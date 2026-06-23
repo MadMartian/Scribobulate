@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -d sdd ] && echo 'SDD project detected. Load the SDD skill before taking any action on this project.'"
+          }
+        ]
+      }
+    ]
+  }
+}

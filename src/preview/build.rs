@@ -1,0 +1,2033 @@
+//! The shared parse-and-render core: parse `md` and render it into a fresh
+//! `GtkTextBuffer`, capturing the source map and the char-precise copymap, and
+//! return the renderer's typed outputs. Both `render` (fresh view) and `re_render`
+//! (in-place swap) build this identically.
+
+use super::cells::attach_cell_copymaps;
+use super::sourcemap::{finalize_source_map, waypoint_src_offset};
+use crate::codeview::CodePreviewView;
+use crate::config::config;
+use crate::palette::Palette;
+use crate::renderer::Renderer;
+use crate::tags::setup_tags;
+use crate::widgets::table::ScribTableWidget;
+use gtk::prelude::*;
+use gtk::{TextBuffer, TextChildAnchor};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use std::collections::HashMap;
+
+/// Everything a Markdown parse+render produces up to (but not including) widget
+/// wiring: the freshly-filled buffer, the source map, and the renderer's typed
+/// outputs. Both [`render`](super::render) (first render → fresh `CodePreviewView`)
+/// and [`re_render`](super::re_render) (in-place buffer swap into the existing view)
+/// build this identically; extracting it removes the ~30-line verbatim duplication
+/// that previously had to be edited in lockstep in both paths, where a one-sided
+/// change would compile and silently break exactly one render route (M5).
+pub(super) struct RenderProducts {
+    pub(super) buf: TextBuffer,
+    pub(super) source_map: Vec<(i32, usize)>,
+    /// The character-precise copy-as-Markdown tree for this render.
+    pub(super) copymap: crate::copymap::CopyTree,
+    pub(super) md_owned: String,
+    pub(super) links: Vec<(i32, i32, String)>,
+    pub(super) anchored: Vec<(TextChildAnchor, gtk::Widget)>,
+    pub(super) image_tints: Vec<(TextChildAnchor, gtk::Widget)>,
+    pub(super) width_bounded: Vec<(gtk::Widget, i32)>,
+    pub(super) image_bounded: Vec<(gtk::Widget, i32, i32)>,
+    pub(super) tables: Vec<ScribTableWidget>,
+    pub(super) code_blocks: Vec<crate::span::BufferSpan>,
+    pub(super) code_block_bg: gtk::gdk::RGBA,
+    pub(super) blockquote_ranges: Vec<crate::span::BufferSpan>,
+    pub(super) blockquote_bar: gtk::gdk::RGBA,
+    pub(super) heading_offsets: Vec<i32>,
+    pub(super) heading_map: HashMap<String, i32>,
+    /// CriticMarkup comment markers to draw in the preview's right margin.
+    pub(super) markers: Vec<crate::codeview::MarkerData>,
+    /// One entry per rendered list item — the data seam for the drawn marker gutter.
+    /// Threaded to the view via `set_list_markers` and drawn in
+    /// `snapshot_layer(BelowText)` (Phase 2).
+    pub(super) list_markers: Vec<crate::renderer::ListMarker>,
+    /// Per-cell cleaned-source spans (row-major, same order as table children /
+    /// `cell_maps`). Used after widgets exist to attach `cell_widget` on markers
+    /// whose claim lives in a table cell (cell-marker pairing).
+    pub(super) cell_src_spans: Vec<std::ops::Range<usize>>,
+    /// Buffer char ranges carrying the `annotation-highlight` tag — the same tags
+    /// `buf` already has, exposed so the incremental annotation refresh can re-tag an
+    /// EXISTING (structurally identical) buffer without a `set_buffer` swap.
+    pub(super) highlight_ranges: Vec<crate::span::BufferSpan>,
+    /// Cleaned→original byte-offset shift table (CriticMarkup extraction), for
+    /// translating a preview selection back to the editor's original source
+    /// (identity `[(0,0)]` when the document has no annotations).
+    pub(super) shifts: Vec<(usize, usize)>,
+    /// The **original** (pre-extraction) normalized source the editor buffer holds
+    /// — needed to convert the editor's char offsets ↔ bytes when the scroll-sync
+    /// translates a position across the CriticMarkup shift table (Fork 2-B). Equals
+    /// `md_owned` (the cleaned text) when the document has no annotations.
+    pub(super) original_owned: String,
+}
+
+/// Parse `md` and render it into a fresh `GtkTextBuffer`, returning the buffer
+/// plus the renderer's typed outputs (see [`RenderProducts`]). This is the one
+/// place the palette resolve, tag setup, the pulldown-cmark offset-iterator
+/// parse loop (which records the sparse `(buffer_char_offset,
+/// source_byte_offset)` waypoint map so Ctrl+C can translate a buffer selection
+/// back to raw Markdown), the source-map finalization, and the destructuring of
+/// the renderer's outputs live. `render` consumes it to build a fresh view;
+/// `re_render` consumes it to update the shared cells and swap the buffer.
+pub(super) fn build_render_products(
+    md: &str,
+    doc_dir: Option<&std::path::Path>,
+    zoom: f64,
+    allow_unsafe_images: bool,
+) -> RenderProducts {
+    let palette = Palette::resolve();
+    let buf = TextBuffer::new(None::<&gtk::TextTagTable>);
+    setup_tags(&buf, &palette, zoom);
+
+    // Normalise inline hard tabs to spaces so tab-separated table rows parse as GFM
+    // tables (a tab in a delimiter row otherwise makes pulldown reject the whole
+    // block — ScrAP-75), without disturbing code content or block indentation. The
+    // substitution is length/position-preserving, so every offset map built below
+    // (`source_map`, `copymap`, cell maps) stays aligned with the editor's text.
+    // The RAW original, kept before `md` is shadowed by the cleaned text below.
+    // Marker constructs are captured from this rather than from `md_norm`: tab
+    // normalisation is length- and position-preserving, so a `src_span` indexes
+    // both identically, but only the raw text is byte-identical to the editor
+    // buffer the mutation will later be applied to — and an anchor is matched by
+    // its TEXT, so a normalised tab would make it unfindable.
+    let raw_src = md;
+    let md_norm = crate::renderer::normalize_inline_tabs(md);
+
+    // Pre-parse CriticMarkup extraction (the pure `annotate::scan` pass): lift annotations
+    // out of the source *before* pulldown sees them, and render the CriticMarkup
+    // -free `cleaned` text. Every render map below stays in this cleaned coordinate
+    // system (which is exactly what the buffer reflects); translation back to the
+    // editor's original text happens per-position at the scroll-sync boundary and
+    // is identity when the doc has no annotations. When there is no CriticMarkup,
+    // `cleaned == md_norm`, so this is behaviour-preserving for every existing doc.
+    let extraction = crate::annotate::extract(md_norm.as_ref());
+    let md = extraction.cleaned.as_str();
+
+    let md_owned = md.to_string();
+    let mut source_map: Vec<(i32, usize)> = Vec::new();
+    // Per-event records (cleaned src byte range + produced buffer char range) for
+    // events that emit text, used after the loop to place the highlight tag over
+    // each annotated claim's exact characters.
+    let mut hl_evs: Vec<(usize, usize, i32, i32)> = Vec::new();
+    // Character-precise copy-as-Markdown: capture each event's live
+    // buffer char range + source byte range as the renderer fills the buffer, so
+    // the copymap is a pure function of THIS render (never re-derived from source
+    // — the renderer strips syntax and synthesises content; TDD 2.8).
+    let mut raw_evs: Vec<crate::copymap::RawEv> = Vec::new();
+    // Per-table-cell copymaps (document order = row-major cell order), so cell
+    // copy is char-precise Markdown like the body. A cell's "buffer" is its label's
+    // plain text (what `label.selection_bounds()` indexes); its offset basis is the
+    // rendered width of each inner event (`copymap::cell_width`).
+    let mut cell_maps: Vec<crate::copymap::CopyTree> = Vec::new();
+    // Per-cell cleaned-source span covering that cell's content events (row-major,
+    // same order as `cell_maps` / table children). Used to pair markers with
+    // cell labels after widgets exist (cell-marker pairing).
+    let mut cell_src_spans: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut cell_active = false;
+    let mut cell_evs: Vec<crate::copymap::RawEv> = Vec::new();
+    let mut cell_off: i32 = 0;
+
+    let ann_highlights: Vec<(usize, usize)> = extraction
+        .annotations
+        .iter()
+        .filter(|a| a.kind == crate::annotate::AnnKind::Highlight)
+        .map(|a| (a.cleaned_content.start.raw(), a.cleaned_content.end.raw()))
+        .collect();
+    let mut r = Renderer::new(
+        buf.clone(),
+        palette.syntect_theme,
+        doc_dir.map(|d| d.to_path_buf()),
+        allow_unsafe_images,
+        md.to_string(),
+        ann_highlights,
+        zoom,
+    );
+    // Streamed: no list-item look-ahead is needed any more — list markers are never
+    // inserted as buffer text (they are drawn in the gutter), so
+    // there is nothing to suppress and thus no reason to peek the next event.
+    for (ev, src_range) in Parser::new_ext(md, crate::renderer::md_options()).into_offset_iter() {
+        let before = buf.char_count();
+        let (src_start, src_end) = (src_range.start, src_range.end);
+        source_map.push((before, waypoint_src_offset(&ev, &src_range)));
+        let copy_kind = crate::copymap::classify(&ev);
+        r.event_src = src_range.clone();
+        // Only CONTENT runs anchor highlight tags / markers. A block-structure
+        // event (e.g. Start(Paragraph)) can emit the inter-paragraph "\n\n"
+        // separator while its src range spans the *whole* paragraph — matching such
+        // an event by source offset would map a claim boundary onto the separator
+        // (the wrong line). Restricting to Text/Code/Break keeps the src↔buffer
+        // mapping to genuine inline content.
+        let is_content_run = matches!(
+            copy_kind,
+            Some(crate::copymap::RawKind::Text(_))
+                | Some(crate::copymap::RawKind::Code(_))
+                | Some(crate::copymap::RawKind::Break)
+        );
+        // Per-cell capture (cells insert no buffer text — their content lives in the
+        // label widgets — so this runs on a separate cell-plain offset counter).
+        match &ev {
+            Event::Start(Tag::TableCell) => {
+                cell_active = true;
+                cell_evs.clear();
+                cell_off = 0;
+            }
+            Event::End(TagEnd::TableCell) => {
+                cell_maps.push(crate::copymap::build(md, &cell_evs, cell_off));
+                let span = if cell_evs.is_empty() {
+                    0..0
+                } else {
+                    let lo = cell_evs.iter().map(|e| e.src.start).min().unwrap_or(0);
+                    let hi = cell_evs.iter().map(|e| e.src.end).max().unwrap_or(0);
+                    lo..hi
+                };
+                cell_src_spans.push(span);
+                cell_active = false;
+            }
+            _ if cell_active => {
+                if let Some(kind) = &copy_kind {
+                    let w = crate::copymap::cell_width(kind);
+                    cell_evs.push(crate::copymap::RawEv {
+                        buf: (cell_off, cell_off + w),
+                        src: src_range.clone(),
+                        kind: kind.clone(),
+                    });
+                    cell_off += w;
+                }
+            }
+            _ => {}
+        }
+        r.process(ev);
+        let after = buf.char_count();
+        if is_content_run && after > before {
+            hl_evs.push((src_start, src_end, before, after));
+        }
+        if let Some(kind) = copy_kind {
+            raw_evs.push(crate::copymap::RawEv {
+                buf: (before, after),
+                src: src_range,
+                kind,
+            });
+        }
+    }
+    let char_count = buf.char_count();
+    let source_map = finalize_source_map(source_map, char_count, md_owned.len());
+    let copymap = crate::copymap::build(md, &raw_evs, char_count);
+    attach_cell_copymaps(&r.anchored, &cell_maps);
+    // Build-time drift guard (debug only): assert the copymap's 1:1 leaves match
+    // the buffer the renderer just filled (copy-as-Markdown consistency guard).
+    #[cfg(debug_assertions)]
+    {
+        // Use `slice` (NOT `text`): `slice` includes a U+FFFC placeholder for each
+        // anchored child (tables/images), so its char offsets match `char_count()`
+        // and `GtkTextIter::offset()` — the exact basis the copymap capture and the
+        // copy-clipboard `selection_bounds()` use. `text` OMITS anchors entirely,
+        // which would misalign the check by one char per anchored child.
+        let slice = buf.slice(&buf.start_iter(), &buf.end_iter(), true);
+        let chars: Vec<char> = slice.chars().collect();
+        crate::copymap::debug_verify(&copymap, md, &chars);
+    }
+
+    // Paint the CriticMarkup highlight tag over each annotated claim's exact
+    // characters (cleaned coords → buffer chars via the per-event records).
+    let highlight_ranges = apply_highlight_tags(&buf, md, &extraction.annotations, &hl_evs);
+    // One right-margin marker per annotation that carries a comment.
+    // Markers pair with cell labels later (cell-marker pairing) once widgets exist.
+    let markers = build_markers(raw_src, md, &extraction.annotations, &hl_evs);
+    // The cleaned→original shift table, for translating a preview selection /
+    // scroll position back to the editor's original source.
+    let shifts = extraction.shifts.clone();
+    let original_owned = md_norm.into_owned();
+
+    let heading_offsets: Vec<i32> = r.headings.iter().map(|&(_, off)| off).collect();
+    let heading_map: HashMap<String, i32> = r.headings.into_iter().collect();
+
+    RenderProducts {
+        buf,
+        source_map,
+        copymap,
+        md_owned,
+        links: r.links,
+        anchored: r.anchored,
+        image_tints: r.image_tints,
+        width_bounded: r.width_bounded,
+        image_bounded: r.image_bounded,
+        tables: r.tables,
+        code_blocks: r.code_blocks,
+        code_block_bg: palette.code_block_bg,
+        blockquote_ranges: r.blockquote_ranges,
+        blockquote_bar: palette.blockquote_bar,
+        heading_offsets,
+        heading_map,
+        markers,
+        list_markers: r.list_markers,
+        cell_src_spans,
+        highlight_ranges,
+        shifts,
+        original_owned,
+    }
+}
+
+/// Build the right-margin comment markers: one per annotation
+/// that carries a comment (a highlight+comment, or a standalone point comment).
+/// The anchor is the buffer char the marker sits beside — the end of a
+/// highlighted claim, or the point comment's position.
+fn build_markers(
+    original: &str,
+    cleaned: &str,
+    annotations: &[crate::annotate::Annotation],
+    hl_evs: &[(usize, usize, i32, i32)],
+) -> Vec<crate::codeview::MarkerData> {
+    use crate::annotate::AnnKind;
+    const HL_OPEN_LEN: usize = 3; // "{=="
+    let mut out = Vec::new();
+    for ann in annotations {
+        // The one shared "is a comment-bearing annotation" predicate (TDD 20.2): the
+        // viewer's list builder gates on this exact function, so a chip exists iff a
+        // viewer row does. It guarantees `comment`/`src_comment_body` are `Some` below.
+        if !ann.is_listed() {
+            continue;
+        }
+        // N1-phase-2 boundary: the marker pipeline (`MarkerSource`, `codeview`,
+        // `cells`) works in raw `usize`, so unwrap the typed `Annotation` ranges to
+        // `.raw()` here. `anchor_cleaned` is a cleaned byte offset (→ buffer offset).
+        let (anchor_cleaned, claim, src_content) = match ann.kind {
+            AnnKind::Highlight => {
+                // The claim is kept verbatim, so its cleaned byte length equals its
+                // original byte length; it begins just past "{==".
+                let cs = ann.src_span.start.raw() + HL_OPEN_LEN;
+                let (lo, hi) = (
+                    ann.cleaned_content.start.raw(),
+                    ann.cleaned_content.end.raw(),
+                );
+                // Neither the subtraction nor the slice is raw (QA round 3, P-2).
+                // Both operands are CriticMarkup-derived byte offsets: an inverted
+                // range underflows `usize` (a panic in release too, and a panic
+                // here is a process abort — no `catch_unwind` on the app path),
+                // and a range that is merely off a char boundary panics on the
+                // slice. `saturating_sub` + `.get()` make a malformed annotation
+                // render as an empty claim rather than kill the window, which is
+                // the same degradation the `_ => continue` arm below already
+                // applies to kinds it cannot handle.
+                let cleaned_len = hi.saturating_sub(lo);
+                (
+                    hi,
+                    Some(cleaned.get(lo..hi).unwrap_or_default().to_string()),
+                    Some(cs..cs + cleaned_len),
+                )
+            }
+            AnnKind::Comment => (ann.cleaned_content.start.raw(), None, None),
+            _ => continue,
+        };
+        let (Some(comment), Some(body)) = (ann.comment.clone(), ann.src_comment_body.clone())
+        else {
+            continue;
+        };
+        // Capture the construct's own text alongside its range, so the card built
+        // from this marker can re-find it after the document moves underneath
+        // (ScrAP-187). This is the single capture point for the whole feature: doing
+        // it here, where the range is produced, is what makes range and text
+        // incapable of disagreeing. A construct that is not a valid slice of the
+        // source it was just scanned from cannot be acted on safely, so it yields
+        // no marker at all rather than an unusable one.
+        let Some(construct) = crate::annotate::AnchoredSpan::capture(
+            original,
+            ann.src_span.start.raw()..ann.src_span.end.raw(),
+        ) else {
+            continue;
+        };
+        out.push(crate::codeview::MarkerData {
+            anchor: cleaned_offset_to_buf(anchor_cleaned, cleaned, hl_evs),
+            comment,
+            claim,
+            source: crate::codeview::MarkerSource {
+                construct,
+                src_content,
+                src_comment_body: body,
+                cleaned_content: ann.cleaned_content.start.raw()..ann.cleaned_content.end.raw(),
+            },
+            cell_widget: None,
+            cell_table_anchor: None,
+        });
+    }
+    out
+}
+
+/// Map a `cleaned` byte offset to a buffer char offset using the per-event
+/// records: char-precise inside a 1:1 text event, else the event boundary; a
+/// gap (between block events) resolves to the nearest preceding event end.
+fn cleaned_offset_to_buf(x: usize, cleaned: &str, hl_evs: &[(usize, usize, i32, i32)]) -> i32 {
+    for &(s, e, before, after) in hl_evs {
+        if x >= s && x <= e {
+            let buf_len = (after - before) as usize;
+            if buf_len == cleaned[s..e].chars().count() {
+                return before + cleaned[s..x].chars().count() as i32;
+            }
+            return if x >= e { after } else { before };
+        }
+    }
+    let mut best = 0;
+    for &(_s, e, _b, after) in hl_evs {
+        if e <= x {
+            best = after;
+        }
+    }
+    best
+}
+
+/// Apply the `annotation-highlight` tag over every `Highlight` annotation's
+/// claim. `hl_evs` holds each text-emitting event's `(cleaned_src_start,
+/// cleaned_src_end, buf_before, buf_after)`; for each highlight's cleaned byte
+/// range we tag the overlapping slice of each event. A 1:1 event (buffer chars ==
+/// source chars) is tagged char-precisely even when the highlight starts/ends
+/// mid-event; a synthesised run (smart-punct/entity, where the lengths differ) is
+/// tagged whole — never a partial glyph.
+fn apply_highlight_tags(
+    buf: &TextBuffer,
+    cleaned: &str,
+    annotations: &[crate::annotate::Annotation],
+    hl_evs: &[(usize, usize, i32, i32)],
+) -> Vec<crate::span::BufferSpan> {
+    let ranges = collect_highlight_ranges(cleaned, annotations, hl_evs);
+    if let Some(tag) = buf.tag_table().lookup("annotation-highlight") {
+        for &span in &ranges {
+            let (from, to) = (span.start, span.end);
+            buf.apply_tag(&tag, &buf.iter_at_offset(from), &buf.iter_at_offset(to));
+        }
+    }
+    ranges
+}
+
+/// The buffer char ranges every `Highlight` annotation's claim should carry the
+/// `annotation-highlight` tag — the data behind [`apply_highlight_tags`], returned
+/// so the **incremental** annotation refresh (`preview::render::refresh_annotations_in_place`)
+/// can re-tag the EXISTING buffer without a `set_buffer` swap (the rendered text is
+/// invariant under an annotation add/remove, so only the tags/markers change).
+fn collect_highlight_ranges(
+    cleaned: &str,
+    annotations: &[crate::annotate::Annotation],
+    hl_evs: &[(usize, usize, i32, i32)],
+) -> Vec<crate::span::BufferSpan> {
+    let mut ranges = Vec::new();
+    for ann in annotations {
+        if ann.kind != crate::annotate::AnnKind::Highlight {
+            continue;
+        }
+        ranges.extend(highlight_tag_ranges(
+            cleaned,
+            ann.cleaned_content.start.raw(),
+            ann.cleaned_content.end.raw(),
+            hl_evs,
+        ));
+    }
+    ranges
+}
+
+/// Pure: the buffer char ranges the highlight `[hs, he)` (cleaned bytes) should
+/// tag, one per overlapping content event.
+///
+/// A thin typed adapter over [`crate::annotate::map_cleaned_highlight_to_local`],
+/// which owns the mapping rule for **both** display paths (this body-buffer one and
+/// the table cells'). It used to be a second, character-identical copy of that
+/// algorithm here — so the marker-stripped-run defect existed twice and a fix to
+/// either would have left the other wrong (ScrAP-194's lesson, in the small).
+fn highlight_tag_ranges(
+    cleaned: &str,
+    hs: usize,
+    he: usize,
+    hl_evs: &[(usize, usize, i32, i32)],
+) -> Vec<crate::span::BufferSpan> {
+    crate::annotate::map_cleaned_highlight_to_local(cleaned, hs, he, hl_evs)
+        .into_iter()
+        .map(|(from, to)| crate::span::BufferSpan::new(from, to))
+        .collect()
+}
+
+/// Install a render's typed outputs into `view`: the self-drawn code-block
+/// backgrounds and blockquote bars, the anchored children (tables, rules,
+/// images), and the width/image bounds. This is the identical install sequence
+/// both [`render`](super::render) (fresh view) and [`re_render`](super::re_render)
+/// (in-place buffer swap) must apply in lockstep — centralising it here means a
+/// new bounded-child category or anchor kind is wired ONCE, not in two paths
+/// where a one-sided edit would compile and silently apply to only one render
+/// route (D4, the same lockstep-edit hazard `RenderProducts` removed for the
+/// parse half).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn install_products_into_view(
+    view: &CodePreviewView,
+    code_blocks: Vec<crate::span::BufferSpan>,
+    code_block_bg: gtk::gdk::RGBA,
+    blockquote_ranges: Vec<crate::span::BufferSpan>,
+    blockquote_bar: gtk::gdk::RGBA,
+    anchored: &[(TextChildAnchor, gtk::Widget)],
+    width_bounded: Vec<(gtk::Widget, i32)>,
+    image_bounded: Vec<(gtk::Widget, i32, i32)>,
+    tables: Vec<ScribTableWidget>,
+    list_markers: Vec<crate::renderer::ListMarker>,
+    zoom: f64,
+) {
+    view.set_code_blocks(code_blocks, code_block_bg);
+    view.set_blockquotes(blockquote_ranges, blockquote_bar);
+    // Drawn list-marker gutter. `zoom` travels with the markers
+    // so their drawn x matches the `li-{depth}` content margin (`px(depth*28)`).
+    view.set_list_markers(list_markers, zoom);
+    for (anchor, widget) in anchored {
+        view.add_child_at_anchor(widget, anchor);
+    }
+    view.set_width_bounded(width_bounded);
+    view.set_image_bounded(image_bounded);
+    view.set_tables(tables);
+    if !anchored.is_empty() {
+        view.queue_resize();
+    }
+}
+
+/// Apply the four preview pixel margins scaled by `zoom`. These are widget
+/// properties (not Pango attrs), so they don't follow the CSS font-size rule and
+/// must be scaled explicitly on every render/zoom — the same `px()` rounding
+/// `setup_tags` uses. Shared by `render` and `re_render` (L4).
+pub(super) fn apply_preview_margins(view: &CodePreviewView, zoom: f64) {
+    let cfg_view = &config().view;
+    let px = |n: i32| (n as f64 * zoom).round() as i32;
+    view.set_left_margin(px(cfg_view.left_margin));
+    view.set_right_margin(px(cfg_view.right_margin));
+    view.set_top_margin(px(cfg_view.top_margin));
+    view.set_bottom_margin(px(cfg_view.bottom_margin));
+}
+
+#[cfg(test)]
+mod pure_tests {
+    use super::*;
+    use crate::annotate::{AnnKind, Annotation};
+    use crate::span::BufferSpan;
+
+    #[test]
+    fn highlight_ranges_map_a_claim_char_precisely_within_one_event() {
+        let cleaned = "the earth is flat";
+        let evs = [(0usize, 17usize, 0i32, 17i32)];
+        assert_eq!(
+            highlight_tag_ranges(cleaned, 13, 17, &evs),
+            vec![BufferSpan::new(13, 17)]
+        );
+    }
+
+    #[test]
+    fn highlight_ranges_split_across_two_noncontiguous_events() {
+        let cleaned = "abcdef";
+        // Two events whose buffer ranges are NOT contiguous (a marker/anchor sat
+        // between them): a claim overlapping both maps each piece independently.
+        let evs = [(0usize, 3usize, 0i32, 3i32), (3usize, 6usize, 10i32, 13i32)];
+        assert_eq!(
+            highlight_tag_ranges(cleaned, 2, 5, &evs),
+            vec![BufferSpan::new(2, 3), BufferSpan::new(10, 12)]
+        );
+    }
+
+    #[test]
+    fn highlight_ranges_tag_a_synthesised_run_whole() {
+        // 3 source chars ("...") rendered as 1 buffer char ("…"): any overlap tags
+        // the whole run rather than a fractional glyph.
+        let cleaned = "a...b";
+        let evs = [(1usize, 4usize, 5i32, 6i32)];
+        assert_eq!(
+            highlight_tag_ranges(cleaned, 2, 3, &evs),
+            vec![BufferSpan::new(5, 6)]
+        );
+    }
+
+    #[test]
+    fn cleaned_offset_maps_precisely_and_falls_back_in_a_gap() {
+        let evs = [(0usize, 11usize, 0i32, 11i32)];
+        assert_eq!(cleaned_offset_to_buf(6, "hello world", &evs), 6);
+        // Offset 6 sits in the block gap between two events → nearest preceding end.
+        let evs2 = [(0usize, 5usize, 0i32, 5i32), (7usize, 12usize, 5i32, 10i32)];
+        assert_eq!(cleaned_offset_to_buf(6, "12345\n\n67890", &evs2), 5);
+    }
+
+    #[test]
+    fn build_markers_emits_one_per_commented_annotation() {
+        let cleaned = "the earth is flat here";
+        // The ORIGINAL the src_span below indexes: "{==flat==}" at 13..23 and
+        // "{>>note<<}" at 23..33, so the construct span is exactly 13..33.
+        let original = "the earth is {==flat==}{>>note<<} here";
+        let ann = Annotation {
+            kind: AnnKind::Highlight,
+            src_span: crate::span::OriginalByteOffset::new(13)
+                ..crate::span::OriginalByteOffset::new(33),
+            cleaned_content: crate::span::CleanedByteOffset::new(13)
+                ..crate::span::CleanedByteOffset::new(17),
+            src_comment_body: Some(16..20),
+            comment: Some("note".into()),
+        };
+        let evs = [(0usize, 22usize, 0i32, 22i32)];
+        let markers = build_markers(original, cleaned, std::slice::from_ref(&ann), &evs);
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].comment, "note");
+        assert_eq!(markers[0].claim.as_deref(), Some("flat"));
+        assert_eq!(markers[0].anchor, 17);
+        assert_eq!(markers[0].source.src_content, Some(16..20));
+        // The construct is anchored to its own text, so it survives an edit
+        // elsewhere in the document (ScrAP-187).
+        assert_eq!(markers[0].source.construct.captured_at(), 13..33);
+        assert_eq!(
+            markers[0]
+                .source
+                .construct
+                .resolve("PREFIX the earth is {==flat==}{>>note<<} here"),
+            Some(20..40)
+        );
+    }
+
+    #[test]
+    fn build_markers_skips_a_comment_less_highlight() {
+        let cleaned = "plain highlight only";
+        let original = "{==plain highlight only==}";
+        let ann = Annotation {
+            kind: AnnKind::Highlight,
+            src_span: crate::span::OriginalByteOffset::new(0)
+                ..crate::span::OriginalByteOffset::new(24),
+            cleaned_content: crate::span::CleanedByteOffset::new(0)
+                ..crate::span::CleanedByteOffset::new(20),
+            src_comment_body: None,
+            comment: None,
+        };
+        let evs = [(0usize, 20usize, 0i32, 20i32)];
+        assert!(build_markers(original, cleaned, std::slice::from_ref(&ann), &evs).is_empty());
+    }
+}
+
+/// GTK-object integration tests for the copy-as-Markdown pipeline (POLICY.md
+/// §Testing). These drive the REAL renderer/`GtkTextBuffer` capture that the pure
+/// `copymap` unit tests can only simulate — the exact surface where both the
+/// anchor-offset drift (get_text vs get_slice, ScrAP-74) and the
+/// table-cell-formatting regression (TDD 2.8f) lived. They need a live GDK
+/// display and are excluded from the default `cargo test` via the
+/// `gtk-integration-tests` feature.
+///
+/// GTK is single-threaded (gtk4-rs skill guardrail #1), and libtest runs each
+/// `#[test]` on its own thread — so a plain `#[test]` calling `gtk::init()` works
+/// only for the FIRST GTK test in the binary; the next thread's init panics
+/// ("initialize GTK from two different threads"). These use **`#[gtktest::test]`**,
+/// which registers the body with both harnesses — serialized on one shared GTK
+/// worker thread under libtest, and on the process **main** thread under
+/// `src/gtk_suite.rs` — so multiple GTK-object tests coexist, no `--test-threads=1`
+/// is needed, and the bodies still run where GTK initialises only on the main
+/// thread. Run with a live display via:
+///
+/// ```sh
+/// cargo test --features gtk-integration-tests
+/// ```
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::build_render_products;
+    use crate::preview::cells::{cell_copymap, collect_cell_labels, collect_table_anchors};
+    use gtk::prelude::*;
+    use gtk::TextBuffer;
+
+    /// Char offset of `sub`'s first occurrence in `text` (the buffer *slice*, so
+    /// offsets match `char_count`/iter/`selection_bounds` — the copy basis).
+    fn char_off(text: &str, sub: &str) -> i32 {
+        let b = text.find(sub).expect("substring present in buffer");
+        text[..b].chars().count() as i32
+    }
+
+    fn buffer_slice(buf: &TextBuffer) -> String {
+        buf.slice(&buf.start_iter(), &buf.end_iter(), true)
+            .to_string()
+    }
+
+    /// The copymap capture must stay aligned with the real buffer PAST an
+    /// anchored child. The `debug_verify` guard inside `build_render_products`
+    /// fires on drift (regression for ScrAP-74 — an anchor-free doc
+    /// would not exercise it), and the resolved copy of text after the table is
+    /// exact.
+    #[gtktest::test]
+    fn copy_stays_aligned_past_an_anchored_table() {
+        let md =
+            "Intro paragraph here.\n\n| A | B |\n|---|---|\n| x | y |\n\nAfter the **bold** table.";
+        let products = build_render_products(md, None, 1.0, false);
+        let text = buffer_slice(&products.buf);
+        // "bold" sits past the table's U+FFFC anchor; its buffer offset must map
+        // back to its own source (it would drift if capture used get_text).
+        let a = char_off(&text, "bold");
+        assert_eq!(
+            crate::copymap::resolve(&products.copymap, md, a, a + 4),
+            "bold"
+        );
+        // Crossing out of the bold run reconstructs the delimiters.
+        assert_eq!(
+            crate::copymap::resolve(&products.copymap, md, a, a + 10),
+            "**bold** table"
+        );
+    }
+
+    /// Select-All over a real render equals Copy Document (constraint B).
+    #[gtktest::test]
+    fn select_all_equals_copy_document() {
+        let md = "# Title\n\nA **bold** and `code` line.";
+        let products = build_render_products(md, None, 1.0, false);
+        let n = products.buf.char_count();
+        assert_eq!(crate::copymap::resolve(&products.copymap, md, 0, n), md);
+    }
+
+    /// A real table cell's label carries its own copymap (attached as qdata), and
+    /// resolving an in-cell selection preserves Markdown formatting (TDD 2.8f) —
+    /// the end-to-end regression for the cell-plain-text bug.
+    #[gtktest::test]
+    fn table_cell_copy_preserves_formatting() {
+        let md = "| **bold** cell | plain |\n|---|---|\n| y | z |";
+        let products = build_render_products(md, None, 1.0, false);
+        let labels = collect_cell_labels(&products.anchored);
+        let label = labels.first().expect("first cell is a selectable label");
+        let n = label.layout().text().chars().count() as i32; // plain "bold cell" = 9
+        let cmap = cell_copymap(label).expect("cell label carries a per-cell copymap");
+        assert_eq!(
+            crate::copymap::resolve_cell(&cmap, md, 0, n),
+            "**bold** cell"
+        );
+        assert_eq!(crate::copymap::resolve_cell(&cmap, md, 0, 4), "bold"); // within → no **
+    }
+
+    /// Multi-line blockquotes (Q2) and list items (L3) are char-precise against
+    /// the REAL renderer: a within-block selection excludes the `>`/`-` markers
+    /// (the sim can only approximate the renderer's list/blockquote buffer math,
+    /// so this pins it to the real thing), and Select-All keeps them.
+    #[gtktest::test]
+    fn blockquote_and_list_are_char_precise() {
+        let md = "> qa\n> qb\n\n- li one\n- li two";
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        let cmap = &products.copymap;
+        // within the 2nd quote line → bare text, continuation `> ` suppressed.
+        let a = char_off(&slice, "qb");
+        assert_eq!(crate::copymap::resolve(cmap, md, a, a + 2), "qb");
+        // within a list item → bare text, no `- ` marker.
+        let b = char_off(&slice, "li two");
+        assert_eq!(crate::copymap::resolve(cmap, md, b, b + 6), "li two");
+        // Select-All keeps every marker (Copy Document).
+        let n = products.buf.char_count();
+        assert_eq!(crate::copymap::resolve(cmap, md, 0, n), md);
+    }
+
+    /// Nested / loose list items are char-precise against the REAL renderer
+    /// (formerly opaque): a within-item selection excludes markers, a
+    /// selection crossing from the outer item into a nested one reconstructs the
+    /// nested marker with its indent lead-in, and an escaped char keeps its
+    /// backslash. Pins edge 1 & 3 to the real list/blockquote buffer math.
+    #[gtktest::test]
+    fn nested_items_and_escapes_are_char_precise_live() {
+        let md = "x\n\n- a\n  - nested\n- b";
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        let cmap = &products.copymap;
+        // within the nested item → bare text, no `- ` marker.
+        let a = char_off(&slice, "nested");
+        assert_eq!(crate::copymap::resolve(cmap, md, a, a + 6), "nested");
+        // crossing from the outer item's "a" into the nested item's "nested"
+        // reconstructs the nested marker + indent, no spurious trailing newline.
+        let o = char_off(&slice, "a\nnested");
+        assert_eq!(
+            crate::copymap::resolve(cmap, md, o, o + "a\nnested".chars().count() as i32),
+            "a\n  - nested"
+        );
+        let n = products.buf.char_count();
+        assert_eq!(crate::copymap::resolve(cmap, md, 0, n), md); // Copy Document
+
+        // Edge 3: a bare escaped char keeps its backslash against the real render.
+        let esc = "a \\* b";
+        let ep = build_render_products(esc, None, 1.0, false);
+        let etext = buffer_slice(&ep.buf);
+        let s = char_off(&etext, "*");
+        assert_eq!(crate::copymap::resolve(&ep.copymap, esc, s, s + 1), "\\*");
+    }
+
+    /// Phase 1: a list item inserts NO inline marker at all — no bullet,
+    /// no number, and (for a task item) no anchored `GtkCheckButton`. Every marker is
+    /// drawn in the gutter in Phase 2 and occupies ZERO buffer chars, so item content
+    /// starts immediately with its text. Assert the buffer holds neither a bullet glyph
+    /// nor an anchor (U+FFFC) for these items, that the `ListMarker` seam still records
+    /// each item's kind (incl. Task + checked state — the gutter draw consumes it), and
+    /// that copy still reconstructs the exact `- [ ]`/`- [x]`/`- ` source from the copymap.
+    #[gtktest::test]
+    fn list_items_insert_no_inline_marker_or_checkbox_anchor() {
+        use crate::renderer::ListMarkerKind::{Bullet, Task};
+        let md = "- [ ] task one\n- [x] task two\n\n- plain bullet item";
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        // No anchored checkbox (U+FFFC) and no bullet glyph anywhere in the buffer.
+        assert_eq!(
+            slice.matches('\u{FFFC}').count(),
+            0,
+            "no anchored checkbox in the buffer"
+        );
+        assert_eq!(slice.matches('•').count(), 0, "no inline bullet glyph");
+        // Item content starts immediately with its text (no marker precedes it).
+        assert!(
+            slice.starts_with("task one"),
+            "task item content starts at its text: {slice:?}"
+        );
+        // The ListMarker seam still records each item's kind (approach-independent input
+        // for the drawn gutter). Task `src` spans vary with pulldown, so normalise them.
+        let kinds: Vec<crate::renderer::ListMarkerKind> = products
+            .list_markers
+            .iter()
+            .map(|m| match &m.kind {
+                Task { checked, .. } => Task {
+                    checked: *checked,
+                    src: 0..0,
+                },
+                other => other.clone(),
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                Task {
+                    checked: false,
+                    src: 0..0
+                },
+                Task {
+                    checked: true,
+                    src: 0..0
+                },
+                Bullet,
+            ]
+        );
+        // Copy is exact: Select-All reconstructs the source, task boxes and all.
+        let cmap = &products.copymap;
+        let n = products.buf.char_count();
+        assert_eq!(crate::copymap::resolve(cmap, md, 0, n), md);
+    }
+
+    /// The list-marker data seam: the render walk records one
+    /// `ListMarker` per item in document order, with the right kind (bullet / ordered
+    /// number / task checkbox + checked state) and nesting depth. This is the
+    /// approach-independent input the future drawn gutter consumes; pinning it here
+    /// keeps the recording honest while the draw layer is still pending research.
+    #[gtktest::test]
+    fn list_markers_seam_records_kind_and_depth_per_item() {
+        use crate::renderer::ListMarkerKind::{Bullet, Ordered, Task};
+        let md = "- a\n- b\n\n1. one\n2. two\n\n- [ ] todo\n- [x] done\n\n- top\n  - nested";
+        let products = build_render_products(md, None, 1.0, false);
+        let got: Vec<(usize, crate::renderer::ListMarkerKind)> = products
+            .list_markers
+            .iter()
+            .map(|m| (m.depth, m.kind.clone()))
+            .collect();
+        // Task `src` spans vary with pulldown, so compare kinds where the span is
+        // irrelevant and check the task spans separately.
+        let simplify = |k: &crate::renderer::ListMarkerKind| match k {
+            Task { checked, .. } => Task {
+                checked: *checked,
+                src: 0..0,
+            },
+            other => other.clone(),
+        };
+        let got_simple: Vec<(usize, crate::renderer::ListMarkerKind)> =
+            got.iter().map(|(d, k)| (*d, simplify(k))).collect();
+        assert_eq!(
+            got_simple,
+            vec![
+                (1, Bullet),
+                (1, Bullet),
+                (1, Ordered(1)),
+                (1, Ordered(2)),
+                (
+                    1,
+                    Task {
+                        checked: false,
+                        src: 0..0
+                    }
+                ),
+                (
+                    1,
+                    Task {
+                        checked: true,
+                        src: 0..0
+                    }
+                ),
+                (1, Bullet), // "- top"
+                (2, Bullet), // "  - nested"
+            ]
+        );
+        // Each first_line offset lands on a real line and increases in document order.
+        let offs: Vec<i32> = products.list_markers.iter().map(|m| m.first_line).collect();
+        assert!(
+            offs.windows(2).all(|w| w[0] < w[1]),
+            "offsets are monotonic"
+        );
+        // Task markers carry a non-empty source span (the `[ ]`/`[x]` to flip on toggle).
+        for m in &products.list_markers {
+            if let Task { src, .. } = &m.kind {
+                assert!(src.start < src.end, "task marker has a real source span");
+            }
+        }
+    }
+
+    /// An empty list item — a bullet / number / checkbox with no content after it
+    /// (`- `, `1. `, `- [ ]`) — records NO gutter marker, so the gutter draws nothing
+    /// for it. A task checkbox is not special here: the marker renders only when the
+    /// item has content, exactly like an empty bullet or number. Content items in the
+    /// same document keep their markers (an empty sibling doesn't suppress a real one).
+    #[gtktest::test]
+    fn empty_list_items_record_no_marker_across_kinds() {
+        use crate::renderer::ListMarkerKind::{Bullet, Ordered, Task};
+        // Each empty item, on its own, yields zero markers — checkbox included.
+        for md in ["- ", "- \n", "1. ", "1. \n", "- [ ]\n", "- [ ] "] {
+            let p = build_render_products(md, None, 1.0, false);
+            assert!(
+                p.list_markers.is_empty(),
+                "empty item {md:?} must record no marker, got {:?}",
+                p.list_markers
+            );
+        }
+        // Empty items interleaved with content: only the content items keep a marker,
+        // and their kinds/order are preserved.
+        let md = "- \n- has text\n\n1. \n2. numbered\n\n- [ ]\n- [x] done\n";
+        let p = build_render_products(md, None, 1.0, false);
+        let kinds: Vec<_> = p
+            .list_markers
+            .iter()
+            .map(|m| match &m.kind {
+                Task { checked, .. } => Task {
+                    checked: *checked,
+                    src: 0..0,
+                },
+                other => other.clone(),
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                Bullet,     // "- has text" (the empty "- " above is dropped)
+                Ordered(2), // "2. numbered" (empty "1. " dropped; counter still advanced)
+                Task {
+                    checked: true,
+                    src: 0..0
+                }, // "- [x] done" (empty "- [ ]" dropped)
+            ],
+            "only content items keep a marker"
+        );
+    }
+
+    /// A multi-line blockquote applies the `blockquote` margin tag per LINE — content
+    /// only, EXCLUDING each terminating `\n` — so every logical line carries its own
+    /// tag on/off toggle. Without those toggles, GtkTextView's `one_style_cache`
+    /// reuses the previous line's style and DROPS the left-margin on toggle-free
+    /// middle lines (ScrAP-76). Assert the structural invariant that produces
+    /// the toggles: content chars are tagged, internal newlines are NOT.
+    #[gtktest::test]
+    fn multiline_blockquote_tags_each_line_leaving_newlines_untagged() {
+        let md =
+            "Lead.\n\n> line one of the quote\n> line two of the quote\n> line three of the quote";
+        let products = build_render_products(md, None, 1.0, false);
+        let buf = &products.buf;
+        let tag = buf
+            .tag_table()
+            .lookup("blockquote")
+            .expect("blockquote tag exists");
+        let chars: Vec<char> = buf
+            .slice(&buf.start_iter(), &buf.end_iter(), true)
+            .chars()
+            .collect();
+        let crate::span::BufferSpan {
+            start: bstart,
+            end: bend,
+        } = *products
+            .blockquote_ranges
+            .first()
+            .expect("one blockquote range");
+        let mut internal_newlines = 0;
+        for off in bstart..bend {
+            let tagged = buf.iter_at_offset(off).has_tag(&tag);
+            if chars[off as usize] == '\n' {
+                internal_newlines += 1;
+                assert!(
+                    !tagged,
+                    "internal newline at {off} must be UNTAGGED (it is what creates the per-line toggle)"
+                );
+            } else {
+                assert!(
+                    tagged,
+                    "content char at {off} must carry the blockquote tag"
+                );
+            }
+        }
+        assert!(
+            internal_newlines >= 2,
+            "a 3-line blockquote has >= 2 internal newlines"
+        );
+    }
+
+    /// Phase 1: a list item's source line break renders as a
+    /// real newline again — the flow-to-spaces workaround is REVERTED (TDD 2.20 hard-wrap
+    /// restored inside lists). Every logical line of the item carries the uniform per-level
+    /// `left_margin` tag applied PER LINE (content only, '\n' untagged — ScrAP-76): the FIRST
+    /// line gets `li-1` (the inter-item gap line), later lines get `li-1-cont`. Both
+    /// variants share the SAME left-margin and `indent = 0` (no hanging indent — the marker
+    /// is drawn in the gutter, not in the flow), differing only in the inter-item gap, so
+    /// the split is ScrAP-76-safe. A loose (blank-line-separated) item behaves the same.
+    #[gtktest::test]
+    fn list_item_break_renders_as_separate_lines_at_uniform_margin() {
+        let table_check = |buf: &TextBuffer| {
+            let table = buf.tag_table();
+            let li = table.lookup("li-1").expect("li-1 tag exists");
+            let li_cont = table.lookup("li-1-cont").expect("li-1-cont tag exists");
+            (li, li_cont)
+        };
+
+        // Tag contract: NEITHER variant has a hanging indent, and both share the same
+        // absolute left-margin — so a per-line cache mix-up can't change the margin.
+        {
+            let products = build_render_products("- x\n  y", None, 1.0, false);
+            let (li, li_cont) = table_check(&products.buf);
+            assert_eq!(li.indent(), 0, "li-1 has no hanging indent");
+            assert_eq!(li_cont.indent(), 0, "li-1-cont has no hanging indent");
+            assert_eq!(
+                li.left_margin(),
+                li_cont.left_margin(),
+                "both variants share the same left-margin"
+            );
+        }
+
+        // A hard break (`\` line break) inside an item renders as a real newline: the two
+        // source lines occupy SEPARATE buffer lines, first carrying li-1, the continuation
+        // li-1-cont — both at the same content margin. Copy stays exact across the break.
+        {
+            let md = "- item one line A\\\n  item one line B\n- item two";
+            let products = build_render_products(md, None, 1.0, false);
+            let buf = &products.buf;
+            let (li, li_cont) = table_check(buf);
+            let slice = buffer_slice(buf);
+            let a = char_off(&slice, "item one line A");
+            let b = char_off(&slice, "item one line B");
+            // The two source lines are separated by a real newline (not a space).
+            assert_eq!(
+                slice.chars().nth((b - 1) as usize),
+                Some('\n'),
+                "the in-item break renders as a newline (separate lines)"
+            );
+            // First line carries li-1; the broken continuation carries li-1-cont.
+            assert!(
+                buf.iter_at_offset(a).has_tag(&li),
+                "first line carries li-1"
+            );
+            assert!(
+                buf.iter_at_offset(b).has_tag(&li_cont),
+                "the broken continuation line carries li-1-cont"
+            );
+            // Copy still reconstructs the byte-exact source across the break.
+            let n = buf.char_count();
+            assert_eq!(crate::copymap::resolve(&products.copymap, md, 0, n), md);
+        }
+
+        // A genuine LOOSE item (blank line between paragraphs) also yields a second
+        // logical line carrying li-1-cont at the same margin — not the first-line li-1.
+        {
+            let md = "- para one\n\n  para two\n- next";
+            let products = build_render_products(md, None, 1.0, false);
+            let buf = &products.buf;
+            let (li, li_cont) = table_check(buf);
+            let slice = buffer_slice(buf);
+            let p2 = char_off(&slice, "para two");
+            let ip2 = buf.iter_at_offset(p2);
+            assert!(
+                ip2.has_tag(&li_cont),
+                "loose continuation paragraph carries li-1-cont"
+            );
+            assert!(
+                !ip2.has_tag(&li),
+                "loose continuation is NOT the first-line li-1 variant"
+            );
+        }
+    }
+
+    /// POLICY Document Rendering CAM row 2 (correct inside every container markup): a list
+    /// inside a BLOCKQUOTE must render nested INSIDE the quote, not break out to the left of
+    /// it. The item's lines carry BOTH the `blockquote` and `li-{depth}` tags, which both set
+    /// `left_margin`; GTK resolves that as
+    ///     (highest-PRIORITY non-accumulative tag, else the view default) + Σ(accumulative)
+    /// so `li-{depth}` MUST be accumulative. When it was a non-accumulative absolute margin
+    /// it silently OVERRODE the quote's (it is added to the table after `blockquote`, so it
+    /// wins on priority) and a quoted item rendered LEFT of the quote's own accent bar, while
+    /// the quote's right margin still applied — a lopsided quote (ScrAP-121).
+    ///
+    /// This asserts the resolved geometry on a REALIZED view, not just the tag properties:
+    /// the tag values alone can't show the override, which is what let the bug through.
+    #[gtktest::test]
+    fn quoted_list_item_nests_inside_its_blockquote() {
+        let products = build_render_products("body\n\n> - quoted item", None, 1.0, false);
+        let buf = &products.buf;
+        let table = buf.tag_table();
+        let li = table.lookup("li-1").expect("li-1 tag exists");
+        let bq = table.lookup("blockquote").expect("blockquote tag exists");
+
+        // The item's indent is RELATIVE to its container, so it must accumulate.
+        assert!(
+            li.is_accumulative_margin(),
+            "li-1 must accumulate onto its container's margin, not override it"
+        );
+
+        // The quoted item's line really does carry both margin-setting tags.
+        let slice = buffer_slice(buf);
+        let q = char_off(&slice, "quoted item");
+        let iq = buf.iter_at_offset(q);
+        assert!(iq.has_tag(&li), "quoted item carries li-1");
+        assert!(iq.has_tag(&bq), "quoted item carries blockquote");
+
+        // The renderer flags it for the gutter, so the marker uses the quoted base.
+        let m = products
+            .list_markers
+            .first()
+            .expect("the quoted item recorded a marker");
+        assert!(
+            m.quoted,
+            "a list item inside a blockquote is flagged quoted"
+        );
+        assert_eq!(m.depth, 1);
+
+        // Resolved geometry on a realized view: the quoted item must sit strictly right of
+        // the quote's own text margin, and strictly right of an unquoted item at the same
+        // depth. `iter_location().x()` is the margin GTK actually resolved.
+        let view = gtk::TextView::with_buffer(buf);
+        let cfg = &crate::config::config().view;
+        view.set_left_margin(cfg.left_margin);
+        let win = gtk::Window::new();
+        win.set_child(Some(&view));
+        win.present();
+
+        let x_of = |needle: &str| {
+            let off = char_off(&buffer_slice(buf), needle);
+            view.iter_location(&buf.iter_at_offset(off)).x()
+        };
+        let body_x = x_of("body");
+        let quoted_x = x_of("quoted item");
+        let m = &crate::theme::active().metrics;
+        let bq_text_x = cfg.left_margin + m.blockquote_bar_width + m.blockquote_text_gap;
+
+        assert_eq!(body_x, cfg.left_margin, "body text sits at the view margin");
+        // The regression: this was 28 (the bare `li-1` absolute), LEFT of bq_text_x (33) and
+        // so left of the quote's accent bar drawn at the body margin.
+        assert_eq!(
+            quoted_x,
+            bq_text_x + m.list_step,
+            "a quoted depth-1 item sits one step inside the QUOTE's text margin"
+        );
+        assert!(
+            quoted_x > bq_text_x,
+            "quoted item ({quoted_x}) escaped its blockquote ({bq_text_x})"
+        );
+        // Its marker column (half a step left of the content margin) also stays inside.
+        assert!(
+            (quoted_x - m.list_step / 2) > bq_text_x,
+            "the quoted item's marker column escaped the blockquote"
+        );
+        win.destroy();
+    }
+
+    /// A NESTED list item's line carries EXACTLY ONE `li-*` tag — its own depth's.
+    /// An outer item's span ENCLOSES its nested list, so the outer pass would otherwise
+    /// stack `li-1` onto the nested line's `li-2`. Because the margins are ACCUMULATIVE
+    /// (ScrAP-121), two stacked `li-*` tags SUM — a depth-2 item would land at
+    /// `20 + 28 + 56 = 104` instead of `20 + 56 = 76`, stranding its drawn gutter marker
+    /// (placed at `depth*list_step` from the base) ~42px left of its own text. The old
+    /// non-accumulative margins hid the stacking: the deeper tag is added to the table
+    /// later, so it won on priority and nesting worked by accident.
+    /// (`LIST_STEP` is now the active theme's `list_step` metric — same single
+    /// resolution point, sourced from data instead of a const.)
+    #[gtktest::test]
+    fn nested_list_item_carries_exactly_one_depth_tag() {
+        let md = "- level one\n  - level two\n    - level three";
+        let products = build_render_products(md, None, 1.0, false);
+        let buf = &products.buf;
+        let table = buf.tag_table();
+        let slice = buffer_slice(buf);
+
+        let li_names: Vec<String> = (1..=6)
+            .flat_map(|d| [format!("li-{d}"), format!("li-{d}-cont")])
+            .collect();
+        let li_tags_at = |needle: &str| -> Vec<String> {
+            let off = char_off(&slice, needle);
+            buf.iter_at_offset(off)
+                .tags()
+                .iter()
+                .filter_map(|t| t.name().map(|n| n.to_string()))
+                .filter(|n| li_names.contains(n))
+                .collect()
+        };
+
+        // The regression: "level two" carried BOTH li-1 (from the enclosing item's span)
+        // and li-2; "level three" carried li-1, li-2 AND li-3.
+        assert_eq!(li_tags_at("level one"), ["li-1"], "depth 1 → li-1 only");
+        assert_eq!(li_tags_at("level two"), ["li-2"], "depth 2 → li-2 only");
+        assert_eq!(li_tags_at("level three"), ["li-3"], "depth 3 → li-3 only");
+
+        // Resolved geometry: each level steps by exactly one list_step from the view margin.
+        let view = gtk::TextView::with_buffer(buf);
+        let cfg_lm = crate::config::config().view.left_margin;
+        view.set_left_margin(cfg_lm);
+        let win = gtk::Window::new();
+        win.set_child(Some(&view));
+        win.present();
+        let x_of = |needle: &str| {
+            let off = char_off(&buffer_slice(buf), needle);
+            view.iter_location(&buf.iter_at_offset(off)).x()
+        };
+        let step = crate::theme::active().metrics.list_step;
+        for (depth, needle) in [(1, "level one"), (2, "level two"), (3, "level three")] {
+            assert_eq!(
+                x_of(needle),
+                cfg_lm + depth * step,
+                "depth-{depth} item sits {depth} step(s) inside the view margin"
+            );
+        }
+        // Tag lookups above are meaningless if the family isn't in the table at all.
+        assert!(table.lookup("li-3").is_some(), "li-3 tag exists");
+        win.destroy();
+    }
+
+    /// The reverted-flow + uniform-margin invariant: a multi-line
+    /// list item now renders as MULTIPLE buffer lines, and EVERY one of them sits at the
+    /// SAME `left_margin`. Assert each item content line carries a `li-1` OR `li-1-cont`
+    /// tag whose `left_margin` is identical (the newlines between them stay untagged, so
+    /// each line gets its own margin toggle — ScrAP-76).
+    #[gtktest::test]
+    fn multi_line_list_item_lines_all_share_one_left_margin() {
+        let md = "- line one of the item\\\n  line two of the item\\\n  line three of the item";
+        let products = build_render_products(md, None, 1.0, false);
+        let buf = &products.buf;
+        let table = buf.tag_table();
+        let li = table.lookup("li-1").expect("li-1 tag exists");
+        let li_cont = table.lookup("li-1-cont").expect("li-1-cont tag exists");
+        let margin = li.left_margin();
+        assert_eq!(
+            margin,
+            li_cont.left_margin(),
+            "the two variants share one margin"
+        );
+        let slice = buffer_slice(buf);
+        let chars: Vec<char> = slice.chars().collect();
+        // Three source lines → three content buffer lines. Every content char of the item
+        // carries li-1 OR li-1-cont (same margin); every interior newline is left UNTAGGED
+        // (the per-line toggle that prevents the ScrAP-76 middle-line margin drop).
+        let first = char_off(&slice, "line one");
+        let end =
+            char_off(&slice, "line three of the item") + "line three of the item".len() as i32;
+        let mut interior_newlines = 0;
+        for off in first..end {
+            let it = buf.iter_at_offset(off);
+            if chars[off as usize] == '\n' {
+                interior_newlines += 1;
+                assert!(
+                    !it.has_tag(&li) && !it.has_tag(&li_cont),
+                    "interior newline at {off} must be UNTAGGED (the per-line toggle)"
+                );
+            } else {
+                assert!(
+                    it.has_tag(&li) || it.has_tag(&li_cont),
+                    "content char at {off} must carry a uniform-margin list tag"
+                );
+            }
+        }
+        assert_eq!(
+            interior_newlines, 2,
+            "a 3-line item has 2 interior newlines"
+        );
+    }
+
+    /// A tab-separated table (tabs after each cell and in the delimiter row) that
+    /// CommonMark/GFM would reject as a table now renders as a real anchored
+    /// `ScribTableWidget`, thanks to inline-tab normalisation (ScrAP-75). Without
+    /// the fix the whole block becomes a literal paragraph — no anchored table.
+    #[gtktest::test]
+    fn tab_separated_table_still_renders_as_a_table() {
+        let md = "|Project\t|Approach\t|\n|---\t|---\t|\n|Foo|Bar|";
+        let products = build_render_products(md, None, 1.0, false);
+        let tables = collect_table_anchors(&products.anchored);
+        assert_eq!(
+            tables.len(),
+            1,
+            "the tab table must anchor one ScribTableWidget"
+        );
+    }
+
+    /// The header row's cells (the row above the `---` delimiter) carry the
+    /// `cell-head` CSS class (bold + grayish fill); body cells do not.
+    #[gtktest::test]
+    fn header_row_cells_are_styled_as_headers() {
+        let md = "| H1 | H2 |\n|---|---|\n| b1 | b2 |";
+        let products = build_render_products(md, None, 1.0, false);
+        let labels = collect_cell_labels(&products.anchored);
+        // Row-major order: first two labels are the header cells, next two the body.
+        assert!(labels[0].has_css_class("cell-head"), "H1 is a header cell");
+        assert!(labels[1].has_css_class("cell-head"), "H2 is a header cell");
+        assert!(!labels[2].has_css_class("cell-head"), "b1 is a body cell");
+        assert!(!labels[3].has_css_class("cell-head"), "b2 is a body cell");
+    }
+
+    /// A CriticMarkup `{==highlight==}{>>comment<<}` renders the bare claim in the
+    /// buffer (delimiters and comment removed by the pre-parse extraction) and the
+    /// `annotation-highlight` tag covers EXACTLY the claim's characters — not the
+    /// surrounding prose.
+    #[gtktest::test]
+    fn criticmarkup_highlight_tags_the_claim_only() {
+        let md = "the earth is {==flat==}{>>citation needed<<} ok";
+        let products = build_render_products(md, None, 1.0, false);
+        let buf = &products.buf;
+        let text = buffer_slice(buf);
+        assert_eq!(text, "the earth is flat ok", "cleaned buffer text");
+        let tag = buf
+            .tag_table()
+            .lookup("annotation-highlight")
+            .expect("highlight tag exists");
+        let flat = char_off(&text, "flat");
+        for off in flat..flat + 4 {
+            assert!(
+                buf.iter_at_offset(off).has_tag(&tag),
+                "char {off} of the claim must be highlighted"
+            );
+        }
+        assert!(
+            !buf.iter_at_offset(flat - 1).has_tag(&tag),
+            "the space before the claim is not highlighted"
+        );
+        assert!(
+            !buf.iter_at_offset(flat + 4).has_tag(&tag),
+            "the space after the claim is not highlighted"
+        );
+    }
+
+    /// The same "exactly the claim" contract on a run whose rendered length DIFFERS
+    /// from its source length because the crate's own scanner stripped construct
+    /// markers (`==mark==` → `mark`). The mapper used to give up on any such run and
+    /// tag the whole event, so an annotation *anywhere* on the line washed all of
+    /// `a mark b` — including, as here, one on a plain word nowhere near the
+    /// construct. Live-observed on KDE/X11 before the fix; the markers' positions are
+    /// known exactly, so the run is mappable.
+    #[gtktest::test]
+    fn criticmarkup_highlight_is_exact_on_a_marker_stripped_run() {
+        for (md, want) in [
+            // Claim on a plain word, construct elsewhere on the line. The claim word is
+            // `z` so `char_off` cannot match a letter of the construct's own content
+            // (`b` collides with the `b` in `sub`, which is a test bug, not a defect).
+            ("a ==mark== {==z==}{>>far<<}", "z"),
+            // Claim covering the whole construct: only its CONTENT is in the buffer.
+            ("a {====mark====}{>>note<<} b", "mark"),
+            // Same for the other three scanned kinds.
+            ("a ~~strike~~ {==z==}{>>far<<}", "z"),
+            ("a ^sup^ {==z==}{>>far<<}", "z"),
+            ("a ~sub~ {==z==}{>>far<<}", "z"),
+        ] {
+            let products = build_render_products(md, None, 1.0, false);
+            let buf = &products.buf;
+            let text = buffer_slice(buf);
+            let tag = buf
+                .tag_table()
+                .lookup("annotation-highlight")
+                .expect("highlight tag exists");
+            let at = char_off(&text, want);
+            let n = want.chars().count() as i32;
+            for off in at..at + n {
+                assert!(
+                    buf.iter_at_offset(off).has_tag(&tag),
+                    "{md:?}: char {off} of the claim {want:?} must be highlighted (text {text:?})"
+                );
+            }
+            assert!(
+                at == 0 || !buf.iter_at_offset(at - 1).has_tag(&tag),
+                "{md:?}: the char BEFORE the claim must not be highlighted (text {text:?})"
+            );
+            assert!(
+                at + n >= text.chars().count() as i32 || !buf.iter_at_offset(at + n).has_tag(&tag),
+                "{md:?}: the char AFTER the claim must not be highlighted (text {text:?})"
+            );
+        }
+    }
+
+    /// Adding an annotation refreshes the highlight tags + markers IN PLACE on the live
+    /// buffer — it does NOT swap the buffer (`set_buffer`). A swap would reset the scroll
+    /// to the top and repaint the whole document, making the preview visibly JUMP; this is
+    /// the regression guard for that (the fix relies on an annotation add/remove leaving
+    /// the rendered text byte-identical). See `preview::render::refresh_annotations_in_place`.
+    #[gtktest::test]
+    fn annotation_refresh_updates_tags_in_place_without_a_buffer_swap() {
+        // Initial render WITHOUT the annotation.
+        let pane = crate::preview::render("the earth is flat ok", None, 1.0, false);
+        let sw = pane
+            .downcast::<gtk::Overlay>()
+            .expect("preview pane is a GtkOverlay")
+            .child()
+            .and_then(|c| c.downcast::<gtk::ScrolledWindow>().ok())
+            .expect("overlay wraps the scroller");
+        let view = sw
+            .child()
+            .and_then(|c| c.downcast::<super::CodePreviewView>().ok())
+            .expect("scroller holds the CodePreviewView");
+        let buf_before = view.buffer();
+        let tag = buf_before
+            .tag_table()
+            .lookup("annotation-highlight")
+            .expect("highlight tag exists");
+        let flat = char_off(&buffer_slice(&buf_before), "flat");
+        assert!(
+            !buf_before.iter_at_offset(flat).has_tag(&tag),
+            "claim is not highlighted before the annotation"
+        );
+
+        // The SAME text but now wrapped in CriticMarkup — the cleaned/rendered text is
+        // identical ("the earth is flat ok"), so the fast path must apply the highlight in
+        // place and NOT swap the buffer.
+        let applied = crate::preview::refresh_annotations_in_place(
+            &sw,
+            "the earth is {==flat==}{>>note<<} ok",
+            None,
+            1.0,
+            false,
+        );
+        assert!(
+            applied,
+            "identical rendered text → in-place refresh (no set_buffer)"
+        );
+        assert_eq!(
+            view.buffer(),
+            buf_before,
+            "the buffer object is unchanged (never swapped) — no scroll reset / jump"
+        );
+        assert_eq!(
+            buffer_slice(&view.buffer()),
+            "the earth is flat ok",
+            "the rendered text stays identical"
+        );
+        // The highlight now covers exactly "flat".
+        for off in flat..flat + 4 {
+            assert!(
+                view.buffer().iter_at_offset(off).has_tag(&tag),
+                "claim char {off} is highlighted after the in-place refresh"
+            );
+        }
+        assert!(!view.buffer().iter_at_offset(flat - 1).has_tag(&tag));
+        assert!(!view.buffer().iter_at_offset(flat + 4).has_tag(&tag));
+    }
+
+    /// One marker per annotation that carries a comment, each anchored to the
+    /// buffer LINE its claim/point actually sits on — the regression guard for the
+    /// paragraph-separator event mis-mapping a claim boundary onto the wrong line.
+    #[gtktest::test]
+    fn markers_anchor_to_the_correct_line() {
+        let md = "The earth is {==flat==}{>>c1<<} and {==green==}{>>c2<<} here.\n\nPoint here{>>c3<<} prose.\n\nSecond {==span words==}{>>c4<<} mid.";
+        let products = build_render_products(md, None, 1.0, false);
+        let buf = &products.buf;
+        let line_of = |anchor: i32| buf.iter_at_offset(anchor).line();
+        assert_eq!(
+            products.markers.len(),
+            4,
+            "one marker per commented annotation"
+        );
+        // Buffer lines: 0 = para 1, 2 = para 2 (point comment), 4 = para 3.
+        assert_eq!(line_of(products.markers[0].anchor), 0, "flat is on line 0");
+        assert_eq!(line_of(products.markers[1].anchor), 0, "green is on line 0");
+        assert_eq!(
+            line_of(products.markers[2].anchor),
+            2,
+            "the point comment is on line 2, not the separator"
+        );
+        assert_eq!(
+            line_of(products.markers[3].anchor),
+            4,
+            "the third highlight is on line 4"
+        );
+    }
+
+    /// Selecting ONE plain word in a paragraph that also holds soft-breaks, inline
+    /// code, and bold — and is followed by a second paragraph — wraps ONLY that
+    /// word. Regression: a paragraph's non-empty source `close` (trailing bytes
+    /// past its last child) used to be mis-flagged as an inline construct, so
+    /// wrap_span engulfed the entire block. Mirrors the MANUAL-TEST.md structure.
+    #[gtktest::test]
+    fn wrap_span_single_word_does_not_engulf_the_block() {
+        let md = "Exhaustive manual/GUI verification checklist here. This complements\n`cargo test` and is **not** automatable.\n\nSecond paragraph via `xdotool` here.";
+        let products = build_render_products(md, None, 1.0, false);
+        let text = buffer_slice(&products.buf);
+        let a = char_off(&text, "verification");
+        let b = a + "verification".len() as i32; // ascii
+        let span = crate::copymap::wrap_span(&products.copymap, &products.md_owned, a, b)
+            .expect("a wrap span");
+        assert_eq!(&md[span], "verification");
+    }
+
+    /// Same regression as above, but against the checked-in fixture that mirrors
+    /// the real MANUAL-TEST.md first paragraph (soft-breaks + inline code + bold,
+    /// followed by a fenced `xdotool` block). Selecting the plain word
+    /// "verification" must wrap ONLY that word — never run to the end of the block
+    /// or into the following code fence. The operator hit this by selecting "just
+    /// about anything in the first paragraph"; this pins the fixture as a contract.
+    #[gtktest::test]
+    fn fixture_first_paragraph_word_wraps_only_that_word() {
+        let md = include_str!("../../tests/fixtures/annotate-inline.md");
+        let products = build_render_products(md, None, 1.0, false);
+        let text = buffer_slice(&products.buf);
+        let a = char_off(&text, "verification");
+        let b = a + "verification".len() as i32; // ascii
+        let span = crate::copymap::wrap_span(&products.copymap, &products.md_owned, a, b)
+            .expect("a wrap span");
+        assert_eq!(
+            &md[span], "verification",
+            "a single word in the first paragraph must not engulf the block"
+        );
+    }
+
+    /// An annotation whose claim is (or covers) inline `code` stays VISIBLE. The
+    /// `annotation-highlight` tag must be applied to the code text AND outrank the
+    /// opaque `code-inline` background — GTK text-tag backgrounds don't composite
+    /// between tags (the highest-priority tag's background wins outright), so a
+    /// translucent highlight added earlier than `code-inline` would be painted over
+    /// and the annotation would appear to vanish. Regression: ScrAP-99.
+    #[gtktest::test]
+    fn annotation_over_inline_code_stays_visible() {
+        let annotated = "before {==`code word`==}{>>note<<} after";
+        let products = build_render_products(annotated, None, 1.0, false);
+        let table = products.buf.tag_table();
+        let hl = table.lookup("annotation-highlight").expect("highlight tag");
+        let code = table.lookup("code-inline").expect("code-inline tag");
+        assert!(
+            hl.priority() > code.priority(),
+            "highlight (prio {}) must outrank code-inline (prio {}) or the code \
+             background paints over it",
+            hl.priority(),
+            code.priority()
+        );
+        // The highlight tag is actually applied over the rendered code text.
+        let text = buffer_slice(&products.buf); // "before code word after"
+        let cs = char_off(&text, "code");
+        assert!(
+            products.buf.iter_at_offset(cs).has_tag(&hl),
+            "the inline code text must carry the annotation highlight"
+        );
+        // …and a margin marker exists for it.
+        assert_eq!(
+            products.markers.len(),
+            1,
+            "one marker for the annotated code"
+        );
+    }
+
+    /// Annotating a selection that spans inline code + bold produces ONE
+    /// well-formed highlight whose `{==…==}` wraps both constructs WHOLE — never
+    /// splitting a `` ` `` or `**` (the inline-construct-split regression). Drives
+    /// the real render's copymap through `create_from_selection` end-to-end.
+    #[gtktest::test]
+    fn annotate_across_inline_constructs_is_wellformed() {
+        let md = "start with `code span` and **bold word** at end.";
+        let products = build_render_products(md, None, 1.0, false);
+        let text = buffer_slice(&products.buf); // "start with code span and bold word at end."
+                                                // Select "with … bold word" (from plain text, through the code, ending at
+                                                // the bold word's content boundary — the exact shape that used to split).
+        let a = char_off(&text, "with");
+        let b = char_off(&text, "word") + 4; // end of "word"
+        let create = crate::preview::annotate::create_from_selection(
+            &products.copymap,
+            &products.shifts,
+            &products.md_owned,
+            a,
+            b,
+            "note",
+        );
+        let Some(crate::codeview::CreateAnnotation::Highlight { range, comment }) = create else {
+            panic!("expected a highlight, got {create:?}");
+        };
+        // The wrap span includes the inline code and the bold WHOLE.
+        assert_eq!(&md[range.clone()], "with `code span` and **bold word**");
+        let out = crate::annotate::insert_or_extend_highlight(md, range, &comment);
+        assert_eq!(
+            out,
+            "start {==with `code span` and **bold word**==}{>>note<<} at end."
+        );
+        // …and it re-extracts to exactly ONE highlight whose content is the source
+        // (markdown intact — extract strips only CriticMarkup), which renders as the
+        // highlighted "with code span and bold word".
+        let ext = crate::annotate::extract(&out);
+        assert_eq!(ext.annotations.len(), 1, "one well-formed highlight");
+        assert_eq!(
+            &ext.cleaned[ext.annotations[0].cleaned_content.start.raw()
+                ..ext.annotations[0].cleaned_content.end.raw()],
+            "with `code span` and **bold word**"
+        );
+    }
+
+    /// Copy-as-Markdown still round-trips over annotated text: because the maps
+    /// stay in cleaned coordinates, copying a highlighted claim yields the clean
+    /// prose (no `{==…==}` cruft) and Select-All equals the cleaned document. This
+    /// is the TDD 2.8 regression guard for the annotation feature.
+    #[gtktest::test]
+    fn copy_over_annotated_text_is_clean_prose() {
+        let md = "alpha {==beta==}{>>note<<} gamma";
+        let cleaned = "alpha beta gamma";
+        let products = build_render_products(md, None, 1.0, false);
+        assert_eq!(buffer_slice(&products.buf), cleaned);
+        let b = char_off(cleaned, "beta");
+        assert_eq!(
+            crate::copymap::resolve(&products.copymap, cleaned, b, b + 4),
+            "beta"
+        );
+        let n = products.buf.char_count();
+        assert_eq!(
+            crate::copymap::resolve(&products.copymap, cleaned, 0, n),
+            cleaned
+        );
+    }
+
+    // ── reading themes (TDD §18) ──────────────────────────────────────────────
+
+    /// Render `md` under the theme `id`, restoring the previously-active theme after.
+    /// The active theme is app-wide state, so a test that changed it and walked away
+    /// would leak into whichever test ran next on the shared GTK thread.
+    fn with_theme<T>(id: &str, f: impl FnOnce() -> T) -> T {
+        let prev = crate::theme::active().id.clone();
+        crate::theme::set_active(id);
+        let out = f();
+        crate::theme::set_active(&prev);
+        out
+    }
+
+    /// The resolved x of `needle`'s first char on a realized view — i.e. the margin
+    /// GTK ACTUALLY laid out, not the value we put on a tag.
+    ///
+    /// This indirection is the whole point of TDD 18.10 and the lesson ScrAP-121 cost
+    /// three rounds to learn: a themed-geometry test that asserts "the tag's
+    /// left_margin property == the theme's value" passes happily while every list
+    /// marker sits stranded beside its text, because the bug lives in how GTK
+    /// RESOLVES several tags' margins together. Only the resolved pixel sees it.
+    fn resolved_x(buf: &gtk::TextBuffer, needle: &str) -> i32 {
+        let view = gtk::TextView::with_buffer(buf);
+        view.set_left_margin(crate::config::config().view.left_margin);
+        let win = gtk::Window::new();
+        win.set_child(Some(&view));
+        win.present();
+        let off = char_off(&buffer_slice(buf), needle);
+        let x = view.iter_location(&buf.iter_at_offset(off)).x();
+        win.destroy();
+        x
+    }
+
+    /// TDD 18.10 / ScrAP-121 — a themed `list_step` must move the item's TEXT, resolved
+    /// on a live view, not merely the tag property. The one-key rule's other half
+    /// (that the drawn marker moves with it) is covered by `codeview::gutter`'s pure
+    /// tests, which read the SAME key this render resolves through.
+    #[gtktest::test]
+    fn a_themed_list_step_moves_the_resolved_text_position() {
+        let md = "- level one\n  - level two";
+        let cfg_lm = crate::config::config().view.left_margin;
+
+        // Baseline: the shipped step.
+        let base_step = crate::theme::themes()
+            .resolve(crate::theme::SYSTEM_ID)
+            .metrics
+            .list_step;
+        let products = build_render_products(md, None, 1.0, false);
+        assert_eq!(resolved_x(&products.buf, "level one"), cfg_lm + base_step);
+        assert_eq!(
+            resolved_x(&products.buf, "level two"),
+            cfg_lm + 2 * base_step
+        );
+
+        // A theme that widens the step must widen the RESOLVED indent, at every depth.
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test("[themes.wide]\nlist_step = 40\n");
+        crate::theme::set_active_for_test(themes.resolve("wide"));
+        let products = build_render_products(md, None, 1.0, false);
+        assert_eq!(
+            resolved_x(&products.buf, "level one"),
+            cfg_lm + 40,
+            "a themed list_step must reach the resolved depth-1 indent"
+        );
+        assert_eq!(
+            resolved_x(&products.buf, "level two"),
+            cfg_lm + 80,
+            "…and accumulate correctly at depth 2"
+        );
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// TDD 18.10 — a themed blockquote bar/gap must move the quote's resolved text,
+    /// and a list inside the quote must still nest INSIDE it (POLICY Document
+    /// Rendering CAM row 2). This is the pairing that ScrAP-121 broke: the container's
+    /// margin and the item's accumulate, so a themed container metric that reached
+    /// only one of them makes a lopsided quote.
+    #[gtktest::test]
+    fn a_themed_blockquote_metric_moves_the_quote_and_keeps_its_list_inside() {
+        let md = "> quoted text\n>\n> - quoted item";
+        let cfg_lm = crate::config::config().view.left_margin;
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.wideq]\nblockquote_bar_width = 6\nblockquote_text_gap = 20\n",
+        );
+        crate::theme::set_active_for_test(themes.resolve("wideq"));
+        let products = build_render_products(md, None, 1.0, false);
+        let bq_text_x = cfg_lm + 6 + 20;
+        assert_eq!(
+            resolved_x(&products.buf, "quoted text"),
+            bq_text_x,
+            "the themed bar+gap must reach the quote's resolved text margin"
+        );
+        let step = crate::theme::active().metrics.list_step;
+        assert_eq!(
+            resolved_x(&products.buf, "quoted item"),
+            bq_text_x + step,
+            "a quoted item accumulates onto the THEMED quote margin, staying inside it"
+        );
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// TDD 18.2 — the regression bar, at the layer that matters: selecting a reading
+    /// theme must not disturb the document's resolved LAYOUT. Sepia restyles colour
+    /// and typeface; it states no geometry, so every position is identical to System.
+    #[gtktest::test]
+    fn a_reading_theme_does_not_move_the_layout() {
+        let md = "# Heading\n\nbody\n\n- item\n\n> quote";
+        let sys: Vec<i32> = with_theme(crate::theme::SYSTEM_ID, || {
+            let p = build_render_products(md, None, 1.0, false);
+            ["Heading", "body", "item", "quote"]
+                .iter()
+                .map(|n| resolved_x(&p.buf, n))
+                .collect()
+        });
+        let sep: Vec<i32> = with_theme("sepia", || {
+            let p = build_render_products(md, None, 1.0, false);
+            ["Heading", "body", "item", "quote"]
+                .iter()
+                .map(|n| resolved_x(&p.buf, n))
+                .collect()
+        });
+        assert_eq!(
+            sys, sep,
+            "Sepia states no geometry, so it must not move anything"
+        );
+    }
+
+    /// TDD 18.9 — theme and zoom compose. The theme owns Pango SCALE, which GTK
+    /// MULTIPLIES onto the CSS base that zoom sets, so a themed heading hierarchy
+    /// survives at any zoom instead of fighting the zoom provider for `font-size`.
+    #[gtktest::test]
+    fn a_themed_heading_scale_reaches_the_tag_and_leaves_font_size_alone() {
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test("[themes.big]\nheading_scale = [3.0, 2.0, 1.5, 1.0]\n");
+        crate::theme::set_active_for_test(themes.resolve("big"));
+        for zoom in [1.0, 2.0] {
+            let products = build_render_products("# H1\n\n## H2\n\nbody", None, zoom, false);
+            let h1 = products.buf.tag_table().lookup("h1").unwrap();
+            let h2 = products.buf.tag_table().lookup("h2").unwrap();
+            // Scale is a MULTIPLIER, so it is the same number at every zoom — that is
+            // exactly what makes it zoom-safe, and why the theme has no font_size key.
+            assert_eq!(h1.scale(), 3.0, "themed h1 scale at zoom {zoom}");
+            assert_eq!(h2.scale(), 2.0, "themed h2 scale at zoom {zoom}");
+            // The tag must NOT carry a size: zoom owns font-size, via CSS, alone.
+            assert!(
+                !h1.is_size_set(),
+                "a heading tag must not set an absolute size"
+            );
+        }
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// TDD 2.1a — the preview has FIVE heading tiers, and h6 folds onto the h5 tag:
+    /// there is no distinct `h6` tag, and a `######` line carries the same `h5` tag
+    /// as a `#####` line, so the two render identically. (`emit.rs` `_ => H5`.)
+    #[gtktest::test]
+    fn h6_folds_onto_the_h5_tag_and_no_h6_tag_exists() {
+        let products = build_render_products(
+            "# one\n\n## two\n\n### three\n\n#### four\n\n##### five\n\n###### six\n",
+            None,
+            1.0,
+            false,
+        );
+        let tt = products.buf.tag_table();
+        for n in ["h1", "h2", "h3", "h4", "h5"] {
+            assert!(tt.lookup(n).is_some(), "tag {n} must be registered");
+        }
+        assert!(
+            tt.lookup("h6").is_none(),
+            "there is no distinct h6 tag — h6 folds onto h5"
+        );
+
+        // The h5 tag applies to BOTH the h5 line ("five") and the h6 line ("six").
+        // Scan every char position on the matching line (not just the start iter,
+        // whose tag membership is a boundary edge case) for the h5 tag.
+        let line_carries_h5 = |needle: &str| {
+            let buf = &products.buf;
+            let mut it = buf.start_iter();
+            loop {
+                let mut end = it;
+                end.forward_to_line_end();
+                // `slice` (not `text`) is the sanctioned reader — ScrAP-5: `text`
+                // omits anchored children and drifts offsets. TextIter is Copy.
+                if buf.slice(&it, &end, false).contains(needle) {
+                    let mut p = it;
+                    while p < end {
+                        if p.tags().iter().any(|t| t.name().as_deref() == Some("h5")) {
+                            return true;
+                        }
+                        if !p.forward_char() {
+                            break;
+                        }
+                    }
+                    return false;
+                }
+                if !it.forward_line() {
+                    return false;
+                }
+            }
+        };
+        assert!(line_carries_h5("five"), "the h5 line carries the h5 tag");
+        assert!(line_carries_h5("six"), "the h6 line folds onto the h5 tag");
+    }
+
+    /// TDD 18.5/18.6 — one key, two application paths. The annotation highlight's
+    /// body tag and its table-cell Pango markup must carry the SAME theme colour;
+    /// they were independent literals, free to drift.
+    #[gtktest::test]
+    fn the_annotation_highlight_matches_between_body_and_cell_under_every_theme() {
+        for id in ["system", "sepia"] {
+            with_theme(id, || {
+                let products = build_render_products("{==claim==}{>>note<<}", None, 1.0, false);
+                let tag = products
+                    .buf
+                    .tag_table()
+                    .lookup("annotation-highlight")
+                    .expect("the highlight tag exists");
+                let tag_rgba = tag.background_rgba().expect("the tag carries a colour");
+                let theme = crate::theme::active();
+                assert_eq!(
+                    tag_rgba,
+                    theme.annotation_hl.rgba(),
+                    "{id}: body tag colour"
+                );
+                // The cell path decomposes the same key into Pango attributes.
+                let cell = crate::renderer::ann_hl_open();
+                assert!(
+                    cell.contains(&theme.annotation_hl.hex()),
+                    "{id}: cell markup: {cell}"
+                );
+                assert!(
+                    cell.contains(&theme.annotation_hl.alpha_pct()),
+                    "{id}: {cell}"
+                );
+            });
+        }
+    }
+
+    /// Write a real 4×4 PNG into `dir` and return its path — a decodable local
+    /// image for the `<picture>`/`<img>` render tests (uses gdk-pixbuf, which GTK
+    /// already links, so no new fixture asset is needed).
+    fn write_png(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        write_png_sized(dir, name, 4, 4)
+    }
+
+    fn write_png_sized(dir: &std::path::Path, name: &str, w: i32, h: i32) -> std::path::PathBuf {
+        let pb = gtk::gdk_pixbuf::Pixbuf::new(gtk::gdk_pixbuf::Colorspace::Rgb, false, 8, w, h)
+            .expect("allocate pixbuf");
+        pb.fill(0xff_00_00_ff);
+        let path = dir.join(name);
+        pb.savev(&path, "png", &[]).expect("save png");
+        path
+    }
+
+    /// ScrAP-147 / TDD 2.23: a raw-HTML `<picture>` block resolves to a
+    /// SINGLE anchored image (the first decodable source — here the `<img>` PNG
+    /// fallback, since the WebP `<source>` file is absent), and the raw HTML
+    /// fragments are NOT rendered as literal text (they are accumulated across the
+    /// per-line `Event::Html` events and parsed once at `TagEnd::HtmlBlock`).
+    #[gtktest::test]
+    fn picture_block_renders_a_single_anchored_image() {
+        let dir = tempfile::tempdir().unwrap();
+        write_png(dir.path(), "hero.png");
+        let md = "# Hero\n\n<picture>\n\
+                  <source srcset=\"hero.webp\" type=\"image/webp\">\n\
+                  <img src=\"hero.png\" alt=\"Hero\">\n\
+                  </picture>\n\nAfter the hero.";
+        let products = build_render_products(md, Some(dir.path()), 1.0, false);
+        assert_eq!(
+            products.image_bounded.len(),
+            1,
+            "exactly one GtkPicture anchored from the <picture> block"
+        );
+        let slice = buffer_slice(&products.buf);
+        for leaked in ["<picture", "srcset", "<img", "hero.webp"] {
+            assert!(
+                !slice.contains(leaked),
+                "raw HTML fragment {leaked:?} must not render as text: {slice:?}"
+            );
+        }
+        // Surrounding Markdown still renders normally around the anchored image.
+        assert!(slice.contains("Hero") && slice.contains("After the hero."));
+    }
+
+    /// TDD 2.23: a DECODABLE `<source>` is preferred over the `<img>` fallback (the
+    /// `<source>` list is honoured, not ignored). Proven by size: a 8×8 source PNG
+    /// and a 4×4 `<img>` PNG — the anchored image takes the SOURCE's natural size.
+    /// (On a machine whose only source is an undecodable WebP, the source is instead
+    /// correctly SKIPPED for the `<img>` — the two are indistinguishable by eye,
+    /// which is why this pins it by dimension.)
+    #[gtktest::test]
+    fn decodable_source_is_preferred_over_img_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        write_png_sized(dir.path(), "first.png", 8, 8);
+        write_png_sized(dir.path(), "fallback.png", 4, 4);
+        let md = "<picture>\n\
+                  <source srcset=\"first.png\">\n\
+                  <img src=\"fallback.png\">\n\
+                  </picture>";
+        let products = build_render_products(md, Some(dir.path()), 1.0, false);
+        assert_eq!(products.image_bounded.len(), 1, "one anchored image");
+        let (_widget, nat_w, nat_h) = &products.image_bounded[0];
+        assert_eq!(
+            (*nat_w, *nat_h),
+            (8, 8),
+            "the <source> (8×8) was chosen, not the <img> fallback (4×4)"
+        );
+    }
+
+    /// TDD 2.23 / ScrAP-147: WITHOUT an enclosing `<picture>`, a `<source>` and an
+    /// `<img>` are INDEPENDENT images (two slots) — the `<source>` must not suppress
+    /// the `<img>`; WITH `<picture>` the same two group into ONE fallback slot (the
+    /// source wins). Deterministic (both candidates are decodable PNGs), so it holds
+    /// with or without a WebP loader installed.
+    #[gtktest::test]
+    fn picture_groups_but_ungrouped_source_and_img_are_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        write_png_sized(dir.path(), "a.png", 8, 8);
+        write_png_sized(dir.path(), "b.png", 4, 4);
+        // No <picture>: <source> + <img> → TWO anchored images.
+        let ungrouped = build_render_products(
+            "<source srcset=\"a.png\">\n<img src=\"b.png\">",
+            Some(dir.path()),
+            1.0,
+            false,
+        );
+        assert_eq!(
+            ungrouped.image_bounded.len(),
+            2,
+            "ungrouped <source> + <img> render as two independent images"
+        );
+        // Wrapped in <picture>: ONE image, the 8×8 <source> winning the fallback.
+        let grouped = build_render_products(
+            "<picture><source srcset=\"a.png\"><img src=\"b.png\"></picture>",
+            Some(dir.path()),
+            1.0,
+            false,
+        );
+        assert_eq!(
+            grouped.image_bounded.len(),
+            1,
+            "<picture> groups into one slot"
+        );
+        let (_widget, nat_w, _nat_h) = &grouped.image_bounded[0];
+        assert_eq!(*nat_w, 8, "the <source> (8×8) won the <picture> fallback");
+    }
+
+    /// TDD 2.23: a bare `<img>` (no `<picture>`) also renders through the shared
+    /// image path.
+    #[gtktest::test]
+    fn bare_img_element_renders_an_anchored_image() {
+        let dir = tempfile::tempdir().unwrap();
+        write_png(dir.path(), "logo.png");
+        let products =
+            build_render_products("<img src=\"logo.png\">", Some(dir.path()), 1.0, false);
+        assert_eq!(
+            products.image_bounded.len(),
+            1,
+            "bare <img> anchors a picture"
+        );
+    }
+
+    /// TDD 2.22 / R3: raw HTML that is not an image element stays sanitized by
+    /// omission — it anchors nothing and never leaks as literal text.
+    #[gtktest::test]
+    fn non_image_html_is_dropped() {
+        let md = "Before.\n\n<script>alert('xss')</script>\n\n\
+                  <iframe src=\"file:///etc/passwd\"></iframe>\n\n\
+                  <div class=\"src\">hi</div>\n\nAfter.";
+        let products = build_render_products(md, None, 1.0, false);
+        assert!(products.image_bounded.is_empty(), "no images");
+        assert!(
+            products.anchored.is_empty(),
+            "non-image HTML anchors nothing (no stray broken-image marker)"
+        );
+        let slice = buffer_slice(&products.buf);
+        for leaked in ["<script", "alert", "<iframe", "passwd", "<div"] {
+            assert!(
+                !slice.contains(leaked),
+                "{leaked:?} must be dropped: {slice:?}"
+            );
+        }
+        assert!(slice.contains("Before.") && slice.contains("After."));
+    }
+
+    /// TDD 2.22: a `<picture>` whose every candidate is undecodable falls back to a
+    /// single broken-image placeholder icon (not a GtkPicture, not literal text).
+    #[gtktest::test]
+    fn picture_with_no_decodable_source_shows_broken_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let md = "<picture>\n\
+                  <source srcset=\"nope.webp\" type=\"image/webp\">\n\
+                  <img src=\"nope.png\">\n\
+                  </picture>";
+        let products = build_render_products(md, Some(dir.path()), 1.0, false);
+        assert!(products.image_bounded.is_empty(), "nothing decoded");
+        assert_eq!(
+            products.anchored.len(),
+            1,
+            "one broken-image marker anchored"
+        );
+        let (_anchor, widget) = &products.anchored[0];
+        assert!(
+            widget.downcast_ref::<gtk::Image>().is_some(),
+            "the placeholder is an image-missing GtkImage"
+        );
+    }
+
+    /// TDD 2.23 (graceful-degradation, deterministic on any machine): a byte string
+    /// that is not a decodable WebP never crashes and never leaks as text — whether
+    /// or not a WebP loader is installed, `Texture::from_file` returns Err on invalid
+    /// data, so exactly one anchored child results (the broken-image marker). Guards
+    /// that an undecodable image aborts nothing (cf. ScrAP-146 — WebP renders
+    /// via `Texture::from_file`'s own loader chain when the loader is registered).
+    #[gtktest::test]
+    fn undecodable_webp_degrades_to_one_anchored_child() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("x.webp"), b"RIFF\x00\x00\x00\x00WEBPVP8 ").unwrap();
+        let products = build_render_products("![](x.webp)", Some(dir.path()), 1.0, false);
+        assert_eq!(
+            products.anchored.len(),
+            1,
+            "one anchored child (broken-image marker)"
+        );
+        assert!(
+            !buffer_slice(&products.buf).contains("x.webp"),
+            "src not leaked as text"
+        );
+    }
+
+    /// Dogfood (ScrAP-147 — the app rendering its own README `<picture>`
+    /// hero): the app opening its OWN README must render the `<picture>` hero, not drop
+    /// it as sanitized HTML. On a machine without a webp pixbuf loader the GIF
+    /// `<img>` fallback decodes; with one, the WebP `<source>` does — either way the
+    /// hero is a single anchored image, never bare text.
+    #[gtktest::test]
+    fn the_readme_picture_hero_renders_in_app() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let md = std::fs::read_to_string(root.join("README.md")).expect("read README");
+        let products = build_render_products(&md, Some(root), 1.0, false);
+        assert!(
+            !products.image_bounded.is_empty(),
+            "the README <picture> hero must render as an anchored image, not be dropped"
+        );
+        assert!(
+            !buffer_slice(&products.buf).contains("<picture"),
+            "the <picture> markup must not leak into the rendered text"
+        );
+    }
+}

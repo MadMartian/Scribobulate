@@ -1,0 +1,26 @@
+# Normalise every text file to LF in the repository, whatever the contributor's
+# platform. Working copies still check out in the platform's native form -- this
+# governs what is STORED, not what you edit.
+#
+# This must come FIRST: in .gitattributes the LAST matching pattern wins, so the two
+# specific rules below deliberately override it. Moving this line to the end would
+# silently revoke both.
+#
+# It is pinned here rather than left to `core.autocrlf` because that setting is a
+# property of each CLONE, not of the project. Every file in this tree is already
+# stored LF (verified with `git ls-files --eol`: one deliberate exception, below), so
+# this rule renormalises nothing today -- it exists so that a contributor whose clone
+# is configured differently cannot commit CRLF without noticing. That failure mode is
+# quiet and expensive: it lands as a whole-file diff that reviews as "everything
+# changed", hiding the real change inside it.
+* text=auto
+
+# Preserve CRLF verbatim in the line-endings test fixture (MANUAL-TEST §4.2 round-trip).
+# `-text` disables all normalisation, so the CRLFs survive the rule above.
+tests/fixtures/crlf-doc.md -text
+
+# Windows batch files must check out with CRLF wherever they are cloned: cmd.exe
+# reads a .bat by byte offset as it executes, so an LF-only file can mis-seek on
+# `goto`/`call` and run the wrong branch. Nothing warns; it simply does the wrong
+# thing. Git stores LF and converts on checkout.
+*.bat text eol=crlf

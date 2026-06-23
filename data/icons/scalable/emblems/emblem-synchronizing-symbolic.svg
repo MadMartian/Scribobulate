@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  emblem-synchronizing-symbolic — two arrows chasing round a ring ("keep in
+  sync"). Drawn for Scribobulate's File > Auto-Reload toggle.
+
+  Fills only, no strokes — and NOT for the reason you would guess. GTK wraps a
+  symbolic SVG in a generated stylesheet whose first rule is
+  `rect,circle,path { fill: <fg> !important; }`, and that `!important` outranks
+  an authored `fill="none"`. MEASURED on BOTH GTK 4.6.9 and 4.22.4: an identical
+  stroked circle renders as a hollow ring under a plain rasterizer and as a
+  SOLID DISC through GTK's symbolic path. (`class="foreground-stroke"` is a
+  4.22+ opt-in that does not exist on 4.6.9, so it is not a portable fix —
+  fills-only is.) That matters especially here — the obvious
+  way to draw this glyph is two stroked arcs, which would have shipped as two
+  filled pie wedges. The ring is therefore built from filled arc BANDS (an
+  outer arc out, an inner arc back, closed), not from strokes.
+
+  Proportions are tuned for 16px, not for the 256px preview: a 2px band, 120°
+  arcs separated by 60° gaps, and deliberately oversized arrowheads. Earlier,
+  prettier passes (thin band, 150° arcs, small heads) rendered at 16px as a
+  featureless ring — the gaps closed up and the arrowheads, the whole point of
+  the glyph, were the first detail to vanish.
+-->
+<svg width="16px" height="16px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+ <g fill="#2e3436">
+  <path d="M 1.99 5.81 A 6.4 6.4 0 0 1 12.9 3.89 L 11.37 5.17 A 4.4 4.4 0 0 0 3.87 6.5 Z"/>
+  <path d="M 14.2 2.79 L 10.07 6.26 L 13.4 8.19 Z"/>
+  <path d="M 14.01 10.19 A 6.4 6.4 0 0 1 3.1 12.11 L 4.63 10.83 A 4.4 4.4 0 0 0 12.13 9.5 Z"/>
+  <path d="M 1.8 13.21 L 5.93 9.74 L 2.6 7.81 Z"/>
+ </g>
+</svg>

@@ -1,0 +1,49 @@
+# Force the GSK Cairo software renderer for everything Cargo runs (test binaries,
+# `cargo run`). This mirrors the in-process override in `scribobulate::run`
+# (`src/lib.rs`; `src/main.rs` is argument-free delegation into it) so the test
+# harness renders on exactly the stack the app ships on (ScrAP-1/ScrAP-2: 0-VRAM Cairo
+# software renderer, never GL/GLES).
+#
+# Why here and not per-test: `#[gtk::test]` bodies never route through `main.rs`,
+# so without this they realize surfaces under the default GskGLRenderer. That
+# renderer's texture-cache teardown intermittently SIGABRTs at process exit under
+# the headless Xvfb display (ScrAP-153).
+# Setting it in each test would be a forgettable per-call-site workaround the
+# happy-path assertions can't catch (the ScrAP-116 shape); the `[env]` table is one
+# enforced choke point every `cargo` invocation inherits automatically.
+#
+# `cargo run` also inherits it, which is harmless and correct — main.rs already
+# forces cairo, so this only makes the dev/test environment match production.
+[env]
+GSK_RENDERER = "cairo"
+
+# Keep the test suite's session state out of the developer's REAL state directory.
+#
+# The `gtk-integration-tests` close/quit paths run the production
+# `window::lifecycle::persist_all_windows_session`, which calls `session::save` —
+# and that resolves `XDG_STATE_HOME` live, from the ambient environment. So with no
+# override, every integration test that closes or destroys a window rewrites
+# `~/.local/state/scribobulate/session.toml`: the tester's own open tabs, window
+# geometry and theme, replaced by whatever the test happened to build. Measured, not
+# theorised — the real file's mtime moves on a bare `cargo test --features
+# gtk-integration-tests` and stays put once this is set.
+#
+# Why here rather than in the tests: the leak is not one stray test. It is any test
+# that closes a window, because the save is reached through *production* code that
+# has no test seam — `session`'s own tests are properly scoped by
+# `with_state_home_for_test`, and the window tests bypass that guard entirely by
+# going through the real lifecycle path. A per-test override would therefore have to
+# be remembered by every future window test, and forgetting it fails silently and
+# destructively (the ScrAP-116 shape, same reasoning as GSK_RENDERER above).
+#
+# NOT `force = true`: an explicitly exported `XDG_STATE_HOME` must still win, so a
+# harness or a session-restore test can point the suite at its own scratch directory.
+# `relative = true` resolves against this file's parent, so the path is
+# `<repo>/target/test-state` — inside the already-ignored build directory, and
+# removed by `cargo clean` like any other build artifact.
+#
+# `cargo run` inherits this too, which is deliberate: a dev run then keeps its
+# session separate from the installed app's instead of fighting over one file. The
+# consequence to know is that `cargo run` will NOT restore your real session — run
+# the built binary directly (`./target/release/scribobulate`) when you want that.
+XDG_STATE_HOME = { value = "target/test-state", relative = true }

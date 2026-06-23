@@ -1,0 +1,229 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 968" width="1000" height="968" role="img" aria-label="Scribobulate system overview">
+  <title>Scribobulate system overview</title>
+  <style>
+    /* Light defaults. Every box is filled, so text always sits on a surface we
+       control rather than on the viewer's page colour; only connectors and edge
+       labels touch the page, and those are mid-tones that read on white or near-black. */
+    .panel  { fill: #f4f6f8; stroke: #c9d1db; }
+    .group  { fill: #ffffff; stroke: #9aa4b2; }
+    .box    { fill: #ffffff; stroke: #8f9aa9; }
+    .widget { fill: #e7effc; stroke: #7d97c4; }
+    .store  { fill: #fdf3e3; stroke: #cfa95f; }
+    .note   { fill: #eef1f5; stroke: #b9c2cd; }
+    .t      { fill: #1c2230; font-family: "DejaVu Sans", "Segoe UI", system-ui, sans-serif; }
+    .lbl    { fill: #5a6472; font-family: "DejaVu Sans", "Segoe UI", system-ui, sans-serif; }
+    .mono   { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; }
+    .grp-t  { fill: #3b4657; font-weight: bold; }
+    .flow   { stroke: #7c8798; fill: none; }
+    .arrow  { fill: #7c8798; }
+    .dash   { stroke: #7c8798; fill: none; stroke-dasharray: 4 3; }
+
+    @media (prefers-color-scheme: dark) {
+      .panel  { fill: #171a20; stroke: #333b47; }
+      .group  { fill: #1f242c; stroke: #4a5563; }
+      .box    { fill: #262c36; stroke: #56616f; }
+      .widget { fill: #26364f; stroke: #5b7bb0; }
+      .store  { fill: #3a3223; stroke: #8a7440; }
+      .note   { fill: #212730; stroke: #3f4854; }
+      .t      { fill: #e8ebf0; }
+      .lbl    { fill: #a3acba; }
+      .grp-t  { fill: #cbd3e0; }
+      .flow   { stroke: #8b95a5; }
+      .arrow  { fill: #8b95a5; }
+      .dash   { stroke: #8b95a5; }
+    }
+  </style>
+
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow"/>
+    </marker>
+  </defs>
+
+  <rect class="panel" x="1" y="1" width="998" height="810" rx="8" stroke-width="1"/>
+
+  <!-- ── process boundary ───────────────────────────────────────────────── -->
+  <text class="t" x="16" y="24" font-size="14" font-weight="bold">Scribobulate — one process, one thread</text>
+  <text class="lbl" x="16" y="40" font-size="11">GtkApplication · app-id <tspan class="mono">com.extollit.scribobulate</tspan> · every module runs on the GLib main loop (no worker threads, no channels)</text>
+
+  <rect class="group" x="14" y="50" width="972" height="470" rx="6" stroke-width="1.5"/>
+
+  <rect class="note" x="26" y="62" width="948" height="30" rx="4" stroke-width="1"/>
+  <text class="lbl" x="36" y="75" font-size="10.5"><tspan font-weight="bold">Single instance (HANDLES_OPEN):</tspan> a second launch with file arguments forwards its argv over D-Bus to this process — no second process starts.</text>
+  <text class="lbl" x="36" y="87" font-size="10.5"><tspan class="mono">--new-instance</tspan> opts out; it is stripped from argv in <tspan class="mono">main()</tspan> before registration, because registration forwards argv before any handler runs.</text>
+
+  <!-- ── Document Window ────────────────────────────────────────────────── -->
+  <rect class="group" x="26" y="102" width="616" height="406" rx="5" stroke-width="1.5"/>
+  <text class="t grp-t" x="38" y="120" font-size="12">Document Window (1..N)</text>
+
+  <rect class="box" x="38" y="128" width="592" height="34" rx="4" stroke-width="1"/>
+  <text class="t" x="48" y="142" font-size="10.5" font-weight="bold">WindowChrome — per window, shared by every tab</text>
+  <text class="lbl" x="48" y="155" font-size="10">menu bar · toolbar · outline + annotations sidebar · conflict + info toasts · status bar · zoom level</text>
+
+  <!-- TabView -->
+  <rect class="group" x="38" y="170" width="592" height="328" rx="5" stroke-width="1.5"/>
+  <text class="t grp-t" x="50" y="187" font-size="11">TabView — custom TabBar + GtkStack (deliberately not GtkNotebook)</text>
+
+  <!-- Tab -->
+  <rect class="box" x="50" y="196" width="568" height="292" rx="4" stroke-width="1.5"/>
+  <text class="t" x="60" y="212" font-size="11" font-weight="bold">Tab = one Document (1..N) — TabState, keyed by a stable TabId</text>
+  <text class="lbl" x="60" y="226" font-size="10">TabId survives a cross-window move, so a tab can be rehomed without rebuilding it</text>
+
+  <rect class="store" x="60" y="234" width="548" height="30" rx="4" stroke-width="1"/>
+  <text class="t" x="70" y="247" font-size="10" font-weight="bold">TabState (the document model)</text>
+  <text class="lbl mono" x="70" y="259" font-size="9.5">path · source · saved_baseline · editor_buf · file_monitor · search_context</text>
+
+  <!-- SplitView -->
+  <rect class="group" x="60" y="272" width="548" height="206" rx="4" stroke-width="1.5"/>
+  <text class="t grp-t" x="70" y="289" font-size="10.5">SplitView — one custom widget, three children mounted once</text>
+  <text class="lbl" x="70" y="302" font-size="9.5">modes Preview | Edit | Split are pure layout parameters: a hidden pane is set_child_visible(false),</text>
+  <text class="lbl" x="70" y="313" font-size="9.5">never reparented — the editor's lifetime is what makes that non-negotiable</text>
+
+  <rect class="widget" x="72" y="322" width="250" height="76" rx="4" stroke-width="1.2"/>
+  <text class="t" x="82" y="339" font-size="10.5" font-weight="bold">Source pane</text>
+  <text class="lbl mono" x="82" y="353" font-size="9.5">sourceview5::View</text>
+  <text class="lbl" x="82" y="366" font-size="9.5">GtkSourceView 5 — editable,</text>
+  <text class="lbl" x="82" y="377" font-size="9.5">own style scheme + undo stack.</text>
+  <text class="lbl" x="82" y="390" font-size="9.5">Reused for the tab's whole life.</text>
+
+  <rect class="widget" x="346" y="322" width="250" height="76" rx="4" stroke-width="1.2"/>
+  <text class="t" x="356" y="339" font-size="10.5" font-weight="bold">Preview pane</text>
+  <text class="lbl mono" x="356" y="353" font-size="9.5">CodePreviewView</text>
+  <text class="lbl" x="356" y="366" font-size="9.5">GtkTextView subclass — self-draws</text>
+  <text class="lbl" x="356" y="377" font-size="9.5">code/quote backgrounds + gutter.</text>
+  <text class="lbl" x="356" y="390" font-size="9.5">Rebuilt on each render.</text>
+
+  <text class="lbl" x="72" y="418" font-size="9.5">Split adds orientation, pane order, and a <tspan font-style="italic">fraction</tspan> (a ratio, not pixels — so the divider survives a resize).</text>
+  <text class="lbl" x="72" y="431" font-size="9.5">Anchored children inside the preview buffer: tables (custom ScribTableWidget), images, horizontal rules.</text>
+  <text class="lbl" x="72" y="444" font-size="9.5">Comment entry floats on a GtkOverlay; the marker card is a GtkPopover subclass re-anchored on scroll.</text>
+  <text class="lbl" x="72" y="463" font-size="9.5" font-style="italic">Editor edits and preview annotations both write the tab's one canonical editor buffer.</text>
+
+  <!-- ── render pipeline ────────────────────────────────────────────────── -->
+  <rect class="group" x="654" y="102" width="320" height="406" rx="5" stroke-width="1.5"/>
+  <text class="t grp-t" x="666" y="120" font-size="12">Render pipeline</text>
+  <text class="lbl" x="666" y="134" font-size="9.5">Markdown source → real GTK widgets. No HTML engine.</text>
+
+  <rect class="box" x="666" y="144" width="296" height="30" rx="4" stroke-width="1"/>
+  <text class="t mono" x="676" y="157" font-size="9.5">annotate:: extract</text>
+  <text class="lbl" x="676" y="168" font-size="9">strips CriticMarkup → cleaned text + shifts table</text>
+
+  <rect class="box" x="666" y="184" width="296" height="42" rx="4" stroke-width="1"/>
+  <text class="t mono" x="676" y="197" font-size="9.5">pulldown-cmark (md_options)</text>
+  <text class="lbl" x="676" y="208" font-size="9">explicit extension allowlist, never Options::all() —</text>
+  <text class="lbl" x="676" y="219" font-size="9">an unhandled extension must degrade to literal text</text>
+
+  <rect class="box" x="666" y="236" width="296" height="42" rx="4" stroke-width="1"/>
+  <text class="t mono" x="676" y="249" font-size="9.5">renderer::Renderer</text>
+  <text class="lbl" x="676" y="260" font-size="9">walks the event stream → GtkTextBuffer + named tags</text>
+  <text class="lbl" x="676" y="271" font-size="9">syntect highlights fenced code as per-token tags</text>
+
+  <rect class="box" x="666" y="288" width="296" height="52" rx="4" stroke-width="1"/>
+  <text class="t mono" x="676" y="301" font-size="9.5">preview::build_render_products</text>
+  <text class="lbl" x="676" y="312" font-size="9">buffer · source map · copy map · links · anchored</text>
+  <text class="lbl" x="676" y="323" font-size="9">children · code/quote ranges · headings · markers</text>
+  <text class="lbl" x="676" y="334" font-size="9">— the typed outputs the view installs in lockstep</text>
+
+  <rect class="box" x="666" y="350" width="296" height="42" rx="4" stroke-width="1"/>
+  <text class="t mono" x="676" y="363" font-size="9.5">preview::render / re_render</text>
+  <text class="lbl" x="676" y="374" font-size="9">re_render swaps only the buffer, keeping the widget</text>
+  <text class="lbl" x="676" y="385" font-size="9">tree — and therefore the scroll position — alive</text>
+
+  <rect class="note" x="666" y="402" width="296" height="42" rx="4" stroke-width="1"/>
+  <text class="lbl" x="676" y="415" font-size="9">Preview styling = the active <tspan font-weight="bold">reading theme</tspan> (themes.toml,</text>
+  <text class="lbl" x="676" y="426" font-size="9">data); System probes the live GTK theme. A theme or</text>
+  <text class="lbl" x="676" y="437" font-size="9">desktop change re-renders every tab; split waits 300 ms.</text>
+
+  <text class="lbl" x="666" y="464" font-size="9.5" font-style="italic">The outline sidebar parses the same source separately,</text>
+  <text class="lbl" x="666" y="476" font-size="9.5" font-style="italic">keying headings by source byte offset — so it works in</text>
+  <text class="lbl" x="666" y="488" font-size="9.5" font-style="italic">all three modes, including Edit (which has no preview).</text>
+
+  <!-- pipeline flow arrows -->
+  <path class="flow" d="M 814 174 L 814 182" stroke-width="1.4" marker-end="url(#a)"/>
+  <path class="flow" d="M 814 226 L 814 234" stroke-width="1.4" marker-end="url(#a)"/>
+  <path class="flow" d="M 814 278 L 814 286" stroke-width="1.4" marker-end="url(#a)"/>
+  <path class="flow" d="M 814 340 L 814 348" stroke-width="1.4" marker-end="url(#a)"/>
+
+  <!-- source pane / TabState -> pipeline -->
+  <path class="flow" d="M 608 249 L 636 249 L 636 159 L 664 159" stroke-width="1.4" marker-end="url(#a)"/>
+  <text class="lbl" font-size="8.5" text-anchor="middle" transform="translate(630,204) rotate(-90)">source text</text>
+
+  <!-- pipeline -> preview pane -->
+  <path class="flow" d="M 664 371 L 598 371" stroke-width="1.4" marker-end="url(#a)"/>
+  <text class="lbl" x="631" y="366" font-size="8.5" text-anchor="middle">widgets</text>
+
+  <!-- ── filesystem row ─────────────────────────────────────────────────── -->
+  <rect class="store" x="26" y="558" width="220" height="66" rx="5" stroke-width="1.5"/>
+  <text class="t" x="36" y="576" font-size="11" font-weight="bold">Markdown file (.md)</text>
+  <text class="lbl" x="36" y="592" font-size="9.5">the only document Scribobulate owns —</text>
+  <text class="lbl" x="36" y="604" font-size="9.5">no database, no sidecar, no cache;</text>
+  <text class="lbl" x="36" y="616" font-size="9.5">the file on disk is the source of truth</text>
+
+  <rect class="box" x="290" y="546" width="300" height="90" rx="5" stroke-width="1.5"/>
+  <text class="t" x="300" y="564" font-size="11" font-weight="bold">Save — window/save.rs</text>
+  <text class="lbl" x="300" y="580" font-size="9.5">Guarded on <tspan font-style="italic">content</tspan>, not mtime: the on-disk bytes are</text>
+  <text class="lbl" x="300" y="592" font-size="9.5">re-read and compared against saved_baseline, so a</text>
+  <text class="lbl" x="300" y="604" font-size="9.5">coarse filesystem clock cannot mask a real conflict.</text>
+  <text class="lbl" x="300" y="620" font-size="9.5"><tspan class="mono" font-weight="bold">atomic_io::write_atomic</tspan> — write-temp-then-rename,</text>
+  <text class="lbl" x="300" y="631" font-size="9.5">so a crash mid-write can never truncate the file.</text>
+
+  <rect class="box" x="634" y="546" width="340" height="90" rx="5" stroke-width="1.5"/>
+  <text class="t" x="644" y="564" font-size="11" font-weight="bold">Live reload — gio::FileMonitor</text>
+  <text class="lbl" x="644" y="580" font-size="9.5">connect_changed fires <tspan font-style="italic">directly on the main loop</tspan> — no</text>
+  <text class="lbl" x="644" y="592" font-size="9.5">thread, no channel. One monitor per tab, per file.</text>
+  <text class="lbl" x="644" y="608" font-size="9.5"><tspan class="mono" font-weight="bold">winstate::external_change_action</tspan> — a pure, GTK-free</text>
+  <text class="lbl" x="644" y="620" font-size="9.5">decision core (unit-tested headlessly):</text>
+  <text class="lbl" x="644" y="631" font-size="8.8">same content → Ignore · changed + dirty → Toast · changed + clean → Reload</text>
+
+  <path class="flow" d="M 246 578 L 288 578" stroke-width="1.4" marker-end="url(#a)"/>
+  <path class="flow" d="M 288 600 L 246 600" stroke-width="1.4" marker-end="url(#a)"/>
+  <text class="lbl" x="250" y="573" font-size="8.5">read · docio</text>
+  <text class="lbl" x="250" y="614" font-size="8.5">write · docio</text>
+
+  <path class="dash" d="M 136 558 L 136 524" stroke-width="1.4" marker-end="url(#a)"/>
+  <path class="flow" d="M 804 546 L 804 524" stroke-width="1.4" marker-end="url(#a)"/>
+  <text class="lbl" x="812" y="538" font-size="9">reload / conflict toast</text>
+  <text class="lbl" x="144" y="540" font-size="9">open / save</text>
+
+  <text class="lbl" x="300" y="652" font-size="9" font-style="italic">A save's own rename looks exactly like an external delete to GIO — the monitor is told to expect it.</text>
+  <text class="lbl" x="300" y="664" font-size="9" font-style="italic">Every arrow above runs on GLib's I/O thread pool via docio — never on the main thread, and capped so it cannot delay a recovery snapshot.</text>
+
+  <!-- ── environment row ────────────────────────────────────────────────── -->
+  <rect class="note" x="26" y="672" width="304" height="60" rx="4" stroke-width="1"/>
+  <text class="t" x="36" y="688" font-size="10" font-weight="bold">config.toml — XDG_CONFIG_HOME</text>
+  <text class="lbl" x="36" y="702" font-size="9">Static user preferences, read once at startup.</text>
+  <text class="lbl" x="36" y="714" font-size="9">No hot-reload. Distinct from session state.</text>
+  <text class="lbl" x="36" y="726" font-size="9">Must be read <tspan font-style="italic">before</tspan> the redirect below moves the path.</text>
+
+  <rect class="note" x="346" y="672" width="304" height="60" rx="4" stroke-width="1"/>
+  <text class="t" x="356" y="688" font-size="10" font-weight="bold">session.toml — XDG_STATE_HOME</text>
+  <text class="lbl" x="356" y="702" font-size="9">Windows, their tabs' paths, view modes, zoom.</text>
+  <text class="lbl" x="356" y="714" font-size="9"><tspan font-weight="bold">No document text here</tspan> — paths only (but see swap, below);</text>
+  <text class="lbl" x="356" y="726" font-size="9">restored at startup when no window exists yet.</text>
+
+  <rect class="note" x="666" y="672" width="308" height="60" rx="4" stroke-width="1"/>
+  <text class="t" x="676" y="688" font-size="10" font-weight="bold">workaround.rs — GTK 4.6 only</text>
+  <text class="lbl" x="676" y="702" font-size="9">Redirects XDG_CONFIG_HOME per-process to a synthesized</text>
+  <text class="lbl" x="676" y="714" font-size="9">compose file, so a large ~/.XCompose can't crash GTK 4.6.</text>
+  <text class="lbl" x="676" y="726" font-size="9">Symlinks the real config back in — that blast radius is wide.</text>
+
+  <!-- ── crash forensics ────────────────────────────────────────────────── -->
+  <rect class="note" x="26" y="744" width="948" height="60" rx="4" stroke-width="1"/>
+  <text class="t" x="36" y="761" font-size="10.5" font-weight="bold">scribobulate.log + crash-&lt;stamp&gt;-&lt;pid&gt;.log — XDG_STATE_HOME</text>
+  <text class="lbl" x="36" y="776" font-size="9.5">Every <tspan font-weight="bold">info</tspan>-or-worse record, appended unbuffered and size-capped — <tspan font-style="italic">regardless of RUST_LOG</tspan>; the last 64 are also held in a fixed-slot, lock-free ring in memory.</text>
+  <text class="lbl" x="36" y="789" font-size="9.5">A panic or a fatal signal writes a report: build identity and fault first, then those breadcrumbs, then a backtrace and the process's executable mappings.</text>
+  <text class="lbl" x="36" y="800" font-size="8.8"><tspan font-weight="bold">No document text is ever recorded</tspan> — paths, sizes and event names only. The handler re-raises, so the process still dies from the signal that killed it.</text>
+
+  <!-- ── crash recovery ─────────────────────────────────────────────────── -->
+  <rect class="note" x="26" y="816" width="948" height="76" rx="4" stroke-width="1"/>
+  <text class="t" x="36" y="833" font-size="10.5" font-weight="bold">Crash recovery — swap/ under XDG_STATE_HOME · swapfile/ + window/swap.rs + window/swaprecovery.rs</text>
+  <text class="lbl" x="36" y="848" font-size="9.5">The one place document text <tspan font-style="italic">is</tspan> persisted, and only while a document is dirty. Invariant: <tspan class="mono" font-weight="bold">a swap file exists iff the document is dirty</tspan>,</text>
+  <text class="lbl" x="36" y="861" font-size="9.5">applied at the single point dirtiness is recomputed — so save, undo, discard and reload need no deletion rule of their own.</text>
+  <text class="lbl" x="36" y="874" font-size="9.5">Written by <tspan class="mono">replace_contents_async</tspan> (GLib's thread pool — no thread of ours; owner-only from the first byte). Each file carries a</text>
+  <text class="lbl" x="36" y="887" font-size="9.5">frontmatter header naming its own document, so recovery reads the headers, never session.toml: <tspan font-style="italic">a non-empty swap/ IS the "unclean exit" signal.</tspan></text>
+
+  <!-- ── renderer note ──────────────────────────────────────────────────── -->
+  <rect class="note" x="26" y="900" width="948" height="52" rx="4" stroke-width="1"/>
+  <text class="t" x="36" y="917" font-size="10.5" font-weight="bold">GSK_RENDERER=cairo — set in main() before GTK initialises</text>
+  <text class="lbl" x="36" y="932" font-size="9.5">The application never creates a GL/GLES context and never appears as a GPU client: 0 MiB VRAM, ~80 MiB RAM for a full-fidelity document.</text>
+  <text class="lbl" x="36" y="945" font-size="9.5">This one line is why the whole stack is "GtkTextView + text tags + a few custom widgets" rather than an embedded web engine — measured, not assumed.</text>
+</svg>

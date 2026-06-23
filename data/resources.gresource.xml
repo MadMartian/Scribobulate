@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Bundles Scribobulate's own icons that have no
+  equivalent on any standard icon theme (Adwaita, Breeze, or otherwise —
+  researcher-verified before adding this file), so they render reliably
+  regardless of the host's installed icon theme instead of risking a silent
+  broken-image placeholder. (Whether every OTHER icon name this app assumes is
+  present actually resolves on a given host's icon theme is checked by
+  `tests/icon_resolution.rs`, which renders each name and reports the
+  file it resolved to — a query like `has_icon` is not equivalent, see
+  ScrAP-169.)
+
+  Compiled at build time by build.rs (glib_build_tools::compile_resources)
+  into a GResource blob embedded in the binary; registered at startup via
+  gio::resources_register_include! and GtkIconTheme::add_resource_path so
+  `Button::from_icon_name("copy-document-symbolic")` resolves exactly like a
+  system-theme icon would, including automatic light/dark symbolic
+  recoloring (only achievable via a real GResource + IconTheme resource
+  path, not a raw embedded texture).
+-->
+<gresources>
+  <gresource prefix="/com/extollit/scribobulate/icons">
+    <file>scalable/actions/copy-document-symbolic.svg</file>
+    <!--
+      Outline-panel header buttons (Expand all / Collapse all). Unlike
+      copy-document-symbolic these DO exist in some themes (e.g. breeze-dark),
+      but NOT in Adwaita (verified against the installed Adwaita symbolic set),
+      so bundling our own guarantees they render on every host theme instead of
+      showing a broken-image placeholder on Adwaita (ANTI-PATTERNS.md #39). On a
+      theme that has these names the active theme's version wins; our copy is the
+      fallback. This is DELIBERATE: the standard names let a KDE/breeze desktop
+      show its own idiomatic expand-all/collapse-all glyphs (chevron-style),
+      matching the host theme — our bundled chevron art (which mirrors that look)
+      only fills in on themes lacking the names (e.g. Adwaita/headless).
+    -->
+    <file>scalable/actions/expand-all-symbolic.svg</file>
+    <file>scalable/actions/collapse-all-symbolic.svg</file>
+    <!--
+      adwaita-icon-theme REMOVED both of these legacy freedesktop names in
+      48.alpha ("symbolic: remove emblems", issue #287), so any host on a recent
+      Adwaita loses them — this is icon-theme drift, not a property of any one
+      OS. Measured: Adwaita 41 and the GNOME 46 runtime still carry both; 48+
+      does not. Breeze still has both, so a KDE desktop keeps showing its own
+      art — as with expand/collapse above, the host theme wins and our copy is
+      the fallback.
+
+      emblem-photos-symbolic (the "show unsafe images" toggle) has no
+      non-symbolic sibling left either, so without this it renders the literal
+      broken-image placeholder. emblem-synchronizing-symbolic (File ▸
+      Auto-Reload) is the subtler of the two: 50.rc reinstated a legacy 16x16
+      RASTER emblem-synchronizing.png, and GTK's lookup strips the `-symbolic`
+      suffix and finds it — so the button LOOKS fine while silently rendering a
+      baked-colour PNG that does not follow the theme foreground on a dark
+      variant (ScrAP-169's hazard, arrived at through the fallback chain rather
+      than through a mis-chosen name). Bundling a real symbolic SVG under the
+      exact requested name pre-empts that fallback, because the `-symbolic`
+      candidate is tried before the stripped one.
+
+      Independently confirmed on Windows, where the drift is total rather than
+      partial: gvsbuild's Adwaita 50.0 symbolic set ships NO `emblems` category
+      at all (only emblem-important/emblem-system under `legacy`). Auto-Reload
+      there drew the legacy full-colour raster amid a row of thin line glyphs —
+      worse than a placeholder, because it looks deliberate.
+    -->
+    <file>scalable/emblems/emblem-photos-symbolic.svg</file>
+    <file>scalable/emblems/emblem-synchronizing-symbolic.svg</file>
+    <!--
+      The application icon. Sits at the freedesktop path an app icon belongs at,
+      so this one file serves both consumers without a copy or an alias: the
+      GResource below, and install.sh (which mirrors the same relative path into
+      hicolor). Any OS packaging step that rasterizes an app icon reads it from
+      here too.
+
+      Without it here, the About dialog's .logo_icon_name() and the window's
+      .icon_name() resolve only if install.sh has been run — so every
+      uninstalled `cargo run` showed the broken-image placeholder where the app
+      logo belongs. Note this masks itself on a developer box: once install.sh
+      has run, the icon resolves from hicolor forever after, so the bug is
+      invisible to anyone who has ever installed. It is a normal
+      full-colour icon, NOT symbolic: it must keep its own palette rather than
+      being recoloured to the theme foreground.
+
+      On Windows the same gap cannot mask itself, because there is no
+      `install.sh` step at all — the staged tree ships only gvsbuild's stock
+      Adwaita + hicolor, so the lookup found nothing and the title bar, taskbar
+      and Alt+Tab all fell back to GTK's generic default. Bundling here makes the
+      name resolve on EVERY platform. This file is the source of truth for the
+      app icon: install.sh installs this path, and
+      packaging/windows/scribobulate.ico is rendered from it.
+    -->
+    <file>scalable/apps/com.extollit.scribobulate.svg</file>
+  </gresource>
+</gresources>

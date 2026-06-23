@@ -1,0 +1,17 @@
+[package]
+name = "gtktest"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Registration attribute for Scribobulate's main-thread GTK test suite"
+
+[lib]
+proc-macro = true
+
+# No `syn`/`quote` on purpose. This macro forwards the annotated item's own
+# TokenStream verbatim and appends two generated items parsed from a string, so it
+# never needs to understand Rust syntax beyond locating the function's name. That
+# keeps the workspace free of a second copy of syn's compile cost, and — more
+# importantly — means the test body's tokens, spans and doc comments reach the
+# compiler exactly as written, so an error inside a body still points at the body.
+[dependencies]

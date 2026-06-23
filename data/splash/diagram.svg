@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" width="1000" height="360" font-family="monospace">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#55ffff"/>
+    </marker>
+  </defs>
+
+  <!-- title -->
+  <text x="500" y="52" text-anchor="middle" fill="#ffff55" font-size="30" font-weight="bold">How Scribobulate works</text>
+
+  <!-- ── node 1: AI agent ────────────────────────────────────────────── -->
+  <rect x="30" y="120" width="190" height="96" rx="12" fill="#55ffff" fill-opacity="0.06" stroke="#55ffff" stroke-width="2.5"/>
+  <text x="125" y="162" text-anchor="middle" fill="#55ffff" font-size="34">&#129302;</text>
+  <text x="125" y="196" text-anchor="middle" fill="#e0e0e0" font-size="19">AI agent</text>
+
+  <!-- ── node 2: the file ────────────────────────────────────────────── -->
+  <rect x="280" y="120" width="190" height="96" rx="12" fill="#55ff55" fill-opacity="0.06" stroke="#55ff55" stroke-width="2.5"/>
+  <text x="375" y="162" text-anchor="middle" fill="#55ff55" font-size="30">&#128196;</text>
+  <text x="375" y="196" text-anchor="middle" fill="#e0e0e0" font-size="19">document.md</text>
+
+  <!-- ── node 3: Scribobulate ────────────────────────────────────────── -->
+  <rect x="530" y="120" width="190" height="96" rx="12" fill="#ffff55" fill-opacity="0.06" stroke="#ffff55" stroke-width="2.5"/>
+  <text x="625" y="164" text-anchor="middle" fill="#ffff55" font-size="26" font-weight="bold">Scribobulate</text>
+  <text x="625" y="196" text-anchor="middle" fill="#aaaaaa" font-size="16">watches &amp; renders</text>
+
+  <!-- ── node 4: you ─────────────────────────────────────────────────── -->
+  <rect x="780" y="120" width="190" height="96" rx="12" fill="#55ffff" fill-opacity="0.06" stroke="#55ffff" stroke-width="2.5"/>
+  <text x="875" y="162" text-anchor="middle" fill="#55ffff" font-size="32">&#128065;</text>
+  <text x="875" y="196" text-anchor="middle" fill="#e0e0e0" font-size="19">you, live</text>
+
+  <!-- ── arrows + labels ─────────────────────────────────────────────── -->
+  <line x1="222" y1="168" x2="278" y2="168" stroke="#55ffff" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="250" y="150" text-anchor="middle" fill="#aaaaaa" font-size="14">writes</text>
+
+  <line x1="472" y1="168" x2="528" y2="168" stroke="#55ffff" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="500" y="150" text-anchor="middle" fill="#aaaaaa" font-size="14">on disk</text>
+
+  <line x1="722" y1="168" x2="778" y2="168" stroke="#55ffff" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="750" y="150" text-anchor="middle" fill="#aaaaaa" font-size="14">instantly</text>
+
+  <!-- tagline -->
+  <text x="500" y="300" text-anchor="middle" fill="#55ff55" font-size="19">0 MiB VRAM &#183; rendered on the CPU &#183; refreshed on every save</text>
+  <text x="500" y="330" text-anchor="middle" fill="#777777" font-size="14">no browser engine &#183; no GPU pipeline &#183; a real native window</text>
+</svg>

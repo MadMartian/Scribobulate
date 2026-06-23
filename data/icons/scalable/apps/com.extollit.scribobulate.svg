@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Scribobulate: a silly silver robot head at the core of a knowledge-graph
+       web (the friendly AI mind), with a Markdown "M down-arrow" badge in the
+       bottom-right marking what it reads and manages. Drawn as plain shapes
+       (no fonts, no blur filters) so it renders identically in librsvg/GTK at
+       every size. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f46e5"/><stop offset="1" stop-color="#9333ea"/>
+    </linearGradient>
+    <linearGradient id="silver" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f5f7"/>
+      <stop offset="0.45" stop-color="#d3d7dd"/>
+      <stop offset="1" stop-color="#9aa0aa"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fb923c"/>
+      <stop offset="1" stop-color="#ea580c"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="eye" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ecfeff"/>
+      <stop offset="0.45" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#0e7490"/>
+    </radialGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#bg)"/>
+
+  <!-- spokes + web ring -->
+  <g stroke="#ffffff" stroke-width="5" stroke-opacity="0.55" stroke-linecap="round">
+    <path d="M128 128 L128 32"/><path d="M128 128 L196 60"/><path d="M128 128 L224 128"/>
+    <path d="M128 128 L196 196"/><path d="M128 128 L128 224"/><path d="M128 128 L60 196"/>
+    <path d="M128 128 L32 128"/><path d="M128 128 L60 60"/>
+  </g>
+  <g stroke="#ffffff" stroke-width="4" stroke-opacity="0.4" stroke-linecap="round" fill="none">
+    <path d="M128 32 L196 60 L224 128 L196 196 L128 224 L60 196 L32 128 L60 60 Z"/>
+  </g>
+
+  <!-- ear-bolt connectors (kept) -->
+  <g stroke="#6366f1" stroke-width="3">
+    <rect x="52" y="112" width="20" height="32" rx="7" fill="#a5b4fc"/>
+    <rect x="184" y="112" width="20" height="32" rx="7" fill="#a5b4fc"/>
+  </g>
+  <circle cx="62" cy="128" r="4" fill="#4338ca"/>
+  <circle cx="194" cy="128" r="4" fill="#4338ca"/>
+
+  <!-- glow + silver head plate -->
+  <circle cx="128" cy="128" r="78" fill="url(#halo)"/>
+  <rect x="68" y="68" width="120" height="120" rx="30" fill="url(#silver)"
+        stroke="#6b7280" stroke-width="3"/>
+  <!-- glossy top highlight -->
+  <rect x="78" y="76" width="100" height="34" rx="17" fill="#ffffff" opacity="0.28"/>
+  <!-- corner screws -->
+  <g fill="#aab0b9" stroke="#6b7280" stroke-width="2">
+    <circle cx="86" cy="86" r="5"/><circle cx="170" cy="86" r="5"/>
+    <circle cx="86" cy="170" r="5"/><circle cx="170" cy="170" r="5"/>
+  </g>
+  <g stroke="#6b7280" stroke-width="1.6" stroke-linecap="round">
+    <path d="M83 86 L89 86"/><path d="M167 86 L173 86"/>
+    <path d="M83 170 L89 170"/><path d="M167 170 L173 170"/>
+  </g>
+
+  <!-- visor screen with mismatched cross-eyed glow eyes (silly) -->
+  <rect x="84" y="104" width="88" height="34" rx="15" fill="#1f2937" stroke="#111827" stroke-width="2"/>
+  <circle cx="108" cy="121" r="9.5" fill="url(#eye)"/>
+  <circle cx="150" cy="121" r="11.5" fill="url(#eye)"/>
+  <circle cx="111" cy="119" r="3" fill="#ffffff"/>
+  <circle cx="146" cy="119" r="3.4" fill="#ffffff"/>
+
+  <!-- speaker-grille mouth -->
+  <rect x="100" y="150" width="56" height="18" rx="6" fill="#3a4150" stroke="#111827" stroke-width="1.5"/>
+  <g stroke="#aab0b9" stroke-width="3" stroke-linecap="round">
+    <path d="M110 153 L110 165"/><path d="M122 153 L122 165"/>
+    <path d="M134 153 L134 165"/><path d="M146 153 L146 165"/>
+  </g>
+
+  <!-- outer nodes; top node = cyan antenna bulb -->
+  <g fill="#ffffff">
+    <circle cx="196" cy="60" r="9"/><circle cx="224" cy="128" r="9"/>
+    <circle cx="196" cy="196" r="9"/><circle cx="128" cy="224" r="9"/><circle cx="60" cy="196" r="9"/>
+    <circle cx="32" cy="128" r="9"/><circle cx="60" cy="60" r="9"/>
+  </g>
+  <circle cx="128" cy="32" r="11" fill="#22d3ee" stroke="#ffffff" stroke-width="3"/>
+  <circle cx="124" cy="29" r="2.6" fill="#ffffff"/>
+
+  <!-- Markdown "M down-arrow" overlay badge, bottom-right (orange) -->
+  <rect x="150" y="150" width="76" height="76" rx="24" fill="url(#orange)" stroke="#ffffff" stroke-width="3"/>
+  <g fill="none" stroke="#ffffff" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M164 202 V174 L178 188 L192 174 V202"/>
+    <path d="M209 174 V190"/>
+  </g>
+  <path d="M199 188 L209 207 L219 188 Z" fill="#ffffff"/>
+</svg>

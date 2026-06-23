@@ -1,0 +1,293 @@
+# Scribobulate preview reading themes.
+#
+# This file is DATA. The theming engine (src/theme.rs) holds no per-theme
+# knowledge — no colour constants, no `if theme == "sepia"` branches. A new theme
+# is a block here, not a code change.
+#
+# ── Resolution order ───────────────────────────────────────────────────────────
+# Each key resolves by the first link that supplies it:
+#   1. the selected theme's key
+#   2. [themes.system]'s key           (i.e. what the app would otherwise hardcode)
+#   3. the system GTK theme probe + derivation (Palette's mix/contrast walk)
+# So a theme states only what makes it distinctive. Selecting "system" means links
+# 2 and 3 only — byte-identical to the app's pre-theming rendering.
+#
+# ── Where this file is read from ───────────────────────────────────────────────
+# First match wins; this copy is compiled into the binary as the last-resort
+# fallback, so a missing or malformed file can never prevent startup.
+#   1. ${XDG_CONFIG_HOME:-~/.config}/scribobulate/themes.toml   (user override)
+#   2. ${XDG_DATA_HOME:-~/.local/share}/scribobulate/themes.toml (per-user install)
+#   3. $XDG_DATA_DIRS/scribobulate/themes.toml                   (system install)
+# A user file is MERGED over this one per theme id: override one key of
+# [themes.sepia] without restating the theme, or add a whole new [themes.<id>].
+#
+# ── Units ──────────────────────────────────────────────────────────────────────
+# * Colours are "#rrggbb", or "#rrggbb_aa" where _aa is a hex alpha byte
+#   (e.g. "#FFD133_61" = #FFD133 at 38%).
+# * Pixel metrics are DESIGN-TIME values at zoom 1.0. The app scales every one of
+#   them by the active zoom when it applies them; a theme never expresses "pixels
+#   at the current zoom".
+# * Scales are Pango multipliers over the page's font size, so they compose with
+#   zoom for free. There is deliberately NO font_size key: zoom owns CSS
+#   font-size exclusively.
+# * Out-of-range values are clamped, not rejected — a theme cannot break layout.
+
+# ── System ─────────────────────────────────────────────────────────────────────
+# The base theme, and the register of every styling value the app would otherwise
+# hardcode. It sets ONLY those values; everything it omits (page background, body
+# foreground, body font, link, code fills, blockquote bar, selection, table
+# chrome, syntax theme) falls through to the desktop GTK theme and the app's
+# existing derivation — i.e. today's exact appearance, unchanged.
+[themes.system]
+name = "System"
+symbol = "🪟"
+
+# Colours that are literals in the source today.
+annotation_hl   = "#FFD133_61"   # translucent amber wash behind an annotated claim
+find_hl_all     = "#f6d32d"      # every find match
+find_hl_current = "#ff7800"      # the current find match, inside a table cell only
+                                 # (in body text the current match uses the real
+                                 # buffer selection; a cell label cannot, ScrAP-36)
+mark_bg         = "#fff59d_88"   # ==highlight== (mark) — a neutral pale-yellow highlighter
+                                 # wash (matches theme.rs's last-resort floor)
+
+# Typography that is literal in the source today.
+heading_scale    = [2.2, 1.8, 1.48, 1.2, 1.0]  # h1..h5 (h6-and-deeper folds to h5)
+heading_weight   = 700
+bold_weight      = 700
+supsub_scale     = 0.72
+superscript_rise = 4              # points, up
+subscript_rise   = -2             # points, down
+
+# Decoration geometry that is literal in the source today (design-time px @ zoom 1.0).
+heading_space_below  = [4, 4, 2, 2, 2]  # h1..h5 space below the heading line
+blockquote_bar_width = 3             # the quote's left accent bar
+blockquote_text_gap  = 10            # bar → quoted text
+list_step            = 28            # per-nesting-level list indent
+list_item_gap        = 8             # space between consecutive list items
+rule_space           = 4             # above/below a horizontal rule
+table_cell_padding_v = 4
+table_cell_padding_h = 10
+table_border_width   = 1
+table_cell_radius    = 0
+
+# ── Sepia ──────────────────────────────────────────────────────────────────────
+# A book-like reading theme: a serif body face on a warm off-white page, with
+# soft-brown text. Body contrast is 7.51:1 — WCAG AAA.
+[themes.sepia]
+name       = "Sepia"
+symbol     = "📖"
+background = "#f4ecd8"
+foreground = "#5b4636"
+accent     = "#7a4b2a"   # the link colour and blockquote bar derive from this
+
+# Always terminate a font stack with a generic family. An unknown family falls
+# back to fontconfig's SANS default, not to serif — a stack without a generic
+# terminator silently lands on sans and defeats the theme. (Neither Charter nor
+# Georgia ships on a stock Linux box; the Liberation/Noto entries are what
+# actually resolve there.)
+font_family   = 'Charter, Georgia, "Liberation Serif", "Noto Serif", serif'
+syntect_theme = "Solarized (light)"
+
+# Warm replacements for the three highlight literals: the system yellows are a
+# near-invisible wash on a cream page.
+annotation_hl   = "#d9a441_61"
+find_hl_all     = "#d9c04a"
+find_hl_current = "#c86428"
+mark_bg         = "#d8a98a_66"   # warm tan-rose highlighter — distinct from the amber/yellow
+                                 # find & annotation washes, and legible on the cream page
+
+# Everything else is omitted on purpose, and is therefore DERIVED from
+# background/foreground/accent exactly as the system theme derives it from the
+# desktop: link, code_inline_bg, code_block_bg, blockquote_bar, selection_bg,
+# table_border, table_head_bg — and the whole of the typography and geometry
+# above, so Sepia keeps the system's heading hierarchy and spacing.
+
+# ── Synthwave ──────────────────────────────────────────────────────────────────
+# A midnight 80s outrun theme: neon on deep indigo. It's a DARK page, so — unlike
+# the light themes' opaque yellows — the highlights are neon *washes* (translucent),
+# because the light body text has to stay readable on top of them.
+[themes.synthwave]
+name          = "Synthwave"
+symbol        = "🌆"
+background    = "#1a1033"   # midnight indigo
+foreground    = "#e6d9ff"   # soft lavender-white — ~11:1 on the page (WCAG AAA)
+accent        = "#ff3caf"   # neon magenta: blockquote bar + selection derive from it
+link          = "#2de1ff"   # neon cyan links — the classic pink/cyan outrun pairing
+heading_color = "#ffc21e"   # sunset-gold — colours the doc headings AND the table header text
+list_marker   = "#ff3caf"   # neon-magenta bullets/numerals/checkboxes — the signature outrun accent
+# Font stack. JURA leads deliberately: it's the packaged (`apt install fonts-jura`),
+# reliably-rendering Eurostile-vein face — and, crucially, Exo 2's usual Google-Fonts
+# distribution is a VARIABLE font (`Exo2[wght].ttf`) that GTK 4.6's Pango does NOT
+# render (it falls through to plain sans, and worse, SHADOWS a working Jura if listed
+# first — confirmed by isolation test). So Exo 2 sits AFTER Jura, reachable only by a
+# STATIC Exo 2 install. Everything falls through to a clean sans on a bare box; the
+# neon palette carries the look regardless. Generic-terminated.
+font_family   = 'Jura, "Exo 2", "Chakra Petch", Cantarell, "Noto Sans", "Liberation Sans", sans-serif'
+# Headings get a distinct DISPLAY face (illegible as body, perfect for large headings):
+# Orbitron/Michroma are the aspirational outrun faces; Exo 2/Jura are the readable
+# fallbacks; generic-terminated. `apt install fonts-orbitron`? — not packaged on Debian,
+# so on a stock box headings fall through to Exo 2/Jura/sans like the body.
+heading_font  = 'Orbitron, Michroma, Jura, "Exo 2", sans-serif'
+syntect_theme = "base16-eighties.dark"   # a literal 80s palette for fenced code
+
+# Neon highlights — the amber/yellow defaults are wrong on a neon-dark page, and an
+# OPAQUE bright highlight would bury the light body text. Washes keep text legible.
+annotation_hl   = "#ff3caf_4d"   # translucent magenta wash (~30%)
+find_hl_all     = "#ff3caf_66"   # magenta wash (~40%) — distinct from the gold headings and cyan links
+find_hl_current = "#ff2f92"      # hot pink — the current match inside a table cell
+mark_bg         = "#39ff14_4d"   # RADIOACTIVE toxic-green wash (~30%) — the ==highlight== marker.
+                                 # A neon hue deliberately outside the magenta/cyan/gold outrun
+                                 # palette (operator's pick), distinct from the magenta annotation/find
+                                 # washes; translucent so the lavender body text stays readable.
+
+# Magenta SHADES (deliberately different): a bright neon horizon line for the rule,
+# a deeper muted magenta for the table grid so it reads as an outline, not a cage.
+rule          = "#ffc21e"   # sunset-GOLD horizon line — a different hue from the magenta grid,
+                            # so a thin rule reads as its own element, not another table border
+table_border  = "#8f3a72"   # deeper, muted magenta grid
+table_head_bg = "#3d1a34"   # dark magenta header fill — matches the grid; gold header text reads on it
+
+# Everything omitted derives from background/foreground/accent as usual:
+# code fills, blockquote_bar, selection_bg, table chrome, and all typography/geometry.
+
+# ── Candy ──────────────────────────────────────────────────────────────────────
+# A sweet-shop theme on a deep-indigo page, built to an operator-supplied six-swatch
+# palette: cotton pink #F6B6D4, hot pink #FB6F92, turquoise #61C7C9, lemon #F6E94F,
+# orchid #A063C8, grape #6C2A92.
+#
+# ── The rule that decides every role here: LUMINANCE, not vividness ────────────
+# A swatch's measured luminance decides whether it can be INK (text on the page) or
+# a FILL (a surface with text on top). Nothing about how "vivid" a colour looks
+# predicts which, and getting it backwards is invisible until it is rendered:
+#
+#   lemon  0.784 ┐                     grape  0.069 ─ the ONLY swatch under the fill
+#   cotton 0.578 ├ INK — far too bright             ceiling: the palette supplies
+#   turq   0.476 │ to sit behind text               its own dark surface
+#   hot pk 0.340 ┘
+#   orchid 0.206 ─ neither, quite: too dark to read as text on the page (3.9:1),
+#                  too bright to carry text (2.2:1). It is used ONLY as a solid
+#                  graphic — the blockquote bar — which needs neither.
+#
+# The ceiling is set by the BODY INK, not by the page: for body text to keep 4.5:1
+# on a fill, that fill must sit at L <= 0.0896. Choosing cotton pink as the body ink
+# rather than a white costs real headroom (a near-white ink would allow L <= 0.166) —
+# a deliberate trade, because pink-on-grape is the whole character of the theme.
+#
+# ── Why the highlights are SHADES, not washes ──────────────────────────────────
+# The previous draft of this theme made every overlay a translucent wash of a bright
+# palette hue, which is the intuitive thing to do and was measurably wrong: over a
+# dark page a wash composites TOWARD the page, so it loses exactly the chroma that
+# made the colour worth choosing. A chartreuse wash landed on #695526 — mud. The fix
+# is to keep the chroma and drop the VALUE instead: each overlay below is a shade of
+# a distinct palette hue, fully saturated, sitting under the ceiling. Desaturating
+# gives mud; shading gives a rich band. On a dark theme, always shade.
+[themes.candy]
+name          = "Candy"
+symbol        = "🍬"
+background    = "#101a4d"   # INDIGO. Chosen over the two other blues that measured just as
+                            # well, on grounds the numbers cannot show: a deep TEAL page is
+                            # the same hue as the turquoise links, which stay legible but stop
+                            # reading as distinct (the trap that killed tomato headings on a
+                            # crimson page); and a NAVY/midnight page lands within a whisker
+                            # of Synthwave's #1a1033, so the two themes would stop being
+                            # tellable apart at a glance. Indigo is clearly blue, clearly not
+                            # Synthwave, and leaves every ink within 0.3 of its old value
+foreground    = "#f6b6d4"   # cotton-pink body ink — 9.6:1 on the page
+accent        = "#fb6f92"   # hot pink
+heading_color = "#f6e94f"   # lemon headings — 12.8:1, the palette's brightest against its
+                            # darkest, which is the most contrast the palette can offer
+link          = "#61c7c9"   # turquoise links — 8.1:1
+list_marker   = "#fb6f92"   # hot-pink bullets/numerals/checkboxes — 6.0:1
+font_family   = 'Comfortaa, Quicksand, Dosis, Cantarell, "Noto Sans", sans-serif'
+heading_font  = 'Comfortaa, "M PLUS Rounded 1c", Quicksand, Dosis, sans-serif'
+syntect_theme = "base16-ocean.dark"
+
+# One hue per element family. The rule takes the headings' lemon because a rule is a
+# section break (heading family). NOTE that ORCHID #A063C8 now has no role at all: its
+# luminance (0.206) is simultaneously too dark to read as text on this page (3.9:1) and
+# too bright to carry text as a fill (2.2:1), and the one job it did hold — the quote
+# bar — has moved to the hot pink. That a whole swatch becomes unusable is a property of
+# the DARK page, not of the palette: on a light page orchid would be a perfectly good ink.
+blockquote_bar = "#fb6f92"  # HOT PINK bar — 6.0:1 on the page (orchid was 3.9:1), and it
+                            # pairs the quote bar with the list markers as one "furniture"
+                            # family. A solid graphic carries no text, so the fill ceiling
+                            # does not apply and the raw swatch can be used undiluted
+rule           = "#f6e94f"  # lemon section rule (heading family)
+table_border   = "#61c7c9"  # turquoise grid
+table_head_bg  = "#9e1449"  # a SHADE of the hot pink. The raw swatch #fb6f92 is impossible
+                            # here: at L=0.340 it is ~4x over the fill ceiling, giving lemon
+                            # header text 2.14:1 and body ink 1.61:1 — both unreadable. Shaded
+                            # to L=0.083 it keeps the hue and reads 6.3:1 / 4.7:1. This is the
+                            # luminance law again: a swatch's ROLE is decided by its value,
+                            # and "use the pink here" is a hue instruction, not a value one
+selection_bg   = "#274088"  # blue-family. Re-shaded with the page: this and the two code
+                            # surfaces below were DERIVED from the old purple page rather than
+                            # taken from the palette, so leaving them behind would have left
+                            # three off-hue purples on a blue page (body ink 5.8:1)
+code_block_bg  = "#070c26"  # RECESSED below the page — on a dark theme a code block reads as
+                            # a panel by going darker, not lighter (ink 11.5:1)
+code_inline_bg = "#1d2a60"  # LIFTED above the page — deliberately the opposite direction from
+                            # the block, so an inline span can never look like a stray fragment
+                            # of a fenced block (ink 8.1:1)
+
+# Overlays: one SHADE per palette hue, every one under the L<=0.0896 ceiling, so the
+# body ink stays legible on all four AND no two can be confused for each other.
+annotation_hl   = "#6c2a92"   # grape   — ink 5.3:1
+find_hl_all     = "#0a5658"   # deep turquoise — ink 4.6:1
+find_hl_current = "#fb6f92"   # HOT PINK, undiluted. Deliberately BRIGHT rather than shaded:
+                              # the current match is a transient pointer, and the shipped
+                              # themes treat it that way (Synthwave #ff2f92, Terminal #55ffff
+                              # are both far too bright to carry body ink). Being bright is
+                              # also what keeps it distinct from the DEEP pink header fill it
+                              # necessarily sits beside — same hue, opposite value
+mark_bg         = "#5c5200"   # deep lemon — the ==highlight== marker. A shaded gold is the
+                              # classic highlighter read, and it is the one overlay that
+                              # must never be mistaken for the others (ink 4.7:1)
+
+# Geometry: round and generously padded, with a grid heavy enough to draw a real edge.
+blockquote_bar_width = 5
+blockquote_text_gap  = 12
+list_item_gap        = 10
+rule_space           = 6
+table_cell_padding_v = 6
+table_cell_padding_h = 12
+table_border_width   = 2
+table_cell_radius    = 8
+
+# ── Terminal ───────────────────────────────────────────────────────────────────
+# A retro CRT / phosphor-terminal reading theme (researcher's "Stack B"): green text
+# on near-black glass, amber for links/headings (the two classic monochrome-monitor
+# phosphors — green and amber), in a monospace face. Distinct from Synthwave's neon
+# outrun; a "retro computer" mood. Green CRT base (bg + body) with an otherwise
+# canonical 16-colour ANSI/VGA accent set: cyan links/selection, yellow headings,
+# a DOS-blue (Norton-Commander) header bar, magenta/blue find+annotation washes,
+# grey line work. No heading_font: headings stay mono, just larger.
+[themes.terminal]
+name          = "Terminal"
+symbol        = "👾"
+background    = "#000000"   # true black — canonical VGA text-mode backdrop
+foreground    = "#aaaaaa"   # ANSI 7 light-gray body (~9:1 on black — WCAG AAA)
+accent        = "#00aaaa"   # ANSI 6 cyan base (link/bar/selection overridden below)
+link          = "#55ffff"   # ANSI 14 bright cyan links
+heading_color = "#ffff55"   # ANSI bright yellow headings (+ table header text)
+list_marker   = "#55ff55"   # ANSI 10 bright green — the phosphor-prompt bullet/numeral/checkbox
+# JetBrains Mono is packaged on Debian AND Fedora; Share Tech Mono is the retro-CRT
+# aspirational face; DejaVu Sans Mono is the universal fallback. Generic-terminated.
+font_family   = '"JetBrains Mono", "Share Tech Mono", "DejaVu Sans Mono", monospace'
+syntect_theme = "base16-ocean.dark"
+
+selection_bg  = "#00aaaa"   # ANSI 6 cyan text-selection
+blockquote_bar = "#6c9fff"  # light-blue quote bar
+
+# ANSI-on-black highlights — washes, so the light-gray body text stays readable on them:
+annotation_hl   = "#ff55ff_40"   # ANSI 13 bright-magenta wash
+find_hl_all     = "#5555ff_59"   # ANSI 12 bright-blue wash
+find_hl_current = "#55ffff"      # ANSI 14 bright cyan — current match in a cell
+mark_bg         = "#ffb000_4d"   # amber-phosphor wash — the ==highlight== marker; the OTHER classic
+                                 # monochrome-monitor phosphor, distinct from the green body & markers
+
+# Grey line work + the DOS blue header bar (Norton-Commander), on the true-black base:
+rule          = "#555555"   # grey horizontal rule
+table_border  = "#555555"   # ANSI 8 grey grid
+table_head_bg = "#0000aa"   # ANSI 4 blue header fill (yellow header text on it)

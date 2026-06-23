@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "designing-gnome-ui": {
+      "source": "mhagrelius/dotfiles",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/designing-gnome-ui/SKILL.md",
+      "computedHash": "e79bbce8bdeaa19233cb84e2e8bfb8329782127b61c81e35ae6040d3f71c68b2"
+    },
+    "developing-gtk-apps": {
+      "source": "mhagrelius/dotfiles",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/developing-gtk-apps/SKILL.md",
+      "computedHash": "b69aa2d24add96983f34f545d9c1355d3c383d8b2c434b9749436bbb10b223ae"
+    }
+  }
+}

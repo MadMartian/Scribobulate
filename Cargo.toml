@@ -1,0 +1,161 @@
+# One workspace member beside the app: `gtktest/`, the registration attribute the
+# main-thread GTK suite needs (`src/gtk_suite.rs`). A proc macro has to be its own
+# crate — it compiles for the host, not the target — so this is not a structural
+# choice so much as the only way to have one.
+[workspace]
+members = [".", "gtktest"]
+
+[package]
+name = "scribobulate"
+version = "0.1.0"
+edition = "2021"
+description = "A native Linux Markdown viewer/editor that renders on the CPU with live reload"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.10" }
+sourceview = { package = "sourceview5", version = "0.10" }
+# glib is re-exported by gtk4; depended on directly only to enable its `log`
+# feature, which compiles the glib→`log` bridge used by src/logging.rs.
+glib = { version = "0.21", features = ["log"] }
+pulldown-cmark = "0.13"
+serde = { version = "1", features = ["derive"] }
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+toml = "0.8"
+# Secure image-src containment + Browse→relative path math (researcher-sourced):
+# dunce::canonicalize resolves symlinks/`..` and strips Windows \\?\ verbatim;
+# pathdiff::diff_paths computes the document-relative reference. See ANTI-PATTERNS.
+dunce = "1"
+pathdiff = "0.2"
+# Leveled logging: `log` facade + `env_logger` (RUST_LOG runtime control). Replaces
+# ad-hoc eprintln! with permanent, level-gated instrumentation. See src/logging.rs.
+log = "0.4"
+env_logger = "0.11"
+# Already present transitively via gtk4/glib-sys; depended on directly so
+# src/atomic_io.rs's umask(2) query (a new file's mode, QA round-4 R4-1) is an
+# explicit dependency rather than relying on an incidental transitive one.
+libc = "0.2"
+two-face = { version = "0.5.1", default-features = false, features = ["syntect-fancy"] }
+# Both are TEST-ONLY and optional, pulled in by `gtk-integration-tests` alone, so a
+# default build and a release build link neither. They exist for `src/gtk_suite.rs`:
+# `gtktest` is the registration attribute, `inventory` the registry it submits into,
+# which is what keeps every `#[gtktest::test]` body off a hand-maintained list.
+# No count here on purpose: this comment and sdd/TECH.md each carried one, both were
+# wrong, and they disagreed. `grep -rc '#\[gtktest::test\]' src/` is the answer.
+gtktest = { path = "gtktest", optional = true }
+inventory = { version = "0.3", optional = true }
+
+[profile.release]
+# Full release optimization. `opt-level = 3` is already Cargo's release default,
+# so the wins here are cross-crate inlining and dead-code elimination across the
+# heavy dep tree (gtk4, sourceview5, syntect, pulldown-cmark):
+#   lto = "thin"       — cross-crate inlining/DCE at near-fat quality, far cheaper
+#                        link time than fat `lto = true`.
+#   codegen-units = 1  — one unit per crate lets the optimizer see the whole crate
+#                        (trades parallel compile for a faster/smaller binary).
+#   strip = "symbols"  — drop debug/symbol tables from the shipped binary.
+# NOT set: `panic = "abort"`. POLICY.md deliberately relies on panics UNWINDING
+# (run `Drop`, honour `RUST_BACKTRACE`) for programmer-error/invariant handling;
+# "abort" would defeat that. Keep the default `panic = "unwind"`.
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+# Opt-in: gates the small number of tests that construct real GTK objects
+# (gtk::init() + a live ApplicationWindow) rather than pure logic. Excluded
+# from the default `cargo test` run because they need a live GDK display
+# (X11/Wayland/broadway) — not available in a plain headless CI runner
+# without Xvfb or equivalent provisioned first. Run explicitly with:
+#   cargo test --features gtk-integration-tests
+# See POLICY.md §Testing "GTK-object integration tests" for the convention
+# (display requirement, single-threaded caveat for any future addition here).
+#
+# It also enables the two test-only dependencies the main-thread suite needs, so
+# they are absent from every build that does not ask for the suite.
+gtk-integration-tests = ["gtktest", "inventory"]
+
+[build-dependencies]
+# Build-time only (never linked into the shipped binary): compiles
+# data/resources.gresource.xml into an embedded GResource blob at build time
+# via the external `glib-compile-resources` tool (part of the same GLib dev
+# toolchain `libgtk-4-dev` already requires). The "Copy Document" toolbar icon
+# needs a bundled, theme-independent symbolic icon
+# (no standard "copy whole document" icon exists on Adwaita/Breeze/GTK's
+# built-in set, researcher-verified) that still gets GTK's automatic
+# light/dark symbolic recoloring — only achievable via a real GResource
+# registered with GtkIconTheme::add_resource_path, not a raw embedded texture.
+glib-build-tools = "0.22.8"
+
+
+[target.'cfg(windows)'.build-dependencies]
+# Build-time only, Windows host only: embeds a Win32 resource section
+# (RT_GROUP_ICON + VERSIONINFO) into scribobulate.exe. A Rust binary carries
+# neither by default, and the Windows shell reads a program's identity from the
+# file on disk WITHOUT launching it — so with the section missing, "Open with"
+# and Settings ▸ Default apps fall back to the raw file name `scribobulate.exe`
+# beside a generic icon, and Task Manager / Properties ▸ Details show nothing.
+#
+# This does NOT overlap with the app icon bundled in data/resources.gresource.xml:
+# that one fixes what GTK draws inside a *running* window (title bar, taskbar,
+# Alt+Tab). Only a PE resource reaches the shell. Both are needed; both render
+# the same source SVG.
+#
+# HOST-gated, deliberately, and it is the one gate here that cannot be a target
+# one: `winresource` drives the Windows SDK's `rc.exe`, which only exists on a
+# Windows host, and Cargo evaluates `cfg()` for build-dependencies against the host.
+# build.rs gates the CALL on the target instead (`CARGO_CFG_TARGET_OS`) — the two
+# gates ask different questions on purpose, and the combination that has neither
+# (targeting Windows from elsewhere) fails the build loudly rather than silently
+# shipping an unbranded exe. The documented pipeline is a native MSVC build; see
+# packaging/windows/README.md.
+winresource = "0.1"
+# A harness-free integration test: cargo runs the file's own `main()` instead of
+# wrapping it in libtest. That matters beyond style — gtk4-rs dispatches
+# `#[gtk::test]` bodies onto a glib ThreadPool worker, and a GTK build that
+# requires initialisation on the process main thread cannot run them at all.
+# Owning `main()` sidesteps the harness entirely, so this target is the portable
+# shape for a GTK assertion that must hold everywhere. Gated like every
+# display-dependent test: `cargo test` alone must stay runnable with no display.
+[[test]]
+name = "icon_resolution"
+harness = false
+required-features = ["gtk-integration-tests"]
+
+# Same shape, same reason. macOS gets no `#[gtk::test]` at all, so the claim that
+# writing `gtk-application-prefer-dark-theme` actually re-themes the Quartz
+# backend — without which the dark-mode detection is inert — has nowhere else to
+# live. Compiles to a no-op `main()` off macOS rather than being excluded here,
+# so the target list stays platform-independent.
+[[test]]
+name = "macos_dark_mode"
+harness = false
+required-features = ["gtk-integration-tests"]
+
+# Same shape again. Isolates the annotation card's deferred-focus mechanism
+# (`markers.rs`'s `idle_add_local_once` + `child_focus(TabForward)` after a popover
+# `popup()`) without reaching `AnnotationCard`/`CodePreviewView` themselves — those
+# need crate internals well past what `#[path]` can pull in as a leaf (ScrAP-197).
+# Runs on every platform: the mechanism is generic
+# GtkPopover/focus-chain behaviour, not macOS-specific, even though the defer it
+# guards was found and fixed on Quartz.
+[[test]]
+name = "popover_deferred_focus"
+harness = false
+required-features = ["gtk-integration-tests"]
+
+# The main-thread GTK suite. A SECOND CRATE ROOT inside `src/`, not a file in
+# `tests/`: cargo builds this `--cfg test`, so it compiles the whole module tree
+# including every `#[cfg(test)]` module and its dev-dependencies, and reaches
+# `pub(crate)` internals that an external integration target cannot see at all.
+# `main()` therefore runs the bodies on the process main thread, which is the one
+# thing `#[gtk::test]` cannot do. See src/gtk_suite.rs.
+[[test]]
+name = "gtk_suite"
+path = "src/gtk_suite.rs"
+harness = false
+required-features = ["gtk-integration-tests"]

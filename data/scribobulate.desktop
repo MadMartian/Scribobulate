@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Scribobulate
+GenericName=Markdown Editor
+Comment=Native Markdown viewer and editor that renders on the CPU
+# install.sh rewrites Exec/TryExec to the absolute install path.
+Exec=scribobulate %U
+TryExec=scribobulate
+Icon=com.extollit.scribobulate
+Terminal=false
+Categories=Utility;TextEditor;GTK;
+MimeType=text/markdown;text/x-markdown;
+Keywords=markdown;md;editor;viewer;
+StartupNotify=true
+StartupWMClass=com.extollit.scribobulate

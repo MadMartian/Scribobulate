@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for Scribobulate.app/Contents/Info.plist. @TOKENS@ are substituted by
+  bundle.sh. Keep this file as the single source of the bundle's metadata — the
+  script does not synthesise plist keys of its own.
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Scribobulate</string>
+  <key>CFBundleDisplayName</key><string>Scribobulate</string>
+
+  <!-- Must match the executable's filename in Contents/MacOS/. -->
+  <key>CFBundleExecutable</key><string>scribobulate</string>
+
+  <!-- Same string as the GApplication ID (src/icons.rs Icon::App / APP_ID).
+       macOS keys Launch Services, the Dock, and TCC permission grants off this;
+       GTK keys its icon lookup off the same string on Linux. -->
+  <key>CFBundleIdentifier</key><string>com.extollit.scribobulate</string>
+
+  <!-- The Dock / Cmd-Tab / Finder icon. macOS reads it from HERE and nowhere
+       else: it does NOT consult GTK's icon theme, so the GResource-bundled
+       app icon that fixes the About-dialog logo has no effect on the Dock.
+       Without this key a bare binary shows the generic "exec" placeholder. -->
+  <key>CFBundleIconFile</key><string>scribobulate.icns</string>
+
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>CFBundleVersion</key><string>@VERSION@</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+
+  <!-- Markdown document association — the macOS counterpart of the .desktop
+       file's MimeType= line. Declaring the type is what makes "Open With ▸
+       Scribobulate" appear; making it the DEFAULT handler additionally needs a
+       Launch Services call (`duti -s com.extollit.scribobulate net.daringfireball.markdown all`),
+       which is a user-level action, not something a bundle can assert. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Markdown Document</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>net.daringfireball.markdown</string>
+        <string>public.plain-text</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>
