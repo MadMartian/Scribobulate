@@ -1,9 +1,7 @@
 # AGENTS.md
 
-Scribobulate: a native GTK4 Markdown viewer/editor for **Linux, macOS and
-Windows** that renders on the CPU (zero GPU memory) and live-reloads files as
-they change on disk. All three are supported build targets from one source tree;
-Linux remains the canonical platform for the POLICY gates.
+Scribobulate: a native GTK4 Markdown viewer/editor for Linux that renders on the
+CPU (zero GPU memory) and live-reloads files as they change on disk.
 
 ## SDD skill
 
@@ -89,7 +87,7 @@ Read all of the above, plus:
 - [`sdd/PLAN.profiling.md`](sdd/PLAN.profiling.md) — deferred: a CPU and memory profiling strategy. TDD §6 gates *ceilings* (VRAM, RSS) proven once as a viability spike; nothing asks whether a change made a main-loop turn slower or made something leak per cycle, which are the two failures a single-threaded GTK application actually produces. **Read it before profiling anything, before proposing a performance gate, and before reaching for any GTK debug channel** — it records, host-measured, that a distribution GTK has its entire introspection surface compiled out (ScrAP-251), including one channel that reports a healthy-looking `0` while dark, and it carries the tier ladder, the escalation order for leak attribution, and what is reachable with no change to the tree.
 - [`sdd/PLAN.details-disclosure.md`](sdd/PLAN.details-disclosure.md) — **shelved** (2026-08-01): HTML `<details>`/`<summary>` collapsible disclosure blocks in the preview. Approved in principle but blocked on one unresolved measurement; nothing is implemented and no TDD rubrics were landed — the plan holds them drafted, for reinstatement on implementation. **Read it before implementing any collapsible or foldable preview construct, and before making a self-drawn affordance keyboard-activatable** — it records, researcher-verified, that a widget copying `GtkExpander`'s `set_activate_signal` gets Space unconditionally but Enter only until the window has a default widget (GTK4Rs/AP-165), that the RTL disclosure triangle is a separate icon name rather than a mirror, and that honouring `<details open>` from source while treating user toggles as ephemeral removes the per-fold-state-across-re-render problem rather than solving it.
 - **Export is implemented, not planned** — its plan retired 2026-08-20 after all three seats verified it. Before building any second representation of a rendered document, read [`sdd/TECH.md`](sdd/TECH.md)'s `export/` entry: an export is a function of the document *source* and the same normalised event stream the preview is built from, **never of the preview widget** — a deferred tab has no preview, off-screen anchored children are parked at negative coordinates, and an unallocated geometry read answers the buffer's last line. `pulldown_cmark::html::push_html` is a *different, more permissive renderer* rather than a shortcut to the same output: it is blind to the constructs a second tokeniser owns, never consults the scheme allowlist or the image containment gate, and emits raw HTML verbatim. The behavioural contract is [`sdd/TDD.md`](sdd/TDD.md) §25; the traps are ScrAP-301 through ScrAP-310.
-
+- [`sdd/PLAN.spell-check.md`](sdd/PLAN.spell-check.md) — **Planned, not yet implemented.** The spell checker: a toggleable, context-menu-driven checker over the editor pane. Read it before touching spell checking, the editor's tag set, or `contextmenu.rs`'s row construction. It records four facts measured on this machine's GTK/GtkSourceView (a foreign `GtkTextTag` survives re-highlighting; which regions the `no-spell-check` context class already covers; that `GtkTextIter`'s word API splits `don't`; that a whole-buffer re-tag does not move the viewport) — each of which is expensive to re-derive and one of which refutes an otherwise plausible assumption.
 
 ### Task triggers
 
