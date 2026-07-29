@@ -55,6 +55,7 @@ Read all of the above, plus:
   markup beyond a control name.
 - [`sdd/PLAN.profiling.md`](sdd/PLAN.profiling.md) — before profiling, proposing a
   performance gate, or reaching for a GTK debug channel.
+- [`sdd/PLAN.spell-check.md`](sdd/PLAN.spell-check.md) — **Planned, not yet implemented.** The spell checker: a toggleable, context-menu-driven checker over the editor pane. Read it before touching spell checking, the editor's tag set, or `contextmenu.rs`'s row construction. It records four facts measured on this machine's GTK/GtkSourceView (a foreign `GtkTextTag` survives re-highlighting; which regions the `no-spell-check` context class already covers; that `GtkTextIter`'s word API splits `don't`; that a whole-buffer re-tag does not move the viewport) — each of which is expensive to re-derive and one of which refutes an otherwise plausible assumption.
 
 ## Task triggers
 
