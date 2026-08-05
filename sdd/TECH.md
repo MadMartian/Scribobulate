@@ -104,11 +104,13 @@ Platform-specific notes that shape the architecture:
   SIGSEGV, an OOM kill, a power loss) no longer discards unsaved work. This is the
   one write path besides save, and it is deliberately not the same one: it must be
   owner-only from the first byte and must never block the main thread, neither of
-  which `atomic_io` provides. The write is GIO's `replace_contents_async` with
-  `REPLACE_DESTINATION | PRIVATE`; the guarantees that combination does and does not
-  buy — including the failure path no flag closes — are ScrAP-232. It shares GLib's
-  I/O thread pool with document I/O, which is why `docio/` caps its own use of that
-  pool rather than letting a slow filesystem make snapshots late (ScrAP-243). Recovery data is
+  which `atomic_io` provides. The write opens a co-located temp with GIO
+  `replace_async` (`PRIVATE` → `0600` from the first byte) and **renames it into
+  place only after a complete write** — owning the promote decision rather than
+  calling `replace_contents_async`, which renames a truncated temp over the previous
+  good snapshot on an ordinary disk-full (ScrAP-232). It shares GLib's I/O thread
+  pool with document I/O, which is why `docio/` caps its own use of that pool rather
+  than letting a slow filesystem make snapshots late (ScrAP-243). Recovery data is
   never written next to the user's document: a central directory keeps each open
   file's `gio::FileMonitor` from seeing a stream of events it would then have to
   learn to ignore, and works for read-only directories and untitled buffers alike.

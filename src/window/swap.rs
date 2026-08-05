@@ -6,9 +6,9 @@
 //! unit-tested with no display. This module is the GTK and filesystem edge: timers,
 //! buffer reads, and the GIO write.
 //!
-//! # Why the write is a bare `replace_contents_async` and not `atomic_io::write_atomic`
+//! # Why this write is neither `atomic_io::write_atomic` nor `replace_contents_async`
 //!
-//! Two reasons, and the first is a hard requirement rather than a preference.
+//! Two hard requirements rule out reusing `atomic_io`:
 //!
 //! - **Privacy from the first byte.** A swap file holds verbatim document text,
 //!   including from documents the user has deliberately made owner-only.
@@ -19,16 +19,17 @@
 //!   `open(2)`, never chmod'd afterwards.
 //! - **No main-thread I/O.** These writes fire unprompted while the user types, so a
 //!   slow filesystem (NFS, FUSE, a synced folder) must not be able to stall the UI. GIO
-//!   dispatches the write on a thread pool and returns the completion on the
-//!   thread-default main context, so the concurrency model is unchanged — the
+//!   dispatches the open and the write on a thread pool and returns the completion on
+//!   the thread-default main context, so the concurrency model is unchanged — the
 //!   application still spawns no threads of its own and no GTK object is ever touched
 //!   off the main thread.
 //!
-//! Both flags are mandatory together. `REPLACE_DESTINATION` is what makes the write a
-//! temp-and-rename rather than a truncate-in-place for a symlinked or hard-linked target,
-//! *and* what stops GIO re-applying the existing file's mode over our `0600` on every
-//! overwrite. The full analysis — including the failure path this cannot close, and the
-//! durability it does not provide — is ScrAP-232.
+//! One measured hazard rules out the obvious GIO one-liner. `replace_contents_async`
+//! closes the stream on a write error and **ignores the close result**, and for a local
+//! file close is where the temp→destination rename happens — so an ordinary disk-full
+//! promotes a truncated temp over the previous good snapshot (ScrAP-232). The write
+//! therefore opens a co-located temp via `replace_async` (`PRIVATE`) and **renames it
+//! into place only after a complete successful write** — see [`write_snapshot`].
 //!
 //! # What the snapshot cannot be
 //!

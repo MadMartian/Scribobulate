@@ -344,8 +344,10 @@ reading position in existence to lose. That is a fact about *when* it runs, not 
 what it does, and it is recorded here rather than left implicit precisely because it is
 the kind of exemption a later change silently invalidates. **Any of these ends it and
 requires routing through the bracket:** recovering into a live session rather than at
-startup; restoring a scroll or caret position from the swap header (an open item in
-`PLAN.crash-recovery.md`); or re-applying a recovery after the user has scrolled. The
+startup; restoring a scroll or caret position from the swap header (not currently
+carried — SCHEMA.md pins the header fields, and adding either would create a held
+reference across a process restart; see the Document-Reference CAM note below); or
+re-applying a recovery after the user has scrolled. The
 *discard* half already needs no special handling — it reverts through the ordinary reload
 path, which is row 3.
 
