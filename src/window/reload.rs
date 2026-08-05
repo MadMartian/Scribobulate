@@ -361,14 +361,15 @@ pub(crate) fn apply_external_reload(window: &ApplicationWindow, content: &str) {
             // the one-shot scroll_to_mark lands a FAR target near the top on a huge
             // doc, so use the progressive far-restore (researcher findings).
             // `render_and_wire_preview` returns the per-preview GtkOverlay PANE (the
-            // in-surface Annotate-bar host, ScrAP-98), not the raw scroller;
-            // `restore_preview_scroll_to_line_fresh` downcasts its arg to
-            // ScrolledWindow, so passing the Overlay directly silently no-ops (the
-            // reading position was NOT restored on reload — a regression the overlay
-            // wrap introduced). Dig one level through to the scroller, as every other
-            // consumer does (`SplitView::preview_scroller`).
+            // in-surface Annotate-bar host, ScrAP-98), not the raw scroller, so dig
+            // one level through to the scroller as every other consumer does
+            // (`SplitView::preview_scroller`). Handing the pane in used to compile —
+            // the restore took an untyped `&gtk::Widget` and downcast internally, so
+            // the Overlay silently no-oped and the reading position was NOT restored
+            // on reload. The parameter is now `&ScrolledWindow`, so that mistake no
+            // longer builds (POLICY § Typed GTK seams, the encapsulation rung).
             if let Some(sw) = st.split.preview_scroller() {
-                restore_preview_scroll_to_line_fresh(sw.upcast_ref(), top_line);
+                restore_preview_scroll_to_line_fresh(&sw, top_line);
             }
             rewire_copy_action(window);
         }

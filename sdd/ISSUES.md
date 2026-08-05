@@ -10,8 +10,6 @@
 | G | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
 | J | The app dies occasionally with SIGSEGV inside GTK/GIO, with no reproduction and nothing recorded at the moment of death | Medium |
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
-| C | The preview scroll/geometry helpers take an untyped `&gtk::Widget` and silently no-op when handed the wrong widget — the same structural-downcast class that made find blind to link-cell text | Low |
-| O | Switching tabs does not scroll the outline (or annotations) list to its selected row — highlight can be correct but off-screen | Low |
 
 ## A. Tables are selection islands
 
@@ -868,66 +866,3 @@ affordance cannot observe the click at all.
 - Leave it, which is the standing choice: the failure is one wasted click that fixes
   itself, and every route past it trades a silent no-op for a silent loss of the drag.
 
-## C. Preview scroll helpers take an untyped widget and no-op on the wrong one
-
-**Severity**: Low (latent — every caller passes the right widget today, so nothing
-is broken; the cost is that the next one to pass the wrong one gets silence)
-
-`preview::scroll`'s entry points — `scroll_preview_to_heading`,
-`restore_preview_scroll`, `restore_preview_scroll_to_line`, `preview_top_line`,
-`preview_scroll_fraction`, `scroll_preview_to_fragment` — take `&gtk::Widget` and
-open with `widget.clone().downcast::<ScrolledWindow>()`, returning on failure.
-Callers currently pass a real scroller upcast to `Widget`, so the behaviour is
-correct; the type simply does not say so, and the failure mode if one ever does not
-is a **reading position that silently fails to restore**, with no warning and no
-visible symptom beyond the pane being at the wrong place.
-
-That matters here because the preview pane is a `GtkOverlay` *wrapping* the
-scroller. Handing the pane in — the natural thing for a caller that has "the preview"
-rather than "the preview's scroller" — compiles, runs, and does nothing.
-
-This is the same shape as ScrAP-250, one level out: a `downcast` to a concrete
-widget type standing in for a semantic question, answering "no" for any shape the
-author did not enumerate. There it cost a user-visible search defect; here it is
-still only a hazard.
-
-**Fix**: narrow the signatures to `&gtk::ScrolledWindow` (or a newtype for the
-preview scroller) so the wrong argument stops compiling rather than stopping
-silently — POLICY § Typed GTK seams, the "encapsulation" rung. Mechanical: the
-call sites already hold the right type and only upcast to satisfy these signatures.
-
-## O. Tab switch leaves the outline / annotations list scrolled away from the selected row
-
-**Severity**: Low (selection and document pane are usually correct; only the
-sidebar list viewport is wrong — no data at risk)
-
-Switching tabs rebuilds the window-scoped outline and annotations lists for the
-new document. The **selected row** is re-derived (outline: scroll-spy from the
-document viewport on idle after `wire_scroll_spy`; annotations: last activated
-identity via `annotations_selected`), but the **list scroller is never moved** so
-that row is visible. The sidebar can show a highlight that is off-screen, or a
-vadjustment left over from the previous tab’s taller/shorter list.
-
-**Cause.** Outline and annotations scrollers are **window chrome**
-(`outline_scroller` / `annotations_scroller`), shared across tabs — not per-tab
-widgets. On tab switch, `refresh_tab_surfaces` (`tabs/switch.rs`) calls
-`refresh_outline` / `refresh_annotations` (child swap + selection restore) and
-`wire_scroll_spy` (idle `on_scroll` → `scroll_spy_set_selection`). Selection is
-only `SingleSelection::set_selected`; nothing scrolls the `GtkListView` /
-scroller into view. Persisting a per-tab outline vadjustment would be the wrong
-model for shared chrome.
-
-**Accepted fix (minimum).** After selection has settled on a tab switch (outline:
-after the scroll-spy idle, not only the pre-spy `outline_selected` restore;
-annotations: end of `refresh_annotations`), **scroll the list so the selected
-row is in view**. Do not re-fire navigation (ScrAP-89 spy guards). Prefer a
-shared “reveal selected row” helper for both panes. GTK 4.6 floor: `ListView::scroll_to`
-is 4.12+ — use a 4.6-safe path (row geometry + adjustment, or equivalent).
-
-**Not required for this issue:** continuous re-scroll of the outline on every
-document `value-changed` (product choice; can fight a user who scrolled the
-outline by hand). Full per-tab storage of sidebar scroll offsets.
-
-**Mitigation options**:
-- Implement the accepted fix above (preferred).
-- Leave it — user scrolls the sidebar manually after each switch.

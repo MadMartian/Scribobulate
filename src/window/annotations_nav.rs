@@ -36,6 +36,15 @@ pub(crate) fn refresh_annotations(window: &ApplicationWindow) {
     let selected = st.annotations_selected.get().map(OriginalByteOffset::new);
     let content = build_annotations_content(&entries, make_annotations_activate(window), selected);
     st.chrome().annotations_scroller.set_child(Some(&content));
+    // Selection is applied inside `build_annotations_content` before the navigation
+    // handler is connected; now scroll that row into view. Deferred one idle so the
+    // ListView has size estimates for `list.scroll-to-item` (same settle the outline
+    // spy idle waits on). Shared chrome: without this a tab switch can leave the
+    // highlight correct but off-screen, or keep the previous tab's vadjustment.
+    let scroller = st.chrome().annotations_scroller.clone();
+    glib::idle_add_local_once(move || {
+        super::sidebar::reveal_selected_row(&scroller);
+    });
 }
 
 /// Build the row-activated callback for the annotations viewer: it navigates the relevant

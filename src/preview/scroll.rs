@@ -41,13 +41,14 @@ pub(crate) fn set_adj_fraction(adj: &gtk::Adjustment, fraction: f64) -> bool {
     }
 }
 
-/// Scroll a preview widget (a `ScrolledWindow` wrapping the `CodePreviewView`) so
+/// Scroll a preview scroller (a `ScrolledWindow` wrapping the `CodePreviewView`) so
 /// the heading at document-order index `doc_index` sits at the top of the view.
 ///
 /// The buffer offset comes from the per-render `RenderData.heading_offsets` (same
 /// document order as `outline::extract_headings`), so the outline's `doc_index`
-/// maps straight to a scroll target without re-parsing.  A no-op if the widget is
-/// not a preview scroller or the index is out of range (e.g. headings changed).
+/// maps straight to a scroll target without re-parsing.  A no-op if the scroller
+/// does not wrap a preview view or the index is out of range (e.g. headings
+/// changed).
 ///
 /// Scrolling goes through a `GtkTextMark` + `scroll_to_mark`, NOT `scroll_to_iter`:
 /// `scroll_to_iter` scrolls *immediately* using whatever line heights are computed
@@ -56,10 +57,7 @@ pub(crate) fn set_adj_fraction(adj: &gtk::Adjustment, fraction: f64) -> bool {
 /// into an as-yet-unvalidated region — the preview went blank-gray and GTK spammed
 /// "snapshot … without a current allocation" every frame (ScrAP-22).  `scroll_to_mark`
 /// records the target and defers the scroll until after validation, which is robust.
-pub(crate) fn scroll_preview_to_heading(widget: &gtk::Widget, doc_index: usize) {
-    let Ok(sw) = widget.clone().downcast::<ScrolledWindow>() else {
-        return;
-    };
+pub(crate) fn scroll_preview_to_heading(sw: &ScrolledWindow, doc_index: usize) {
     let Some(view) = sw
         .child()
         .and_then(|c| c.downcast::<CodePreviewView>().ok())
@@ -77,7 +75,7 @@ pub(crate) fn scroll_preview_to_heading(widget: &gtk::Widget, doc_index: usize) 
     }
 }
 
-/// Scroll a preview widget (a `ScrolledWindow` wrapping the `CodePreviewView`)
+/// Scroll a preview scroller (a `ScrolledWindow` wrapping the `CodePreviewView`)
 /// so the heading whose anchor slug matches `fragment` sits at the top of the
 /// view, consulting **that view's own** `RenderData.heading_map` — the same map
 /// a same-document `#anchor` click reads in `preview/interactions.rs`. Returns
@@ -93,10 +91,7 @@ pub(crate) fn scroll_preview_to_heading(widget: &gtk::Widget, doc_index: usize) 
 /// `scroll_to_iter` here would risk the blank-gray / "without a current
 /// allocation" hazard; `scroll_to_mark` defers the actual scroll until
 /// validation catches up.
-pub(crate) fn scroll_preview_to_fragment(widget: &gtk::Widget, fragment: &str) -> bool {
-    let Ok(sw) = widget.clone().downcast::<ScrolledWindow>() else {
-        return false;
-    };
+pub(crate) fn scroll_preview_to_fragment(sw: &ScrolledWindow, fragment: &str) -> bool {
     let Some(view) = sw
         .child()
         .and_then(|c| c.downcast::<CodePreviewView>().ok())
@@ -116,14 +111,9 @@ pub(crate) fn scroll_preview_to_fragment(widget: &gtk::Widget, fragment: &str) -
     }
 }
 
-/// Fractional scroll position of a preview widget (a `ScrolledWindow`).
-pub(crate) fn preview_scroll_fraction(widget: &gtk::Widget) -> f64 {
-    widget
-        .clone()
-        .downcast::<ScrolledWindow>()
-        .ok()
-        .map(|sw| adj_fraction(&sw.vadjustment()))
-        .unwrap_or(0.0)
+/// Fractional scroll position of a preview/editor scroller.
+pub(crate) fn preview_scroll_fraction(sw: &ScrolledWindow) -> f64 {
+    adj_fraction(&sw.vadjustment())
 }
 
 /// The top visible buffer line of a preview/editor scroller (a `ScrolledWindow`
@@ -133,10 +123,9 @@ pub(crate) fn preview_scroll_fraction(widget: &gtk::Widget) -> f64 {
 /// `value/(upper−page_size)` fraction, which mixes tall (heading) and short
 /// (blank) line heights and therefore drifts upward on a zoom re-render
 /// (ScrAP-65). Capture BEFORE mutating the buffer,
-/// while the old layout is still valid. `None` when `widget` is not such a
-/// scroller.
-pub(crate) fn preview_top_line(widget: &gtk::Widget) -> Option<i32> {
-    let sw = widget.clone().downcast::<ScrolledWindow>().ok()?;
+/// while the old layout is still valid. `None` when the scroller does not wrap a
+/// `GtkTextView`.
+pub(crate) fn preview_top_line(sw: &ScrolledWindow) -> Option<i32> {
     let child = sw.child()?;
     // The preview is a CodePreviewView, which tracks a rapid-zoom-robust reading
     // anchor (its live top line, or the target of a still-settling programmatic
@@ -224,13 +213,10 @@ fn restore_textview_scroll_to_line(sw: &ScrolledWindow, view: &TextView, line: i
 /// its scale differs, so an exact line anchor preserves the reading position with
 /// none of the pixel-fraction drift). No-op for `line <= 0` (already at/above the
 /// top) or a non-`GtkTextView` scroller.
-pub(crate) fn restore_preview_scroll_to_line(widget: &gtk::Widget, line: i32) {
+pub(crate) fn restore_preview_scroll_to_line(sw: &ScrolledWindow, line: i32) {
     if line <= 0 {
         return;
     }
-    let Ok(sw) = widget.clone().downcast::<ScrolledWindow>() else {
-        return;
-    };
     let Some(child) = sw.child() else { return };
     // The preview is a CodePreviewView — reuse its proven, coalesced,
     // validation-forcing scroll (ScrAP-22), targeting the buffer offset of `line`.
@@ -245,7 +231,7 @@ pub(crate) fn restore_preview_scroll_to_line(widget: &gtk::Widget, line: i32) {
     }
     // Any other GtkTextView scroller — generic validation-safe restore.
     if let Ok(view) = child.downcast::<TextView>() {
-        restore_textview_scroll_to_line(&sw, &view, line);
+        restore_textview_scroll_to_line(sw, &view, line);
     }
 }
 
@@ -268,19 +254,16 @@ pub(crate) fn restore_preview_scroll_to_line(widget: &gtk::Widget, line: i32) {
 /// `size_allocate` refresh freeze a running scroll animation causes
 /// (gtktextview.c:4656-4660), and this is the normal scroll path (not a
 /// pre-allocation `scroll_to_iter`), so it never re-enters ScrAP-22.
-pub(crate) fn restore_preview_scroll_to_line_fresh(widget: &gtk::Widget, line: i32) {
+pub(crate) fn restore_preview_scroll_to_line_fresh(sw: &ScrolledWindow, line: i32) {
     if line <= 0 {
         return;
     }
-    let Ok(sw) = widget.clone().downcast::<ScrolledWindow>() else {
-        return;
-    };
     // The preview is a CodePreviewView, but every step here is generic GtkTextView
     // geometry (line_yrange / line_at_y / iter_at_mark), so treat it as its base.
     let Some(view) = sw.child().and_then(|c| c.downcast::<TextView>().ok()) else {
         return;
     };
-    restore_textview_scroll_to_line_progressive(&sw, &view, line);
+    restore_textview_scroll_to_line_progressive(sw, &view, line);
 }
 
 /// The progressive, `notify::upper`-driven far-restore core (see
@@ -386,13 +369,10 @@ fn restore_textview_scroll_to_line_progressive(sw: &ScrolledWindow, view: &TextV
 /// pixel-fraction). Source and rendered views have different per-line heights, so
 /// no offset is exact across a mode switch anyway; a line-fraction is stable and
 /// close, and — crucially — survives validation, which the pixel-fraction did not.
-pub(crate) fn restore_preview_scroll(widget: &gtk::Widget, fraction: f64) {
+pub(crate) fn restore_preview_scroll(sw: &ScrolledWindow, fraction: f64) {
     if fraction <= 0.0 {
         return;
     }
-    let Ok(sw) = widget.clone().downcast::<ScrolledWindow>() else {
-        return;
-    };
     // Preferred path: a GtkTextView (preview CodePreviewView or the editor View,
     // both TextView subclasses). This is the CROSS-buffer restore (a view-mode
     // switch: the rendered preview and the source editor have different line
@@ -431,7 +411,7 @@ pub(crate) fn restore_preview_scroll(widget: &gtk::Widget, fraction: f64) {
             let lines = view.buffer().line_count();
             if lines > 0 {
                 let target = ((fraction * lines as f64).round() as i32).clamp(0, lines - 1);
-                restore_textview_scroll_to_line(&sw, &view, target);
+                restore_textview_scroll_to_line(sw, &view, target);
             }
             return;
         }
@@ -535,7 +515,7 @@ mod gtk_integration_tests {
         sw.set_child(Some(&view));
 
         let target = 30_000;
-        restore_preview_scroll_to_line_fresh(sw.upcast_ref::<gtk::Widget>(), target);
+        restore_preview_scroll_to_line_fresh(&sw, target);
 
         let buffer = view.buffer();
         let mark = buffer
@@ -579,7 +559,7 @@ mod gtk_integration_tests {
         }
 
         let target = 2_000;
-        restore_preview_scroll_to_line_fresh(sw.upcast_ref::<gtk::Widget>(), target);
+        restore_preview_scroll_to_line_fresh(&sw, target);
 
         // Pump until the viewport reaches the target (tolerance == the assert's).
         let vadj = sw.vadjustment();
@@ -723,7 +703,7 @@ mod gtk_integration_tests {
         let lines = view.buffer().line_count();
         let expected = ((0.5 * lines as f64).round() as i32).clamp(0, lines - 1);
 
-        restore_preview_scroll(sw.upcast_ref::<gtk::Widget>(), 0.5);
+        restore_preview_scroll(&sw, 0.5);
 
         assert_eq!(
             view.reading_line(),
@@ -743,7 +723,7 @@ mod gtk_integration_tests {
         let sw = ScrolledWindow::new();
         sw.set_child(Some(&view));
 
-        restore_preview_scroll_to_line_fresh(sw.upcast_ref::<gtk::Widget>(), 0);
+        restore_preview_scroll_to_line_fresh(&sw, 0);
         assert!(
             view.buffer().mark("scrib-scroll-restore").is_none(),
             "line 0 is a no-op — no restore mark should be created"
@@ -785,7 +765,7 @@ mod gtk_integration_tests {
         }
 
         // Schedule the progressive far-restore — installs the persistent mark on A.
-        restore_preview_scroll_to_line_fresh(sw.upcast_ref::<gtk::Widget>(), 2_000);
+        restore_preview_scroll_to_line_fresh(&sw, 2_000);
         let mark_a = view
             .buffer()
             .mark("scrib-scroll-restore")

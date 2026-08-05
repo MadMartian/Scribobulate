@@ -111,7 +111,7 @@ fn rerender_and_restore_scroll(
     // none of the upward drift a pixel fraction suffers here (a fraction mixes
     // tall heading lines and short blank lines, so `fraction × line_count` ≠ the
     // captured line). ScrAP-65.
-    let top_line = preview_top_line(preview_sw.upcast_ref()).unwrap_or(0);
+    let top_line = preview_top_line(preview_sw).unwrap_or(0);
 
     // In split mode, force the editor as scroll driver so the preview's validation
     // noise during the buffer swap doesn't drive the editor (ScrAP-16).
@@ -134,7 +134,7 @@ fn rerender_and_restore_scroll(
     // GTK 4.6.9 path — the former pre-read primer was vestigial and is gone;
     // ANTI-PATTERNS deferred-work meta-pattern, myth-bust #1)
     // (ScrAP-14/ScrAP-15/ScrAP-65).
-    restore_preview_scroll_to_line(preview_sw.upcast_ref(), top_line);
+    restore_preview_scroll_to_line(preview_sw, top_line);
 }
 
 /// Re-render the current preview pane in place. The caller only needs to have

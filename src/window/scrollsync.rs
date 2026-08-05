@@ -426,11 +426,11 @@ pub(super) fn content_scroll_fraction(window: &ApplicationWindow) -> f64 {
     // In editor-visible modes the editor is the reading position that matters
     // (and, in split, the scroll-sync driver); in pure preview it's the preview.
     if st.view_mode.get().is_editor_visible() {
-        preview_scroll_fraction(st.split.editor_scroller().upcast_ref())
+        preview_scroll_fraction(&st.split.editor_scroller())
     } else {
         st.split
             .preview_scroller()
-            .map(|sw| preview_scroll_fraction(sw.upcast_ref()))
+            .map(|sw| preview_scroll_fraction(&sw))
             .unwrap_or(0.0)
     }
 }
@@ -442,11 +442,11 @@ pub(super) fn content_scroll_fraction(window: &ApplicationWindow) -> f64 {
 pub(super) fn apply_content_scroll(window: &ApplicationWindow, mode: ViewMode, fraction: f64) {
     let Some(st) = state(window) else { return };
     if mode.is_editor_visible() {
-        restore_preview_scroll(st.split.editor_scroller().upcast_ref(), fraction);
+        restore_preview_scroll(&st.split.editor_scroller(), fraction);
     }
     if mode.is_preview_visible() {
         if let Some(preview) = st.split.preview_scroller() {
-            restore_preview_scroll(preview.upcast_ref(), fraction);
+            restore_preview_scroll(&preview, fraction);
         }
     }
 }

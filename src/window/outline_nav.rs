@@ -108,7 +108,7 @@ fn navigate_to_heading(
     match current_mode(window) {
         ViewMode::Preview => {
             if let Some(sw) = st.split.preview_scroller() {
-                scroll_preview_to_heading(sw.upcast_ref(), doc_index);
+                scroll_preview_to_heading(&sw, doc_index);
             }
         }
         ViewMode::Split => {
@@ -120,7 +120,7 @@ fn navigate_to_heading(
                 // (the coalesced sync projects preview→editor). Genuine user input
                 // on the editor switches the driver back via mark_driver_on_input.
                 st.scroll.driver.set(ScrollDriver::Preview);
-                scroll_preview_to_heading(preview_sw.upcast_ref::<gtk::Widget>(), doc_index);
+                scroll_preview_to_heading(&preview_sw, doc_index);
             }
         }
         ViewMode::Edit => scroll_editor_to_offset(&st.editor, &st.editor_buf, src_offset),
@@ -195,6 +195,16 @@ pub(crate) fn wire_scroll_spy(window: &ApplicationWindow) {
         window,
         move || {
             on_scroll(&w);
+            // After the spy has settled the selection for this tab/mode, scroll the
+            // outline list so that row is on screen. The scroller is window chrome
+            // shared across tabs, so without this the highlight can be correct but
+            // off-screen (or the previous tab's vadjustment left the viewport
+            // mid-list). Only this post-wire idle — not every document
+            // `value-changed` — so a user who scrolled the outline by hand is not
+            // fought while reading. Uses `list.scroll-to-item` (4.6-safe; ScrAP-157).
+            if let Some(st) = state(&w) {
+                super::sidebar::reveal_selected_row(&st.chrome().outline_scroller);
+            }
         }
     ));
 
@@ -620,7 +630,7 @@ mod collapse_all_tests {
     /// claims to wait for (T-9) — this backs off with a short sleep only when an
     /// iteration dispatched nothing, so it neither busy-spins nor blocks past
     /// convergence.
-    fn pump_until(ctx: &glib::MainContext, budget: u32, done: impl Fn() -> bool) -> bool {
+    fn pump_until(ctx: &glib::MainContext, budget: u32, mut done: impl FnMut() -> bool) -> bool {
         for _ in 0..budget {
             if done() {
                 return true;
@@ -771,6 +781,182 @@ mod collapse_all_tests {
             vec!["Title".to_string()],
             "the ListView must show exactly the root row after collapse \
              (ScrAP-157); saw: {shown:?}"
+        );
+
+        window.destroy();
+    }
+
+    /// Whether flat list position `pos` overlaps the scroller's vertical viewport,
+    /// using a uniform row-height estimate (`upper / n`). Outline rows are uniform
+    /// enough for this; we do **not** walk materialised children — GtkListView keeps
+    /// the selected/anchor row materialised even when scrolled away, so presence in
+    /// the child list is not a visibility signal.
+    fn estimated_row_in_view(vadj: &gtk::Adjustment, pos: u32, n: u32) -> bool {
+        if n == 0 || vadj.page_size() <= 0.0 || vadj.upper() <= 0.0 {
+            return false;
+        }
+        let row_h = vadj.upper() / f64::from(n);
+        let row_top = f64::from(pos) * row_h;
+        let row_bottom = row_top + row_h;
+        let value = vadj.value();
+        let page = vadj.page_size();
+        row_bottom > value && row_top < value + page
+    }
+
+    /// `reveal_selected_row` scrolls a far selected outline row into the list
+    /// viewport. Mutation guard: deleting the `list.scroll-to-item` call (or the
+    /// adjustment fallback) leaves the highlight correct but off-screen after the
+    /// scroller is parked at the top — the tab-switch failure mode.
+    #[gtktest::test]
+    fn reveal_selected_row_brings_far_outline_selection_into_view() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.outlinereveal");
+        let mut doc = String::from("# Root\n\n");
+        for i in 0..80 {
+            doc.push_str(&format!("## Section {i}\n\nbody\n\n"));
+        }
+        let window = crate::window::new_window(&app, "IT", &doc, None);
+        window.set_default_size(900, 500);
+        let ctx = glib::MainContext::default();
+        assert!(
+            pump_until(&ctx, 400, || {
+                window.is_mapped() && outline_tree_model(&window).is_some_and(|m| m.n_items() >= 81)
+            }),
+            "outline never built its full heading set"
+        );
+
+        let st = state(&window).expect("state");
+        // Wait for the outline scroller to finish its first layout — reveal is a
+        // no-op while page_size is 0 (ScrAP-13 class).
+        assert!(
+            pump_until(&ctx, 200, || {
+                st.chrome().outline_scroller.vadjustment().page_size() > 0.0
+                    && st.chrome().outline_scroller.vadjustment().upper() > 0.0
+            }),
+            "outline scroller never acquired a non-zero page_size/upper"
+        );
+
+        let list_view = outline_list_view(&window);
+        let sel = list_view
+            .model()
+            .and_then(|m| m.downcast::<gtk::SingleSelection>().ok())
+            .expect("SingleSelection");
+        let n_items = sel.n_items();
+        let selected_pos = n_items - 1;
+        // Select the last row without navigating (spy guards).
+        st.outline_spy_selecting.set(true);
+        sel.set_selected(selected_pos);
+        st.outline_spy_selecting.set(false);
+        st.outline_spy_doc.set(Some(selected_pos as usize));
+
+        // Park the shared outline scroller at the TOP so the selection is off-screen.
+        let vadj = st.chrome().outline_scroller.vadjustment();
+        vadj.set_value(0.0);
+        assert!(
+            !estimated_row_in_view(&vadj, selected_pos, n_items),
+            "precondition: selected pos {selected_pos}/{n_items} must be off-screen at vadj=0 \
+             (page={})",
+            vadj.page_size()
+        );
+
+        super::super::sidebar::reveal_selected_row(&st.chrome().outline_scroller);
+        // Layout retries + `list.scroll-to-item`'s queued allocate: pump until in view.
+        assert!(
+            pump_until(&ctx, 200, || {
+                let v = st.chrome().outline_scroller.vadjustment();
+                estimated_row_in_view(&v, selected_pos, n_items)
+            }),
+            "reveal_selected_row must scroll the far selection into the list viewport"
+        );
+
+        window.destroy();
+    }
+
+    /// The post-`wire_scroll_spy` idle (the path every tab switch takes via
+    /// `refresh_tab_surfaces`) must reveal the settled selection, not only set
+    /// it. Mutation guard: drop the `reveal_selected_row` call from that idle and
+    /// a far selection left at outline vadj=0 stays off-screen.
+    ///
+    /// Uses **edit** mode + caret at end of document: the spy is caret-driven
+    /// there (`editor_cursor_doc_index`), which is deterministic under Xvfb —
+    /// unlike preview `line_at_y` / a still-settling vadjustment, which flaked
+    /// the earlier "scroll preview to end" setup in the full suite.
+    #[gtktest::test]
+    fn wire_scroll_spy_idle_reveals_selected_outline_row() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.outlinerevealspy");
+        let mut doc = String::from("# Root\n\n");
+        for i in 0..80 {
+            doc.push_str(&format!("## Section {i}\n\nbody\n\n"));
+        }
+        let window = crate::window::new_window(&app, "IT", &doc, None);
+        window.set_default_size(900, 500);
+        let ctx = glib::MainContext::default();
+        let st = state(&window).expect("state");
+        assert!(
+            pump_until(&ctx, 400, || {
+                window.is_mapped()
+                    && outline_tree_model(&window).is_some_and(|m| m.n_items() >= 81)
+                    && st.chrome().outline_scroller.vadjustment().page_size() > 0.0
+            }),
+            "outline never settled"
+        );
+
+        // Edit mode: outline spy tracks the caret, not the preview viewport.
+        change_action_state(&window, "view-mode", &"edit".to_variant());
+        assert!(
+            pump_until(&ctx, 200, || st.view_mode.get() == ViewMode::Edit),
+            "never entered edit mode"
+        );
+        // Rebuild outline from the editor buffer and wait for layout again.
+        refresh_outline(&window);
+        assert!(
+            pump_until(&ctx, 200, || {
+                outline_tree_model(&window).is_some_and(|m| m.n_items() >= 81)
+                    && st.chrome().outline_scroller.vadjustment().page_size() > 0.0
+            }),
+            "outline never resettled after mode switch"
+        );
+
+        // Caret at end of buffer → spy selects the last heading.
+        let buf = &st.editor_buf;
+        let end = buf.end_iter();
+        buf.place_cursor(&end);
+
+        let list_view = outline_list_view(&window);
+        let sel = list_view
+            .model()
+            .and_then(|m| m.downcast::<gtk::SingleSelection>().ok())
+            .expect("SingleSelection");
+        let n_items = sel.n_items();
+        let selected_pos = n_items - 1;
+
+        // Establish far selection via the real spy (same as the idle will do).
+        apply_scroll_spy(&window);
+        assert_eq!(
+            sel.selected(),
+            selected_pos,
+            "caret-at-end spy must select the last outline row (got {})",
+            sel.selected()
+        );
+
+        // Stale shared-chrome vadjustment after a tab leave: top.
+        st.chrome().outline_scroller.vadjustment().set_value(0.0);
+        assert!(
+            !estimated_row_in_view(
+                &st.chrome().outline_scroller.vadjustment(),
+                selected_pos,
+                n_items
+            ),
+            "precondition: far selection off-screen at top"
+        );
+
+        // Same idle path a tab switch fires — spy re-confirms selection + reveal.
+        wire_scroll_spy(&window);
+        assert!(
+            pump_until(&ctx, 300, || {
+                let v = st.chrome().outline_scroller.vadjustment();
+                sel.selected() == selected_pos && estimated_row_in_view(&v, selected_pos, n_items)
+            }),
+            "wire_scroll_spy idle must reveal the far selected outline row"
         );
 
         window.destroy();

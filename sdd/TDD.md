@@ -13,7 +13,7 @@
 | 9 | Menu bar, toolbar, and actions | 9.1 – 9.31 |
 | 10 | Markdown formatting commands | 10.1 – 10.20 |
 | 11 | Find & replace | 11.1 – 11.8 |
-| 12 | Document outline | 12.1 – 12.20 |
+| 12 | Document outline | 12.1 – 12.21 |
 | 13 | Preview zoom | 13.1 – 13.10 |
 | 14 | Show Unsafe Images | 14.1 – 14.10 |
 | 15 | Tabbed documents | 15.1 – 15.22 |
@@ -21,7 +21,7 @@
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.53 |
 | 18 | Preview reading themes | 18.1 – 18.16 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
-| 20 | Annotations viewer | 20.1 – 20.17 |
+| 20 | Annotations viewer | 20.1 – 20.18 |
 | 21 | Crash forensics | 21.1 – 21.12 |
 | 22 | Crash recovery (swap files) | 22.1 – 22.16 |
 
@@ -1363,6 +1363,13 @@
 - **When** the document's headings change — one typed, retitled, re-levelled, or deleted in the editor; an undo or redo of such an edit; an external reload that changes them
 - **Then** the outline reflects the new headings without the user switching view mode, switching tab, or reloading first — and a selected heading that still exists keeps its selection (POLICY Derived-view CAM row 1, columns A/B)
 
+### 12.21 Tab switch scrolls the outline list to its selected row
+- **Given** two tabs with enough headings that the outline list scrolls, tab A positioned so the outline highlights a far section (top-of-viewport in preview, or the caret's heading in edit/split), and the shared outline scroller left showing a different part of the list (e.g. after visiting a shorter-outline tab, or parked at the top)
+- **When** the user switches to tab A
+- **Then** the outline still highlights the correct section for tab A (12.16) **and** that selected row is scrolled into view in the outline list — the highlight is never left correct-but-off-screen under a stale scroller position from the previous tab
+- **And** this reveal runs only after the scroll-spy has settled the selection for the newly active tab (not on every document `value-changed`), so a user who scrolled the outline by hand while reading is not fought mid-scroll
+- **And** the reveal does not re-fire outline navigation (spy guards stay quiet — ScrAP-89)
+
 ## 13. Preview zoom
 
 > Zoom In / Zoom Out / Reset Zoom scale the preview text on a discrete ladder
@@ -2232,6 +2239,12 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** the annotations viewer is shown, in **any** view mode — including **preview-only**
 - **When** the user adds an annotation, edits its comment, or removes it through the preview's own annotate affordances (the selection pop-up and the margin card's Edit/Remove)
 - **Then** the list gains, updates, or drops that row **at once**, in the mode the change was made in — the user never has to switch mode, switch tab, or reload to see the list agree with the document, and the surrounding rows keep their order and selection (POLICY Derived-view CAM row 3, column A)
+
+### 20.18 Tab switch scrolls the annotations list to its selected row
+- **Given** two tabs whose annotations lists are long enough to scroll, tab A with a selected annotation row that is not the first, and the shared annotations scroller left showing a different part of the list (e.g. after visiting a shorter list, or parked at the top)
+- **When** the user switches to tab A
+- **Then** the still-present selection is restored (20.11) **and** that selected row is scrolled into view — the highlight is never left correct-but-off-screen under a stale scroller position from the previous tab
+- **And** restoring the selection still does not re-navigate (20.11); the list scroll is visual-only
 
 ## 21. Crash forensics
 

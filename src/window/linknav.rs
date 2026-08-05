@@ -122,7 +122,7 @@ fn open_doc_link_target(window: &ApplicationWindow, path: &Path, fragment: Optio
         // nothing to scroll — `preview_scroller()` returns `None` for it below.
         if let Some(fragment) = fragment {
             if let Some(sw) = tab.split.preview_scroller() {
-                scroll_preview_to_fragment(sw.upcast_ref(), fragment);
+                scroll_preview_to_fragment(&sw, fragment);
             }
         }
         return;
@@ -182,7 +182,7 @@ fn open_doc_link_target(window: &ApplicationWindow, path: &Path, fragment: Optio
         // that needs to be built.
         if let (Some(fragment), Some(t)) = (fragment, new_tab) {
             if let Some(sw) = t.split.preview_scroller() {
-                scroll_preview_to_fragment(sw.upcast_ref(), &fragment);
+                scroll_preview_to_fragment(&sw, &fragment);
             }
         }
     });

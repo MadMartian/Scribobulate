@@ -16,6 +16,7 @@
 //! [`reconcile_sidebar_visibility`](super::annotations_nav::reconcile_sidebar_visibility),
 //! never set here — this module only *builds* the widgets.
 
+use gtk::glib;
 use gtk::prelude::*;
 
 /// One built sidebar section's persistent handles.
@@ -100,4 +101,76 @@ impl SidebarPane {
 /// otherwise hand-roll, owned here once (used by both `outline_nav` and `annotations_nav`).
 pub(crate) fn list_view_of(scroller: &gtk::ScrolledWindow) -> Option<gtk::ListView> {
     scroller.child().and_downcast::<gtk::ListView>()
+}
+
+/// Scroll `scroller`'s `GtkListView` so the currently selected row is in view with
+/// the minimum amount of scrolling. No-op when the scroller holds the empty-state
+/// placeholder, when nothing is selected, or when the row is already visible.
+///
+/// Prefers the GTK 4.6 `list.scroll-to-item` widget action on `GtkListBase`
+/// (exact row heights, min scroll). That action **silently no-ops** when the item
+/// has no size record yet (`get_allocation_along` fails — common on a fresh
+/// ListView right after a child swap). Falls back to a uniform-height estimate on
+/// the scroller's vadjustment. When the scroller is not yet laid out
+/// (`page_size == 0`), retries on subsequent idles (bounded) so a tab-switch
+/// reveal that races the first allocate still lands. `ListView::scroll_to` is
+/// 4.12+ only (ScrAP-157 / GTK4Rs/AP-114). Does not change the selection, so
+/// outline spy guards (ScrAP-89) stay quiet.
+pub(crate) fn reveal_selected_row(scroller: &gtk::ScrolledWindow) {
+    reveal_selected_row_attempt(scroller, 0);
+}
+
+const REVEAL_LAYOUT_RETRIES: u8 = 8;
+
+fn reveal_selected_row_attempt(scroller: &gtk::ScrolledWindow, attempt: u8) {
+    let Some(list_view) = list_view_of(scroller) else {
+        return;
+    };
+    let Some(sel) = list_view
+        .model()
+        .and_then(|m| m.downcast::<gtk::SingleSelection>().ok())
+    else {
+        return;
+    };
+    let pos = sel.selected();
+    if pos == gtk::INVALID_LIST_POSITION {
+        return;
+    }
+    // Parameter type "u" — matches GtkListBase|list.scroll-to-item (guint position).
+    let _ = list_view.activate_action("list.scroll-to-item", Some(&pos.to_variant()));
+
+    let n = sel.n_items();
+    if n == 0 {
+        return;
+    }
+    let vadj = scroller.vadjustment();
+    let page = vadj.page_size();
+    let upper = vadj.upper();
+    if page <= 0.0 || upper <= 0.0 {
+        // Not laid out yet — common right after `set_child` on a tab switch.
+        // Retry on later idles until the scroller has a real page_size (or we
+        // exhaust the budget; an unmapped pane then simply stays put).
+        if attempt < REVEAL_LAYOUT_RETRIES {
+            let scroller = scroller.clone();
+            glib::idle_add_local_once(move || {
+                reveal_selected_row_attempt(&scroller, attempt + 1);
+            });
+        }
+        return;
+    }
+    let row_h = upper / f64::from(n);
+    let row_top = f64::from(pos) * row_h;
+    let row_bottom = row_top + row_h;
+    let value = vadj.value();
+    if row_top >= value && row_bottom <= value + page {
+        return; // already fully visible
+    }
+    // Minimum scroll: pin the row to the top edge if above, bottom edge if below.
+    let target = if row_top < value {
+        row_top
+    } else {
+        (row_bottom - page).max(0.0)
+    };
+    let max = (upper - page).max(0.0);
+    vadj.set_value(target.clamp(0.0, max));
 }
