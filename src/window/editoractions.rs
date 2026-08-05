@@ -1,7 +1,8 @@
 //! Registration of the editor / document `win.*` actions (copy, cut, delete,
 //! undo/redo, select-all, auto-reload, reload, insert-emoji, change-case, format,
-//! save, save-as, copy-path). The state-enablement helpers these drive live in
-//! `actions.rs`.
+//! save, save-as, copy-path, copy-document). The state-enablement helpers these
+//! drive live in `actions.rs`; Copy Link Location keeps its registration and its
+//! gate together in `copylink.rs`, which this module calls into.
 use super::*;
 
 /// Register every editor / document action on `window`. `heading_btn` is not itself
@@ -401,6 +402,11 @@ pub(super) fn register_editor_actions(window: &ApplicationWindow, heading_btn: &
     // regardless of view mode" source `save_window` itself reads from), so
     // this stays correct even while the active tab sits in Preview mode with
     // a `st.source` that hasn't been flushed yet.
+    // Copy Link Location — the URL of the Markdown link under the editor caret.
+    // Registered from its own module (`window::copylink`), which also owns the
+    // one place its enabled state is computed.
+    register_copy_link_action(window);
+
     let copy_document_action = SimpleAction::new("copy-document", None);
     copy_document_action.connect_activate(glib::clone!(
         #[weak(rename_to = window)]

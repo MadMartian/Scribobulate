@@ -15,7 +15,7 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > event stream), **#160** (syntect default-syntax coverage), **#163** (Pango markup escaping), **#164** (testing/CI + cross-platform filesystem),
 > **#194** (CommonMark/Markdown transform logic + enforcement discipline),
 > **#195** (pulldown-cmark + this crate's own inline scanner),
-> **#196** (this crate's renderer/annotation offset mapping), **#206**/**#207** (reference-gate tooling + cross-platform gate parity), **#208** (Rust proc-macro/test-harness design), **#209** (testing discipline), **#214** (macOS/dyld dynamic-loader semantics + Rust/libc), **#215** (testing discipline), **#216** (register/citation tooling), **#217** (experiment design), **#218** (multi-agent process), **#219** (testing/tooling discipline), **#220** (testing discipline), **#221** (testing discipline), **#222** (documentation/tooling governance), **#223** (review/claim discipline), **#224** (version control / project governance), **#225** (input-cost policy / threat modelling), **#226** (testing/gate discipline), **#228** (invariant-placement discipline), **#229** (filesystem permissions / cross-platform security model), **#230** (Rust tooling / enforcement discipline), **#233** (serde/`toml` crate + file-format design), **#234** (testing discipline), **#236** (verification tooling / Windows harness), **#237** (testing/CI process + cross-platform build discipline), **#239** (verification tooling / Cargo + git build-artefact semantics), **#240** (reference-gate tooling + review discipline), **#241** (crash-recovery design limitation / OS process identity), **#242** (tooling/process), **#245** (verification tooling / X11 input injection), **#251** (verification tooling / distribution build configuration), **#243** (GLib/GIO task-pool internals — not a GTK widget contract, though it binds any gtk-rs app that moves I/O off the main thread) — and, following the same precedent as #36,
+> **#196** (this crate's renderer/annotation offset mapping), **#206**/**#207** (reference-gate tooling + cross-platform gate parity), **#208** (Rust proc-macro/test-harness design), **#209** (testing discipline), **#214** (macOS/dyld dynamic-loader semantics + Rust/libc), **#215** (testing discipline), **#216** (register/citation tooling), **#217** (experiment design), **#218** (multi-agent process), **#219** (testing/tooling discipline), **#220** (testing discipline), **#221** (testing discipline), **#222** (documentation/tooling governance), **#223** (review/claim discipline), **#224** (version control / project governance), **#225** (input-cost policy / threat modelling), **#226** (testing/gate discipline), **#228** (invariant-placement discipline), **#229** (filesystem permissions / cross-platform security model), **#230** (Rust tooling / enforcement discipline), **#233** (serde/`toml` crate + file-format design), **#234** (testing discipline), **#236** (verification tooling / Windows harness), **#237** (testing/CI process + cross-platform build discipline), **#239** (verification tooling / Cargo + git build-artefact semantics), **#240** (reference-gate tooling + review discipline), **#241** (crash-recovery design limitation / OS process identity), **#242** (tooling/process), **#245** (verification tooling / X11 input injection), **#251** (verification tooling / distribution build configuration), **#252** (verification tooling / test-harness design), **#243** (GLib/GIO task-pool internals — not a GTK widget contract, though it binds any gtk-rs app that moves I/O off the main thread) — and, following the same precedent as #36,
 > **#124**'s core-GTK half went to the skill as **GTK4Rs/AP-98**; its tooling/process remainder
 > (which pipeline step compiles a gated suite) stays project-specific. Their stubs stay a
 > little fuller (root cause + citations inline), full essay in git history. Edited only by
@@ -270,6 +270,7 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 | 250 | A WIDGET SWAPPED IN FOR ONE FEATURE'S SAKE MOVES ITS TEXT OUT OF EVERY TEXT-WALKER'S REACH, AND THE WALKERS FAIL SILENTLY. A table cell that is nothing but a link is a `GtkLinkButton` rather than a `GtkLabel` (#4 — Pango `<a href>` has no hover cursor and fires on press), which puts its caption in a label INSIDE the button. Find-in-preview enumerates cell text by downcasting each of a table's DIRECT children to `GtkLabel` (cell text is in labels, not the buffer — #36), so a link cell matched nothing: the reader sees "Handbook" on the page and the find bar says "No matches", while the same word in a MIXED cell (still a label) matches — the inconsistency reads as random, and the code recorded the exclusion as deliberate ("not selectable labels… keeping the count equal to what find can navigate to"), which is a real property of the OLD walk and no reason at all not to reach the text. Neither widget choice was wrong; nothing connected them, and a container-child type test is a **structural** predicate standing in for a **semantic** question ("does this cell have text?") → make the swap-in and the read-back ONE seam (`link_cell_button`/`link_cell_caption` in `widgets::table::linkcell`) and ban the raw constructor so the next link widget cannot be built without a way to read its text back; when a walk answers a semantic question by downcasting to a concrete type, enumerate every widget shape that can carry that content, and treat "we deliberately skip X" written next to a structural test as a claim to re-derive, not inherit. TRAP in the fix: the caption label must be installed as ESCAPED MARKUP, because find's cell path forces an anchored-child repaint by toggling a `<span>` wrapper around the label's own markup (#37/#117) and a plain-text caption containing `&`/`<` would then fail `pango_parse_markup` and render EMPTY (#163) — a fix that repairs find and silently blanks captions. MEASURED (4.6.9/Xvfb): pre-fix 1 of 2 link captions found (mixed cell only), post-fix 2, and the mutation (restore the direct-children walk) returns it to 1. Kin #36 (cell text is not in the buffer) and #235 (a capability wired into one of several shapes of the same thing). CAM: this is Document Rendering row 8 x row 2, written down and unmet — the row POSTDATES the code (row 2026-07-13, cell 2026-06-23), so it applied to future changes and to nothing already shipped; adding a row now obliges a back-sweep (CAM.md governing rules) |
 | 251 | A DISTRIBUTION GTK HAS ITS ENTIRE INTROSPECTION SURFACE COMPILED OUT, AND THE THREE CHANNELS FAIL IN THREE DIFFERENT WAYS — ONE OF THEM BY REPORTING A NUMBER THAT MEANS "HEALTHY". MEASURED on Ubuntu jammy GTK 4.6.9 / GLib 2.72.4: every informational `GTK_DEBUG`/`GDK_DEBUG`/`GSK_DEBUG` key reports `[unavailable]` (only `interactive` survives), `g_type_get_instance_count()` is exported and always returns **0** with no diagnostic, and neither `libgtk-4` nor `libglib-2.0` links `libsysprof-capture`, so the toolkit emits no profiler marks at all → a profiling or leak-hunting plan that names any of them is unrunnable here, and the instance-count one produces a false all-clear. Plan around app-owned instrumentation plus process-external sampling; verify a channel EMITS before trusting its silence |
 | 247 | "NO HANDLER IS REGISTERED FOR THIS SCHEME" IS NOT A SAFETY PROPERTY — IT IS A CLAIM ABOUT EVERY MACHINE THE TEST WILL EVER RUN ON. A control test deliberately let `GtkLinkButton`'s default `activate-link` handler run, using `x-scribobulate-no-such-handler:///probe` on the reasoning that an unhandled scheme "fails to launch instead of opening something". True on Linux (a `g_warning`, nothing else). **False on Windows**: the shell answers an UNREGISTERED scheme with a modal "You'll need a new app to open this" chooser, hosted by `SystemSettings`/`ApplicationFrameHost` — a DIFFERENT PROCESS, so it outlives the test binary, is absent from your own window list, holds foreground focus (silently swallowing keystrokes aimed at any later driven UI run — cost a full cycle before the focus theft was traced back to it), ignores `WM_CLOSE` and Escape because it is a UWP surface, and presents OK beside an already-ticked "Always use this app", i.e. one stray click from writing a scheme handler into `HKCU`. **A test suite reached out of its process and could have reconfigured the host.** → make the probe an **invalid URI**, not an unclaimed one: `gtk_uri_launcher_launch` runs `g_uri_is_valid` and returns an error before `gtk_show_uri_full` (gtk-4.22.4 `gtk/gtkurilauncher.c:333`, MEASURED from source; `gtk_link_button_set_visited(…, TRUE)` still runs unconditionally afterwards, so a `visited`-based oracle is unaffected), and assert that invalidity in the suite so the property cannot rot back into a comment. The rule: **prefer a safety claim about your own dependency over one about the host** — the first is checkable in-repo on every run, the second is unfalsifiable and fails on exactly the machine you did not test on. Second-order, and the reason this sat undetected: the Linux failure mode is *silence*, so the seat that could most easily have found it is the one structurally unable to. Kin #237/#242 (a platform-shaped hole in what a gate can see) |
+| 252 | A DRIVE STEP ROUTED THROUGH AN APP COMMAND INHERITS THAT COMMAND'S OWN ENABLEMENT GATE, AND A DISABLED `GAction` SWALLOWS IT IN SILENCE. A live drive alternated "place the caret with the app's own Go To Line" and "click the toolbar button under test"; the click moved focus to the toolbar, `win.go-to-line` is gated on EDITOR focus, and `g_simple_action_activate` returns without emitting when an action is disabled — so from the second iteration the caret never moved, no dialog appeared, nothing logged, and every later assertion was evaluated against the PREVIOUS position. Worse than a dropped input: the stale run produced the CORRECT ANSWER FOR THE OLD LINE, which is exactly what a broken gate would produce, so the false reading was indistinguishable from a real defect — caught only by cropping the footer Ln/Col indicator and seeing `Ln 5` where the script believed `Ln 3` → verify a setup step by its OWN observable (Ln/Col, title, match count), never by its exit status, and prefer a setup primitive with NO enablement gate (a click into the text moves the caret unconditionally) — a harness step must not depend on the subsystem under test being in a particular state. Second-order: two assertions sharing one stale precondition AGREE WITH EACH OTHER, so a self-consistent pair of results is not evidence either was measured. SECOND INSTANCE, same session, different mechanism: chaining `mousemove`+`mousedown` in ONE `xdotool` invocation delivered a press the app's gesture handler NEVER RAN FOR (proved by instrumenting the handler — 3 calls for 4 clicks) while a context menu still appeared, so the capture showed a menu built for the PREVIOUS pointer position and the feature read as broken on one link and fine on its neighbour; separate the move from the press with a settle. An input that is DELIVERED is not an input that was HANDLED — instrument the handler rather than re-reading the screenshot. Kin #245 (the same silence one layer down, at the input channel), #217, #239 |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -4782,3 +4783,66 @@ transferable half is the "prove it emits" rule, which is a testing-methodology
 lesson.* Kin #141 (the same build decision, seen as missing symbols — and the
 `LD_PRELOAD` GType interposer that is the fallback when instance counting is dark),
 #155 (leak attribution without symbols), #49 (toolkit noise in valgrind output).
+
+## 252. A drive step routed through an app command inherits that command's own enablement gate — and a disabled `GAction` swallows the step in silence
+
+**Symptom.** Halfway through a live drive, the step that *positions* the subject
+(here: put the caret on a given line, via the app's own Go To Line) stops taking
+effect. Nothing errors: `xdotool` reports success, no dialog appears, the log is
+clean. Every assertion after it is then evaluated against the *previous* position —
+and reads as a result rather than as a failure.
+
+**Measured** (Xvfb + openbox, GTK 4.6.9 / X11, release build, verifying Edit ▸ Copy
+Link Location). The drive alternated two steps: place the caret with `Ctrl+G` +
+a line number, then click the toolbar button under test. The click moves focus to
+the toolbar; `win.go-to-line` is gated on **editor focus** (`editbar/focusgate.rs`),
+so from the second iteration onward `Ctrl+G` activated a *disabled* action —
+`g_simple_action_activate` returns without emitting `activate` when the action is
+disabled, so there is nothing to observe and nothing to log.
+
+**Why it is worse than a dropped input.** The stale-caret run produced the *correct
+answer for the previous line*: the negative case ("caret in prose ⇒ the clipboard
+must not change") reported the URL from the link line, which is exactly what a
+**broken gate** would also produce. The false reading was indistinguishable from a
+genuine defect, in the direction that manufactures a bug report about working code.
+It was caught only by cropping the footer's Ln/Col indicator out of a screenshot and
+seeing `Ln 5` where the script believed `Ln 3`.
+
+**The rule — two halves, both cheap:**
+
+1. **Verify a setup step by its own observable, never by its exit status.** A drive
+   asserts the *behaviour*; the state it established first is an assumption, and an
+   unasserted assumption is where a run silently changes subject. This app hands out
+   the observables for free — the Ln/Col indicator, the window title, the match
+   count — and reading one costs a crop.
+2. **Prefer a setup primitive with no enablement gate.** Clicking into the text at
+   coordinates moves the caret unconditionally; the same caret move via a focus-gated
+   command is only available in the states that command is available in — which are
+   not the states the test is exploring. A harness step must not depend on the
+   subsystem under test being in a particular state.
+
+**Second-order, and the reason this shape survives review:** two assertions sharing
+one stale precondition **agree with each other**, so a self-consistent pair of
+results is not evidence that either was measured. The corroboration is an artefact of
+the shared premise.
+
+**A second instance, same session, different mechanism — which is why the rule is
+about the *class* and not about Go To Line.** Chaining the pointer move and the press
+into ONE `xdotool mousemove --window … mousedown 3` invocation delivered a press the
+app's own gesture handler **never ran for**: no handler call at all (proved by a
+temporary `[🐛DEBUG]` line in the handler — three lines for four clicks), while a
+context menu still appeared on screen. The screenshot therefore showed a real menu
+built for the *previous* pointer position, and the feature under test read as broken
+for one link and working for its neighbour — "which occurrences it works on looks
+arbitrary" being the same reader-facing symptom #250 produces from a genuine defect.
+Splitting the move from the press with a ~0.3 s settle made it deterministic (three
+consecutive runs, identical coordinates, correct result). The cheap general form:
+**an input that is delivered is not an input that was handled** — when a drive step's
+effect is invisible, instrument the handler rather than re-reading the screenshot.
+
+*Non-core (verification tooling / test-harness design — not a GTK widget contract).
+The transferable half is "assert the setup, not its delivery", plus the GTK-specific
+fact that activating a disabled `GAction` is a silent no-op with no signal to hook.*
+Kin #245 (the same silence one layer down — the input *channel* delivering nothing
+while every diagnostic says otherwise), #217 (positive controls), #239 (a control
+that cannot differ has stopped being a control).

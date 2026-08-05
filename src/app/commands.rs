@@ -220,7 +220,7 @@ pub(crate) const VIEW_CMDS: [ViewCmd; 3] = [
 /// reorder without reordering the section boxes to match.
 pub(crate) const TBTN_SECTION_IDS: [&str; 6] = ["file", "edit", "format", "view", "split", "zoom"];
 
-pub(crate) const EDIT_CMDS: [Cmd; 9] = [
+pub(crate) const EDIT_CMDS: [Cmd; 10] = [
     Cmd {
         action: "win.undo",
         label: "Undo",
@@ -264,6 +264,24 @@ pub(crate) const EDIT_CMDS: [Cmd; 9] = [
         label: "Copy Document",
         accel: "<Primary><Meta><Alt>c",
         icon: Icon::CopyDocument,
+        section_start: false,
+        is_toggle: false,
+    },
+    // Copies the URL of the Markdown link (or image) the editor caret sits in —
+    // the browser's "Copy Link Location", aimed at the source rather than at a
+    // rendered anchor. Enabled only with the editor visible AND a link under the
+    // caret (`window::copylink`), so it is greyed everywhere in preview-only mode
+    // and everywhere the caret is in ordinary prose. No accelerator: every
+    // layout-stable <Primary><Alt>+letter this would plausibly take is already
+    // claimed (`l` by Insert Link, `c`/`u`/`o`/`h`/`m`/`n` by the format and
+    // annotate commands), and inventing a <Shift>+punctuation one is the
+    // ScrAP-44 trap. Menu, toolbar and context menu reach it; the Keyboard
+    // Shortcuts window correctly omits an unbound command.
+    Cmd {
+        action: "win.copy-link-location",
+        label: "Copy Link Location",
+        accel: "",
+        icon: Icon::InsertLink,
         section_start: false,
         is_toggle: false,
     },

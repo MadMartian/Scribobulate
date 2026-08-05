@@ -58,7 +58,9 @@
 //!   `code_fence_close` (with the open-fence walker `inside_fenced_block`).
 //! * [`hr`] — thematic-break insertion.
 //! * [`continuation`] — the Enter-convenience list/blockquote `line_continuation`.
-//! * [`insert`] — GTK-free link/image/table markup builders and their parsers.
+//! * [`insert`] — GTK-free link/image/table markup builders and their parsers,
+//!   plus `link_target_at` (the destination of the link under the caret, which
+//!   gates and feeds Edit ▸ Copy Link Location).
 //!
 //! `FormatCmd`, the [`Edit`] result type, and the [`apply`] dispatcher stay here;
 //! the crate-level API (`format::apply`, `format::line_continuation`, …) is
@@ -76,7 +78,9 @@ mod text;
 
 pub(crate) use codeblock::code_fence_close;
 pub(crate) use continuation::{line_continuation, LineContinuation};
-pub(crate) use insert::{image_markup, link_markup, parse_image, parse_link, table_markup};
+pub(crate) use insert::{
+    image_markup, link_markup, link_target_at, parse_image, parse_link, table_markup,
+};
 
 /// A formatting command.  `Heading` carries its tier (1..=6, validated by the
 /// caller via the `win.format::h{n}` action target).

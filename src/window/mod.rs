@@ -99,6 +99,7 @@ pub(crate) use zoom::rerender_tab_preview_in_place;
 // Decomposed window sub-builders (see TECH.md module map).
 mod chrome;
 mod chrome_fit;
+mod copylink;
 mod editoractions;
 mod findbar;
 mod lifecycle;
@@ -116,6 +117,7 @@ mod undo;
 mod viewactions;
 
 use chrome::*;
+use copylink::*;
 use editoractions::*;
 use findbar::*;
 use lifecycle::*;
@@ -610,6 +612,7 @@ fn build_window_chrome_state(
         overlay_edit_btns: ov_edit_btns,
         fmt_edit_state: Cell::new(None),
         focused_pane: Cell::new(winstate::FocusedPane::Editor),
+        ctx_link: RefCell::new(None),
         zoom_level: Cell::new(zoom_level),
         zoom_css_provider,
         tabs: chrome.tabs.clone(),

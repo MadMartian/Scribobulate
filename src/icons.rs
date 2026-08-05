@@ -105,7 +105,10 @@ pub(crate) enum Icon {
     /// File ▸ Auto-Reload toggle. Bundled fallback for the same reason as
     /// [`Icon::EmblemPhotos`] — absent from gvsbuild's Adwaita 50.0.
     EmblemSynchronizing,
-    /// File ▸ Load Unsafe Linked Documents toggle; also Format ▸ Insert Link.
+    /// File ▸ Load Unsafe Linked Documents toggle; also Format ▸ Insert Link and
+    /// Edit ▸ Copy Link Location (all three name a *link*, and the enum is a
+    /// name-per-glyph, not a name-per-command — `EditCopy` already serves Copy
+    /// and Copy Full Path the same way).
     InsertLink,
     /// File/Edit ▸ Exit (menu only — Exit is not on the toolbar).
     ApplicationExit,

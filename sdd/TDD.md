@@ -1025,6 +1025,21 @@
 - The host theme still wins where it has the name, so a KDE or GNOME desktop keeps
   its own idiomatic art; the bundle only fills gaps
 
+### 9.32 Copy Link Location copies the link the reader pointed at, or the one under the editor caret
+- **Given** the user **right-clicks a link** — a rendered link in the preview pane (including a link that is a whole table cell), or a Markdown link in the editor source — in any view mode
+- **When** they choose Copy Link Location from that context menu
+- **Then** the clipboard holds **that** link's destination: the one under the pointer, not merely some link in the document
+- **And given** edit or split mode with the editor caret anywhere inside a Markdown link — `[caption](url)` or an image `![alt](url)`, from the opening bracket through the closing parenthesis
+- **When** the user invokes the command from a surface that has no pointer — the Edit menu, the Edit toolbar section, or a context menu opened away from any link
+- **Then** the clipboard holds the caret's link destination **only** — not the caption, not the surrounding markup, and not any `"title"` that follows the URL; a destination containing a balanced parenthesis pair (`…/Ruby_(gem)`) is copied whole
+- **And** when both are true, the right-clicked link wins: the reader singled it out
+- **And given** no link is pointed at and the caret is in ordinary prose, in a bare `[bracketed]` span, or in a reference link (`[text][ref]`), which carries no inline destination
+- **When** the user looks at the command
+- **Then** it is disabled in every surface simultaneously — menu bar, toolbar, and both context menus — and it re-enables the moment the caret moves back into a link, or an edit puts a link under a caret that never moved
+- **And given** preview-only mode, which has no editor pane and so no caret
+- **Then** the command is disabled in the menu bar and toolbar (like every other editor-only Edit command, 9.11) yet **enabled in the preview's context menu whenever that right-click landed on a link** — reading a link's target is not an editing operation
+- **And** a right-clicked target lasts exactly as long as its menu: once the context menu closes, the command reverts to what the caret alone allows, so no surface stays enabled for a link nobody is pointing at
+
 ## 10. Markdown formatting commands
 
 > The Format menu, its toolbar section, and the caret overlay all drive one

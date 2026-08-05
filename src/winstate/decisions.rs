@@ -4,10 +4,17 @@
 
 use super::ViewMode;
 
-/// Whether the editor-only Cut/Delete commands should be enabled: only when the
-/// editor is visible (edit or split mode) AND there is a selection to act on.
-pub(crate) fn edit_actions_enabled(mode: ViewMode, has_selection: bool) -> bool {
-    mode.is_editor_visible() && has_selection
+/// Whether an editor-only Edit command should be enabled: only when the editor is
+/// visible (edit or split mode) AND the command has something to act on.
+///
+/// `has_target` is the command family's own precondition, evaluated by the
+/// caller: an editor **selection** for Cut / Delete / Change Case, a Markdown
+/// **link under the caret** for Copy Link Location. One predicate rather than one
+/// per family, because the mode half — "the editor is not even on screen" — is
+/// the same fact for all of them, and a second copy of it is how one command ends
+/// up live in read-only preview after a mode rule changes.
+pub(crate) fn edit_actions_enabled(mode: ViewMode, has_target: bool) -> bool {
+    mode.is_editor_visible() && has_target
 }
 
 /// Whether Save should be enabled. Save writes the editor buffer to disk — a

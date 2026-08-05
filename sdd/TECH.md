@@ -171,6 +171,7 @@ Every module below runs on the GTK main thread; see [Concurrency model](#concurr
 | `window/lifecycle.rs` | Owns the window close-request path and the session snapshot taken on close. |
 | `window/actions.rs` | Owns window action-state cores — the readers and the sensitivity rules that gate commands by mode and selection. |
 | `window/editoractions.rs` | Owns registration of the editor and document `win.*` actions. |
+| `window/copylink.rs` | Owns Edit ▸ Copy Link Location: the `win.copy-link-location` action and the one place its enabled state is computed. It resolves two inputs to one gate — the link a right-click landed on (held for that popover's lifetime in `WindowChrome::ctx_link`, and what makes the read-only preview's row usable) and the link under the editor caret — each through the seam that already owns its question, the display-free source scan `format::link_target_at` and the preview's single link hit-test `preview::link_url_at`. |
 | `window/viewactions.rs` | Owns registration of the view, sidebar, chrome, split and zoom `win.*` actions. |
 | `window/editbar/` | Owns the Markdown formatting commands: the `win.format` application path, the insert dialogs, the Format toolbar section, the editor focus gate, the caret overlay, and the Enter conveniences (list/quote continuation, code-fence auto-close). |
 | `window/contextmenu.rs` | Owns the right-click popover for the text views. |

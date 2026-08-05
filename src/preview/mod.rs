@@ -35,6 +35,7 @@ mod sourcemap;
 
 pub(crate) use cells::{cell_copymap, cell_search_targets};
 pub(crate) use css::{css, theme_css};
+pub(crate) use interactions::link_url_at;
 pub(crate) use qdata::{scrib_labels, scrib_render_data};
 pub(crate) use render::{re_render, refresh_annotations_in_place, render};
 pub(crate) use scroll::{

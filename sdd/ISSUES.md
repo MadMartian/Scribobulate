@@ -11,6 +11,7 @@
 | J | The app dies occasionally with SIGSEGV inside GTK/GIO, with no reproduction and nothing recorded at the moment of death | Medium |
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | C | The preview scroll/geometry helpers take an untyped `&gtk::Widget` and silently no-op when handed the wrong widget — the same structural-downcast class that made find blind to link-cell text | Low |
+| O | Switching tabs does not scroll the outline (or annotations) list to its selected row — highlight can be correct but off-screen | Low |
 
 ## A. Tables are selection islands
 
@@ -662,6 +663,14 @@ unsanctioned (`queue_allocate` only flags — gtkwidget.c:~4103-4105; no "relayo
 remain by design — acceptable). If it recurs *terminally*, escalate to a structural fix (don't
 reveal the preview pane until its first content has validated during a relayout).
 
+**⚠ Every `GTK_DEBUG=geometry` instruction in this entry is unrunnable on the reference host,
+and reads as a clean result when it is dark.** Measured 2026-08-04: a distribution GTK is
+built without debug support, so that key — like every informational `GTK_DEBUG`/`GDK_DEBUG`/
+`GSK_DEBUG` key — reports `[unavailable]` and emits nothing at all (ScrAP-251). The reasoning
+below about *reading* its output remains correct and is retained for whoever obtains a
+debug-enabled GTK; it simply cannot be acted on as written here. `sdd/PLAN.profiling.md`
+records what that costs and what substitutes for it.
+
 **Live confirmation on the next occurrence** (belt-and-suspenders, since it isn't reproducible
 on demand): run once with **`GTK_DEBUG=geometry`** — it names the subtree that `queue_resize`d
 during `size_allocate` (gtkwidget.c:4085-4091). The symbol-free parent-walk trap on the warned
@@ -723,15 +732,24 @@ The buffer's `mark-set` is listened for in four places — `window/tabs/lifecycl
 coalesce because `mark-set` is chatty, so the culprit is more likely a coalescing timer that
 keeps re-arming than a naive re-dirty.)
 
-**Distinct from N** (same *preview-overlay relayout* family, opposite outcome): N is a **rare,
-recoverable blank** from a `GtkOverlay` snapshotted without an allocation; O is a **permanent
-~100% CPU spin** with no blank. N's `GTK_DEBUG=geometry` probe — which names the subtree that
-`queue_resize`d during `size_allocate` — is the right first instrument for O's driver too.
+**Distinct from F** (same *preview-overlay relayout* family, opposite outcome): F is a **rare,
+recoverable blank** from a `GtkOverlay` snapshotted without an allocation; this one is a
+**permanent ~100% CPU spin** with no blank. (Both entries previously called each other N and O
+— letters that no longer name them.)
+
+⚠ **The `GTK_DEBUG=geometry` probe both entries recommended CANNOT RUN on the reference
+host, and its silence is not evidence.** Measured 2026-08-04: a distribution GTK is built
+without debug support, so every informational `GTK_DEBUG`/`GDK_DEBUG`/`GSK_DEBUG` key reports
+`[unavailable]` and emits nothing — an empty log therefore means *the instrument is dark*, not
+*no widget re-queued a resize* (ScrAP-251). Restoring that key requires a locally built,
+debug-enabled GTK loaded ahead of the distribution one; `sdd/PLAN.profiling.md` records the
+cost and the alternatives.
 
 **Mitigation options**:
 - **Root-cause the driver** (recommended; not yet done): take several samples to confirm the
-  loop consistently sits in shaping/layout; run once under `GTK_DEBUG=geometry` to name the
-  subtree that re-`queue_resize`s each frame; then bisect the four `mark-set` handlers by
+  loop consistently sits in shaping/layout — `perf record` against the unstripped debug binary
+  gives named application frames today, with no change to the tree, and is the substitute for
+  the unavailable geometry key; then bisect the four `mark-set` handlers by
   disabling each and re-measuring idle CPU. If one stops the spin, that handler is the driver;
   if none does, the driver is not `mark-set`, and the search moves to whatever re-invalidates
   the (likely preview) widget tree's layout every iteration.
@@ -877,3 +895,39 @@ still only a hazard.
 preview scroller) so the wrong argument stops compiling rather than stopping
 silently — POLICY § Typed GTK seams, the "encapsulation" rung. Mechanical: the
 call sites already hold the right type and only upcast to satisfy these signatures.
+
+## O. Tab switch leaves the outline / annotations list scrolled away from the selected row
+
+**Severity**: Low (selection and document pane are usually correct; only the
+sidebar list viewport is wrong — no data at risk)
+
+Switching tabs rebuilds the window-scoped outline and annotations lists for the
+new document. The **selected row** is re-derived (outline: scroll-spy from the
+document viewport on idle after `wire_scroll_spy`; annotations: last activated
+identity via `annotations_selected`), but the **list scroller is never moved** so
+that row is visible. The sidebar can show a highlight that is off-screen, or a
+vadjustment left over from the previous tab’s taller/shorter list.
+
+**Cause.** Outline and annotations scrollers are **window chrome**
+(`outline_scroller` / `annotations_scroller`), shared across tabs — not per-tab
+widgets. On tab switch, `refresh_tab_surfaces` (`tabs/switch.rs`) calls
+`refresh_outline` / `refresh_annotations` (child swap + selection restore) and
+`wire_scroll_spy` (idle `on_scroll` → `scroll_spy_set_selection`). Selection is
+only `SingleSelection::set_selected`; nothing scrolls the `GtkListView` /
+scroller into view. Persisting a per-tab outline vadjustment would be the wrong
+model for shared chrome.
+
+**Accepted fix (minimum).** After selection has settled on a tab switch (outline:
+after the scroll-spy idle, not only the pre-spy `outline_selected` restore;
+annotations: end of `refresh_annotations`), **scroll the list so the selected
+row is in view**. Do not re-fire navigation (ScrAP-89 spy guards). Prefer a
+shared “reveal selected row” helper for both panes. GTK 4.6 floor: `ListView::scroll_to`
+is 4.12+ — use a 4.6-safe path (row geometry + adjustment, or equivalent).
+
+**Not required for this issue:** continuous re-scroll of the outline on every
+document `value-changed` (product choice; can fight a user who scrolled the
+outline by hand). Full per-tab storage of sidebar scroll offsets.
+
+**Mitigation options**:
+- Implement the accepted fix above (preferred).
+- Leave it — user scrolls the sidebar manually after each switch.

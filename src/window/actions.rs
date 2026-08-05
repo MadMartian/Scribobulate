@@ -356,6 +356,10 @@ pub(crate) fn apply_mode_action_state(window: &ApplicationWindow, mode: ViewMode
         set_action_enabled(window, "go-to-line", false);
     }
     update_edit_action_state(window);
+    // Copy Link Location gates on the editor being visible AND a link under the
+    // caret; a mode switch changes the first half and a tab switch (which routes
+    // through here) changes both, and neither fires a buffer signal.
+    update_copy_link_action_state(window);
     update_undo_redo_state(window);
     // Zoom requires a visible preview; gating to off here ensures edit mode always
     // leaves all three zoom actions grey. update_zoom_action_state also gates on

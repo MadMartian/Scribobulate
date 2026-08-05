@@ -109,6 +109,23 @@ fn link_at(view: &CodePreviewView, rd: &RenderData, x: f64, y: f64) -> Option<Li
 /// offsets — the same shape `RenderData::links` stores.
 type LinkHit = (i32, i32, String);
 
+/// The URL of the rendered link under `(x, y)` (WIDGET coords), or `None`.
+///
+/// The **fourth** consumer of [`link_at`] — the right-click context menu's Copy Link
+/// Location row, which must agree with the hover cursor, the hover tooltip and click
+/// activation about what counts as "over a link". It resolves the view's own
+/// `RenderData` from qdata rather than taking it as an argument, because the context
+/// menu is attached once per view and holds no per-render state.
+///
+/// This deliberately answers only for links in the buffer text. A pure-link **table
+/// cell** is a `GtkLinkButton` (ScrAP-250), so it holds no buffer span at all; the
+/// caller reads that one off the picked widget instead.
+pub(crate) fn link_url_at(view: &CodePreviewView, x: f64, y: f64) -> Option<String> {
+    let rd = crate::preview::scrib_render_data(view)?;
+    let hit = link_at(view, &rd.borrow(), x, y);
+    hit.map(|(_, _, url)| url)
+}
+
 /// Hover cursor (pointer over link spans, text beam elsewhere), the hover tooltip
 /// revealing a link's target, and link activation (on release). Wired unconditionally
 /// so re_render doesn't need to rewire when links appear or disappear — each closure

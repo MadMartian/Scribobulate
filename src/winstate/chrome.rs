@@ -120,6 +120,20 @@ pub(crate) struct WindowChrome {
     /// is a window property); reset to `Editor` on every mode/tab switch and updated
     /// by the editor-focus gate as the user moves between panes.
     pub(crate) focused_pane: Cell<FocusedPane>,
+    /// The link the user right-clicked ON, for the lifetime of one context-menu
+    /// popover — set before the menu is built, cleared when it closes
+    /// (`window::copylink`).
+    ///
+    /// It exists because the pointer knows something no window state does: *which*
+    /// link, out of the several a rendered page shows, the reader means. Copy Link
+    /// Location's other surfaces (menu bar, toolbar) have no pointer and take the
+    /// caret's link instead — so this is not a second gate, it is the extra input
+    /// the one gate consults, which keeps the single-`GAction` rule intact (the
+    /// context-menu row still just reads `is_enabled()`, POLICY / ScrAP-9).
+    ///
+    /// Window-scoped rather than per-view because both panes' menus feed the one
+    /// window action, and at most one context menu is open at a time.
+    pub(crate) ctx_link: RefCell<Option<String>>,
     /// Current preview zoom factor (e.g. 1.0 = 100%, 1.5 = 150%). Initialised
     /// from the session; written back on window close. Stepped on the discrete
     /// ladder [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] by the

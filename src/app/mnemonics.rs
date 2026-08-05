@@ -25,7 +25,8 @@ const MENU_MNEMONICS: &[(&str, &str)] = &[
     ("Close Tab", "_Close Tab"), ("Exit", "E_xit"),
     // Edit
     ("Undo", "_Undo"), ("Redo", "_Redo"), ("Copy", "_Copy"), ("Cut", "Cu_t"),
-    ("Copy Document", "Copy Docu_ment"), ("Delete", "_Delete"),
+    ("Copy Document", "Copy Docu_ment"),
+    ("Copy Link Location", "Copy _Link Location"), ("Delete", "_Delete"),
     ("Select All", "Select _All"), ("Find", "_Find"),
     ("Find & Replace", "Find & Re_place"), ("Insert Emoji", "Insert _Emoji"),
     ("Annotate", "A_nnotate"), ("Change Case", "Chan_ge Case"),
@@ -235,6 +236,7 @@ mod tests {
                     "Copy",
                     "Cut",
                     "Copy Document",
+                    "Copy Link Location",
                     "Delete",
                     "Select All",
                     "Find",

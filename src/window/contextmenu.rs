@@ -131,6 +131,15 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
             .root()
             .and_then(|r| r.dynamic_cast::<ApplicationWindow>().ok());
 
+        // Arm Copy Link Location with the link this right-click landed on, BEFORE
+        // the rows below read `is_enabled()`. This is the only surface that knows
+        // WHICH link the reader means, and it is what makes the row usable in the
+        // read-only preview, which has no caret to gate on (`window::copylink`).
+        // Disarmed on `closed`, at the bottom of this handler.
+        if let Some(w) = win_ref.as_ref() {
+            set_context_link(w, link_at_pointer(&view, x, y));
+        }
+
         // Build buttons from EDIT_CMDS; accel hints derived at runtime via
         // accelerator_get_label so they are always platform-correct.
         let edit_btns: Vec<gtk::Button> = EDIT_CMDS
@@ -338,7 +347,19 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
         let (px, py) = view.translate_coordinates(&root, x, y).unwrap_or((x, y));
         popover.set_parent(&root);
         popover.set_pointing_to(Some(&gdk::Rectangle::new(px as i32, py as i32, 1, 1)));
-        popover.connect_closed(|p| p.unparent());
+        // Weak (never a strong clone): this closure is owned by the popover, which
+        // lives in the window's widget tree — a strong capture would be the
+        // uncollectable cycle ScrAP-60 is about.
+        let win_weak = win_ref.as_ref().map(|w| w.downgrade());
+        popover.connect_closed(move |p| {
+            // Disarm the right-clicked link with the popover it belongs to, so the
+            // pointer target cannot outlive the menu and leave the menu-bar and
+            // toolbar surfaces enabled for a link nobody is pointing at.
+            if let Some(w) = win_weak.as_ref().and_then(|w| w.upgrade()) {
+                set_context_link(&w, None);
+            }
+            p.unparent();
+        });
         popover.popup();
     });
     view.add_controller(right_click);

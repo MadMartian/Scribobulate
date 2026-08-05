@@ -89,6 +89,11 @@ pub(crate) fn wire_tab_buffer_signals(content_box: &gtk::Box, buffer: &sourcevie
         move |_| {
             if let Some(w) = resolve_tab_window(&cb) {
                 refresh_dirty_status(&w);
+                // An edit can add or destroy the link under a STATIONARY caret
+                // (an undo, a live external reload), which `mark-set` below never
+                // reports — recompute at this boundary too, not only on the
+                // caret-move delta (ScrAP-38).
+                update_copy_link_action_state(&w);
             }
         }
     });
@@ -103,6 +108,9 @@ pub(crate) fn wire_tab_buffer_signals(content_box: &gtk::Box, buffer: &sourcevie
                 // reuses that connection rather than adding a second one for
                 // "cursor-position" (they cover the same events).
                 refresh_position_indicator(&w);
+                // Copy Link Location tracks the caret the same way the Ln/Col
+                // indicator does — mark-set is the caret-move boundary.
+                update_copy_link_action_state(&w);
                 // Same events drive the outline highlight in edit/split mode,
                 // where the caret (not the viewport) is the reading position
                 // `apply_scroll_spy` dispatches by mode, so it is a
