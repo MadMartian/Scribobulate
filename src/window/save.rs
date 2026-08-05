@@ -597,6 +597,10 @@ fn save_all_next(
         if let Some(id) = original_active {
             if let Some(chrome) = winstate::chrome(window) {
                 if let Some(t) = winstate::tab_by_id(id) {
+                    // Not a navigation (TDD 23.9) — nor were the per-prompt
+                    // switches below; the reader asked to save, not to tour the
+                    // strip, so Back must not replay the tour.
+                    let _no_history = winstate::nav_suppress(window);
                     chrome.tabs.focus_page(&t.content_box);
                 }
             }
@@ -615,7 +619,9 @@ fn save_all_next(
         );
     } else {
         // Make the untitled tab visible so the chooser is about the right document.
+        // Not a navigation (TDD 23.9).
         if let Some(chrome) = winstate::chrome(window) {
+            let _no_history = winstate::nav_suppress(window);
             chrome.tabs.focus_page(&tab.content_box);
         }
         let rest = remaining;
@@ -706,6 +712,9 @@ fn confirm_close_tabs(
         if let Some(id) = original_active {
             if let Some(chrome) = winstate::chrome(window) {
                 if let Some(t) = winstate::tab_by_id(id) {
+                    // Not a navigation (TDD 23.9), like the per-prompt switches
+                    // below it — and the window is closing regardless.
+                    let _no_history = winstate::nav_suppress(window);
                     chrome.tabs.focus_page(&t.content_box);
                 }
             }
@@ -715,8 +724,10 @@ fn confirm_close_tabs(
         return;
     };
     // Make the tab this prompt is about the visible one (also what
-    // `save_and_then`/`state(window)` will act on below).
+    // `save_and_then`/`state(window)` will act on below). Not a navigation
+    // (TDD 23.9).
     if let Some(chrome) = winstate::chrome(window) {
+        let _no_history = winstate::nav_suppress(window);
         chrome.tabs.focus_page(&tab.content_box);
     }
     confirm_dialog(

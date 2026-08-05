@@ -1,7 +1,7 @@
 //! The thread-local window/tab registry: id allocation, register/add/remove/rehome,
 //! and the `state`/`chrome`/`tabs_for_window` lookups every call site reaches through.
 
-use super::{TabId, TabState, WindowChrome, WindowId};
+use super::{NavDir, NavHistory, TabId, TabState, WindowChrome, WindowId};
 use gtk::prelude::*;
 use gtk::ApplicationWindow;
 use std::cell::{Cell, RefCell};
@@ -19,6 +19,14 @@ struct WindowEntry {
     /// the former magic `0` sentinel (QA round-1 L2).
     active_tab: Cell<Option<TabId>>,
     tabs: RefCell<Vec<TabId>>,
+    /// This window's Back/Forward history (TDD §23). It lives here rather than in
+    /// [`WindowChrome`] because it is the same *kind* of fact as the two fields
+    /// above — which tabs this window has, and which one is active — only extended
+    /// over time; `WindowChrome` is the window's furniture. Keeping it here is also
+    /// what makes TDD 23.8 automatic: the two places a tab stops belonging to a
+    /// window ([`remove_tab`], [`rehome_tab`]) are in this file, so the history
+    /// cannot be left holding a tab the window no longer has.
+    nav: RefCell<NavHistory>,
 }
 
 thread_local! {
@@ -72,6 +80,15 @@ pub(crate) fn register(
                 chrome,
                 active_tab: Cell::new(Some(tab_id)),
                 tabs: RefCell::new(vec![tab_id]),
+                // The window's first tab IS its first history entry, seeded here
+                // rather than by the switch-page choke point: a window's initial
+                // page is shown by the `GtkStack` and never travels through
+                // `switch_to_index`, so no switch callback ever fires for it
+                // (`TabBar::mark_first_active`, ScrAP-62). Without this seeding the
+                // history would start at the SECOND document the reader visits, and
+                // Back from it would report nothing behind it — the one entry a
+                // reader is most certain exists.
+                nav: RefCell::new(NavHistory::seeded(tab_id)),
             },
         )
     });
@@ -105,6 +122,10 @@ pub(crate) fn add_tab(window: &ApplicationWindow, tab: TabState) -> TabId {
 /// responsible for checking [`tab_count`] and closing an emptied window
 /// (a window with zero tabs is never a valid state).
 pub(crate) fn remove_tab(window: &ApplicationWindow, tab_id: TabId) {
+    // A closed tab leaves its history with it (TDD 23.8) — here rather than at
+    // the call sites, because this is where "the window no longer has this tab"
+    // becomes true.
+    nav_forget_everywhere(tab_id);
     WINDOWS.with(|m| {
         if let Some(entry) = m.borrow().get(&window_id(window)) {
             entry.tabs.borrow_mut().retain(|&id| id != tab_id);
@@ -117,6 +138,85 @@ pub(crate) fn remove_tab(window: &ApplicationWindow, tab_id: TabId) {
     });
     TABS.with(|m| {
         m.borrow_mut().remove(&tab_id);
+    });
+}
+
+// ── Back/Forward history (TDD §23) ───────────────────────────────────────────
+// The window's [`NavHistory`] lives in its [`WindowEntry`] (see that field's doc
+// comment). These five functions are the whole crate-facing surface; the pure
+// rules are in [`super::navhistory`], and the UI side — the two GActions, their
+// sensitivity, and the suppression call sites — is `window::navhistory`.
+
+/// Run `f` against `window`'s history, or return `None` if the window is not (or
+/// no longer) registered. One helper so every accessor below takes the same short
+/// borrow and cannot hold it across a GTK call (ScrAP-53).
+fn with_nav<T>(window: &ApplicationWindow, f: impl FnOnce(&mut NavHistory) -> T) -> Option<T> {
+    WINDOWS.with(|m| {
+        let m = m.borrow();
+        let entry = m.get(&window_id(window))?;
+        let out = f(&mut entry.nav.borrow_mut());
+        Some(out)
+    })
+}
+
+/// Record that `tab_id` became `window`'s active tab. Called from exactly one
+/// place — the tab-strip switch callback (`window::tabs`) — so every present and
+/// future way of changing the active tab is history-bearing by default; the
+/// exceptions raise [`nav_suppress`] instead.
+pub(crate) fn nav_record(window: &ApplicationWindow, tab_id: TabId) {
+    with_nav(window, |nav| nav.record(tab_id));
+}
+
+/// Step `window`'s history one entry in `dir`, returning the tab to activate.
+pub(crate) fn nav_step(window: &ApplicationWindow, dir: NavDir) -> Option<TabId> {
+    with_nav(window, |nav| nav.step(dir)).flatten()
+}
+
+/// Whether a [`nav_step`] in `dir` would go anywhere — the single source of the
+/// two actions' enabled state (TDD 23.5).
+pub(crate) fn nav_can(window: &ApplicationWindow, dir: NavDir) -> bool {
+    with_nav(window, |nav| nav.can(dir)).unwrap_or(false)
+}
+
+/// Open a scope in which page switches on `window` are not navigations (TDD
+/// 23.9) — traversal itself, and the internal sweeps that reveal a tab in order
+/// to prompt about it. Released on drop, so an early return or a `?` cannot leak
+/// suppression (which would silently disable the feature for that window).
+///
+/// Keyed by [`WindowId`] rather than holding the window: the guard must not keep a
+/// closing window alive, and a window unregistered inside the scope simply has
+/// nothing left to release.
+#[must_use = "the scope ends when the guard drops; binding it to `_` ends it immediately"]
+pub(crate) fn nav_suppress(window: &ApplicationWindow) -> NavSuppressGuard {
+    with_nav(window, |nav| nav.suppress());
+    NavSuppressGuard {
+        window: window_id(window),
+    }
+}
+
+/// The live scope [`nav_suppress`] opens. See its doc comment.
+pub(crate) struct NavSuppressGuard {
+    window: WindowId,
+}
+
+impl Drop for NavSuppressGuard {
+    fn drop(&mut self) {
+        WINDOWS.with(|m| {
+            if let Some(entry) = m.borrow().get(&self.window) {
+                entry.nav.borrow_mut().unsuppress();
+            }
+        });
+    }
+}
+
+/// Drop every history entry for `tab_id` in whichever window's history holds it
+/// (TDD 23.8). Private: it is called only from [`remove_tab`]/[`rehome_tab`], the
+/// two places a tab stops belonging to a window, so no caller can forget it.
+fn nav_forget_everywhere(tab_id: TabId) {
+    WINDOWS.with(|m| {
+        for entry in m.borrow().values() {
+            entry.nav.borrow_mut().forget(tab_id);
+        }
     });
 }
 
@@ -153,6 +253,12 @@ pub(crate) fn tab_by_content_box(child: &gtk::Widget) -> Option<Rc<TabState>> {
 /// destination notebook that already has this tab as its only/current page
 /// would not fire one.
 pub(crate) fn rehome_tab(dest_window: &ApplicationWindow, tab_id: TabId) {
+    // A tab that moves to another window leaves the origin's history exactly as a
+    // closed one does (TDD 23.8) — a traversal must never activate a document
+    // living in a different window (23.7). Swept across every window rather than
+    // the origin alone: the origin is identified below by scanning, and the
+    // destination's own history cannot contain a tab it has never shown.
+    nav_forget_everywhere(tab_id);
     WINDOWS.with(|m| {
         let mut m = m.borrow_mut();
         for entry in m.values_mut() {

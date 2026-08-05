@@ -137,6 +137,20 @@ pub(crate) fn build_reading_theme_toolbar_menu() -> Menu {
 }
 
 fn build_view_menu() -> (Menu, Menu) {
+    // Back / Forward through this window's document-visit history (TDD §23), in
+    // their own leading section — the browser's own placement, above the view
+    // modes, so the two navigation commands read as a pair rather than as members
+    // of the mode group. One `win.nav-*` action each, shared with the toolbar
+    // buttons, the two accelerators and the mouse thumb buttons; GTK greys each
+    // item whenever its action is disabled, which is the whole of the "insensitive
+    // when it leads nowhere" contract (TDD 23.5, POLICY's single-`GAction` rule).
+    let nav_section = Menu::new();
+    for (label, action) in [("Back", "win.nav-back"), ("Forward", "win.nav-forward")] {
+        let item = MenuItem::new(Some(&mnem(label)), Some(action));
+        set_inline_accel(&item, action);
+        nav_section.append_item(&item);
+    }
+
     let section = Menu::new();
     for cmd in &VIEW_CMDS {
         let item = MenuItem::new(Some(&mnem(cmd.label)), None);
@@ -296,6 +310,7 @@ fn build_view_menu() -> (Menu, Menu) {
     ));
 
     let outer = Menu::new();
+    outer.append_section(None, &nav_section);
     outer.append_section(None, &section);
     outer.append_section(None, &tabs_section);
     outer.append_section(None, &tab_nav_section);

@@ -82,6 +82,8 @@ member. For a stateful action the work is driven by `change-state`, not
 | `win.close-tab` | — | — | Close the active tab, prompting if it is dirty. |
 | `win.next-tab` | — | — | Activate the next tab. |
 | `win.previous-tab` | — | — | Activate the previous tab. |
+| `win.nav-back` | — | — | Activate the document visited before the current one in this window's Back/Forward history. Enabled only while there is an earlier entry — at the oldest it is insensitive rather than wrapping. Also carried by Alt+Left, `XF86Back`, and mouse button 8. |
+| `win.nav-forward` | — | — | Activate the document a Back left, in this window's history. Enabled only while a forward trail exists; any new navigation discards it. Also carried by Alt+Right, `XF86Forward`, and mouse button 9. |
 | `win.select-tab` | `s` | `s` | The active tab, identified by tab id. Radio group backing the View ▸ Documents menu and the toolbar's Documents combo (one action, two surfaces). |
 | `win.move-tab-new-window` | — | — | Detach the active tab into a new window. |
 | `win.show-help-overlay` | — | — | Show the shortcuts window. Provided by GTK, not registered by this application. |

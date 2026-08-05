@@ -192,6 +192,13 @@ fn restore_window(
         let n = chrome.tabs.n_pages();
         if n > 0 {
             let idx = (ws.active_tab as u32).min(n - 1);
+            // Not a navigation (TDD 23.9/23.10): a restored window starts with no
+            // history, holding only the document it comes back on. The suppressed
+            // switch re-seeds the history onto that document rather than being a
+            // no-op, so the reader's first real navigation records against what
+            // they are actually looking at and not against the window's
+            // construction-time first tab (see `NavHistory`'s module doc).
+            let _no_history = winstate::nav_suppress(&window);
             chrome.tabs.set_current_page(Some(idx));
         }
     }

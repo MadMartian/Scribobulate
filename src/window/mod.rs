@@ -105,6 +105,7 @@ mod findbar;
 mod lifecycle;
 mod linknav;
 mod livepreview;
+mod navhistory;
 mod restore;
 mod sidebar;
 mod splitview;
@@ -123,6 +124,8 @@ use findbar::*;
 use lifecycle::*;
 pub(crate) use linknav::activate_doc_link;
 use livepreview::*;
+use navhistory::*;
+pub(crate) use navhistory::{nav_action_name, refresh_nav_history_actions};
 use sidebar::*;
 pub(crate) use splitview::SplitView;
 use tabs::*;
@@ -450,6 +453,10 @@ fn build_window(
         },
     );
     register_tab_actions(&window);
+    // Back/Forward (TDD §23). Both start insensitive and are re-derived on every
+    // tab switch; the window's first document is seeded into the history by
+    // `winstate::register` below, since no switch callback ever fires for it.
+    register_nav_history_actions(&window);
     // ── Phase 4-5: first tab's editor + preview + per-tab wiring ──────────────
     // Assembled by the SHARED `assemble_tab_core` — byte-for-byte the same
     // orchestration every later tab runs in `window/tabs/create_tab_in_window`.

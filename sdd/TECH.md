@@ -2,13 +2,13 @@
 
 Scribobulate is a native GTK4 desktop application written in Rust. It renders
 Markdown into real GTK widgets drawn on the CPU (no HTML engine, no GPU
-pipeline), giving it the resource footprint of a native editor. See PRODUCT.md
+pipeline), giving it the resource footprint of a native editor. See [PRODUCT.md](PRODUCT.md)
 for what the application does and why.
 
 The stack was chosen by measured viability spikes, not assumption: native
 widgets + the GSK Cairo renderer hold **0 MiB VRAM and ~80 MiB RAM** for a
 single document with full-fidelity rendering. The rejected alternatives
-(GPU-canvas toolkits, WebKitGTK) and why they failed are recorded in ANTI-PATTERNS.md.
+(GPU-canvas toolkits, WebKitGTK) and why they failed are ScrAP-1 and ScrAP-2.
 
 ## System overview
 
@@ -171,6 +171,7 @@ Every module below runs on the GTK main thread; see [Concurrency model](#concurr
 | `window/lifecycle.rs` | Owns the window close-request path and the session snapshot taken on close. |
 | `window/actions.rs` | Owns window action-state cores — the readers and the sensitivity rules that gate commands by mode and selection. |
 | `window/editoractions.rs` | Owns registration of the editor and document `win.*` actions. |
+| `window/navhistory.rs` | Owns Back/Forward navigation's UI side: the two `win.nav-*` actions, the single place their sensitivity is computed, the mouse thumb-button gestures, and the one call site that records a tab activation as a navigation. Its module doc states why recording is centralised while the opt-outs are per-call-site — the inverse of this codebase's usual choke-point arrangement. |
 | `window/copylink.rs` | Owns Edit ▸ Copy Link Location: the `win.copy-link-location` action and the one place its enabled state is computed. It resolves two inputs to one gate — the link a right-click landed on (held for that popover's lifetime in `WindowChrome::ctx_link`, and what makes the read-only preview's row usable) and the link under the editor caret — each through the seam that already owns its question, the display-free source scan `format::link_target_at` and the preview's single link hit-test `preview::link_url_at`. |
 | `window/viewactions.rs` | Owns registration of the view, sidebar, chrome, split and zoom `win.*` actions. |
 | `window/editbar/` | Owns the Markdown formatting commands: the `win.format` application path, the insert dialogs, the Format toolbar section, the editor focus gate, the caret overlay, and the Enter conveniences (list/quote continuation, code-fence auto-close). |
@@ -214,6 +215,7 @@ Every module below runs on the GTK main thread; see [Concurrency model](#concurr
 | `atomic_io.rs` | Owns atomic file writes (write-temp-then-rename), so a crash mid-write cannot tear a document. |
 | `docio/` | Owns every read and write of a user document, and the fact that none of them touch the main thread: the blocking halves are module-private, so its `async fn`s are the crate's only route to a document. `docio/pool.rs` owns the dispatch and the cap on how much of GLib's shared I/O pool this application may hold (ScrAP-243). |
 | `app/openbatch.rs` | Owns the `GApplication` **open** handler: one invocation's file arguments read first, then turned into at most one window in a single uninterrupted pass, so two overlapping launches cannot interleave their window targeting. |
+| `winstate/navhistory.rs` | Owns the per-window Back/Forward history as display-free data — the visited-tab list, the cursor, and every rule that mutates them. The instance lives in the registry's per-window entry, so a tab's departure prunes it without any call site knowing. |
 | `winstate/writegate.rs` | Owns the one-writer-at-a-time gate over a document's file, as a pass released on `Drop` rather than a flag with a rule attached. Display-free, so its release-on-every-exit contract is unit-tested directly. |
 | `swapfile/` | Owns the display-free crash-recovery core: the swap file's frontmatter codec, its naming scheme, the baseline content digest, and the recovery decisions. Touches no GTK and no filesystem; its module doc states the two invariants the feature turns on. |
 | `window/swap.rs` | Owns the crash-recovery write edge — the debounce, the focus-loss flush, and the write-temp-then-rename that promotes a snapshot only after a complete write — plus the single choke point that applies the dirty↔swap invariant. |

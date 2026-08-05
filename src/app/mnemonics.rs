@@ -44,6 +44,9 @@ const MENU_MNEMONICS: &[(&str, &str)] = &[
     ("Insert Image…", "Insert I_mage…"), ("Edit Image…", "Edit I_mage…"),
     ("Insert Table…", "Insert _Table…"),
     // View
+    // "B" is Status Bar's and "f" is free in View, so Back takes "k" and Forward
+    // "f" (the `unique_per_popover` test below is what holds this).
+    ("Back", "Bac_k"), ("Forward", "_Forward"),
     ("Preview", "_Preview"), ("Edit", "_Edit"), ("Side by Side", "_Side by Side"),
     ("New Window", "_New Window"),
     ("Move Tab to New Window", "_Move Tab to New Window"),
@@ -275,6 +278,8 @@ mod tests {
             (
                 "View",
                 &[
+                    "Back",
+                    "Forward",
                     "Preview",
                     "Edit",
                     "Side by Side",

@@ -59,6 +59,7 @@
 //! * [`selfdelete`] — [`SelfDeleteGuard`], the atomic-save round-trip guard (ScrAP-54).
 //! * [`status`] — the footer [`StatusStack`].
 //! * [`swap`] — [`SwapState`] plus the crash-recovery snapshot debounce/cap arithmetic.
+//! * [`navhistory`] — [`NavHistory`], the per-window Back/Forward history (TDD §23).
 //! * [`chrome`] — [`WindowChrome`], the window-level furniture struct.
 //! * [`tab`] — [`TabState`] + [`TabInit`] and their `impl`s.
 //! * [`registry`] — the thread-local window/tab registry and its lookup/mutation API.
@@ -99,6 +100,7 @@ mod docepoch;
 mod fmtinsert;
 mod ids;
 mod infotoast;
+mod navhistory;
 mod registry;
 mod scrollsync;
 mod selfdelete;
@@ -119,9 +121,11 @@ pub(crate) use docepoch::DocEpoch;
 pub(crate) use fmtinsert::FmtInsertKind;
 pub(crate) use ids::{TabId, WindowId};
 pub(crate) use infotoast::InfoToast;
+pub(crate) use navhistory::{NavDir, NavHistory};
 pub(crate) use registry::{
-    add_tab, alloc_tab_id, chrome, register, rehome_tab, remove_tab, set_active_tab, state,
-    tab_by_content_box, tab_by_id, tab_count, tab_for_descendant, tabs_for_window, unregister,
+    add_tab, alloc_tab_id, chrome, nav_can, nav_record, nav_step, nav_suppress, register,
+    rehome_tab, remove_tab, set_active_tab, state, tab_by_content_box, tab_by_id, tab_count,
+    tab_for_descendant, tabs_for_window, unregister,
 };
 pub(crate) use scrollsync::{ScrollDriver, ScrollSync};
 pub(crate) use selfdelete::SelfDeleteGuard;

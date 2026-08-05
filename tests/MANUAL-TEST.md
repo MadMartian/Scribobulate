@@ -1072,6 +1072,48 @@ the operator's own next launch. The recovery data lives in
 - [ ] **22.L** *(POLICY § Logging — forensic threshold)* Run a recovery with **no `RUST_LOG` set**, then read `scribobulate.log` → there is an `INFO` line per recovered document naming the path and the **byte count**, and **no document text anywhere** (grep the log for distinctive text from the recovered buffer — §21.10's rule applies here too, and this is the one path that handles buffer content). Then leave a document dirty and typing for several minutes, `kill -SEGV` it, and read the crash report's breadcrumb ring → it is **not** filled with snapshot-write records: a periodic event must stay below the forensic threshold, or the ring's 64 slots describe nothing but the safety net
 
 
+### §23 Back / Forward navigation history
+
+> **Two harness facts that decide how these are run, both measured 2026-08-05 on
+> GTK 4.6.9 / Xvfb.**
+>
+> **(a) Probe the action state by the app's UNIQUE bus name, never its well-known
+> one.** The plan's `-n` requirement makes the process `NON_UNIQUE`, so it owns no
+> *well-known* name — and `--dest com.extollit.scribobulate` then silently answers
+> about whichever instance does hold it (the operator's), replying "The named action
+> ('nav-back') does not exist" about an action that is registered and working
+> (ScrAP-253). It still owns a unique name, and everything works through it:
+>
+> ```bash
+> BUS=$(busctl --user list --no-pager | awk -v p=$APP_PID '$2==p {print $1}')
+> OP=/com/extollit/scribobulate/window/1
+> gdbus call --session --dest "$BUS" --object-path $OP \
+>   --method org.gtk.Actions.Describe nav-back        # → ((false|true, …),)
+> gdbus call --session --dest "$BUS" --object-path $OP \
+>   --method org.gtk.Actions.Activate nav-back "[]" "{}"
+> ```
+>
+> That makes 23.5's sensitivity checks mechanical — read the bit, drive the action,
+> re-read it — with no pointer and no pixels. Functional verification (invoke it and
+> see whether the document changed) is the fallback.
+>
+> **(b) A toolbar chevron is pixel-identical enabled and disabled** (`compare -metric
+> AE` = 0 across a real transition, GTK4Rs/AP-67), so never judge greying from a
+> toolbar screenshot: use the probe above, or the **View menu**, whose items do grey
+> visibly (a menu is a separate surface — `import -window root`, GTK4Rs/AP-134).
+
+- [ ] **23.1** Open three documents in one window (`-n a.md b.md c.md`). Click tab **b**, then tab **c**. Invoke **Back** → **b** is active; again → **a**. Nothing reloads, no other document's scroll moves (TDD 23.1)
+- [ ] **23.2** From **a** (after 23.1), invoke **Forward** twice → **b**, then **c**: the exact inverse of the two Back presses (TDD 23.2)
+- [ ] **23.3** From **c**, press Back and Forward alternately a dozen times → you keep reaching **a** and **c** at the ends and never get stuck oscillating between two middle documents. **The failure this catches:** if traversal recorded itself, each Back would add an entry and Back/Forward would degenerate into a two-document toggle (TDD 23.3)
+- [ ] **23.4** From **c**, Back to **b**, then navigate somewhere NEW instead of going forward — click tab **a**, or follow a link. Now invoke **Forward** → nothing happens; the trail to **c** is gone. The View menu shows Forward greyed (TDD 23.4)
+- [ ] **23.5** With no navigation yet (a freshly opened window), **View ▸ Back and View ▸ Forward are both greyed**, and the toolbar buttons do nothing when clicked. Navigate once → Back greys in. At the oldest entry press Back again → **nothing changes**; it must not wrap around to the newest (contrast Previous Tab, which cycles). Check each command from **all three** of: the View menu, the toolbar chevrons, and the keyboard (TDD 23.5)
+- [ ] **23.6** Every input drives the same command: **Alt+Left / Alt+Right**; the dedicated **Back/Forward keys** if the keyboard has them (`XF86Back`/`XF86Forward`); and the **two mouse thumb buttons** (`xdotool mousedown 8` / `mousedown 9`, or a real thumb switch — press it over the document area, over the toolbar, and over the tab strip; all three must navigate). Then open **Help ▸ Keyboard Shortcuts** → the View group lists Back = Alt+Left and Forward = Alt+Right, and the mouse buttons are deliberately absent (TDD 23.6)
+- [ ] **23.7** Two windows, each with two documents visited. Invoke Back in window A → only A's document changes; B's active document and its own Back/Forward availability are untouched. No traversal ever activates a document living in the other window (TDD 23.7)
+- [ ] **23.8** **A document that leaves the window leaves its history.** (a) Visit **a → b → c**, then **close b** (its × button, so the active tab is not the one closing) → Back from **c** goes to **a**, never to a closed document and never producing a Back press that visibly does nothing. (b) Visit **a → b**, then close **a** → Back is greyed on **b**. (c) Visit **a → b → c**, then **drag b out to its own window** → in the origin window Back from **c** reaches **a**; in the new window Back is greyed. (d) Close the ACTIVE tab and confirm that landing on its neighbour did *not* add a history entry — Back must not return you to the tab you were just on (TDD 23.8)
+- [ ] **23.9** **Internal page switches are not navigations.** With **three** documents where two are untitled and dirty, invoke **Save All** and cancel each chooser → the sweep switches tabs to show you each one, and when it finishes the history is unchanged: Back goes where it went before the sweep, not on a tour of the prompted tabs. Repeat with **Close Other Tabs** on a window with two dirty others (Discard each). Then restart into a **restored session** (23.10) and, separately, trigger a **startup crash recovery** (§22.1) → neither leaves a history entry behind (TDD 23.9)
+- [ ] **23.10** **Session-local and bounded.** Visit several documents, close the window, relaunch → the restored window's Back and Forward are **both greyed**, and the first navigation you make goes back to the *restored* document (not to whichever tab the window happened to be built with). There is no persisted history in `session.toml` — `grep -i nav ~/.local/state/scribobulate/session.toml` finds nothing (TDD 23.10)
+
+
 ## 4. Additional test scenarios (not yet in TDD.md)
 
 These are candidate rubrics surfaced while planning this pass — not yet

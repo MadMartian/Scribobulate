@@ -15,7 +15,7 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > event stream), **#160** (syntect default-syntax coverage), **#163** (Pango markup escaping), **#164** (testing/CI + cross-platform filesystem),
 > **#194** (CommonMark/Markdown transform logic + enforcement discipline),
 > **#195** (pulldown-cmark + this crate's own inline scanner),
-> **#196** (this crate's renderer/annotation offset mapping), **#206**/**#207** (reference-gate tooling + cross-platform gate parity), **#208** (Rust proc-macro/test-harness design), **#209** (testing discipline), **#214** (macOS/dyld dynamic-loader semantics + Rust/libc), **#215** (testing discipline), **#216** (register/citation tooling), **#217** (experiment design), **#218** (multi-agent process), **#219** (testing/tooling discipline), **#220** (testing discipline), **#221** (testing discipline), **#222** (documentation/tooling governance), **#223** (review/claim discipline), **#224** (version control / project governance), **#225** (input-cost policy / threat modelling), **#226** (testing/gate discipline), **#228** (invariant-placement discipline), **#229** (filesystem permissions / cross-platform security model), **#230** (Rust tooling / enforcement discipline), **#233** (serde/`toml` crate + file-format design), **#234** (testing discipline), **#236** (verification tooling / Windows harness), **#237** (testing/CI process + cross-platform build discipline), **#239** (verification tooling / Cargo + git build-artefact semantics), **#240** (reference-gate tooling + review discipline), **#241** (crash-recovery design limitation / OS process identity), **#242** (tooling/process), **#245** (verification tooling / X11 input injection), **#251** (verification tooling / distribution build configuration), **#252** (verification tooling / test-harness design), **#243** (GLib/GIO task-pool internals — not a GTK widget contract, though it binds any gtk-rs app that moves I/O off the main thread) — and, following the same precedent as #36,
+> **#196** (this crate's renderer/annotation offset mapping), **#206**/**#207** (reference-gate tooling + cross-platform gate parity), **#208** (Rust proc-macro/test-harness design), **#209** (testing discipline), **#214** (macOS/dyld dynamic-loader semantics + Rust/libc), **#215** (testing discipline), **#216** (register/citation tooling), **#217** (experiment design), **#218** (multi-agent process), **#219** (testing/tooling discipline), **#220** (testing discipline), **#221** (testing discipline), **#222** (documentation/tooling governance), **#223** (review/claim discipline), **#224** (version control / project governance), **#225** (input-cost policy / threat modelling), **#226** (testing/gate discipline), **#228** (invariant-placement discipline), **#229** (filesystem permissions / cross-platform security model), **#230** (Rust tooling / enforcement discipline), **#233** (serde/`toml` crate + file-format design), **#234** (testing discipline), **#236** (verification tooling / Windows harness), **#237** (testing/CI process + cross-platform build discipline), **#239** (verification tooling / Cargo + git build-artefact semantics), **#240** (reference-gate tooling + review discipline), **#241** (crash-recovery design limitation / OS process identity), **#242** (tooling/process), **#245** (verification tooling / X11 input injection), **#251** (verification tooling / distribution build configuration), **#252**, **#253** (verification tooling / test-harness design), **#254** (testing discipline), **#243** (GLib/GIO task-pool internals — not a GTK widget contract, though it binds any gtk-rs app that moves I/O off the main thread) — and, following the same precedent as #36,
 > **#124**'s core-GTK half went to the skill as **GTK4Rs/AP-98**; its tooling/process remainder
 > (which pipeline step compiles a gated suite) stays project-specific. Their stubs stay a
 > little fuller (root cause + citations inline), full essay in git history. Edited only by
@@ -271,6 +271,8 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 | 251 | A DISTRIBUTION GTK HAS ITS ENTIRE INTROSPECTION SURFACE COMPILED OUT, AND THE THREE CHANNELS FAIL IN THREE DIFFERENT WAYS — ONE OF THEM BY REPORTING A NUMBER THAT MEANS "HEALTHY". MEASURED on Ubuntu jammy GTK 4.6.9 / GLib 2.72.4: every informational `GTK_DEBUG`/`GDK_DEBUG`/`GSK_DEBUG` key reports `[unavailable]` (only `interactive` survives), `g_type_get_instance_count()` is exported and always returns **0** with no diagnostic, and neither `libgtk-4` nor `libglib-2.0` links `libsysprof-capture`, so the toolkit emits no profiler marks at all → a profiling or leak-hunting plan that names any of them is unrunnable here, and the instance-count one produces a false all-clear. Plan around app-owned instrumentation plus process-external sampling; verify a channel EMITS before trusting its silence |
 | 247 | "NO HANDLER IS REGISTERED FOR THIS SCHEME" IS NOT A SAFETY PROPERTY — IT IS A CLAIM ABOUT EVERY MACHINE THE TEST WILL EVER RUN ON. A control test deliberately let `GtkLinkButton`'s default `activate-link` handler run, using `x-scribobulate-no-such-handler:///probe` on the reasoning that an unhandled scheme "fails to launch instead of opening something". True on Linux (a `g_warning`, nothing else). **False on Windows**: the shell answers an UNREGISTERED scheme with a modal "You'll need a new app to open this" chooser, hosted by `SystemSettings`/`ApplicationFrameHost` — a DIFFERENT PROCESS, so it outlives the test binary, is absent from your own window list, holds foreground focus (silently swallowing keystrokes aimed at any later driven UI run — cost a full cycle before the focus theft was traced back to it), ignores `WM_CLOSE` and Escape because it is a UWP surface, and presents OK beside an already-ticked "Always use this app", i.e. one stray click from writing a scheme handler into `HKCU`. **A test suite reached out of its process and could have reconfigured the host.** → make the probe an **invalid URI**, not an unclaimed one: `gtk_uri_launcher_launch` runs `g_uri_is_valid` and returns an error before `gtk_show_uri_full` (gtk-4.22.4 `gtk/gtkurilauncher.c:333`, MEASURED from source; `gtk_link_button_set_visited(…, TRUE)` still runs unconditionally afterwards, so a `visited`-based oracle is unaffected), and assert that invalidity in the suite so the property cannot rot back into a comment. The rule: **prefer a safety claim about your own dependency over one about the host** — the first is checkable in-repo on every run, the second is unfalsifiable and fails on exactly the machine you did not test on. Second-order, and the reason this sat undetected: the Linux failure mode is *silence*, so the seat that could most easily have found it is the one structurally unable to. Kin #237/#242 (a platform-shaped hole in what a gate can see) |
 | 252 | A DRIVE STEP ROUTED THROUGH AN APP COMMAND INHERITS THAT COMMAND'S OWN ENABLEMENT GATE, AND A DISABLED `GAction` SWALLOWS IT IN SILENCE. A live drive alternated "place the caret with the app's own Go To Line" and "click the toolbar button under test"; the click moved focus to the toolbar, `win.go-to-line` is gated on EDITOR focus, and `g_simple_action_activate` returns without emitting when an action is disabled — so from the second iteration the caret never moved, no dialog appeared, nothing logged, and every later assertion was evaluated against the PREVIOUS position. Worse than a dropped input: the stale run produced the CORRECT ANSWER FOR THE OLD LINE, which is exactly what a broken gate would produce, so the false reading was indistinguishable from a real defect — caught only by cropping the footer Ln/Col indicator and seeing `Ln 5` where the script believed `Ln 3` → verify a setup step by its OWN observable (Ln/Col, title, match count), never by its exit status, and prefer a setup primitive with NO enablement gate (a click into the text moves the caret unconditionally) — a harness step must not depend on the subsystem under test being in a particular state. Second-order: two assertions sharing one stale precondition AGREE WITH EACH OTHER, so a self-consistent pair of results is not evidence either was measured. SECOND INSTANCE, same session, different mechanism: chaining `mousemove`+`mousedown` in ONE `xdotool` invocation delivered a press the app's gesture handler NEVER RAN FOR (proved by instrumenting the handler — 3 calls for 4 clicks) while a context menu still appeared, so the capture showed a menu built for the PREVIOUS pointer position and the feature read as broken on one link and fine on its neighbour; separate the move from the press with a settle. An input that is DELIVERED is not an input that was HANDLED — instrument the handler rather than re-reading the screenshot. Kin #245 (the same silence one layer down, at the input channel), #217, #239 |
+| 253 | `org.gtk.Actions`'s D-Bus probe — the sanctioned way to read a GAction's `enabled` bit, because sensitivity often has NO pixel signal (GTK4Rs/AP-67) — SILENTLY ANSWERS ABOUT A DIFFERENT PROCESS when addressed by the app's WELL-KNOWN name, which is what you reach for. `--new-instance` (which the manual plan mandates, ScrAP-43) means `NON_UNIQUE`, so the test process owns no well-known name; that name still resolves — to whichever primary the session bus already has, i.e. **the operator's own running app**. MEASURED: `Describe nav-back` on `com.extollit.scribobulate` returned `The named action ('nav-back') does not exist` while the action was registered and working in the instance under test — a confident, specific, plausible answer about another process, in the direction that manufactures "my registration is broken" about working code. The tell nobody reads: `List` answered at BOTH `window/1` and `window/2` for a launch that made one window. → **the probe is MIS-ADDRESSED, not unavailable** (a first version of this entry said unavailable — corrected by measurement): a `NON_UNIQUE` app still holds a UNIQUE name, so resolve it from the PID you launched (`busctl --user list \| awk '$2==PID'` → `:1.NNN`) and address that. MEASURED end-to-end on a `-n` instance: `Describe` returns the real enabled bits and `Activate` drives the actions, so both halves of GTK4Rs/AP-67 work with no pointer and no pixels. Functional verification is the fallback where no bus exists at all. Lesson: **a well-known bus name is a ROLE, not your process** — bind a probe to the identity you launched. Kin ScrAP-43/ScrAP-131 (process ≠ window ≠ bus-name isolation), ScrAP-252 (self-consistent wrong answer) |
+| 254 | AN INVARIANT HELD BY TWO INDEPENDENTLY-SUFFICIENT MECHANISMS IS MUTATION-PROOF ONE MECHANISM AT A TIME, SO THE STANDARD MUTATION TEST REPORTS EACH ONE AS DEAD CODE. Writing "mutation-checked: removing this guard fails the test" is then false in both directions, and it is the *comment* that rots first. MEASURED here on TDD 23.3 (traversing Back/Forward must not itself record history): a suppression guard around the traversal's page switch AND the history's own already-current dedup each hold it alone — neuter either and 25 tests stay green; neuter both and two fail. Neither mutation is informative, and the natural reading of the first ("no test covers this, delete it") removes a guard whose whole value is the day the *other* mechanism is narrowed. → when a mutation leaves a suite green, the next question is "what else holds this?", not "is this dead?" — enumerate the mechanisms and mutate the SET; aim the test at the OUTCOME rather than at either mechanism (a test aimed at one passes while the pair drifts); and record the honest result in the code, including "this guard is redundant today, kept for X" — a claim of load-bearingness nobody neutered is exactly the untested assertion the mutation discipline exists to catch. Sharpens ScrAP-87 (a test that passes against broken code) one level up: there the SETUP masked the defect, here a second correct mechanism masks the guard's absence |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -4478,6 +4480,21 @@ LaunchServices, or a desktop portal. `gtk_link_button_set_visited (…, TRUE)` r
 unconditionally afterwards (`gtk/gtklinkbutton.c:551`), so a `visited`-based oracle
 is unaffected and the control still discriminates.
 
+**VERSION SCOPE of that citation — it is 4.10+ evidence, and this project floors at
+4.6.** `GtkUriLauncher` did not exist before 4.10: MEASURED on this host's own
+GTK 4.6.9, `nm -D --defined-only libgtk-4.so.1` finds **no** `gtk_uri_launcher_*`
+symbol at all, only `gtk_show_uri`/`gtk_show_uri_full` (GTK4Rs/AP-114's technique —
+an above-floor wrapper is a link/runtime failure, not a compile one). So "GTK itself
+refuses the URI" is a fact about the launcher class on 4.10+, **not** about the
+`gtk_show_uri` path a 4.6 host actually takes. The safety here does not rest on it:
+what gates the probe is the in-repo assertion below — the URI does not parse, so it
+names no scheme any shell could offer a chooser for — and that holds on every
+version, which is precisely the "claim about your own dependency, not about the
+host" rule this entry exists to state, applied one level down to the entry's own
+evidence. (Raised by the `gtk4-rs` skill's maintainer while mirroring this entry,
+whose floor is likewise 4.6; a mechanism cited from a newer source than the tree
+runs on is the ordinary way a correct-looking citation stops applying.)
+
 **The rule.** **Prefer a safety claim about your own dependency over one about the
 host.** "GTK refuses to launch X" is checkable in-repo, on every run, on every
 platform — and should be *asserted*, not commented, so it cannot rot back into
@@ -4867,3 +4884,145 @@ fact that activating a disabled `GAction` is a silent no-op with no signal to ho
 Kin #245 (the same silence one layer down — the input *channel* delivering nothing
 while every diagnostic says otherwise), #217 (positive controls), #239 (a control
 that cannot differ has stopped being a control).
+
+## 253. The `org.gtk.Actions` probe answers about the operator's app when addressed by the well-known name — a `--new-instance` app must be probed by its UNIQUE name
+
+**Symptom.** You verify a newly-added action's registration or `enabled` bit the way
+the plan prescribes — over `org.gtk.Actions`, because sensitivity frequently has no
+pixel signal at all (GTK4Rs/AP-67) — and D-Bus replies, crisply, that your action
+does not exist. The obvious conclusion is that the registration is broken.
+
+**Measured** (GTK 4.6.9 / X11, private Xvfb, release build, verifying the new
+`win.nav-back` / `win.nav-forward`):
+
+```
+gdbus call --session --dest com.extollit.scribobulate \
+  --object-path /com/extollit/scribobulate/window/1 \
+  --method org.gtk.Actions.Describe nav-back
+→ GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs:
+  The named action ('nav-back') does not exist.
+```
+
+…while the same build, driven through the keyboard and the toolbar on the same
+display seconds later, navigated correctly on both actions.
+
+**Cause.** The manual plan mandates `-n`/`--new-instance` so a relaunch cannot be
+forwarded to a stale primary (ScrAP-43). `-n` means `ApplicationFlags::NON_UNIQUE`,
+and a non-unique `GApplication` **owns no bus name**. The well-known name in the
+`--dest` argument therefore does not resolve to the process under test; it resolves
+to whatever process currently holds that name — on a shared session bus, the
+operator's own installed copy (`pgrep -ax scribobulate` showed
+`/home/…/.local/bin/scribobulate` alongside the test binary). The reply was truthful
+about *that* app, which is running an older build.
+
+**Why it is expensive rather than merely wrong.** The answer is specific,
+well-formed, and points at the code you just wrote, so it reads as a finding rather
+than as a mis-addressed query — the ScrAP-252 shape (a confident answer about the
+wrong subject). The available tell is easy to miss and requires already suspecting
+the problem: `org.gtk.Actions.List` at `window/1` **and** `window/2` both answered,
+for a launch that had built exactly one window.
+
+**The corrective — and the first version of this entry got it wrong, which is worth
+recording because the error is the more expensive of the two.** That version
+concluded the probe was *unavailable* for a `-n` instance and prescribed functional
+verification instead. It reached that from a single failed well-known-name query
+without trying the other address. **A `NON_UNIQUE` `GApplication` still opens a
+session-bus connection and still exports its action groups — it just owns no
+well-known name.** So resolve its UNIQUE name from the PID you launched and address
+that:
+
+```bash
+BUS=$(busctl --user list --no-pager | awk -v p=$APP_PID '$2==p {print $1}')   # → :1.NNN
+gdbus call --session --dest "$BUS" \
+  --object-path /com/extollit/scribobulate/window/1 \
+  --method org.gtk.Actions.Describe nav-back
+```
+
+MEASURED end-to-end against a `-n` instance (Xvfb, release): `Describe nav-back`
+returned `(false, …)` on a fresh window, `Activate next-tab` drove a tab switch, and
+a re-`Describe` returned `(true, …)` for `nav-back` with `(false, …)` for
+`nav-forward` — then `Activate nav-back` flipped the pair the other way. Both halves
+of GTK4Rs/AP-67 (read the state, drive the action) therefore work for exactly the
+launch the manual plan mandates, with no pointer and no pixels.
+
+**The rule.**
+- **A well-known bus name is a ROLE, not your process.** Bind the probe to the
+  identity you launched — the unique name derived from the PID — and never to a name
+  another process can hold. This is ScrAP-131's "scope it by the PID you launched"
+  applied to a third axis: process, window, *and* bus identity are three separate
+  scopings, each of which must be done deliberately.
+- **Functional verification is the fallback, not the answer:** invoke the command and
+  observe whether anything happened. A disabled `GAction` is a silent no-op
+  (ScrAP-252), so "pressed it, nothing changed" *is* the reading of `enabled == false`.
+  Reach for it where there is no session bus at all.
+- **`dbus-run-session` is not needed for this** — it isolates *forwarding*, which is
+  a different concern, and costs the cold-portal delay of ScrAP-138.
+
+**Second-order, and the reason the wrong version is recorded rather than quietly
+overwritten:** "the tool cannot see my process" and "I addressed the tool wrongly"
+predict the same single observation, and the first is the one that ends the
+investigation. The corrected reading arrived only because a peer's own knowledge base
+already carried the unique-name route — i.e. from *outside* the failing observation,
+which is precisely where it had to come from. Before concluding a capability is
+absent, enumerate the ways of asking for it.
+
+**Confirmed in passing, and worth stating because it is what sends people to D-Bus
+in the first place:** a toolbar `GtkButton` driven by `set_action_name` renders
+**pixel-identical** enabled and disabled — `compare -metric AE` over the chevron's
+crop returned **0** across a transition proven real by the button's behaviour
+(GTK4Rs/AP-67, re-measured). A *menu item* for the same action does grey visibly, so
+the menu is the surface to screenshot when a pixel is wanted.
+
+*Non-core (verification tooling / harness design). The GTK-specific halves are
+`NON_UNIQUE` ⇒ no bus name, and the pixel-identity of a disabled action-button.*
+Kin ScrAP-43 and ScrAP-131 (process, window and bus-name isolation are three
+separate things, each of which must be scoped), ScrAP-252 (a self-consistent wrong
+answer), ScrAP-247 (a claim about the host rather than about your own dependency).
+
+## 254. An invariant held by two sufficient mechanisms is mutation-proof one at a time — so the mutation test calls each of them dead code
+
+**Symptom.** You neuter a guard to prove the test that covers it fails, per the
+project's own mutation discipline — and the suite stays green. Two readings are
+available and both are wrong: "the guard is dead code, delete it", and (if you
+never ran the mutation) "mutation-checked" in a doc comment.
+
+**Measured.** TDD 23.3 — traversing Back/Forward must not itself become history —
+is held by two mechanisms that were designed independently and are each sufficient:
+
+1. `window::navhistory::traverse` wraps its page switch in a `nav_suppress` guard,
+   so the switch callback's `record` is a no-op.
+2. `NavHistory::record` ignores a tab that is already the cursor's entry — and
+   `nav_step` moves the cursor onto the target *before* the switch, so the target
+   always is.
+
+Removing (1): 25 navigation tests green. Removing (2): the pure-core dedup test
+fails, but every live traversal test stays green. Removing **both**: two live tests
+fail, exactly as intended (`Back` stays enabled at the oldest entry, the reader
+oscillating between two documents instead of walking back).
+
+**Why the natural reading is the harmful one.** "No test fails when I remove it" is
+the definition of dead code in every other context, so the guard gets deleted — and
+the invariant is then resting on a rule (the dedup) written for a different purpose,
+which the next person to narrow it will not connect to this contract. The redundancy
+is not waste; it is what survives one of the two being changed.
+
+**The rule.**
+- **When a mutation leaves the suite green, the next question is "what ELSE holds
+  this?", not "is this dead?"** Enumerate the mechanisms and mutate the *set*; a
+  mutation of one member of a redundant pair is uninformative by construction.
+- **Aim the test at the OUTCOME, not at either mechanism.** A test aimed at one
+  passes while the pair drifts. The live test here asserts "three Back presses over a
+  three-entry history reach the oldest and stop", which is what the reader
+  experiences, and it is killed by the only mutation that actually breaks the
+  contract.
+- **Write down the honest result, including redundancy.** `traverse`'s doc comment
+  says the guard is redundant today, states which mechanism is load-bearing, says
+  where that one's test is, and gives the two reasons the guard is kept anyway. The
+  alternative — an unqualified "mutation-checked" — is precisely the untested
+  assertion this discipline exists to eliminate, one level up: a claim about the
+  *test's* strength rather than about the code's behaviour.
+
+*Non-core (testing discipline).* Sharpens ScrAP-87 (a test that passes against
+broken code because the SETUP masked the defect) with its sibling: a test that
+passes against a mutated guard because a SECOND CORRECT MECHANISM masked its
+absence. Kin ScrAP-217 (a control that cannot differ has stopped being a control).

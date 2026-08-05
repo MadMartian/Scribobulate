@@ -435,11 +435,21 @@ fn close_tab_now(window: &ApplicationWindow, tab: &Rc<TabState>) {
     // (ScrAP-61); detach it before the editor finalizes, then re-home it onto the
     // surviving active tab below.
     detach_overlay_from(&chrome, &tab.editor);
-    if let Some(idx) = chrome.tabs.page_num(&tab.content_box) {
-        chrome.tabs.remove_page(Some(idx));
+    // Landing on the neighbour BECAUSE a tab closed is not a navigation (TDD
+    // 23.8): removing the active page makes the strip switch to its neighbour
+    // synchronously, which would otherwise record a history entry the reader
+    // never asked for. `winstate::remove_tab` then drops this tab's own entries.
+    {
+        let _no_history = winstate::nav_suppress(window);
+        if let Some(idx) = chrome.tabs.page_num(&tab.content_box) {
+            chrome.tabs.remove_page(Some(idx));
+        }
     }
     winstate::remove_tab(window, tab.id);
     update_window_title(window);
+    // A closed BACKGROUND tab fires no switch, so nothing else would re-derive
+    // the two actions after its entries were dropped.
+    refresh_nav_history_actions(window);
     // Re-parent the overlay onto the now-active tab's editor (a surviving tab).
     // Deterministic here rather than relying solely on a post-remove `switch-page`.
     if let Some(st) = state(window) {
@@ -483,6 +493,7 @@ fn close_other_dirty_tabs(
     let Some(tab) = dirty.pop() else {
         // Batch complete or aborted: return focus to the kept tab.
         if let Some(chrome) = winstate::chrome(window) {
+            let _no_history = winstate::nav_suppress(window);
             chrome.tabs.focus_page(&keep.content_box);
         }
         return;
@@ -490,7 +501,11 @@ fn close_other_dirty_tabs(
     // Make the tab this prompt is about the visible one, so it — and any Save As
     // it triggers — is visibly about that tab (and `save_and_then` acts on it via
     // `state(window)`). Mirrors `confirm_close_tabs`.
+    //
+    // Not a navigation (TDD 23.9): the reader asked to close the other tabs, not
+    // to visit each in turn, and recording the tour would make Back replay it.
     if let Some(chrome) = winstate::chrome(window) {
+        let _no_history = winstate::nav_suppress(window);
         chrome.tabs.focus_page(&tab.content_box);
     }
     confirm_dialog(

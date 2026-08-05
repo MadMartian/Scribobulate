@@ -34,6 +34,14 @@ pub(crate) fn wire_tab_switch_page(window: &ApplicationWindow, tab_view: &TabVie
                 return;
             };
             winstate::set_active_tab(&w, tab_id);
+            // THE Back/Forward recording site (TDD §23) — every way of changing
+            // the active tab funnels through this callback, so recording here
+            // makes each of them history-bearing by default and leaves only the
+            // exceptions (traversal, restore, the internal sweeps) to opt out
+            // with a suppression guard. Before the derived-state re-drive below,
+            // whose `resync_tab_action_state` reads the history back to settle
+            // the two actions' sensitivity.
+            record_active_tab(&w, tab_id);
             on_active_tab_changed(&w);
         }
     ));
@@ -173,6 +181,11 @@ pub(super) fn resync_tab_action_state(window: &ApplicationWindow, st: &Rc<TabSta
     for name in ["copy-path", "reload"] {
         set_action_enabled(window, name, has_path);
     }
+
+    // Back/Forward sensitivity (TDD 23.5) — re-derived here so it settles after
+    // every switch whatever caused it, including the traversals that move the
+    // history cursor and the cross-window arrival that calls this directly.
+    refresh_nav_history_actions(window);
 
     apply_mode_action_state(window, st.view_mode.get());
 }

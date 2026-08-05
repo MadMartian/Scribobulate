@@ -2433,3 +2433,64 @@ of: *a swap file exists for a document if and only if that document is dirty.*
 - **Then** the work is recovered into the tab that file opened, and the window holds **one** tab for it, not a clean one beside a recovered one the user has to tell apart
 - **And** this holds however the two paths are spelled — a relative argument, a symlink, `..`, or a different letter case where the filesystem is case-insensitive — because the same "is this the same file?" rule governs here as governs re-opening an already-open document (8.2/15.16)
 - **And** an untitled recovery is never correlated this way: it names no file, so it always comes back in a tab of its own
+
+## 23. Back / Forward navigation history
+
+The browser gesture, applied to documents: a per-window history of *which
+document was being read*, walked with the same keys and mouse buttons a web
+browser uses. One rule underlies every rubric below: **a history entry is
+created by an act of navigation, and traversing history is not one of them.**
+
+### 23.1 Back returns to the document that was being read before
+- **Given** a window in which the reader has moved from one document to another — by clicking a tab, by Ctrl+PageUp/PageDown or Ctrl+Tab, by picking one from View ▸ Documents, by following a link, or by opening a file
+- **When** the reader invokes Back
+- **Then** the document that was active *before* that move becomes active again, and the window is otherwise unchanged — no document is reloaded, re-rendered from disk, or has its own scroll position disturbed by the traversal
+
+### 23.2 Forward returns to where Back was invoked from
+- **Given** the reader has gone Back at least once and has not navigated since
+- **When** the reader invokes Forward
+- **Then** the document Back left is active again — Back and Forward are exact inverses over an unchanged history
+
+### 23.3 Traversal does not itself become history
+- **Given** any history
+- **When** the reader goes Back and Forward repeatedly
+- **Then** no new entries accumulate: the reachable set of documents is the same after ten traversals as after none. A history mechanism that recorded its own traversals would make Back stop being an escape route — the failure this rubric exists to prevent
+
+### 23.4 A new navigation discards the forward trail
+- **Given** the reader has gone Back one or more times, so a forward trail exists
+- **When** they then navigate somewhere new instead of going Forward
+- **Then** the forward trail is discarded and Forward is unavailable — browser semantics; the trail described a future the reader has now declined
+
+### 23.5 Both commands are available on every surface, and greyed out when they lead nowhere
+- **Given** a window
+- **When** the View menu and the toolbar's view section are inspected
+- **Then** Back and Forward appear in both, each driven by the one action that also carries the keyboard and mouse bindings, and each insensitive exactly when there is nothing in that direction — at the oldest entry Back is greyed out rather than wrapping around to the newest (deliberately unlike Previous Tab, which cycles: a history has ends, a ring does not)
+- **And** their sensitivity is correct immediately after every event that can change it — a navigation, a traversal, a tab closing, a tab moving to another window — never only after some later unrelated interaction
+
+### 23.6 The browser's own inputs work
+- **Given** a window with history in both directions
+- **When** the reader presses Alt+Left / Alt+Right, or the dedicated Back / Forward keys a keyboard may carry (`XF86Back` / `XF86Forward`), or the two thumb buttons a mouse may carry (buttons 8 and 9)
+- **Then** each drives the same navigation as the menu item — one action, several inputs, no per-input behaviour
+- **And** the keyboard bindings appear in the Keyboard Shortcuts window; the mouse buttons deliberately do not, that window describing keys
+
+### 23.7 History is per window and never crosses between them
+- **Given** two windows, each with its own history
+- **When** Back is invoked in one
+- **Then** only that window's active document changes; the other window's history and active document are untouched, and no traversal ever activates a document living in a different window
+
+### 23.8 A document that leaves the window leaves its history
+- **Given** history entries for a document that is then closed, or moved to another window
+- **When** the reader walks the history afterwards
+- **Then** it behaves as though that document had never been visited: no traversal activates it, no traversal is a visible no-op standing in for it, and Back becomes insensitive rather than appearing to be available while having nowhere to go
+- **And** landing on a neighbouring document *because* one was closed is not itself a navigation — closing a tab must not push the tab it exposes onto the history
+
+### 23.9 Internal page switches the reader did not ask for are not navigations
+- **Given** an operation that switches tabs on the reader's behalf in order to show them something about each — Save All prompting for each untitled document, Close Other Tabs prompting per unsaved document, session restore selecting the tab that was active last launch, startup crash recovery revealing a recovered document
+- **When** the operation finishes
+- **Then** the history is as it was before it started (save for anything the reader genuinely navigated to), and Back does not replay the tour
+
+### 23.10 History is a session-local, bounded convenience
+- **Given** any amount of navigation
+- **When** the window is closed and a later launch restores the session
+- **Then** the restored window starts with no history — Back and Forward are insensitive, and the restored active document is the only thing in it
+- **And** within a session the history is bounded (oldest entries are dropped past a fixed depth), so a long reading session cannot grow it without limit

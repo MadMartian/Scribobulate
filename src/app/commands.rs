@@ -544,6 +544,31 @@ pub(crate) const INLINE_ACCEL_CMDS: &[InlineCmd] = &[
         label: "Close Tab",
         accels: &["<Primary>w"],
     },
+    // Back / Forward through the window's document-visit history (TDD §23). The
+    // browser bindings, deliberately: Alt+Left/Alt+Right canonical, plus the
+    // dedicated Back/Forward keys a keyboard may carry as aliases. Both are
+    // layout-stable non-letter keys, so neither is an ScrAP-44 <Shift>+glyph trap,
+    // and both were verified free of the app's own accelerators and of a
+    // ~/.config/kglobalshortcutsrc WM binding (KDE claims Meta+Alt+Left/Right for
+    // "Switch Window Left/Right" — a different combination).
+    //
+    // The two mouse thumb buttons drive the same actions but cannot appear in this
+    // table: it is the accelerator SSOT, and buttons 8/9 are not expressible as an
+    // accelerator string. They are gestures in `window/navhistory.rs`, and their
+    // absence from the Keyboard Shortcuts window is correct — that window
+    // describes keys (TDD 23.6).
+    InlineCmd {
+        action: "win.nav-back",
+        group: "View",
+        label: "Back",
+        accels: &["<Alt>Left", "XF86Back"],
+    },
+    InlineCmd {
+        action: "win.nav-forward",
+        group: "View",
+        label: "Forward",
+        accels: &["<Alt>Right", "XF86Forward"],
+    },
     InlineCmd {
         action: "win.outline",
         group: "View",

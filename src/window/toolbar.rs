@@ -105,6 +105,32 @@ pub(super) fn build_toolbar() -> BuiltToolbar {
 
     // ── view section ───────────────────────────────────────────────────────────
     let view_box = new_section();
+
+    // Back / Forward (TDD §23) lead the section, mirroring their leading position
+    // in the View menu and a browser's own left-to-right order. Plain buttons
+    // driven by `win.nav-back`/`win.nav-forward` via `set_action_name`, so their
+    // insensitivity is the actions' own (POLICY's single-`GAction` rule) and there
+    // is nothing to keep in sync here.
+    //
+    // `go-previous-symbolic` / `go-next-symbolic` are freedesktop-spec names
+    // already used by the find bar's match steppers, so they are known present in
+    // the themes this app is verified against, and both are SYMBOLIC (a
+    // non-symbolic icon's baked colour goes invisible on a dark-variant resolve —
+    // ScrAP-169). They are direction glyphs rather than history glyphs by design:
+    // no common theme ships a distinct "browser back" icon, and the arrows are the
+    // convention every browser and file manager uses.
+    for (dir, icon) in [
+        (crate::winstate::NavDir::Back, Icon::GoPrevious),
+        (crate::winstate::NavDir::Forward, Icon::GoNext),
+    ] {
+        let action = format!("win.{}", crate::window::nav_action_name(dir));
+        let btn = gtk::Button::from_icon_name(icon.name());
+        crate::a11y::name_from_action(&btn, &action);
+        btn.add_css_class("flat");
+        btn.set_action_name(Some(&action));
+        view_box.append(&btn);
+    }
+
     for cmd in VIEW_CMDS.iter() {
         let btn = gtk::ToggleButton::new();
         btn.set_icon_name(cmd.icon.name());

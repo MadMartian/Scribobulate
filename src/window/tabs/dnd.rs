@@ -115,7 +115,14 @@ fn spawn_window_hosting_tab(
         detach_overlay_from(&tab.chrome(), &tab.editor);
     }
 
-    source_tabs.detach_tab(content_box);
+    // Landing on the neighbour because a tab was handed away is not a navigation
+    // (TDD 23.8/23.9) — the same rule as closing one; `detach_tab` makes the
+    // source strip switch synchronously. The moved tab's own entries are dropped
+    // by `winstate::rehome_tab`, which `wire_tab_arrival` runs on the append below.
+    {
+        let _no_history = winstate::nav_suppress(source);
+        source_tabs.detach_tab(content_box);
+    }
     chrome.tabs.append_page(content_box);
     Some(win)
 }
@@ -444,7 +451,18 @@ pub(crate) fn wire_tab_bar_dnd(window: &ApplicationWindow, tab_view: &TabView) {
                 tv.settle_reorder();
                 return true;
             }
-            source_chrome.tabs.detach_tab(&tab.content_box);
+            // Same rule as the pop-out path above: the source window's switch to
+            // whatever the departing tab exposes is not a navigation (TDD 23.9).
+            // The source window is resolved from the tab's own live root — the
+            // drop handler is handed chrome, not a window, and a `TabState`
+            // deliberately holds no window reference (`winstate`'s module doc).
+            match window_of_content_box(&tab.content_box) {
+                Some(source) => {
+                    let _no_history = winstate::nav_suppress(&source);
+                    source_chrome.tabs.detach_tab(&tab.content_box);
+                }
+                None => source_chrome.tabs.detach_tab(&tab.content_box),
+            }
             dest_chrome.tabs.append_page(&tab.content_box);
             // The tab-arrival callback (`wire_tab_arrival`) now owns every
             // remaining step — registry rehome, titles, and closing an
