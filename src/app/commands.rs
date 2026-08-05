@@ -66,7 +66,7 @@ pub(crate) struct Cmd {
     pub(crate) is_toggle: bool,
 }
 
-pub(crate) const FILE_CMDS: [Cmd; 9] = [
+pub(crate) const FILE_CMDS: [Cmd; 10] = [
     // Relabeled "New Document" (operator decision) — opens a
     // new TAB in the current window rather than a new window (View ▸ New
     // Window, below, is the old window-spawning behavior). Ctrl+N moves to
@@ -92,6 +92,19 @@ pub(crate) const FILE_CMDS: [Cmd; 9] = [
         action: "win.save",
         label: "Save",
         accel: "<Primary>s",
+        icon: Icon::DocumentSave,
+        section_start: false,
+        is_toggle: false,
+    },
+    // Save every tab in this window that needs writing (dirty or deleted
+    // backing file). Same icon as Save — themes' document-save-all is not
+    // universal (MustResolve icons cannot miss — ScrAP-39); the label
+    // differentiates. Accel is layout-stable <Primary><Alt>s (save family),
+    // not <Shift>+letter (and not <Primary><Shift>s, which is Save As).
+    Cmd {
+        action: "win.save-all",
+        label: "Save All",
+        accel: "<Primary><Alt>s",
         icon: Icon::DocumentSave,
         section_start: false,
         is_toggle: false,

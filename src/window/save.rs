@@ -1,8 +1,12 @@
-//! Saving (save / save-as / content-gated save guard) and the dirty-window
-//! close confirmation.
+//! Saving (save / save-all / save-as / content-gated save guard) and the
+//! dirty-window close confirmation.
 
 use super::*;
 use crate::winstate::BusyNotice;
+
+/// One-shot completion after a single tab's save attempt (write settled, overwrite
+/// cancelled, or abandoned). Boxed so Save All can hand it through async paths.
+type SaveAfter = Box<dyn FnOnce(&ApplicationWindow) + 'static>;
 /// Build and show a modal confirmation `GtkMessageDialog` transient for
 /// `window`. `buttons` is `(label, response)` pairs added left-to-right;
 /// `default` is the response triggered by Enter. `on_response` runs AFTER the
@@ -212,7 +216,15 @@ async fn save_window(
 /// The window is re-resolved weakly after the write: a save that takes real time is
 /// a window the user can close in the meantime, and a strong capture would keep the
 /// whole subtree alive past its teardown to show a toast in it (ScrAP-152).
-fn do_save(window: &ApplicationWindow, st: &Rc<TabState>, busy: Option<BusyNotice>) {
+///
+/// `after`, when present, runs once the write attempt finishes (success or error) —
+/// used by Save All to advance to the next tab only after this one's write settles.
+fn do_save(
+    window: &ApplicationWindow,
+    st: &Rc<TabState>,
+    busy: Option<BusyNotice>,
+    after: Option<SaveAfter>,
+) {
     let win_weak = window.downgrade();
     let st = Rc::clone(st);
     // Fall back to arming one here for the callers that reach the write directly (the
@@ -225,6 +237,9 @@ fn do_save(window: &ApplicationWindow, st: &Rc<TabState>, busy: Option<BusyNotic
         match save_window(&window, &st, busy).await {
             Ok(_) => refresh_dirty_status(&window),
             Err(e) => show_save_error(&window, &e),
+        }
+        if let Some(after) = after {
+            after(&window);
         }
     });
 }
@@ -239,9 +254,22 @@ fn do_save(window: &ApplicationWindow, st: &Rc<TabState>, busy: Option<BusyNotic
 /// handled by `check_and_reload` + the conflict toast; see TDD §5.)
 pub(super) fn save_with_guard(window: &ApplicationWindow) {
     let Some(st) = state(window) else { return };
-    let Some(path) = st.path.borrow().clone() else {
+    if !st.has_path() {
         // No backing file → Save As (choose a location, then write + promote).
         save_as(window, |_, _| {});
+        return;
+    }
+    save_with_guard_tab(window, st, None);
+}
+
+/// Content-gated save of a **named** tab (not necessarily the active one).
+/// `after` runs when this tab's save attempt finishes — write settled, overwrite
+/// cancelled, or abandoned (identity re-pointed) — so Save All can advance.
+fn save_with_guard_tab(window: &ApplicationWindow, st: Rc<TabState>, after: Option<SaveAfter>) {
+    let Some(path) = st.path.borrow().clone() else {
+        if let Some(after) = after {
+            after(window);
+        }
         return;
     };
     let win_weak = window.downgrade();
@@ -250,6 +278,9 @@ pub(super) fn save_with_guard(window: &ApplicationWindow) {
     // guard's read, the decision, the write — and a person who pressed Save
     // experiences them as a single "Saving…", not three flickers.
     let busy = BusyNotice::arm(&st.chrome(), "Saving…");
+    // One-shot completion shared across every exit of the guard (abandon / cancel /
+    // write). Held in a RefCell so each branch can take it without cloning a FnOnce.
+    let after_slot = Rc::new(std::cell::RefCell::new(after));
     gtk::glib::MainContext::default().spawn_local(async move {
         // The guard read leaves the main thread like every other document read. It
         // is deliberately still read "as late as possible before deciding": the
@@ -289,8 +320,13 @@ pub(super) fn save_with_guard(window: &ApplicationWindow) {
                  abandoning (Save As has already written it)",
                 st.id
             );
+            if let Some(f) = after_slot.borrow_mut().take() {
+                f(&window);
+            }
             return;
         }
+        // Take the completion for this branch only — each arm hands it on once.
+        let after = after_slot.borrow_mut().take();
         // QA round-2 N6: `.ok()` used to collapse EVERY read failure — a genuine
         // "file not found" (deleted since load: nothing to conflict with, safe)
         // AND a real I/O error (permissions, transient failure: the file may
@@ -299,7 +335,7 @@ pub(super) fn save_with_guard(window: &ApplicationWindow) {
         match disk {
             Ok(disk_content) => {
                 if save_is_safe(&st.saved_baseline.borrow(), Some(&disk_content)) {
-                    do_save(&window, &st, Some(busy));
+                    do_save(&window, &st, Some(busy), after);
                 } else {
                     confirm_overwrite(
                         &window,
@@ -307,10 +343,13 @@ pub(super) fn save_with_guard(window: &ApplicationWindow) {
                         "File changed on disk",
                         "This file was modified by another program since you opened it. \
                          Overwrite those changes with your version?",
+                        after,
                     );
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => do_save(&window, &st, Some(busy)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                do_save(&window, &st, Some(busy), after)
+            }
             // QA round-2 N6: the on-disk file could not be read for a reason
             // OTHER than "it doesn't exist" (permissions, a transient I/O
             // error, or a path that is no longer an admissible document) — we
@@ -324,6 +363,7 @@ pub(super) fn save_with_guard(window: &ApplicationWindow) {
                     "The file could not be read to check whether it changed since you \
                      opened it ({e}). Overwrite it anyway with your version?"
                 ),
+                after,
             ),
         }
     });
@@ -332,12 +372,22 @@ pub(super) fn save_with_guard(window: &ApplicationWindow) {
 /// The shared Cancel/Overwrite confirmation behind both `save_with_guard`
 /// outcomes above (QA round-3 R3-6: previously two near-identical wrapper
 /// functions differing only in title/body text).
-fn confirm_overwrite(window: &ApplicationWindow, st: &Rc<TabState>, title: &str, body: &str) {
+///
+/// `after` runs after Overwrite's write settles, or immediately on Cancel —
+/// so Save All can advance either way.
+fn confirm_overwrite(
+    window: &ApplicationWindow,
+    st: &Rc<TabState>,
+    title: &str,
+    body: &str,
+    after: Option<SaveAfter>,
+) {
     // The tab travels into the response handler for the same reason it travels
     // across the guard read: the prompt names a specific file, and the user can
     // switch tabs while it is on screen, so "Overwrite" must write the document the
     // dialog was about and not whatever is in front by the time they answer.
     let st = Rc::clone(st);
+    let after = Rc::new(std::cell::RefCell::new(after));
     confirm_dialog(
         window,
         gtk::MessageType::Warning,
@@ -350,7 +400,10 @@ fn confirm_overwrite(window: &ApplicationWindow, st: &Rc<TabState>, title: &str,
         gtk::ResponseType::Cancel,
         move |w, resp| {
             if resp == gtk::ResponseType::Accept {
-                do_save(w, &st, None);
+                let after = after.borrow_mut().take();
+                do_save(w, &st, None, after);
+            } else if let Some(f) = after.borrow_mut().take() {
+                f(w);
             }
         },
     );
@@ -450,7 +503,22 @@ fn normalize_md_extension(path: std::path::PathBuf) -> std::path::PathBuf {
 /// so a never-saved document is always saveable.
 pub(super) fn save_as(
     window: &ApplicationWindow,
-    after: impl Fn(&ApplicationWindow, bool) + 'static,
+    after: impl FnOnce(&ApplicationWindow, bool) + 'static,
+) {
+    let Some(st) = state(window) else {
+        after(window, false);
+        return;
+    };
+    save_as_tab(window, st, after);
+}
+
+/// Save As for a **named** tab (not necessarily the one active when the chooser
+/// returns). The tab is captured when the chooser opens, so a mid-dialog tab
+/// switch cannot re-point the write (TDD 4.11).
+fn save_as_tab(
+    window: &ApplicationWindow,
+    st: Rc<TabState>,
+    after: impl FnOnce(&ApplicationWindow, bool) + 'static,
 ) {
     let chooser = FileChooserNative::new(
         Some("Save As"),
@@ -459,13 +527,11 @@ pub(super) fn save_as(
         Some("Save"),
         Some("Cancel"),
     );
-    let suggested = state(window)
-        .and_then(|st| {
-            st.path
-                .borrow()
-                .as_ref()
-                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        })
+    let suggested = st
+        .path
+        .borrow()
+        .as_ref()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "untitled.md".to_string());
     chooser.set_current_name(&suggested);
     // Start in the document's own directory, or the last-visited dialog dir.
@@ -473,10 +539,8 @@ pub(super) fn save_as(
         let _ = chooser.set_current_folder(Some(&gtk::gio::File::for_path(&dir)));
     }
     let win_weak = window.downgrade();
-    // `after` is shared across the two exits below (a chosen path, and a cancel or
-    // vanished window), so it goes behind an `Rc` — an `impl Fn` moved into an async
-    // block cannot also be called from outside it.
-    let after = Rc::new(after);
+    // One-shot completion shared by cancel and the async write path.
+    let after = Rc::new(std::cell::RefCell::new(Some(after)));
     crate::saferizer::native_dialog::NativeDialogHolder::show(&chooser, move |ch, resp| {
         let chosen = (resp == ResponseType::Accept)
             .then(|| ch.file().and_then(|f| f.path()))
@@ -488,22 +552,79 @@ pub(super) fn save_as(
         let Some(w) = win_weak.upgrade() else { return };
         let Some(path) = chosen else {
             // Cancelled — report "not saved" immediately, with no I/O at all.
-            after(&w, false);
+            if let Some(f) = after.borrow_mut().take() {
+                f(&w, false);
+            }
             return;
         };
         remember_dialog_dir(&path);
-        // The tab Save As is promoting is the one active when the chooser is
-        // answered — resolved here, once, and carried through the write.
-        let Some(st) = state(&w) else {
-            after(&w, false);
-            return;
-        };
         let after = Rc::clone(&after);
+        let st = Rc::clone(&st);
         gtk::glib::MainContext::default().spawn_local(async move {
             let saved = adopt_and_save(&w, &st, path).await;
-            after(&w, saved);
+            if let Some(f) = after.borrow_mut().take() {
+                f(&w, saved);
+            }
         });
     });
+}
+
+/// Save every tab in this window that needs writing — dirty, or clean over a
+/// deleted backing file (`needs_close_prompt`). Titled tabs go through the same
+/// content-gated Save as `win.save`; untitled tabs get Save As one at a time.
+/// Sequential so overwrite / Save As dialogs never stack. Cancelling a single
+/// dialog skips that tab and continues (the rest still save); the user's focus
+/// is restored when the batch ends.
+pub(super) fn save_all(window: &ApplicationWindow) {
+    let original_active = state(window).map(|st| st.id);
+    let mut todo: Vec<Rc<TabState>> = winstate::tabs_for_window(window)
+        .into_iter()
+        .filter(|t| t.needs_close_prompt())
+        .collect();
+    // Process first-to-last: reverse so `pop` yields the first collected tab.
+    todo.reverse();
+    save_all_next(window, todo, original_active);
+}
+
+fn save_all_next(
+    window: &ApplicationWindow,
+    mut remaining: Vec<Rc<TabState>>,
+    original_active: Option<winstate::TabId>,
+) {
+    let Some(tab) = remaining.pop() else {
+        // Batch done: restore the tab the user had focused before Save All
+        // walked the strip (same reason as the close-confirm sweep).
+        if let Some(id) = original_active {
+            if let Some(chrome) = winstate::chrome(window) {
+                if let Some(t) = winstate::tab_by_id(id) {
+                    chrome.tabs.focus_page(&t.content_box);
+                }
+            }
+        }
+        update_save_action_state(window);
+        return;
+    };
+    if tab.has_path() {
+        let rest = remaining.clone();
+        save_with_guard_tab(
+            window,
+            tab,
+            Some(Box::new(move |w| {
+                save_all_next(w, rest, original_active);
+            })),
+        );
+    } else {
+        // Make the untitled tab visible so the chooser is about the right document.
+        if let Some(chrome) = winstate::chrome(window) {
+            chrome.tabs.focus_page(&tab.content_box);
+        }
+        let rest = remaining;
+        save_as_tab(window, tab, move |w, _saved| {
+            // Continue whether or not the user completed Save As — a cancelled
+            // chooser must not block the rest of the batch.
+            save_all_next(w, rest, original_active);
+        });
+    }
 }
 /// Save the active tab (titled: write in place; untitled: route through Save
 /// As), then run `after(window, saved)` — `saved` is `true` only on an actual
@@ -1204,6 +1325,64 @@ mod gtk_integration_tests {
                 crate::docio::settle(|| !snapshot.exists()),
                 "a saved document is clean, so its crash-recovery snapshot must go: \
                  leaving it resurrects already-saved work as unsaved after a crash"
+            );
+
+            window.destroy();
+        });
+    }
+
+    /// Save All is enabled when any tab needs writing, and saves every titled
+    /// dirty tab (TDD 4.12). Mutation: dropping the `any(needs_close_prompt)`
+    /// gate leaves Save All tracking only the active tab.
+    #[gtktest::test]
+    fn save_all_saves_every_dirty_titled_tab_and_tracks_any_dirty() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let a_path = dir.path().join("a.md");
+            let b_path = dir.path().join("b.md");
+            std::fs::write(&a_path, "a0\n").unwrap();
+            std::fs::write(&b_path, "b0\n").unwrap();
+
+            let app = gtk::Application::new(
+                Some("com.extollit.scribobulate.integrationtest.saveall"),
+                gtk::gio::ApplicationFlags::NON_UNIQUE,
+            );
+            app.register(gtk::gio::Cancellable::NONE).expect("register");
+            let window = crate::window::new_window(&app, "IT", "a0\n", Some(&a_path));
+            let tab_a = state(&window).expect("tab A");
+            let tab_b_id =
+                crate::window::create_tab_in_window(&window, "b0\n", Some(&b_path), false, false)
+                    .expect("tab B");
+            let tab_b = winstate::tab_by_id(tab_b_id).expect("tab B registered");
+            // create_tab_in_window opens with the given source as clean baseline.
+            tab_a.editor_buf.set_text("a1\n");
+            tab_b.editor_buf.set_text("b1\n");
+            // Active is B; A is dirty in the background — Save All must still enable.
+            update_save_action_state(&window);
+            assert!(
+                window
+                    .lookup_action("save-all")
+                    .and_then(|a| a.downcast::<gtk::gio::SimpleAction>().ok())
+                    .is_some_and(|a| a.is_enabled()),
+                "Save All enabled when a background tab is dirty"
+            );
+
+            let chrome = winstate::chrome(&window).expect("chrome");
+            chrome.tabs.focus_page(&tab_a.content_box);
+            save_all(&window);
+            assert!(
+                crate::docio::settle(|| !tab_a.is_dirty() && !tab_b.is_dirty()),
+                "Save All must write every dirty titled tab"
+            );
+            assert_eq!(std::fs::read_to_string(&a_path).unwrap(), "a1\n");
+            assert_eq!(std::fs::read_to_string(&b_path).unwrap(), "b1\n");
+            update_save_action_state(&window);
+            assert!(
+                window
+                    .lookup_action("save-all")
+                    .and_then(|a| a.downcast::<gtk::gio::SimpleAction>().ok())
+                    .is_some_and(|a| !a.is_enabled()),
+                "Save All disabled when every tab is clean"
             );
 
             window.destroy();

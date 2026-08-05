@@ -450,6 +450,14 @@
 - **And given** the document is clean but its backing file has been **deleted** on disk (a genuine external deletion, not the app's own crash-safe self-rename), **then** the file monitor makes Save **enabled** while the "File deleted on disk — save to restore it" notice is shown, and activating Save re-creates the file with the buffer's content; once the file exists again (a successful save, a reload, or an external re-create) Save sensitivity returns to tracking the dirty flag. Pure predicate: `save_enabled(dirty, backing_missing) == dirty || backing_missing` (unit-tested in `winstate::decisions`).
 - **And** Save As remains available in every mode regardless of dirty state (it can write a copy of even a clean document to a new path)
 
+### 4.12 Save All writes every tab that needs saving
+- **Given** a window with several tabs, of which more than one is dirty (or clean over a deleted backing file)
+- **When** the user invokes Save All (File ▸ Save All, the toolbar control, or its accelerator)
+- **Then** every such tab is written: titled tabs use the same content-gated Save as a single Save (including the overwrite prompt when the file changed on disk), and each untitled dirty tab gets a Save As chooser in turn
+- **And** Save All is enabled whenever **any** tab in the window needs writing — not only when the *active* tab is dirty — and disabled when every tab is clean with its backing file present
+- **And** a write started for one tab always lands on that tab even if the user switches tabs mid-batch (4.11), and a cancelled Save As / overwrite for one tab does not prevent the rest of the batch from continuing
+- **And** when the batch finishes, the tab the user had focused when they invoked Save All is active again
+
 ---
 
 ## 5. Reconciliation (conflict handling)

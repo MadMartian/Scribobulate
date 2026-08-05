@@ -1,6 +1,6 @@
 //! Registration of the editor / document `win.*` actions (copy, cut, delete,
 //! undo/redo, select-all, auto-reload, reload, insert-emoji, change-case, format,
-//! save, save-as, copy-path, copy-document). The state-enablement helpers these
+//! save, save-all, save-as, copy-path, copy-document). The state-enablement helpers these
 //! drive live in `actions.rs`; Copy Link Location keeps its registration and its
 //! gate together in `copylink.rs`, which this module calls into.
 use super::*;
@@ -373,6 +373,19 @@ pub(super) fn register_editor_actions(window: &ApplicationWindow, heading_btn: &
         }
     ));
     window.add_action(&save_as_action);
+
+    // Save All — every dirty / deleted-backing tab in this window (TDD 4.12).
+    // Sensitivity tracks "any tab needs saving", not only the active one.
+    let save_all_action = SimpleAction::new("save-all", None);
+    save_all_action.set_enabled(false);
+    save_all_action.connect_activate(glib::clone!(
+        #[weak(rename_to = window)]
+        window,
+        move |_, _| {
+            save_all(&window);
+        }
+    ));
+    window.add_action(&save_all_action);
 
     // Copy Full Path — disabled until a backing file is known; enabled in
     // connect_open at the point the path is set.

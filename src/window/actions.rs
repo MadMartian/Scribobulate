@@ -570,6 +570,12 @@ pub(crate) fn update_save_action_state(window: &ApplicationWindow) {
         .map(|st| (st.is_dirty(), st.backing_missing.get()))
         .unwrap_or((false, false));
     set_action_enabled(window, "save", save_enabled(dirty, backing_missing));
+    // Save All is enabled when ANY tab in the window needs writing — dirty or
+    // clean-over-deleted-file — not only the active one (TDD 4.12).
+    let any_to_save = winstate::tabs_for_window(window)
+        .iter()
+        .any(|t| t.needs_close_prompt());
+    set_action_enabled(window, "save-all", any_to_save);
 }
 /// Recompute `win.undo` / `win.redo` enabled state: enabled iff the editor buffer
 /// actually has something to undo / redo, in EVERY view mode. Undo/redo are NOT

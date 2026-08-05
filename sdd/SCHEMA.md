@@ -43,6 +43,7 @@ member. For a stateful action the work is driven by `change-state`, not
 | Action | Parameter | State | Description |
 |--------|-----------|-------|-------------|
 | `win.save` | — | — | Write the document to its current path. |
+| `win.save-all` | — | — | Write every tab in this window that needs saving (dirty, or clean over a deleted backing file). Untitled tabs get Save As one at a time. |
 | `win.save-as` | — | — | Choose a new path and write the document there. |
 | `win.reload` | — | — | Discard in-memory changes and re-read the file from disk. |
 | `win.auto-reload` | — | `b` | Whether external file changes are picked up automatically. |

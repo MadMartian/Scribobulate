@@ -19,7 +19,7 @@ use gtk::prelude::*;
 const MENU_MNEMONICS: &[(&str, &str)] = &[
     // File
     ("New Document", "_New Document"), ("Open", "_Open"), ("Save", "_Save"),
-    ("Save As…", "Save _As…"), ("Reload", "_Reload"),
+    ("Save All", "Save A_ll"), ("Save As…", "Save _As…"), ("Reload", "_Reload"),
     ("Copy Full Path", "Copy Full _Path"), ("Auto-Reload", "A_uto-Reload"),
     ("Load Unsafe Linked Documents", "_Load Unsafe Linked Documents"),
     ("Close Tab", "_Close Tab"), ("Exit", "E_xit"),
