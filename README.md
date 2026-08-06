@@ -98,15 +98,23 @@ cargo build --release
 
 ### macOS
 
+Install the Homebrew GTK dependencies first — skipping this is the most common
+build failure (`pkg-config` can't find `gtk4`/`cairo`/`pango`/etc.):
+
 ```bash
 brew install gtk4 gtksourceview5 adwaita-icon-theme
+```
+
+Then build and package:
+
+```bash
 cargo build --release
 packaging/macos/bundle.sh          # -> target/macos/Scribobulate.app
 open target/macos/Scribobulate.app --args path/to/document.md
 ```
 
-Needs Homebrew GTK installed (not a self-contained redistributable). More:
-[`packaging/macos/README.md`](packaging/macos/README.md).
+Not a self-contained redistributable — the built app still links these
+Homebrew libraries at runtime. More: [`packaging/macos/README.md`](packaging/macos/README.md).
 
 ### Windows
 

@@ -2,6 +2,22 @@
 
 `bundle.sh` builds `target/macos/Scribobulate.app` around the release binary.
 
+## Prerequisites
+
+```bash
+brew install gtk4 gtksourceview5 adwaita-icon-theme
+```
+
+`bundle.sh` runs `cargo build --release` itself, and that build links GTK4 via
+`pkg-config`. Skip this step and the build fails before the script does
+anything bundle-specific — `pkg-config` errors for `gtk4`, `gdk-pixbuf-2.0`,
+`pango`, `cairo`, `glib-2.0`, `gio-2.0`, `gobject-2.0`, and
+`graphene-gobject-1.0`, with `PKG_CONFIG_PATH` unset. That signature means the
+Homebrew packages above were never installed on this machine, not that
+something is broken.
+
+## Usage
+
 ```bash
 packaging/macos/bundle.sh                    # -> target/macos/Scribobulate.app
 open target/macos/Scribobulate.app --args "$PWD/path/to/document.md"
