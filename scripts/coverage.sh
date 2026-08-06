@@ -29,7 +29,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-FLOOR=76.58
+FLOOR=76.76
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

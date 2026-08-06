@@ -126,6 +126,51 @@ pub(crate) fn link_url_at(view: &CodePreviewView, x: f64, y: f64) -> Option<Stri
     hit.map(|(_, _, url)| url)
 }
 
+/// Activate `url` as a link the reader clicked in `view`'s preview — the **one**
+/// decision every rendered link in this document goes through, whatever widget
+/// happened to carry it.
+///
+/// It exists as a named seam because a link renders in three shapes here and they
+/// must not diverge in what a click *does*: buffer text carrying the `link` tag
+/// (the body, headings, list items, blockquotes), a `GtkLabel`'s Pango `<a href>`
+/// (a table cell holding a link **plus** other content), and a `GtkLinkButton` (a
+/// cell that is nothing but a link — ScrAP-4). The two cell shapes used to call
+/// `links::open_url` directly, which is only step 2 of the policy: a `#fragment`
+/// never scrolled and a relative `./other.md` was *refused* inside a table while
+/// the identical link in a paragraph opened a tab (Document Rendering CAM row 2 —
+/// ScrAP-259).
+///
+/// A same-document `#anchor` scrolls to the matching heading rather than launching
+/// an external handler. ScrAP-22: this used to call `scroll_to_iter` directly, which
+/// scrolls against whatever line heights are computed so far — the same
+/// unvalidated-region hazard `scroll_preview_to_heading` documents (blank-gray view,
+/// GTK spamming "snapshot without a current allocation"). It routes through the same
+/// mark-based `scroll_to_buffer_offset` the outline nav uses, so a fragment click is
+/// exactly as robust as an outline-row click to the same heading.
+///
+/// Everything else — external launch vs. local Markdown navigation vs. a visible
+/// refusal — is decided in one place, `window::activate_doc_link`, so no rendering
+/// layer re-implements the containment policy.
+pub(crate) fn activate_link_url(view: &CodePreviewView, url: &str) {
+    if let Some(slug) = anchor_target(url) {
+        // Scoped borrow: resolve the heading offset and release `RenderData` before
+        // touching the view. An accepted local doc-link navigation can create/focus
+        // another tab and re-enter render/re-render on THIS tab, and holding a
+        // `RefCell` borrow across that boundary is the ScrAP-53 hazard (a synchronous
+        // re-entrant borrow aborts).
+        let target = super::scrib_render_data(view)
+            .and_then(|rd| rd.borrow().heading_map.get(&slug).copied());
+        // An unresolvable `#fragment` is inert, exactly as before: a document is free
+        // to link a heading it does not have, and launching it externally would be
+        // worse than doing nothing.
+        if let Some(target) = target {
+            view.scroll_to_buffer_offset(target);
+        }
+        return;
+    }
+    crate::window::activate_doc_link(view, url);
+}
+
 /// Hover cursor (pointer over link spans, text beam elsewhere), the hover tooltip
 /// revealing a link's target, and link activation (on release). Wired unconditionally
 /// so re_render doesn't need to rewire when links appear or disappear — each closure
@@ -200,7 +245,6 @@ pub(super) fn wire_link_gestures(view: &CodePreviewView, render_data: &Rc<RefCel
     // release-only shape is not writable here.
     let gesture = GestureClick::new();
     let rd_h = Rc::clone(render_data);
-    let rd_g = Rc::clone(render_data);
     crate::saferizer::ClickActivation::new()
         .max_travel(crate::saferizer::click_activation::drag_threshold())
         .wire(
@@ -215,37 +259,7 @@ pub(super) fn wire_link_gestures(view: &CodePreviewView, render_data: &Rc<RefCel
             glib::clone!(
                 #[weak(rename_to = v)]
                 view,
-                move |_: &GestureClick, (_, _, url): LinkHit, _, _| {
-                    let rd = rd_g.borrow();
-                    // A same-document `#anchor` scrolls to the matching heading rather
-                    // than launching an external handler.
-                    //
-                    // ScrAP-22: this used to call `v.scroll_to_iter` directly,
-                    // which scrolls immediately against whatever line heights are
-                    // computed so far — the same unvalidated-region hazard
-                    // `scroll_preview_to_heading` documents (blank-gray view, GTK
-                    // spamming "snapshot without a current allocation"). Route
-                    // through the same mark-based `scroll_to_buffer_offset` the
-                    // outline nav uses instead, so a fragment click is exactly as
-                    // robust as an outline-row click to the same heading.
-                    if let Some(slug) = anchor_target(&url) {
-                        if let Some(&target) = rd.heading_map.get(&slug) {
-                            v.scroll_to_buffer_offset(target);
-                        }
-                    } else {
-                        // Drop the RenderData borrow BEFORE navigating: an accepted local
-                        // doc-link navigation can create/focus another tab and, on THIS
-                        // tab, a future click could re-enter render/re-render — holding a
-                        // RefCell borrow across that boundary is the ScrAP-53 hazard (a
-                        // synchronous re-entrant borrow aborts). Everything
-                        // beyond "is this a same-document anchor" (external launch vs.
-                        // local Markdown navigation vs. a visible refusal) is decided in
-                        // one place, `window::activate_doc_link`, so the preview layer
-                        // itself never re-implements the containment policy.
-                        drop(rd);
-                        crate::window::activate_doc_link(&v, &url);
-                    }
-                }
+                move |_: &GestureClick, (_, _, url): LinkHit, _, _| activate_link_url(&v, &url)
             ),
         );
     view.add_controller(gesture);

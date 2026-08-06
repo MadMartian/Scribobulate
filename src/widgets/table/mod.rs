@@ -32,7 +32,9 @@
 mod layout;
 mod linkcell;
 
-pub(crate) use linkcell::{link_cell_button, link_cell_caption};
+pub(crate) use linkcell::{
+    cell_markup_label, link_cell_button, link_cell_caption, link_markup_open, LINK_MARKUP_CLOSE,
+};
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};

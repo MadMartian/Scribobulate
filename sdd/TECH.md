@@ -190,7 +190,7 @@ Every module below runs on the GTK main thread; see [Concurrency model](#concurr
 | `winstate/` | Owns the typed per-window and per-tab state registry, and the pure decision cores that read it. |
 | `widgets/tab/` | Owns the tab-strip widget: `TabBar`, its rows, and their drag, close and context-menu mechanics. |
 | `widgets/table/` | Owns `ScribTableWidget`, the custom widget rendering Markdown tables inside the preview. |
-| `widgets/table/linkcell.rs` | Owns the pure-link table cell — the one way one is built, and the matching way its caption text is read back out of the button it lives in. |
+| `widgets/table/linkcell.rs` | Owns a link in a table cell across **both widget shapes one renders in** — the pure-link cell's button and the read-back of its caption, the link markup a mixed cell's label carries, and the single activation both delegate to. Owning both is the point: the shapes are indistinguishable to a reader, so nothing may reach one without reaching the other. |
 | `preview/` | Owns construction of the read-only preview widget and its interaction, scroll and CSS wiring. |
 | `codeview/` | Owns `CodePreviewView`, the preview's `GtkTextView` subclass that self-draws code-block backgrounds, task checkboxes, list markers and the right-margin annotation chips. |
 | `codeview/card.rs` | Owns `AnnotationCard`, the `GtkPopover` subclass an annotation chip opens: its anchor (the annotation's identity, never a rectangle), its scroll-tracking, its dismissal and its teardown. |

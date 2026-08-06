@@ -26,7 +26,7 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 | 1   | Rendering a document viewer with a GPU-compositing UI stack |
 | 2   | Assuming "disable hardware acceleration" makes a web engine render on the CPU |
 | 3   | Using environment variables to prevent GTK from crashing on a large XCompose file |
-| 4   | Using Pango `<a href>` markup in GtkLabel for standalone link widgets |
+| 4   | Using Pango `<a href>` markup in GtkLabel for standalone link widgets — **its reasons were corrected by #259; read both** |
 | 5   | Reading GtkTextBuffer text to track trailing newlines when child anchors are present |
 | 6   | Using a horizontal rule to indicate a blockquote |
 | 7   | Placing the blockquote `DrawingArea` in an outer overlay outside the `ScrolledWindow` |
@@ -277,6 +277,7 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 | 256 | A COVERAGE RATCHET'S FLOOR IS TRANSCRIBED BY HAND FROM A MULTI-METRIC REPORT, AND THE TRANSCRIPTION IS AN UNGUARDED STEP INSIDE THE GATE — `cargo llvm-cov --summary-only`'s TOTAL row prints THREE percentages (regions, functions, lines) and `--fail-under-lines` turns on the THIRD, so reading the row left-to-right takes the REGION figure (~1pt higher here) and sets a floor the run can never reach; the gate then fails on a change that RAISED coverage, and since `--fail-under-lines` exits non-zero printing the same table it prints on success, the only signal is an exit code identical to a genuine regression → it reads as "your change tanked coverage". Second hazard in the same number: the printed figure is ROUNDED to 2dp, so even the correct column's displayed value fails against the unrounded one (76.49% printed → floor must be 76.48). Fix: pin WHICH FIELD beside the constant in the file that holds it (the tool's output format is part of the gate's contract), round the floor DOWN past the printed precision, and prove the new floor by re-running the gate to exit 0 instead of assuming the edit was right. Diagnostic tell: a gate that fails while its TOTAL is HIGHER than the last run is not a regression, it is a bad threshold. General: a gate can be broken by the act of MAINTAINING it, and it breaks in the direction that blames the code under test |
 | 257 | `Trying to snapshot GtkGizmo … without a current allocation` IS NOT YOURS AND NEEDS NO DEBUGGER, AND IT IS THE ONLY MEMBER OF ITS WARNING FAMILY THAT IS BENIGN — the message's `%s` is `gtk_widget_get_name()`, which falls back to the GTYPE NAME, and `GtkGizmo` is GTK's *private* generic leaf widget, so one of your own widgets can never print as one (yours prints its own GType, and that variant IS a real bug). Identify the exact gizmo with a SYMBOL-FREE PARENT WALK — no debug symbols, no debugger; a log filter that demotes it must PIN THE TYPE (`"Trying to snapshot GtkGizmo "`), never wildcard the type, or it masks the bug-bearing variant |
 | 258 | REPLACING A LIVE `GtkTextView`'S BUFFER (`set_buffer`) IS A USE-AFTER-FREE, not a swap — `gtk_text_layout_set_buffer` never clears the layout's line-DISPLAY cache, and the btree teardown that would is gated on `if (ld)`, i.e. only for lines the incremental validator had reached. Caching a display and validating a line are DIFFERENT populations, so any display cached for a still-unvalidated line dangles the instant the old buffer finalizes → SIGSEGV in `_gtk_text_line_get_number` (or `couldn't find line` → SIGTRAP) from GTK's OWN paint / IM-spot update. Unfixed 4.6→4.23: rebuild the view's own buffer in place instead |
+| 259 | A FEATURE IMPLEMENTED FOR THE SHAPE THE AUTHOR HAPPENED TO WRITE THE TEST FOR LEAVES THE OTHER SHAPES INERT, AND THE READER SEES ONE CAPABILITY BEHAVING AT RANDOM. Table-cell links were built for the cell shape that is *nothing but* a link (a `GtkLinkButton`, #250); a cell holding a link **plus** anything else — `\| ☑ [#6378](url) \|`, the shape every progress/status table is made of — had its caption emitted as escaped TEXT with the href simply dropped, so it rendered as body-coloured prose with no colour, no underline, no pointer cursor, no tooltip, no activation and a greyed-out Copy Link Location. Nothing failed: no warning, no log line, 992 tests green, and a doc comment three modules away asserted "cells stay real selectable `GtkLabel`s **with working `<a href>` links**" — a statement of INTENT that had frozen into a statement of FACT nobody re-derived (#250's "re-derive the comment, don't inherit it", recurring in the same file it was written about). The tell is the *arbitrariness*: two tables in one document, one clickable and one not, with no difference the reader can name. Same defect in the shape that DID work — a pure-link cell called the external-URL gate directly instead of the document's link policy, so `#fragment` and `./other.md` were dead inside a table and live in a paragraph. → **Document Rendering CAM row 2 (correct inside every container markup) and row 11 (interaction parity there) name exactly this and were unmet**; when a rendering feature exists in more than one widget shape, enumerate the shapes FIRST and give them ONE activation seam, not one per shape (#250's read-back seam completed by its write-back twin). Traps measured in the fix: (a) `<a href>` is **`GtkLabel` markup, not Pango markup** — GtkLabel lifts the `a` elements out with its own `GMarkupParser` (`gtklabel.c:3376`) and only then calls `pango_parse_markup`, so validating the fragment against Pango asserts against the wrong parser; (b) the `title` that gives the tooltip must be escaped **TWICE**, because Pango unescapes the attribute and `gtk_label_query_tooltip` then hands the result to `gtk_tooltip_set_markup` which parses it AGAIN (`:1757`) — one escape and any URL with `&` shows no tooltip at all, silently (#163 one layer out); (c) `GtkLabel` has the same bypassable default `activate-link` handler as `GtkLinkButton` (`gtk_show_uri` with the raw href, `:2081`), so the containment gate needs its own measured guard per shape — an argument by analogy is not one; (d) colour AND underline must be stated by the app for both shapes, because a host theme that underlines `button.link` but not a label's `link` node made the two cells in one table disagree while agreeing with neither the body nor each other. MEASURED (4.6.9/Xvfb, pre-fix positive control + mutation): pre-fix the mixed cell renders inert text and the test fails on the missing href; post-fix body link, mixed cell and pure cell are pixel-alike and all three fragment-scroll to the identical position. **CORRECTS #4**: its "Pango `<a href>` in a `GtkLabel` has no hover cursor and activates on button-press" is FALSE at 4.6.9 — `gtk_label_update_cursor` sets `"pointer"` over an active link (`:737`) and `gtk_label_click_gesture_released` emits on RELEASE under three operands (`:4400`). #4's *conclusion* (a whole-cell link is better as a `GtkLinkButton`) still stands on other grounds; its *reasons* did not survive being read |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -340,10 +341,12 @@ GTK4 is single-threaded, yet many pitfalls below present as **races** — interm
 
 ## 4. Using Pango `<a href>` markup in GtkLabel for standalone link widgets
 > *Non-core (Pango) — condensed; full essay in git history.*
+> **⚠ Its stated reasons were CORRECTED by #259 (measured against the 4.6.9 source);
+> its conclusion stands on different grounds. Read both before citing this entry.**
 
-**Symptom**: a link rendered via Pango `<a href>` in a `GtkLabel` styles and activates, but with no pointer cursor on hover and activation on button-*press* rather than *release*.
-**Root cause**: `GtkLabel` handles `<a href>` without `GtkLinkButton`'s full interaction model (no hover cursor; `activate-link` wired to press).
-**Resolution**: for a cell that IS a single link, use `GtkLinkButton` (`has_frame = false`). Pango `<a href>` stays correct for an *inline* link inside mixed-content label text (bold/italic/link interleaved), where `connect_activate_link` is the open hook.
+**Symptom**: a link rendered via Pango `<a href>` in a `GtkLabel` was believed to style and activate but with no pointer cursor on hover and activation on button-*press* rather than *release*.
+**Root cause** *(as recorded — since disproved)*: `GtkLabel` was thought to handle `<a href>` without `GtkLinkButton`'s full interaction model. **At 4.6.9 it does both**: `gtk_label_update_cursor` sets `"pointer"` over an active link (`gtklabel.c:737`) and `gtk_label_click_gesture_released` emits `activate-link` on **release** (`:4400`). See #259.
+**Resolution**: for a cell that IS a single link, use `GtkLinkButton` (`has_frame = false`) — now on its real merits (focusable, carries the URL as a property, frame-less button padding), not on an interaction deficit that does not exist. Pango `<a href>` is the correct and fully-featured route for an *inline* link inside mixed-content label text (bold/italic/link interleaved), where `connect_activate_link` is the open hook — and it must return `Propagation::Stop`, because `GtkLabel`'s default handler `gtk_show_uri`s the raw href (`:2081`).
 
 ## 5. Reading GtkTextBuffer text to track trailing newlines when child anchors are present
 **Symptom**: counting trailing blank lines by inspecting buffer contents miscounts when child anchors are present — `get_text` **drops** each anchor entirely (#74) while `get_slice`/iters count it as one `U+FFFC`.
@@ -5323,3 +5326,116 @@ into the register as fact. Second, **replacing an object a live widget holds is 
 expensive operation; mutating the one it already has is usually both safer and cheaper** —
 here it also deleted a class of re-attachment bookkeeping (every handler on the buffer
 stays connected, because the buffer stays).
+
+## 259. A rendering feature built for one of a construct's widget shapes leaves the others inert, and the reader sees one capability behaving at random
+
+> *Core GTK4 (GtkLabel link markup, `activate-link` emission, CSS node naming) with a
+> Pango-markup escaping half. **Send the core half to the gtk4-rs skill**; the
+> double-escaped tooltip title is a Pango/GtkLabel-contract sibling of ScrAP-163 and
+> ScrAP-4. **Corrects ScrAP-4** — see the closing note.*
+
+**Symptom**: in a rendered Markdown table, some links are links and some are not, with no
+difference a reader can name. In the reported document, every link in the *Context*
+table — `| [#6429](url) |`, a cell that is nothing but a link — was coloured, underlined
+and clickable, while every link in the *Progress tracker* table — `| ☑ [#6378](url) |`,
+the shape every progress/status table is made of — rendered as ordinary body-coloured
+prose: no colour, no underline, no pointer cursor, no hover tooltip, no activation, and a
+greyed-out Copy Link Location on right-click. Nothing failed anywhere: no GTK warning, no
+log line, no test failure (992 green).
+
+**What was tried** — nothing, and that is the finding worth recording. The defect was
+resolved by *reading* rather than by iterating, and three written artefacts each said it
+was already handled:
+
+- The table widget's module doc stated "cells stay real, selectable `GtkLabel`s **with
+  working `<a href>` links**". No cell had ever carried an `<a href>`. It was a statement
+  of design *intent* that had frozen into a statement of *fact* — the same
+  inherit-don't-re-derive failure ScrAP-250 recorded, recurring in the file it was
+  written about.
+- The Copy Link Location seam carried a careful paragraph explaining that a mixed cell is
+  "not a link on screen at all", marked MEASURED, ending "if mixed-cell links ever become
+  real links, this is the function that grows the second branch". Accurate, and it had
+  turned an unimplemented case into a documented property.
+- `sdd/CAM.md` Document Rendering **row 2** (a rendering feature must be correct inside
+  every container markup — table cells) and **row 11** (interaction parity for a target
+  inside a table cell) name this obligation exactly, and were unmet.
+
+**Root cause**: the renderer decides a cell's widget shape from its *content*, and only
+one shape ever learned about links. A cell whose entire content is one link becomes a
+`GtkLinkButton` (ScrAP-4, ScrAP-250); every other cell becomes a `GtkLabel` built from
+accumulated Pango markup, and the markup accumulator emitted `<b>`, `<i>`, `<s>`, `<sup>`,
+`<sub>` and highlight spans but simply **dropped the href**, appending the link's caption
+as escaped text. The link's URL was recorded (to decide the cell shape) and then thrown
+away. The same asymmetry ran one level deeper: the shape that *did* work called the
+external-URL gate directly rather than the document's link policy, so a `#fragment` or a
+relative `./other.md` was dead inside a table and live in a paragraph.
+
+**Resolution**: emit the link into the cell's markup exactly as the inline-format tags are
+emitted (open at the link's start, close at its end, so it composes with bold/italic and
+with the tight `==`/`~~`/`^`/`~` constructs the crate scans itself), and give **both** cell
+shapes one activation seam that routes to the same policy every body link already used.
+Four things had to be measured rather than assumed, each of which fails silently:
+
+1. **`<a href>` is `GtkLabel` markup, not Pango markup.** `GtkLabel` runs its own
+   `GMarkupParser` first, lifting out the `a` elements and recording each `href`/`title`
+   (`gtklabel.c:3376`, `parse_uri_markup` `:3542`), and hands only what remains to
+   `pango_parse_markup`. Validating the emitted fragment against Pango asserts against the
+   wrong parser and fails on correct markup.
+2. **The `title` must be escaped twice.** It is what produces the URL tooltip a body link
+   has. Pango unescapes the attribute value when it parses the markup, and
+   `gtk_label_query_tooltip` then hands *that* to `gtk_tooltip_set_markup`, which parses it
+   **again** (`:1757`). A single escape leaves any URL containing `&` — `?a=1&b=2`, half
+   the URLs in a real document — failing to parse as tooltip markup, so no tooltip appears
+   and nothing says why. The `href` is escaped once; nothing parses it twice.
+3. **`GtkLabel` has the same bypassable default handler as `GtkLinkButton`.**
+   `gtk_label_activate_link` calls `gtk_show_uri` with the raw href (`:2081`), so the URL
+   scheme gate is bypassed unless the app's handler returns `Propagation::Stop`. That is a
+   claim about a *different widget's* signal, so it needs its own measured guard — an
+   argument by analogy from the button's is not one. Its oracle is different too: a label
+   has no `:visited` property, but its default handler declines outright outside a
+   `GtkWindow` (`:2087`), and the signal uses the boolean-handled accumulator (`:2274`),
+   so on an unparented label a `true` from emission can only have come from a handler that
+   halted it.
+4. **Colour *and* underline must be stated by the app, for both shapes.** The body's link
+   `GtkTextTag` sets both explicitly; the cells are outside the buffer, so no tag reaches
+   them (ScrAP-36) and CSS is their only path. Left to the desktop theme, the measured
+   result was the worst one: Breeze-dark underlines `button.link` but not a label's `link`
+   node, so the two cell shapes in one table disagreed with each other *and* with the body.
+   The nodes are `label → link` (`gtklabel.c:3447`) and `button.link`
+   (`gtklinkbutton.c:223`/`:364`).
+
+**Measured** (GTK 4.6.9, gtk-rs 0.10, X11 + Xvfb, with a pre-fix positive control and a
+mutation check): pre-fix the mixed cell renders inert text and the guard fails on the
+missing href; post-fix a body link, a mixed-cell link and a pure-link cell are
+indistinguishable on screen, all three hover-tooltip their URL, and all three
+fragment-links scroll to the identical position.
+
+**Lesson**: **when one construct renders through more than one widget shape, the feature
+is only as complete as its rarest shape — and the shapes fail silently, because each one
+is correct code doing what it was written to do.** The reader experiences that as a
+capability behaving at random, which is worse than a capability that is missing: a missing
+one is reported, an arbitrary one is worked around. Three habits fall out. **Enumerate the
+shapes before writing the feature, not after the bug report** — the shape split is usually
+visible in the renderer's own branch and is the natural test matrix (this is ScrAP-250's
+read-back seam completed by its write-back twin: that entry made every cell's *text*
+reachable, this one makes every cell's *link* work, and both were the same missing
+question — "which shapes can carry this?"). **Give the shapes one activation seam rather
+than one handler each**, so the policy cannot fork per shape and a later shape inherits it
+by construction. And **treat a doc comment that asserts a capability as a claim to
+re-derive**: two comments here described this feature as working and one described its
+absence as deliberate, so every written artefact agreed with the code and none agreed with
+the screen. The check that beat all three was looking at the pixels.
+
+**Corrects ScrAP-4.** That entry's stated reasons — "Pango `<a href>` in a `GtkLabel` has
+no pointer cursor on hover and activates on button-*press*" — are **false at 4.6.9**, and
+they were the argument that made a link inside a mixed cell look not worth having.
+`gtk_label_update_cursor` sets `"pointer"` whenever the pointer is over a link
+(`gtklabel.c:737`), and `gtk_label_click_gesture_released` emits `activate-link` on
+**release**, under three operands including "no selection was made"
+(`:4400`) — the same complete-click discipline ScrAP-238 arrived at independently. ScrAP-4's
+*conclusion* survives on other grounds (a whole-cell link is a better button: it is
+focusable, it carries its URL as a property, and it gets a frame-less button's padding for
+free), but its *reasons* did not survive being read. Generalised: **an anti-pattern entry
+is evidence about the version it was measured on, and a reason that was never measured is
+the part that rots first** — re-check the mechanism before letting an old entry veto a
+feature.

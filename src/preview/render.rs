@@ -526,6 +526,65 @@ mod gtk_integration_tests {
         assert_eq!(code_tag.wrap_mode(), WrapMode::Char);
     }
 
+    /// A link in a **mixed** table cell — a cell holding a link *plus* other content —
+    /// renders as a real link, and the cell it lives in can find the preview view that
+    /// activation routes through.
+    ///
+    /// The reported defect (ScrAP-259): every `☑ [#6378](…)` cell in a progress-tracker
+    /// table rendered its link as inert text, while the pure-link cells of the table two
+    /// sections above worked — the difference invisible to the reader, so link
+    /// clickability looked random. Document Rendering CAM row 2 (a rendering feature
+    /// must hold inside every container markup) and row 11 (interaction parity there).
+    ///
+    /// Two assertions, because two independent things must hold and each fails
+    /// silently on its own:
+    ///
+    /// 1. the cell's markup carries the `<a href>`, and the caption is still the
+    ///    caption (a markup slip renders a BLANK cell, ScrAP-163);
+    /// 2. the cell can resolve the `CodePreviewView` from its own ancestry — the
+    ///    mechanism `linkcell::activate_cell_link` uses to route a click through the
+    ///    same policy a body link gets, instead of the bare external gate that refused
+    ///    `#fragment`s and relative documents inside a table.
+    #[gtktest::test]
+    fn a_link_in_a_mixed_table_cell_renders_as_a_link() {
+        const MD: &str = "# Target heading\n\n\
+             | Language | Issue |\n|---|---|\n\
+             | Python | \u{2611} [#6378](https://example.com/i?a=1&b=2) filed |\n";
+        let pane = crate::preview::render(MD, None, 1.0, false);
+        let view = view_of(&pane);
+
+        let cell = crate::preview::cell_search_targets(&view)
+            .into_iter()
+            .map(|(_, label)| label)
+            .find(|l| l.text().contains("#6378"))
+            .expect("the mixed cell is on screen, so find can see its text");
+
+        assert_eq!(
+            cell.text(),
+            "☑ #6378 filed",
+            "the caption must render intact — EMPTY means the cell's markup failed to \
+             parse (ScrAP-163)"
+        );
+        assert!(
+            cell.label()
+                .contains("href=\"https://example.com/i?a=1&amp;b=2\""),
+            "the cell markup must carry the link's href; without it the caption is \
+             decorated text with no cursor, tooltip, activation or Copy Link \
+             Location: {}",
+            cell.label()
+        );
+        assert_eq!(
+            cell.ancestor(CodePreviewView::static_type())
+                .and_then(|a| a.downcast::<CodePreviewView>().ok())
+                .as_ref(),
+            Some(&view),
+            "a cell must be able to reach its preview view — that lookup is how a cell \
+             link is routed through the same activation a body link gets (fragment \
+             scroll, local-document navigation, visible refusal) rather than straight \
+             to the external URL gate"
+        );
+    }
+
     fn view_of(widget: &gtk::Widget) -> CodePreviewView {
         widget
             .downcast_ref::<gtk::Overlay>()

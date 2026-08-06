@@ -161,9 +161,10 @@
 - **Then** it appears as a real laid-out table, not a literal paragraph of pipes and em-dashes — inline hard tabs are normalised to spaces before parsing (length-preservingly, exempting leading indentation and verbatim code), so offsets/scroll-sync/copy are unaffected (ScrAP-75)
 
 ### 2.9 Links within table cells
-- **Given** a table cell containing a Markdown hyperlink (e.g. `[#1](https://github.com/...)`)
+- **Given** a table cell containing a Markdown hyperlink — **whether the link is the cell's entire content** (`[#1](https://github.com/…)`) **or sits beside other content** (`☑ [#1](…) filed`), which are the two shapes a reader cannot tell apart
 - **When** it is rendered
-- **Then** the link appears with link styling and activating it opens the URL in the system browser — it is not stripped or rendered as plain text
+- **Then** the link appears with the reading theme's link styling — the same colour and underline a link in body text has, and the same as the other cell shape — and hovering it shows a pointer cursor and its URL
+- **And** activating it does exactly what the same link does in body text: an external URL opens in the system browser, a same-document `#fragment` scrolls to that heading, and a local document reference opens or is visibly refused — never stripped, never rendered as inert text, and never routed to a different policy because of which cell shape it landed in
 
 ### 2.13 Blockquote bar color adapts to the desktop theme
 - **Given** a document containing a blockquote, rendered under the **System** reading theme (§18) on a light or dark desktop theme

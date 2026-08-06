@@ -270,6 +270,33 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
         head_font
     ));
 
+    // A link inside a table cell takes the reading theme's link colour, from the SAME
+    // `link_fg` key the body's `link` GtkTextTag uses (`tags.rs`) — one theme key,
+    // every application path (Document Rendering CAM row 12). Without these two rules a
+    // cell link keeps the *desktop* theme's blue on a sepia or neon page, which is
+    // exactly the drift the CAM row exists to prevent.
+    //
+    // Two selectors because a link renders in two widget shapes (`linkcell`): a mixed
+    // cell's `GtkLabel` draws a CSS node literally named `link` for each `<a href>`
+    // range (`gtklabel.c:3447`), while a pure-link cell IS a `GtkLinkButton` — css name
+    // `button`, css class `link` (`gtklinkbutton.c:223`/`:364`) — whose caption label
+    // inherits `color`. Both come last so they win over the `.cell-head` colour a
+    // themed heading sets: a link in a header cell is still a link.
+    //
+    // The underline is stated here rather than inherited from the desktop theme for
+    // the same reason: the body's `link` GtkTextTag sets `Underline::Single`
+    // explicitly (`tags.rs`), and a host theme that does not underline its `link` node
+    // left a mixed cell's link coloured-but-flat beside a pure-link cell the same
+    // theme *did* underline (MEASURED on Breeze-dark: the two cell shapes disagreed
+    // while the body agreed with neither — GTK4Rs/AP-102's "your art, not the user's" in
+    // reverse). Three paths, one appearance, none of them the desktop's opinion.
+    let link_fg = to_hex(palette.link_fg);
+    for selector in ["scribtable .cell link", "scribtable button.cell.link"] {
+        out.push_str(&format!(
+            "{selector} {{ color: {link_fg}; text-decoration-line: underline; }}\n"
+        ));
+    }
+
     // ── the horizontal rule ───────────────────────────────────────────────────
     //
     // A stock GtkSeparator (`renderer/events.rs` `Event::Rule`) — the third anchored
@@ -459,6 +486,69 @@ mod tests {
             !s.contains("scribtable .cell selection"),
             "System must not emit a cell-selection rule (the body doesn't either):\n{s}"
         );
+    }
+
+    /// Document Rendering CAM row 12 — a link is one theme key feeding three render
+    /// paths, and the two that CSS owns must agree with the one a `GtkTextTag` owns.
+    ///
+    /// A link renders in the body as buffer text carrying the `link` tag (coloured from
+    /// `palette.link_fg` in `tags.rs`), in a mixed table cell as a `GtkLabel`'s `link`
+    /// CSS node, and in a pure-link cell as a `GtkLinkButton`. Cells are outside the
+    /// buffer, so no tag reaches them (ScrAP-36) — without these rules a cell link keeps
+    /// the *desktop* theme's blue on a sepia or neon page while the identical link one
+    /// line above is the theme's colour. Emitted for every theme, System included,
+    /// because the body's link tag is too (unlike the selection above, which gates).
+    ///
+    /// The underline is asserted beside the colour because it is the same claim: the
+    /// body tag sets `Underline::Single`, and leaving the cells to the desktop theme
+    /// made the two cell shapes disagree with each other on a real dark theme.
+    #[test]
+    fn cell_link_colour_follows_the_same_theme_key_as_a_body_link() {
+        let colour_of = |line: &str| {
+            line.split(" color:")
+                .nth(1)
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .trim()
+                .to_string()
+        };
+        for id in ["sepia", SYSTEM_ID] {
+            let theme = Themes::builtin().resolve(id);
+            let palette = Palette::from_base(
+                theme.background.unwrap_or(PROBE_BG),
+                theme.foreground.unwrap_or_else(probe_fg),
+                theme.foreground.unwrap_or_else(probe_chrome_fg),
+                theme.accent.unwrap_or_else(probe_accent),
+                &theme,
+            );
+            let c = theme_css(&theme, &palette);
+            // The one key the body's `link` GtkTextTag is set from.
+            let expected = crate::preview::css::to_hex(palette.link_fg);
+            for prefix in ["scribtable .cell link", "scribtable button.cell.link"] {
+                let rule = c
+                    .lines()
+                    .find(|l| l.starts_with(prefix))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{id}: no `{prefix}` rule — a cell link \
+                         falls back to the desktop theme's link colour on a themed page"
+                        )
+                    });
+                assert_eq!(
+                    colour_of(rule),
+                    expected,
+                    "{id}: `{prefix}` diverged from the body link colour"
+                );
+                assert!(
+                    rule.contains("text-decoration-line: underline"),
+                    "{id}: `{prefix}` must state its underline — the body link tag does, \
+                     and a host theme that underlines one cell shape but not the other \
+                     is what made two links in one table look different"
+                );
+            }
+        }
     }
 
     /// TDD 18.9 / ScrAP-127 — the load-bearing invariant of the whole design. Zoom owns

@@ -4,10 +4,11 @@
 //! inline-tag pops.
 
 use super::Renderer;
-use crate::links::{open_url, slugify, unique_slug};
-use crate::widgets::table::{link_cell_button, ScribTableWidget};
+use crate::links::{slugify, unique_slug};
+use crate::widgets::table::{
+    cell_markup_label, link_cell_button, ScribTableWidget, LINK_MARKUP_CLOSE,
+};
 use gtk::prelude::*;
-use gtk::{glib, Label};
 use pulldown_cmark::TagEnd;
 
 impl Renderer {
@@ -128,30 +129,27 @@ impl Renderer {
                             if ts.in_head {
                                 btn.add_css_class("cell-head");
                             }
-                            btn.connect_activate_link(|btn| {
-                                open_url(&btn.uri());
-                                glib::Propagation::Stop
-                            });
                             btn.upcast()
                         } else {
                             // Plain or mixed cell: GtkLabel with Pango markup for
-                            // bold/italic/links. Cells WRAP (WordChar breaks even a long
-                            // token) and top-align; the custom ScribTableWidget measures
-                            // and lays them out (it never re-measures at validation, so
-                            // they never re-arm the ScrAP-23 blank).
-                            let label = Label::builder()
-                                .label(&ts.cell_markup)
-                                .use_markup(true)
-                                .xalign(0.0)
-                                // Fill (not Start) so the cell's CSS border spans the
-                                // FULL row height even when a sibling cell wraps taller;
-                                // yalign 0 keeps this cell's text aligned to the top.
-                                .valign(gtk::Align::Fill)
-                                .yalign(0.0)
-                                .selectable(true)
-                                .wrap(true)
-                                .wrap_mode(gtk::pango::WrapMode::WordChar)
-                                .build();
+                            // bold/italic/links. Built through the cell seam, which owns
+                            // the `activate-link` containment gate for BOTH cell shapes —
+                            // a mixed cell's `<a href>` is a real link (ScrAP-259) and its
+                            // default handler would otherwise `gtk_show_uri` the raw href.
+                            // Cells WRAP (WordChar breaks even a long token) and
+                            // top-align; the custom ScribTableWidget measures and lays
+                            // them out (it never re-measures at validation, so they never
+                            // re-arm the ScrAP-23 blank).
+                            let label = cell_markup_label(&ts.cell_markup);
+                            label.set_xalign(0.0);
+                            // Fill (not Start) so the cell's CSS border spans the FULL
+                            // row height even when a sibling cell wraps taller; yalign 0
+                            // keeps this cell's text aligned to the top.
+                            label.set_valign(gtk::Align::Fill);
+                            label.set_yalign(0.0);
+                            label.set_selectable(true);
+                            label.set_wrap(true);
+                            label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
                             label.add_css_class("cell");
                             if ts.in_head {
                                 label.add_css_class("cell-head");
@@ -249,6 +247,7 @@ impl Renderer {
             TagEnd::Link => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
+                        ts.cell_markup.push_str(LINK_MARKUP_CLOSE);
                         if let Some(url) = ts.in_link.take() {
                             // Promote to sole link only if no other content has appeared.
                             if !ts.cell_mixed && ts.cell_sole_link.is_none() {
@@ -421,6 +420,52 @@ mod gtk_integration_tests {
             "GtkLinkButton's default handler ran despite our handler returning \
              Stop — it calls gtk_show_uri with the RAW href, so the pure-link \
              table cell bypasses open_url's scheme gate entirely"
+        );
+    }
+
+    /// CONTROL for the `GtkLabel` shape — the oracle discriminates.
+    ///
+    /// A mixed cell is a `GtkLabel`, and its `activate-link` has the same bypassable
+    /// default handler, but no `:visited` property to watch. The oracle instead is the
+    /// **emission's own return value**, which works because `gtk_label_activate_link`
+    /// declines outright when the label is not inside a `GtkWindow`
+    /// (`gtklabel.c:2087-2088`, an early `return FALSE`) — as it is not here.
+    ///
+    /// So on a bare label with no handler of ours, emission reaches that default and
+    /// returns FALSE. That is what makes the TRUE in the guard below evidence of
+    /// anything: the accumulator is `_gtk_boolean_handled_accumulator`
+    /// (`gtklabel.c:2274`), which halts emission at the first TRUE, so a TRUE can only
+    /// have come from a handler that ran *before* the default and stopped it.
+    #[gtktest::test]
+    fn a_bare_labels_default_activate_link_handler_declines_outside_a_window() {
+        let label = gtk::Label::new(None);
+        let handled: bool = label.emit_by_name("activate-link", &[&INERT_URI]);
+        assert!(
+            !handled,
+            "CONTROL FAILED: an unparented GtkLabel's default activate-link handler \
+             reported the link as handled, so a `true` from the guard below would say \
+             nothing about whose handler produced it. Do not trust that test until \
+             this one passes."
+        );
+    }
+
+    /// GUARD — a mixed cell's `<a href>` cannot reach `gtk_show_uri` either.
+    ///
+    /// The `GtkLabel` twin of the pure-link cell guard above, and it earns its own
+    /// test rather than an argument by analogy: the two shapes are different widgets
+    /// with different default handlers, and the cell seam is the only thing making
+    /// them agree. Without it, `[x](file:///etc/passwd)` written *beside other text*
+    /// in a table cell would bypass `open_url`'s scheme gate that the same link alone
+    /// in a cell is stopped by (ScrAP-259).
+    #[gtktest::test]
+    fn a_mixed_cell_labels_link_never_reaches_gtks_own_show_uri() {
+        let label = crate::widgets::table::cell_markup_label("cell");
+        let handled: bool = label.emit_by_name("activate-link", &[&INERT_URI]);
+        assert!(
+            handled,
+            "the cell seam's handler did not halt emission, so GtkLabel's default \
+             handler got the RAW href — inside a window that is gtk_show_uri, and \
+             the containment gate is bypassed"
         );
     }
 }

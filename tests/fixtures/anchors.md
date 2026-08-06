@@ -6,6 +6,15 @@ Jump links (same-document fragments):
 - [Jump to second Section (dup slug)](#section-1)
 - [Jump to Deep](#deep)
 
+The same three targets **inside a table**, in both cell shapes — a cell that is nothing
+but a link, and a cell holding a link beside other content (ScrAP-259):
+
+| Shape | Jump |
+|-------|------|
+| pure-link cell | [#deep](#deep) |
+| mixed cell | ☑ [Jump to Deep](#deep) tracked |
+| mixed cell, `&` in the URL | ☑ [query link](https://example.com/s?a=1&b=2) filed |
+
 Intro paragraph 1. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
 
 Intro paragraph 2. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.

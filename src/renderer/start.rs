@@ -200,6 +200,16 @@ impl Renderer {
                             ts.cell_mixed = true;
                         }
                         ts.in_link = Some(dest_url.to_string());
+                        // Open a Pango `<a href>` around the caption, exactly as
+                        // `<b>`/`<i>` above wrap theirs — so a link composes with inline
+                        // formatting and with the tight `==`/`~~`/`^`/`~` constructs
+                        // `Event::Text` scans (Document Rendering CAM row 3), and a link
+                        // inside a *mixed* cell is a real link and not inert text
+                        // (row 2 — ScrAP-259). A cell that turns out to be nothing but
+                        // this link discards `cell_markup` for a `GtkLinkButton`, so the
+                        // tag emitted here is simply unused in that case.
+                        ts.cell_markup
+                            .push_str(&crate::widgets::table::link_markup_open(&dest_url));
                     }
                 } else {
                     self.link_start = Some((self.end_offset(), dest_url.to_string()));

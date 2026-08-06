@@ -94,12 +94,11 @@ pub(super) fn set_context_link(window: &ApplicationWindow, url: Option<String>) 
 /// stores links:
 ///
 /// * a **preview** pane — the rendered link spans, through the preview's one hit-test;
-/// * a pure-link **table cell**, which holds no buffer span at all (cell text lives
-///   in widgets, ScrAP-36/ScrAP-250) — read off the picked widget, so a link in a
-///   table behaves like a link in the body (Document Rendering CAM row 11,
-///   interaction parity in container contexts). That is *every* cell link this
-///   renderer produces; see [`link_in_widget_at`] for why the mixed-cell case is
-///   not a gap here;
+/// * a **table cell**, in either of the two widget shapes a cell link renders in —
+///   neither holds a buffer span at all (cell text lives in widgets,
+///   ScrAP-36/ScrAP-250) — read off the picked widget, so a link in a table behaves
+///   like a link in the body (Document Rendering CAM row 11, interaction parity in
+///   container contexts);
 /// * an **editor** pane — the Markdown source under the pointer, through the same
 ///   scanner the caret gate uses.
 ///
@@ -117,24 +116,34 @@ pub(super) fn link_at_pointer(view: &gtk::TextView, x: f64, y: f64) -> Option<St
     link_target_in_line(&buf, &hit)
 }
 
-/// The URL of the link in the **widget** under `(x, y)` — i.e. a pure-link table
-/// cell, whose `GtkLinkButton` holds the URL that no buffer span does.
+/// The URL of the link in the **widget** under `(x, y)` — a table cell, whose link
+/// holds the URL that no buffer span does.
 ///
-/// **Only that one cell shape, and deliberately:** a link inside a *mixed* cell
-/// (text and link together) is not a link on screen at all — the renderer emits its
-/// caption as escaped text with no `<a href>` and no `GtkLinkButton`
-/// (`renderer/events.rs`'s `Event::Text` arm; `renderer/start.rs` records
-/// `in_link` but only a *sole*-link cell becomes a button), so it has no hover
-/// cursor, no tooltip, and no activation. There is nothing there to copy, and a
-/// `GtkLabel::current_uri` branch for it would be code for a shape this renderer
-/// never produces — MEASURED, not assumed: a mixed cell renders `see inline here`
-/// as plain text. If mixed-cell links ever become real links, this is the function
-/// that grows the second branch, beside its rendering.
+/// Both cell shapes answer here, because a reader cannot tell them apart: a cell that
+/// is *nothing but* a link is a `GtkLinkButton` carrying the URL as a property, and a
+/// cell holding a link *plus* other content is a `GtkLabel` whose markup carries a
+/// Pango `<a href>` (`widgets::table::linkcell`). Missing either one produces the same
+/// bug — a right-click on a visible, working link whose Copy Link Location row is
+/// greyed out, for no reason the reader can see (ScrAP-259).
+///
+/// `GtkLabel::current_uri` is the label's answer, and it is trustworthy **at the
+/// moment this runs and not much longer**: it reports `select_info->active_link`
+/// (`gtklabel.c:4608`), which the label updates from the pointer position on motion
+/// *and* on press (`gtk_label_update_active_link`, called first thing in
+/// `gtk_label_click_gesture_pressed`, `:4311`). The right-click that opens the context
+/// menu is such a press, and this runs from that press's capture-phase handler, so the
+/// active link is the one under `(x, y)` by construction. Do not cache the result or
+/// read it later: on the next motion outside the link it becomes `None`.
 fn link_in_widget_at(view: &gtk::TextView, x: f64, y: f64) -> Option<String> {
     let mut w = view.pick(x, y, gtk::PickFlags::DEFAULT);
     while let Some(node) = w {
         if let Some(btn) = node.downcast_ref::<gtk::LinkButton>() {
             return Some(btn.uri().to_string());
+        }
+        if let Some(label) = node.downcast_ref::<gtk::Label>() {
+            if let Some(uri) = label.current_uri() {
+                return Some(uri.to_string());
+            }
         }
         w = node.parent();
     }
