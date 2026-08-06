@@ -189,16 +189,22 @@ fn project_scroll(window: &ApplicationWindow) {
     let iter = dst_view.buffer().iter_at_offset(dst_offset);
     // Y of the target line via `line_yrange`, NOT `iter_location` (ScrAP-105).
     // This tick fires in the frame-clock UPDATE phase, BEFORE this frame's
-    // layout/allocate, and often right after a `re_render` (`set_buffer`) swapped the
-    // follower's buffer. `iter_location` builds+caches a line DISPLAY, inserting it into
-    // the view's line-display GSequence which is kept sorted by line number: that
-    // insertion compares against entries still CACHED from the pre-swap buffer, whose
-    // GtkTextLines were freed with it, and `_gtk_text_line_get_number` on a freed line
-    // aborts the process (`gtk_text_btree_line_number couldn't find line` / SIGSEGV —
-    // researcher-sourced; reproduced deterministically). `line_yrange` is a pure cached
-    // btree-height READ (validates nothing, touches no display cache — GTK 4.6.9), so it
-    // is immune, and returning the target line's top-y is exactly what this projection
-    // needs; the coalesced tick re-runs and re-converges as heights validate.
+    // layout/allocate, and often right after a `re_render` rebuilt the follower's
+    // content. `iter_location` builds+caches a line DISPLAY, inserting it into the
+    // view's line-display GSequence which is kept sorted by line number — an insertion
+    // that runs its comparator over every neighbouring cached entry. `line_yrange` is a
+    // pure cached btree-height READ (validates nothing, touches no display cache — GTK
+    // 4.6.9), so it neither caches nor compares, and returning the target line's top-y
+    // is exactly what this projection needs; the coalesced tick re-runs and re-converges
+    // as heights validate.
+    //
+    // Note what the `set_value` below is, on a GtkTextView's own vadjustment: NOT a
+    // scalar store. It emits `value-changed` synchronously inside this call, and
+    // `gtk_text_view_value_changed` updates the IM spot via
+    // `gtk_text_view_get_cursor_locations`, which inserts into that same display cache.
+    // So this function both avoids caching a display itself AND drives one from GTK,
+    // one line apart — worth knowing before treating any adjustment write as cheap or
+    // side-effect-free (researcher-verified, 4.6.9).
     let (y, _) = dst_view.line_yrange(&iter);
     let target = (f64::from(y)).clamp(0.0, max);
 

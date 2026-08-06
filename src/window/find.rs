@@ -317,30 +317,36 @@ fn build_preview_hits(
     keyed.into_iter().map(|(_, _, hit)| hit).collect()
 }
 
-/// The preview hit list, cached against the exact preview buffer and query it was
-/// derived from. One per tab (`TabState::preview_find`).
+/// The preview hit list, cached against the exact render and query it was derived
+/// from. One per tab (`TabState::preview_find`).
 ///
 /// Building the list is **document-proportional** — a `forward_search` sweep of the whole
 /// preview buffer plus a scan of every table cell — and it used to be rebuilt from
 /// scratch on every Next/Prev press and every re-highlight, so advancing the cursor by
 /// one cost a full document search. The list only changes when the QUERY changes or when
-/// the preview BUFFER is replaced, so those two are the cache key and the entire
+/// the preview is re-rendered, so those two are the cache key and the entire
 /// invalidation rule:
 ///
 /// - **Query** — compared by value.
-/// - **Buffer identity** — every path that changes what the preview shows (theme
+/// - **Render generation** — every path that changes what the preview shows (theme
 ///   re-render, view-mode switch, external reload, live-preview re-render) goes through
-///   `preview::re_render`, which `set_buffer`s a BRAND-NEW buffer; the preview buffer's
-///   text is never mutated in place. The one in-place path,
-///   `preview::refresh_annotations_in_place`, is gated on the new buffer's *slice* being
-///   byte-identical to the live one and only ever changes cell-label MARKUP — never the
-///   `label.text()` the cell hits index into — so the cached hits stay exactly valid
-///   across it.
+///   `preview::re_render`, which bumps `CodePreviewView::render_generation`. The one
+///   in-place path, `preview::refresh_annotations_in_place`, does not re-render: it is
+///   gated on the freshly built buffer's *slice* being byte-identical to the live one and
+///   only ever changes cell-label MARKUP — never the `label.text()` the cell hits index
+///   into — so the cached hits stay exactly valid across it, and it deliberately does not
+///   bump the generation.
+///
+/// **Not buffer identity, which this used to key on.** A re-render rebuilds the view's
+/// own buffer in place rather than swapping in a new one (that swap is fatal — see
+/// `preview::build::build_render_products_into`), so the object identity now survives a
+/// re-render and would serve stale hits indexing content that is gone. The generation is
+/// bumped in the render's own choke point, so no route can change the content without
+/// invalidating this.
 ///
 /// Both keys are checked on every access, so a missed explicit invalidation is a wasted
 /// rebuild, never a wrong result. [`invalidate`](Self::invalidate) exists only to release
-/// the strong `GtkLabel` references a stale entry holds (the buffer itself is held
-/// WEAKLY, so an entry never keeps a swapped-out buffer alive on its own).
+/// the strong `GtkLabel` references a stale entry holds.
 #[derive(Default)]
 pub(crate) struct PreviewFindCache {
     slot: RefCell<Option<BuiltHits>>,
@@ -351,19 +357,29 @@ pub(crate) struct PreviewFindCache {
     builds: Cell<u64>,
 }
 
-/// One cached hit list, together with the (buffer, query) pair it is valid for.
-struct BuiltHits {
-    /// Weak: a stale entry must not keep a replaced buffer (and its widget tree) alive.
-    buffer: glib::WeakRef<gtk::TextBuffer>,
+/// What a cached hit list is valid for: the render it was derived from, and the query
+/// it answers. Pure and display-free on purpose — the whole invalidation rule is this
+/// comparison, so it is decidable (and testable) without a widget.
+#[derive(PartialEq, Eq, Debug, Clone)]
+struct HitsKey {
+    generation: u64,
     query: String,
-    targets: Vec<(i32, Label)>,
-    hits: Vec<PreviewHit>,
 }
 
-impl BuiltHits {
-    fn is_current_for(&self, buf: &gtk::TextBuffer, query: &str) -> bool {
-        self.query == query && self.buffer.upgrade().is_some_and(|b| &b == buf)
+impl HitsKey {
+    fn new(generation: u64, query: &str) -> Self {
+        Self {
+            generation,
+            query: query.to_string(),
+        }
     }
+}
+
+/// One cached hit list, together with the key it is valid for.
+struct BuiltHits {
+    key: HitsKey,
+    targets: Vec<(i32, Label)>,
+    hits: Vec<PreviewHit>,
 }
 
 impl PreviewFindCache {
@@ -376,7 +392,7 @@ impl PreviewFindCache {
         query: &str,
         f: impl FnOnce(&[(i32, Label)], &[PreviewHit]) -> R,
     ) -> R {
-        let buf = view.buffer();
+        let key = HitsKey::new(view.render_generation(), query);
         // TAKEN, not borrowed, for the duration of `f`: `f` applies highlights, which
         // calls back into GTK (`set_attributes`/`set_markup` on anchored children, plus a
         // scroll), and holding a `RefCell` borrow across a GTK call that can re-enter is a
@@ -384,22 +400,14 @@ impl PreviewFindCache {
         // taken, a re-entrant caller sees an empty cache and rebuilds — wasteful in a case
         // that does not currently arise, but never a panic.
         let mut built = self.slot.take();
-        if !built
-            .as_ref()
-            .is_some_and(|b| b.is_current_for(&buf, query))
-        {
+        if !built.as_ref().is_some_and(|b| b.key == key) {
             #[cfg(test)]
             self.builds.set(self.builds.get() + 1);
             // Resolved ONCE and reused by every consumer of this entry — see
             // `build_preview_hits` on why the tree walk is not repeated per consumer.
             let targets = cell_search_targets(view);
             let hits = build_preview_hits(view, query, &targets);
-            built = Some(BuiltHits {
-                buffer: buf.downgrade(),
-                query: query.to_string(),
-                targets,
-                hits,
-            });
+            built = Some(BuiltHits { key, targets, hits });
         }
         let built = built.expect("the slot is Some: either it was current, or just built");
         let out = f(&built.targets, &built.hits);
@@ -811,7 +819,39 @@ pub(super) fn update_match_count_label(
 
 #[cfg(test)]
 mod tests {
-    use super::{ci_match_ranges, FindCursor};
+    use super::{ci_match_ranges, FindCursor, HitsKey};
+
+    /// The preview hit list's entire invalidation rule: a cached list answers only for
+    /// the exact render it was built from AND the exact query it answers.
+    ///
+    /// The generation half is the one worth pinning. It replaced the preview buffer's
+    /// object identity, which stopped being a usable key when a re-render started
+    /// rebuilding the view's own buffer instead of swapping in a new one (swapping is
+    /// fatal — `preview::build::build_render_products_into`). Identity would now compare
+    /// EQUAL across a re-render and serve hits indexing content that no longer exists.
+    ///
+    /// Mutation check: dropping either field from the comparison fails one of the two
+    /// stale cases below.
+    #[test]
+    fn a_cached_hit_list_answers_only_for_its_own_render_and_query() {
+        let key = HitsKey::new(4, "cell");
+        assert_eq!(
+            key,
+            HitsKey::new(4, "cell"),
+            "same render, same query: current"
+        );
+        assert_ne!(
+            key,
+            HitsKey::new(5, "cell"),
+            "a re-render bumps the generation, so the same query must rebuild"
+        );
+        assert_ne!(
+            key,
+            HitsKey::new(4, "feature"),
+            "a new query must rebuild even within one render"
+        );
+        assert_ne!(key, HitsKey::new(5, "feature"));
+    }
 
     /// A find cursor never reports the OTHER list's index. The editor's occurrence list
     /// and the preview's unified body+cell list are numbered independently with no
@@ -1078,8 +1118,8 @@ mod gtk_integration_tests {
     ///
     /// Mutation checks, all three of which this fails: dropping the cache entirely (build
     /// count rises on every call); dropping the QUERY key (a new term reuses the old
-    /// list); dropping the BUFFER-identity key (a re-render's brand-new buffer is served
-    /// stale offsets into a buffer that no longer exists).
+    /// list); dropping the RENDER-GENERATION key (a re-render's fresh content is served
+    /// the previous render's offsets and cell labels).
     #[gtktest::test]
     fn the_preview_hit_list_is_built_once_per_buffer_and_query() {
         let pane = crate::preview::render(MD, None, 1.0, false);
@@ -1117,15 +1157,23 @@ mod gtk_integration_tests {
         );
         assert_eq!(cache.builds(), 2, "…and the new list is itself cached");
 
-        // A re-render swaps in a BRAND-NEW buffer with brand-new cell labels: the cached
-        // hits index a buffer that is gone, so the SAME query must rebuild.
+        // A re-render rebuilds the content and makes brand-new cell labels: the cached
+        // hits index content that is gone, so the SAME query must rebuild. The view keeps
+        // its buffer (replacing it is fatal — `preview::build::build_render_products_into`),
+        // so the generation, not the buffer's identity, is what must move.
         let buf_before = view.buffer();
+        let gen_before = view.render_generation();
         crate::preview::re_render(&sw, MD, None, 1.0, false);
         let view_after = view_in(&sw);
-        assert_ne!(
+        assert_eq!(
             view_after.buffer(),
             buf_before,
-            "sanity: re_render swapped the preview buffer"
+            "sanity: re_render rebuilds the live buffer rather than replacing it"
+        );
+        assert_ne!(
+            view_after.render_generation(),
+            gen_before,
+            "sanity: re_render bumps the render generation"
         );
         assert_eq!(
             super::highlight_preview_matches(&cache, &view_after, "feature"),
@@ -1135,7 +1183,7 @@ mod gtk_integration_tests {
         assert_eq!(
             cache.builds(),
             3,
-            "a preview-buffer swap invalidates even when the query is unchanged"
+            "a preview re-render invalidates even when the query is unchanged"
         );
     }
 
@@ -1157,13 +1205,13 @@ mod gtk_integration_tests {
     }
 
     /// A **theme re-render** must NOT erase the preview find-match highlights
-    /// (GTK4Rs/AP-47/ScrAP-38). `re_render_all_windows`
-    /// swaps a fresh `GtkTextBuffer` into the preview, dropping the `scrib-search-hl` tags;
-    /// `window::refresh_preview_find_highlight` (invoked from that sweep) must re-apply them
-    /// for the active tab while the find bar is open.
+    /// (GTK4Rs/AP-47/ScrAP-38). `re_render_all_windows` rebuilds the preview's content
+    /// from scratch, which clears the buffer and empties its tag table — so the
+    /// `scrib-search-hl` tags go with it; `window::refresh_preview_find_highlight` (invoked
+    /// from that sweep) must re-apply them for the active tab while the find bar is open.
     ///
     /// Mutation check: removing the `refresh_preview_find_highlight(app_win)` call from
-    /// `re_render_all_windows` leaves the post-swap buffer untagged and fails this.
+    /// `re_render_all_windows` leaves the re-rendered buffer untagged and fails this.
     #[gtktest::test]
     fn theme_re_render_preserves_preview_find_highlights() {
         let app = gtk::Application::new(
@@ -1194,9 +1242,10 @@ mod gtk_integration_tests {
 
         let view_after = super::find_target(&window).expect_preview();
         let buf_after = view_after.buffer();
-        assert_ne!(
+        assert_eq!(
             buf_after, buf_before,
-            "sanity: the theme re-render swapped in a NEW preview buffer"
+            "sanity: the theme re-render rebuilds the live preview buffer rather than \
+             replacing it (replacing it is fatal — build_render_products_into)"
         );
         assert!(
             buffer_has_search_highlight(&buf_after),

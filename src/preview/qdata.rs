@@ -60,7 +60,7 @@ pub(crate) struct RenderData {
 /// The three render-state qdata keys, each binding its name to its one concrete
 /// type. `render()` is the sole writer; `re_render()` mutates the pointed-to
 /// cells in place rather than re-storing, so a clone taken once by a live
-/// closure keeps seeing fresh data across every subsequent buffer swap.
+/// closure keeps seeing fresh data across every subsequent re-render.
 const RENDER_DATA: QdataKey<Rc<RefCell<RenderData>>> = QdataKey::new("scrib-render-data");
 const LABELS: QdataKey<Rc<RefCell<Vec<Label>>>> = QdataKey::new("scrib-labels");
 const ANCHOR_WIDGETS: QdataKey<Rc<RefCell<Vec<gtk::Widget>>>> =
@@ -83,7 +83,7 @@ pub(crate) fn scrib_labels<T: IsA<gtk::glib::Object>>(view: &T) -> Option<Rc<Ref
 
 /// The `Rc<RefCell<Vec<gtk::Widget>>>` `render()` stores — the anchored children
 /// (tables, images) of the current buffer, unparented by `re_render()` just
-/// before the buffer swap. `None` before the first `render()`.
+/// before the buffer's content is cleared. `None` before the first `render()`.
 pub(crate) fn scrib_anchor_widgets<T: IsA<gtk::glib::Object>>(
     view: &T,
 ) -> Option<Rc<RefCell<Vec<gtk::Widget>>>> {

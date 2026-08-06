@@ -14,7 +14,7 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > lifecycle), **#130** (librsvg/docs tooling), **#147** (pulldown-cmark/CommonMark block-HTML
 > event stream), **#160** (syntect default-syntax coverage), **#163** (Pango markup escaping), **#164** (testing/CI + cross-platform filesystem),
 > **#194** (CommonMark/Markdown transform logic + enforcement discipline),
-> **#195** (pulldown-cmark + this crate's own inline scanner), **#255** (this crate's copymap/renderer offset model),
+> **#195** (pulldown-cmark + this crate's own inline scanner), **#255** (this crate's copymap/renderer offset model), **#256** (coverage tooling / gate maintenance),
 > **#196** (this crate's renderer/annotation offset mapping), **#206**/**#207** (reference-gate tooling + cross-platform gate parity), **#208** (Rust proc-macro/test-harness design), **#209** (testing discipline), **#214** (macOS/dyld dynamic-loader semantics + Rust/libc), **#215** (testing discipline), **#216** (register/citation tooling), **#217** (experiment design), **#218** (multi-agent process), **#219** (testing/tooling discipline), **#220** (testing discipline), **#221** (testing discipline), **#222** (documentation/tooling governance), **#223** (review/claim discipline), **#224** (version control / project governance), **#225** (input-cost policy / threat modelling), **#226** (testing/gate discipline), **#228** (invariant-placement discipline), **#229** (filesystem permissions / cross-platform security model), **#230** (Rust tooling / enforcement discipline), **#233** (serde/`toml` crate + file-format design), **#234** (testing discipline), **#236** (verification tooling / Windows harness), **#237** (testing/CI process + cross-platform build discipline), **#239** (verification tooling / Cargo + git build-artefact semantics), **#240** (reference-gate tooling + review discipline), **#241** (crash-recovery design limitation / OS process identity), **#242** (tooling/process), **#245** (verification tooling / X11 input injection), **#251** (verification tooling / distribution build configuration), **#252**, **#253** (verification tooling / test-harness design), **#254** (testing discipline), **#243** (GLib/GIO task-pool internals — not a GTK widget contract, though it binds any gtk-rs app that moves I/O off the main thread) — and, following the same precedent as #36,
 > **#124**'s core-GTK half went to the skill as **GTK4Rs/AP-98**; its tooling/process remainder
 > (which pipeline step compiles a gated suite) stays project-specific. Their stubs stay a
@@ -274,6 +274,9 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 | 253 | `org.gtk.Actions`'s D-Bus probe — the sanctioned way to read a GAction's `enabled` bit, because sensitivity often has NO pixel signal (GTK4Rs/AP-67) — SILENTLY ANSWERS ABOUT A DIFFERENT PROCESS when addressed by the app's WELL-KNOWN name, which is what you reach for. `--new-instance` (which the manual plan mandates, ScrAP-43) means `NON_UNIQUE`, so the test process owns no well-known name; that name still resolves — to whichever primary the session bus already has, i.e. **the operator's own running app**. MEASURED: `Describe nav-back` on `com.extollit.scribobulate` returned `The named action ('nav-back') does not exist` while the action was registered and working in the instance under test — a confident, specific, plausible answer about another process, in the direction that manufactures "my registration is broken" about working code. The tell nobody reads: `List` answered at BOTH `window/1` and `window/2` for a launch that made one window. → **the probe is MIS-ADDRESSED, not unavailable** (a first version of this entry said unavailable — corrected by measurement): a `NON_UNIQUE` app still holds a UNIQUE name, so resolve it from the PID you launched (`busctl --user list \| awk '$2==PID'` → `:1.NNN`) and address that. MEASURED end-to-end on a `-n` instance: `Describe` returns the real enabled bits and `Activate` drives the actions, so both halves of GTK4Rs/AP-67 work with no pointer and no pixels. Functional verification is the fallback where no bus exists at all. Lesson: **a well-known bus name is a ROLE, not your process** — bind a probe to the identity you launched. Kin ScrAP-43/ScrAP-131 (process ≠ window ≠ bus-name isolation), ScrAP-252 (self-consistent wrong answer) |
 | 254 | AN INVARIANT HELD BY TWO INDEPENDENTLY-SUFFICIENT MECHANISMS IS MUTATION-PROOF ONE MECHANISM AT A TIME, SO THE STANDARD MUTATION TEST REPORTS EACH ONE AS DEAD CODE. Writing "mutation-checked: removing this guard fails the test" is then false in both directions, and it is the *comment* that rots first. MEASURED here on TDD 23.3 (traversing Back/Forward must not itself record history): a suppression guard around the traversal's page switch AND the history's own already-current dedup each hold it alone — neuter either and 25 tests stay green; neuter both and two fail. Neither mutation is informative, and the natural reading of the first ("no test covers this, delete it") removes a guard whose whole value is the day the *other* mechanism is narrowed. → when a mutation leaves a suite green, the next question is "what else holds this?", not "is this dead?" — enumerate the mechanisms and mutate the SET; aim the test at the OUTCOME rather than at either mechanism (a test aimed at one passes while the pair drifts); and record the honest result in the code, including "this guard is redundant today, kept for X" — a claim of load-bearingness nobody neutered is exactly the untested assertion the mutation discipline exists to catch. Sharpens ScrAP-87 (a test that passes against broken code) one level up: there the SETUP masked the defect, here a second correct mechanism masks the guard's absence |
 | 255 | A CONSTRUCT WHOSE GLYPHS ARE BUFFERED AT ITS `End` EVENT LOOKS UNRECONSTRUCTABLE, AND "OPAQUE" IS THE WRONG CONCLUSION — the copymap's per-event buffer capture reads ZERO-WIDTH for every event inside a fenced code block (the renderer accumulates the body and flushes it in one syntect-highlighted insertion at `TagEnd::CodeBlock`), so the block joined the image/table opaque set and a two-word selection inside it copied the WHOLE fenced block. But the two cases are not alike: an image/table is one `U+FFFC` standing for a widget whose text is not in this buffer at all, whereas a code block's body IS the buffer — only its coordinates are attributed to a different event. Re-derive them by laying the interior events' SOURCE runs across the `End` event's buffer range, and prove the layout reconciles (chars flushed == chars accounted) before trusting it, degrading to the old opaque node when it does not — coarse copy, never wrong copy. Two traps in the fix: (a) the tree has a SECOND consumer with the opposite atomicity requirement — `wrap_span` places CriticMarkup, and a divisible code block would let `{==` land inside a fence; (b) a closing ```` ``` ```` closes nothing unless it BEGINS A LINE, so a crossing selection that stops mid-line must take a newline before the fence or the paste swallows everything after it. Both say the same thing: "char-precise for copy" and "indivisible as a construct" are independent properties, and the flag that carried them was one bool |
+| 256 | A COVERAGE RATCHET'S FLOOR IS TRANSCRIBED BY HAND FROM A MULTI-METRIC REPORT, AND THE TRANSCRIPTION IS AN UNGUARDED STEP INSIDE THE GATE — `cargo llvm-cov --summary-only`'s TOTAL row prints THREE percentages (regions, functions, lines) and `--fail-under-lines` turns on the THIRD, so reading the row left-to-right takes the REGION figure (~1pt higher here) and sets a floor the run can never reach; the gate then fails on a change that RAISED coverage, and since `--fail-under-lines` exits non-zero printing the same table it prints on success, the only signal is an exit code identical to a genuine regression → it reads as "your change tanked coverage". Second hazard in the same number: the printed figure is ROUNDED to 2dp, so even the correct column's displayed value fails against the unrounded one (76.49% printed → floor must be 76.48). Fix: pin WHICH FIELD beside the constant in the file that holds it (the tool's output format is part of the gate's contract), round the floor DOWN past the printed precision, and prove the new floor by re-running the gate to exit 0 instead of assuming the edit was right. Diagnostic tell: a gate that fails while its TOTAL is HIGHER than the last run is not a regression, it is a bad threshold. General: a gate can be broken by the act of MAINTAINING it, and it breaks in the direction that blames the code under test |
+| 257 | `Trying to snapshot GtkGizmo … without a current allocation` IS NOT YOURS AND NEEDS NO DEBUGGER, AND IT IS THE ONLY MEMBER OF ITS WARNING FAMILY THAT IS BENIGN — the message's `%s` is `gtk_widget_get_name()`, which falls back to the GTYPE NAME, and `GtkGizmo` is GTK's *private* generic leaf widget, so one of your own widgets can never print as one (yours prints its own GType, and that variant IS a real bug). Identify the exact gizmo with a SYMBOL-FREE PARENT WALK — no debug symbols, no debugger; a log filter that demotes it must PIN THE TYPE (`"Trying to snapshot GtkGizmo "`), never wildcard the type, or it masks the bug-bearing variant |
+| 258 | REPLACING A LIVE `GtkTextView`'S BUFFER (`set_buffer`) IS A USE-AFTER-FREE, not a swap — `gtk_text_layout_set_buffer` never clears the layout's line-DISPLAY cache, and the btree teardown that would is gated on `if (ld)`, i.e. only for lines the incremental validator had reached. Caching a display and validating a line are DIFFERENT populations, so any display cached for a still-unvalidated line dangles the instant the old buffer finalizes → SIGSEGV in `_gtk_text_line_get_number` (or `couldn't find line` → SIGTRAP) from GTK's OWN paint / IM-spot update. Unfixed 4.6→4.23: rebuild the view's own buffer in place instead |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -5094,3 +5097,229 @@ block, `wrap_span` whole-block) plus `preview::build`'s
 sim can only mirror. All five guards mutation-tested: restoring the opaque set,
 neutering the fence newline, dropping `Fence` from `paired()`, and disabling
 either fallback condition each fail a specific test.
+
+## 256. A gate's threshold is copied by hand out of a multi-metric report — so maintaining the gate is how you break it
+
+> *Non-core (coverage tooling / gate-maintenance discipline) — do NOT fold into the
+> gtk4-rs skill. Kin to ScrAP-226 (gate discipline) and to POLICY's rule that a value
+> restated in two places drifts — except the second "place" here is the TOOL'S REPORT,
+> which nobody thinks of as a copy.*
+
+**Symptom.** A change that *added* tests and *raised* scoped coverage was followed
+by the coverage gate exiting non-zero. The obvious reading — the one the exit code
+invites — is "this change tanked coverage", and it is wrong: coverage had gone up.
+The floor had been set to a number the run can never reach.
+
+**What was tried.**
+
+- Raise the floor to the first percentage on the summary's `TOTAL` row. Gate fails.
+- Assume a boundary/rounding problem, drop it by 0.01. Gate fails again.
+- Read the row's *column groups* instead of the row: the first triple is **regions**,
+  the second **functions**, the third **lines**. The gate turns on lines, ~1 point
+  lower. Set the floor to the printed lines figure. Gate **still** fails.
+- Drop 0.01 below the printed lines figure. Passes.
+
+Four gate runs, several minutes each, to move one constant.
+
+**Root cause — two independent transcription hazards in one number.**
+
+1. `cargo llvm-cov --summary-only` prints three metric triples side by side, and
+   `--fail-under-lines` compares against the **third**. Region coverage leads the
+   row and reads higher, so a left-to-right reading is both plausible and wrong.
+2. The printed figure is **rounded** to two decimals while the comparison uses the
+   unrounded value, so even the correct column's *displayed* number is not a valid
+   threshold.
+
+Neither mistake produces a message naming itself: `--fail-under-lines` exits
+non-zero having printed the *same* summary table it prints on success, so the only
+signal is an exit code indistinguishable from a real regression.
+
+**Resolution.** The fix is not a better memory, it is putting the contract where
+the constant lives: an ASCII bracket diagram over a sample `TOTAL` row beside the
+floor, naming which triple the gate turns on, plus the round-down rule — and
+**proving the new floor by re-running the gate to a zero exit** rather than
+assuming the edit was right.
+
+**Lesson.** When a gate's threshold is transcribed by hand out of a tool's report,
+**the transcription is an unguarded step inside the gate** — the one part of it
+nothing checks. Two consequences worth carrying:
+
+- **The tool's output format is part of the gate's contract.** Pin *which field*, in
+  the file that holds the constant. A gate whose constant is maintained by reading a
+  report is only as reliable as that reading, and the reading is done rarely, by
+  whoever happens to be raising the ratchet.
+- **It fails in the direction that blames the code under test.** A threshold set too
+  high and a genuine regression are the same exit code, so the misconfiguration
+  arrives disguised as a defect in the change that triggered it. The diagnostic tell
+  is cheap and worth a reflex: *a gate that fails while its reported figure is higher
+  than the previous run is not a regression, it is a bad threshold.*
+
+## 257. `Trying to snapshot GtkGizmo … without a current allocation` is GTK's own scrollbar trough — the one benign member of a warning family whose other members are real bugs
+
+> *Core GTK4. Already carried by the gtk4-rs skill as its name/count triage for this
+> warning (`references/ui-testing-debugging.md`); kept here because the identification
+> TECHNIQUE and the filter rule were derived on this project and are cheap to lose.*
+
+**Symptom.** One `Trying to snapshot GtkGizmo 0x… without a current allocation`
+reaching WARN at the default log level, once per session, with no visual defect —
+inside a warning family whose other members are genuine, ugly bugs (a pane stuck
+blank until resized; a first-shown stack page; content overflowing at window open).
+Same message text, opposite severity.
+
+**What was tried.**
+- Chasing it as one of ours. Four reproduction attempts were spent on a trigger
+  recorded from a wrong first reading ("the first content-height change"), which
+  never fires in the plain editor.
+- Reaching for a debugger and then for distribution debug symbols — a dead end on
+  this platform in both directions (see the debuginfod/ddebs entry), and unnecessary.
+
+**Root cause.** The warning's `%s` is `gtk_widget_get_name()`, which returns
+`priv->name` **or falls back to the GType name**. `GtkGizmo` is GTK's *private*
+generic leaf widget, used internally for CSS-styled sub-nodes. So the literal string
+`GtkGizmo` is a proof of provenance: **an application widget can never print as
+one** — an instance of your own subclass prints its own GType. Specifically it is a
+`GtkRange`'s **trough**: `gtk_range` queues an allocation on the trough
+unconditionally whenever its adjustment emits `changed`, and if that lands after the
+frame's layout pass the trough carries `alloc_needed` into the same frame's
+snapshot, where GTK warns and early-returns. The early return leaves the previous
+`render_node` intact, so GTK re-appends the **previous** frame's paint — stale, not
+blank — and re-snapshots once the allocation lands. Self-healing in one frame, which
+is exactly why this member of the family has no visual signature.
+
+**Resolution.** Two techniques, both cheap and both reusable:
+
+- **Identify a GTK-internal widget with a symbol-free parent walk.** Resolve the
+  warned pointer to a widget in the log-writer function and walk `get_parent`
+  upward, printing each GType. `gtk_widget_get_parent` is an *exported* symbol, so
+  this needs no debug symbols, no DWARF, and no debugger — the ladder it prints
+  (`GtkGizmo → GtkRange → GtkScrollbar → GtkScrolledWindow → …`) settles the identity
+  outright, because a range parents its trough on the range and its slider on the
+  trough. Prefer this to elimination-by-pointer-arithmetic, which was the slow road
+  to the same answer.
+- **If you demote it in a log filter, pin the type.** Match
+  `"Trying to snapshot GtkGizmo "`, never a wildcard over the type. The wildcard
+  form silences the identical message emitted for one of *your* widgets, which is a
+  real defect, and it silences it in exactly the situation where you most need the
+  line.
+
+**Lesson.** **A diagnostic's severity can depend entirely on one interpolated field,
+so read the field before triaging the message.** Here the whole family shares a
+sentence and splits on a single `%s`: GTK's own private widget = benign and
+self-healing; your GType = a bug that leaves a pane blank. Two corollaries worth
+carrying: a message that prints a *type* is telling you its provenance, and where a
+toolkit exports an accessor, provenance questions are answerable **from inside the
+running process** — reach for an in-process walk before you reach for symbols you may
+not be able to obtain.
+
+**Open, and deliberately not asserted either way**: on this project the warning
+stopped reproducing entirely (eight headless runs across four document sizes, two
+view modes, typing and zoom — zero). Whether that is a fix or a shifted timing window
+is unknown, and one configuration could not be driven at all because the process dies
+there for an unrelated reason. Do not read "it no longer reproduces" as "the
+mechanism above is retired" — the mechanism is source-confirmed and unconditional in
+`gtk_range`.
+
+## 258. Replacing a live `GtkTextView`'s buffer is a use-after-free, not a swap — the layout's line-display cache survives `set_buffer` and dangles
+
+> *Core GTK4, and the deepest one this project has found. **Send to the gtk4-rs skill**
+> (GtkTextView / buffer lifecycle). Supersedes nothing: ScrAP-104 (a persisted
+> `GtkTextMark` re-resolved across a swap) and ScrAP-105 (an `iter_location` right after
+> a swap) are the same underlying defect seen through two narrower windows, and both
+> guards stay — this entry is the root, and it removes the swap entirely.*
+
+**Symptom**: the application dies outright — usually `SIGSEGV` reading a small offset off
+a garbage base, occasionally the glib fatal `Gtk-ERROR gtk_text_btree_line_number
+couldn't find line` → `SIGTRAP` — a second or so after an edit, with a backtrace that is
+**all GTK**: `g_sequence_insert_sorted` under either `gtk_text_view_get_cursor_locations`
+(reached from a `value-changed`) or the widget-tree snapshot descent. Nothing of the
+application's own is on the stack above `g_application_run`. It presented for weeks as an
+untriggerable "occasional SIGSEGV", because reproducing it needs an edit to land inside a
+window whose width is the *previous* render's validation time.
+
+**What was tried**, in order, before the cause was known:
+- **Reading it as a size problem.** A 41,785-line document died every time; an 886-line
+  one never did. Recorded as "needs a large document" — **wrong**, and the wrong frame
+  cost two rounds of investigation. Holding the document constant and varying only the
+  pause before typing showed 3 s and 5 s fatal, 6 s and 15 s safe; holding the pause at
+  ~1 s made 21,001- and 42,001-line documents die too. Size only sets how wide the
+  window is.
+- **Suspecting the split scroll-sync's `set_value`** (it appears in the first backtrace).
+  A probe build with the sync disabled died anyway, at a *different* GTK call site. The
+  sync selects the executioner, not the cause.
+- **Auditing our own display-cache-inserting reads.** They had already been moved off
+  `iter_location` onto the cache-free `line_yrange` when ScrAP-105 was written. Correct,
+  and irrelevant: every faulting call site is GTK's own.
+- **Hoping for an upstream fix.** There is none — see below.
+
+**Root cause** (researcher, against the GTK 4.6.9 C source, with a standalone reproducer):
+`gtk_text_view_set_buffer` keeps the same `GtkTextLayout`, and `gtk_text_layout_set_buffer`
+never touches that layout's line-display cache. The only cleanup is indirect, through
+btree teardown, and it is conditional:
+
+```c
+ld = _gtk_text_line_remove_data (line, view_id);   /* gtktextbtree.c, node_remove_view */
+if (ld)                                            /* <== the defect */
+  gtk_text_layout_free_line_data (view->layout, line, ld);
+```
+
+An entry is dropped **iff** the line owns a `GtkTextLineData` for this view. The two
+populations are not the same set:
+
+- `GtkTextLineData` is created in exactly one place, `gtk_text_layout_wrap()`, called only
+  from btree **validation**.
+- A `GtkTextLineDisplay` is cached by every non-`size_only` reader — snapshot,
+  `get_cursor_locations`, `get_iter_location` — and `gtk_text_layout_wrap` itself asks
+  `size_only=TRUE`, which the cache deliberately does not store.
+
+So **validating a line does not cache it, and caching a line does not validate it.** Any
+paint or geometry read touching a line the incremental validator has not reached yet
+leaves an entry `set_buffer` will not clean; `GtkTextLineDisplay::line` is a raw,
+unrefcounted `GtkTextLine *`, so the moment the old buffer finalizes those entries dangle,
+and the next `g_sequence_insert_sorted` from anywhere runs its comparator over freed
+memory. The two fatal arms are one bug: if the recycled junk ends the sibling walk with
+NULL you land on the `g_error` instead of a segfault.
+
+**Not a version to upgrade past.** The `if (ld)` guard is present and unchanged on
+gtk-4-8, 4-10, 4-12, 4-14, 4-16, 4-18 and `origin/main` (4.23.2), and
+`gtk_text_layout_set_buffer` still does not touch the cache on `main`.
+
+**Resolution**: **render into the view's own buffer instead of replacing it.** The preview
+re-render now clears the live buffer and refills it, so the buffer object never dies and
+no cached display can outlive it; the clearing delete also invalidates the old content's
+entries on GTK's own delete path, which carries no line-data condition. Three consequences
+worth knowing before doing this elsewhere:
+
+1. **Detach anchored children with `GtkTextView::remove`, never a bare `unparent`.** The
+   view bookkeeps anchored children, and deleting an anchor's `U+FFFC` makes GTK call
+   `gtk_text_view_remove` itself — which faults on a child already unparented behind its
+   back. This is the one behavioural requirement rendering in place adds; a swap never
+   deletes the old buffer's anchors, so it never exercised the path.
+2. **Empty the tag table too.** A `GtkTextTagTable` rejects duplicate names, and the tags
+   carry theme colours and zoom-scaled metrics that must be rebuilt.
+3. **Anything keyed on buffer identity silently stops invalidating.** The preview find
+   cache used "is this a different buffer object" as a proxy for "is this a different
+   render". With the buffer stable it would serve hits indexing content that is gone → a
+   monotonic render generation on the view, bumped in the render's shared choke point, is
+   both the replacement and the more honest key.
+
+**Verification, and one negative result worth keeping**: the guard is a **state** assertion
+— re-render, then assert the buffer is the same object — mutation-checked by restoring the
+swap. A test that re-enacted the *crash* (cache a display on an unvalidated far line,
+re-render, force a cache insert) was written, measured, and **deleted**: it PASSED against
+the fatal code, because a dangling `GtkTextLine *` only faults once the freed memory is
+recycled, which a short headless body does not reliably do. It would have been a guard
+reporting "protected" while protecting nothing (ScrAP-87). The crash itself is covered by
+a `tests/MANUAL-TEST.md` check that types *inside* the validation window.
+
+**Lesson**: **a "swap" that keeps a machine attached to both sides is not an atomic
+exchange — find what the machine cached about the side you are discarding.** GTK's own
+API named this `set_buffer` and cleaned up *most* of what a buffer owns, which is exactly
+what makes the residue invisible; the failure needed a *timing* window to appear, so it
+read as random for weeks. Two transferable habits fall out. First, **when a defect's
+observed trigger is a quantity (document size, item count), test whether it is really a
+duration** — holding the quantity fixed and varying only the delay is a cheap experiment
+that reframed this entire investigation, and the size framing had already been written
+into the register as fact. Second, **replacing an object a live widget holds is the
+expensive operation; mutating the one it already has is usually both safer and cheaper** —
+here it also deleted a class of re-attachment bookkeeping (every handler on the buffer
+stays connected, because the buffer stays).

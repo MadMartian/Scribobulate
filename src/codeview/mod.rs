@@ -161,6 +161,22 @@ mod imp {
         /// `pending_marker_open.is_none()` cannot catch this: a new navigation *replaces*
         /// the pending request rather than clearing it, so the old tick never sees `None`.
         pub(crate) nav_generation: Cell<u64>,
+        /// Bumped once per render of this view's content — the identity of "what the
+        /// preview currently shows".
+        ///
+        /// It exists because the obvious key for that, the `GtkTextBuffer`'s object
+        /// identity, is no longer available: a re-render rebuilds the view's OWN buffer
+        /// rather than swapping in a new one (handing a live `GtkTextView` a different
+        /// buffer strands its layout's cached line displays on the freed one and the next
+        /// cache insert faults — see `preview::build::build_render_products_into`). Any
+        /// state derived from the rendered content — the find hit list is the standing
+        /// case — keys on this instead, and because the bump lives in the same choke point
+        /// that rebuilds the content, no render path can forget to invalidate.
+        ///
+        /// Strictly better than the identity it replaces, too: identity answered "is this
+        /// a different buffer object", which was only ever a proxy for "is this a
+        /// different render".
+        pub(crate) render_generation: Cell<u64>,
         /// Widget-coordinate hit-boxes for the interactive TASK checkboxes only,
         /// each `(rect, index into list_markers)`. Recorded in
         /// the SAME convention as `marker_hitboxes` — buffer-x, y shifted by the scroll
@@ -244,6 +260,7 @@ mod imp {
                 marker_hitboxes: RefCell::new(Vec::new()),
                 pending_marker_open: RefCell::new(None),
                 nav_generation: Cell::new(0),
+                render_generation: Cell::new(0),
                 checkbox_hitboxes: RefCell::new(Vec::new()),
                 hovered_checkbox: Cell::new(None),
                 annotation_sink: RefCell::new(None),
@@ -887,6 +904,22 @@ glib::wrapper! {
 }
 
 impl CodePreviewView {
+    /// Note that this view's content has just been (re-)rendered, and return the new
+    /// generation. State derived from the rendered content keys on this — see
+    /// `imp::CodePreviewView::render_generation` for why buffer identity cannot.
+    pub(crate) fn bump_render_generation(&self) -> u64 {
+        use gtk::subclass::prelude::*;
+        let next = self.imp().render_generation.get().wrapping_add(1);
+        self.imp().render_generation.set(next);
+        next
+    }
+
+    /// The current render generation (see [`Self::bump_render_generation`]).
+    pub(crate) fn render_generation(&self) -> u64 {
+        use gtk::subclass::prelude::*;
+        self.imp().render_generation.get()
+    }
+
     pub(crate) fn new() -> Self {
         use gtk::subclass::prelude::*;
         let obj: Self = glib::Object::new();

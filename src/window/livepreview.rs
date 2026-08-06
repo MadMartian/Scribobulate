@@ -71,11 +71,13 @@ pub(super) fn wire_live_preview(content_box: &gtk::Box, buffer: &sourceview::Buf
             // Read live buffer text; the source/baseline are NOT touched.
             let text = st.editor_text();
 
-            // Re-render the preview in-place: only the GtkTextBuffer is
-            // replaced; the GtkScrolledWindow and its GtkAdjustment stay
-            // alive. set_buffer() triggers GtkTextView's multi-pass height
-            // validation, during which the preview adjustment's `upper`
-            // thrashes and it emits a storm of notify::upper / value-changed.
+            // Re-render the preview in-place: the GtkTextBuffer's CONTENT is
+            // rebuilt (the buffer, the GtkScrolledWindow and its GtkAdjustment all
+            // stay alive — replacing the buffer is fatal, see
+            // `preview::build::build_render_products_into`). The rebuild triggers
+            // GtkTextView's multi-pass height validation, during which the preview
+            // adjustment's `upper` thrashes and it emits a storm of
+            // notify::upper / value-changed.
             // rerender_split_preview_driven_by_editor forces the editor as the
             // sync driver so that noise can never drag the editor, and lets
             // the coalesced tick re-project editor→preview as the new height

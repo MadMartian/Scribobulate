@@ -951,3 +951,183 @@ fn a_code_block_with_an_unmodelled_interior_event_degrades_to_opaque() {
     };
     assert_eq!(resolve(&tree, md, 6, 10), "```\nalpha\nbeta\n```");
 }
+
+// ── degenerate event streams: the "should not happen" branches ────────────────
+//
+// Every test above feeds the builder a stream a real pulldown parse produced. The
+// builder also carries fallbacks for streams that are malformed or merely shaped in
+// a way no fixture here happens to produce — a construct that never closes, a stray
+// `End`, an empty construct, a break or an opaque unit at document level. Those
+// branches decide what a COPY does when a document is unusual, and until now none of
+// them had ever run: the code path a reader would reach for to explain a wrong copy
+// was the one path with no evidence behind it.
+//
+// They are reachable directly, because `build` is pure and takes the classified
+// stream as data. A hand-built stream is not a worse test than a parsed one here —
+// it is the only way to express a stream a parser will not emit.
+
+/// Build a copymap from a hand-written event stream, then copy `[a, b)` from it.
+fn resolve_raw(md: &str, evs: &[RawEv], char_count: i32, a: i32, b: i32) -> String {
+    resolve(&build(md, evs, char_count), md, a, b)
+}
+
+fn ev(buf: (i32, i32), src: Range<usize>, kind: RawKind) -> RawEv {
+    RawEv { buf, src, kind }
+}
+
+/// A `Break` and an opaque unit (a rule, a task-list checkbox) sitting at DOCUMENT
+/// level rather than inside a paragraph. Both own buffer glyphs, so a selection over
+/// them must still resolve to their own source rather than swallowing a neighbour's.
+#[test]
+fn a_break_and_an_opaque_unit_at_document_level_resolve_to_their_own_source() {
+    // md: "a\n---\n" — text, break, rule, with no enclosing paragraph events.
+    let md = "a\n---\n";
+    let evs = [
+        ev((0, 1), 0..1, RawKind::Text("a".into())),
+        ev((1, 2), 1..2, RawKind::Break),
+        ev((2, 3), 2..6, RawKind::Atomic),
+    ];
+    // The break alone.
+    assert_eq!(resolve_raw(md, &evs, 3, 1, 2), "\n");
+    // The opaque rule alone — opaque means its whole source, never a slice of it.
+    assert_eq!(resolve_raw(md, &evs, 3, 2, 3), "---\n");
+}
+
+/// A stray `End` with no matching `Start` — at document level and inside a
+/// construct. It must be skipped, leaving the surrounding content intact, rather
+/// than terminating the walk early and truncating the copy.
+#[test]
+fn a_stray_end_event_is_skipped_and_does_not_truncate_the_copy() {
+    let md = "ab";
+    // Document level: End(Emphasis) between two text runs that never opened one.
+    let evs = [
+        ev((0, 1), 0..1, RawKind::Text("a".into())),
+        ev((1, 1), 1..1, RawKind::End(Construct::Emphasis)),
+        ev((1, 2), 1..2, RawKind::Text("b".into())),
+    ];
+    assert_eq!(
+        resolve_raw(md, &evs, 2, 0, 2),
+        md,
+        "both runs survive the stray"
+    );
+
+    // Inside a construct: the stray must not close the paragraph early either.
+    let evs = [
+        ev((0, 0), 0..0, RawKind::Start(Construct::Paragraph)),
+        ev((0, 1), 0..1, RawKind::Text("a".into())),
+        ev((1, 1), 1..1, RawKind::End(Construct::Strong)),
+        ev((1, 2), 1..2, RawKind::Text("b".into())),
+        ev((2, 2), 2..2, RawKind::End(Construct::Paragraph)),
+    ];
+    assert_eq!(resolve_raw(md, &evs, 2, 0, 2), md);
+}
+
+/// A construct with no interior at all (`**bold**` with the text run missing, an
+/// empty heading). There is no content to clip a selection against, so it falls back
+/// to opaque — the whole construct's source, delimiters included — rather than
+/// resolving to nothing.
+#[test]
+fn a_construct_with_no_interior_falls_back_to_opaque() {
+    let md = "x****y";
+    let evs = [
+        ev((0, 1), 0..1, RawKind::Text("x".into())),
+        ev((1, 1), 1..3, RawKind::Start(Construct::Strong)),
+        ev((1, 1), 3..5, RawKind::End(Construct::Strong)),
+        ev((1, 2), 5..6, RawKind::Text("y".into())),
+    ];
+    // Selecting across the empty construct yields its whole source, not "".
+    assert_eq!(resolve_raw(md, &evs, 2, 0, 2), md);
+}
+
+/// A construct whose `End` never arrives — a truncated stream. The builder
+/// substitutes the last event it saw as the close, which BOUNDS the walk: it
+/// terminates, and everything outside the unclosed construct still resolves.
+///
+/// **Measured degenerate outcome, asserted as-is rather than as an aspiration:** the
+/// unclosed construct's own interior resolves to nothing, because the substituted
+/// close is the interior event itself, so the construct's content range collapses to
+/// empty. That is a lossy answer, and it is acceptable only because a parser cannot
+/// emit this stream — `pulldown-cmark` closes every tag it opens. It is pinned here
+/// so the behaviour is a recorded fact rather than a surprise found while debugging a
+/// wrong copy, and so that a future change which starts SALVAGING the interior fails
+/// this test loudly rather than passing unnoticed.
+#[test]
+fn an_unclosed_construct_is_bounded_and_costs_only_its_own_interior() {
+    let md = "a *b";
+    let evs = [
+        ev((0, 2), 0..2, RawKind::Text("a ".into())),
+        ev((2, 2), 2..3, RawKind::Start(Construct::Emphasis)),
+        ev((2, 3), 3..4, RawKind::Text("b".into())),
+        // no End(Emphasis)
+    ];
+    assert_eq!(
+        resolve_raw(md, &evs, 4, 0, 2),
+        "a ",
+        "content BEFORE the unclosed construct is unaffected"
+    );
+    assert_eq!(
+        resolve_raw(md, &evs, 4, 2, 3),
+        "",
+        "the unclosed construct's interior is lost (see the doc comment)"
+    );
+}
+
+/// A code block whose interior is not a plain text run (an emphasis event inside a
+/// fence — impossible from a parse, possible from a stream) is treated as opaque:
+/// a selection inside it copies the whole fence rather than a reconstruction that
+/// would drop the fence markers.
+#[test]
+fn a_code_block_with_a_non_text_interior_is_opaque() {
+    let md = "```\nab\n```";
+    let evs = [
+        ev((0, 0), 0..4, RawKind::Start(Construct::CodeBlock)),
+        ev((0, 1), 4..5, RawKind::Text("a".into())),
+        ev((1, 1), 5..5, RawKind::Start(Construct::Emphasis)),
+        ev((1, 2), 5..6, RawKind::Text("b".into())),
+        ev((2, 2), 6..6, RawKind::End(Construct::Emphasis)),
+        ev((2, 3), 6..10, RawKind::End(Construct::CodeBlock)),
+    ];
+    assert_eq!(resolve_raw(md, &evs, 3, 1, 2), md);
+}
+
+/// An unclosed code block — the fence-close fallback, the code-block twin of the
+/// unclosed-construct case above.
+#[test]
+fn an_unclosed_code_block_closes_at_the_last_event_it_saw() {
+    let md = "```\nab";
+    let evs = [
+        ev((0, 0), 0..4, RawKind::Start(Construct::CodeBlock)),
+        ev((0, 2), 4..6, RawKind::Text("ab".into())),
+        // no End(CodeBlock)
+    ];
+    // char_count 3 (a trailing buffer newline the stream does not describe), so this
+    // is a PARTIAL selection — not the whole-buffer shortcut, which would return the
+    // source without consulting the tree at all and prove nothing.
+    assert_eq!(resolve_raw(md, &evs, 3, 0, 2), md);
+}
+
+/// `wrap_span` (the annotation path, not the copy path) over an opaque unit and over
+/// an atomic code span returns the WHOLE unit's source. Wrapping half of either in
+/// `{==…==}` would split a fence or a rule.
+#[test]
+fn wrap_span_takes_an_opaque_or_atomic_unit_whole() {
+    let md = "a `code` b";
+    let evs = [
+        ev((0, 2), 0..2, RawKind::Text("a ".into())),
+        ev((2, 6), 2..8, RawKind::Code("code".into())),
+        ev((6, 8), 8..10, RawKind::Text(" b".into())),
+    ];
+    let t = build(md, &evs, 8);
+    // A selection of ONE character inside the code span still wraps the whole span,
+    // backticks included.
+    assert_eq!(super::wrap_span(&t, md, 3, 4), Some(2..8));
+
+    let md2 = "a\n---\n";
+    let evs2 = [
+        ev((0, 1), 0..1, RawKind::Text("a".into())),
+        ev((1, 2), 1..2, RawKind::Break),
+        ev((2, 3), 2..6, RawKind::Atomic),
+    ];
+    let t2 = build(md2, &evs2, 3);
+    assert_eq!(super::wrap_span(&t2, md2, 2, 3), Some(2..6));
+}

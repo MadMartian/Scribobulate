@@ -392,6 +392,14 @@
 - **Given** the editor pane has focus
 - **When** the user types Markdown
 - **Then** the preview pane reflects the changes promptly
+- **And** this holds however large the document is and whenever the keystroke lands —
+  including while a previous render of the same document is still laying itself out
+- **And** a re-render never replaces the preview's `GtkTextBuffer`; it rebuilds the
+  content of the buffer the view already holds. Handing a live `GtkTextView` a
+  different buffer leaves the layout's cached line displays pointing at the freed one,
+  and the next thing to touch that cache — GTK's own paint, or its input-method
+  position update inside a scroll — kills the process (ScrAP-258; unfixed in every GTK
+  4 through 4.23, so it is avoided rather than waited out)
 
 ### 4.2 Source syntax highlighting
 - **Given** the editor pane displaying Markdown source
@@ -910,7 +918,8 @@
 ### 9.18 Help > About opens the About dialog
 - **Given** a document window
 - **When** the user selects Help ▸ About (F1 opens the keyboard-shortcuts window instead — §16.1)
-- **Then** a modal About dialog opens showing the application name, version, description, copyright, and the extollIT Enterprises website link
+- **Then** a modal About dialog opens showing the application name, version, description, copyright, and a **Scribobulate on GitHub** link to the project's source repository, which opens in the system browser
+- **And** the description names no platform — the same copy ships on every platform, so a platform list there would go stale as platforms are added (it once read "Linux-first … also compatible with macOS" while a Windows build shipped)
 - **And** the dialog shows a License button that displays the Apache License, Version 2.0 text
 - **And** the System tab shows the GTK runtime version and the versions of the gtk4, sourceview5, and pulldown-cmark crates
 

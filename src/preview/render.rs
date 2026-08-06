@@ -1,11 +1,12 @@
 //! The public render entry points: [`render`] (parse+render into a fresh
-//! `CodePreviewView` inside a `GtkScrolledWindow`) and [`re_render`] (in-place
-//! buffer swap into the existing view, preserving scroll position). Both consume
-//! [`build_render_products`](super::build) and wire the interactions from
+//! `CodePreviewView` inside a `GtkScrolledWindow`) and [`re_render`] (rebuild the
+//! content of the existing view's own buffer, preserving scroll position). Both
+//! consume [`build_render_products`](super::build) and wire the interactions from
 //! [`super::interactions`].
 
 use super::build::{
-    apply_preview_margins, build_render_products, install_products_into_view, RenderProducts,
+    apply_preview_margins, build_render_products, build_render_products_into,
+    install_products_into_view, RenderProducts,
 };
 use super::cells::{attach_cell_marker_widgets, collect_cell_labels, collect_table_anchors};
 use super::interactions::{
@@ -126,7 +127,7 @@ pub(crate) fn render(
         Rc::new(RefCell::new(collect_cell_labels(&anchored)));
 
     // Track anchor child widgets so re_render can unparent them before the
-    // next buffer swap.
+    // next re-render clears the buffer.
     let anchor_widgets: Rc<RefCell<Vec<gtk::Widget>>> = Rc::new(RefCell::new(
         anchored.iter().map(|(_, w)| w.clone()).collect(),
     ));
@@ -195,11 +196,17 @@ pub(crate) fn render(
 
 /// Update the preview widget's content in-place, preserving its scroll position.
 ///
-/// Replaces only the `GtkTextBuffer` inside the existing `GtkTextView` (which
-/// stays inside the existing `GtkScrolledWindow`).  Because the widget tree is
-/// not torn down the `GtkAdjustment` — and therefore its `value` — survive the
-/// operation.  GTK reconfigures `upper`/`page_size` as the new buffer lays out,
-/// but the value is not reset to 0, so there is no adjustment cascade.
+/// Rebuilds the content of the `GtkTextBuffer` the existing `GtkTextView` already
+/// holds — the widget tree, the buffer, and the `GtkAdjustment` all survive, so
+/// there is no adjustment cascade and the scroll `value` is not reset. GTK
+/// reconfigures `upper`/`page_size` as the new content lays out.
+///
+/// **The buffer is rebuilt, never replaced.** Handing the view a different buffer
+/// strands the layout's cached line displays on the freed one and kills the process
+/// from whatever touches the cache next — see
+/// [`build_render_products_into`](super::build::build_render_products_into) for the
+/// mechanism and its GTK source. Everything wired to this buffer therefore stays
+/// wired: no handler needs re-attaching after a re-render.
 pub(crate) fn re_render(
     sw: &ScrolledWindow,
     md: &str,
@@ -217,18 +224,38 @@ pub(crate) fn re_render(
     // Update the view's own pixel margins for the new zoom factor (L4).
     apply_preview_margins(&view, zoom);
 
-    // Unparent anchor children (tables etc.) from the previous render before
-    // swapping the buffer so they don't linger as orphaned widget-tree nodes.
+    // Detach the previous render's anchored children (tables etc.) BEFORE the render
+    // clears the buffer, so they don't linger as orphaned widget-tree nodes. Order is
+    // load-bearing: clearing the text destroys the anchors holding them.
+    //
+    // `view.remove()`, NOT `w.unparent()`. An anchored child is bookkept by the VIEW
+    // (`gtk_text_view_add_child_at_anchor` records it), and deleting the anchor's
+    // U+FFFC makes GTK walk that bookkeeping and call `gtk_text_view_remove` itself.
+    // A bare `unparent` drops the widget's parent link while leaving GTK's record
+    // pointing at it, so the delete then removes an already-unparented child and
+    // faults inside `gtk_text_view_remove` — measured, a SIGSEGV at fault address
+    // 0x20. This never showed while re-rendering swapped the buffer, because a
+    // swapped-away buffer's anchors are never deleted; it is the one behavioural
+    // requirement rendering in place adds (cf. GTK4Rs/AP-166: `remove` is the only
+    // lever that empties the view's anchored-children list).
     let anchor_widgets_rc = scrib_anchor_widgets(&view);
     if let Some(aw) = &anchor_widgets_rc {
         for w in aw.borrow().iter() {
-            w.unparent();
+            if w.parent()
+                .is_some_and(|p| p == *view.upcast_ref::<gtk::Widget>())
+            {
+                view.remove(w);
+            } else {
+                w.unparent();
+            }
         }
     }
 
-    // Build the new buffer and render into it (shared parse-and-extract — M5).
+    // Render into the view's LIVE buffer (shared parse-and-extract — M5). Not into a
+    // fresh one handed over with `set_buffer`: that is the fatal path this function's
+    // doc comment describes.
     let RenderProducts {
-        buf,
+        buf: _,
         source_map,
         copymap,
         md_owned,
@@ -250,7 +277,7 @@ pub(crate) fn re_render(
         highlight_ranges: _,
         shifts,
         original_owned,
-    } = build_render_products(md, doc_dir, zoom, allow_unsafe_images);
+    } = build_render_products_into(&view.buffer(), md, doc_dir, zoom, allow_unsafe_images);
 
     // Update the shared RenderData cell — live closures on the view borrow this.
     let render_data = scrib_render_data(&view);
@@ -275,13 +302,14 @@ pub(crate) fn re_render(
         *tl.borrow_mut() = collect_cell_labels(&anchored);
     }
 
-    // Swap the buffer.  `re_render` is only ever called in split mode, where the
-    // preview must follow the *editor's* scroll position — not restore its own.
-    // That re-projection is owned by the coalesced split-scroll sync in window.rs
-    // (it forces the editor as driver around this swap and re-projects as the new
-    // height settles), so re_render deliberately does NOT touch the scroll position
-    // here. Restoring the preview's own position would fight the sync (ScrAP-16).
-    view.set_buffer(Some(&buf));
+    // The buffer now holds the new content (the render above filled it in place).
+    // `re_render` is only ever called in split mode, where the preview must follow
+    // the *editor's* scroll position — not restore its own. That re-projection is
+    // owned by the coalesced split-scroll sync in window.rs (it forces the editor as
+    // driver around this rebuild and re-projects as the new height settles), so
+    // re_render deliberately does NOT touch the scroll position here. Restoring the
+    // preview's own position would fight the sync (ScrAP-16).
+    //
     // Track the new anchor children, then install the render's typed outputs
     // (self-drawn code-block/blockquote backgrounds refreshed for the new buffer
     // and possibly theme-changed colors, anchored children, width/image bounds) —
@@ -305,10 +333,12 @@ pub(crate) fn re_render(
     if let Some(aw) = anchor_widgets_rc {
         *aw.borrow_mut() = new_aw;
     }
-    // The buffer was swapped, so re-attach the image-selection tint handler to it.
-    if let Some(rd) = &render_data {
-        connect_image_tints(&buf, rd);
-    }
+    // No handler re-attaching here, deliberately. The image-selection tint handler
+    // (and every other handler on this buffer) was connected on the first render and
+    // is still connected, because the buffer object is the same one — it is the
+    // content that was rebuilt. Re-connecting would stack a second copy per edit.
+    // Each such handler reads the shared RenderData, updated above, so they all see
+    // the new render's anchors and maps.
 }
 
 /// Incrementally refresh ONLY the CriticMarkup annotations (highlight tags + margin
@@ -575,6 +605,65 @@ mod gtk_integration_tests {
              the preview over-wide — hadjustment upper={upper} must not exceed page_size={page} \
              (over by {:.0}px → spurious Automatic h-scrollbar → ScrAP-22/23 churn/blank)",
             upper - page,
+        );
+    }
+
+    fn scroller_of(widget: &gtk::Widget) -> ScrolledWindow {
+        widget
+            .downcast_ref::<gtk::Overlay>()
+            .and_then(|o| o.child())
+            .and_then(|c| c.downcast::<ScrolledWindow>().ok())
+            .expect("Overlay > ScrolledWindow")
+    }
+
+    /// A re-render must REBUILD the live buffer, never hand the view a different one.
+    ///
+    /// This asserts the STATE (buffer identity), not the symptom (a crash), on purpose:
+    /// the symptom needs an unvalidated line to be cached at the moment of the swap, so a
+    /// test that pumps to a settled layout would pass against the fatal version
+    /// (ScrAP-87/GTK4Rs/AP-78 masking). Identity fails immediately and everywhere.
+    ///
+    /// Mutation check: restoring `view.set_buffer(Some(&buf))` in `re_render` fails the
+    /// first assert.
+    ///
+    /// **A test that re-enacts the crash instead was written, measured, and deleted.**
+    /// It cached a display on an unvalidated far line, re-rendered, then forced a cache
+    /// insert — and it PASSED against the fatal version, because a dangling
+    /// `GtkTextLine *` only faults once the freed memory has been recycled, which a short
+    /// headless body does not reliably do. It would have been a guard that reports
+    /// "protected" while protecting nothing (ScrAP-87). The state — one buffer, never
+    /// replaced — is the checkable thing; the crash is not.
+    #[gtktest::test]
+    fn re_render_rebuilds_the_live_buffer_and_never_swaps_it() {
+        let pane = render("# One\n\nFirst body paragraph.\n", None, 1.0, false);
+        let view = view_of(&pane);
+        let sw = scroller_of(&pane);
+        let before = view.buffer();
+
+        re_render(
+            &sw,
+            "# Two\n\nA different body paragraph.\n",
+            None,
+            1.0,
+            false,
+        );
+
+        let after = view.buffer();
+        assert_eq!(
+            before, after,
+            "re_render must rebuild the view's own GtkTextBuffer in place; replacing it \
+             strands the layout's cached line displays on the freed buffer and the next \
+             cache insert (GTK's own paint or IM-spot update) faults in \
+             _gtk_text_line_get_number"
+        );
+        let text = after.slice(&after.start_iter(), &after.end_iter(), true);
+        assert!(
+            text.contains("A different body paragraph."),
+            "the rebuilt buffer must hold the new render, got {text:?}"
+        );
+        assert!(
+            !text.contains("First body paragraph."),
+            "the previous render's content must be gone, got {text:?}"
         );
     }
 }

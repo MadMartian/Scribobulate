@@ -1,7 +1,8 @@
-//! The shared parse-and-render core: parse `md` and render it into a fresh
+//! The shared parse-and-render core: parse `md` and render it into a
 //! `GtkTextBuffer`, capturing the source map and the char-precise copymap, and
-//! return the renderer's typed outputs. Both `render` (fresh view) and `re_render`
-//! (in-place swap) build this identically.
+//! return the renderer's typed outputs. Both `render` (a fresh view, hence a fresh
+//! buffer) and `re_render` (the existing view's own buffer, rebuilt in place) build
+//! this identically.
 
 use super::cells::attach_cell_copymaps;
 use super::sourcemap::{finalize_source_map, waypoint_src_offset};
@@ -19,8 +20,8 @@ use std::collections::HashMap;
 /// Everything a Markdown parse+render produces up to (but not including) widget
 /// wiring: the freshly-filled buffer, the source map, and the renderer's typed
 /// outputs. Both [`render`](super::render) (first render → fresh `CodePreviewView`)
-/// and [`re_render`](super::re_render) (in-place buffer swap into the existing view)
-/// build this identically; extracting it removes the ~30-line verbatim duplication
+/// and [`re_render`](super::re_render) (the live view's own buffer, rebuilt in
+/// place) build this identically; extracting it removes the ~30-line verbatim duplication
 /// that previously had to be edited in lockstep in both paths, where a one-sided
 /// change would compile and silently break exactly one render route (M5).
 pub(super) struct RenderProducts {
@@ -53,7 +54,7 @@ pub(super) struct RenderProducts {
     pub(super) cell_src_spans: Vec<std::ops::Range<usize>>,
     /// Buffer char ranges carrying the `annotation-highlight` tag — the same tags
     /// `buf` already has, exposed so the incremental annotation refresh can re-tag an
-    /// EXISTING (structurally identical) buffer without a `set_buffer` swap.
+    /// EXISTING (structurally identical) buffer without rebuilding it at all.
     pub(super) highlight_ranges: Vec<crate::span::BufferSpan>,
     /// Cleaned→original byte-offset shift table (CriticMarkup extraction), for
     /// translating a preview selection back to the editor's original source
@@ -66,22 +67,105 @@ pub(super) struct RenderProducts {
     pub(super) original_owned: String,
 }
 
+/// Empty a buffer so a render can fill it again: drop its text (which also drops
+/// every child anchor and mark the previous render left in it), then empty its tag
+/// table so `setup_tags` can re-add the tags at the current theme and zoom.
+///
+/// A no-op on the fresh buffer `build_render_products` makes, and the load-bearing
+/// step on a live one: the text delete is what runs GTK's
+/// `gtk_text_line_display_cache_invalidate_range` over the old content, and unlike
+/// the buffer-swap teardown it drops every cached display in the range with no
+/// condition attached. The caller must have detached the previous render's anchored
+/// children — via `GtkTextView::remove`, which is what maintains the view's own
+/// record of them — BEFORE this runs: deleting the text destroys the anchors holding
+/// them, and GTK removes each child itself as it goes, which faults if the child was
+/// already unparented behind its back.
+///
+/// The tag table is emptied by name because a `GtkTextTagTable` rejects a duplicate
+/// name (with a warning, not an error), and the tags carry theme colours and
+/// zoom-scaled metrics that must be rebuilt rather than reused. Names are collected
+/// first: removing during `foreach` mutates the table mid-iteration.
+fn reset_buffer_for_render(buf: &TextBuffer) {
+    buf.delete(&mut buf.start_iter(), &mut buf.end_iter());
+    let table = buf.tag_table();
+    let mut tags: Vec<gtk::TextTag> = Vec::new();
+    table.foreach(|tag| tags.push(tag.clone()));
+    for tag in tags {
+        table.remove(&tag);
+    }
+}
+
 /// Parse `md` and render it into a fresh `GtkTextBuffer`, returning the buffer
 /// plus the renderer's typed outputs (see [`RenderProducts`]). This is the one
 /// place the palette resolve, tag setup, the pulldown-cmark offset-iterator
 /// parse loop (which records the sparse `(buffer_char_offset,
 /// source_byte_offset)` waypoint map so Ctrl+C can translate a buffer selection
 /// back to raw Markdown), the source-map finalization, and the destructuring of
-/// the renderer's outputs live. `render` consumes it to build a fresh view;
-/// `re_render` consumes it to update the shared cells and swap the buffer.
+/// the renderer's outputs live.
+///
+/// `render` (the first render of a pane) consumes this to build a fresh view.
+/// **A re-render must NOT** — it renders into the view's LIVE buffer via
+/// [`build_render_products_into`], because handing a `GtkTextView` a different
+/// buffer is fatal (see that function).
 pub(super) fn build_render_products(
     md: &str,
     doc_dir: Option<&std::path::Path>,
     zoom: f64,
     allow_unsafe_images: bool,
 ) -> RenderProducts {
+    let fresh = TextBuffer::new(None::<&gtk::TextTagTable>);
+    build_render_products_into(&fresh, md, doc_dir, zoom, allow_unsafe_images)
+}
+
+/// [`build_render_products`] rendering into an EXISTING buffer, clearing whatever
+/// it held first. This is how a re-render replaces a live pane's content, and the
+/// reason it exists is a use-after-free in GTK, not tidiness.
+///
+/// **Never replace a live `GtkTextView`'s buffer with a different one.**
+/// `gtk_text_view_set_buffer` keeps the same `GtkTextLayout` and
+/// `gtk_text_layout_set_buffer` never touches that layout's line-DISPLAY cache; the
+/// only cleanup is indirect, via btree teardown, and it is conditional on the line
+/// owning a `GtkTextLineData` for the view:
+///
+/// ```text
+/// ld = _gtk_text_line_remove_data (line, view_id);
+/// if (ld)                                     /* gtktextbtree.c, node_remove_view */
+///   gtk_text_layout_free_line_data (view->layout, line, ld);
+/// ```
+///
+/// Line DATA is created only by btree VALIDATION, while a cached line DISPLAY is
+/// created by every non-`size_only` reader (paint, `get_cursor_locations`,
+/// `iter_location`) — and validation itself asks `size_only`, which is deliberately
+/// not cached. So validating a line does not cache it and caching a line does not
+/// validate it: any paint or geometry read that touches a line the incremental
+/// validator has not reached yet leaves a cache entry the swap will not clean, and
+/// `GtkTextLineDisplay::line` is a raw, unrefcounted `GtkTextLine *`. The moment the
+/// old buffer finalizes those entries dangle, and the next `g_sequence_insert_sorted`
+/// from anywhere — GTK's own paint, its IM-spot update inside a `value-changed` — runs
+/// the comparator over freed memory: SIGSEGV in `_gtk_text_line_get_number`, or, when
+/// the recycled junk happens to end the sibling walk with NULL, the `g_error`
+/// `gtk_text_btree_line_number couldn't find line` → SIGTRAP.
+///
+/// Present and unchanged in every GTK 4 from 4.6 through `main` (4.23), so there is no
+/// version to upgrade to. Measured here: typing into split mode while the preceding
+/// render was still validating killed the process every time.
+///
+/// Rendering into the live buffer removes the swap entirely — the buffer object
+/// never dies, so no cache entry can outlive it — and the clearing delete below
+/// invalidates the entries for the old content on GTK's own delete path, which
+/// carries no line-data condition. Keeping the buffer is what makes this safe;
+/// clearing it is ordinary bookkeeping. Cf. ScrAP-104/ScrAP-105, the two earlier,
+/// narrower faces of this same dangling-line-display defect.
+pub(super) fn build_render_products_into(
+    buf: &TextBuffer,
+    md: &str,
+    doc_dir: Option<&std::path::Path>,
+    zoom: f64,
+    allow_unsafe_images: bool,
+) -> RenderProducts {
     let palette = Palette::resolve();
-    let buf = TextBuffer::new(None::<&gtk::TextTagTable>);
+    let buf = buf.clone();
+    reset_buffer_for_render(&buf);
     setup_tags(&buf, &palette, zoom);
 
     // Normalise inline hard tabs to spaces so tab-separated table rows parse as GFM
@@ -451,7 +535,7 @@ fn highlight_tag_ranges(
 /// backgrounds and blockquote bars, the anchored children (tables, rules,
 /// images), and the width/image bounds. This is the identical install sequence
 /// both [`render`](super::render) (fresh view) and [`re_render`](super::re_render)
-/// (in-place buffer swap) must apply in lockstep — centralising it here means a
+/// (the in-place content rebuild) must apply in lockstep — centralising it here means a
 /// new bounded-child category or anchor kind is wired ONCE, not in two paths
 /// where a one-sided edit would compile and silently apply to only one render
 /// route (D4, the same lockstep-edit hazard `RenderProducts` removed for the
@@ -470,6 +554,12 @@ pub(super) fn install_products_into_view(
     list_markers: Vec<crate::renderer::ListMarker>,
     zoom: f64,
 ) {
+    // Both render routes pass through here, so this is where "the content changed"
+    // is recorded. State derived from the rendered content (the find hit list) keys
+    // on this generation rather than on the buffer's object identity, which no longer
+    // changes per render — see `CodePreviewView::render_generation`. Bumping at the
+    // shared choke point is what makes the invalidation impossible to forget.
+    view.bump_render_generation();
     view.set_code_blocks(code_blocks, code_block_bg);
     view.set_blockquotes(blockquote_ranges, blockquote_bar);
     // Drawn list-marker gutter. `zoom` travels with the markers

@@ -3,7 +3,6 @@
 | ID | Issue | Severity |
 |----|-------|----------|
 | A | Tables are selection islands; cells are individually selectable but not part of the continuous buffer | Closed |
-| B | Benign GTK scrollbar-gizmo snapshot-without-allocation warning on the first content-height change | Low |
 | D | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
 | E | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
 | F | Split mode intermittently blanks the view on an edit — a `GtkOverlay` snapshotted without a current allocation; rare, first-time-only, recovers on a mode toggle | Medium |
@@ -107,189 +106,6 @@ triple-click-line, keyboard selection and PRIMARY ownership — all of which GTK
 free today, as the probe's control demonstrates — to un-break a Low-severity limitation
 nobody has asked for. It would be a deliberate project chosen on product grounds, not an
 increment, and it should not be started from this entry.
-
-## B. Benign GTK scrollbar-gizmo snapshot-without-allocation warning on the first content-height change
-
-**Severity**: Low (cosmetic log noise; no functional effect)
-
-One harmless warning reaches WARN at the default `RUST_LOG`:
-
-```
-Trying to snapshot GtkGizmo 0x… without a current allocation
-```
-
-**It is the scrollbar's `trough`** — researcher-confirmed against GTK 4.6.9 source, and
-identified here without a debugger:
-
-- `gtk_widget_get_name()` returns `priv->name ?: G_OBJECT_TYPE_NAME`, so **`GtkGizmo`
-  is the TYPE name** (gtkwidget.c:11616). `GtkGizmo` is GTK's *private* generic leaf
-  widget — **our own widgets can never print as one** (a `CodePreviewView` instance
-  would print its own GType). The name alone proves this is GTK-internal, not ours.
-- **Only `gtkrange.c` creates gizmos** in this stack (trough :543, slider :553; the
-  other two are `GtkScale`-only). `gtktextview.c`, `gtkscrolledwindow.c`,
-  `gtkscrollbar.c` and `gtkviewport.c` create **zero** — so it is trough or slider.
-- **Pointer-diff settles it**: `gtksizerequest.c:323`'s `-2` warning prints the same
-  pointer *plus* the CSS role (`(slider)`). At `RUST_LOG=debug`, none of the six
-  slider addresses matched the snapshot warning's widget → by elimination, the
-  **trough**. (It also sits 0x1a0 from a slider — adjacent allocation, consistent with
-  `gtk_range_init` creating trough then slider back-to-back.)
-- **Confirmed POSITIVELY (2026-07-16), no longer by elimination alone.** A temporary
-  probe in the log writer resolved the warned pointer to a live `gtk::Widget` and
-  walked its parents (no debug symbols needed — `gtk_widget_get_parent` is exported):
-
-  ```
-  [0] GtkGizmo  w=6 h=575   ← the warned widget
-  [1] GtkRange              ← parent is the RANGE itself
-  [2] GtkScrollbar
-  [3] GtkScrolledWindow
-  [4] GtkOverlay
-  [5] ScribobulateSplitView
-  ```
-
-  `gtkrange.c` parents the trough on the **range** and the slider on the **trough**, so
-  a gizmo whose parent is `GtkRange` **cannot be the slider** — it is the trough. Two
-  corollaries: the widget still reports its LAST allocation (6×575) while
-  `alloc_needed` is set, exactly as the stale-`render_node` re-append predicts; and the
-  chain runs through `ScribobulateSplitView`, matching the split-mode-only trigger below.
-- **Mechanism** (gtkrange.c:2325-2344): on the adjustment's `changed` signal — i.e. our
-  content-height change — `gtk_widget_queue_allocate(priv->trough_widget)` runs
-  **unconditionally** (:2339), setting `alloc_needed`. If that lands after the frame's
-  layout pass, the trough carries `alloc_needed` into the same frame's snapshot, and
-  `gtk_widget_do_snapshot` warns and early-returns (gtkwidget.c:11614-11617). The
-  sibling `show(slider)` path is inert for us: its hide branch is `GTK_IS_SCALE`-gated
-  and a scrollbar is not a scale, and `show()` is a no-op when already visible.
-- **Why it's harmless, precisely**: the early return leaves `render_node` intact, so
-  `gtk_widget_snapshot` re-appends the **previous** frame's node — stale paint, not
-  blank, and invisible when the content is unchanged (our case). `draw_needed` stays
-  TRUE, so it re-snapshots once the allocation lands: one frame, self-healing.
-
-Characterised empirically (Xvfb, release build of `501a71f`, `tests/fixtures/large-doc.md`):
-
-**⚠ The trigger recorded below was WRONG and cost four failed reproduction attempts
-(2026-07-16). Corrected trigger — all three conditions are REQUIRED:**
-
-1. **Split mode** (`Alt+2`). Not Edit, not Preview.
-2. **A document tall enough for the pane to actually scroll** (`large-doc.md`, 41,785
-   lines). A 5-line doc reproduces nothing even in split.
-3. **A content-height change** while in that state (plain typing suffices).
-
-Measured, one run, counting after each step:
-`startup 0 · Page_Down×3 0 · resize-small 0 · resize-back 0 · enter-split 0 ·
-type-in-split 1`. Typing in **Edit** mode is a content-height change and yields **0** —
-so "the first content-height change" is not the trigger and never was. The parent chain
-above explains why: the trough that warns hangs off a `ScribobulateSplitView` pane's
-scroller, which does not exist until split mode is entered.
-
-- **Fires exactly once per session**, on the first qualifying change (above). Three
-  successive code-block insertions at different offsets, five undo/redo cycles, and
-  Page_Down/Up bursts all left the count at 1 — it's a first-layout-pass transient,
-  not a recurring one.
-- **Not code-block-specific** (an earlier revision of this entry claimed it was): a
-  fresh instance that only pressed Return ×10 and typed plain text — no code block —
-  reproduced it identically.
-- **No visible scrollbar flicker.** Screenshots across the 42k-line fixture rendered
-  correctly, as the stale-node re-append above predicts.
-- **Why exactly once is OPEN — and two hypotheses are already dead. Do not revive
-  them.**
-  - ❌ *"the gate is `draw_needed`"* — **refuted from source.**
-    `gtk_widget_queue_allocate` calls `gtk_widget_queue_draw` (setting `draw_needed`)
-    *and* `gtk_widget_set_alloc_needed`, and gtkrange.c:2339 calls it unconditionally
-    per `changed`. So **both** warning conditions are set on **every** content-height
-    change. The once-ness is phase ordering, not flags.
-  - ❌ *"validation inside `size_allocate` on a layout-width change"* (GTK's own hazard
-    note, gtktextview.c:130-134: *"GTK sends exposes right after doing the size
-    allocates without returning to the main loop"*, with steady-state silence explained
-    by `first_validate_idle` at `GTK_PRIORITY_RESIZE - 2`) — **plausible mechanism, but
-    unconfirmed for us**: see the negative result below.
-  - ⚠️ **Negative result (researcher, minimal C, GTK 4.6.9/Xvfb): the generic pattern
-    does NOT reproduce this.** A bare `GtkTextView` in a `GtkScrolledWindow` with
-    `overlay_scrolling(false)` + vscrollbar ALWAYS produced **zero** warnings across
-    the not-scrollable→scrollable transition, forced width changes, and a 400-line doc
-    present at startup (the benign `-2` noise *did* appear, 2×). **So the trigger is
-    something OUR app has and the minimal case lacks** — the SplitView/Paned nest, the
-    `snapshot_layer` override, the `CodePreviewView` subclass, or the startup sequence.
-    Do not assume a generic TextView cause.
-  - ✅ **That four-way list is now narrowed to ONE (2026-07-16): the `SplitView`.** The
-    warned trough's parent chain runs `GtkRange → GtkScrollbar → GtkScrolledWindow →
-    GtkOverlay → ScribobulateSplitView`, and the warning fires **only** in split mode.
-    This *excludes* the other three candidates: the `CodePreviewView` subclass and its
-    `snapshot_layer` override are both live in **Preview** mode, and Preview — including
-    a 41,785-line document rendering at startup — produces **zero** warnings. Likewise
-    the startup sequence: startup is silent; the warning needs split to be entered and
-    then typed into. Whatever the mechanism is, it is a property of the `SplitView`
-    pane's scroller, not of the text view or the subclass.
-  - **The decisive capture, if this is ever worth closing**: break at
-    `gtk_widget_do_snapshot` (gtkwidget.c:11602-11618) and record the **backtrace**
-    (is `gtk_text_view_size_allocate` on the stack?), `priv->render_node` (NULL-or-not,
-    which also settles the stale-vs-missing branch), and the CSS node name. Trap via a
-    message-scoped `g_log_set_writer_func` (`strstr(msg, "without a current
-    allocation")` → `G_BREAKPOINT()`) — that sidesteps both the `-2`-traps-first
-    problem and any address arithmetic. Note `ptrace_scope=1` here, so it must be
-    launch-under-gdb, not attach.
-  - **Backtrace ATTEMPTED (2026-07-16) — half the capture landed, half is blocked.**
-    The writer-func trap works exactly as specified (an `int3` in the Rust writer, gated
-    on an env var, fires at the warn site). It confirms the warning is emitted from
-    inside a deep `gtk_widget_snapshot_child` descent, with **our own binary present in
-    the chain**. But `gtk_text_view_size_allocate` **cannot be confirmed present or
-    absent**, and `priv->render_node` / `draw_needed` / `alloc_needed` cannot be read at
-    all: **this machine has no GTK debug symbols** — `libgtk-4-1` is stripped, the
-    `ddebs.ubuntu.com` repo is not configured, and every interesting frame is a `static`
-    function that resolves to no symbol. Reading `priv->` fields needs struct layout,
-    i.e. DWARF.
-    **⛔ The apt/dbgsym route is a DEAD END on this box (verified 2026-07-19); so is
-    `debuginfod` (see below) — but B needs no symbols anyway.** The ddebs repo publishes `libgtk-4-1-dbgsym` only at
-    **4.6.2+ds-1ubuntu2** (the jammy *release* pocket), but the installed lib is
-    **4.6.9+ds-0ubuntu0.22.04.2** (from jammy-updates/security). The `jammy-updates` ddebs
-    index carries **no** libgtk-4 dbgsym, and ddebs has no `jammy-security` suite (404), so
-    `apt install libgtk-4-1-dbgsym` fails with `Depends: libgtk-4-1 (= 4.6.2…) but 4.6.9… is
-    to be installed`. The matching 4.6.9 dbgsym is simply not mirrored to ddebs. Do NOT
-    downgrade libgtk to 4.6.2 to satisfy it — that regresses the whole GTK stack. (For the
-    record, the sources line must still be two EXPLICIT `deb` suites — a single
-    `…{,-updates}…` inside double quotes stays literal → "does not have a Release file" — but
-    fixing that only gets you to the version-skew dead end above.)
-
-    **⛔ `debuginfod` is ALSO a confirmed dead end for 4.6.9 (verified 2026-07-20).** `gdb`
-    here is built `with-debuginfod` and `debuginfod.ubuntu.com` is reachable (DNS+TCP+TLS
-    <1 s), but the server **never delivers a payload** for the installed 4.6.9 build-ids
-    (libgtk `30d8b2a7…`, libglib `6b4f160d…`): two retry loops ran ~5 h total, each attempt
-    holding the connection ~72 min with the progress spinner animating yet **0 bytes**
-    written. So Ubuntu serves no debuginfo for the jammy-updates 4.6.9 build **anywhere** —
-    not ddebs, not debuginfod. (Full account: GTK4Rs/AP-141.)
-    **This does not block B, because B needs no symbols:** it is already POSITIVELY confirmed
-    as the scrollbar trough by the symbol-free parent-walk above (`gtk_widget_get_parent` is
-    exported). Anything that ever *did* need to name a GTK-internal static frame can use the
-    same symbol-free route, or the `LD_PRELOAD` + `dladdr`/`addr2line` interposer technique
-    (GTK4Rs/AP-141) — not distro debug symbols, which are unobtainable here.
-
-**Mitigation options**:
-- **Accept the limitation (current state)**: one line per session, no visual or
-  functional effect; the allocation timing belongs to GTK's internal trough.
-- **Demote it to Debug in `logging.rs`** alongside the slider transient — **now known
-  to be SAFE, on a pinned-type match.** An earlier revision of this entry rejected
-  this, reasoning the message was too generic and would also mask a real
-  snapshot-without-allocation bug in one of our own widgets (the ScrAP-29 class). That
-  reasoning was **wrong**: `%s` is `gtk_widget_get_name()`, so our own widget's
-  instance prints its own GType, never `GtkGizmo`. A filter pinning the type —
-  `"Trying to snapshot GtkGizmo "` — cannot mask ours. (A filter that *wildcards* the
-  type — `Trying to snapshot .* without a current allocation` — would, and must never
-  be used.) Not yet applied: one line per session is under the threshold that would
-  justify touching the log bridge, but the option is open and the objection is gone.
-- **Report upstream — now a concrete ONE-LINE PATCH, not a bug report.** There is no
-  user-visible defect to file (the stale-node re-append is invisible, and the trough's
-  `queue_allocate` is unconditional by design). But the *warning itself* is deficient:
-  gtkwidget.c:11616 prints only `gtk_widget_get_name()` (the type), so it cannot say
-  *which* internal gizmo. The CSS node name is reachable on any widget at any time —
-  and GTK **already does exactly this two files over**, in the sibling warning at
-  gtksizerequest.c:323:
-  ```c
-  g_warning ("%s %p (%s) reported min %s %d, but sizes must be >= 0",
-             G_OBJECT_TYPE_NAME (widget), widget,
-             g_quark_to_string (gtk_css_node_get_name (gtk_widget_get_css_node (widget))), …);
-  ```
-  Adding the same `(%s)` role to gtkwidget.c:11616 would make the warning
-  self-identifying (`GtkGizmo 0x… (trough) …`) and retire this whole investigation for
-  everyone downstream. Small, precedented, in-tree — a good first upstream patch if
-  anyone wants one.
 
 ## D. A strikethrough fence wrapping other inline markup renders the `~~` literally
 
@@ -568,11 +384,12 @@ Trying to snapshot GtkOverlay 0x… without a current allocation
 It has **not recurred after the first occurrence** in a session, and there is no known way
 to reproduce it on demand.
 
-**Not ISSUES.md "B".** B is the same *warning family* but a different widget and a benign
-outcome: B is the scrollbar **trough** (`GtkGizmo`, positively identified), one line per
-session, no visual effect — the stale render-node re-append leaves the *previous* frame's
-paint intact. This is a **`GtkOverlay`** and the outcome is a **blank** (no paint), so the
-stale-node cushion that makes B invisible is not operating here.
+**Not the benign member of this warning family** (ScrAP-257). The harmless variant names
+`GtkGizmo` — GTK's own private leaf widget, in practice a scrollbar trough — and leaves the
+previous frame's render node in place, so it repaints stale rather than empty and shows
+nothing on screen. This one names a **`GtkOverlay`**, one of ours by composition, and the
+outcome is a **blank** (no paint at all), so that stale-node cushion is not operating here.
+Read the interpolated widget name before assuming which case you have.
 
 **Not caused by the empty-task-list-marker fix (ScrAP-158).** Occurrence 1 predates
 that change and involved no task lists (plain select-and-delete); the change only touches
@@ -762,30 +579,29 @@ cost and the alternatives.
 ## J. Occasional SIGSEGV inside GTK/GIO, with nothing recorded at the moment of death
 
 **Severity**: Medium (real and user-facing — the application vanishes mid-work — but
-rare, with no known trigger and no reproduction. Not a regression of any single
-feature: five occurrences across four weeks, at three distinct faulting instructions,
-under circumstances the operator describes as different each time.
-**Its worst consequence is now bounded**: crash recovery snapshots unsaved edits while
+now rare and untriggerable, with no known reproduction. **Two of the five occurrences
+below are accounted for and fixed** (2026-08-06): they were the dangling
+line-display cache described in ANTI-PATTERNS #258, which the preview's re-render no
+longer creates. Three are not, and this entry is what remains of them.
+Its worst consequence stays bounded — crash recovery snapshots unsaved edits while
 they are unsaved, so an occurrence costs seconds of work and an interrupted session
-rather than the whole unsaved buffer it used to. Kept at Medium rather than dropped to
-Low deliberately — an unexplained SIGSEGV in the toolkit is worth chasing on its own
-terms, and bounding a symptom is not diagnosing a cause)
+rather than the whole unsaved buffer — but a bounded symptom is not a diagnosed cause)
 
-The installed build dies occasionally with SIGSEGV. Recovered from the
-operator's kernel log and journald, since the app itself records nothing:
+Recovered from the operator's kernel log and journald, before the forensics kit
+existed:
 
 | When | Signal | Fault addr | Faulting frame |
 |---|---|---|---|
 | 2026-07-03 11:05:30 | SIGSEGV | `0x18` | `libgtk-4.so.1.600.9` vaddr `0x1DD28A` (static fn, unnamed) |
 | 2026-07-03 11:08:17 | SIGSEGV | `0x18` | same IP |
-| 2026-07-13 12:36:03 | SIGSEGV | `0x2400000008` | `libgtk-4.so.1.600.9` vaddr `0x375219` (static fn, unnamed) |
-| 2026-07-29 01:54:39 | SIGSEGV | `0x30` | same IP |
 | 2026-07-29 13:43:44 | SIGSEGV | `0x1` | `libgio-2.0.so.0.7200.4` **`g_file_equal +0x20`** |
 
-All five are **reads** (`error 4`) of a small offset off a null-or-garbage base —
-the signature of a field read on a freed or invalid GObject. Two of the three
-faulting instructions recur weeks apart, so the paths are repeatable even though
-the trigger is unknown.
+Both remaining instructions are **reads** (`error 4`) of a small offset off a
+null-or-garbage base — the signature of a field read on a freed or invalid GObject —
+and the `0x1DD28A` pair recurred minutes apart, so the path is repeatable even though
+the trigger is unknown. (Two further occurrences, 2026-07-13 and 2026-07-29 01:54, both
+at vaddr `0x375219`, were the fixed defect; they are dropped from this table rather
+than kept as history.)
 
 **The one identified frame is a lead, not a diagnosis.** `g_file_equal +0x20`
 faulting on address `0x1` is GIO dereferencing an invalid `GFile`. The app never
@@ -795,7 +611,7 @@ monitor held on `TabState::file_monitor`) — asynchronous disk events fit the
 "different circumstances each time" description — and `FileChooserNative`, which
 per ScrAP-41 has inverted liveness and needs an external owning reference.
 
-**The recording gap is now closed; the crash is not.** The application carries a
+**The recording gap is closed; the crash is not.** The application carries a
 crash-forensics kit (`src/forensics/`, TECH.md § Diagnostics and crash forensics):
 a persistent log in the state directory, an always-on breadcrumb ring, and a
 fatal-signal handler that writes a report naming the signal, the fault address,
@@ -807,9 +623,15 @@ symbols the distribution does not ship. Lifecycle breadcrumbs are recorded at
 `FileMonitor` event (including one delivered for a tab that no longer exists) and
 every native dialog's show and response.
 
+**One recording gap remains, and it under-counts.** The handler traps fatal signals;
+it does **not** trap `SIGTRAP`, which is how a glib `G_LOG_LEVEL_ERROR` (`g_error`)
+kills the process. A death by that route leaves no report at all — the fixed defect
+took that arm roughly half the time, so any future occurrence may too. Trapping it is
+small and worth doing.
+
 **What is still open is the diagnosis.** The next occurrence should produce a
 report in `$XDG_STATE_HOME/scribobulate/`, and the next launch after it says so.
-The question to take to that report is which of the two candidates above was live
+The question to take to that report is which of the two `GFile` candidates was live
 in the seconds before the fault; with that answer, the follow-up is a targeted
 `G_DEBUG=fatal-warnings` run under gdb on the implicated path, since the first GTK
 CRITICAL is usually upstream of the eventual segfault.
@@ -819,8 +641,20 @@ without the kit, and for correlating a report against `journalctl -k`): see
 ScrAP-204 — the naive reading of a `segfault at … ip … in <lib>[<VMA>+<size>]`
 line names the wrong function.
 
-**Do not treat a clean run as evidence of a fix.** Five occurrences in four weeks
-means an absence of crashes over a session or a test pass says nothing.
+**Do not treat a clean run as evidence of a fix.** These surfaced three times in four
+weeks, so an absence of crashes over a session or a test pass says nothing.
+
+**Mitigation options**:
+- **Wait for a report and diagnose from it** (current state): the kit now records what
+  the earlier occurrences could not, and the two `GFile` suspects are both
+  breadcrumbed.
+- **Trap `SIGTRAP` in the forensics handler**: independent of the diagnosis and worth
+  doing regardless — without it, a glib-fatal death is invisible.
+- **Audit the two `GFile` suspects directly** rather than waiting: the `FileMonitor`
+  held on a tab that may already be gone, and the native dialog's inverted liveness.
+  Cheaper than a crash, but speculative — neither is confirmed.
+- **Accept the limitation**: not viable. An unexplained SIGSEGV in the toolkit is
+  worth chasing on its own terms.
 
 ## N. A click inside an existing selection never reaches the preview's click affordances
 
