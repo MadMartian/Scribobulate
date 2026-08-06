@@ -269,19 +269,22 @@ fn injected_delay() -> std::time::Duration {
 /// Make every document operation take at least `delay`, until the returned guard is
 /// dropped. Restores the previous value rather than zeroing, so nesting is safe and a
 /// panicking test cannot leave the delay set for whatever runs next on this thread.
-#[cfg(test)]
+// Gated to its callers' cfg (the gtk-integration-tests modules), not the broader
+// `cfg(test)` — otherwise a bare `cargo test` compiles the injector with nothing to
+// inject into and reports it, its guard, and the re-export as dead.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
 #[must_use = "the delay is only in force while the guard is alive"]
 pub(crate) fn slow_io(delay: std::time::Duration) -> SlowIoGuard {
     let previous = INJECTED_DELAY.with(|d| d.replace(delay));
     SlowIoGuard { previous }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gtk-integration-tests"))]
 pub(crate) struct SlowIoGuard {
     previous: std::time::Duration,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gtk-integration-tests"))]
 impl Drop for SlowIoGuard {
     fn drop(&mut self) {
         INJECTED_DELAY.with(|d| d.set(self.previous));

@@ -117,8 +117,42 @@ function Invoke-Step {
     # Assigning the preference here is function-scoped, so it reverts on return;
     # PowerShell's preference variables are dynamically scoped, so $Body -- defined
     # at script scope but invoked from here -- correctly sees this value.
+    # 'Continue' stops the record being TERMINATING. It does not stop it being
+    # WRITTEN -- and that is the second half of the same defect, fixed by the unwrap
+    # below. Measured here on PS 5.1, native command exiting 0 with one stderr line,
+    # caller redirecting:
+    #
+    #     cargo :     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s
+    #     At R:\Scribobulate\packaging\windows\pipeline.ps1:206 char:5
+    #     + CategoryInfo          : NotSpecified: (...) [], RemoteException
+    #     + FullyQualifiedErrorId : NativeCommandError
+    #
+    # The run completes and every gate is honest, but each successful step prints a
+    # block that reads as a failure, quoting a line number in THIS file -- so a real
+    # failure has to be told apart from four lookalikes, which is the same reading
+    # error the fatal version caused, just cheaper.
+    #
+    # `2>&1` here is deliberately the very construct that creates the records: it is
+    # what lets us CATCH them as objects and re-emit the message as a plain string.
+    # Non-ErrorRecord output passes through untouched, so a body that emits real
+    # objects (stage.ps1) keeps its normal formatting.
+    #
+    # NOT $ErrorActionPreference = 'SilentlyContinue', the obvious one-word fix: cargo
+    # writes COMPILER DIAGNOSTICS to stderr as well as progress, so suppressing the
+    # records discards the error text of a failing build and leaves the operator with
+    # a bare "FAILED: ... (exit 101)". Quiet, and useless.
+    #
+    # Emitted to the OUTPUT stream, not Write-Host: Write-Host writes to the
+    # information stream, which `2>&1` does not capture, so the documented
+    # `.\pipeline.ps1 2>&1 | Tee-Object build.log` form would have produced a log with
+    # every cargo line missing. Measured: with this form, `| Tee-Object` and
+    # `2>&1 | Tee-Object` both capture the full output, stdout/stderr interleaving is
+    # preserved in order, a body that `throw`s still terminates, and a called .ps1's
+    # `exit 1` is still seen by the $LASTEXITCODE check below.
     $ErrorActionPreference = 'Continue'
-    & $Body
+    & $Body 2>&1 | ForEach-Object {
+        if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "FAILED: $Name (exit $LASTEXITCODE)"
     }

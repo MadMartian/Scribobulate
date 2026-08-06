@@ -61,7 +61,10 @@ pub(crate) struct BusyNotice {
     inner: Rc<BusyNoticeInner>,
 }
 
-#[cfg(test)]
+// Gated to the same cfg as its only callers, `mod tests` below, not the broader
+// `cfg(test)`: a bare `cargo test` does not compile that module and reported this
+// as dead.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
 impl BusyNotice {
     /// Whether the notice has actually reached the status bar yet — i.e. whether the
     /// operation outlived [`BUSY_NOTICE_DELAY`]. Test-only: production code never asks,

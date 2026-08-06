@@ -126,7 +126,10 @@ pub(crate) fn describe(control: &impl IsA<gtk::Widget>, description: Option<&str
 /// `gtk_test_accessible_has_property` — present in 4.6.9 (`nm -D`-confirmed, the ScrAP-83
 /// discipline), non-variadic, and asking exactly the question the regression guard needs:
 /// *was a name set at all*, which is the omission this module exists to prevent.
-#[cfg(test)]
+// Gated to the same cfg as its only caller, `gtk_integration_tests` below, not the
+// broader `cfg(test)`: a bare `cargo test` does not compile that module and reported
+// this as dead.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
 pub(crate) fn has_name(control: &impl IsA<gtk::Widget>) -> bool {
     use gtk::glib::translate::{IntoGlib, ToGlibPtr};
     let accessible = control.as_ref().clone().upcast::<gtk::Accessible>();

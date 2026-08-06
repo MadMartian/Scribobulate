@@ -423,7 +423,10 @@ impl PreviewFindCache {
     }
 
     /// How many times the list has been built (test-only; see the field).
-    #[cfg(test)]
+    ///
+    /// Gated to its callers' cfg for the reason given above `impl FindTarget`: under a
+    /// bare `cargo test` the gated module is absent and this reads as dead code.
+    #[cfg(all(test, feature = "gtk-integration-tests"))]
     fn builds(&self) -> u64 {
         self.builds.get()
     }

@@ -68,7 +68,10 @@
 
 mod pool;
 
-#[cfg(test)]
+// Gated to the same cfg as its only callers (the gtk-integration-tests modules in
+// `window::save`), not the broader `cfg(test)`: under a bare `cargo test` the callers
+// are not compiled and the re-export became an unused import.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
 pub(crate) use pool::slow_io;
 
 use crate::limits;

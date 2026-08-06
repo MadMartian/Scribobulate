@@ -180,7 +180,11 @@ impl StatusStack {
     /// Test-only, and deliberately the widget rather than the model: a notice that
     /// reaches the stack but never the label is the failure a model-level assertion
     /// cannot see.
-    #[cfg(test)]
+    ///
+    /// Gated to its only callers' cfg (`winstate::busynotice`'s gated tests), not the
+    /// broader `cfg(test)` — a bare `cargo test` does not compile them and reported
+    /// this as dead.
+    #[cfg(all(test, feature = "gtk-integration-tests"))]
     pub(crate) fn label_text(&self) -> String {
         self.label.text().to_string()
     }
