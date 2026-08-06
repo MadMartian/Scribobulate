@@ -263,6 +263,14 @@ silently returning in a future change.
   the `pub(crate)` tree these tests reach into. The main-thread runner that does
   need that reach is a second crate root (`src/gtk_suite.rs`), not a `tests/`
   file, for exactly this reason.
+- **A helper that exists only for these tests carries their cfg, not a bare
+  `#[cfg(test)]`.** An item gated `#[cfg(test)]` whose only callers are gated
+  `#[cfg(all(test, feature = "gtk-integration-tests"))]` still compiles under a
+  plain `cargo test`, with nothing to use it — so step 4 reports it as dead code
+  while step 2, which passes the feature, stays silent. Gate the item to the same
+  cfg as its callers and the `-D warnings` gate stays satisfiable without an
+  `#[allow]`, for the same reason platform seams are `#[cfg]`-gated at the module
+  declaration.
 - **Use `#[gtktest::test]`, not `#[test]` + a manual `gtk::init()`.** GTK is
   single-threaded (gtk4-rs skill guardrail #1) and libtest runs each test on its
   own thread, so a plain `#[test]` that calls `gtk::init()` works only for the
