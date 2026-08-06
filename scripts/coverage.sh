@@ -9,6 +9,18 @@
 # non-zero when scoped line coverage drops below it. Raise it in the same change
 # that raises coverage; never lower it to make a run pass.
 #
+# READ THE RIGHT COLUMN WHEN YOU RAISE IT. `--summary-only`'s TOTAL row prints
+# THREE percentages and the one this gate turns on is the THIRD:
+#
+#   TOTAL   24951  5609  77.52%   1788  371  79.25%   14634  3441  76.49%
+#           └─ regions ─┘         └─ functions ─┘     └───── LINES ─────┘
+#
+# Region coverage leads the row and runs about a point HIGHER, so reading
+# left-to-right sets the floor above what the run can ever reach and the gate
+# then fails on correct code — which reads as "your change tanked coverage".
+# Also round DOWN by 0.01: the printed figure is rounded, so a floor set to the
+# displayed value fails against the unrounded one (76.49% printed, 76.48 here).
+#
 # Usage:
 #   scripts/coverage.sh                 # run the gate (summary + fail-under)
 #   scripts/coverage.sh --html          # + HTML report (extra args pass through)
@@ -17,7 +29,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-FLOOR=76.40
+FLOOR=76.48
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

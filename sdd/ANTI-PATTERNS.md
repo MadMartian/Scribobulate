@@ -14,7 +14,7 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > lifecycle), **#130** (librsvg/docs tooling), **#147** (pulldown-cmark/CommonMark block-HTML
 > event stream), **#160** (syntect default-syntax coverage), **#163** (Pango markup escaping), **#164** (testing/CI + cross-platform filesystem),
 > **#194** (CommonMark/Markdown transform logic + enforcement discipline),
-> **#195** (pulldown-cmark + this crate's own inline scanner),
+> **#195** (pulldown-cmark + this crate's own inline scanner), **#255** (this crate's copymap/renderer offset model),
 > **#196** (this crate's renderer/annotation offset mapping), **#206**/**#207** (reference-gate tooling + cross-platform gate parity), **#208** (Rust proc-macro/test-harness design), **#209** (testing discipline), **#214** (macOS/dyld dynamic-loader semantics + Rust/libc), **#215** (testing discipline), **#216** (register/citation tooling), **#217** (experiment design), **#218** (multi-agent process), **#219** (testing/tooling discipline), **#220** (testing discipline), **#221** (testing discipline), **#222** (documentation/tooling governance), **#223** (review/claim discipline), **#224** (version control / project governance), **#225** (input-cost policy / threat modelling), **#226** (testing/gate discipline), **#228** (invariant-placement discipline), **#229** (filesystem permissions / cross-platform security model), **#230** (Rust tooling / enforcement discipline), **#233** (serde/`toml` crate + file-format design), **#234** (testing discipline), **#236** (verification tooling / Windows harness), **#237** (testing/CI process + cross-platform build discipline), **#239** (verification tooling / Cargo + git build-artefact semantics), **#240** (reference-gate tooling + review discipline), **#241** (crash-recovery design limitation / OS process identity), **#242** (tooling/process), **#245** (verification tooling / X11 input injection), **#251** (verification tooling / distribution build configuration), **#252**, **#253** (verification tooling / test-harness design), **#254** (testing discipline), **#243** (GLib/GIO task-pool internals — not a GTK widget contract, though it binds any gtk-rs app that moves I/O off the main thread) — and, following the same precedent as #36,
 > **#124**'s core-GTK half went to the skill as **GTK4Rs/AP-98**; its tooling/process remainder
 > (which pipeline step compiles a gated suite) stays project-specific. Their stubs stay a
@@ -273,6 +273,7 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 | 252 | A DRIVE STEP ROUTED THROUGH AN APP COMMAND INHERITS THAT COMMAND'S OWN ENABLEMENT GATE, AND A DISABLED `GAction` SWALLOWS IT IN SILENCE. A live drive alternated "place the caret with the app's own Go To Line" and "click the toolbar button under test"; the click moved focus to the toolbar, `win.go-to-line` is gated on EDITOR focus, and `g_simple_action_activate` returns without emitting when an action is disabled — so from the second iteration the caret never moved, no dialog appeared, nothing logged, and every later assertion was evaluated against the PREVIOUS position. Worse than a dropped input: the stale run produced the CORRECT ANSWER FOR THE OLD LINE, which is exactly what a broken gate would produce, so the false reading was indistinguishable from a real defect — caught only by cropping the footer Ln/Col indicator and seeing `Ln 5` where the script believed `Ln 3` → verify a setup step by its OWN observable (Ln/Col, title, match count), never by its exit status, and prefer a setup primitive with NO enablement gate (a click into the text moves the caret unconditionally) — a harness step must not depend on the subsystem under test being in a particular state. Second-order: two assertions sharing one stale precondition AGREE WITH EACH OTHER, so a self-consistent pair of results is not evidence either was measured. SECOND INSTANCE, same session, different mechanism: chaining `mousemove`+`mousedown` in ONE `xdotool` invocation delivered a press the app's gesture handler NEVER RAN FOR (proved by instrumenting the handler — 3 calls for 4 clicks) while a context menu still appeared, so the capture showed a menu built for the PREVIOUS pointer position and the feature read as broken on one link and fine on its neighbour; separate the move from the press with a settle. An input that is DELIVERED is not an input that was HANDLED — instrument the handler rather than re-reading the screenshot. Kin #245 (the same silence one layer down, at the input channel), #217, #239 |
 | 253 | `org.gtk.Actions`'s D-Bus probe — the sanctioned way to read a GAction's `enabled` bit, because sensitivity often has NO pixel signal (GTK4Rs/AP-67) — SILENTLY ANSWERS ABOUT A DIFFERENT PROCESS when addressed by the app's WELL-KNOWN name, which is what you reach for. `--new-instance` (which the manual plan mandates, ScrAP-43) means `NON_UNIQUE`, so the test process owns no well-known name; that name still resolves — to whichever primary the session bus already has, i.e. **the operator's own running app**. MEASURED: `Describe nav-back` on `com.extollit.scribobulate` returned `The named action ('nav-back') does not exist` while the action was registered and working in the instance under test — a confident, specific, plausible answer about another process, in the direction that manufactures "my registration is broken" about working code. The tell nobody reads: `List` answered at BOTH `window/1` and `window/2` for a launch that made one window. → **the probe is MIS-ADDRESSED, not unavailable** (a first version of this entry said unavailable — corrected by measurement): a `NON_UNIQUE` app still holds a UNIQUE name, so resolve it from the PID you launched (`busctl --user list \| awk '$2==PID'` → `:1.NNN`) and address that. MEASURED end-to-end on a `-n` instance: `Describe` returns the real enabled bits and `Activate` drives the actions, so both halves of GTK4Rs/AP-67 work with no pointer and no pixels. Functional verification is the fallback where no bus exists at all. Lesson: **a well-known bus name is a ROLE, not your process** — bind a probe to the identity you launched. Kin ScrAP-43/ScrAP-131 (process ≠ window ≠ bus-name isolation), ScrAP-252 (self-consistent wrong answer) |
 | 254 | AN INVARIANT HELD BY TWO INDEPENDENTLY-SUFFICIENT MECHANISMS IS MUTATION-PROOF ONE MECHANISM AT A TIME, SO THE STANDARD MUTATION TEST REPORTS EACH ONE AS DEAD CODE. Writing "mutation-checked: removing this guard fails the test" is then false in both directions, and it is the *comment* that rots first. MEASURED here on TDD 23.3 (traversing Back/Forward must not itself record history): a suppression guard around the traversal's page switch AND the history's own already-current dedup each hold it alone — neuter either and 25 tests stay green; neuter both and two fail. Neither mutation is informative, and the natural reading of the first ("no test covers this, delete it") removes a guard whose whole value is the day the *other* mechanism is narrowed. → when a mutation leaves a suite green, the next question is "what else holds this?", not "is this dead?" — enumerate the mechanisms and mutate the SET; aim the test at the OUTCOME rather than at either mechanism (a test aimed at one passes while the pair drifts); and record the honest result in the code, including "this guard is redundant today, kept for X" — a claim of load-bearingness nobody neutered is exactly the untested assertion the mutation discipline exists to catch. Sharpens ScrAP-87 (a test that passes against broken code) one level up: there the SETUP masked the defect, here a second correct mechanism masks the guard's absence |
+| 255 | A CONSTRUCT WHOSE GLYPHS ARE BUFFERED AT ITS `End` EVENT LOOKS UNRECONSTRUCTABLE, AND "OPAQUE" IS THE WRONG CONCLUSION — the copymap's per-event buffer capture reads ZERO-WIDTH for every event inside a fenced code block (the renderer accumulates the body and flushes it in one syntect-highlighted insertion at `TagEnd::CodeBlock`), so the block joined the image/table opaque set and a two-word selection inside it copied the WHOLE fenced block. But the two cases are not alike: an image/table is one `U+FFFC` standing for a widget whose text is not in this buffer at all, whereas a code block's body IS the buffer — only its coordinates are attributed to a different event. Re-derive them by laying the interior events' SOURCE runs across the `End` event's buffer range, and prove the layout reconciles (chars flushed == chars accounted) before trusting it, degrading to the old opaque node when it does not — coarse copy, never wrong copy. Two traps in the fix: (a) the tree has a SECOND consumer with the opposite atomicity requirement — `wrap_span` places CriticMarkup, and a divisible code block would let `{==` land inside a fence; (b) a closing ```` ``` ```` closes nothing unless it BEGINS A LINE, so a crossing selection that stops mid-line must take a newline before the fence or the paste swallows everything after it. Both say the same thing: "char-precise for copy" and "indivisible as a construct" are independent properties, and the flag that carried them was one bool |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -915,7 +916,7 @@ GTK4 is single-threaded, yet many pitfalls below present as **races** — interm
 
 **Symptom**: annotating a single plain word in a paragraph highlighted the ENTIRE paragraph.
 **Root cause**: `wrap_span` inferred "inline" from whether a node's source open/close delimiter byte-ranges were non-empty — a paragraph ALSO has non-empty trailing "close" bytes, so it was mis-flagged inline and taken whole.
-**Resolution**: the copy-map's branch-node representation carries an explicit `inline: bool` set from the CONSTRUCT KIND at build time, never inferred from byte shape.
+**Resolution**: the copy-map's branch-node representation carries an explicit kind set from the CONSTRUCT KIND at build time, never inferred from byte shape (originally an `inline: bool`; now the `BranchKind` enum — see ScrAP-255 for why the boolean pair became one enum).
 **Non-core (pulldown-cmark / this project's copymap) — do NOT fold into the gtk4-rs skill.**
 
 ## 98. A `GtkPopover` hosting a typing entry is unwinnable on X11 (autohide steals focus via its seat grab; non-autohide can drop clicks) — host a typing entry as an in-surface `GtkOverlay` child instead
@@ -5026,3 +5027,70 @@ is not waste; it is what survives one of the two being changed.
 broken code because the SETUP masked the defect) with its sibling: a test that
 passes against a mutated guard because a SECOND CORRECT MECHANISM masked its
 absence. Kin ScrAP-217 (a control that cannot differ has stopped being a control).
+
+## 255. A construct whose glyphs are buffered at its `End` event is not opaque — it is char-precise in a coordinate space nobody wrote down
+
+> *Non-core (this project's copymap + renderer offset model) — do NOT fold into the
+> gtk4-rs skill. Sibling of ScrAP-73 (the block-granular copy this register was
+> opened with) and ScrAP-97 (branch behaviour set from the construct KIND).*
+
+**Symptom.** Selecting a couple of words inside a rendered code block and choosing
+Copy — from the context menu, the Edit menu, or Ctrl+C, all one `win.copy` action —
+put the **entire fenced block, fences included** on the clipboard. Every other
+construct had been char-precise since ScrAP-73; the code block was the last one
+that had not, and it is the construct users copy *from* most.
+
+**Root cause.** The copymap captures each render event's live buffer range as
+`(before, after)` around that event's processing. That is exact for every
+construct whose interior events insert their own glyphs — and a code block's do
+not: `Renderer` *accumulates* the body while the `Text` events go by (inserting
+nothing, so each captured range is **zero-width**) and flushes the whole block in
+one syntect-highlighted insertion at `TagEnd::CodeBlock`. The block's glyphs are
+therefore attributed to the `End` event, and the interior looks like it has no
+buffer coordinates at all. It was consequently filed with images and tables as
+`Node::Opaque` — "owns buffer glyphs with no reconstructable interior".
+
+**The misread is the lesson.** An image or a table is opaque for a *structural*
+reason: it is one `U+FFFC` anchor standing in for a widget whose text is not in
+this buffer at all. A code block shares none of that — its body **is**
+buffer text, character for character; only the *bookkeeping* attributed it
+elsewhere. "No per-event buffer range" and "no reconstructable interior" are
+different claims, and one was read as the other.
+
+**Resolution.** `copymap::code_block_node` lays the interior events' source runs
+out across the `End` event's buffer range, in order, producing one leaf per run —
+and **proves the layout before trusting it**: the flushed char count must equal
+the body's, mirroring `insert_code_block`'s own rule (trailing blank lines
+trimmed, one `\n` per line). Where it does not reconcile — or where any
+non-`Text` event appears inside — the block falls back to exactly the opaque node
+it used to be. Coarse copy, never wrong copy, on the same principle as the
+`one_to_one` degradation an escape or an entity already gets.
+
+**Two traps in the fix, both worth more than the fix.**
+
+1. **The tree has a second consumer with the opposite requirement.** `wrap_span`
+   resolves where a CriticMarkup annotation may be placed. Making the block
+   divisible for *copy* would silently have made it divisible for *annotate*, and
+   `{==` landing inside a fence renders as literal code — a regression in a
+   different feature, from a change that reads as local. The two properties
+   ("char-precise for copy", "indivisible as a construct") are independent.
+2. **A closing fence closes nothing unless it begins a line.** A selection that
+   crosses into the block and stops mid-line reconstructs the fence right after
+   the last selected character — ```` let a``` ```` — which CommonMark reads as
+   more code, so the paste swallows everything after it. Well-formedness (TDD
+   2.8e) is a property of the *emitted* text, not of having emitted a delimiter.
+
+Both were caught because the branch flags were re-examined rather than reused: the
+node carried `line_marker: bool` + `inline: bool`, and a code block is neither
+(nor plainly both). Replacing them with one `BranchKind` — `Container`,
+`LineMarker`, `Paired`, `Fence` — made each site ask a semantic question and made
+`Fence`'s extra rule expressible. **A boolean pair that has no name for the case in
+front of you is the design telling you it is an enum.**
+
+**Now pinned by**: `copymap/tests.rs`'s code-block block (within/whole-line/whole-body,
+both crossings, indented, quoted, in a list, trailing-blank degradation, empty
+block, `wrap_span` whole-block) plus `preview::build`'s
+`code_block_is_char_precise_live`, which drives the REAL syntect flush the unit
+sim can only mirror. All five guards mutation-tested: restoring the opaque set,
+neutering the fence newline, dropping `Fence` from `paired()`, and disabling
+either fallback condition each fail a specific test.

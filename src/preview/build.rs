@@ -713,6 +713,39 @@ mod gtk_integration_tests {
         assert_eq!(crate::copymap::resolve(cmap, md, 0, n), md);
     }
 
+    /// A code block is char-precise against the REAL renderer (ScrAP-255).
+    ///
+    /// This is the case the pure unit tests can only *simulate*, and the
+    /// simulation is the whole risk: a code block's body is the one construct
+    /// whose glyphs no interior event inserts — the renderer accumulates it and
+    /// flushes it through **syntect** at `TagEnd::CodeBlock`, one buffer insertion
+    /// per highlighted token. The copymap re-derives the body's buffer layout from
+    /// that flush's range, so if the real insertion ever stops matching the rule
+    /// (`insert_code_block`: trailing blank lines trimmed, one `\n` per line), the
+    /// block silently degrades back to opaque and only this test can see it.
+    #[gtktest::test]
+    fn code_block_is_char_precise_live() {
+        let md = "intro\n\n```rust\nlet a = 1;\nlet b = 2;\n```\n\nafter";
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        let cmap = &products.copymap;
+        // Within the body: the reported bug — this used to copy the whole block.
+        let a = char_off(&slice, "a = 1");
+        assert_eq!(crate::copymap::resolve(cmap, md, a, a + 5), "a = 1");
+        // A whole line of it, still fence-free.
+        let l = char_off(&slice, "let b = 2;");
+        assert_eq!(crate::copymap::resolve(cmap, md, l, l + 10), "let b = 2;");
+        // Crossing out of the block reconstructs BOTH fences (2.8b).
+        let x = char_off(&slice, "after");
+        assert_eq!(
+            crate::copymap::resolve(cmap, md, l, x + 5),
+            "```rust\nlet b = 2;\n```\n\nafter"
+        );
+        // And Select-All is still byte-identical Copy Document (2.8c).
+        let n = products.buf.char_count();
+        assert_eq!(crate::copymap::resolve(cmap, md, 0, n), md);
+    }
+
     /// Nested / loose list items are char-precise against the REAL renderer
     /// (formerly opaque): a within-item selection excludes markers, a
     /// selection crossing from the outer item into a nested one reconstructs the

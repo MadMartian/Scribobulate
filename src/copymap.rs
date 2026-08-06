@@ -144,8 +144,9 @@ enum Node {
         src: Range<usize>,
         one_to_one: bool,
     },
-    /// An opaque construct (image, table, or code block): any buffer overlap
-    /// copies its whole source.
+    /// An opaque construct (an image or a table, plus any construct whose
+    /// reconstruction could not be proven — see [`code_block_node`]): any buffer
+    /// overlap copies its whole source.
     Opaque { buf: (i32, i32), src: Range<usize> },
     /// A paired/leading-marker construct reconstructed from source delimiters,
     /// or a delimiter-free container (document root, list, paragraph).
@@ -156,24 +157,59 @@ enum Node {
         open: Range<usize>,
         /// Source range of the close delimiter (empty for a container).
         close: Range<usize>,
-        /// A **leading-marker block** (heading, blockquote, list item): its
-        /// per-line markers (`> `, the list continuation indent, …) live in the
-        /// inter-sibling source gaps and must be **suppressed** when the selection
-        /// stays *within* the block (constraint A — exclude the block's own
-        /// delimiters) but **emitted** when the selection crosses out of it. This
-        /// flag drives that gate over the whole subtree; `false` for containers
-        /// and paired inline constructs, whose gaps are ordinary content.
-        line_marker: bool,
-        /// An INLINE construct (emphasis/strong/link) — as opposed to a block
-        /// container (paragraph/list) or a leading-marker block. Set from the
-        /// `Construct` kind at build time, NOT inferred from the delimiter ranges:
-        /// a paragraph can have a non-empty source `close` (trailing bytes past its
-        /// last child), so a delimiter-emptiness heuristic wrongly flags it inline.
-        /// [`wrap_span`] includes an inline construct WHOLE (so `{==…==}` never
-        /// splits its `**`/`[]()`) but recurses into a container.
-        inline: bool,
+        /// How those two delimiters behave — see [`BranchKind`].
+        kind: BranchKind,
         children: Vec<Node>,
     },
+}
+
+/// What a [`Node::Branch`]'s `open`/`close` delimiters *are*, which is what
+/// decides when they are emitted and whether the construct may be split.
+///
+/// **Always set from the `Construct` kind at build time, never inferred from the
+/// delimiter byte ranges**: a paragraph can have a non-empty source `close`
+/// (trailing bytes past its last child), so a delimiter-emptiness heuristic
+/// flagged it inline and copy/annotate engulfed whole paragraphs (ScrAP-97).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BranchKind {
+    /// A delimiter-free container: the document root, a list, a paragraph. Its
+    /// `close` is a line terminator, not a delimiter, so it is emitted only when
+    /// the selection crosses out the *bottom*; its inter-sibling gaps are ordinary
+    /// content.
+    Container,
+    /// A **leading-marker block** (heading, blockquote, list item): its per-line
+    /// markers (`> `, the list continuation indent, …) live in the inter-sibling
+    /// source gaps and must be **suppressed** when the selection stays *within* the
+    /// block (constraint A — exclude the block's own markers) but **emitted** when
+    /// it crosses out. That gate runs over the whole subtree. Its `close` is a line
+    /// terminator, as `Container`'s is.
+    LineMarker,
+    /// A **paired inline construct** — emphasis/strong/link, an inline code span, a
+    /// `^sup^`/`~~s~~` script marker: two halves of a delimiter that must never be
+    /// separated.
+    Paired,
+    /// A **fenced code block**: paired exactly like `Paired`, plus one rule of its
+    /// own — a closing fence only closes the block when it *begins a line*, so a
+    /// selection that stops mid-line takes a newline before the fence.
+    Fence,
+}
+
+impl BranchKind {
+    /// Whether the delimiters are a matched pair that must never be split. Two
+    /// consequences, both of "the pair is indivisible": [`resolve_node`]
+    /// reconstructs the `close` on *any* crossing (so a copy out of the construct
+    /// is balanced, 2.8b), and [`wrap_span`] takes the construct WHOLE (so a
+    /// `{==…==}` annotation never lands between a `**`, a `` ` `` or a
+    /// ```` ``` ```` and its partner).
+    fn paired(self) -> bool {
+        matches!(self, BranchKind::Paired | BranchKind::Fence)
+    }
+
+    /// Whether the construct's markers live in its inter-sibling gaps and are
+    /// gated on it being crossed.
+    fn line_marker(self) -> bool {
+        matches!(self, BranchKind::LineMarker)
+    }
 }
 
 impl Node {
@@ -234,8 +270,7 @@ pub(crate) fn build(md: &str, evs: &[RawEv], char_count: i32) -> CopyTree {
         buf: (0, char_count),
         open: 0..0,
         close: md.len()..md.len(),
-        line_marker: false,
-        inline: false,
+        kind: BranchKind::Container,
         children,
     };
     CopyTree { root, char_count }
@@ -412,6 +447,13 @@ impl Builder<'_> {
             return Some(Node::Opaque { buf, src });
         }
 
+        // A code block owns buffer glyphs its interior events never produced (the
+        // renderer buffers the whole body and flushes it at `End`), so it cannot
+        // use the generic path below — see [`Builder::code_block`].
+        if c == Construct::CodeBlock {
+            return Some(self.code_block(&start));
+        }
+
         // Char-precise construct: recurse, capturing the matching End for the
         // content buffer range.
         let mut children = Vec::new();
@@ -481,12 +523,14 @@ impl Builder<'_> {
             buf: content_buf,
             open,
             close,
-            // Leading-marker blocks whose per-line markers must be gap-gated.
-            line_marker: matches!(
-                c,
-                Construct::Heading | Construct::BlockQuote | Construct::Item
-            ),
-            inline: matches!(c, Construct::Emphasis | Construct::Strong | Construct::Link),
+            kind: match c {
+                // Leading-marker blocks whose per-line markers must be gap-gated.
+                Construct::Heading | Construct::BlockQuote | Construct::Item => {
+                    BranchKind::LineMarker
+                }
+                Construct::Emphasis | Construct::Strong | Construct::Link => BranchKind::Paired,
+                _ => BranchKind::Container,
+            },
             children,
         })
     }
@@ -517,18 +561,132 @@ impl Builder<'_> {
             kind: RawKind::End(c),
         })
     }
+
+    /// Build the node for the code block whose `Start` event is `start` and whose
+    /// events begin at `self.i`; consumes through the matching `End`.
+    ///
+    /// **Why this construct needs its own builder.** Every other construct's
+    /// interior events insert their own glyphs, so each carries a live buffer
+    /// range. A code block's do not: the renderer *accumulates* the body and
+    /// flushes it in one syntect-highlighted insertion at `TagEnd::CodeBlock`
+    /// (`renderer::emit::insert_code_block`), so every interior `Text` event has a
+    /// ZERO-WIDTH captured range and the whole block's glyphs are attributed to the
+    /// `End` event. Nothing is missing — the interior events still carry their
+    /// exact *source* ranges — but the buffer side has to be re-derived by laying
+    /// those runs out across the flush's range, which is what this does. Treating
+    /// the block as [`Node::Opaque`] instead (which it was) is what made a partial
+    /// selection inside a code block copy the ENTIRE fenced block (ScrAP-255).
+    ///
+    /// **It proves the layout before trusting it.** The buffer text is the
+    /// accumulated body with trailing blank lines trimmed and exactly one `\n` per
+    /// line, so it can differ in length from the concatenated source runs (trailing
+    /// blank lines, or a syntect highlight that yielded no tokens). Unless the
+    /// reconstruction accounts for exactly the flushed chars, the block degrades to
+    /// the opaque node it used to be — coarse copy, never wrong copy.
+    fn code_block(&mut self, start: &RawEv) -> Node {
+        let mut texts: Vec<(Range<usize>, String)> = Vec::new();
+        // Anything other than Text inside a code block is unmodelled by the
+        // renderer's accumulate-and-flush path; refuse to guess where its glyphs
+        // came from and keep the whole block opaque.
+        let mut interior_ok = true;
+        let mut end_ev: Option<RawEv> = None;
+        while self.i < self.evs.len() {
+            let ev = self.evs[self.i].clone();
+            self.i += 1;
+            match &ev.kind {
+                RawKind::End(Construct::CodeBlock) => {
+                    end_ev = Some(ev);
+                    break;
+                }
+                RawKind::Text(t) => texts.push((ev.src.clone(), t.clone())),
+                _ => interior_ok = false,
+            }
+        }
+        let end = end_ev.unwrap_or_else(|| {
+            // Malformed stream: same tail fallback as `skip_to_end`.
+            self.evs.last().cloned().unwrap_or(RawEv {
+                buf: (0, 0),
+                src: 0..0,
+                kind: RawKind::End(Construct::CodeBlock),
+            })
+        });
+        code_block_node(self.md, start, &end, &texts, interior_ok)
+    }
 }
 
-/// Constructs always copied opaquely (whole source on any overlap): an image,
-/// table, or code block owns buffer glyphs with no reconstructable interior.
+/// The pure half of [`Builder::code_block`]: lay the interior source runs out
+/// across the buffer range the `End` event flushed, or degrade to one opaque node.
+fn code_block_node(
+    md: &str,
+    start: &RawEv,
+    end: &RawEv,
+    texts: &[(Range<usize>, String)],
+    interior_ok: bool,
+) -> Node {
+    let full = start.src.start..end.src.end;
+    // The fallback keeps the pre-ScrAP-255 node exactly: whole source on any
+    // overlap, over the same buffer span the opaque path used.
+    let opaque = || Node::Opaque {
+        buf: (start.buf.0, end.buf.1),
+        src: full.clone(),
+    };
+    if !interior_ok || texts.is_empty() {
+        return opaque();
+    }
+    // The flush's own buffer range IS the block's content range: the fences are
+    // never buffer text, so [b0, b1) holds body glyphs and nothing else. Taking it
+    // from `End` (not `start.buf.0`) keeps the preceding block separator OUTSIDE
+    // the content, so a selection reaching in from the blank line above reads as a
+    // boundary crossing and gets the fences reconstructed.
+    let (b0, b1) = (end.buf.0, end.buf.1);
+    let concat: String = texts.iter().map(|(_, t)| t.as_str()).collect();
+    // Mirrors `insert_code_block`: `text.trim_end_matches('\n')`, then one `\n` per
+    // split line — i.e. the body with its trailing blank lines collapsed to one
+    // terminator.
+    let flushed = format!("{}\n", concat.trim_end_matches('\n'));
+    if flushed.chars().count() as i32 != b1 - b0 {
+        return opaque();
+    }
+    let mut children: Vec<Node> = Vec::new();
+    let mut cb = b0;
+    for (src, t) in texts {
+        let n = t.chars().count() as i32;
+        let hi = (cb + n).min(b1);
+        children.push(Node::Leaf {
+            buf: (cb, hi),
+            src: src.clone(),
+            // 1:1 only when the buffer kept every char of the run AND the source
+            // says the same thing. An indented or quoted block's per-line prefix
+            // belongs to the inter-run GAP, not to the run, so each line still
+            // matches; a trailing-blank-line run does not, and copies whole.
+            one_to_one: hi - cb == n && sl(md, src.clone()) == t,
+        });
+        cb = hi;
+    }
+    let Some(content_src) = children_span(&children) else {
+        return opaque();
+    };
+    Node::Branch {
+        buf: (b0, b1),
+        open: full.start..content_src.start.min(full.end),
+        close: content_src.end.max(full.start)..full.end,
+        // The two fences are a matched pair: never split by an annotation, always
+        // reconstructed together when a copy crosses out of the block.
+        kind: BranchKind::Fence,
+        children,
+    }
+}
+
+/// Constructs always copied opaquely (whole source on any overlap): an image or a
+/// table owns buffer glyphs with no reconstructable interior — one `U+FFFC` anchor
+/// standing for a whole widget, whose text is not in this buffer at all.
 /// Blockquotes AND list items — including nested and loose items — are instead
 /// char-precise (leading-marker gap-gated; markers live out of the buffer in the
-/// gutter, ScrAP-118), so they recurse rather than skip.
+/// gutter, ScrAP-118), so they recurse rather than skip. A **code block** is
+/// char-precise too, but by a path of its own ([`Builder::code_block`]): its
+/// interior IS in the buffer, just flushed in one go at its `End` event.
 fn is_opaque(c: Construct) -> bool {
-    matches!(
-        c,
-        Construct::Image | Construct::Table | Construct::CodeBlock
-    )
+    matches!(c, Construct::Image | Construct::Table)
 }
 
 /// The source span covered by a node's children (their full source ranges).
@@ -665,8 +823,7 @@ fn text_nodes_unescaped(md: &str, buf: (i32, i32), src: Range<usize>, rendered: 
                 buf: child_buf,
                 open: sb..sb + mlen,
                 close: content_src.end..full.end,
-                line_marker: false,
-                inline: true, // script marker (^sup^/~sub~/~~strike~~)
+                kind: BranchKind::Paired, // script marker (^sup^/~sub~/~~strike~~)
                 children: vec![child],
             });
         }
@@ -694,8 +851,7 @@ fn code_node(md: &str, buf: (i32, i32), src: Range<usize>, rendered: &str) -> No
                 buf,
                 open: src.start..src.start + ticks,
                 close: src.end - ticks..src.end,
-                line_marker: false,
-                inline: true, // inline code fence — wrap whole so backticks don't split
+                kind: BranchKind::Paired, // inline code span — whole, so backticks never split
                 children: vec![child],
             };
         }
@@ -804,13 +960,12 @@ fn wrap_span_node(md: &str, node: &Node, a: i32, b: i32) -> Option<Range<usize>>
             }
         }
         Node::Opaque { src, .. } => Some(src.clone()),
-        Node::Branch {
-            inline, children, ..
-        } => {
-            // An inline construct (emphasis/strong/link) is included WHOLE so its
-            // `**`/`*`/`[]()` never split; a container (paragraph/list) or a
-            // leading-marker block (heading/blockquote/item) recurses.
-            if *inline {
+        Node::Branch { kind, children, .. } => {
+            // A paired-delimiter construct (emphasis/strong/link, a code span, a
+            // fenced code block) is included WHOLE so its `**`/`*`/`[]()`/```` ``` ````
+            // never split; a container (paragraph/list) or a leading-marker block
+            // (heading/blockquote/item) recurses.
+            if kind.paired() {
                 let s = node.src();
                 Some(s.start..s.end)
             } else {
@@ -944,30 +1099,47 @@ fn resolve_node(md: &str, node: &Node, a: i32, b: i32, emit_gaps: bool) -> Strin
         Node::Branch {
             open,
             close,
-            line_marker,
-            inline,
+            kind,
             children,
             ..
         } => {
             let cross_end = b > c1;
             let crossed = a < c0 || cross_end;
-            let child_gaps = if *line_marker { crossed } else { emit_gaps };
+            let child_gaps = if kind.line_marker() {
+                crossed
+            } else {
+                emit_gaps
+            };
             let inner = reconstruct(md, children, a, b, child_gaps);
             if !crossed {
                 return inner;
             }
-            // Only an INLINE paired construct (emphasis/strong/link/code span) has a
-            // true trailing delimiter, reconstructed whenever crossed (2.8b balanced
-            // closure). A block — a leading-marker block (heading/blockquote/list
-            // item) or a container (paragraph) — has only structure: its `close` is
-            // a line terminator that participates in the block separator ONLY when
-            // the selection crosses OUT the bottom (`cross_end`). On an *entering*
-            // cross (selection ends inside the block) emitting it would append a
-            // spurious trailing newline (`a\n  - nested\n`).
-            let close_s = if !*inline && !cross_end {
+            // Only a PAIRED construct (emphasis/strong/link/code span, or a fenced
+            // code block) has a true trailing delimiter, reconstructed whenever
+            // crossed (2.8b balanced closure). A block — a leading-marker block
+            // (heading/blockquote/list item) or a container (paragraph) — has only
+            // structure: its `close` is a line terminator that participates in the
+            // block separator ONLY when the selection crosses OUT the bottom
+            // (`cross_end`). On an *entering* cross (selection ends inside the
+            // block) emitting it would append a spurious trailing newline
+            // (`a\n  - nested\n`).
+            let close_s = if !kind.paired() && !cross_end {
                 ""
             } else {
                 sl(md, close.clone())
+            };
+            // A closing FENCE closes nothing unless it begins a line: a selection
+            // that stops mid-line would otherwise paste ```` let a``` ````, which
+            // CommonMark reads as more code and swallows the rest of the paste. The
+            // fence's own newline belongs to the last body line, so it is present
+            // whenever the selection ran to the block's end and absent exactly when
+            // it did not. (Indented code has no fence — its `close` is empty.)
+            let fence_nl =
+                *kind == BranchKind::Fence && !close_s.is_empty() && !inner.ends_with('\n');
+            let close_s = if fence_nl {
+                format!("\n{close_s}")
+            } else {
+                close_s.to_string()
             };
             // A leading-marker block whose selection begins with an in-block line
             // break — its first selected glyph is a continuation newline, not
@@ -976,7 +1148,7 @@ fn resolve_node(md: &str, node: &Node, a: i32, b: i32, emit_gaps: bool) -> Strin
             // first *real* content line is already reconstructed inside `inner`
             // (the gap-spliced continuation `> `/indent), so the leading one is
             // redundant. Drop it, keeping the user's selected newline (`\n> b`).
-            let open_s = if *line_marker && inner.starts_with('\n') {
+            let open_s = if kind.line_marker() && inner.starts_with('\n') {
                 ""
             } else {
                 sl(md, open.clone())
@@ -1034,7 +1206,7 @@ fn emits_leading_marker(node: &Node, a: i32, b: i32) -> bool {
     let Node::Branch {
         buf,
         open,
-        line_marker,
+        kind,
         children,
         ..
     } = node
@@ -1045,7 +1217,7 @@ fn emits_leading_marker(node: &Node, a: i32, b: i32) -> bool {
     if a.max(c0) >= b.min(c1) {
         return false; // not selected
     }
-    if *line_marker && (a < c0 || b > c1) && open.start != open.end {
+    if kind.line_marker() && (a < c0 || b > c1) && open.start != open.end {
         return true; // this crossed block emits its own leading marker
     }
     // Otherwise recurse into the first overlapped child (a container, or an

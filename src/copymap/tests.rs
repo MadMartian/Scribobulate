@@ -64,8 +64,14 @@ impl Sim {
 }
 
 /// Apply an event's buffer effect, mirroring `renderer.rs`.
-fn apply(sim: &mut Sim, ev: &Event, code_depth: &mut i32, opaque_depth: &mut i32) {
-    // Inside a code block, Text is accumulated, not inserted, until End flushes it.
+///
+/// `code` is the accumulated code-block body: inside a code block `Text` inserts
+/// nothing and is buffered here, then flushed at `End(CodeBlock)` exactly as
+/// `renderer::emit::insert_code_block` does (trailing blank lines trimmed, one
+/// `\n` per line). That fidelity is the point — the copymap has to re-derive the
+/// block's buffer layout from that rule (ScrAP-255), so a stand-in body would test
+/// nothing.
+fn apply(sim: &mut Sim, ev: &Event, code: &mut Option<String>, opaque_depth: &mut i32) {
     match ev {
         Event::Start(Tag::Heading { .. })
         | Event::Start(Tag::Paragraph)
@@ -93,11 +99,11 @@ fn apply(sim: &mut Sim, ev: &Event, code_depth: &mut i32, opaque_depth: &mut i32
         }
         Event::Start(Tag::CodeBlock(_)) => {
             sim.block_sep();
-            *code_depth += 1;
+            *code = Some(String::new());
         }
         Event::End(TagEnd::CodeBlock) => {
-            *code_depth -= 1;
-            sim.insert("CODE\n"); // stand-in flushed block body
+            let body = code.take().unwrap_or_default();
+            sim.insert(&format!("{}\n", body.trim_end_matches('\n')));
         }
         Event::Start(Tag::Item) => {
             if sim.list_first_item {
@@ -116,8 +122,8 @@ fn apply(sim: &mut Sim, ev: &Event, code_depth: &mut i32, opaque_depth: &mut i32
         }
         Event::End(TagEnd::Image) => *opaque_depth -= 1,
         Event::Text(t) => {
-            if *code_depth > 0 {
-                // accumulated, flushed at End(CodeBlock)
+            if let Some(body) = code.as_mut() {
+                body.push_str(t); // accumulated, flushed at End(CodeBlock)
             } else if *opaque_depth > 0 {
                 // suppressed image alt text
             } else {
@@ -149,13 +155,13 @@ fn apply(sim: &mut Sim, ev: &Event, code_depth: &mut i32, opaque_depth: &mut i32
 /// (anchors as U+FFFC) — the pure pipeline a real render drives (minus GTK).
 fn render(md: &str) -> (CopyTree, String, String) {
     let mut sim = Sim::new();
-    let (mut code_depth, mut opaque_depth) = (0, 0);
+    let (mut code, mut opaque_depth) = (None, 0);
     let mut evs = Vec::new();
     // Streamed: no list-item look-ahead is needed — markers are drawn in the gutter and
     // insert no buffer text, so there is nothing to suppress (mirrors `preview::build`).
     for (ev, r) in Parser::new_ext(md, crate::renderer::md_options()).into_offset_iter() {
         let before = sim.count;
-        apply(&mut sim, &ev, &mut code_depth, &mut opaque_depth);
+        apply(&mut sim, &ev, &mut code, &mut opaque_depth);
         let after = sim.count;
         if let Some(kind) = classify(&ev) {
             evs.push(RawEv {
@@ -723,4 +729,225 @@ fn ordinary_nesting_is_unaffected_by_the_depth_cap() {
     let a = woff(&text, "bold");
     assert_eq!(resolve(&t, &md_owned, a, a + 4), "bold");
     assert_eq!(resolve(&t, &md_owned, 0, t.char_count), md_owned);
+}
+
+// ── code blocks: char-precise inside, fenced when crossed (ScrAP-255) ──────────
+//
+// A code block's body is buffered in ONE flush at its `End` event, so its
+// interior events carry zero-width buffer ranges and it *looked* unreconstructable
+// — it was `Node::Opaque`, and a two-word selection inside a 50-line block copied
+// all 50 lines plus both fences. These pin the re-derived layout: within the body
+// is char-precise (2.8a), crossing out of it reconstructs BOTH fences (2.8b), and
+// anything the layout cannot account for degrades to the whole block (2.8e).
+
+#[test]
+fn within_a_code_block_excludes_the_fences() {
+    // The reported bug: selecting part of a code block copied the whole block.
+    assert_eq!(
+        copy(
+            "```rust\nlet a = 1;\nlet b = 2;\n```\n",
+            "let a = 1;\nlet b = 2;\n",
+            "a = 1"
+        ),
+        "a = 1"
+    );
+}
+
+#[test]
+fn a_whole_line_of_a_code_block_copies_that_line_only() {
+    assert_eq!(
+        copy(
+            "```rust\nlet a = 1;\nlet b = 2;\n```\n",
+            "let a = 1;\nlet b = 2;\n",
+            "let b = 2;"
+        ),
+        "let b = 2;"
+    );
+}
+
+#[test]
+fn selecting_a_code_blocks_whole_body_still_excludes_the_fences() {
+    // Exactly the content range is INSIDE the construct (2.8a), like selecting the
+    // four letters of `**bold**`: no boundary is crossed, so no fence is emitted.
+    // (Wrapped in prose so the selection is not the WHOLE buffer, which is Copy
+    // Document by definition — 2.8c.)
+    let md = "intro\n\n```rust\nlet a = 1;\nlet b = 2;\n```\n\nafter\n";
+    let (t, md_owned, text) = render(md);
+    let a = woff(&text, "let a");
+    assert_eq!(
+        resolve(
+            &t,
+            &md_owned,
+            a,
+            a + "let a = 1;\nlet b = 2;\n".chars().count() as i32
+        ),
+        "let a = 1;\nlet b = 2;\n"
+    );
+}
+
+#[test]
+fn crossing_into_a_code_block_reconstructs_both_fences() {
+    // The fences are a matched PAIR: a selection that starts outside the block and
+    // stops mid-body must still close the fence, or the paste is unparseable
+    // Markdown (2.8b / 2.8e).
+    let md = "intro\n\n```rust\nlet a = 1;\nlet b = 2;\n```\n";
+    let (t, md_owned, text) = render(md);
+    let a = woff(&text, "ntro");
+    let b = woff(&text, " = 1");
+    assert_eq!(resolve(&t, &md_owned, a, b), "ntro\n\n```rust\nlet a\n```");
+}
+
+#[test]
+fn crossing_out_of_a_code_block_reconstructs_both_fences() {
+    let md = "```rust\nlet a = 1;\nlet b = 2;\n```\n\nafter\n";
+    let (t, md_owned, text) = render(md);
+    let a = woff(&text, "b = 2");
+    let b = woff(&text, "after") + 3;
+    assert_eq!(resolve(&t, &md_owned, a, b), "```rust\nb = 2;\n```\n\naft");
+}
+
+#[test]
+fn within_an_indented_code_block_keeps_the_continuation_indent() {
+    // An indented block has no fences (empty open/close); each line's own source
+    // excludes the 4-space indent, which lives in the inter-run GAP and is spliced
+    // back so the copy re-parses as the same code block.
+    let md = "intro\n\n    indented one\n    indented two\n\nafter\n";
+    let (t, md_owned, text) = render(md);
+    let a = woff(&text, "indented one");
+    assert_eq!(
+        resolve(
+            &t,
+            &md_owned,
+            a,
+            // BUFFER chars: the indent is not in the buffer, only in the source.
+            a + "indented one\nindented two".chars().count() as i32
+        ),
+        "indented one\n    indented two"
+    );
+    // A fragment of ONE line is exactly that fragment.
+    assert_eq!(copy(md, &text, "dented t"), "dented t");
+}
+
+#[test]
+fn within_a_quoted_code_block_excludes_the_quote_markers() {
+    // Inside an un-crossed blockquote the per-line `> ` is suppressed (2.8g) — the
+    // code block's own children inherit that gate, so a two-line body copies bare.
+    let md = "> ```\n> quoted one\n> quoted two\n> ```\n";
+    let (t, md_owned, text) = render(md);
+    let a = woff(&text, "quoted one");
+    assert_eq!(
+        resolve(
+            &t,
+            &md_owned,
+            a,
+            a + "quoted one\nquoted two".chars().count() as i32
+        ),
+        "quoted one\nquoted two"
+    );
+}
+
+#[test]
+fn a_code_block_in_a_list_item_is_char_precise() {
+    let md = "- item\n\n  ```\n  in list\n  ```\n";
+    let (t, md_owned, text) = render(md);
+    let a = woff(&text, "in list");
+    assert_eq!(resolve(&t, &md_owned, a, a + 7), "in list");
+}
+
+#[test]
+fn a_code_block_whose_flush_cannot_be_accounted_for_stays_whole() {
+    // The renderer TRIMS trailing blank lines, so this run's 18 rendered chars
+    // become 16 buffer chars. The block's total still reconciles (so the block is
+    // not opaque), but the run itself is not 1:1 — any overlap copies it whole,
+    // the same atomicity guarantee an escape or an entity gets.
+    let md = "```\ntrailing blanks\n\n\n```\n";
+    let (t, md_owned, text) = render(md);
+    let a = woff(&text, "blanks");
+    assert_eq!(resolve(&t, &md_owned, a, a + 3), "trailing blanks\n\n\n");
+}
+
+#[test]
+fn an_empty_code_block_is_opaque() {
+    // No interior Text event at all: nothing to lay out, so the pre-existing
+    // whole-source fallback stands — the block's one buffer newline copies as its
+    // whole source.
+    let md = "intro\n\n```\n```\n";
+    let (t, md_owned, text) = render(md);
+    let a = text.chars().count() as i32 - 1; // the empty block's sole buffer char
+    assert_eq!(resolve(&t, &md_owned, a, a + 1), "```\n```");
+}
+
+#[test]
+fn select_all_over_a_code_block_is_the_whole_document() {
+    let md = "# Title\n\n```rust\nlet a = 1;\n```\n\nAfter.\n";
+    let (t, md_owned, _text) = render(md);
+    assert_eq!(resolve(&t, &md_owned, 0, t.char_count), md_owned);
+}
+
+#[test]
+fn wrap_span_inside_a_code_block_takes_the_whole_fenced_block() {
+    // The OTHER consumer of this tree: an annotation must never wrap a fragment of
+    // a code block, or `{==` lands inside the fence and is rendered as code. Making
+    // the block char-precise for COPY must not make it divisible for ANNOTATE.
+    let md = "```rust\nlet a = 1;\nlet b = 2;\n```\n";
+    let (t, md_owned, text) = render(md);
+    let a = woff(&text, "a = 1");
+    let span = wrap_span(&t, &md_owned, a, a + 5).unwrap();
+    assert_eq!(&md_owned[span], "```rust\nlet a = 1;\nlet b = 2;\n```");
+}
+
+/// The alignment gate at its seam. The only way a code block's re-derived layout
+/// can be *wrong* is if the renderer's flush stops matching `insert_code_block`'s
+/// rule (e.g. a syntect highlight that yields no tokens drops a line's glyphs
+/// entirely). No document can produce that today, so the gate cannot be reached
+/// through `render()` — it is pinned here directly, with the aligned case beside
+/// it so the check is proved to DISCRIMINATE rather than to always fall back.
+#[test]
+fn a_code_block_flush_that_does_not_reconcile_degrades_to_opaque() {
+    let md = "```\nalpha\nbeta\n```\n";
+    let body = "alpha\nbeta\n";
+    let texts = vec![(4..15, body.to_string())];
+    let start = RawEv {
+        buf: (0, 0),
+        src: 0..18,
+        kind: RawKind::Start(Construct::CodeBlock),
+    };
+    let node_for = |flushed_chars: i32| {
+        let end = RawEv {
+            buf: (0, flushed_chars),
+            src: 0..18,
+            kind: RawKind::End(Construct::CodeBlock),
+        };
+        CopyTree {
+            root: code_block_node(md, &start, &end, &texts, true),
+            char_count: flushed_chars,
+        }
+    };
+    // Aligned (11 body chars flushed): char-precise, as every other test asserts.
+    assert_eq!(resolve(&node_for(11), md, 6, 10), "beta");
+    // Short by five: the layout is unprovable, so the whole block copies.
+    assert_eq!(resolve(&node_for(6), md, 1, 3), "```\nalpha\nbeta\n```");
+}
+
+/// A non-`Text` event inside a code block is likewise unmodelled — the same
+/// fallback, from the other input.
+#[test]
+fn a_code_block_with_an_unmodelled_interior_event_degrades_to_opaque() {
+    let md = "```\nalpha\nbeta\n```\n";
+    let texts = vec![(4..15, "alpha\nbeta\n".to_string())];
+    let start = RawEv {
+        buf: (0, 0),
+        src: 0..18,
+        kind: RawKind::Start(Construct::CodeBlock),
+    };
+    let end = RawEv {
+        buf: (0, 11),
+        src: 0..18,
+        kind: RawKind::End(Construct::CodeBlock),
+    };
+    let tree = CopyTree {
+        root: code_block_node(md, &start, &end, &texts, false),
+        char_count: 11,
+    };
+    assert_eq!(resolve(&tree, md, 6, 10), "```\nalpha\nbeta\n```");
 }

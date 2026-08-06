@@ -293,13 +293,13 @@
 - **When** the user selects a region and copies (Ctrl+C)
 - **Then** the clipboard contains the Markdown source that produced the visible selection — headings include their `#` prefix, bold text retains its `**` delimiters, code blocks include the fenced backticks — not the stripped rendered plain text
 - **And** blockquote text participates in the continuous selection like ordinary prose (blockquotes are buffer text, not embedded widgets)
-- **And** the copy is **character-precise**, not block-granular: a partial selection copies only the highlighted characters' source, reconstructing delimiters so the result is always valid Markdown (see 2.8a–2.8f)
+- **And** the copy is **character-precise**, not block-granular: a partial selection copies only the highlighted characters' source, reconstructing delimiters so the result is always valid Markdown (see 2.8a–2.8h)
 - *(Only **tables** remain embedded selection islands; an in-cell selection copies that cell's own Markdown source, character-precise like body text — see 2.8f.)*
 
 ### 2.8a Within a construct, the enclosing delimiter is excluded; enclosed delimiters are included
-- **Given** a rendered document containing a formatting construct — paired inline (bold, italic, code span, link) **or** a leading-marker block (heading, single-line blockquote)
+- **Given** a rendered document containing a formatting construct — paired inline (bold, italic, code span, link), a **fenced code block**, **or** a leading-marker block (heading, single-line blockquote)
 - **When** the user selects a region **entirely inside** one construct's content and copies
-- **Then** the enclosing delimiter/marker is **excluded** (four letters of a heading copy no `#`; text inside bold copies no `**`; a link caption fragment copies neither the brackets nor the URL)
+- **Then** the enclosing delimiter/marker is **excluded** (four letters of a heading copy no `#`; text inside bold copies no `**`; a link caption fragment copies neither the brackets nor the URL; two lines of a code block copy no ```` ``` ````)
 - **And** the delimiters of any construct **fully enclosed** by the selection are **included**
 
 ### 2.8b Crossing a construct boundary balances the delimiters
@@ -321,7 +321,7 @@
 ### 2.8e Every selection yields well-formed Markdown
 - **Given** any selection in the preview (including partial constructs, escapes/entities, images, tables, lists, blockquotes)
 - **When** the user copies
-- **Then** the clipboard always holds well-formed Markdown: an atomic token (an escape, entity, image, table) is copied whole rather than half; an image/table/code-block overlap copies the whole construct source
+- **Then** the clipboard always holds well-formed Markdown: an atomic token (an escape, entity, image, table) is copied whole rather than half; an image or table overlap copies the whole construct source, and a code block that overlaps copies per 2.8h — never an unclosed fence
 
 ### 2.8g Multi-line blockquotes and list items are character-precise
 - **Given** a multi-line blockquote (`> a` / `> b`) or a list (bulleted, ordered, or task)
@@ -334,6 +334,16 @@
 - **Given** a rendered table whose cell contains formatted content (bold, code span, or a link) — a cell is a selection island, not part of the continuous buffer
 - **When** the user selects text inside that cell and copies
 - **Then** the clipboard holds the **cell's Markdown source** for the selection — formatting is preserved (`**bold**`, `` `code` ``, `[caption](url)`), not the stripped rendered plain text — and the delimiter rule of 2.8a/2.8b applies within the cell (a partial selection inside the bold run copies no `**`; a whole-cell or crossing selection reconstructs the delimiters)
+
+### 2.8h Code-block selection is character-precise; the fences balance
+- **Given** a rendered fenced code block of several lines
+- **When** the user selects part of it — a fragment of one line, or whole lines — and copies
+- **Then** the clipboard holds **exactly the selected code**, with **no** ```` ``` ```` fences and no other line of the block (consistent with 2.8a)
+- **And given** a selection that starts outside the block and ends inside it (or the reverse)
+- **When** the user copies
+- **Then** **both** fences are reconstructed around the selected code, the closing fence on a line of its own, so the paste is a complete code block (2.8b/2.8e) — never an unclosed ```` ``` ````
+- **And** an **indented** (4-space) code block behaves the same, its continuation indent preserved so the copy re-parses as the same block, and a code block inside a blockquote or list item excludes that container's `> `/indent markers within (2.8g)
+- **And** annotating (`{==…==}`) a selection inside a code block still wraps the **whole** block — a copy may be divided at a character; an annotation may not
 
 ### 2.18 Selecting over an image marks it as selected
 - **Given** a rendered document containing an image
