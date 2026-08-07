@@ -112,7 +112,7 @@ mod tests {
         // draft page height), so a direct `set_value` moves the viewport
         // deterministically — no deferred, one-shot `scroll_to_iter` that would land
         // pre-validation at the top (GTK4Rs/AP-115/22).
-        vadj.set_value(vadj.upper() * 0.5);
+        crate::saferizer::scrollpos::jump(&vadj, vadj.upper() * 0.5);
         for _ in 0..50 {
             ctx.iteration(false);
             std::thread::sleep(std::time::Duration::from_millis(4));

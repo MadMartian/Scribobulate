@@ -947,6 +947,22 @@
 - **And given** pure-preview mode (no editor pane), or edit/split mode with focus outside the editor (e.g. the preview pane, find bar, or a menu/popover)
 - **Then** the command is disabled (menu item, toolbar button, and accelerator all inert) — there is no editor caret to place in preview mode, and no unambiguous "the editor" target without editor focus in split mode
 
+### 9.33 Ctrl+Home and Ctrl+End reach the ends of a document however large it is
+- **Given** edit or split mode with the editor pane focused, and a document large enough that GTK has not finished laying out every line — a freshly opened or reloaded one of tens of thousands of lines
+- **When** the user presses Ctrl+End (or Ctrl+Home)
+- **Then** the caret goes to the very end (or start) of the document **and the viewport follows it all the way there**, on the FIRST press — not part of the way, and without needing the key pressed again; on a document GTK has already laid out this is immediate, and on one it has not, it happens as soon as the layout is ready rather than never
+- **And given** the user moves the caret elsewhere in the meantime (a click, Go To Line, Find, the opposite key)
+- **Then** the pending jump is abandoned rather than dragging the reader to a place they have stopped asking for
+- **And given** the read-only preview pane rather than the editor
+- **Then** the same keys behave the same way — read-only does not exempt a pane from carrying GTK's buffer-ends bindings
+
+### 9.34 Every far navigation arrives, however large the document
+- **Given** a freshly opened or reloaded document of tens of thousands of lines, which GTK has not finished laying out
+- **When** the user navigates to somewhere well outside the current viewport — View ▸ Go To Line, a Find hit, or an outline-sidebar entry
+- **Then** the viewport arrives at that target; if GTK cannot compute the destination yet the navigation completes as soon as it can, rather than stopping wherever the layout happened to have reached
+- **And given** the caret has moved on before the layout is ready
+- **Then** the deferred arrival is abandoned, so a navigation the reader has already replaced never takes effect late
+
 ### 9.21 The footer shows the editor caret's line and column
 - **Given** edit or split mode
 - **When** the caret moves in the editor (typing, arrow keys, a click, Go To Line, Find, …), or the user switches to a different tab

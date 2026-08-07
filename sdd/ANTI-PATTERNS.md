@@ -73,7 +73,7 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > the row is noise that will eventually be read as a live claim. Clear a row in the
 > same commit that merges the entries it was holding.
 >
-> **The next free number is 197.** Do not derive it from the highest entry below —
+> **The next free number is 261.** Do not derive it from the highest entry below —
 > unmerged branches hold ranges that are invisible from this file, which is exactly
 > how a collision happens. Check the table, **announce the range you are claiming**,
 > and never fill a reserved gap.
@@ -349,6 +349,7 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 257 | `Trying to snapshot GtkGizmo … without a current allocation` is GTK's own scrollbar trough — the one benign member of a warning family whose other members are real bugs | A |
 | 258 | Replacing a live `GtkTextView`'s buffer is a use-after-free, not a swap — the layout's line-display cache survives `set_buffer` and dangles | A |
 | 259 | A rendering feature built for one of a construct's widget shapes leaves the others inert, and the reader sees one capability behaving at random | A |
+| 260 | A `GtkTextView` scroll aimed past the lazily-validated frontier is parked and never re-issued — and the validation idle cancels the one scroll it does animate | A |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -3575,3 +3576,147 @@ the part that rots first** — re-check the mechanism before letting an old entr
 feature.
 
 **See**: gtk4-rs skill → widgets-and-composites (GTK4Rs/AP-239).
+
+---
+
+## 260. A `GtkTextView` scroll aimed past the lazily-validated frontier is parked and never re-issued — and the validation idle cancels the one scroll it does animate
+
+> *Core GTK4 (GtkTextView layout validation, GtkAdjustment animation, the GLib idle
+> priority band). **Send to the gtk4-rs skill** — textview-scrolling-and-adjustments.
+> Kin to ScrAP-82 (a one-shot far `scroll_to_mark` landing near the top) and ScrAP-13:
+> same lazy-validation cause, but those are about a scroll issued too EARLY on a fresh
+> view, and this is about one issued to a WARM, already-mapped view that GTK has simply
+> not finished laying out.*
+
+**Symptom**: Ctrl+Home / Ctrl+End in a large document do not reach either end — it stops
+part-way and pressing again gets further. The caret lands correctly every time; only the
+viewport does not follow. Nothing logged, nothing failing, suite green. Presses needed
+scale with size: 8 000 lines fine, 10 000 two, 14 000 three, 20 000+ never.
+
+**What was tried** — one design, prototyped and then **refuted by measurement**:
+re-applying a non-animating `set_value(upper - page_size)` on every vadjustment
+`notify::upper`, i.e. staying pinned to the bottom while the layout settles. It lands on
+the correct value, and it is a **livelock**: pinning the viewport to the moving
+validation frontier makes GTK re-validate a screenful at a time around the new first
+paragraph instead of letting its own idle run 2000-pixel chunks. Measured, same fixture,
+"validation complete" instrumented: 20 000 lines took 98 ms unpinned and 1494 ms pinned;
+40 000 lines took 1655 ms unpinned and had **still not finished at 60 s** pinned (the
+range had reached 750 564 px of a true 1 422 018). Do not chase a frontier with the
+viewport. Only an aim that moves *with* the frontier livelocks; the preview's existing
+far-restore, which pins to a *fixed* target line and stops once the frontier passes it, is
+not implicated (researcher-confirmed).
+
+**Root cause** — two GTK mechanisms which, in many runs, are *the same event*
+(researcher, source-traced): `gtk_text_view_value_changed` **destroys**
+`first_validate_idle` (gtktextview.c:8437-8443, *"it's just a waste of time"*), and that
+idle is the only thing that ever consumes a pending scroll. So one adjustment write does
+both halves at once — truncates the animation *and* orphans the queued request:
+- **The scroll is parked and abandoned.** `gtk_text_view_scroll_to_mark` queues the
+  request and flushes it immediately *only* if `gtk_text_layout_is_valid`; otherwise it
+  waits for `flush_first_validate`, which returns early unless `first_validate_idle` is
+  armed. The idle that lazily validates the rest of a big document,
+  `incremental_validate_callback`, never touches `pending_scroll` — and the next
+  `queue_scroll` frees the old one. So on a still-validating layout the request is simply
+  lost. Compounding it, every line past the frontier reports identical geometry
+  (`line_yrange` → `y` = the frontier, `h` = 0, measured), so nothing downstream can
+  compute the destination either.
+- **The animation is cancelled after one frame.** `scroll_to_mark` scrolls by
+  `gtk_adjustment_animate_to_value` (~200 ms). Any plain `gtk_adjustment_set_value` calls
+  `gtk_adjustment_end_updating` and kills a running animation, and
+  `gtk_text_view_set_vadjustment_values` ends with exactly that whenever its first-paragraph
+  re-anchor moves — which it does on nearly every validation pass. `size_allocate` guards
+  both refreshes with `gtk_adjustment_is_animating`; `gtk_text_view_update_adjustments`,
+  the path the validation idle takes, does not. Measured: a Ctrl+Home from 30 000 travelled
+  to 23 108 in one frame and never moved again.
+
+This is a **documented-contract violation**, not a quirk: `scroll_to_iter`'s doc comment
+(gtktextview.c:2734-2738) directs you to `scroll_to_mark` *"which saves a point to be
+scrolled to after line validation"* — the point is saved, then deleted. Commit `9d7f1caca7`
+(2014) added the `is_animating` guard to `size_allocate` describing this exact failure, but
+never covered `update_adjustments` and still has not. **Nine predicates diffed across
+4.6 → main (4.23.2) are identical: a GTK upgrade is not a fix.** Also user-reachable:
+`scroll_pages` cancels a pending scroll (:6626), so PageUp discards a queued Ctrl+End.
+
+**Already filed upstream and stalled — do not file again.** GNOME/gtk **#7507** (2025) is
+mechanism (1) with no merge request; **#2205** (2019) is mechanism (2) by name in its title;
+**#5065** (2022) is (1) from the other side. The position is not "GTK is wrong": GTK knows, and
+the partial fix `9d7f1caca7` has stood since 2014. Plan accordingly — this needs an
+application-side answer for the foreseeable life of the project.
+
+**Resolution**: re-issue the scroll from an idle GTK's own validator starves.
+`GTK_TEXT_VIEW_PRIORITY_VALIDATE` is `GDK_PRIORITY_REDRAW + 5` = 125, and that source
+stays attached *and permanently ready* until the layout is valid — so an idle at
+`G_PRIORITY_DEFAULT_IDLE` (200) cannot be dispatched until validation has finished, which
+makes it an exact "the layout is now valid" event, the signal GTK does not otherwise
+expose. `src/farscroll.rs` owns that primitive and wires `move-cursor` for the
+buffer-ends step; `window/tabs/lifecycle.rs`'s `build_tab_editor` — the one place every
+editor view is built — installs it. The re-issue's licence to act is the caret still
+being where the keystroke put it, so a later navigation retires a pending one with no
+generation bookkeeping. Measured exact (`value == upper - page_size`) at 8 000 / 20 000 /
+40 000 lines, cold and warm, with no effect on validation speed.
+
+**Verified on the operator's real KDE/X11 session** (and Go To Line 90 000 on a cold
+120 000-line document lands there and stays), differential against a deliberately
+rebuilt pre-fix binary (never a stash — ScrAP-239). 200 000 lines, Ctrl+End on a
+just-opened document: the control sat at line 1 and was **still at line 1 after 120 s**;
+the fixed build sat at line 1 at 2 s and was at **line 199 959** by 40 s, the deferred
+re-issue firing at 18.8 s (instrumented) — which is simply how long GTK takes to lay that
+document out (the reason the deadline below triggers on stalled progress, not elapsed time). A 30 000-line document settles before a driven keystroke can even arrive, so
+**both** builds pass there: the live harness removes the precondition exactly as a
+`#[gtktest::test]` does (ScrAP-87).
+
+**A related GTK fact worth knowing**: the guard GTK uses on itself is **not available to
+you**. `gtk_adjustment_is_animating` — the test `gtk_text_view_size_allocate` uses before
+refreshing the adjustment — is declared in `gtkadjustmentprivate.h`, so it is neither public
+GTK API nor bound in gtk-rs. An application therefore *cannot* ask "is a scroll animation
+running?" and cannot replicate GTK's own guard. The only available discipline is to not need
+the question: prefer non-animating `set_value` for app-initiated positioning, and know that
+any such write silently truncates an animated scroll already in flight.
+
+**Lesson**: on a lazily-validating widget, a request the toolkit *cannot* satisfy yet is
+not deferred — it is dropped, and the toolkit's own background work will cancel whatever
+it *does* start. The remedy is never to fight the settling (chasing it can livelock the
+very work you are waiting for) but to **wait for it on an event that means "settled"** —
+and where a toolkit exposes no such signal, the **priority band of its own deferred work
+is one**: a source below the toolkit's cannot run until the toolkit's is done.
+
+The app was **its own** second source of this: any adjustment write reaches
+`value_changed` and destroys that view's `first_validate_idle`, so a split-pane sync
+projection into one pane orphans a scroll the *other* pane had queued — the reported symptom,
+arriving from our own code. Guarded by a test rather than by reasoning, and it passes because
+the re-issue never depended on GTK's pending scroll surviving.
+
+**Testing note, because the two halves need opposite harnesses.** Line validation runs on
+an idle, so a `sleep` between `MainContext::iteration(false)` turns *throttles* it (a 2 ms
+sleep stretched a 100 ms settle past 3 s) — pump tight. The scroll it carries runs on a
+~200 ms frame-clock animation, so a tight pump that advances no wall clock starves *that* —
+**turns are not time**, and a settle loop of N iterations cannot exercise anything driven by
+`GdkFrameClock`. Both failures are silent and both report success. This module's tests use
+each style deliberately; check which mechanism a new one is waiting on before copying either.
+
+**Cost**: **High**. Benign but shipped for the whole life of the editor pane and reported
+by the operator, and the same root cause silently breaks every other far navigation in the
+pane (a cold go-to-line to line 30 000 measured landing on line 177). Two mechanisms had
+to be separated before either was fixable, the first design had to be built before its
+livelock was visible, and both the defect and the fix are invisible to any test whose
+harness settles the layout first (ScrAP-87 / GTK4Rs/AP-78).
+
+That idle is bounded by a second source on a **timer**, not an idle: `g_timeout_add` runs
+at `G_PRIORITY_DEFAULT` (0), strictly *above* the validate idle, so it cannot be starved by
+the thing the idle waits on — the exact inverse of the idle's own vulnerability. It triggers
+on stalled progress rather than elapsed time, because a legitimately huge document takes as
+long as it takes and a fixed deadline would pre-empt the correct answer. Without it, a layout
+that never converges starves the primary path *by design*, on precisely the documents this
+exists for.
+
+**Now enforced by** `farscroll::scroll_to_mark_when_ready` and `saferizer::scrollpos`
+(`jump`, and `reconfigure` for the **mirror-image** failure: `configure`/`clamp_page` write
+`priv->value` directly with no `end_updating`, so they do not truncate a running animation —
+its next frame overwrites *them*, and the write silently does not stick), all backed by
+`clippy.toml` bans (`TextViewExt::scroll_to_mark`,
+`AdjustmentExt::set_value`/`configure`/`clamp_page`) — so neither half of this can be re-entered by a new call site
+without the ban naming the route. Ctrl+Home / Ctrl+End are wired at each pane's own
+construction site, so a view cannot be built without them.
+
+**See**: `src/farscroll.rs`, `src/saferizer/scrollpos.rs`; gtk4-rs skill →
+textview-scrolling-and-adjustments.

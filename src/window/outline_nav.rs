@@ -147,7 +147,14 @@ pub(super) fn scroll_editor_to_offset(
     let char_off = text.char_offset_at(src_offset.raw());
     let it = buf.iter_at_offset(char_off);
     buf.place_cursor(&it);
-    editor.scroll_to_mark(&buf.get_insert(), 0.0, true, 0.0, 0.0);
+    crate::farscroll::scroll_to_mark_when_ready(
+        editor.upcast_ref(),
+        &buf.get_insert(),
+        0.0,
+        true,
+        0.0,
+        0.0,
+    );
 }
 
 // ── Scroll-spy ──────────────────────────────────────────────────────────────
@@ -350,7 +357,7 @@ pub(crate) fn outline_collapse_all(window: &ApplicationWindow) {
     // reproduces the stale far-end leaf without this reset). No `scroll_to` (4.12+,
     // GTK4Rs/AP-114) is available on the 4.6 target, so drive the adjustment directly.
     if let Some(st) = state(window) {
-        st.chrome().outline_scroller.vadjustment().set_value(0.0);
+        crate::saferizer::scrollpos::jump(&st.chrome().outline_scroller.vadjustment(), 0.0);
     }
 
     let n = tree_model.n_items();
@@ -739,7 +746,7 @@ mod collapse_all_tests {
             .chrome()
             .outline_scroller
             .vadjustment();
-        vadj.set_value(vadj.upper());
+        crate::saferizer::scrollpos::jump(&vadj, vadj.upper());
         assert!(
             pump_until(&ctx, 200, || {
                 materialized_row_labels(&list_view)
@@ -850,7 +857,7 @@ mod collapse_all_tests {
 
         // Park the shared outline scroller at the TOP so the selection is off-screen.
         let vadj = st.chrome().outline_scroller.vadjustment();
-        vadj.set_value(0.0);
+        crate::saferizer::scrollpos::jump(&vadj, 0.0);
         assert!(
             !estimated_row_in_view(&vadj, selected_pos, n_items),
             "precondition: selected pos {selected_pos}/{n_items} must be off-screen at vadj=0 \
@@ -939,7 +946,7 @@ mod collapse_all_tests {
         );
 
         // Stale shared-chrome vadjustment after a tab leave: top.
-        st.chrome().outline_scroller.vadjustment().set_value(0.0);
+        crate::saferizer::scrollpos::jump(&st.chrome().outline_scroller.vadjustment(), 0.0);
         assert!(
             !estimated_row_in_view(
                 &st.chrome().outline_scroller.vadjustment(),

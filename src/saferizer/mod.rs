@@ -33,6 +33,8 @@ pub(crate) mod buffer_mark;
 pub(crate) mod click_activation;
 pub(crate) use click_activation::ClickActivation;
 
+pub(crate) mod scrollpos;
+
 pub(crate) mod viewport;
 
 pub(crate) mod persistent_popover;

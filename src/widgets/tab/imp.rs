@@ -284,7 +284,15 @@ impl WidgetImpl for TabBar {
         let off = if let Some(adj) = hadj {
             self.block_scrolling.set(true);
             let value = adj.value().clamp(0.0, max_off);
-            adj.configure(value, 0.0, upper, step_inc, page_inc, viewport_w as f64);
+            crate::saferizer::scrollpos::reconfigure(
+                &adj,
+                value,
+                0.0,
+                upper,
+                step_inc,
+                page_inc,
+                viewport_w as f64,
+            );
             self.block_scrolling.set(false);
             adj.value()
         } else {

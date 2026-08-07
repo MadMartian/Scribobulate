@@ -211,7 +211,7 @@ fn project_scroll(window: &ApplicationWindow) {
     // One-stack-frame guard: set_value emits the follower's value-changed
     // synchronously; the guard makes note_adj_change ignore exactly that echo.
     st.scroll.guard.set(true);
-    dst_adj.set_value(target);
+    crate::saferizer::scrollpos::jump(&dst_adj, target);
     st.scroll.guard.set(false);
     log::trace!(
         target: "scribobulate::scroll",

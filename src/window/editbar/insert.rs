@@ -143,12 +143,21 @@ pub(crate) fn go_to_line(window: &ApplicationWindow) {
             let buf = &st.editor_buf;
             let iter = buf.iter_at_line(target).unwrap_or_else(|| buf.end_iter());
             buf.place_cursor(&iter);
-            // A left-gravity mark + scroll_to_mark (not scroll_to_iter): GTK defers
-            // the scroll until line validation and retries it across later
-            // validation passes / re-allocations, same as the preview's scroll
-            // restore (preview/scroll.rs) and per this project's TextView convention.
+            // A left-gravity mark, never `scroll_to_iter` (GTK4Rs/AP-22). GTK does NOT
+            // "defer the scroll until line validation and retry it" — the comment
+            // that used to stand here said so and it is false: on a document GTK
+            // is still laying out, the request is DISCARDED (ScrAP-260), which on a
+            // cold 40 000-line file left Go To Line 30 000 showing line 177. The
+            // seam re-issues it once the layout can answer.
             let mark = buf.create_mark(None, &iter, true);
-            st.editor.scroll_to_mark(&mark, 0.0, true, 0.0, 0.5);
+            crate::farscroll::scroll_to_mark_when_ready(
+                st.editor.upcast_ref(),
+                &mark,
+                0.0,
+                true,
+                0.0,
+                0.5,
+            );
             st.editor.grab_focus();
         },
     );

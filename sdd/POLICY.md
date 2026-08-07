@@ -763,6 +763,15 @@ landed; the rules for adding to it are here.
   ceiling of the binding, not of effort — gtk4-rs #819 records it, and no ecosystem
   binding has cleared it except Qt, whose meta-object system solves it structurally
   rather than by types.
+  **One of those rejections has since been partly overturned, and the way it fell is
+  the reusable part.** ScrAP-13's "no principled *authoritative now* signal exists" is
+  now false for one subset — `GtkTextView` line-height validation — because the toolkit
+  schedules its own deferred work at a *published priority*, so a source below that
+  priority is a precise "it has finished" event (`farscroll::after_line_heights_validated`).
+  Adjustment settling in general remains rejected; only this subset moved. The general
+  lesson for a future assessment: before recording a runtime invariant as unreachable,
+  check whether the toolkit's own deferred work sits at a priority you can order against
+  — the main loop is an observable the type system is not.
 
 ## Change accountability matrices (CAM)
 

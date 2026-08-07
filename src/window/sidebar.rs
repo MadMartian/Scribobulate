@@ -172,5 +172,5 @@ fn reveal_selected_row_attempt(scroller: &gtk::ScrolledWindow, attempt: u8) {
         (row_bottom - page).max(0.0)
     };
     let max = (upper - page).max(0.0);
-    vadj.set_value(target.clamp(0.0, max));
+    crate::saferizer::scrollpos::jump(&vadj, target.clamp(0.0, max));
 }

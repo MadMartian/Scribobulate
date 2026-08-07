@@ -89,6 +89,10 @@ pub(crate) use swap::{discard_tab_swap, sync_tab_swap, wire_swap_snapshots};
 pub(crate) use swaprecovery::recover_after_restore;
 pub(crate) use tabs::add_new_document_tab;
 pub(crate) use tabs::badge_tab_label;
+/// Reached directly only by `farscroll`'s integration tests, so they exercise the
+/// editor the app actually ships; carries their cfg, not a bare `#[cfg(test)]`.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) use tabs::build_tab_editor;
 pub(crate) use tabs::create_tab_in_window;
 pub(crate) use tabs::start_deferred_prerender_pump;
 pub(crate) use tabs::{host_window, window_of_content_box};

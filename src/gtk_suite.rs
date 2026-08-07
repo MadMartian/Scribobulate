@@ -53,6 +53,7 @@ mod colorscheme;
 mod config;
 mod copymap;
 mod docio;
+mod farscroll;
 mod forensics;
 mod format;
 mod icons;

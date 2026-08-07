@@ -1160,7 +1160,7 @@ mod jjj_tests {
             .and_downcast::<gtk::ScrolledWindow>()
             .unwrap();
         let vadj = scroller.vadjustment();
-        vadj.set_value(vadj.upper() * 0.5);
+        crate::saferizer::scrollpos::jump(&vadj, vadj.upper() * 0.5);
         for _ in 0..30 {
             ctx.iteration(false);
             std::thread::sleep(Duration::from_millis(4));

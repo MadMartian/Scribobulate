@@ -754,8 +754,14 @@ pub(super) fn do_find_next(
         // exactly the target iter — same mark-based route the preview path and the
         // sibling `outline_nav::scroll_editor_to_offset` already take. The alignment
         // args are preserved verbatim (within_margin 0.1, use_align false, yalign 0.5).
-        st.editor
-            .scroll_to_mark(&buf.get_insert(), 0.1, false, 0.0, 0.5);
+        crate::farscroll::scroll_to_mark_when_ready(
+            st.editor.upcast_ref(),
+            &buf.get_insert(),
+            0.1,
+            false,
+            0.0,
+            0.5,
+        );
         // Approximate current-match index by counting matches from buffer start.
         let total = sc.occurrences_count();
         let start = buf.start_iter();

@@ -923,6 +923,12 @@ impl CodePreviewView {
     pub(crate) fn new() -> Self {
         use gtk::subclass::prelude::*;
         let obj: Self = glib::Object::new();
+        // Ctrl+Home / Ctrl+End. Read-only does not exempt this view: GTK's
+        // buffer-ends key bindings are on GtkTextView, not on editability, and a
+        // rendered document is exactly the kind that is still being laid out when
+        // the key arrives (ScrAP-260). Wired here, at the one place a preview view is
+        // constructed, so it cannot be missed by a later render path.
+        crate::farscroll::wire_buffer_ends_scroll(obj.upcast_ref());
         // A genuine user scroll supersedes any cached programmatic reading anchor,
         // so a subsequent zoom re-captures the live position rather than snapping
         // back to the last zoom-restore/outline target.

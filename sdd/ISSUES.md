@@ -515,6 +515,16 @@ across a 60 s idle window (20 samples, all ~100%, process alive throughout). A n
 (`tests/fixtures/lists.md`) opened the same way idles at **~0%**, isolating the spin to document
 size.
 
+**Second consequence, established 2026-08-07.** While the layout is invalid, GTK keeps its
+incremental line-height validation idle permanently ready, and that starves anything the app
+schedules below it. Far navigation (Ctrl+Home/End, Go To Line, find, outline) is deferred until
+validation completes for correctness reasons (ScrAP-260), so on a document caught in this spin
+that navigation would never arrive at all. It is bounded rather than exposed — the deferral
+carries a timer-based deadline above the validate idle's priority, which degrades to a partial
+landing instead of hanging — but that mitigation exists *because of this issue* and would be
+unnecessary without it. Measured counter-point: a 200 000-line plain-prose file settles to 0 %
+CPU in ~30 s and does **not** reproduce the spin, so whatever drives it is not size alone.
+
 Surfaced during the macOS-port bring-up, where a stack sample suggested a GtkSourceView
 incremental-highlighter feedback loop (its progress `mark-set` re-dirtying the highlighter's own
 region). Confirmed here to reproduce on Linux — so it is **not platform-specific** — but an

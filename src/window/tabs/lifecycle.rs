@@ -150,6 +150,11 @@ pub(crate) fn build_tab_editor(md: &str) -> (sourceview::Buffer, sourceview::Vie
     // ate the tail of pasted text (see `wire_newline_edits`).
     wire_newline_edits(&sv_view);
 
+    // Ctrl+Home / Ctrl+End aim past the part of the document GTK has laid out, so
+    // they need re-issuing once it has (ScrAP-260). Wired here because this is the
+    // one place every editor view is built.
+    crate::farscroll::wire_buffer_ends_scroll(sv_view.upcast_ref());
+
     sv_view.set_editable(true);
     sv_view.set_wrap_mode(gtk::WrapMode::Word);
     sv_view.set_show_line_numbers(true);

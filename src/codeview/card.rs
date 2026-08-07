@@ -693,9 +693,10 @@ mod gtk_integration_tests {
     fn scroll_like_a_user(view: &CodePreviewView, to: f64) {
         use gtk::subclass::prelude::*;
         view.imp().user_scrolling.set(true);
-        view.vadjustment()
-            .expect("the view is in a scroller")
-            .set_value(to);
+        crate::saferizer::scrollpos::jump(
+            &view.vadjustment().expect("the view is in a scroller"),
+            to,
+        );
     }
 
     /// A presented window showing the fixture, with the card open on its first annotation.

@@ -34,7 +34,7 @@ pub(crate) fn adj_fraction(adj: &gtk::Adjustment) -> f64 {
 pub(crate) fn set_adj_fraction(adj: &gtk::Adjustment, fraction: f64) -> bool {
     let max = adj.upper() - adj.page_size();
     if max > 0.0 {
-        adj.set_value(fraction * max);
+        crate::saferizer::scrollpos::jump(adj, fraction * max);
         true
     } else {
         false
@@ -198,12 +198,13 @@ fn restore_textview_scroll_to_line(sw: &ScrolledWindow, view: &TextView, line: i
         // (1) authoritative, validation-safe scroll to the top of `line`;
         // scroll_to_mark's internal flush_scroll finalises `upper` (the only
         // validation force here — see the doc comment's myth-bust #1 note).
+        #[allow(clippy::disallowed_methods)] // deliberate raw call — see clippy.toml
         view.scroll_to_mark(&mark, 0.0, true, 0.0, 0.0);
         // (2) non-animating clamp re-enables the size-allocate refresh path.
         let vadj = sw.vadjustment();
         let max = (vadj.upper() - vadj.page_size()).max(0.0);
         if vadj.value() > max {
-            vadj.set_value(max);
+            crate::saferizer::scrollpos::jump(&vadj, max);
         }
     });
 }
@@ -315,7 +316,7 @@ fn restore_textview_scroll_to_line_progressive(sw: &ScrolledWindow, view: &TextV
             return true;
         };
         let (y, _) = view.line_yrange(&iter);
-        vadj.set_value((y as f64).clamp(0.0, max)); // NON-animating
+        crate::saferizer::scrollpos::jump(&vadj, (y as f64).clamp(0.0, max)); // NON-animating
         let (top, _) = view.line_at_y(vadj.value() as i32);
         top.line() == target || vadj.value() >= max
     });

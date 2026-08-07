@@ -214,7 +214,7 @@ fn refine_scroll_to_cell(
         return;
     };
     let max = (vadj.upper() - vadj.page_size()).max(vadj.lower());
-    vadj.set_value((cell_y as f64).clamp(vadj.lower(), max));
+    crate::saferizer::scrollpos::jump(&vadj, (cell_y as f64).clamp(vadj.lower(), max));
 }
 
 impl CodePreviewView {
@@ -314,6 +314,7 @@ impl CodePreviewView {
             // validation on ANY path (pure cached-height btree read), so that call was
             // vestigial and has been removed (ANTI-PATTERNS deferred-work meta-pattern,
             // myth-bust #1). yalign 0.0 puts the heading at the top of the viewport.
+            #[allow(clippy::disallowed_methods)] // deliberate raw call — see clippy.toml
             view.scroll_to_mark(mark, 0.0, true, 0.0, 0.0);
         });
     }
@@ -390,6 +391,7 @@ impl CodePreviewView {
             let Some(mark) = bmark.scroll_mark(&view.buffer()) else {
                 return;
             };
+            #[allow(clippy::disallowed_methods)] // deliberate raw call — see clippy.toml
             view.scroll_to_mark(mark, 0.0, true, 0.0, 0.0);
             // Step 2: refine to the cell's own row once the table (forced to validate
             // by scroll_to_mark) has allocated its cells on the next idle pass — chained

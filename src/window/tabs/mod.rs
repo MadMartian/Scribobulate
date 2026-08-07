@@ -48,6 +48,11 @@ pub(crate) use documents::{
     badge_tab_label, refresh_active_tab_label, refresh_documents_button, refresh_documents_menu,
     update_window_title,
 };
+/// The editor builder itself, reached directly only by `farscroll`'s integration
+/// tests so they exercise the editor the app actually ships. Carries their cfg,
+/// not a bare `#[cfg(test)]`, per POLICY's test-helper rule.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) use lifecycle::build_tab_editor;
 pub(crate) use lifecycle::{
     add_new_document_tab, assemble_tab_core, create_tab_in_window, host_window, resolve_tab_window,
     window_of_content_box,

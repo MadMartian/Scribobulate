@@ -938,7 +938,7 @@ impl CodePreviewView {
             let it = view.buffer().iter_at_offset(offset);
             let (y, _h) = view.line_yrange(&it);
             let max = (vadj.upper() - vadj.page_size()).max(vadj.lower());
-            vadj.set_value((y as f64).clamp(vadj.lower(), max));
+            crate::saferizer::scrollpos::jump(&vadj, (y as f64).clamp(vadj.lower(), max));
 
             let upper = vadj.upper();
             if upper == last_upper.get() {
@@ -1137,7 +1137,7 @@ impl CodePreviewView {
                     }
                     if (adj.value() - saved).abs() > 0.5 {
                         re.set(true);
-                        adj.set_value(saved);
+                        crate::saferizer::scrollpos::jump(adj, saved);
                         re.set(false);
                     }
                 }
@@ -1754,7 +1754,7 @@ mod a11y_integration_tests {
         // Exactly what GTK4Rs/AP-118's deferred validation scroll does: re-target the adjustment
         // to the top some frames after `popup()`. The guard runs synchronously inside this
         // emission and must put it straight back.
-        vadj.set_value(0.0);
+        crate::saferizer::scrollpos::jump(&vadj, 0.0);
         assert!(
             (vadj.value() - settled).abs() < 4.0,
             "the re-pin guard must restore the POST-scroll position ({settled}), not snap \

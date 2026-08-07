@@ -286,7 +286,7 @@ impl TabBar {
             return;
         };
         let max = (adj.upper() - adj.page_size()).max(0.0);
-        adj.set_value((adj.value() + delta).clamp(0.0, max));
+        crate::saferizer::scrollpos::jump(&adj, (adj.value() + delta).clamp(0.0, max));
     }
 
     pub(super) fn scroll_into_view(&self, idx: usize) {
@@ -307,7 +307,7 @@ impl TabBar {
         let viewport = imp.viewport_w.get();
         let value = adj.value();
         if let Some(new_value) = layout::scroll_target(pos, w, value, viewport) {
-            adj.set_value(new_value);
+            crate::saferizer::scrollpos::jump(&adj, new_value);
         }
     }
 
