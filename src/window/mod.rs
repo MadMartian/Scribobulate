@@ -321,7 +321,7 @@ fn build_window(
     // The rule is loaded AFTER the window exists (below), because it is scoped to
     // that window's `.scrib-win-<id>` class — an unscoped `textview.scrib-preview`
     // selector on the shared display collides across windows (last-loaded wins),
-    // the multi-window zoom regression (ScrAP-64). Created empty here so it can be
+    // the multi-window zoom regression (GTK4Rs/AP-77). Created empty here so it can be
     // added to the display before the first render(); the scoped rule is applied
     // the moment the window (and its class) is built, before the initial preview.
     let zoom_css_provider = gtk::CssProvider::new();
@@ -340,11 +340,11 @@ fn build_window(
         .default_width(init.width)
         .default_height(init.height)
         // No `.show_menubar(true)`: we build our OWN per-window GtkPopoverMenuBar
-        // in `build_chrome` (ScrAP-63) so the View ▸ Documents submenu can
+        // in `build_chrome` (GTK4Rs/AP-76) so the View ▸ Documents submenu can
         // list THIS window's tabs. The auto-built app menubar would have shared one
         // model across every window.
         // Compile-checked and resolution-tested like every other icon name
-        // (ScrAP-39). Resolves from the bundled GResource, so it works on
+        // (GTK4Rs/AP-48). Resolves from the bundled GResource, so it works on
         // Windows and from an uninstalled `cargo run`, not just where
         // `install.sh` has populated the hicolor theme.
         .icon_name(crate::icons::Icon::App.name())
@@ -383,7 +383,7 @@ fn build_window(
     // rule now that the window (hence its `.scrib-win-<id>` node) exists. The
     // provider is already on the display; this is the first content it carries,
     // so the initial preview built below picks up the restored zoom. Scoping is
-    // load-bearing — see the zoom-provider note above and ScrAP-64.
+    // load-bearing — see the zoom-provider note above and GTK4Rs/AP-77.
     window.add_css_class(&format!(
         "scrib-win-{}",
         winstate::WindowId::of(&window).raw()
@@ -393,7 +393,7 @@ fn build_window(
     // Keyboard-shortcuts help overlay. `set_help_overlay` owns the
     // window, creates this window's `win.show-help-overlay` action (opened with
     // F1 / Ctrl+?, registered in `setup::register_accelerators`), and hides it on
-    // close so it can reopen. Per-window like the menubar (ScrAP-63).
+    // close so it can reopen. Per-window like the menubar (GTK4Rs/AP-76).
     window.set_help_overlay(Some(&crate::app::make_shortcuts_window()));
 
     // ── toolbar & chrome ─────────────────────────────────────────────────────
@@ -474,10 +474,10 @@ fn build_window(
     wire_find_bar(&window, &chrome);
     // Gate the Format and Go To Line commands on editor focus.
     setup_editor_focus_gate(&window, &format_box, &chrome.find_bar_revealer);
-    // Stage-2 caret formatting overlay: ONE per window (ScrAP-61), stored in
+    // Stage-2 caret formatting overlay: ONE per window (GTK4Rs/AP-106), stored in
     // WindowChrome and re-parented to the active tab's editor on every switch.
     // Built once here — its heading-menu font resolution happens once ever, O(1)
-    // (ScrAP-61). `assemble_tab_core` already wired this first tab's
+    // (GTK4Rs/AP-106). `assemble_tab_core` already wired this first tab's
     // editor to drive it (via `wire_editor_format_overlay`), exactly as every
     // later tab wires its own. Unparented once on window destroy (below).
     let (format_overlay, ov_edit_btns) = build_format_overlay();
@@ -637,7 +637,7 @@ fn build_window_chrome_state(
 /// present on every window it might build (see tabs.rs), and `wire_tab_bar_dnd`
 /// owns the single `GtkDragSource`/`GtkDropTarget` pair that drives in-strip
 /// reorder AND cross-window move AND drag-to-desktop (module doc, widgets/tab) —
-/// no per-tab-label wiring needed anymore (ScrAP-50 is now moot: there is no
+/// no per-tab-label wiring needed anymore (GTK4Rs/AP-60 is now moot: there is no
 /// `GtkNotebook` internal DnD to have raced against in the first place).
 fn wire_tab_machinery(window: &ApplicationWindow, tabs: &TabView) {
     wire_tab_switch_page(window, tabs);
@@ -683,7 +683,7 @@ fn wire_format_surface_updates(window: &ApplicationWindow) {
 /// 1. Unparent the single caret-overlay popover while the chrome is still
 ///    registered — a `set_parent`ed popover is NOT auto-unparented, so its host
 ///    editor would otherwise finalize "with children left" and leak the popover
-///    subtree (ScrAP-61).
+///    subtree (GTK4Rs/AP-106).
 /// 2. Remove this window's zoom CSS rule from the shared display (the provider
 ///    reference is held by this closure so it outlives the window).
 /// 3. Unregister the window's typed state LAST, so both handlers above still

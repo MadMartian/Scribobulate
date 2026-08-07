@@ -112,7 +112,7 @@ fn level_class(level: u8) -> &'static str {
 }
 
 /// Expand every heading row of a `GtkTreeListModel` that was built
-/// `autoexpand=false` (ScrAP-84 — required so a later true-recursive Collapse all is
+/// `autoexpand=false` (GTK4Rs/AP-111 — required so a later true-recursive Collapse all is
 /// possible). The single, subtle forward walk shared by the build-time full-open
 /// (`build_outline_content`) and the runtime "Expand all" button
 /// (`window::outline_nav::outline_expand_all`) — kept in one place so the two
@@ -125,7 +125,7 @@ fn level_class(level: u8) -> &'static str {
 /// `autoexpand=false`, each step opens exactly one level; re-reading `n_items()`
 /// each step and advancing the index one at a time therefore descends into each
 /// freshly-revealed child in turn, reaching full depth one level per step.
-/// Already-expanded rows are a cheap no-op. See ScrAP-84.
+/// Already-expanded rows are a cheap no-op. See GTK4Rs/AP-111.
 pub(crate) fn expand_all_rows(model: &gtk::TreeListModel) {
     let mut i = 0;
     while i < model.n_items() {
@@ -171,7 +171,7 @@ pub(crate) fn build_outline_content(
     // TreeExpander; get the real data via row.item()).
     //
     // autoexpand=FALSE — deliberately, so that JetBrains-style *true recursive*
-    // Collapse all is possible (TDD 12.17, ScrAP-84). Under autoexpand=true a
+    // Collapse all is possible (TDD 12.17, GTK4Rs/AP-111). Under autoexpand=true a
     // programmatic `set_expanded(true)` on any row recursively re-opens its WHOLE
     // subtree synchronously (init_node → expand_node per child → recursion), so
     // "Collapse all, then expand one root to see its children collapsed" is

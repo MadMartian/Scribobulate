@@ -162,7 +162,7 @@ pub(crate) fn check_and_reload(window: &ApplicationWindow) {
 /// against whichever window `tab` is CURRENTLY parented under — resolved fresh
 /// from the tab's own widget tree every time, never a window reference cached at
 /// monitor-creation time, because a tab can move to a different window later while
-/// its `id` (and its file monitor's closure) stays the same (ScrAP-46's lesson
+/// its `id` (and its file monitor's closure) stays the same (GTK4Rs/AP-52's lesson
 /// applies here too: re-resolve live state from the tab, don't cache a
 /// window/context reference across a possible reparent).
 ///
@@ -314,7 +314,7 @@ pub(crate) fn apply_external_reload(window: &ApplicationWindow, content: &str) {
             // `preview_top_line(sw)` (= `line_at_y(vadjustment.value())`). The two agree
             // when the view is settled, but they diverge under a CONCURRENT horizontal
             // resize: a width change re-wraps the text and GtkTextView's lazy
-            // re-validation transiently clamps the live `value` toward 0 (ScrAP-13/65),
+            // re-validation transiently clamps the live `value` toward 0 (GTK4Rs/AP-13/65),
             // so a reload landing in that window would capture a near-top line and
             // re-anchor the fresh document to the top. `reading_line` returns the
             // continuously-tracked settled line (falling back to `line_at_y` only before
@@ -335,7 +335,7 @@ pub(crate) fn apply_external_reload(window: &ApplicationWindow, content: &str) {
                 render_and_wire_preview(content, st.doc_dir().as_deref(), zoom, allow_unsafe);
             // Close any open marker popover BEFORE `set_preview` drops the view it is
             // parented to. That popover is autohide and holds a real X11 seat grab
-            // (ScrAP-98); destroying its parent while the grab is live strands it and the
+            // (GTK4Rs/AP-83); destroying its parent while the grab is live strands it and the
             // app stops accepting clicks and keys (hover keeps working — see
             // `CodePreviewView::dispose`, which is the belt to this one's braces).
             //
@@ -361,7 +361,7 @@ pub(crate) fn apply_external_reload(window: &ApplicationWindow, content: &str) {
             // the one-shot scroll_to_mark lands a FAR target near the top on a huge
             // doc, so use the progressive far-restore (researcher findings).
             // `render_and_wire_preview` returns the per-preview GtkOverlay PANE (the
-            // in-surface Annotate-bar host, ScrAP-98), not the raw scroller, so dig
+            // in-surface Annotate-bar host, GTK4Rs/AP-83), not the raw scroller, so dig
             // one level through to the scroller as every other consumer does
             // (`SplitView::preview_scroller`). Handing the pane in used to compile —
             // the restore took an untyped `&gtk::Widget` and downcast internally, so
@@ -375,7 +375,7 @@ pub(crate) fn apply_external_reload(window: &ApplicationWindow, content: &str) {
         }
         ViewMode::Split => {
             // Editor drives; let the coalesced tick re-project editor→preview
-            // as the rebuilt preview's height settles (ScrAP-16).
+            // as the rebuilt preview's height settles (GTK4Rs/AP-16).
             rerender_split_preview_driven_by_editor(window, content);
             rewire_copy_action(window);
         }
@@ -387,7 +387,7 @@ pub(crate) fn apply_external_reload(window: &ApplicationWindow, content: &str) {
     refresh_annotations(window);
     // A reload also rebuilt the preview buffer (Preview) / swapped it (Split), dropping
     // the find-match highlights — re-apply them for the active tab if the find bar is
-    // open, the same derived-state re-sync outline/annotations get here (GTK4Rs/AP-47/ScrAP-38). The
+    // open, the same derived-state re-sync outline/annotations get here (GTK4Rs/AP-47/GTK4Rs/AP-47). The
     // third preview-rebuild boundary alongside the theme sweep and the mode switch.
     super::refresh_preview_find_highlight(window);
     // Preview mode just installed a brand-new preview
@@ -485,7 +485,7 @@ mod gtk_integration_tests {
     }
 
     /// Iterate the main loop until `done` or the budget is spent. Frame-count based
-    /// deliberately — never a wall-clock sleep (ScrAP-134).
+    /// deliberately — never a wall-clock sleep (GTK4Rs/AP-122).
     fn pump_until(budget: u32, done: impl Fn() -> bool) -> bool {
         let ctx = glib::MainContext::default();
         for _ in 0..budget {
@@ -502,13 +502,13 @@ mod gtk_integration_tests {
     ///
     /// The marker popover is the app's only autohide popover — every other one is
     /// forced `set_autohide(false)` — so it is the only one holding a real X11 seat
-    /// grab (ScrAP-98). Unrealizing its surface while that grab is live strands the
+    /// grab (GTK4Rs/AP-83). Unrealizing its surface while that grab is live strands the
     /// grab: the app then ignores every click and keystroke while hover feedback
     /// keeps working, and stays that way until restarted.
     ///
     /// **Read what this test does and does not prove.** It CANNOT observe the grab:
     /// Xvfb has no window manager and no real seat grab, so the failure mode does not
-    /// exist in this harness at all (ScrAP-98's parenthetical — this class is
+    /// exist in this harness at all (GTK4Rs/AP-83's parenthetical — this class is
     /// real-compositor-only). A green run here is not evidence the app is fixed. What
     /// it pins is the *ordering contract* that prevents the failure, which is the part
     /// that can regress silently under refactoring.
@@ -555,14 +555,14 @@ mod gtk_integration_tests {
             "an external reload must popdown the marker popover BEFORE set_preview \
              drops the view it is parented to: an autohide popover unrealized while \
              holding a seat grab strands that grab, and the app goes dead to clicks \
-             and keys while hover still works (ScrAP-98)"
+             and keys while hover still works (GTK4Rs/AP-83)"
         );
 
         window.destroy();
     }
 
     /// An **external reload** must NOT erase the preview find-match highlights — the third
-    /// preview-rebuild boundary (alongside theme switch and mode switch) of the GTK4Rs/AP-47/ScrAP-38
+    /// preview-rebuild boundary (alongside theme switch and mode switch) of the GTK4Rs/AP-47/GTK4Rs/AP-47
     /// class. `apply_external_reload` installs a fresh preview buffer, dropping the
     /// `scrib-search-hl` tags; `refresh_preview_find_highlight` (invoked at the end of the
     /// reload) must re-apply them for the active tab while the find bar is open. Mutation:
@@ -613,7 +613,7 @@ mod gtk_integration_tests {
         assert!(
             tagged,
             "the find highlights must survive an external reload — the reload boundary must \
-             re-apply them (ScrAP-38)"
+             re-apply them (GTK4Rs/AP-47)"
         );
 
         window.destroy();
@@ -673,7 +673,7 @@ mod gtk_integration_tests {
         // Each reload rebuilds the preview subtree, dropping the previous overlay + card.
         // Drive a few bounded cycles and stop the moment the captured entry finalizes — a
         // stranded (ScrAP-60-cycled) entry never will, so the loop exhausts and the assert
-        // fires. Frame-count pumped, never a wall-clock sleep (ScrAP-134).
+        // fires. Frame-count pumped, never a wall-clock sleep (GTK4Rs/AP-122).
         for n in 0..8 {
             apply_external_reload(&window, &format!("# One\n\n# Two {n}\n\nbody {n}"));
             if pump_until(256, || weak.upgrade().is_none()) {

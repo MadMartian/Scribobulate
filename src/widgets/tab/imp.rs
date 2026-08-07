@@ -244,7 +244,7 @@ impl WidgetImpl for TabBar {
         // giving it anything smaller (down to and including 0) subtracts
         // its CSS padding/border without clamping at 0 internally,
         // driving its child `GtkImage`'s computed width negative
-        // (ScrAP-56).
+        // (GTK4Rs/AP-104).
         let chevron_w = prev_btn
             .measure(gtk::Orientation::Horizontal, -1)
             .1
@@ -279,7 +279,7 @@ impl WidgetImpl for TabBar {
         // refcount bump) and let the borrow end before calling
         // `configure` (researcher-confirmed root cause of a real,
         // live-reproduced crash during this file's `GtkScrollable`
-        // rewrite — the same pattern as ScrAP-53).
+        // rewrite — the same pattern as GTK4Rs/AP-61).
         let hadj = self.hadjustment.borrow().clone();
         let off = if let Some(adj) = hadj {
             self.block_scrolling.set(true);
@@ -297,7 +297,7 @@ impl WidgetImpl for TabBar {
         // achieved purely by moving the unneeded one outside
         // `[0, width)`, where the constructor's `set_overflow(Hidden)`
         // clips it from the paint exactly the way a scrolled-off tab
-        // handle already is (ScrAP-56's full account of why).
+        // handle already is (GTK4Rs/AP-104's full account of why).
         // `set_sensitive` (layout-neutral) still keeps a shoved-off
         // chevron unfocusable/unclickable — only called when the value
         // actually changes, to keep this per-frame-safe.

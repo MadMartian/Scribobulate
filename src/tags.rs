@@ -10,7 +10,7 @@
 //!   *multiplies* onto the CSS base (`gtktextattributes.c:349-351`), so it never
 //!   touches the CSS cascade and composes with zoom for free. This is why the theme
 //!   owns scale and has no `font_size` key at all — `font-size` is a CSS longhand
-//!   the zoom provider owns exclusively (ScrAP-127).
+//!   the zoom provider owns exclusively (GTK4Rs/AP-101).
 //! * **Pixel metrics** (`heading_space_below`, the blockquote indent, `list_step`)
 //!   are widget/Pango properties that do NOT follow CSS font-size, so they must be
 //!   scaled explicitly on every render/zoom. The theme states design-time px at
@@ -186,7 +186,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
 
     let code_inline_bg = to_hex(palette.code_inline_bg);
     // Note: the code-*block* background is self-drawn by codeview::CodePreviewView
-    // (ScrAP-21), not set here as a paragraph_background.
+    // (GTK4Rs/AP-21), not set here as a paragraph_background.
     let link_fg = to_hex(palette.link_fg);
 
     let px = |n: i32| (n as f64 * zoom).round() as i32;
@@ -266,7 +266,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // table-cell Pango path (`renderer::mark_open`), so body and cell never drift
     // (Document Rendering CAM row 12). Unlike AnnotationHighlight it is NOT raised to
     // top priority: a mark is content the user typed, an annotation is a review overlay
-    // that must never be buried — so an annotation still wins on overlap (ScrAP-99).
+    // that must never be buried — so an annotation still wins on overlap (GTK4Rs/AP-84).
     let mark_bg = theme.mark_bg.rgba();
     add(TagName::Mark.name(), &move |t| {
         t.set_background_rgba(Some(&mark_bg));
@@ -311,7 +311,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     });
     // The block background is NOT a paragraph_background — that fill is pinned to
     // the text's left/right margin and so can never show inner horizontal padding
-    // (ScrAP-21).  Instead `codeview::CodePreviewView` self-draws the block rect under
+    // (GTK4Rs/AP-21).  Instead `codeview::CodePreviewView` self-draws the block rect under
     // the text.  This tag only sets the monospace family and insets the text by
     // (view margin + pad) so it sits padded inside that drawn rect.
     let view_lm = px(config().view.left_margin);
@@ -336,13 +336,13 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // Blockquote: an indent that leaves room on the left for the accent bar + gap
     // (the bar itself is drawn by codeview::CodePreviewView in snapshot_layer, not a
     // widget — blockquotes are buffer text now, so they are selectable and their
-    // links work, with no anchored widget to churn the layout: ScrAP-23). Symmetric
+    // links work, with no anchored widget to churn the layout: GTK4Rs/AP-23). Symmetric
     // right indent so the quote reads as an inset block. No foreground override —
     // that would clobber the link colour where a quote contains a link.
     //
     // The bar width/gap are the SAME theme keys `codeview::mod`'s snapshot draws the
     // bar from and `codeview::gutter` offsets a quoted list's markers by, so a themed
-    // bar cannot land beside a differently-indented quote (ScrAP-121's failure mode).
+    // bar cannot land beside a differently-indented quote (GTK4Rs/AP-96's failure mode).
     let bq_indent = px(metrics.blockquote_bar_width + metrics.blockquote_text_gap);
     add(TagName::Blockquote.name(), &|t| {
         t.set_left_margin(view_lm + bq_indent);
@@ -367,15 +367,15 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     //                      paragraph. No pixels_above so lines WITHIN one item stay tight.
     //
     // The two variants share the SAME left_margin and indent=0; they differ ONLY in
-    // pixels_above_lines. That makes the first-line-vs-cont split ScrAP-76-safe: even if
+    // pixels_above_lines. That makes the first-line-vs-cont split GTK4Rs/AP-72-safe: even if
     // GtkTextView's one_style_cache mixes a line's cached style, the margin VALUE is
     // identical in both variants, so it cannot change — only the inter-item gap could.
     // Applying per-line (content only, '\n's untagged) still gives every line its own
     // margin toggle, which is what prevents a uniform multi-line margin from being
-    // dropped on toggle-free middle lines (ScrAP-72/ScrAP-76; research §5a). Both keep
+    // dropped on toggle-free middle lines (ScrAP-72/GTK4Rs/AP-72; research §5a). Both keep
     // pixels_inside_wrap at 0 so a line's own soft wraps stay tight.
     //
-    // ACCUMULATIVE margin (ScrAP-121): `left_margin` here is the item's indent
+    // ACCUMULATIVE margin (GTK4Rs/AP-96): `left_margin` here is the item's indent
     // RELATIVE to whatever container it sits in, not an absolute buffer x. GTK resolves a
     // line's margin as
     //     (highest-PRIORITY non-accumulative tag's left_margin, else the view's default)
@@ -418,7 +418,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // (inline `code`, which is added later and would otherwise win). GTK text-tag
     // backgrounds do NOT alpha-composite between tags — the highest-priority tag's
     // background wins outright — so a translucent highlight added earlier than
-    // code-inline is painted over entirely (ScrAP-99). An annotation is a
+    // code-inline is painted over entirely (GTK4Rs/AP-84). An annotation is a
     // user overlay that must never be hidden by the content it marks, so it takes
     // top priority among all tags. (Priorities are 0..=size-1; size-1 is highest.)
     let table = buf.tag_table();

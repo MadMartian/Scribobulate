@@ -35,7 +35,7 @@ struct Press<T> {
 /// *and* the label has no selection, so a drag that selected text is not a click
 /// either (`gtklabel.c`, 4.6.9). A hand-wired gesture gets none of that; it must
 /// reproduce it, and every call site that reproduces it by hand is a call site that
-/// can forget to (ScrAP-238).
+/// can forget to (GTK4Rs/AP-169).
 ///
 /// So this type owns **both** connections. The press half is not something a caller
 /// can decline to write, because the caller never writes either half —
@@ -141,7 +141,7 @@ impl ClickActivation {
         #[allow(clippy::disallowed_methods)]
         gesture.connect_released(move |gesture, _, x, y| {
             // One statement, so the tracker's borrow is released before `activate`
-            // runs: an activation can rebuild the widget tree and re-enter (ScrAP-53).
+            // runs: an activation can rebuild the widget tree and re-enter (GTK4Rs/AP-61).
             let activated = tracker_r.borrow_mut().release(hit(x, y).as_ref(), x, y);
             if let Some(target) = activated {
                 activate(gesture, target, x, y);

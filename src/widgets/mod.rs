@@ -7,9 +7,9 @@
 //! façade split across focused files rather than one monolith:
 //!
 //! - [`table`] — `ScribTableWidget`, the churn-free anchored Markdown-table
-//!   widget (a `ConstantSize` widget with cached cell rects; see ScrAP-23).
+//!   widget (a `ConstantSize` widget with cached cell rects; see GTK4Rs/AP-23).
 //! - [`tab`] — the `GtkNotebook`-free tab strip (`TabBar` + the `TabView`
-//!   façade); kills the ScrAP-50 crash class and adds per-tab close/context-menu.
+//!   façade); kills the GTK4Rs/AP-60 crash class and adds per-tab close/context-menu.
 //! - [`comment_entry`] — `CommentEntry`, the single annotation comment
 //!   entry + Save pair shared by all three annotation surfaces, wiring every
 //!   commit route once.

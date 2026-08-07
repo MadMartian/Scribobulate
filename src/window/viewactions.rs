@@ -262,7 +262,7 @@ fn register_view_mode_action(window: &ApplicationWindow) {
             // above), which carries none of the find-match highlights the old buffer
             // had — re-apply them for the active tab if the find bar is open, the same
             // derived-state re-sync `refresh_outline`/`refresh_annotations` get here
-            // (GTK4Rs/AP-47/ScrAP-38; no-op in edit mode / bar closed).
+            // (GTK4Rs/AP-47/GTK4Rs/AP-47; no-op in edit mode / bar closed).
             refresh_preview_find_highlight(&window);
             // Re-wire the scroll-spy to the new mode's preview SW (the old SW was
             // replaced by the mode switch above; wire_scroll_spy is idempotent and
@@ -285,7 +285,7 @@ fn register_view_mode_action(window: &ApplicationWindow) {
 /// `outline_visible || annotations_visible` — so an empty sidebar disappears and the
 /// content reclaims the width. Runtime toggles route through
 /// `reconcile_sidebar_visibility` (which reads the action states and the chrome
-/// widgets from `winstate::state`), recomputed at every boundary (ScrAP-38). But the
+/// widgets from `winstate::state`), recomputed at every boundary (GTK4Rs/AP-47). But the
 /// INITIAL seed runs BEFORE `winstate::register` — the typed per-window state doesn't
 /// exist yet — so the three section widgets are passed directly (like `toolbar` /
 /// `status_bar`) and their initial visibility is applied here from the two bools.
@@ -524,7 +524,7 @@ fn register_split_actions(window: &ApplicationWindow) {
     split_swap_action.set_enabled(false); // enabled by apply_mode_action_state in split mode
 
     // split-orientation: flips the SplitView's split axis in place — no rebuild
-    // (the scroll-sync projection is fraction-based and orientation-agnostic — ScrAP-16).
+    // (the scroll-sync projection is fraction-based and orientation-agnostic — GTK4Rs/AP-16).
     let split_orientation_action =
         register_bool_action(window, "split-orientation", false, |window, vertical| {
             let Some(st) = state(window) else { return };
@@ -633,7 +633,7 @@ pub(super) fn reconcile_toolbar_chrome(window: &ApplicationWindow) {
 /// purpose. Note: a synchronous `toolbar.measure(Horizontal, -1)` right after
 /// `set_visible(false)` would in fact be *fresh*, not stale — `gtk_widget_hide`
 /// completes the `queue_resize` cache-clear before returning, so it is NOT the
-/// ScrAP-13/ScrAP-15 lazy-validation family (see ScrAP-68). We simply don't need
+/// GTK4Rs/AP-13/GTK4Rs/AP-15 lazy-validation family (see ScrAP-68). We simply don't need
 /// the measure.
 fn update_toolbar_min_width(window: &ApplicationWindow) {
     window.queue_resize();

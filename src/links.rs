@@ -170,9 +170,9 @@ pub(crate) fn scheme_of(url: &str) -> Option<&str> {
 /// event time through.** On the *launch* path GDK substitutes 0 (`GDK_CURRENT_TIME`)
 /// with `gdk_x11_display_get_user_time()` — the last **user-interaction** time, which
 /// the click that got us here already seeded via `XI_ButtonPress`
-/// (`gdkapplaunchcontext-x11.c:346-348`). This is the opposite of ScrAP-54,
+/// (`gdkapplaunchcontext-x11.c:346-348`). This is the opposite of GTK4Rs/AP-62,
 /// whose *focus* path (`gdksurface-x11.c:2220`) passes the timestamp **raw** with no
-/// substitution — hence 0 failing there. Different code paths; ScrAP-54 does not apply here.
+/// substitution — hence 0 failing there. Different code paths; GTK4Rs/AP-62 does not apply here.
 ///
 /// **Parent is deliberately `None`.** It is not needed for the token (the launch
 /// context comes from `gdk_display_get_default()` when parent is NULL —
@@ -187,7 +187,7 @@ pub(crate) fn scheme_of(url: &str) -> Option<&str> {
 /// `show_uri_full` (not the simpler `show_uri`) because `show_uri` swallows failure
 /// into its own "Could not show link" modal; we want it in the log, not in the user's
 /// face. It is NOT deprecated on our target — the deprecation is `v4_10`-gated and we
-/// do not enable that feature (ScrAP-83's version trap).
+/// do not enable that feature (GTK4Rs/AP-114's version trap).
 pub(crate) fn open_url(url: &str) {
     if !is_allowed_url(url) {
         log::warn!("refusing to open URL with disallowed scheme: {url}");

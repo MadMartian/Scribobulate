@@ -9,7 +9,7 @@
 //!
 //! ⚠️ A rule must live in exactly ONE of the two. GTK's cascade scans providers by
 //! priority and takes the FIRST value found; equal priority resolves by provider
-//! ADD ORDER, and specificity only breaks ties WITHIN one provider (ScrAP-127). So two
+//! ADD ORDER, and specificity only breaks ties WITHIN one provider (GTK4Rs/AP-101). So two
 //! providers writing the same property on the same node is decided by construction
 //! order, which no selector can arbitrate. The table/image-tint rules therefore MOVED
 //! here→[`theme_css`] rather than being overridden from there.
@@ -17,11 +17,11 @@
 pub(crate) fn css() -> &'static str {
     "popover.format-overlay > contents { border-radius: 12px; padding: 4px; }
      /* The preview selection ACTION popover (Annotate, …) — same chrome as the editor
-        format overlay for a consistent look/behaviour (ScrAP-98: non-autohide popover). */
+        format overlay for a consistent look/behaviour (GTK4Rs/AP-83: non-autohide popover). */
      popover.annotation-overlay > contents { border-radius: 12px; padding: 4px; }
      /* The Annotate comment ENTRY, by contrast, floats as an IN-SURFACE GtkOverlay
         child over the preview (NOT a popover — the typing entry can't safely live in a
-        popover surface on X11, ScrAP-98), so it gets no theme popover chrome; give it its
+        popover surface on X11, GTK4Rs/AP-83), so it gets no theme popover chrome; give it its
         own opaque card so it reads over document text.
         This is the BASE (desktop-themed) card, worn by BOTH the editor's card and the
         preview's. The preview's additionally carries `.scrib-preview-card`, which
@@ -158,7 +158,7 @@ fn rgba_css(c: gtk::gdk::RGBA, alpha: f32) -> String {
 /// Unscoped (no `.scrib-win-<id>` prefix): the theme is app-wide, and its properties
 /// (`color`, `font-family`, `background-color`) are DISJOINT from zoom's
 /// (`font-size`), so the two providers never write the same lookup slot and cannot
-/// interact (ScrAP-127). Only zoom, which is per-window, needs a scope.
+/// interact (GTK4Rs/AP-101). Only zoom, which is per-window, needs a scope.
 ///
 /// Pure — takes its inputs, touches no display. Unit-tested headlessly.
 pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
@@ -328,7 +328,7 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     //
     // These DO override the static sheet's rules, which is why the theme provider is
     // installed at a strictly higher priority: priority dominates, and equal-priority
-    // add-order would otherwise decide it (ScrAP-127).
+    // add-order would otherwise decide it (GTK4Rs/AP-101).
     if theme.background.is_some() || theme.foreground.is_some() {
         let card_bg = to_hex(palette.page_bg);
         let card_border = to_hex(palette.table_border);
@@ -360,7 +360,7 @@ mod tests {
     fn css_defines_the_expected_style_classes() {
         let c = css();
         // The table + image-tint rules deliberately MOVED to `theme_css` — a rule must
-        // live in exactly one provider (ScrAP-127), so their absence here is the contract.
+        // live in exactly one provider (GTK4Rs/AP-101), so their absence here is the contract.
         assert!(!c.contains("scribtable"));
         assert!(!c.contains(".scrib-image-sel"));
         assert!(c.contains(".conflict-toast"));
@@ -551,7 +551,7 @@ mod tests {
         }
     }
 
-    /// TDD 18.9 / ScrAP-127 — the load-bearing invariant of the whole design. Zoom owns
+    /// TDD 18.9 / GTK4Rs/AP-101 — the load-bearing invariant of the whole design. Zoom owns
     /// CSS `font-size` EXCLUSIVELY; the theme owns Pango scale. If the theme sheet
     /// ever emits `font-size`, the two providers write the same lookup slot and the
     /// winner is decided by provider ADD ORDER — a construction-order accident that
@@ -563,7 +563,7 @@ mod tests {
             let c = css_for(id);
             assert!(
                 !c.contains("font-size"),
-                "theme {id} emitted font-size — that slot belongs to the zoom provider (ScrAP-127)"
+                "theme {id} emitted font-size — that slot belongs to the zoom provider (GTK4Rs/AP-101)"
             );
             // The `font:` SHORTHAND is the same trap by another route: GTK expands it
             // to six longhands INCLUDING size, silently clobbering zoom.
@@ -606,7 +606,7 @@ mod tests {
     }
 
     /// The table rules are generated for EVERY theme (they moved out of the static
-    /// sheet entirely — one provider per rule, ScrAP-127), including System.
+    /// sheet entirely — one provider per rule, GTK4Rs/AP-101), including System.
     #[test]
     fn table_and_rule_chrome_is_generated_for_every_theme() {
         for id in ["system", "sepia"] {

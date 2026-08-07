@@ -53,10 +53,10 @@
 //! `pub(crate)` items) is re-exported here so call sites are unchanged.
 //!
 //! * [`viewmode`] — [`ViewMode`], [`FocusedPane`], and the [`copy_target`] decision.
-//! * [`scrollsync`] — [`ScrollDriver`] + the [`ScrollSync`] coalescing state (ScrAP-16).
+//! * [`scrollsync`] — [`ScrollDriver`] + the [`ScrollSync`] coalescing state (GTK4Rs/AP-16).
 //! * [`ids`] — the [`TabId`] and [`WindowId`] identity newtypes.
 //! * [`fmtinsert`] — [`FmtInsertKind`] (the Insert↔Edit Link/Image kind).
-//! * [`selfdelete`] — [`SelfDeleteGuard`], the atomic-save round-trip guard (ScrAP-54).
+//! * [`selfdelete`] — [`SelfDeleteGuard`], the atomic-save round-trip guard (GTK4Rs/AP-62).
 //! * [`status`] — the footer [`StatusStack`].
 //! * [`swap`] — [`SwapState`] plus the crash-recovery snapshot debounce/cap arithmetic.
 //! * [`navhistory`] — [`NavHistory`], the per-window Back/Forward history (TDD §23).
@@ -88,7 +88,7 @@
 //! **adopted from the destination** on a move into an existing one: zoom must
 //! actively adopt (two tabs under one per-window CSS class cannot render at
 //! different zooms — that is the real work `window/tabs/dnd.rs::wire_tab_arrival`
-//! does for zoom, ScrAP-64); chrome adopts by *construction* (not tab-scoped, so an
+//! does for zoom, GTK4Rs/AP-77); chrome adopts by *construction* (not tab-scoped, so an
 //! arriving tab carries no chrome and the destination's toggles are left alone —
 //! `wire_tab_arrival` needs no chrome code). Editing `wire_tab_arrival` for a
 //! window-scoped seeding change is the signal you have taken a wrong turn.

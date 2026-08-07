@@ -366,7 +366,7 @@ pub(super) fn wire_occurrences_count(
 /// Pango attrs on table-cell labels), and both boundaries swap in a BRAND-NEW buffer/labels
 /// that carry none of them — so the matches silently vanish and only return when the user
 /// next edits the query or steps a match (which re-runs `highlight_preview_matches`). This
-/// is the GTK4Rs/AP-47/ScrAP-38 "a delta-only signal (`search-changed`) misses a lifecycle boundary"
+/// is the GTK4Rs/AP-47/GTK4Rs/AP-47 "a delta-only signal (`search-changed`) misses a lifecycle boundary"
 /// class: the highlight is derived state and must be RECOMPUTED at every boundary that
 /// rebuilds its substrate, exactly as `refresh_outline`/`refresh_annotations` already are in
 /// both sweeps, and as the tab-switch and bar-reopen paths already re-sync find. Mirrors

@@ -37,7 +37,7 @@ thread_local! {
 
 /// A window's registry key — the single [`WindowId::of`] derivation shared with
 /// the `.scrib-win-<id>` CSS scope (`window`/`zoom`), so the map key and the CSS
-/// class can never diverge for the same window (see `WindowId`'s CONTRACT, ScrAP-64).
+/// class can never diverge for the same window (see `WindowId`'s CONTRACT, GTK4Rs/AP-77).
 fn window_id(window: &ApplicationWindow) -> WindowId {
     WindowId::of(window)
 }
@@ -149,7 +149,7 @@ pub(crate) fn remove_tab(window: &ApplicationWindow, tab_id: TabId) {
 
 /// Run `f` against `window`'s history, or return `None` if the window is not (or
 /// no longer) registered. One helper so every accessor below takes the same short
-/// borrow and cannot hold it across a GTK call (ScrAP-53).
+/// borrow and cannot hold it across a GTK call (GTK4Rs/AP-61).
 fn with_nav<T>(window: &ApplicationWindow, f: impl FnOnce(&mut NavHistory) -> T) -> Option<T> {
     WINDOWS.with(|m| {
         let m = m.borrow();

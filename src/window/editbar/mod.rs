@@ -15,7 +15,7 @@
 //!   - [`formatbar`] — the Format toolbar/overlay row (`build_format_bar`, `format_button`)
 //!   - [`relabel`]   — the Insert↔Edit surface relabel (`update`/`resync_format_edit_surfaces`)
 //!   - [`focusgate`] — the sticky editor-focus gate for `win.format`/`win.go-to-line`
-//!   - [`overlay`]   — the single per-window caret formatting overlay (ScrAP-61)
+//!   - [`overlay`]   — the single per-window caret formatting overlay (GTK4Rs/AP-106)
 //!
 //! Submodules reach each other's editbar-internal `pub(super)` helpers through the
 //! private globs below; the `pub(crate) use` re-exports expose the window-facing

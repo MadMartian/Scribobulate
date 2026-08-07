@@ -113,13 +113,13 @@ impl ForensicSink {
     /// `logging::forward`'s benign-GTK-noise demotion. That demotion is a
     /// *display* decision — "do not alarm someone reading a default startup log" —
     /// and applying it to the forensic record would be a category error. It is also
-    /// concretely wrong: the benign gizmo transient and the ScrAP-30 popover warning
+    /// concretely wrong: the benign gizmo transient and the GTK4Rs/AP-30 popover warning
     /// were the *only* context either 2026-07-29 crash left behind, so the records
     /// most likely to be filtered are the ones the plan says to keep.
     ///
     /// Only `logging::forward` may call this. Everything else must go through the
     /// `log` macros, where the threshold applies — an opt-in "also record this" API
-    /// used freely would be a latent gap by construction (ScrAP-116's enforcement
+    /// used freely would be a latent gap by construction (GTK4Rs/AP-108's enforcement
     /// lesson), which is why it is named for its one purpose rather than generally.
     pub(crate) fn record_demoted_diagnostic(&self, level: Level, target: &str, message: &str) {
         let line = format_line(&super::timefmt::now_iso8601(), level, target, message);

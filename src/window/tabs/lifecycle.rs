@@ -19,7 +19,7 @@ use super::*;
 /// the window fresh from its current root self-heals across the move with no
 /// explicit rewire — the same "don't cache a reparent-able context" idiom
 /// already used for the per-tab file monitor (`app.rs::attach_file_backing`,
-/// ScrAP-46/ScrAP-52).
+/// GTK4Rs/AP-52/ScrAP-52).
 pub(crate) fn resolve_tab_window(
     content_box: &gtk::glib::WeakRef<gtk::Box>,
 ) -> Option<ApplicationWindow> {
@@ -29,7 +29,7 @@ pub(crate) fn resolve_tab_window(
 /// The single self-healing root-walk: the `ApplicationWindow` currently hosting
 /// `widget`, from its live widget-tree root. A widget reparented to a DIFFERENT
 /// window by a cross-window tab move resolves fresh to its new window, so a handler
-/// that calls this never caches a stale window (ScrAP-46/ScrAP-52/ScrAP-57). Everything that
+/// that calls this never caches a stale window (GTK4Rs/AP-52/ScrAP-52/GTK4Rs/AP-52). Everything that
 /// needs "which window hosts this widget" funnels here (QA L-3): the tab machinery's
 /// [`window_of_content_box`]/[`resolve_tab_window`], the split-sync + scroll-spy
 /// handlers, and the editor-overlay adapter — each was previously an independent
@@ -92,7 +92,7 @@ pub(crate) fn wire_tab_buffer_signals(content_box: &gtk::Box, buffer: &sourcevie
                 // An edit can add or destroy the link under a STATIONARY caret
                 // (an undo, a live external reload), which `mark-set` below never
                 // reports — recompute at this boundary too, not only on the
-                // caret-move delta (ScrAP-38).
+                // caret-move delta (GTK4Rs/AP-47).
                 update_copy_link_action_state(&w);
             }
         }
@@ -187,7 +187,7 @@ pub(crate) struct TabCore {
 /// needs *regardless of when it was created*: the editor + persistent splitter
 /// (the editor is mounted once and never reparented), the split
 /// scroll-sync/spy, the per-tab buffer signals, the search engine + its
-/// occurrences-count, the caret-overlay driver (ScrAP-61 — a later tab only wires
+/// occurrences-count, the caret-overlay driver (GTK4Rs/AP-106 — a later tab only wires
 /// its editor to the one-per-window overlay), and live-preview re-render.
 ///
 /// This is the single home for the assembly `build_window` and
@@ -208,7 +208,7 @@ pub(crate) fn assemble_tab_core(
     // reparented), install the initial preview (or leave it preview-less for a
     // deferred tab), make it content_box's single child, and wire the editor
     // scroll-sync + Edit-mode/cross-window scroll-spy on the persistent editor
-    // scroller once (ScrAP-46/ScrAP-57).
+    // scroller once (GTK4Rs/AP-52/GTK4Rs/AP-52).
     let split = SplitView::new(&editor);
     split.set_preview(preview);
     content_box.append(&split);
@@ -228,7 +228,7 @@ pub(crate) fn assemble_tab_core(
     wire_occurrences_count(content_box, &search_context);
 
     // The caret-format overlay is one-per-window (built with the window's first
-    // tab, ScrAP-61); this only wires THIS editor to drive that shared overlay — no
+    // tab, GTK4Rs/AP-106); this only wires THIS editor to drive that shared overlay — no
     // second popover/heading-menu is built.
     wire_editor_format_overlay(&editor);
     wire_live_preview(content_box, &editor_buf);
@@ -432,7 +432,7 @@ fn close_tab_now(window: &ApplicationWindow, tab: &Rc<TabState>) {
         return;
     };
     // The window's single caret overlay may be parented to THIS tab's editor
-    // (ScrAP-61); detach it before the editor finalizes, then re-home it onto the
+    // (GTK4Rs/AP-106); detach it before the editor finalizes, then re-home it onto the
     // surviving active tab below.
     detach_overlay_from(&chrome, &tab.editor);
     // Landing on the neighbour BECAUSE a tab closed is not a navigation (TDD

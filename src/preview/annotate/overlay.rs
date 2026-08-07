@@ -3,7 +3,7 @@
 //!
 //! Two coordinated pieces: a non-autohide **action popover** (Annotate, …) shown over a
 //! live preview selection, and an in-surface **comment entry** card revealed when
-//! Annotate is clicked. See [`wire_annotation_overlay`] for the full rationale (ScrAP-98).
+//! Annotate is clicked. See [`wire_annotation_overlay`] for the full rationale (GTK4Rs/AP-83).
 //!
 //! This file is pure GTK signal/geometry wiring that cannot be exercised headlessly, so
 //! it is EXCLUDED from the coverage ratchet (scripts/coverage.sh / POLICY.md), same as
@@ -54,7 +54,7 @@ fn selected_cell_label(view: &CodePreviewView) -> Option<(Label, i32, i32)> {
 
 /// Position the action popover / card at a cell-label selection using the label's
 /// Pango layout clip region (table-cell annotations). Returns false when the
-/// label has no layout or translate fails (ScrAP-22/29 unallocated guard).
+/// label has no layout or translate fails (GTK4Rs/AP-22/29 unallocated guard).
 fn point_at_cell_selection(
     view: &CodePreviewView,
     label: &Label,
@@ -85,10 +85,10 @@ fn point_at_cell_selection(
     let lh = (pos_a.height() / scale).max(1);
     // Label-local → view-widget coords.
     let Some((vx, vy)) = label.translate_coordinates(view, f64::from(lx), f64::from(ly)) else {
-        return false; // unallocated (ScrAP-22/29)
+        return false; // unallocated (GTK4Rs/AP-22/29)
     };
     let Some(vr) = ViewportRect::at(Viewport::of(view), vx as i32, vy as i32, lh) else {
-        return false; // off-viewport (ScrAP-26) — do not pin to a hidden anchor
+        return false; // off-viewport (GTK4Rs/AP-26) — do not pin to a hidden anchor
     };
     pin_above(pop, &vr);
     true
@@ -101,7 +101,7 @@ fn point_at_cell_selection(
 /// (gtkpopover.c / gdksurface.c). The popover is armed by a deferred ~40 ms timer that can
 /// fire against an alive-but-unrooted ZOMBIE view after teardown (unrealize is synchronous,
 /// finalize deferred; a co-pending strong ref keeps the weak `view.upgrade()` succeeding),
-/// and the ScrAP-26 viewport-geometry gate does NOT catch it — a zombie keeps its last
+/// and the GTK4Rs/AP-26 viewport-geometry gate does NOT catch it — a zombie keeps its last
 /// allocation, so the anchor still looks on-viewport. So every path that pops this popover
 /// MUST route through here; a realized-but-unmapped fresh tab is still realized, so a
 /// legitimate open is never wrongly skipped.
@@ -141,7 +141,7 @@ fn position_card_on_cell(
     };
     let height = view.height();
     // Same on-viewport gate the popovers use, through the same constructor — this card is
-    // an in-surface GtkOverlay child rather than a popover, so it is not exposed to ScrAP-26
+    // an in-surface GtkOverlay child rather than a popover, so it is not exposed to GTK4Rs/AP-26
     // itself, but "is there a visible anchor here?" is one question and deserves one
     // answer. The rect is discarded: `bar_placement` below owns this card's clamping.
     if ViewportRect::at(Viewport::of(view), vx as i32, vy as i32, lh).is_none() {
@@ -171,7 +171,7 @@ fn position_card_on_cell(
 /// Point `pop`'s arrow at the horizontal midpoint of the preview selection — the same
 /// validation-safe geometry as the editor `point_format_overlay` (iter → rect →
 /// `buffer_to_window_coords(Widget, …)`, never a position→iter hit-test, so it
-/// sidesteps ScrAP-15). Returns whether a valid on-screen anchor was set (so the caller
+/// sidesteps GTK4Rs/AP-15). Returns whether a valid on-screen anchor was set (so the caller
 /// can decide to `popup` vs `popdown`).
 fn point_at_selection(view: &CodePreviewView, pop: &gtk::Popover) -> bool {
     let Some((start, end)) = view.buffer().selection_bounds() else {
@@ -183,7 +183,7 @@ fn point_at_selection(view: &CodePreviewView, pop: &gtk::Popover) -> bool {
     let (x1, _y1) = view.buffer_to_window_coords(gtk::TextWindowType::Widget, r1.x(), r1.y());
     let line_h = r0.height().max(1);
     let Some(vr) = ViewportRect::at(Viewport::of(view), (x0 + x1) / 2, y0, line_h) else {
-        return false; // off-viewport (ScrAP-26) — on EITHER axis (QA round 5, H-1)
+        return false; // off-viewport (GTK4Rs/AP-26) — on EITHER axis (QA round 5, H-1)
     };
     pin_above(pop, &vr);
     true
@@ -194,7 +194,7 @@ fn point_at_selection(view: &CodePreviewView, pop: &gtk::Popover) -> bool {
 /// frame clock's `after-paint` phase (see `wire_annotation_overlay`), never a
 /// wall-clock timeout or a bare tick callback, because every geometry read
 /// (`iter_location`/`buffer_to_window_coords`) reads a lagging `yoffset` + cached
-/// `find_line_top` and ONLY a paint validates them (ScrAP-156, researcher
+/// `find_line_top` and ONLY a paint validates them (GTK4Rs/AP-142, researcher
 /// round 2). At that point `point_at_selection`'s on-viewport read is trustworthy: a
 /// genuinely-visible selection reads on-viewport → show; a scrolled-away one reads
 /// off-viewport → hide (the legitimate suppression). Marker-popover open → stay down.
@@ -214,16 +214,16 @@ fn decide_show_action_popover(view: &CodePreviewView, pop: &gtk::Popover) {
 /// create overlay AND the editor Annotate card (`window/editor_annotate.rs`), which
 /// differ only in the concrete view type. Mirrors the editor format overlay's geometry
 /// (`iter_location` → `buffer_to_window_coords(Widget, …)`, never a position→iter
-/// hit-test, so it sidesteps ScrAP-15) but targets an in-surface overlay child rather than
-/// a popover (ScrAP-98). Returns `false` when the selection is scrolled off-viewport.
+/// hit-test, so it sidesteps GTK4Rs/AP-15) but targets an in-surface overlay child rather than
+/// a popover (GTK4Rs/AP-83). Returns `false` when the selection is scrolled off-viewport.
 ///
 /// This thin GTK shell (selection → widget coords → overlay-local) delegates the
 /// bug-prone above/below + clamp arithmetic to the pure `bar_placement` helper and the
 /// shared `saferizer::ViewportRect` gate. Runs ONLY in the event phase (Annotate click / action / coalesced driver),
 /// NEVER inside the overlay's `get-child-position`/allocation: it calls
 /// `buffer_to_window_coords` and `preferred_size`, which force GtkTextView layout
-/// validation and a child measure — doing that from allocate re-enters layout (ScrAP-22)
-/// and bubbles `alloc_needed` (ScrAP-56). The overlay's own layout reads only the plain
+/// validation and a child measure — doing that from allocate re-enters layout (GTK4Rs/AP-22)
+/// and bubbles `alloc_needed` (GTK4Rs/AP-104). The overlay's own layout reads only the plain
 /// margins set here.
 pub(crate) fn position_card(
     view: &impl IsA<gtk::TextView>,
@@ -291,7 +291,7 @@ pub(crate) fn position_card(
 ///    Currently it holds one **Annotate** button, but it is built as a button box so
 ///    more preview-selection actions can join it later. It is deliberately
 ///    `autohide(false)`: an autohide popover takes an X11 seat grab whose cross-surface
-///    coordinate mis-delivery prelights/steals focus onto the top chrome (ScrAP-98,
+///    coordinate mis-delivery prelights/steals focus onto the top chrome (GTK4Rs/AP-83,
 ///    researcher-confirmed against gtk-4-6) — but a *buttons-only* non-autohide popover
 ///    needs no grab (exactly like the format overlay), so it is immune. Positioned with
 ///    [`point_at_selection`]; shown/hidden by the coalesced selection driver below.
@@ -321,7 +321,7 @@ pub(crate) fn wire_annotation_overlay(
     pop.add_css_class("annotation-overlay");
     pop.set_parent(view);
     // A `set_parent`-attached popover is a native child GTK does NOT unparent for us —
-    // the view's `dispose` must (ScrAP-90), or teardown floods "GtkPopover is not a child
+    // the view's `dispose` must (GTK4Rs/AP-80), or teardown floods "GtkPopover is not a child
     // of ScribCodePreviewView".
     view.store_overlay_popover(&pop);
 
@@ -439,7 +439,7 @@ pub(crate) fn wire_annotation_overlay(
             // synchronously inside the Save button's "clicked" handler tears down and
             // re-creates widgets while the press gesture is still active, so GTK loses
             // track of the active state up the ScribCodePreviewView→…→window ancestor
-            // chain ("Broken accounting of active state for widget …" — ScrAP-96).
+            // chain ("Broken accounting of active state for widget …" — GTK4Rs/AP-30).
             // Deferring lets the gesture finish first. (Entry `activate` reaches here
             // too and is deferred identically.)
             hide_entry();
@@ -567,7 +567,7 @@ pub(crate) fn wire_annotation_overlay(
             // width 0, the centering `anchor - bw/2` collapses to `anchor`, and the card's
             // LEFT edge (not its centre) lands on the midpoint (it sits to the right,
             // "not aligned at all"). Measure needs visibility, not allocation, so
-            // set_visible(true) first gives a real natural size to centre against (ScrAP-100 /
+            // set_visible(true) first gives a real natural size to centre against (GTK4Rs/AP-85 /
             // ScrAP-68 family). The selection is intact and on-screen (the popover was
             // showing), so position_card succeeds; show regardless of its return.
             bar.set_visible(true);
@@ -624,11 +624,11 @@ pub(crate) fn wire_annotation_overlay(
     // format overlay: `mark-set` fires on every step of a drag-select, so updates are
     // debounced through one replaceable ~40 ms timer rather than popping up per event.
     // Generation token for the action popover's deferred `after-paint` anchor read
-    // (ScrAP-156). Bumped on every selection change, so a one-shot
+    // (GTK4Rs/AP-142). Bumped on every selection change, so a one-shot
     // `after-paint` handler still pending from an earlier selection cancels itself when
     // a newer selection supersedes its anchor before that paint lands.
     let anchor_gen = Rc::new(Cell::new(0u64));
-    // The single in-flight `after-paint` handler (ScrAP-156, researcher note 3):
+    // The single in-flight `after-paint` handler (GTK4Rs/AP-142, researcher note 3):
     // a one-shot handler disconnects itself on its first fire, but if a NEWER selection
     // arms before the old one's paint lands, disconnect the old handler up front so a
     // never-firing handler can't dangle on the frame clock. One slot, always the latest.
@@ -683,7 +683,7 @@ pub(crate) fn wire_annotation_overlay(
                 // outright** — which fires `mark-set`. So Ctrl+A or Shift+Home inside the
                 // card destroyed the card the user was typing into, discarding the comment.
                 //
-                // Note this is why muting our own ScrAP-28 PRIMARY listener does NOT fix it:
+                // Note this is why muting our own GTK4Rs/AP-28 PRIMARY listener does NOT fix it:
                 // the `mark-set` comes from GTK clearing the buffer, not from our listener.
                 // Verified live (Xvfb + openbox): Shift+Home fires no accelerator at all
                 // and still dismissed — which is what rules out the accelerator collision
@@ -768,7 +768,7 @@ pub(crate) fn wire_annotation_overlay(
                 // `yoffset` + a cached, possibly-ESTIMATED `find_line_top`. ONLY a PAINT
                 // validates them: gtk_text_view paint runs `flush_first_validate` and asserts
                 // `onscreen_validated`, then draws at `find_line_top − yoffset` — the identical
-                // transform the read uses (researcher round 2, gtk-4.6.9; ScrAP-156).
+                // transform the read uses (researcher round 2, gtk-4.6.9; GTK4Rs/AP-142).
                 // So a read agrees with the painted position IFF it happens AFTER a paint of
                 // the current scroll state. The earlier fixes read too early: a 40 ms
                 // WALL-CLOCK timeout can fire before any paint, and even a bare
@@ -828,7 +828,7 @@ pub(crate) fn wire_annotation_overlay(
     // swap. `re_render` replaces the preview buffer via `set_buffer` — which the
     // live-refresh after each annotation triggers — silently dropping the old buffer's
     // handlers; without re-wiring, the overlay would work for the FIRST annotation only
-    // (ScrAP-94). `notify::buffer` fires on the VIEW (which survives the swap) each time
+    // (GTK4Rs/AP-82). `notify::buffer` fires on the VIEW (which survives the swap) each time
     // the buffer is replaced, so we re-attach to the new buffer.
     let connect_selection: Rc<dyn Fn(&gtk::TextBuffer)> = Rc::new({
         let schedule = schedule.clone();
@@ -875,14 +875,14 @@ pub(crate) fn wire_annotation_overlay(
     // selecting inside it fires NO buffer signal (no `mark-set`/`has-selection` — the
     // text is not in the buffer), so the buffer-signal wiring above never runs for a
     // cell selection. The one cross-environment signal a selectable label exposes is the
-    // DISPLAY-level primary clipboard's `changed` (ScrAP-28 — the same signal Copy uses to
+    // DISPLAY-level primary clipboard's `changed` (GTK4Rs/AP-28 — the same signal Copy uses to
     // track cell selections). Route it through the SAME coalesced `schedule` as buffer
     // selections so a cell selection reaches full parity: it re-evaluates the action
     // popover (auto-show/-hide) AND refreshes `win.annotate`'s enabled state
     // (`schedule` calls `update_annotate_action_state`) AND dismisses the entry card
     // when the selection changes — the three things buffer selections already get. The
     // handler is stored on the view and disconnected in `dispose` (the primary clipboard
-    // is long-lived; a per-render leak would otherwise accumulate — ScrAP-28).
+    // is long-lived; a per-render leak would otherwise accumulate — GTK4Rs/AP-28).
     //
     // NOTE: this listener over-fires badly — `::changed` means "the display's
     // PRIMARY *ownership* changed", NOT "our document's selection changed", and PRIMARY is
@@ -918,7 +918,7 @@ pub(crate) fn wire_annotation_overlay(
         ));
     }
     // NB: the scroll handler above deliberately does NOT bump `anchor_gen`. An in-flight
-    // anchor poll (ScrAP-156) re-reads `selection_start_widget_y` every frame, so it
+    // anchor poll (GTK4Rs/AP-142) re-reads `selection_start_widget_y` every frame, so it
     // self-corrects to the current scroll position rather than needing cancellation — and
     // cancelling it on each `value-changed` while a pending post-`select`+scroll is still
     // SETTLING (vadj changes over several frames) would abort the poll before it converges,
@@ -1095,7 +1095,7 @@ mod jjj_tests {
         None
     }
 
-    /// ScrAP-156: scroll the preview, THEN select on-viewport text
+    /// GTK4Rs/AP-142: scroll the preview, THEN select on-viewport text
     /// — the Annotate action popover must appear over the selection.
     ///
     /// This is a WIRING / FUNCTIONAL guard, and honest about its limit. The reported bug
@@ -1113,7 +1113,7 @@ mod jjj_tests {
     /// The STALE-READ regression itself cannot be caught deterministically headless: to
     /// pick a genuinely on-viewport selection this test must settle the scroll, and once
     /// the region is validated an early read also sees the correct y — the exact
-    /// ScrAP-87 masking (a prior bare-`add_tick_callback` fix passed this test yet shipped
+    /// GTK4Rs/AP-78 masking (a prior bare-`add_tick_callback` fix passed this test yet shipped
     /// broken until the LIVE run). So this asserts only that the fix DELIVERS the popover
     /// end-to-end (it guards the after-paint wiring from a future break that stops it ever
     /// showing). The stale-timing gate is the operator's LIVE display (GTK4Rs/AP-56).
@@ -1177,7 +1177,7 @@ mod jjj_tests {
         assert!(
             pump_until(200, || pop.is_mapped()),
             "after scroll-then-select the Annotate action popover must appear over the \
-             on-viewport selection (ScrAP-156: the anchor read must ride the frame clock, \
+             on-viewport selection (GTK4Rs/AP-142: the anchor read must ride the frame clock, \
              not the wall-clock debounce)"
         );
 
@@ -1219,7 +1219,7 @@ mod jjj_tests {
              against a NULL parent surface)"
         );
 
-        // A set_parent'd popover is not auto-unparented (ScrAP-90).
+        // A set_parent'd popover is not auto-unparented (GTK4Rs/AP-80).
         pop.unparent();
     }
 }

@@ -14,7 +14,7 @@ fn format_button(cmd: &crate::app::FmtCmd) -> gtk::Button {
     // `cmd.icon` is `None` for commands with no freedesktop icon (Code Span, Quote,
     // Code Block, Task List, Horizontal Bar) — fall back to the short glyph. When
     // present, still verify the theme actually resolves it before using it, so a
-    // missing name never renders the broken-image placeholder (ScrAP-39).
+    // missing name never renders the broken-image placeholder (GTK4Rs/AP-48).
     let icon_name = cmd.icon.map(crate::icons::Icon::name).filter(|name| {
         gtk::gdk::Display::default()
             .map(|d| gtk::IconTheme::for_display(&d).has_icon(name))
@@ -78,7 +78,7 @@ pub(crate) fn build_format_bar() -> (gtk::Box, gtk::MenuButton, Vec<(FmtInsertKi
     // target, so it drives the parameterless `win.annotate` action. Placed here in the
     // SHARED format row so the ONE button serves BOTH the toolbar Format section AND the
     // editor caret/format overlay (SSOT). No standard "add comment" symbolic icon exists
-    // on the common themes (ScrAP-39), so it uses the same 💬 glyph as the preview selection
+    // on the common themes (GTK4Rs/AP-48), so it uses the same 💬 glyph as the preview selection
     // popover for a consistent mark; its enabled state is `win.annotate`'s (an editor or
     // preview selection). `set_focus_on_click(false)` keeps editor focus so the action
     // stays enabled at activation (same reasoning as `format_button`).

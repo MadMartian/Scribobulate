@@ -26,7 +26,7 @@
 //!   (`gtk_label_activate_link`, `gtktextview`-independent; `gtk_link_button_activate_link`),
 //!   so a handler that forgets to return [`glib::Propagation::Stop`] hands
 //!   `file:///etc/passwd` straight to the desktop. Hence one activation function both
-//!   connections delegate to, which cannot return anything else (ScrAP-259).
+//!   connections delegate to, which cannot return anything else (GTK4Rs/AP-239).
 
 use crate::codeview::CodePreviewView;
 use gtk::prelude::*;
@@ -38,7 +38,7 @@ use gtk::{glib, Label, LinkButton};
 /// The caption is installed as **escaped Pango markup**, not plain text. Every other
 /// cell label in a table is a markup label, and find's cell path relies on that
 /// uniformly: it forces an anchored child to re-snapshot by toggling a transient
-/// no-attr `<span>` wrapper around the label's own markup (ScrAP-37/ScrAP-117), which
+/// no-attr `<span>` wrapper around the label's own markup (GTK4Rs/AP-45/GTK4Rs/AP-92), which
 /// on a plain-text label would silently reinterpret the caption AS markup — a caption
 /// like `R&D notes` or `<draft>` then fails `pango_parse_markup` and the label renders
 /// EMPTY, with no crash and no compile error (ScrAP-163). One `set_markup` of an
@@ -255,7 +255,7 @@ mod gtk_integration_tests {
             label.uses_markup(),
             "the caption label must be a MARKUP label: find's repaint force wraps its \
              own markup in a transient <span>, which a plain-text label would then \
-             show literally or fail to parse (ScrAP-37/ScrAP-163)"
+             show literally or fail to parse (GTK4Rs/AP-45/ScrAP-163)"
         );
     }
 
@@ -293,7 +293,7 @@ mod gtk_integration_tests {
             "☑ #6378 tracked",
             "EMPTY means the markup failed to parse and the cell renders blank \
              (ScrAP-163); text still containing `<a href` means the link markup was \
-             never emitted and the caption is inert text — the defect ScrAP-259 fixed"
+             never emitted and the caption is inert text — the defect GTK4Rs/AP-239 fixed"
         );
     }
 }

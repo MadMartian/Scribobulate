@@ -20,7 +20,7 @@ use super::*;
 /// **Tried and reverted: lifting the tab strip out from under the content
 /// `GtkOverlay`** (splitting this struct into separate `bar_widget()` /
 /// `stack_widget()` parents, per the researcher's tree-topology diagnosis of
-/// ScrAP-56). Live-tested and found to make the residual warning
+/// GTK4Rs/AP-104). Live-tested and found to make the residual warning
 /// WORSE, not better: the warning still reproduced (same `Trying to snapshot
 /// ... without a current allocation` mechanism, now naming whatever new
 /// widget became the nearest shared ancestor — a plain `GtkBox` instead of
@@ -28,7 +28,7 @@ use super::*;
 /// single-frame, always-self-healing flicker to a full-second-plus stuck
 /// blank that also swallowed the toolbar and tab strip, not just the content
 /// pane, requiring a second click to recover. Reverted back to this combined
-/// widget. See ScrAP-56 round 4 for the full account, including the
+/// widget. See GTK4Rs/AP-104 round 4 for the full account, including the
 /// researcher's own residual-cause (c): a NEWLY-switched-to tab's content
 /// pane can trigger its own first-layout `queue_resize` (lazy
 /// `GtkSourceView`/`GtkTextView` line-height validation) independent of
@@ -110,7 +110,7 @@ impl TabView {
         // reflow. Keep the default transition-type=NONE: a crossfade/slide
         // re-arms the overlay skip every animation frame via queue_draw and
         // makes the blank WORSE (researcher-verified, gtkwidget.c:3541-3552).
-        // See ScrAP-56 round 5 for the full account and the two prior
+        // See GTK4Rs/AP-104 round 5 for the full account and the two prior
         // (homogeneous) rounds this reverses. (gtk-rs default is homogeneous.)
         stack.set_hhomogeneous(false);
         stack.set_vhomogeneous(false);
@@ -310,7 +310,7 @@ impl TabView {
     /// Capture-then-dim for a drag start; see [`TabBar::begin_drag_visuals`].
     ///
     /// There is deliberately no `handle_widget` accessor here: it existed only to
-    /// let a caller snapshot the handle itself, which is the sequence ScrAP-173 is
+    /// let a caller snapshot the handle itself, which is the sequence GTK4Rs/AP-156 is
     /// about. Routing drag-start visuals through this one call makes the broken
     /// ordering unrepresentable from outside `widgets::tab`.
     pub(crate) fn begin_drag_visuals(&self, content: &gtk::Widget) -> Option<gdk::Paintable> {

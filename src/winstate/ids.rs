@@ -15,7 +15,7 @@ use gtk::ApplicationWindow;
 /// [`WindowId::of`]. That identity is used in two places that MUST agree — the
 /// [`registry`](super::registry)'s `WINDOWS` HashMap key, and the window's
 /// `.scrib-win-<id>` CSS-scope class ([`window`](crate::window)'s per-window
-/// zoom-provider scope, ScrAP-64). If those two ever derived the id independently
+/// zoom-provider scope, GTK4Rs/AP-77). If those two ever derived the id independently
 /// and diverged, a cross-window tab move would resolve state against one window
 /// and CSS against another (a latent desync). Flowing both from `WindowId::of`
 /// makes that divergence unrepresentable.

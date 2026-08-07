@@ -27,7 +27,7 @@
 //! One measured hazard rules out the obvious GIO one-liner. `replace_contents_async`
 //! closes the stream on a write error and **ignores the close result**, and for a local
 //! file close is where the temp→destination rename happens — so an ordinary disk-full
-//! promotes a truncated temp over the previous good snapshot (ScrAP-232). The write
+//! promotes a truncated temp over the previous good snapshot (GTK4Rs/AP-167). The write
 //! therefore opens a co-located temp via `replace_async` (`PRIVATE`) and **renames it
 //! into place only after a complete successful write** — see [`write_snapshot`].
 //!
@@ -57,7 +57,7 @@ use gtk::gio;
 /// behaviour by calling this and nothing else. Deliberately *not* a pair of
 /// `write_swap`/`delete_swap` helpers called from each of those sites: an opt-in
 /// mitigation re-applied per call site is a latent regression, because the next site
-/// added will forget it and the feature test will still pass (ScrAP-116, ScrAP-219).
+/// added will forget it and the feature test will still pass (GTK4Rs/AP-108, ScrAP-219).
 pub(crate) fn sync_tab_swap(tab: &Rc<TabState>) {
     match swapfile::sync_action(tab.is_dirty()) {
         SwapSync::Write => request_snapshot(tab),
@@ -157,7 +157,7 @@ fn header_for(tab: &Rc<TabState>) -> SwapHeader {
 /// (`glocalfileoutputstream.c:418-421`). So the promote fires from code that has already
 /// discarded the knowledge that the write failed, and an ordinary disk-full renames a
 /// truncated temp over the previous good snapshot. Measured: a known-good file became
-/// **0 bytes** (ScrAP-232).
+/// **0 bytes** (GTK4Rs/AP-167).
 ///
 /// The fix is therefore not "add a temp file" — GIO has one — but **take the promote
 /// decision back**. We write to our own co-located temp and rename only after a complete,
@@ -438,7 +438,7 @@ fn delete_snapshot(tab: &Rc<TabState>) {
 /// the next launch would resurrect work the user explicitly threw away.
 ///
 /// It must also survive a **coordinated quit**, during which session writes are frozen
-/// across a shrinking set of windows (ScrAP-81). This deletes immediately rather than
+/// across a shrinking set of windows (GTK4Rs/AP-113). This deletes immediately rather than
 /// deferring to any end-of-quit pass, so a Discard mid-quit is honoured even if the quit
 /// is then cancelled.
 pub(crate) fn discard_tab_swap(tab: &Rc<TabState>) {
@@ -813,7 +813,7 @@ mod tests {
     /// **Overwriting an existing snapshot never exposes a partial file** — the property
     /// the whole mechanism leans on, measured rather than assumed.
     ///
-    /// ScrAP-232 established from the GLib source that `replace_contents_async` is atomic
+    /// GTK4Rs/AP-167 established from the GLib source that `replace_contents_async` is atomic
     /// only under the right flags. This pins the behaviour we actually depend on, and it
     /// also records the boundary that source read did not make obvious: the guarantee
     /// covers **replacing**, not **creating**. A first-ever write streams into the
@@ -869,7 +869,7 @@ mod tests {
                     "the destination shrank to {smallest} bytes mid-write (previous \
                      snapshot was {first_len}) — an overwrite must never expose a \
                      truncated file, or a crash mid-snapshot destroys the recovery it \
-                     was taken for (ScrAP-232)"
+                     was taken for (GTK4Rs/AP-167)"
                 );
             }
             crate::swapfile::decode(&settled).expect("the settled file decodes");
@@ -903,7 +903,7 @@ mod tests {
             assert!(!tab.is_dirty(), "precondition: the document is clean again");
             // Drive the PRODUCTION path, not `sync_tab_swap` directly. Calling the
             // choke point by hand proves the function and says nothing about whether
-            // anything calls it — the masking ScrAP-87 warns about. Mutation-tested:
+            // anything calls it — the masking GTK4Rs/AP-78 warns about. Mutation-tested:
             // with the invariant unwired, the buffer-change path still deletes here (it
             // enforces the same rule from the other side), so the assertion that
             // actually pins the wiring is the discard-recovery test in `swaprecovery` —
@@ -924,7 +924,7 @@ mod tests {
     /// It holds verbatim document text, including from documents the user has
     /// deliberately made owner-only — so this asserts the mode rather than trusting that
     /// the flag was passed, which is the assertion that would have caught the mode being
-    /// re-applied over ours on a later overwrite (ScrAP-232).
+    /// re-applied over ours on a later overwrite (GTK4Rs/AP-167).
     #[gtktest::test]
     fn a_snapshot_is_owner_only() {
         let dir = tempfile::tempdir().unwrap();

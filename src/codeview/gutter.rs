@@ -10,10 +10,10 @@
 //!    geometry — so the marker column lines up with the content margin at any zoom.
 //!    The base is the container's own text margin (the view's configured `left_margin`,
 //!    plus the blockquote indent for a quoted item), which is a *set property*, not a
-//!    lazily-validated layout read — safe in a snapshot (ScrAP-22 applies to the y, not x).
+//!    lazily-validated layout read — safe in a snapshot (GTK4Rs/AP-22 applies to the y, not x).
 //!  * **y comes from the caller's cache-free `line_yrange` read** (research §4 —
 //!    never `iter_location`, which validates/caches a line display mid-snapshot →
-//!    ScrAP-22 blank view / ScrAP-105 btree abort). The caller paints VISIBLE lines only, so
+//!    GTK4Rs/AP-22 blank view / ScrAP-105 btree abort). The caller paints VISIBLE lines only, so
 //!    `line_yrange` is on a validated line (its 0/stale hazard doesn't bite here).
 //!
 //! Shapes draw via Cairo (`snapshot.append_cairo`): `Snapshot::append_stroke` /
@@ -33,7 +33,7 @@ use gtk::{cairo, gdk, graphene};
 /// `li-{depth}` tags from — so the tag and this gutter cannot drift apart (POLICY "One
 /// theme key, every application path"; they were once duplicated bare literals behind
 /// "KEEP IN SYNC" comments, F-DRY-003). A themed `list_step` that reached the tag but
-/// not this gutter would strand every marker off its text: ScrAP-121's exact failure mode.
+/// not this gutter would strand every marker off its text: GTK4Rs/AP-96's exact failure mode.
 /// Taken as a parameter rather than read from the thread-local here, so every function
 /// below stays pure and headlessly unit-testable at any metric.
 fn step_f(m: &Metrics) -> f32 {
@@ -86,7 +86,7 @@ pub(crate) fn checkbox_rect(
 /// paragraph — down to just its FIRST display row.
 ///
 /// `single_line_h` is that row's text height (a fresh Pango layout in the view's own
-/// CSS-zoomed font — cache-free, never `iter_location`: ScrAP-22) and `gap` is the item's
+/// CSS-zoomed font — cache-free, never `iter_location`: GTK4Rs/AP-22) and `gap` is the item's
 /// `pixels_above_lines` (= `px(list_item_gap)`, the inter-item gap the text sits below).
 /// Markers centre on the text midline (`draw_list_marker` / `checkbox_rect`), so without
 /// this clamp a soft-wrapped item's `text_h` is `N · single_line_h` and its marker floats
@@ -187,7 +187,7 @@ pub(crate) fn draw_list_marker(
         }
         ListMarkerKind::Task { checked, .. } => {
             // A static box outline (+ checkmark when checked) — custom-drawn, no live
-            // GtkCheckButton and no icon-theme dependency (research §7; ScrAP-109). The
+            // GtkCheckButton and no icon-theme dependency (research §7; GTK4Rs/AP-91). The
             // box geometry comes from the shared pure `checkbox_rect` so the hover
             // hit-band (recorded in mod.rs) matches the painted box exactly.
             let rect = checkbox_rect(content_margin, line, zoom, m);
@@ -328,7 +328,7 @@ mod tests {
         assert!(quoted > list_content_margin_px(20.0, 1, 1.0, &m));
     }
 
-    /// TDD 18.10 / ScrAP-121 — a THEMED `list_step` must move the marker column and the
+    /// TDD 18.10 / GTK4Rs/AP-96 — a THEMED `list_step` must move the marker column and the
     /// content margin TOGETHER. This is the drift the one-key rule exists to prevent:
     /// the gutter and `tags.rs` read the same key, so a theme cannot strand a marker.
     #[test]

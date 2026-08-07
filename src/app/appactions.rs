@@ -145,7 +145,7 @@ pub(super) fn add_about_action(app: &Application) {
             // .website() renders a GtkLinkButton on the About tab that opens the
             // default web browser.  Do NOT use "Name <url>" in .authors() for a
             // website URL — GTK treats the <...> portion as a mailto: address
-            // regardless of whether it starts with https:// (ScrAP-40).
+            // regardless of whether it starts with https:// (GTK4Rs/AP-50).
             // license_type stays on About — it is the only way to surface the
             // auto-rendered full Apache 2 text via the License button.
             let dialog = AboutDialog::builder()
@@ -169,7 +169,7 @@ pub(super) fn add_about_action(app: &Application) {
                 // release. The publisher is named in the copyright line below; it does
                 // not need the link. (A second link is not expressible here: the only
                 // other link-bearing fields, `authors`/credits, route a `<...>` through
-                // GTK's mailto: parser whatever its scheme — ScrAP-40.)
+                // GTK's mailto: parser whatever its scheme — GTK4Rs/AP-50.)
                 .website("https://github.com/MadMartian/Scribobulate")
                 .website_label("Scribobulate on GitHub")
                 .authors(vec!["© 2026 extollIT Enterprises".to_string()])
@@ -185,7 +185,7 @@ pub(super) fn add_about_action(app: &Application) {
             // with a binary distribution. The full verbatim notices ship as
             // THIRD-PARTY-LICENSES.md (generated from `two_face::acknowledgement`);
             // this credit section is the in-app surface of that obligation. Plain text
-            // only — a `<...>` here would be mis-parsed as a mailto: link (ScrAP-40).
+            // only — a `<...>` here would be mis-parsed as a mailto: link (GTK4Rs/AP-50).
             dialog.add_credit_section(
                 "Bundled open-source components",
                 &[
@@ -230,7 +230,7 @@ const MARKDOWN_HELP_URL: &str = "https://commonmark.org/help/";
 /// launch path (`show_uri_full`, parent `None`, timestamp 0). Routing every launch
 /// through it (rather than a bare `gtk::show_uri`) keeps launch failures in the log
 /// instead of a per-call "Could not show link" modal, and avoids the X11 handle-unexport
-/// warning a parent triggers on 4.6 (ScrAP-129; see `open_url`'s own rationale).
+/// warning a parent triggers on 4.6 (GTK4Rs/AP-99; see `open_url`'s own rationale).
 pub(super) fn add_markdown_help_action(app: &Application) {
     let help_action = SimpleAction::new("markdown-help", None);
     help_action.connect_activate(move |_, _| {
@@ -301,7 +301,7 @@ pub(super) fn add_preview_theme_action(app: &Application) {
     // on the active theme — consistent with the other menubar radio menus (view-mode).
     // View ▸ Reading Theme is a NESTED submenu, so activating an item hits the GTK
     // 4.6 GtkPopoverMenuBar bug that leaves a stray top-level menubar popover mapped
-    // — clicking a theme would otherwise "activate" File (ScrAP-116). This
+    // — clicking a theme would otherwise "activate" File (GTK4Rs/AP-108). This
     // action is `app.`-scoped, so the dismissal routes to the active window (the one
     // the user clicked in); both that and `set_state` are carried by the
     // `nested_submenu_app_stateful_action` choke point rather than hand-wired here.

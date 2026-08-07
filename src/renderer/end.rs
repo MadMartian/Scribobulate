@@ -44,7 +44,7 @@ impl Renderer {
                         // GtkTextView's `one_style_cache` (gtktextlayout.c get_style)
                         // then reuses the previous line's style and DROPS the
                         // left-margin on those lines — a width-dependent layout
-                        // artifact (researcher-sourced, GTK 4.6.9; ScrAP-76).
+                        // artifact (researcher-sourced, GTK 4.6.9; GTK4Rs/AP-72).
                         // Leaving each '\n' untagged breaks the btree's same-tag
                         // coalescing, so every line gets its own on/off toggle and its
                         // margin is rebuilt. (The `\n`s carry no visible glyph, so
@@ -67,7 +67,7 @@ impl Renderer {
                     *n += 1;
                 }
                 // Apply the uniform per-level content-margin tags over the complete item
-                // span, PER LINE (the '\n's left untagged, GTK4Rs/AP-72/ScrAP-76). The first logical
+                // span, PER LINE (the '\n's left untagged, GTK4Rs/AP-72/GTK4Rs/AP-72). The first logical
                 // line gets the inter-item gap; every later logical line (each hard-broken
                 // source line — breaks are real newlines again — and any loose continuation
                 // paragraph) shares the same absolute left-margin with indent=0. Depth is
@@ -134,12 +134,12 @@ impl Renderer {
                             // Plain or mixed cell: GtkLabel with Pango markup for
                             // bold/italic/links. Built through the cell seam, which owns
                             // the `activate-link` containment gate for BOTH cell shapes —
-                            // a mixed cell's `<a href>` is a real link (ScrAP-259) and its
+                            // a mixed cell's `<a href>` is a real link (GTK4Rs/AP-239) and its
                             // default handler would otherwise `gtk_show_uri` the raw href.
                             // Cells WRAP (WordChar breaks even a long token) and
                             // top-align; the custom ScribTableWidget measures and lays
                             // them out (it never re-measures at validation, so they never
-                            // re-arm the ScrAP-23 blank).
+                            // re-arm the GTK4Rs/AP-23 blank).
                             let label = cell_markup_label(&ts.cell_markup);
                             label.set_xalign(0.0);
                             // Fill (not Start) so the cell's CSS border spans the FULL
@@ -175,14 +175,14 @@ impl Renderer {
                     // validation `for_size` and never re-measures its cells at a steady
                     // width — so the line-validator's re-measure on a far scroll can
                     // never re-arm the "snapshot without a current allocation" blank
-                    // (ScrAP-23, researcher-verified contract). Its bound width is set to
+                    // (GTK4Rs/AP-23, researcher-verified contract). Its bound width is set to
                     // the live viewport column by CodePreviewView (registered in
                     // `tables`); until then it is 0×0 and grows on the first allocation.
                     let table = ScribTableWidget::new(ts.rows);
                     // A table nested in a list item / blockquote starts at the enclosing
                     // block's indented content margin, not the view's content edge; record
                     // that inset so the view fits it into `content − inset` and it never
-                    // goes over-wide → no spurious Automatic h-scrollbar (ScrAP-23a).
+                    // goes over-wide → no spurious Automatic h-scrollbar (GTK4Rs/AP-23a).
                     // Zero for a top-level table.
                     table.set_bound_inset(self.block_inset());
                     let mut iter = self.buf.end_iter();
@@ -456,7 +456,7 @@ mod gtk_integration_tests {
     /// with different default handlers, and the cell seam is the only thing making
     /// them agree. Without it, `[x](file:///etc/passwd)` written *beside other text*
     /// in a table cell would bypass `open_url`'s scheme gate that the same link alone
-    /// in a cell is stopped by (ScrAP-259).
+    /// in a cell is stopped by (GTK4Rs/AP-239).
     #[gtktest::test]
     fn a_mixed_cell_labels_link_never_reaches_gtks_own_show_uri() {
         let label = crate::widgets::table::cell_markup_label("cell");

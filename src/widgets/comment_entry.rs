@@ -92,7 +92,7 @@ impl CommentEntry {
     /// Wire Escape anywhere in `root`'s subtree to `cancel`.
     ///
     /// For the in-surface cards only. They are `GtkOverlay` children rather than popovers
-    /// (ScrAP-98 — a popover hosting a typing entry is unwinnable on X11), so they gave up
+    /// (GTK4Rs/AP-83 — a popover hosting a typing entry is unwinnable on X11), so they gave up
     /// the popover's built-in Escape-to-dismiss and must wire it explicitly. The marker
     /// Edit popover is a real `GtkPopover` and GTK already dismisses it on Escape, so it
     /// does not call this — that asymmetry is GTK's, not ours.

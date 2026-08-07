@@ -71,16 +71,16 @@ pub(crate) fn register_tab_actions(window: &ApplicationWindow) {
     // whichever item's target matches the action's current state, so "which tab is
     // active" is modelled as ACTION STATE — a plain tab switch then mutates NOTHING
     // (no menu rebuild), exactly the cheap path the researcher recommended
-    // (ScrAP-63). Like the `win.view-mode` radio, the real work lives in
+    // (GTK4Rs/AP-76). Like the `win.view-mode` radio, the real work lives in
     // `change-state` (NOT `activate`: GSimpleAction routes a stateful action's
     // activate straight to change-state), and `on_active_tab_changed` resyncs the
     // check via `set_action_state` — which uses `set_state`, so it never re-enters
     // this handler.
     // View ▸ Documents is a NESTED submenu, so its `change-state` must route the
-    // ScrAP-116 stray-popover dismissal (and `set_state`) — both carried by the
+    // GTK4Rs/AP-108 stray-popover dismissal (and `set_state`) — both carried by the
     // `nested_submenu_stateful_action` choke point rather than hand-wired here, so
     // this action cannot silently re-trip the seam the way an opt-in dismiss call
-    // would (ScrAP-116).
+    // would (GTK4Rs/AP-108).
     let select_tab_action = nested_submenu_stateful_action(
         window,
         "select-tab",

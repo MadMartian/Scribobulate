@@ -49,7 +49,7 @@ impl BufferSpan {
 
     /// `true` when the span lies entirely outside the visible `[vis_start, vis_end]`
     /// char window — the visible-only clamp that keeps a draw from forcing an
-    /// off-screen validating read (ScrAP-22).
+    /// off-screen validating read (GTK4Rs/AP-22).
     pub(crate) fn is_outside(self, vis_start: i32, vis_end: i32) -> bool {
         self.last_content() < vis_start || self.start > vis_end
     }

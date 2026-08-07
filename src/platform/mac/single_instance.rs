@@ -493,7 +493,7 @@ fn forward(sock_path: &Path, args: &[String]) -> bool {
     // The primary takes the lock a few instructions before it binds the socket,
     // so a launch landing inside that window sees "locked but nothing
     // listening". The bound is wall-clock because the thing being waited on is
-    // wall-clock (ScrAP-134's shape) — there is no main loop running in this
+    // wall-clock (GTK4Rs/AP-122's shape) — there is no main loop running in this
     // process to count frames against, and the whole budget is well under the
     // time a second window would take to appear.
     let client = gio::SocketClient::new();

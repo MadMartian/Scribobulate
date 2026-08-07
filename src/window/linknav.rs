@@ -262,7 +262,7 @@ mod gtk_integration_tests {
     /// (`crate::docio`), so the new tab appears when that read comes back rather
     /// than before `activate_doc_link` returns. This waits for the completion the
     /// same way the app does — by letting the main loop run — instead of sleeping,
-    /// which would be a wall-clock bound on a thread-pool event (ScrAP-134).
+    /// which would be a wall-clock bound on a thread-pool event (GTK4Rs/AP-122).
     ///
     /// It blocks (`iteration(true)`) rather than spinning, because the wakeup comes
     /// from a `gio::spawn_blocking` completion posted to this context and there may

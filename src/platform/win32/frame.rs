@@ -188,7 +188,7 @@ fn remembered_size_while_maximized(
 
 /// Keep GTK's remembered window size in step with the OS while `window` is
 /// maximized, so that opening a popover cannot collapse a maximized window back to
-/// its pre-maximize size. **ScrAP-168.**
+/// its pre-maximize size. **GTK4Rs/AP-158.**
 ///
 /// **The symptom.** Maximize the window with the native maximize button, then open
 /// *any* popover — a menubar menu, the toolbar's theme dropdown, a right-click
@@ -224,7 +224,7 @@ fn remembered_size_while_maximized(
 /// remembered size. Maximizing from the **OS** button never sets the flag, so the
 /// clamp never runs. `GTK_CSD=0` is what puts us on that path — which is why this
 /// defect is unreachable under CSD and was not waiting to be found by the rest of
-/// the GTK-on-Windows world (ScrAP-168).
+/// the GTK-on-Windows world (GTK4Rs/AP-158).
 ///
 /// **Why this fix and not `gtk_window_maximize()`.** Calling it from a
 /// `notify::maximized` handler would set the flag and re-enable the clamp, but it

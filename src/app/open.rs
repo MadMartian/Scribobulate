@@ -15,7 +15,7 @@ use std::rc::Rc;
 thread_local! {
     // The Format menu's insert section and its last-applied edit-kind used to
     // live here as process-globals, back when there was a single shared app-level
-    // menubar. With per-window menubars (ScrAP-63) both are per-window:
+    // menubar. With per-window menubars (GTK4Rs/AP-76) both are per-window:
     // `WindowChrome.format_insert_menu` / `WindowChrome.format_menu_kind`.
     /// Last directory successfully visited by any Open / Save As / Browse dialog.
     /// Seeded from the active window's doc dir when available; persists for the
@@ -213,7 +213,7 @@ pub(crate) fn attach_file_backing(
     // (TDD 15.13). Re-resolving both the tab (via
     // `Weak::upgrade`) and its CURRENT window (via its own widget tree) fresh
     // on every fire avoids caching either — the same "don't cache a
-    // reparent-able context" lesson as ScrAP-46.
+    // reparent-able context" lesson as GTK4Rs/AP-52.
     let tab_weak = Rc::downgrade(tab);
     monitor.connect_changed(move |_, _, _, event| {
         use gtk::gio::FileMonitorEvent;
@@ -240,7 +240,7 @@ pub(crate) fn attach_file_backing(
         // 3.4: the file was deleted on disk. Inform the user via a transient
         // status notice and keep the buffer — it is recoverable by saving.
         //
-        // ScrAP-54: `write_atomic`'s write-temp-then-`rename` (the
+        // GTK4Rs/AP-62: `write_atomic`'s write-temp-then-`rename` (the
         // crash-safety guarantee, QA round-1 H4) replaces the watched path's
         // inode; GIO's local file monitor (`FileMonitorFlags::NONE`, no
         // `WATCH_MOVES`) reports that as this same `Deleted` event — so
@@ -284,7 +284,7 @@ pub(crate) fn attach_file_backing(
                 // Some monitor backends coalesce a rename-over into
                 // Changed/Created without a separate Deleted — don't leave a
                 // stale self-delete guard armed to swallow a later,
-                // genuinely external deletion (ScrAP-54).
+                // genuinely external deletion (GTK4Rs/AP-62).
                 tab.expect_self_delete.disarm();
                 // The file exists again (recreated / rewritten externally). If a
                 // prior Deleted had flipped the "backing missing" savable

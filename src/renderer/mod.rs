@@ -15,7 +15,7 @@
 //!   * [`normalize`] — the shared parse flags (`md_options`) and the length/position-
 //!     preserving inline-tab pre-pass (`normalize_inline_tabs`; ScrAP-75).
 //!   * [`blockquote`] — `logical_line_ranges`, the per-line content split that
-//!     gives every quoted or list-item line its own tag toggle (ScrAP-76).
+//!     gives every quoted or list-item line its own tag toggle (GTK4Rs/AP-72).
 //!   * [`image`] — `image_placeholder_tooltip`, the broken-image reason string.
 //! * **GTK walk (the `impl Renderer`, split by phase):**
 //!   * [`emit`] — buffer-emission helpers (`insert`/`newline`/`block_sep`/
@@ -151,7 +151,7 @@ pub(crate) fn annotate_markup(plain: &str, highlights: &[(usize, usize)]) -> Str
 // (`crate::codeview::gutter`, which paints the bullet/number/checkbox beside it) —
 // only now the single resolution point is the theme key rather than a const
 // (F-DRY-003 → POLICY "One theme key, every application path"). A themed `list_step`
-// that reached the tag but not the gutter would strand every marker: ScrAP-121.
+// that reached the tag but not the gutter would strand every marker: GTK4Rs/AP-96.
 
 // ── syntect highlight engine (loaded once) ────────────────────────────────────
 
@@ -178,7 +178,7 @@ pub(crate) fn syntect() -> &'static (SyntaxSet, ThemeSet) {
 pub(crate) struct TableState {
     /// Row-major cell widgets; one inner `Vec` per row. Handed to
     /// `ScribTableWidget::new` at `TagEnd::Table` — a custom churn-free widget, NOT
-    /// a `GtkGrid` (an anchored height-for-width grid blanks the view — ScrAP-23).
+    /// a `GtkGrid` (an anchored height-for-width grid blanks the view — GTK4Rs/AP-23).
     pub(crate) rows: Vec<Vec<gtk::Widget>>,
     /// True while between Tag::TableCell and TagEnd::TableCell.
     pub(crate) in_cell: bool,
@@ -277,7 +277,7 @@ pub(crate) struct Renderer {
     blockquote_start: Option<i32>,
     /// The buffer span of every top-level blockquote.
     /// Blockquotes are buffer TEXT now (selectable, links work, no anchored widget
-    /// to churn — ScrAP-23); the preview view draws the left accent bar over each
+    /// to churn — GTK4Rs/AP-23); the preview view draws the left accent bar over each
     /// range in `snapshot_layer`, the same proven pattern as code-block backgrounds.
     pub blockquote_ranges: Vec<crate::span::BufferSpan>,
     link_start: Option<(i32, String)>,
@@ -286,20 +286,20 @@ pub(crate) struct Renderer {
     /// Anchored children whose width must track the live content column, each with
     /// the fixed chrome to its left (`inset`). Handed to
     /// `CodePreviewView::set_width_bounded`; the view rebinds them on every
-    /// allocation so they fit the actual pane — full preview OR split (ScrAP-23).
+    /// allocation so they fit the actual pane — full preview OR split (GTK4Rs/AP-23).
     pub width_bounded: Vec<(gtk::Widget, i32)>,
     /// Anchored images, each `(picture, max_w, max_h)` at the image's natural size.
     /// Handed to `CodePreviewView::set_image_bounded`; the view CLAMPS each to the live
     /// content column (keeping natural size when it fits, aspect preserved) so a
-    /// too-wide image fits the viewport instead of blanking (ScrAP-32).
+    /// too-wide image fits the viewport instead of blanking (GTK4Rs/AP-58).
     pub image_bounded: Vec<(gtk::Widget, i32, i32)>,
     /// Custom `ScribTableWidget`s anchored in the buffer. The preview view sets each
     /// one's bound width to the live viewport column (`set_bound_width`) so the table
-    /// lays out once per real width change and never churns the blank (ScrAP-23).
+    /// lays out once per real width change and never churns the blank (GTK4Rs/AP-23).
     pub tables: Vec<ScribTableWidget>,
     /// The buffer span of every fenced code block, so
     /// the preview view can self-draw each block's padded background under the
-    /// text (a `paragraph-background` tag cannot pad — ScrAP-21).
+    /// text (a `paragraph-background` tag cannot pad — GTK4Rs/AP-21).
     pub code_blocks: Vec<crate::span::BufferSpan>,
     /// One entry per rendered list item, in document order — the data seam for the
     /// planned drawn marker gutter. Populated at `Tag::Item`

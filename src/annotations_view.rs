@@ -5,7 +5,7 @@
 //! GObjects (one per `annotations::AnnotationEntry`). Deliberately **flat**, not a
 //! `GtkTreeListModel` — annotations have no hierarchy — which sidesteps every
 //! autoexpand/collapse-destroys-subtree hazard the outline's tree must guard against
-//! (ScrAP-84 does not apply here; do not introduce a tree without re-reading it).
+//! (GTK4Rs/AP-111 does not apply here; do not introduce a tree without re-reading it).
 //!
 //! Activating a row calls back with the annotation's `src_span` START byte — its
 //! **identity**, never a row index (the list is a filtered subsequence of all

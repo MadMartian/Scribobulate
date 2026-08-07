@@ -166,7 +166,7 @@ fn mimeapps_list_names() -> Vec<String> {
 /// directory containing a small Compose file (system locale + any keyd macro
 /// sequences found), with symlinks to all other real GTK4 config files so user
 /// theme/settings survive. No-op when ~/.XCompose is absent or ≤ 8 KB.
-/// See ScrAP-3.
+/// See GTK4Rs/AP-3.
 pub(crate) fn workaround_gtk46_compose_crash() {
     let minor = unsafe { gtk::ffi::gtk_get_minor_version() };
     if minor >= 12 {

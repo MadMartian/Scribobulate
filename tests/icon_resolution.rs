@@ -1,5 +1,5 @@
 //! Every icon name the app uses must resolve — a miss renders the broken-image
-//! placeholder (ScrAP-39). This is the whole-set gate for that.
+//! placeholder (GTK4Rs/AP-48). This is the whole-set gate for that.
 //!
 //! WHY THIS TARGET OWNS ITS PROCESS (`harness = false`, see `Cargo.toml`). The
 //! original reason — that `#[gtk::test]` bodies are dispatched onto a

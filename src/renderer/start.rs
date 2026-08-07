@@ -42,7 +42,7 @@ impl Renderer {
                     self.block_sep();
                     // Blockquote content now flows into the buffer as normal text +
                     // tags (selectable, links work, no anchored widget to churn —
-                    // ScrAP-23). Record where it starts; the range is closed and the
+                    // GTK4Rs/AP-23). Record where it starts; the range is closed and the
                     // `blockquote` indent tag applied at the matching TagEnd.
                     self.blockquote_start = Some(self.end_offset());
                 }
@@ -205,7 +205,7 @@ impl Renderer {
                         // formatting and with the tight `==`/`~~`/`^`/`~` constructs
                         // `Event::Text` scans (Document Rendering CAM row 3), and a link
                         // inside a *mixed* cell is a real link and not inert text
-                        // (row 2 — ScrAP-259). A cell that turns out to be nothing but
+                        // (row 2 — GTK4Rs/AP-239). A cell that turns out to be nothing but
                         // this link discards `cell_markup` for a `GtkLinkButton`, so the
                         // tag emitted here is simply unused in that case.
                         ts.cell_markup
@@ -333,7 +333,7 @@ impl Renderer {
         self.block_sep();
         let mut iter = self.buf.end_iter();
         let anchor = self.buf.create_child_anchor(&mut iter);
-        // ScrAP-32 (researcher-sourced, 4.6 source-verified): an anchored GtkPicture
+        // GTK4Rs/AP-58 (researcher-sourced, 4.6 source-verified): an anchored GtkPicture
         // defaults to `can_shrink` → `min_width` 0, so the GtkTextView measures its
         // HEIGHT at for-width 0, which gtk_picture_measure short-circuits to height 0 →
         // the picture blanks (the rest of the doc renders). A definite size_request
@@ -344,9 +344,9 @@ impl Renderer {
         // The NATURAL size is registered in `image_bounded`;
         // `CodePreviewView::size_allocate` clamps it to the live column each width
         // change (aspect preserved), so a too-wide image fits instead of forcing an
-        // over-wide line → ScrAP-22/23 blank. The initial `set_size_request` is only a
-        // first-frame SEED: it must be nonzero (ScrAP-32) but not absurdly over-wide, or
-        // the pre-allocate frame flashes the ScrAP-22/23 transient; size_allocate then
+        // over-wide line → GTK4Rs/AP-22/23 blank. The initial `set_size_request` is only a
+        // first-frame SEED: it must be nonzero (GTK4Rs/AP-58) but not absurdly over-wide, or
+        // the pre-allocate frame flashes the GTK4Rs/AP-22/23 transient; size_allocate then
         // scales it up (to the pane) or down (to fit) as needed.
         let (nat_w, nat_h) = (tex.width().max(1), tex.height().max(1));
         const INIT_SEED_W: i32 = 640;
@@ -383,7 +383,7 @@ impl Renderer {
     fn anchor_broken(&mut self, tooltip: &str) {
         // GtkImage with "image-missing" is a GTK built-in fallback icon available on
         // every GTK4 installation; set_pixel_size sets both its natural width and
-        // height (no ScrAP-32 issue — GtkImage reports a definite size, unlike GtkPicture
+        // height (no GTK4Rs/AP-58 issue — GtkImage reports a definite size, unlike GtkPicture
         // with can_shrink).
         self.block_sep();
         let mut iter = self.buf.end_iter();

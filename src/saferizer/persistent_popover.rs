@@ -3,13 +3,13 @@
 
 use gtk::prelude::*;
 
-/// A `GtkPopover` whose *parenting* is yours to manage (ScrAP-90): GTK does not
+/// A `GtkPopover` whose *parenting* is yours to manage (GTK4Rs/AP-80): GTK does not
 /// auto-unparent a `set_parent`-attached popover, so its owner must — and teardown
 /// of a *possibly-open* popover must run the close path first, i.e. `popdown()`
 /// **before** `unparent()` (ScrAP-144). `unparent()` unrealizes the popover's surface;
 /// doing that while the popover still holds its (autohide) seat grab strands the
-/// grab, leaving the app dead to clicks and keys while hover still works (ScrAP-98,
-/// real-compositor-only). Reuse the instance — never destroy per use (ScrAP-112).
+/// grab, leaving the app dead to clicks and keys while hover still works (GTK4Rs/AP-83,
+/// real-compositor-only). Reuse the instance — never destroy per use (GTK4Rs/AP-117).
 ///
 /// This handle exists so that order cannot be re-introduced wrongly at a call site:
 /// its [`teardown`](Self::teardown) and [`reparent`](Self::reparent) always
@@ -75,7 +75,7 @@ impl PersistentPopover {
 
     /// Tear the popover down for its owner's `dispose`/teardown: **`popdown()` then
     /// `unparent()`** (ScrAP-144 order), the unparent guarded on an actual parent
-    /// (ScrAP-90 — a `set_parent`'d popover left parented at teardown floods
+    /// (GTK4Rs/AP-80 — a `set_parent`'d popover left parented at teardown floods
     /// "not a child of" warnings). Idempotent: `popdown` no-ops when closed, the
     /// unparent is skipped when already unparented.
     pub(crate) fn teardown(&self) {
@@ -172,7 +172,7 @@ mod gtk_integration_tests {
         );
         assert!(
             handle.parent().is_none(),
-            "teardown must also unparent the popover (ScrAP-90)"
+            "teardown must also unparent the popover (GTK4Rs/AP-80)"
         );
         win.destroy();
     }

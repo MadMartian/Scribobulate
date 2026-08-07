@@ -254,7 +254,7 @@ mod gtk_integration_tests {
     /// precisely why the bug read as non-deterministic in the field, GtkSourceView
     /// highlighting being lazy.
     ///
-    /// Mutation-checked (ScrAP-87): reinstating the `insert-text` hook makes this FAIL
+    /// Mutation-checked (GTK4Rs/AP-78): reinstating the `insert-text` hook makes this FAIL
     /// with the tail of the block missing and GTK's `Invalid text buffer iterator`
     /// warning on stderr.
     #[gtktest::test]

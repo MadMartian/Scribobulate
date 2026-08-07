@@ -16,7 +16,7 @@ pub(crate) enum ScrollDriver {
 /// during which the preview adjustment's `upper` thrashes and it emits a storm of
 /// `notify::upper` (every pass) and `value-changed` (on clamp). Mirroring scroll
 /// synchronously on each emission mirrors half-validated garbage and oscillates
-/// (ScrAP-16). Instead every notification is *coalesced* into a single tick callback
+/// (GTK4Rs/AP-16). Instead every notification is *coalesced* into a single tick callback
 /// that re-projects `driver → follower` once per frame (on the frame-clock UPDATE
 /// phase, which runs BEFORE this frame's layout/allocate — ANTI-PATTERNS
 /// deferred-work meta-pattern correction). Correctness comes from the projection

@@ -200,7 +200,7 @@ fn main() {
 
 /// Pump the default main context for approximately `dur`, in small non-blocking slices —
 /// never `iteration(true)`, which can block indefinitely if nothing schedules more work
-/// (ScrAP-88). A coarse wall-clock budget is the right shape here (not a frame-count bound):
+/// (GTK4Rs/AP-79). A coarse wall-clock budget is the right shape here (not a frame-count bound):
 /// the thing being measured is elapsed real time since `popup()`, matching how a human
 /// perceives "focus arrived late".
 fn pump_for(dur: Duration) {

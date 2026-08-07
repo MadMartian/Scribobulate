@@ -1,7 +1,7 @@
 //! Popover anchoring — the rectangle on the way **in** ([`ViewportRect`]) and on the way
 //! **out** ([`pointing_to`]).
 //!
-//! **Contract, inbound (ScrAP-26).** A `GtkPopover` pointed at a rectangle outside the visible
+//! **Contract, inbound (GTK4Rs/AP-26).** A `GtkPopover` pointed at a rectangle outside the visible
 //! viewport trips a `GDK_IS_MONITOR` assertion and lays out at a negative height. Any
 //! selection- or content-anchored popover must therefore prove its anchor is on screen
 //! *before* pointing at it. [`ViewportRect`]'s only constructor runs that proof and clamps
@@ -130,7 +130,7 @@ pub(crate) fn on_viewport(vp: Viewport, rect: &gdk::Rectangle) -> Option<gdk::Re
 /// Pin `pop` above a proven on-viewport anchor — **the sole sink for a selection-anchored
 /// popover.**
 ///
-/// Takes a [`ViewportRect`], so the ScrAP-26 guard cannot be skipped: there is no way to call
+/// Takes a [`ViewportRect`], so the GTK4Rs/AP-26 guard cannot be skipped: there is no way to call
 /// this with an unproven anchor. It also owns the caret-sliver rectangle shape
 /// (`width = 1`, height = the line) and the `Top` placement, which three call sites
 /// previously hand-rolled — one of them re-deriving the guard and the clamp inline as well.
@@ -145,7 +145,7 @@ pub(crate) fn pin_above(pop: &impl IsA<gtk::Popover>, vr: &ViewportRect) {
     pop.set_position(gtk::PositionType::Top);
 }
 
-/// A popover anchor point **proven on-viewport** (ScrAP-26).
+/// A popover anchor point **proven on-viewport** (GTK4Rs/AP-26).
 ///
 /// The only constructor is [`at`](Self::at), which runs [`anchor_visible`] on both axes and
 /// clamps the anchor into the viewport, returning `None` when it is off-viewport — so

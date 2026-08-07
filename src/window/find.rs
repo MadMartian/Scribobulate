@@ -396,7 +396,7 @@ impl PreviewFindCache {
         // TAKEN, not borrowed, for the duration of `f`: `f` applies highlights, which
         // calls back into GTK (`set_attributes`/`set_markup` on anchored children, plus a
         // scroll), and holding a `RefCell` borrow across a GTK call that can re-enter is a
-        // process ABORT rather than an error (ScrAP-53 / GTK4Rs/AP-61). With the slot
+        // process ABORT rather than an error (GTK4Rs/AP-61 / GTK4Rs/AP-61). With the slot
         // taken, a re-entrant caller sees an empty cache and rebuilds — wasteful in a case
         // that does not currently arise, but never a panic.
         let mut built = self.slot.take();
@@ -462,7 +462,7 @@ fn apply_preview_highlights(
 
     // Clear the body buffer tag (a buffer-tag change auto-repaints — GtkTextView
     // listens). The table cells need a different strategy entirely — a match-only
-    // Pango overlay plus a forced anchored-child repaint; see below (ScrAP-37/ScrAP-117).
+    // Pango overlay plus a forced anchored-child repaint; see below (GTK4Rs/AP-45/GTK4Rs/AP-92).
     if let Some(tag) = &tag {
         let (b0, b1) = buf.bounds();
         buf.remove_tag(tag, &b0, &b1);
@@ -492,12 +492,12 @@ fn apply_preview_highlights(
 
     // Cells: paint a background on the MATCH RANGE ONLY — no full-coverage base. An
     // earlier design kept an opaque view-bg background over every cell's whole width at
-    // all times (so that a search change always MODIFIED ink and thus repainted — ScrAP-37:
+    // all times (so that a search change always MODIFIED ink and thus repainted — GTK4Rs/AP-45:
     // GtkTextView won't re-invalidate an anchored child when a Pango background merely
     // shrinks/is removed). That base blanketed every cell and, being opaque, painted OVER
     // the cell `GtkLabel`'s own blue text selection, so selecting text inside a table cell
     // was invisible while the find bar was open. We drop the base and force
-    // the anchored-child repaint explicitly instead: `force_cell_repaint` (ScrAP-117) toggles
+    // the anchored-child repaint explicitly instead: `force_cell_repaint` (GTK4Rs/AP-92) toggles
     // a transient no-attr `<span>` wrapper — a markup-STRING change that renders pixel-
     // identically (no reflow, no scroll shift) — so a removed or recoloured match still
     // repaints even though its `set_attributes` ink did not grow. Now a cell with no match
@@ -546,8 +546,8 @@ fn apply_preview_highlights(
 
 /// Force a `GtkTextView`-anchored cell `GtkLabel` to re-snapshot after its find overlay
 /// was added, recoloured, or removed. A `set_attributes` change that shrinks or removes
-/// ink does NOT repaint an anchored child on its own (ScrAP-37 / GTK4Rs/AP-45), and a same-string
-/// `set_markup` is a no-op (ScrAP-117). Toggle a transient no-attr `<span>` wrapper: a markup
+/// ink does NOT repaint an anchored child on its own (GTK4Rs/AP-45 / GTK4Rs/AP-45), and a same-string
+/// `set_markup` is a no-op (GTK4Rs/AP-92). Toggle a transient no-attr `<span>` wrapper: a markup
 /// string that differs (so the child re-snapshots) but renders pixel-identically — no
 /// glyphs, no size change, so no reflow and no scroll shift — then revert to the clean
 /// markup so no wrapper accumulates. `set_markup` does not clear a `set_attributes`
@@ -583,7 +583,7 @@ pub(super) fn highlight_preview_matches(
 /// to drop attribute-free cell labels, but that `set_buffer` reset the scroll to the
 /// top and the by-fraction restore landed imprecisely on a document with lazily
 /// validating anchored children (tables/images), so the pane visibly jumped — the
-/// exact `set_buffer` JUMP the annotation in-place path avoids (ScrAP-103).
+/// exact `set_buffer` JUMP the annotation in-place path avoids (GTK4Rs/AP-90).
 pub(super) fn clear_preview_highlight(window: &ApplicationWindow) {
     // Find is done with this list: drop it so the entry stops holding a strong reference
     // to every table-cell `GtkLabel` it indexed (correctness does not need this — a stale
@@ -606,7 +606,7 @@ pub(super) fn clear_preview_highlight(window: &ApplicationWindow) {
 /// listens) — we also collapse any blue current-match selection back to a caret.
 /// Cell highlights are a Pango `set_attributes` overlay on the anchored `GtkLabel`
 /// children; `set_attributes(None)` drops the data but on its own won't repaint the
-/// child (ScrAP-37 / GTK4Rs/AP-45: removing a cell background leaves the old ink un-invalidated).
+/// child (GTK4Rs/AP-45 / GTK4Rs/AP-45: removing a cell background leaves the old ink un-invalidated).
 ///
 /// The repaint has to be forced through the markup, and — unlike ScrAP-111's annotation
 /// reconciliation, where the markup string genuinely changes — the find overlay never
@@ -627,11 +627,11 @@ fn clear_preview_view_highlights(view: &CodePreviewView) {
 }
 
 /// Scroll the preview so the `hit` is in view (validation-safe coalesced
-/// `scroll_to_mark`, never `scroll_to_iter` — ScrAP-22). A body hit scrolls to its own
+/// `scroll_to_mark`, never `scroll_to_iter` — GTK4Rs/AP-22). A body hit scrolls to its own
 /// buffer offset; a cell hit scrolls to the matched cell's own row via the
 /// cell-precise two-step (`scroll_to_cell_offset`), so a match deep in a tall table
 /// — and every subsequent in-cell match — lands in view rather than stopping at the
-/// table top (ScrAP-109).
+/// table top (GTK4Rs/AP-91).
 fn scroll_to_preview_hit(view: &CodePreviewView, hit: &PreviewHit) {
     match hit {
         PreviewHit::Body { start, .. } => view.scroll_to_buffer_offset(*start),
@@ -749,7 +749,7 @@ pub(super) fn do_find_next(
         // Scroll via the buffer's insert mark + `scroll_to_mark`, NOT `scroll_to_iter`:
         // the immediate, pre-validation `scroll_to_iter` scrolls against whatever line
         // heights happen to be computed and intermittently blanks the view to gray
-        // (ScrAP-22). `scroll_to_mark` defers to line validation. `select_range(&ms, &me)`
+        // (GTK4Rs/AP-22). `scroll_to_mark` defers to line validation. `select_range(&ms, &me)`
         // just placed the insert mark at `ms` (the match start), so the insert mark is
         // exactly the target iter — same mark-based route the preview path and the
         // sibling `outline_nav::scroll_editor_to_offset` already take. The alignment
@@ -1208,7 +1208,7 @@ mod gtk_integration_tests {
     }
 
     /// A **theme re-render** must NOT erase the preview find-match highlights
-    /// (GTK4Rs/AP-47/ScrAP-38). `re_render_all_windows` rebuilds the preview's content
+    /// (GTK4Rs/AP-47/GTK4Rs/AP-47). `re_render_all_windows` rebuilds the preview's content
     /// from scratch, which clears the buffer and empties its tag table — so the
     /// `scrib-search-hl` tags go with it; `window::refresh_preview_find_highlight` (invoked
     /// from that sweep) must re-apply them for the active tab while the find bar is open.
@@ -1253,14 +1253,14 @@ mod gtk_integration_tests {
         assert!(
             buffer_has_search_highlight(&buf_after),
             "the find highlights must survive a theme re-render — the boundary must re-apply \
-             them (ScrAP-38), not leave the pane bare until the user cycles matches"
+             them (GTK4Rs/AP-47), not leave the pane bare until the user cycles matches"
         );
 
         window.destroy();
     }
 
     /// A **view-mode switch** (preview → edit → preview) must NOT erase the preview
-    /// find-match highlights (same ScrAP-38 boundary as the theme sweep). Switching to a mode
+    /// find-match highlights (same GTK4Rs/AP-47 boundary as the theme sweep). Switching to a mode
     /// that shows the preview builds a fresh `render_and_wire_preview`, dropping the tags;
     /// `refresh_preview_find_highlight` (invoked at the end of the view-mode change) must
     /// re-apply them. Mutation check: removing that call from `viewactions.rs` fails this.
@@ -1289,7 +1289,7 @@ mod gtk_integration_tests {
         assert!(
             buffer_has_search_highlight(&view_after.buffer()),
             "the find highlights must survive a mode switch — the view-mode boundary must \
-             re-apply them (ScrAP-38)"
+             re-apply them (GTK4Rs/AP-47)"
         );
 
         window.destroy();

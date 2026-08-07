@@ -146,7 +146,7 @@ async fn save_window(
         return Ok(SaveOutcome::Busy);
     };
     let text = st.editor_text();
-    // ScrAP-54: arm the round-trip guard BEFORE the write — the
+    // GTK4Rs/AP-62: arm the round-trip guard BEFORE the write — the
     // rename inside `write_atomic` is what triggers the monitor's spurious
     // `Deleted` event, so the flag must already be set the instant the
     // rename happens, not after `write_atomic` returns. It stays armed across the
@@ -764,7 +764,7 @@ fn confirm_close_tabs(
                 // goes with it — immediately. It cannot come through the dirtiness choke
                 // point, because the tab is still dirty as it is destroyed; and it
                 // cannot wait for an end-of-quit pass, because a coordinated quit
-                // freezes session writes across a shrinking window set (ScrAP-81) and
+                // freezes session writes across a shrinking window set (GTK4Rs/AP-113) and
                 // may itself be cancelled. Without this, the next launch resurrects
                 // exactly the work the user chose to discard.
                 crate::window::discard_tab_swap(&tab);
@@ -786,7 +786,7 @@ pub(crate) fn refresh_dirty_status(window: &ApplicationWindow) {
         // The crash-recovery invariant hangs off the same recomputation as the
         // indicator, so every path that changes dirtiness — save, Save As, reload,
         // revert, undo — gets the right swap-file behaviour without being individually
-        // taught it (`window::swap::sync_tab_swap`, ScrAP-116/ScrAP-219). The one
+        // taught it (`window::swap::sync_tab_swap`, GTK4Rs/AP-108/ScrAP-219). The one
         // deletion that cannot come through here is a *discarded* tab, which is still
         // dirty when it is destroyed; that is `discard_tab_swap`.
         crate::window::sync_tab_swap(&st);

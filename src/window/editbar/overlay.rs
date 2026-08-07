@@ -1,4 +1,4 @@
-//! The single per-window caret/selection formatting overlay (ScrAP-61): built once per
+//! The single per-window caret/selection formatting overlay (GTK4Rs/AP-106): built once per
 //! window ([`build_format_overlay`]), pointed at the selection and coalesced/hidden by
 //! the active tab's editor signals ([`wire_editor_format_overlay`]).
 
@@ -9,7 +9,7 @@ use crate::saferizer::{pin_above, Viewport, ViewportRect};
 /// so the popover (and its down arrow, which centers on the pointing-to rect)
 /// sits centered above the selection.  Goes iter → rect (`iter_location`, buffer
 /// coords) → `buffer_to_window_coords(Widget, …)` → `set_pointing_to`; never a
-/// position→iter hit-test, so it sidesteps ScrAP-15.  `Widget` (not `Text`) coords
+/// position→iter hit-test, so it sidesteps GTK4Rs/AP-15.  `Widget` (not `Text`) coords
 /// because `set_pointing_to` is parent-relative and the popover is parented to the
 /// whole textview.
 /// Returns whether a valid on-screen anchor was set (so the caller can decide to
@@ -22,7 +22,7 @@ fn point_format_overlay(editor: &sourceview::View, pop: &gtk::Popover) -> bool {
     let r1 = editor.iter_location(&end);
     let (x0, y0) = editor.buffer_to_window_coords(gtk::TextWindowType::Widget, r0.x(), r0.y());
     let (x1, _y1) = editor.buffer_to_window_coords(gtk::TextWindowType::Widget, r1.x(), r1.y());
-    // GUARD (ScrAP-26): a selection scrolled OUTSIDE the visible viewport — a find match
+    // GUARD (GTK4Rs/AP-26): a selection scrolled OUTSIDE the visible viewport — a find match
     // selected before its scroll-into-view lands — has an off-widget Widget-coord y,
     // negative above the top or past the height below the bottom. Pointing a GtkPopover
     // at an off-widget rect makes GTK allocate the popover content a NEGATIVE height and
@@ -91,7 +91,7 @@ fn schedule_format_overlay(window: &ApplicationWindow) {
     chrome.format_overlay_timer.replace(Some(id));
 }
 
-/// Build the ONE caret formatting overlay for a window (ScrAP-61).  A non-autohide
+/// Build the ONE caret formatting overlay for a window (GTK4Rs/AP-106).  A non-autohide
 /// popover (so the editor keeps focus and the selection highlight stays vivid),
 /// holding the shared format bar (Bold … HR, Link/Image/Table + the H1–H6 heading
 /// `GtkMenuButton`).  Returns the popover and its Insert Link/Image buttons for
@@ -103,7 +103,7 @@ fn schedule_format_overlay(window: &ApplicationWindow) {
 /// editor it points at; the focus gate already treats "focus inside the editor
 /// subtree" as still-editing, and the overlay buttons never grab focus).
 ///
-/// WHY one per window (ScrAP-61, researcher-confirmed vs GTK 4.6.9): the
+/// WHY one per window (GTK4Rs/AP-106, researcher-confirmed vs GTK 4.6.9): the
 /// bar holds a `GtkMenuButton` (the H1–H6 heading menu). `set_menu_model` builds
 /// the whole `GtkPopoverMenu` eagerly — a `GtkModelButton` per item, each with an
 /// accelerator label + a managed `GtkShortcutController`. When the overlay is
@@ -133,14 +133,14 @@ pub(crate) fn build_format_overlay() -> (gtk::Popover, Vec<(FmtInsertKind, gtk::
 /// wired in. Same self-healing tactic the split scroll-sync (`scrollsync.rs`) and
 /// outline-nav spy (`outline_nav.rs`) use: resolve the host window at emission time
 /// via the shared `host_window` helper (`window::host_window`, defined in
-/// `tabs/lifecycle.rs`), never a captured weak ref (ScrAP-57).
+/// `tabs/lifecycle.rs`), never a captured weak ref (GTK4Rs/AP-52).
 fn editor_host_window(editor: &sourceview::View) -> Option<ApplicationWindow> {
     // Typed adapter over the shared root-walk (QA L-3) — kept for the
     // `.and_then(editor_host_window)` fn-reference sites below.
     crate::window::host_window(editor)
 }
 
-/// Wire ONE tab's editor to drive its window's shared caret overlay (ScrAP-61):
+/// Wire ONE tab's editor to drive its window's shared caret overlay (GTK4Rs/AP-106):
 /// show/reposition/hide on its buffer's cursor & selection changes, hide on its own
 /// scroll, dismiss on Escape.  Cheap per-tab signal connections only — the expensive
 /// popover + heading-menu build lives in [`build_format_overlay`], done once per
@@ -150,7 +150,7 @@ fn editor_host_window(editor: &sourceview::View) -> Option<ApplicationWindow> {
 /// time (`editor_host_window`), never a captured window ref: a tab moved to another
 /// window reuses this editor but re-parents it under the destination window, and a
 /// captured ref would keep driving the SOURCE window's overlay — so the moved tab's
-/// editor pane would show no overlay in its new window (ScrAP-57).
+/// editor pane would show no overlay in its new window (GTK4Rs/AP-52).
 pub(crate) fn wire_editor_format_overlay(editor: &sourceview::View) {
     // Show / reposition / hide on cursor or selection changes (insert &
     // selection_bound marks), coalesced by schedule_format_overlay.

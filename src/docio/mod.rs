@@ -31,7 +31,7 @@
 //!   its mode/ownership preservation and its rename. GIO's `replace_contents`
 //!   promotes its own temp from the stream's *close* path, which has already
 //!   discarded the knowledge that the write failed — measured here as a
-//!   known-good file becoming 0 bytes (ScrAP-232). Swapping our write for GIO's
+//!   known-good file becoming 0 bytes (GTK4Rs/AP-167). Swapping our write for GIO's
 //!   would move this I/O off the main thread by giving up the guarantee the I/O
 //!   exists to provide.
 //!
@@ -393,7 +393,7 @@ pub(crate) async fn write_document(path: PathBuf, content: String) -> std::io::R
 ///   A tick source keeps `iteration` returning regularly so a condition that never
 ///   becomes true fails the test instead of hanging it.
 /// * The wall-clock deadline is a **failure bound, not the completion signal**
-///   (ScrAP-134): success is always `done()` observing the real state. Nothing here
+///   (GTK4Rs/AP-122): success is always `done()` observing the real state. Nothing here
 ///   waits out a duration and then assumes.
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 pub(crate) fn settle(done: impl Fn() -> bool) -> bool {

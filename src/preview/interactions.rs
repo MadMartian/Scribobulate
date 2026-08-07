@@ -138,10 +138,10 @@ pub(crate) fn link_url_at(view: &CodePreviewView, x: f64, y: f64) -> Option<Stri
 /// `links::open_url` directly, which is only step 2 of the policy: a `#fragment`
 /// never scrolled and a relative `./other.md` was *refused* inside a table while
 /// the identical link in a paragraph opened a tab (Document Rendering CAM row 2 —
-/// ScrAP-259).
+/// GTK4Rs/AP-239).
 ///
 /// A same-document `#anchor` scrolls to the matching heading rather than launching
-/// an external handler. ScrAP-22: this used to call `scroll_to_iter` directly, which
+/// an external handler. GTK4Rs/AP-22: this used to call `scroll_to_iter` directly, which
 /// scrolls against whatever line heights are computed so far — the same
 /// unvalidated-region hazard `scroll_preview_to_heading` documents (blank-gray view,
 /// GTK spamming "snapshot without a current allocation"). It routes through the same
@@ -156,7 +156,7 @@ pub(crate) fn activate_link_url(view: &CodePreviewView, url: &str) {
         // Scoped borrow: resolve the heading offset and release `RenderData` before
         // touching the view. An accepted local doc-link navigation can create/focus
         // another tab and re-enter render/re-render on THIS tab, and holding a
-        // `RefCell` borrow across that boundary is the ScrAP-53 hazard (a synchronous
+        // `RefCell` borrow across that boundary is the GTK4Rs/AP-61 hazard (a synchronous
         // re-entrant borrow aborts).
         let target = super::scrib_render_data(view)
             .and_then(|rd| rd.borrow().heading_map.get(&slug).copied());
@@ -241,7 +241,7 @@ pub(super) fn wire_link_gestures(view: &CodePreviewView, render_data: &Rc<RefCel
     // Activating on the release alone made every swipe-selection that happened to end
     // over a link navigate away from the document the reader was selecting from, and
     // the travel bound covers the other half of that: a selection made WITHIN one long
-    // link caption (ScrAP-238). `ClickActivation` owns both signals, so the
+    // link caption (GTK4Rs/AP-169). `ClickActivation` owns both signals, so the
     // release-only shape is not writable here.
     let gesture = GestureClick::new();
     let rd_h = Rc::clone(render_data);
@@ -277,13 +277,13 @@ pub(super) fn wire_link_gestures(view: &CodePreviewView, render_data: &Rc<RefCel
 ///    text selection or moves the caret. Press and release must land on the SAME
 ///    checkbox (a clean click, not a drag off) — the complete-click rule every
 ///    click affordance in this app now takes from `saferizer::ClickActivation`
-///    rather than re-deriving (ScrAP-238), with a small release slop because a
+///    rather than re-deriving (GTK4Rs/AP-169), with a small release slop because a
 ///    checkbox is a few pixels wide.
 ///  * **Deferred edit through the annotation sink** — the flip is routed to the
 ///    editor source buffer via `view.annotation_sink()` (installed by the window
 ///    per preview mount), DEFERRED one idle turn (`idle_add_local_once`) because
 ///    the click gesture is still active and the sink mutates + re-renders the
-///    preview widget tree (ScrAP-96 / ScrAP-30). Through the shared `apply_annotation_edit`
+///    preview widget tree (GTK4Rs/AP-30 / GTK4Rs/AP-30). Through the shared `apply_annotation_edit`
 ///    → `splice_minimal` path the single-char replace is ONE undoable user-action,
 ///    and the editor buffer's `changed` drives dirty-tracking + the live re-render
 ///    (the sink also re-renders in preview-only mode) for free (ScrAP-114 — the
@@ -342,7 +342,7 @@ pub(super) fn wire_checkbox_toggle_gesture(
                     let Some(sink) = v.annotation_sink() else {
                         return;
                     };
-                    // DEFER off the active press gesture (ScrAP-96/ScrAP-30): the sink mutates
+                    // DEFER off the active press gesture (GTK4Rs/AP-30/GTK4Rs/AP-30): the sink mutates
                     // the editor buffer and rebuilds the preview widget tree.
                     glib::idle_add_local_once(move || {
                         sink(crate::codeview::AnnotationEdit::ToggleTask { span });

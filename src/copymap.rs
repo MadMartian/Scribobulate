@@ -2,7 +2,7 @@
 //! A **pure**, unit-tested resolver over a buffer-annotated construct
 //! tree built in the render loop, where the *real* preview buffer offsets are
 //! known (they cannot be re-derived from source alone — the renderer strips
-//! syntax and synthesises content, ScrAP-5/ScrAP-23).
+//! syntax and synthesises content, GTK4Rs/AP-5/GTK4Rs/AP-23).
 //!
 //! # The one rule (the uniform resolver model)
 //!

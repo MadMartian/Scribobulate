@@ -137,7 +137,7 @@ pub(super) fn register_editor_actions(window: &ApplicationWindow, heading_btn: &
     // panes; only entries need the standdown. See `focus_in_text_entry`'s doc comment.
     //
     // Recomputed on every focus move, not just when an entry gains it: state driven only
-    // off a delta signal misses the lifecycle boundaries (ScrAP-38). `focus-widget` notify IS
+    // off a delta signal misses the lifecycle boundaries (GTK4Rs/AP-47). `focus-widget` notify IS
     // the boundary.
     {
         let win = window.downgrade();
@@ -242,7 +242,7 @@ pub(super) fn register_editor_actions(window: &ApplicationWindow, heading_btn: &
     // picks the transform applied to the editor selection. Enabled in edit/split
     // with a selection (managed by update_edit_action_state).
     // Edit ▸ Change Case is a nested submenu; built through `nested_submenu_action`
-    // so the ScrAP-116 stray-popover dismissal is wired in and cannot be forgotten.
+    // so the GTK4Rs/AP-108 stray-popover dismissal is wired in and cannot be forgotten.
     let change_case_action = nested_submenu_action(
         window,
         "change-case",
@@ -271,11 +271,11 @@ pub(super) fn register_editor_actions(window: &ApplicationWindow, heading_btn: &
     // applying, focus is returned to the editor so successive commands stack.
     // Format ▸ Heading is a nested submenu: after activation GTK can leave a
     // sibling top-level menu ("Edit") popped open. Built through
-    // `nested_submenu_action` so the ScrAP-116 dismissal is wired in and cannot be
+    // `nested_submenu_action` so the GTK4Rs/AP-108 dismissal is wired in and cannot be
     // forgotten (no-op from the toolbar/overlay, which open no menubar popover).
     // The constructor schedules that dismissal BEFORE this handler runs, so its
     // idle is enqueued ahead of the deferred `grab_focus` idle below — the
-    // stray-popover pop-down must not run last and steal the editor focus (ScrAP-116).
+    // stray-popover pop-down must not run last and steal the editor focus (GTK4Rs/AP-108).
     let format_action = nested_submenu_action(
         window,
         "format",
@@ -451,7 +451,7 @@ mod gtk_integration_tests {
 
     /// Pump the default main context until `cond` holds or a 5s timeout SOURCE fires
     /// (never a wall-clock check between iterations — that never returns on an idle
-    /// display; ScrAP-88). Panics loudly on timeout — a silently-ignored timeout would
+    /// display; GTK4Rs/AP-79). Panics loudly on timeout — a silently-ignored timeout would
     /// let the following assertion pass or fail for the wrong reason.
     fn pump_until(cond: impl Fn() -> bool, what: &str) {
         let deadline = std::rc::Rc::new(std::cell::Cell::new(false));

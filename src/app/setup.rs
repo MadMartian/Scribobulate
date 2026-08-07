@@ -66,7 +66,7 @@ pub(crate) fn re_render_all_windows(app: &Application) {
         // Each preview's buffer was just rebuilt (rerender_tab_preview_in_place →
         // set_buffer), dropping the find-match highlights — re-apply them for the
         // active tab if the find bar is open, the same derived-state re-sync outline
-        // and annotations get above (GTK4Rs/AP-47/ScrAP-38; no-op when find is closed).
+        // and annotations get above (GTK4Rs/AP-47/GTK4Rs/AP-47; no-op when find is closed).
         crate::window::refresh_preview_find_highlight(app_win);
         // Keep the theme-button label in step with the (possibly just-switched) theme.
         crate::window::refresh_theme_button(app_win);
@@ -118,7 +118,7 @@ fn on_startup(app: &Application) {
     // stays per-window for free; only content had to be split out. We
     // deliberately do NOT call `app.set_menubar` here: it would also export
     // the model to a global-menu shell and duplicate our in-window bar
-    // (ScrAP-63). Accelerators (`set_accels_for_action`) remain
+    // (GTK4Rs/AP-76). Accelerators (`set_accels_for_action`) remain
     // app-level (see `register_accelerators`) and are unaffected by the model split.
 }
 
@@ -153,7 +153,7 @@ fn init_resources_and_css() {
     // permanently, and **specificity only breaks ties WITHIN one provider** — so two
     // providers writing the same property on the same node are arbitrated by
     // priority, and at EQUAL priority by ADD ORDER (`gtkstylecascade.c:314-319`;
-    // ScrAP-127). The theme sheet deliberately overrides a few of the static sheet's
+    // GTK4Rs/AP-101). The theme sheet deliberately overrides a few of the static sheet's
     // card rules, so relying on its selectors being more specific would have made the
     // winner a construction-order accident. Priority makes it deterministic.
     //

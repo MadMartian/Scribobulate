@@ -7,7 +7,7 @@
 //! [`apply_annotation_edit`](crate::window::apply_annotation_edit) path (which the normal
 //! dirty-tracking + live-preview re-render then pick up for free — decision 3).
 //!
-//! The card is a typing entry, so it CANNOT live in a popover on X11 (ScrAP-98); it is an
+//! The card is a typing entry, so it CANNOT live in a popover on X11 (GTK4Rs/AP-83); it is an
 //! in-surface `GtkOverlay` child of the editor pane's overlay (the SplitView wraps the
 //! editor scroller in that overlay for exactly this). There is no selection popover on
 //! the editor side — the editor already has its format/caret overlay; Annotate is raised
@@ -68,7 +68,7 @@ pub(crate) fn wire_editor_annotate_card(
     // write it into the editor buffer. DEFER the buffer mutation to an idle turn — doing
     // it synchronously inside the Save `clicked` handler mutates (and, in split, re-renders
     // the preview) while the press gesture is still active, breaking active-state
-    // accounting up the ancestor chain (ScrAP-96). The dirty-tracking + live-preview re-render
+    // accounting up the ancestor chain (GTK4Rs/AP-30). The dirty-tracking + live-preview re-render
     // then pick the edit up through the normal editor path (no explicit refresh needed —
     // the editor buffer's `changed` already drives them).
     //
@@ -154,8 +154,8 @@ pub(crate) fn wire_editor_annotate_card(
             entry.set_text(&existing);
             entry_open.set(true);
             // Show BEFORE positioning — `position_card` measures the card, and a hidden
-            // widget measures 0 (ScrAP-100); a stale margin also inflates the re-measure
-            // (ScrAP-102), both handled inside `position_card`.
+            // widget measures 0 (GTK4Rs/AP-85); a stale margin also inflates the re-measure
+            // (GTK4Rs/AP-87), both handled inside `position_card`.
             bar.set_visible(true);
             position_card(&editor, &overlay, bar.upcast_ref());
             entry.grab_focus();
@@ -294,7 +294,7 @@ mod gtk_integration_tests {
         win.present();
 
         // Pump to mapped, bounded by a timeout SOURCE rather than a wall-clock check
-        // between iterations — the latter never returns on an idle display (ScrAP-88).
+        // between iterations — the latter never returns on an idle display (GTK4Rs/AP-79).
         let deadline = std::rc::Rc::new(std::cell::Cell::new(false));
         glib::timeout_add_local_once(std::time::Duration::from_secs(5), {
             let deadline = deadline.clone();
@@ -367,7 +367,7 @@ mod gtk_integration_tests {
     /// Kept because the class is genuinely still load-bearing for styling and for test
     /// discovery — but retargeted, because a test whose name and message claim to guard
     /// the standdown while asserting only that a CSS class exists is the vacuous guard
-    /// this codebase mutation-tests against (ScrAP-87).
+    /// this codebase mutation-tests against (GTK4Rs/AP-78).
     #[gtktest::test]
     fn the_card_bar_carries_the_shared_styling_and_test_discovery_class() {
         let (win, entry) = raise_card_over_mapped("the earth is {==flat==}{>>note<<}", 16, 20);

@@ -67,7 +67,7 @@ pub(crate) struct Palette {
     pub(crate) code_block_bg: gdk::RGBA,
     pub(crate) link_fg: gdk::RGBA,
     /// Colour of the blockquote's left accent bar (drawn by the preview view, not a
-    /// widget — blockquotes live in the buffer as text now, ScrAP-23/ScrAP-24 family).
+    /// widget — blockquotes live in the buffer as text now, GTK4Rs/AP-23/GTK4Rs/AP-24 family).
     pub(crate) blockquote_bar: gdk::RGBA,
     /// The selection / accent tint the preview's floating chrome derives from.
     pub(crate) selection_bg: gdk::RGBA,

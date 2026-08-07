@@ -4,13 +4,13 @@
 //! A `paragraph-background` tag cannot give a code block inner horizontal
 //! padding: GTK pins the fill's left edge to the text's `left_margin` (they are
 //! literally the same x), so the text is always flush with the colored edge
-//! (ScrAP-21).  The fix is to draw each block rectangle in `TextViewImpl::snapshot_layer`
+//! (GTK4Rs/AP-21).  The fix is to draw each block rectangle in `TextViewImpl::snapshot_layer`
 //! at the BelowText layer (above the widget background, below the text), and to
 //! inset the text past the rect via the `code-block` tag's margins.
 //!
 //! The rectangles' vertical extents come from `line_yrange` (a pure cached
 //! btree-height read), NOT `iter_location`. Two reasons, both load-bearing:
-//! (1) ScrAP-22 — a geometry read that *validates* a line's layout on demand, forced on
+//! (1) GTK4Rs/AP-22 — a geometry read that *validates* a line's layout on demand, forced on
 //! an OFF-SCREEN line during a draw/size-allocate, sets `alloc_needed` mid-cycle and
 //! blanks the view. So we measure **live in `snapshot_layer`, visible blocks only**,
 //! clamping each rectangle to the viewport. (2) ScrAP-105 — `iter_location` also builds
@@ -35,7 +35,7 @@ use gtk::{gdk, glib, graphene};
 /// line end is never clipped. Wrapped text already wraps to `content - 1`, so it never
 /// overflows; an anchored child's advance can't be trimmed, so a child sized to
 /// exactly the content column makes the layout 1px past the viewport and raises a
-/// spurious horizontal scrollbar that churns the ScrAP-23 blank. Bounding every anchored
+/// spurious horizontal scrollbar that churns the GTK4Rs/AP-23 blank. Bounding every anchored
 /// block child to `content - this` makes it behave like a wrapped line. The value is a
 /// fixed literal in GTK (invariant to font / scale / HiDPI / RTL / multiple anchors —
 /// researcher-verified against gtk-4-6), so a named constant is exact; do NOT derive
@@ -69,7 +69,7 @@ mod imp {
         pub(crate) bg: RefCell<gdk::RGBA>,
         /// (first-char offset, exclusive end offset) per blockquote, + the accent-bar
         /// colour. Blockquotes are buffer text now; the view draws the left bar over
-        /// each range in snapshot_layer (no anchored widget to churn — ScrAP-23).
+        /// each range in snapshot_layer (no anchored widget to churn — GTK4Rs/AP-23).
         pub(crate) blockquotes: RefCell<Vec<crate::span::BufferSpan>>,
         pub(crate) bq_bar: RefCell<gdk::RGBA>,
         /// Replaceable idle for a pending scroll-to-heading, so rapid outline
@@ -81,16 +81,16 @@ mod imp {
         pub(crate) width_bounded: RefCell<Vec<(gtk::Widget, i32)>>,
         /// Custom `ScribTableWidget`s anchored in this view. On each real
         /// content-column change `size_allocate` calls their `set_bound_width` (each
-        /// is itself idempotent), driving their once-per-width cached layout (ScrAP-23).
+        /// is itself idempotent), driving their once-per-width cached layout (GTK4Rs/AP-23).
         pub(crate) tables: RefCell<Vec<crate::widgets::table::ScribTableWidget>>,
         /// Anchored images, each `(picture, max_w, max_h)` — the image's NATURAL size
         /// (uncapped: `max-width: 100%` policy). On each real content-column change
         /// `size_allocate` CLAMPS each to `w = min(max_w, content)`, `h = max_h · w /
         /// max_w` (aspect preserved), so a too-wide image shrinks to the viewport instead
-        /// of forcing an over-wide line and re-arming the ScrAP-22/23 blank, and
+        /// of forcing an over-wide line and re-arming the GTK4Rs/AP-22/23 blank, and
         /// an image narrower than the pane keeps its natural size (never upscaled).
         /// Distinct from `width_bounded`, which FILLS the column. Both width AND height
-        /// stay non-zero so the picture paints (ScrAP-32).
+        /// stay non-zero so the picture paints (GTK4Rs/AP-58).
         pub(crate) image_bounded: RefCell<Vec<(gtk::Widget, i32, i32)>>,
         /// Last content-column width applied; the idempotent guard that keeps the
         /// `size_allocate` rebind from looping.
@@ -138,7 +138,7 @@ mod imp {
         /// An armed "open marker `target`'s popover the moment its chip paints" request.
         /// A programmatic navigation to an OFF-SCREEN marker cannot open a
         /// popover immediately: `marker_hitboxes` is repopulated only by `snapshot_layer`
-        /// and therefore holds only the VISIBLE markers (ScrAP-125), so the target has no
+        /// and therefore holds only the VISIBLE markers (GTK4Rs/AP-97), so the target has no
         /// rect to point at until it has been scrolled to AND painted.
         ///
         /// GTK offers no signal for "that paint happened": `GtkTextView` has no
@@ -202,8 +202,8 @@ mod imp {
         /// (Edit/Remove on a CriticMarkup marker click). A `GtkPopover` attached via
         /// `set_parent` is a native child GTK does NOT unparent for us — we must do it
         /// in `dispose`, or the view's teardown spams "GtkPopover is not a child of
-        /// ScribCodePreviewView" (ScrAP-90). (The Annotate comment ENTRY is a GtkOverlay
-        /// child, not a popover — GTK unparents overlay children itself — ScrAP-98.)
+        /// ScribCodePreviewView" (GTK4Rs/AP-80). (The Annotate comment ENTRY is a GtkOverlay
+        /// child, not a popover — GTK unparents overlay children itself — GTK4Rs/AP-83.)
         pub(crate) overlay_popover: RefCell<Option<crate::saferizer::PersistentPopover>>,
         /// The persistent annotation card. Not a bare `gtk::Popover` and not a
         /// `PersistentPopover`: [`AnnotationCard`](super::card::AnnotationCard) is a
@@ -211,7 +211,7 @@ mod imp {
         /// captured rect), its scroll-tracking, its outside-click dismissal and its
         /// teardown order — the three defects those used to be spread across the callers
         /// as three separate defects. Created once and reused for the view's life
-        /// (ScrAP-112/GTK4Rs/AP-117:
+        /// (GTK4Rs/AP-117/GTK4Rs/AP-117:
         /// destroying a popover per use strands a tooltip timer over an unrealized
         /// surface); torn down by `dispose` via `AnnotationCard::teardown`.
         pub(crate) marker_card: RefCell<Option<super::card::AnnotationCard>>,
@@ -233,7 +233,7 @@ mod imp {
         /// primary clipboard is long-lived (outlives the view), so we keep the id +
         /// clipboard here and disconnect in `dispose` — otherwise every fresh render's
         /// view would leak a handler on the shared clipboard (same discipline as the
-        /// window's `copy-primary-handler`, ScrAP-28/ScrAP-94).
+        /// window's `copy-primary-handler`, GTK4Rs/AP-28/GTK4Rs/AP-82).
         pub(crate) primary_sel_handler: RefCell<Option<(gdk::Clipboard, glib::SignalHandlerId)>>,
     }
 
@@ -294,8 +294,8 @@ mod imp {
                 // and a stranded grab is not a dead app: button/key events keep routing
                 // to the destroyed holder while motion/crossing still reach widgets, so
                 // it looks like anything but a grab. The unparent is also mandatory
-                // (ScrAP-90 — a `set_parent`'d popover left parented at dispose leaks)
-                // and must not migrate to a per-use destroy (ScrAP-112). `teardown()`
+                // (GTK4Rs/AP-80 — a `set_parent`'d popover left parented at dispose leaks)
+                // and must not migrate to a per-use destroy (GTK4Rs/AP-117). `teardown()`
                 // encodes exactly this order, so the "stop unparenting" / "unparent while
                 // open" wrong fixes are unrepresentable through the handle.
                 p.teardown();
@@ -304,12 +304,12 @@ mod imp {
             // `teardown`, plus the handlers it planted on objects that OUTLIVE the view
             // (the scroller's adjustment, for scroll-tracking; the toplevel, for
             // outside-click dismissal) — those must come off here or every render's card
-            // would leave one behind on a longer-lived object (ScrAP-28 discipline).
+            // would leave one behind on a longer-lived object (GTK4Rs/AP-28 discipline).
             if let Some(card) = self.marker_card.borrow_mut().take() {
                 card.teardown();
             }
             // Drop our handler on the long-lived primary clipboard (table-cell annotation) so it
-            // doesn't outlive the view and accumulate across renders (ScrAP-28).
+            // doesn't outlive the view and accumulate across renders (GTK4Rs/AP-28).
             if let Some((clip, id)) = self.primary_sel_handler.borrow_mut().take() {
                 clip.disconnect(id);
             }
@@ -334,7 +334,7 @@ mod imp {
             // the 1px SPACE_FOR_CURSOR GtkTextView adds to the line layout width (an
             // anchored child's advance can't be trimmed like wrapped text, so a child
             // sized to exactly the column makes the view 1px over-wide → spurious
-            // Automatic h-bar that churns → blank, ScrAP-23). Bounds every anchored block
+            // Automatic h-bar that churns → blank, GTK4Rs/AP-23). Bounds every anchored block
             // child (rules AND tables) so none ever measures wider than the viewport.
             let view = self.obj();
             let content = width - view.left_margin() - view.right_margin();
@@ -354,7 +354,7 @@ mod imp {
                 }
                 // Images CLAMP to the viewport (not fill): keep natural size when it
                 // fits, shrink to `bound` when too wide, height following by aspect
-                // ratio so it never forces an over-wide line → ScrAP-22/23 blank.
+                // ratio so it never forces an over-wide line → GTK4Rs/AP-22/23 blank.
                 for (w, max_w, max_h) in self.image_bounded.borrow().iter() {
                     if *max_w <= 0 {
                         continue;
@@ -374,7 +374,7 @@ mod imp {
             // and GtkTextView re-validates line heights lazily; during that
             // re-validation a transiently smaller `upper` clamps the vadjustment
             // `value` toward 0 and the viewport JUMPS to the top — unless we re-anchor
-            // to the user's tracked reading line (ScrAP-13/65 family). Unlike a
+            // to the user's tracked reading line (GTK4Rs/AP-13/65 family). Unlike a
             // buffer-swap event the buffer is unchanged here, so the reading line is
             // still valid and already captured continuously by
             // `wire_scroll_position_tracking`; we only restore it.
@@ -386,7 +386,7 @@ mod imp {
             // prior reading line to preserve and it must not fight the initial fresh
             // render's own restore. `reanchor_to_reading_line` only SCHEDULES a
             // coalesced, deferred, validation-safe scroll — no synchronous validation
-            // from the size-allocate path (ScrAP-22/29).
+            // from the size-allocate path (GTK4Rs/AP-22/29).
             let prev_w = self.last_alloc_width.get();
             if width != prev_w {
                 self.last_alloc_width.set(width);
@@ -454,7 +454,7 @@ mod imp {
             // this after the widget's own (opaque) CSS background but before the
             // text + selection, so the fill is visible under the text. (Drawing in
             // WidgetImpl::snapshot before parent_snapshot does NOT work — the widget
-            // background paints over it. ScrAP-21.)
+            // background paints over it. GTK4Rs/AP-21.)
             // Backgrounds (code blocks, blockquotes) paint in BELOW-TEXT (under the text
             // and under anchored children). Comment markers paint in ABOVE-TEXT so the
             // right-margin chip is drawn ON TOP of an anchored table widget — a cell
@@ -482,7 +482,7 @@ mod imp {
             // translated), so the visible region and every measurement below are in
             // that same space — no window-coordinate math.
             // First/last VISIBLE lines, clamped to [vis_start, vis_end]. Two hazards
-            // shape the geometry reads below: (ScrAP-22) an OFF-SCREEN validating read
+            // shape the geometry reads below: (GTK4Rs/AP-22) an OFF-SCREEN validating read
             // (mid-draw validation → alloc_needed → blanked view/scrollbar) — avoided
             // by clamping the rect to the viewport; and (ScrAP-105) `iter_location`'s
             // line-display CACHE insert dereferences freed lines when a paint lands
@@ -520,7 +520,7 @@ mod imp {
             // loose continuation paragraph abutting a code block inside a list item
             // (only ONE `\n` separates them, not a `block_sep` blank line), so the
             // paragraph's text rendered overlapping the card's bottom edge
-            // (ScrAP-150). Relying on the tags also keeps the padding zoom-correct:
+            // (GTK4Rs/AP-127). Relying on the tags also keeps the padding zoom-correct:
             // `code_pad` is `px()`-scaled, the old raw `pad` was not.
             let lm = view.left_margin() as f32;
             let rm = view.right_margin() as f32;
@@ -540,7 +540,7 @@ mod imp {
                     // viewport edge clamps to that edge instead of reading an off-screen
                     // (unvalidated) iter. A block taller than the viewport clamps both
                     // ends and fills the visible height. The extent is the block's own
-                    // line range with NO extra pad (ScrAP-150 — see `span_card_y_extent`).
+                    // line range with NO extra pad (GTK4Rs/AP-127 — see `span_card_y_extent`).
                     let (top, bottom) = span_card_y_extent(
                         &*view,
                         &buffer,
@@ -558,9 +558,9 @@ mod imp {
 
                 // Blockquote accent bars — same visible-only, viewport-clamped Y-extent
                 // logic as the code-block backgrounds (so we never read an off-screen,
-                // unvalidated iter — ScrAP-22), but drawn as a thin vertical rect at the
+                // unvalidated iter — GTK4Rs/AP-22), but drawn as a thin vertical rect at the
                 // body-text left margin. Blockquotes are buffer text, so there is no
-                // anchored widget here to re-measure/churn (ScrAP-23).
+                // anchored widget here to re-measure/churn (GTK4Rs/AP-23).
                 let bar_color = *self.bq_bar.borrow();
                 // The bar's width is a themed decoration metric: a design-time px at
                 // zoom 1.0, scaled here through the same `round(n * zoom)` the
@@ -597,7 +597,7 @@ mod imp {
                 // right-aligned number / static checkbox per item, drawn in the band
                 // LEFT of the item's content margin, aligned to the item's FIRST line.
                 // Same discipline as the bars above: paint VISIBLE first-lines only, so
-                // the y read (`line_yrange`, cache-free — never `iter_location`, ScrAP-22/
+                // the y read (`line_yrange`, cache-free — never `iter_location`, GTK4Rs/AP-22/
                 // ScrAP-105; research §4) is on a validated line; x derives from `depth`
                 // (`list_content_margin_px` == the `li-{depth}` content margin), never
                 // from GTK geometry. Buffer-space, so scroll-correct for free.
@@ -608,13 +608,13 @@ mod imp {
                     // `left_margin` for a body item, and the `blockquote` tag's
                     // `left_margin + px(bar_width + text_gap)` for a quoted one.
                     // Both are SET properties (same read the bq bar above does), not
-                    // lazily-validated layout — no ScrAP-22 exposure. Without the quoted
+                    // lazily-validated layout — no GTK4Rs/AP-22 exposure. Without the quoted
                     // base, a quoted list's markers land left of the quote's accent bar
                     // (POLICY Document Rendering CAM row 2).
                     let body_base = lm;
                     // The SAME two theme keys `tags.rs` builds the `blockquote` tag's
                     // margin from, so a themed bar/gap can never leave a quoted list's
-                    // markers beside the quote instead of inside it (ScrAP-121).
+                    // markers beside the quote instead of inside it (GTK4Rs/AP-96).
                     let qm = crate::theme::active();
                     let quoted_base = lm
                         + ((qm.metrics.blockquote_bar_width + qm.metrics.blockquote_text_gap)
@@ -647,7 +647,7 @@ mod imp {
                     // the rows and provokes the wrap). Clamp each item's height to its first
                     // display row via `first_display_line`. `single_line_h` is one row's
                     // text height in the view's OWN CSS-zoomed font — a fresh Pango layout
-                    // (cache-free, never `iter_location`: ScrAP-22), the same font the ordered
+                    // (cache-free, never `iter_location`: GTK4Rs/AP-22), the same font the ordered
                     // numeral is drawn in, so it tracks zoom automatically. `marker_gap` is
                     // the item's `pixels_above_lines`, the band the text sits below.
                     let single_line_h = view.create_pango_layout(Some("0")).pixel_size().1 as f32;
@@ -722,7 +722,7 @@ mod imp {
                 // the reserved right margin at each annotated line. When several
                 // annotations share one visual line they collapse to a single chip
                 // showing a count. Visible-only measurement, viewport-anchored — never
-                // reads an off-screen (unvalidated) iter (ScrAP-22), same as the bars above.
+                // reads an off-screen (unvalidated) iter (GTK4Rs/AP-22), same as the bars above.
                 let mut hitboxes: Vec<(graphene::Rect, Vec<usize>)> = Vec::new();
                 if !markers.is_empty() {
                     let mut vis_markers: Vec<(usize, f32, f32)> = Vec::new();
@@ -738,7 +738,7 @@ mod imp {
                         // Base Y (anchor line), refined to the exact table row for a CELL
                         // marker, via the SHARED `marker_row_y_h` — the same formula the
                         // annotation card anchors itself with, so the chip and the card
-                        // that points at it can never drift apart (ScrAP-87/ScrAP-150).
+                        // that points at it can never drift apart (GTK4Rs/AP-78/GTK4Rs/AP-127).
                         // Recomputed EVERY frame: both halves are cheap and scroll-stable,
                         // so there's nothing to cache against (no flicker, no stale cache).
                         let (y, h) = marker_row_y_h(&*view, &buffer, m);
@@ -758,7 +758,7 @@ mod imp {
                         let (_, y, h) = vis_markers[local[0]];
                         // SHARED chip arithmetic (`chip_rect`) — the annotation card
                         // re-derives its anchor with the very same call, so the drawn chip
-                        // and the card pointing at it cannot disagree (ScrAP-87/ScrAP-150).
+                        // and the card pointing at it cannot disagree (GTK4Rs/AP-78/GTK4Rs/AP-127).
                         let (chip_x, cy, marker_w, chip_h) = chip_rect(width, rm, y, h);
                         snapshot.append_color(
                             &accent,
@@ -775,7 +775,7 @@ mod imp {
                         // with GTK's own transform (chip_x is already widget-space). Using
                         // `cy - visible_rect().y()` drifts by the top margin on compositors
                         // where the two disagree — the same bug that displaced the task
-                        // checkbox hit zone (operator, 2026-07-16); ScrAP-90-safe (pure math).
+                        // checkbox hit zone (operator, 2026-07-16); GTK4Rs/AP-80-safe (pure math).
                         let (_, chip_wy) =
                             view.buffer_to_window_coords(gtk::TextWindowType::Widget, 0, cy as i32);
                         let ann_idxs: Vec<usize> =
@@ -795,8 +795,8 @@ mod imp {
                 //
                 // Dispatch on an IDLE, NEVER inline: we are inside the draw path, and
                 // `open_marker_popover` calls `popup()`, which re-enters layout/validation
-                // (ScrAP-22 — forcing layout from snapshot leaves the view stuck blank) and
-                // rebuilds widgets mid-emission (ScrAP-30 — "broken accounting of active
+                // (GTK4Rs/AP-22 — forcing layout from snapshot leaves the view stuck blank) and
+                // rebuilds widgets mid-emission (GTK4Rs/AP-30 — "broken accounting of active
                 // state"). The idle runs after this frame is on screen.
                 let dispatch = {
                     let mut pending = self.pending_marker_open.borrow_mut();
@@ -819,7 +819,7 @@ mod imp {
                         // the adjustment's `upper`, so a dispatch here would freeze the
                         // scroll at whatever partial position happened to reveal it: the
                         // converge tick sees its request gone and stops re-aiming (correctly
-                        // — the ScrAP-113 re-pin guard owns the adjustment from that moment),
+                        // — the GTK4Rs/AP-118 re-pin guard owns the adjustment from that moment),
                         // and nothing corrects it afterwards. Measured on GDK-Win32: left at
                         // 103 against a reachable 263, because the chip surfaces earlier there
                         // relative to validation.
@@ -883,7 +883,7 @@ mod imp {
                     // stably WRONG rather than merely late: a tick callback fires at the
                     // UPDATE phase, before LAYOUT, so it samples the same pre-validation
                     // estimate every frame and a stability check converges on it
-                    // (GTK4Rs/AP-142/ScrAP-156). Reading after the paint is the fix, and
+                    // (GTK4Rs/AP-142/GTK4Rs/AP-142). Reading after the paint is the fix, and
                     // dispatching from inside the paint is how we get it for free.
                     let obj = self.obj();
                     glib::idle_add_local_once(glib::clone!(
@@ -954,7 +954,7 @@ impl CodePreviewView {
         click.set_propagation_phase(gtk::PropagationPhase::Capture);
         // A COMPLETE click, press and release on the same marker: a selection drag that
         // runs off the end of a line into the right margin ends over a chip, and on the
-        // release alone that opened the card the reader never clicked (ScrAP-238). The
+        // release alone that opened the card the reader never clicked (GTK4Rs/AP-169). The
         // claim stays on the release, as before — a press that only *might* become a
         // marker click must not take the sequence away from the view's selection.
         crate::saferizer::ClickActivation::new().wire(
@@ -1076,7 +1076,7 @@ impl CodePreviewView {
     /// (e.g. a horizontal-rule `GtkSeparator`) that just need a content-column width.
     /// Each `(widget, inset)`'s `width_request` is kept at `content - inset` as the
     /// view is allocated. (NOT for height-for-width content like tables — those churn
-    /// the blank and use the custom `ScribTableWidget` via `set_tables`. ScrAP-23.)
+    /// the blank and use the custom `ScribTableWidget` via `set_tables`. GTK4Rs/AP-23.)
     pub(crate) fn set_width_bounded(&self, items: Vec<(gtk::Widget, i32)>) {
         use gtk::subclass::prelude::*;
         let imp = self.imp();
@@ -1099,7 +1099,7 @@ impl CodePreviewView {
 
     /// Register this render's custom table widgets. `size_allocate` gives each its
     /// live content-column width via `set_bound_width`, which lays it out once per
-    /// real width change and never re-measures its cells at validation (ScrAP-23).
+    /// real width change and never re-measures its cells at validation (GTK4Rs/AP-23).
     pub(crate) fn set_tables(&self, tables: Vec<crate::widgets::table::ScribTableWidget>) {
         use gtk::subclass::prelude::*;
         let imp = self.imp();
@@ -1157,7 +1157,7 @@ impl CodePreviewView {
         use gtk::subclass::prelude::*;
         // The click arrives in WIDGET coords; the hit-boxes are stored in BUFFER coords
         // (where the markers are drawn). Convert with GTK's own inverse transform so no
-        // hand-rolled scroll/margin math can drift (ScrAP-90-safe — pure arithmetic, no
+        // hand-rolled scroll/margin math can drift (GTK4Rs/AP-80-safe — pure arithmetic, no
         // line-display validation, unlike `iter_at_location`).
         let (bx, by) =
             self.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
@@ -1424,7 +1424,7 @@ mod gtk_integration_tests {
         win.destroy();
     }
 
-    /// ScrAP-150 regression: a code block's self-drawn card must not paint below its own
+    /// GTK4Rs/AP-127 regression: a code block's self-drawn card must not paint below its own
     /// last line. When a loose continuation paragraph abuts a code block inside a list
     /// item (only ONE `\n` between them — no `block_sep` blank line), the old `+pad`
     /// added to the card bottom reached 12 px BEYOND the code line's own `line_yrange`
@@ -1436,7 +1436,7 @@ mod gtk_integration_tests {
     fn code_block_card_does_not_bleed_onto_the_following_line() {
         use gtk::subclass::prelude::*;
         // A fenced code block followed by a hard-break loose paragraph, inside a nested
-        // ordered list item — the exact ScrAP-150 construct (the `**OR**` line abuts the
+        // ordered list item — the exact GTK4Rs/AP-127 construct (the `**OR**` line abuts the
         // code block with no blank separator).
         let md = "2. If you've configured git, otherwise either:\n   1. use our `.githooks`:\n      ```\n      git config set core.hookspath .githooks\n      ```\n      **OR**  \n   2. Add the `-s` flag when committing:\n      ```\n      git commit -s -m \"msg\"\n      ```\n";
         let pane = crate::preview::render(md, None, 1.0, false);
@@ -1468,7 +1468,7 @@ mod gtk_integration_tests {
         let buffer = view.buffer();
         // Reproduce snapshot_layer's exact visible-range setup so the card extent is
         // computed by the SAME formula the paint uses (span_card_y_extent) — not an
-        // independent recomputation (which would be a tautology, ScrAP-87).
+        // independent recomputation (which would be a tautology, GTK4Rs/AP-78).
         let ViewportRange {
             top_y,
             bottom_y,
@@ -1496,7 +1496,7 @@ mod gtk_integration_tests {
             let (_card_top, card_bottom) =
                 span_card_y_extent(&view, &buffer, *cb, vis_start, vis_end, vtop, vbot);
             // The line immediately AFTER the block starts here — the card must not paint
-            // over its top (the ScrAP-150 overlap was exactly the card reaching 12 px past
+            // over its top (the GTK4Rs/AP-127 overlap was exactly the card reaching 12 px past
             // its own last line onto the abutting loose paragraph).
             let next_line = buffer.iter_at_offset(cb.last_content()).line() + 1;
             if let Some(next) = buffer.iter_at_line(next_line) {
@@ -1511,7 +1511,7 @@ mod gtk_integration_tests {
         assert!(
             checked >= 1,
             "no code block in the fixture had a following line, so the overlap this \
-             test guards was never evaluated — the ScrAP-150 construct requires a block \
+             test guards was never evaluated — the GTK4Rs/AP-127 construct requires a block \
              ABUTTED by a following paragraph"
         );
         win.destroy();

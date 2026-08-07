@@ -12,13 +12,13 @@
 //!
 //! * **One key → one resolved value → every consumer.** A key that reached the
 //!   `li-{depth}` tag but not the drawn marker gutter would strand every list
-//!   marker — ScrAP-121's exact failure mode. Resolution happens once, in
+//!   marker — GTK4Rs/AP-96's exact failure mode. Resolution happens once, in
 //!   [`Theme::resolve`]; consumers read the resolved [`Theme`], never the file.
 //! * **The theme owns Pango SCALE, never CSS `font-size`.** Scale is a tag
 //!   attribute GTK *multiplies* onto the CSS base (`gtktextattributes.c:349-351`),
 //!   so it composes with zoom for free. `font-size` is a CSS longhand the zoom
 //!   provider owns exclusively; a second provider writing the same lookup slot is
-//!   arbitrated by provider ADD ORDER, not selector specificity (ScrAP-127), which
+//!   arbitrated by provider ADD ORDER, not selector specificity (GTK4Rs/AP-101), which
 //!   our `.scrib-win-<id>` scoping cannot arbitrate. There is no `font_size` key
 //!   by decision, so the collision is impossible rather than managed.
 //! * **Types over sanitisers.** Geometry is parsed to `i32` and clamped, so it
@@ -555,7 +555,7 @@ pub(crate) struct Metrics {
     pub blockquote_text_gap: i32,
     /// The ONE definition both the `li-{depth}` tag's `left_margin` and the drawn
     /// marker gutter's x read. A value that reached one but not the other would
-    /// strand every list marker — ScrAP-121.
+    /// strand every list marker — GTK4Rs/AP-96.
     pub list_step: i32,
     pub list_item_gap: i32,
     pub rule_space: i32,

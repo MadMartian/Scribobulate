@@ -1041,7 +1041,7 @@ mod gtk_integration_tests {
     /// only, EXCLUDING each terminating `\n` — so every logical line carries its own
     /// tag on/off toggle. Without those toggles, GtkTextView's `one_style_cache`
     /// reuses the previous line's style and DROPS the left-margin on toggle-free
-    /// middle lines (ScrAP-76). Assert the structural invariant that produces
+    /// middle lines (GTK4Rs/AP-72). Assert the structural invariant that produces
     /// the toggles: content chars are tagged, internal newlines are NOT.
     #[gtktest::test]
     fn multiline_blockquote_tags_each_line_leaving_newlines_untagged() {
@@ -1089,11 +1089,11 @@ mod gtk_integration_tests {
     /// Phase 1: a list item's source line break renders as a
     /// real newline again — the flow-to-spaces workaround is REVERTED (TDD 2.20 hard-wrap
     /// restored inside lists). Every logical line of the item carries the uniform per-level
-    /// `left_margin` tag applied PER LINE (content only, '\n' untagged — ScrAP-76): the FIRST
+    /// `left_margin` tag applied PER LINE (content only, '\n' untagged — GTK4Rs/AP-72): the FIRST
     /// line gets `li-1` (the inter-item gap line), later lines get `li-1-cont`. Both
     /// variants share the SAME left-margin and `indent = 0` (no hanging indent — the marker
     /// is drawn in the gutter, not in the flow), differing only in the inter-item gap, so
-    /// the split is ScrAP-76-safe. A loose (blank-line-separated) item behaves the same.
+    /// the split is GTK4Rs/AP-72-safe. A loose (blank-line-separated) item behaves the same.
     #[gtktest::test]
     fn list_item_break_renders_as_separate_lines_at_uniform_margin() {
         let table_check = |buf: &TextBuffer| {
@@ -1177,7 +1177,7 @@ mod gtk_integration_tests {
     /// so `li-{depth}` MUST be accumulative. When it was a non-accumulative absolute margin
     /// it silently OVERRODE the quote's (it is added to the table after `blockquote`, so it
     /// wins on priority) and a quoted item rendered LEFT of the quote's own accent bar, while
-    /// the quote's right margin still applied — a lopsided quote (ScrAP-121).
+    /// the quote's right margin still applied — a lopsided quote (GTK4Rs/AP-96).
     ///
     /// This asserts the resolved geometry on a REALIZED view, not just the tag properties:
     /// the tag values alone can't show the override, which is what let the bug through.
@@ -1255,7 +1255,7 @@ mod gtk_integration_tests {
     /// A NESTED list item's line carries EXACTLY ONE `li-*` tag — its own depth's.
     /// An outer item's span ENCLOSES its nested list, so the outer pass would otherwise
     /// stack `li-1` onto the nested line's `li-2`. Because the margins are ACCUMULATIVE
-    /// (ScrAP-121), two stacked `li-*` tags SUM — a depth-2 item would land at
+    /// (GTK4Rs/AP-96), two stacked `li-*` tags SUM — a depth-2 item would land at
     /// `20 + 28 + 56 = 104` instead of `20 + 56 = 76`, stranding its drawn gutter marker
     /// (placed at `depth*list_step` from the base) ~42px left of its own text. The old
     /// non-accumulative margins hid the stacking: the deeper tag is added to the table
@@ -1317,7 +1317,7 @@ mod gtk_integration_tests {
     /// list item now renders as MULTIPLE buffer lines, and EVERY one of them sits at the
     /// SAME `left_margin`. Assert each item content line carries a `li-1` OR `li-1-cont`
     /// tag whose `left_margin` is identical (the newlines between them stay untagged, so
-    /// each line gets its own margin toggle — ScrAP-76).
+    /// each line gets its own margin toggle — GTK4Rs/AP-72).
     #[gtktest::test]
     fn multi_line_list_item_lines_all_share_one_left_margin() {
         let md = "- line one of the item\\\n  line two of the item\\\n  line three of the item";
@@ -1336,7 +1336,7 @@ mod gtk_integration_tests {
         let chars: Vec<char> = slice.chars().collect();
         // Three source lines → three content buffer lines. Every content char of the item
         // carries li-1 OR li-1-cont (same margin); every interior newline is left UNTAGGED
-        // (the per-line toggle that prevents the ScrAP-76 middle-line margin drop).
+        // (the per-line toggle that prevents the GTK4Rs/AP-72 middle-line margin drop).
         let first = char_off(&slice, "line one");
         let end =
             char_off(&slice, "line three of the item") + "line three of the item".len() as i32;
@@ -1608,7 +1608,7 @@ mod gtk_integration_tests {
     /// opaque `code-inline` background — GTK text-tag backgrounds don't composite
     /// between tags (the highest-priority tag's background wins outright), so a
     /// translucent highlight added earlier than `code-inline` would be painted over
-    /// and the annotation would appear to vanish. Regression: ScrAP-99.
+    /// and the annotation would appear to vanish. Regression: GTK4Rs/AP-84.
     #[gtktest::test]
     fn annotation_over_inline_code_stays_visible() {
         let annotated = "before {==`code word`==}{>>note<<} after";
@@ -1719,7 +1719,7 @@ mod gtk_integration_tests {
     /// The resolved x of `needle`'s first char on a realized view — i.e. the margin
     /// GTK ACTUALLY laid out, not the value we put on a tag.
     ///
-    /// This indirection is the whole point of TDD 18.10 and the lesson ScrAP-121 cost
+    /// This indirection is the whole point of TDD 18.10 and the lesson GTK4Rs/AP-96 cost
     /// three rounds to learn: a themed-geometry test that asserts "the tag's
     /// left_margin property == the theme's value" passes happily while every list
     /// marker sits stranded beside its text, because the bug lives in how GTK
@@ -1736,7 +1736,7 @@ mod gtk_integration_tests {
         x
     }
 
-    /// TDD 18.10 / ScrAP-121 — a themed `list_step` must move the item's TEXT, resolved
+    /// TDD 18.10 / GTK4Rs/AP-96 — a themed `list_step` must move the item's TEXT, resolved
     /// on a live view, not merely the tag property. The one-key rule's other half
     /// (that the drawn marker moves with it) is covered by `codeview::gutter`'s pure
     /// tests, which read the SAME key this render resolves through.
@@ -1777,7 +1777,7 @@ mod gtk_integration_tests {
 
     /// TDD 18.10 — a themed blockquote bar/gap must move the quote's resolved text,
     /// and a list inside the quote must still nest INSIDE it (POLICY Document
-    /// Rendering CAM row 2). This is the pairing that ScrAP-121 broke: the container's
+    /// Rendering CAM row 2). This is the pairing that GTK4Rs/AP-96 broke: the container's
     /// margin and the item's accumulate, so a themed container metric that reached
     /// only one of them makes a lopsided quote.
     #[gtktest::test]
@@ -1885,7 +1885,7 @@ mod gtk_integration_tests {
             loop {
                 let mut end = it;
                 end.forward_to_line_end();
-                // `slice` (not `text`) is the sanctioned reader — ScrAP-5: `text`
+                // `slice` (not `text`) is the sanctioned reader — GTK4Rs/AP-5: `text`
                 // omits anchored children and drifts offsets. TextIter is Copy.
                 if buf.slice(&it, &end, false).contains(needle) {
                     let mut p = it;

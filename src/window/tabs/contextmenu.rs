@@ -241,7 +241,7 @@ fn reload_for_tab(window: &ApplicationWindow, tab: &Rc<TabState>) {
     }
 }
 
-/// ScrAP-30: don't `popdown()` synchronously from inside a descendant button's
+/// GTK4Rs/AP-30: don't `popdown()` synchronously from inside a descendant button's
 /// own `clicked` handler — see `window/contextmenu.rs`'s identical helper for
 /// the full "why" (Broken-accounting-of-active-state + spurious
 /// `g_object_unref` criticals). Deliberately duplicated rather than shared:

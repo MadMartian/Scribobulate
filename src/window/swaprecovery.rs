@@ -310,8 +310,8 @@ async fn apply_recovered_content(window: &ApplicationWindow, tab: &Rc<TabState>,
     // document state a derived view projects" clause.
     //
     // MEASURED, not reasoned: the whole in-crate suite passed with this line missing,
-    // because the assertions read `editor_text()` — the half that worked (ScrAP-87). It
-    // took a live run to see it (ScrAP-56). The baseline is deliberately NOT touched:
+    // because the assertions read `editor_text()` — the half that worked (GTK4Rs/AP-78). It
+    // took a live run to see it (GTK4Rs/AP-104). The baseline is deliberately NOT touched:
     // the recovered tab must stay dirty against what is on disk.
     *tab.source.borrow_mut() = swap.body.clone();
     tab.loading.set(false);
@@ -918,7 +918,7 @@ mod tests {
     /// let the invariant remove the recovery data* — rather than a bespoke deletion. The
     /// assertion that matters is the second one: reverting alone must be sufficient, so a
     /// future refactor that adds an explicit delete here is adding a second deletion path
-    /// (ScrAP-116/ScrAP-219) and this test would keep passing while that rot set in — so
+    /// (GTK4Rs/AP-108/ScrAP-219) and this test would keep passing while that rot set in — so
     /// it deliberately never calls a delete itself.
     #[gtktest::test]
     fn discarding_a_recovery_reverts_the_tab_and_clears_its_recovery_data() {
@@ -1087,10 +1087,10 @@ mod tests {
     /// mode — this application's *default* mode — would have seen the recovery
     /// silently do nothing.
     ///
-    /// Found on a live display (ScrAP-56), not headlessly, and the reason is worth
+    /// Found on a live display (GTK4Rs/AP-104), not headlessly, and the reason is worth
     /// keeping: a headless suite can only catch what its assertions point at, so
     /// aiming them all at one surface makes the suite's greenness evidence about that
-    /// surface alone (ScrAP-87). Mutation-tested.
+    /// surface alone (GTK4Rs/AP-78). Mutation-tested.
     #[gtktest::test]
     fn a_recovery_reaches_the_derived_views_not_only_the_editor_buffer() {
         let dir = tempfile::tempdir().unwrap();

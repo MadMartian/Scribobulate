@@ -56,7 +56,7 @@ fn note_adj_change(window: &ApplicationWindow, adj: &gtk::Adjustment, is_editor:
 /// needs no `scroll_spy_conn`-style re-wire-on-switch tracking. Listening to `upper`
 /// (not just `value`) is what lets the projection re-converge as a re-rendered
 /// preview's content height settles — without it the two panes' differing `upper`s
-/// make the mirrored fractions never cancel (ScrAP-16).
+/// make the mirrored fractions never cancel (GTK4Rs/AP-16).
 fn wire_adj_sync(sw: &gtk::ScrolledWindow, is_editor: bool) {
     let adj = sw.vadjustment();
     adj.connect_value_changed(glib::clone!(
@@ -228,7 +228,7 @@ fn project_scroll(window: &ApplicationWindow) {
     }
 }
 
-/// Char offset of the iter at the top of `view`'s viewport (ScrAP-15: `visible_rect`
+/// Char offset of the iter at the top of `view`'s viewport (GTK4Rs/AP-15: `visible_rect`
 /// + `line_at_y`, not `iter_at_location`).
 fn view_top_offset(view: &impl IsA<gtk::TextView>) -> i32 {
     crate::saferizer::viewport::ViewportTopIter::top_offset(view)
@@ -270,7 +270,7 @@ fn src_byte_to_buf_char(inv: &[(usize, i32)], src_byte: usize) -> i32 {
 /// it — wheel/touchpad (`EventControllerScroll`), a press anywhere in the pane incl.
 /// the scrollbar (`GestureClick`, capture phase), or keyboard focus
 /// (`EventControllerFocus`). This is how the bidirectional loop is broken by input
-/// source rather than by guessing which `value-changed` was user-driven (ScrAP-16).
+/// source rather than by guessing which `value-changed` was user-driven (GTK4Rs/AP-16).
 fn mark_driver_on_input(pane: &gtk::ScrolledWindow, driver: ScrollDriver) {
     // Resolve the host window from the pane at input time (not a captured weak
     // window ref), so a re-homed tab's driver marks the destination window's per-tab
@@ -310,7 +310,7 @@ fn mark_driver_on_input(pane: &gtk::ScrolledWindow, driver: ScrollDriver) {
 }
 /// Wire the coalesced editor↔preview scroll sync for a freshly entered split, and
 /// align the preview to the editor's current position. Replaces the old
-/// synchronous, `value-changed`-only mirroring (ScrAP-16).
+/// synchronous, `value-changed`-only mirroring (GTK4Rs/AP-16).
 pub(super) fn setup_split_scroll_sync(window: &ApplicationWindow) {
     let Some((_editor_sw, preview_sw)) = split_scrollers(window) else {
         return;
@@ -342,7 +342,7 @@ pub(super) fn setup_split_scroll_sync(window: &ApplicationWindow) {
 /// side (rewired per split entry in `setup_split_scroll_sync`) it must be wired a
 /// single time or handlers would accumulate. All handlers resolve the host window
 /// dynamically (`host_window`), so they keep driving the correct window across a
-/// cross-window tab move (ScrAP-57) — and they simply no-op while not in split mode
+/// cross-window tab move (GTK4Rs/AP-52) — and they simply no-op while not in split mode
 /// (`project_scroll`/`split_scrollers` return early), so wiring them up-front is
 /// harmless in preview/edit.
 pub(super) fn wire_persistent_editor_scroll_sync(split: &crate::window::SplitView) {
@@ -352,7 +352,7 @@ pub(super) fn wire_persistent_editor_scroll_sync(split: &crate::window::SplitVie
 }
 /// Re-render the split-mode preview from `md`, forcing the editor as the
 /// scroll-sync driver so the preview's post-render validation noise can never
-/// drag the editor (ScrAP-16), then queue one coalesced re-projection so the
+/// drag the editor (GTK4Rs/AP-16), then queue one coalesced re-projection so the
 /// preview lands at the editor's current position. Unlike
 /// `rerender_preview_in_place` (zoom.rs), this does NOT capture/restore a
 /// preview scroll fraction: these split-only callers rely on the coalesced
@@ -391,7 +391,7 @@ pub(super) fn rerender_split_preview_driven_by_editor(window: &ApplicationWindow
 /// `set_buffer` while already visible — so its first REAL content-validation is a
 /// decoupled `first_validate_idle` pass on an on-screen pane that can carry
 /// `alloc_needed` into a terminal paint (a `GtkOverlay` snapshotted without an
-/// allocation → whole-pane blank; the ScrAP-22/ScrAP-23/ScrAP-29 family).
+/// allocation → whole-pane blank; the GTK4Rs/AP-22/GTK4Rs/AP-23/GTK4Rs/AP-29 family).
 /// Researcher-verified (GTK 4.6.9): deferring the render to idle and pre-warming while
 /// hidden are both no-ops (the decoupling is intrinsic to `set_buffer`'s own
 /// re-invalidation); the working shape is to GUARANTEE a follow-up frame. By the time
@@ -399,7 +399,7 @@ pub(super) fn rerender_split_preview_driven_by_editor(window: &ApplicationWindow
 /// overlay's `alloc_needed` is cleared, so one `queue_draw` repaints it with a real
 /// render node — converting a stuck blank into a self-healed one.
 ///
-/// Frame-clock-anchored (not wall-clock — ScrAP-134), one-shot (disconnects itself on the
+/// Frame-clock-anchored (not wall-clock — GTK4Rs/AP-122), one-shot (disconnects itself on the
 /// first fire), weak overlay (never keeps it alive — ScrAP-152/GTK4Rs/AP-128). Gated to the first
 /// render since mount, so steady-state edits pay nothing.
 fn arm_first_content_repaint(overlay: &gtk::Overlay) {

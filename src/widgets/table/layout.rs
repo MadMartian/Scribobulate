@@ -42,7 +42,7 @@ pub(crate) struct Placement {
 /// Fit the columns into `bound_w`, GUARANTEEING `sum(col_w) <= bound_w` AND
 /// `col_w[c] >= col_min[c]` (so no cell overflows its column → the table is
 /// never wider than the bound, which would summon the outer Automatic h-bar and
-/// re-arm the split-pane blank — see mod.rs and ScrAP-23). Three cases:
+/// re-arm the split-pane blank — see mod.rs and GTK4Rs/AP-23). Three cases:
 ///   - naturals fit → give each its natural plus an even share of the slack;
 ///   - even the minimums don't fit (very narrow pane) → use the minimums (the
 ///     table is `sum(min)` wide and h-scrolls — the only honest option);

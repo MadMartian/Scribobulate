@@ -7,7 +7,7 @@ const ZOOM_LADDER: &[f64] = &[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 /// `textview.scrib-preview`) is load-bearing: the provider is registered on the
 /// shared display, so an unscoped selector lets the most-recently-loaded window
 /// dictate the font-size for EVERY window's preview (the multi-window zoom
-/// regression). See ScrAP-64. [`WindowId::of`] is the app's single
+/// regression). See GTK4Rs/AP-77. [`WindowId::of`] is the app's single
 /// per-window identity derivation — the SAME value the `winstate` registry keys
 /// on — so this CSS scope and the registry key can never diverge for a window
 /// (a moved preview re-matches by tree position, so cross-window tab moves need
@@ -78,13 +78,13 @@ pub(super) fn get_preview_sw(window: &ApplicationWindow) -> Option<gtk::Scrolled
     tab_preview_sw(&st, current_mode(window))
 }
 /// Re-render `tab`'s preview into `preview_sw` in place, preserving the
-/// reading position across the buffer swap (ScrAP-14/ScrAP-15). Reads
+/// reading position across the buffer swap (ScrAP-14/GTK4Rs/AP-15). Reads
 /// `mode`-appropriate source text straight off `tab` — in split mode
 /// `tab.source` is stale until a mode-switch flush (D7), so the live editor
 /// buffer is read instead; in preview mode `tab.source` is authoritative
 /// (ScrAP-35's match arm, now with exactly one copy). In split mode also forces
 /// the editor as scroll-sync driver before the swap, so the preview's
-/// post-render validation noise can never drag the editor (ScrAP-16).
+/// post-render validation noise can never drag the editor (GTK4Rs/AP-16).
 ///
 /// Shared core of [`rerender_preview_in_place`] (the active tab, which also
 /// queues a coalesced scroll-sync re-projection afterward) and
@@ -114,7 +114,7 @@ fn rerender_and_restore_scroll(
     let top_line = preview_top_line(preview_sw).unwrap_or(0);
 
     // In split mode, force the editor as scroll driver so the preview's validation
-    // noise during the buffer swap doesn't drive the editor (ScrAP-16).
+    // noise during the buffer swap doesn't drive the editor (GTK4Rs/AP-16).
     if mode == ViewMode::Split {
         tab.scroll.driver.set(ScrollDriver::Editor);
         tab.scroll.pv_last.set((-1.0, -1.0));
@@ -133,7 +133,7 @@ fn rerender_and_restore_scroll(
     // the restore idle (`gtk_text_view_get_line_yrange` validates nothing on any
     // GTK 4.6.9 path — the former pre-read primer was vestigial and is gone;
     // ANTI-PATTERNS deferred-work meta-pattern, myth-bust #1)
-    // (ScrAP-14/ScrAP-15/ScrAP-65).
+    // (ScrAP-14/GTK4Rs/AP-15/ScrAP-65).
     restore_preview_scroll_to_line(preview_sw, top_line);
 }
 
@@ -293,7 +293,7 @@ pub(super) fn apply_zoom(window: &ApplicationWindow, new_zoom: f64) {
     // Update the per-window CSS provider. load_from_data() triggers a re-evaluation
     // of all matching widgets immediately — no add/remove cycle needed (plan §6).
     // The rule is scoped to THIS window's `.scrib-win-<id>` class so it cannot
-    // dictate the font-size of another window's preview (ScrAP-64).
+    // dictate the font-size of another window's preview (GTK4Rs/AP-77).
     st.chrome()
         .zoom_css_provider
         .load_from_data(&zoom_css_rule(window, new_zoom));

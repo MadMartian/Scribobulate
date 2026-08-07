@@ -19,8 +19,8 @@
 #
 # WHAT IT CANNOT DO — read this before trusting a PASS. Check 2 proves a cited entry
 # EXISTS, never that it is the RIGHT one. The error that motivated this script cited
-# ScrAP-61 (a real entry, about a menu-button startup freeze) for a claim only
-# ScrAP-90 (set_parent'd popovers are not auto-unparented) supports. Both checks pass
+# GTK4Rs/AP-106 (a real entry, about a menu-button startup freeze) for a claim only
+# GTK4Rs/AP-80 (set_parent'd popovers are not auto-unparented) supports. Both checks pass
 # on that. It slipped in because two neighbouring call sites cite 61 correctly for an
 # ADJACENT clause, and the next author read the number as belonging to the detach it
 # sat beside — citation proximity drift. The only guard is to place a number against
@@ -466,13 +466,13 @@ doc_link_fragment("./sub/PLAN.md#caf%C3%A9")'
 per the gtk4-rs skill AP-78 masking
 AP-1 leads the router
 GTK4Rs/AP-57 / AP-34b enum split
-see ScrAP-79 and AP-88 together
+see GTK4Rs/AP-109 and AP-88 together
 gtk4rs/AP-9 is a misspelled prefix
 GTK4Rs / AP-9 is not one token'
-    bare_ap_must_not_flag='see ScrAP-79 for the tab-close gesture guard
+    bare_ap_must_not_flag='see GTK4Rs/AP-109 for the tab-close gesture guard
 see GTK4Rs/AP-79 for the pump-loop bound
 a bare `AP-N` is illegal anywhere in the tree
-ScrAP-162 pairs with GTK4Rs/AP-153
+GTK4Rs/AP-153 pairs with GTK4Rs/AP-153
 SOAP-12 is not a citation
 the shorthand #79 inside this register
 Scr-AP-9 is not a citation either'
@@ -1142,9 +1142,9 @@ fi
 #
 # AND IT CANNOT SEE THE OTHER HALF OF THE EXPOSURE. An already-prefixed `ScrAP-N`
 # pointing at a real entry about the wrong subject is invisible here and to every other
-# check — `src/widgets/tab/bar.rs` carried exactly that, a `ScrAP-79` on a helper whose
+# check — `src/widgets/tab/bar.rs` carried exactly that, a `GTK4Rs/AP-109` on a helper whose
 # comment described the skill's AP-79 pump-loop lesson (this register's #88), sitting
-# among three CORRECT `ScrAP-79` citations about the tab-close gesture. It got there by
+# among three CORRECT `GTK4Rs/AP-109` citations about the tab-close gesture. It got there by
 # the FIX, not the original: the sweep that introduced the prefix rewrote the prefix
 # without re-resolving the number. That audit is human-only and has no completion
 # criterion; this check is the half that has one.
@@ -1197,5 +1197,143 @@ if [ -n "$bare8" ]; then
 else
     echo "  PASS"
 fi
+
+# ── Check 9 ────────────────────────────────────────────────────────────────────
+# Number immutability. ScrAP numbers are frozen IDs: never renumbered, never
+# reused, and a deleted or merged entry keeps a landing-spot stub under its
+# heading forever. Until now that rule was enforced by a person hand-diffing the
+# heading set against master through a migration that rewrote 80% of the file --
+# which worked, and is exactly the kind of guarantee that stops working the first
+# time nobody remembers to run it.
+#
+# It matters more since the citation sweep: 709 comments in src/ cite
+# GTK4Rs/AP-N, whose correctness rests on the skill's numbers being frozen, and
+# this register's own ScrAP-N citations resolve against the headings below. A
+# silently dropped heading breaks working citations in both directions.
+#
+# THE MANIFEST IS A DIFF SEED, NOT A SNAPSHOT. It was generated from `master`,
+# where the heading set is independently known good, NOT from the working file.
+# Regenerating it from whatever the file currently says would bless a heading
+# that had already gone missing and hold the gate green forever after -- a check
+# that cannot fail, built that way at construction time (ScrAP-206's shape,
+# which #216 then sharpens: a PASS must assert the thing the reader assumes).
+# So: to ADD an entry, append its number. NEVER regenerate this file wholesale.
+MANIFEST='sdd/scrap-numbers.manifest'
+echo "── Check 9: ScrAP number immutability (no removed, renamed or reused numbers) ──"
+if [ ! -f "$MANIFEST" ]; then
+    echo "  FAIL — manifest $MANIFEST is missing; number immutability is unenforced"
+    fail=1
+else
+    have9=$(grep -oE '^## [0-9]+[a-z]?\.' sdd/ANTI-PATTERNS.md | sed 's/^## //; s/\.$//')
+    want9=$(grep -vE '^\s*(#|$)' "$MANIFEST")
+    missing9=$(comm -23 <(echo "$want9" | sort) <(echo "$have9" | sort))
+    added9=$(comm -13 <(echo "$want9" | sort) <(echo "$have9" | sort))
+    dupes9=$(echo "$have9" | sort | uniq -d)
+    bad9=0
+    if [ -n "$missing9" ]; then
+        echo "  FAIL — allocated number(s) no longer have a '## N.' heading:"
+        echo "$missing9" | sed 's/^/    ScrAP-/'
+        echo "    A number is never released. If the entry was merged or superseded, leave a"
+        echo "    one-line landing-spot stub under its heading -- code and sibling entries"
+        echo "    still cite it."
+        bad9=1
+    fi
+    if [ -n "$dupes9" ]; then
+        echo "  FAIL — number(s) used by more than one heading:"
+        echo "$dupes9" | sed 's/^/    ScrAP-/'
+        bad9=1
+    fi
+    if [ -n "$added9" ]; then
+        echo "  INFO — new number(s) not yet in the manifest: $(echo "$added9" | tr '\n' ' ')"
+        echo "    Append them to $MANIFEST in the same commit that adds the entry."
+    fi
+    [ "$bad9" = 1 ] && fail=1
+    [ "$bad9" = 0 ] && echo "  PASS"
+fi
+
+# ── Check 10 ───────────────────────────────────────────────────────────────────
+# Stub integrity. A stub replaces a full body with a pointer, and the ONE thing it
+# must keep that no external register can ever carry is where THIS project
+# implements the lesson. Drop that line and the entry becomes strictly worse than
+# either register alone: the mechanism is elsewhere and the local answer is gone.
+#
+# THE LABEL IS ENUMERATED, NOT GUESSED. This file spells that field five ways
+# (measured, not assumed):
+#     **Scribobulate**   **Scribobulate.**   **Where Scribobulate implements the fix**
+#     **Where Scribobulate implements the fix.**   and one Non-core variant naming it
+# A check keyed on one spelling reports a confident absence for every other, and
+# during this migration a compression pass came within one batch of deleting a
+# field it "could not see" for exactly that reason. So match the STEM.
+#
+# Scope: only entries that have already been compressed -- one carrying Resolution
+# or Root cause or Lesson is still a full body and is not making a stub's promise.
+echo "── Check 10: a compressed entry keeps its implementation line ──"
+bad10=''
+cur10=''; has_impl=0; is_stub=1; body10=0
+while IFS= read -r line; do
+    case "$line" in
+        '## '[0-9]*)
+            if [ -n "$cur10" ] && [ "$is_stub" = 1 ] && [ "$body10" = 1 ] && [ "$has_impl" = 0 ]; then
+                bad10+="    ScrAP-$cur10"$'\n'
+            fi
+            cur10=$(printf '%s' "$line" | sed 's/^## //; s/\..*//')
+            has_impl=0; is_stub=1; body10=0
+            ;;
+        '**Symptom'*) body10=1 ;;
+        '**'*Scribobulate*) has_impl=1 ;;
+        '**Resolution'*|'**Root cause'*|'**Lesson'*|'**What was tried'*) is_stub=0 ;;
+    esac
+done < sdd/ANTI-PATTERNS.md
+if [ -n "$cur10" ] && [ "$is_stub" = 1 ] && [ "$body10" = 1 ] && [ "$has_impl" = 0 ]; then
+    bad10+="    ScrAP-$cur10"$'\n'
+fi
+if [ -n "$bad10" ]; then
+    echo "  FAIL — compressed entr(ies) with no implementation line:"
+    printf '%s' "$bad10"
+    echo "    A stub without it points at a lesson and answers nothing locally. If the"
+    echo "    entry genuinely has no implementation here (a pure discipline lesson), that"
+    echo "    is fine — but say so in the body rather than leaving the field absent."
+    fail=1
+else
+    echo "  PASS"
+fi
+
+# ── Check 11 ───────────────────────────────────────────────────────────────────
+# Growth ratchet, in BYTES. Lines are the wrong unit and this register proved it:
+# trimming its index cut 72% of that block's bytes while the line count went UP,
+# so a line budget watched this file bloat sideways for months and would not have
+# seen it shrink either. Thresholds are set above today's measured state, not at
+# it — a ratchet you trip on the commit that installs it teaches people to raise
+# the number rather than to consolidate.
+REG_WARN=520000; REG_FAIL=650000; ENTRY_WARN=11000; ENTRY_FAIL=15000
+echo "── Check 11: register growth (bytes, not lines) ──"
+reg_bytes=$(wc -c < sdd/ANTI-PATTERNS.md)
+bad11=0
+if [ "$reg_bytes" -gt "$REG_FAIL" ]; then
+    echo "  FAIL — register is ${reg_bytes}B, past the ${REG_FAIL}B ceiling"
+    echo "    Consolidate as part of the change that tripped this, not later."
+    bad11=1
+elif [ "$reg_bytes" -gt "$REG_WARN" ]; then
+    echo "  WARN — register is ${reg_bytes}B, past the ${REG_WARN}B soft limit"
+fi
+big11=$(awk '
+    /^## [0-9]+[a-z]?\./ { if (n != "" && b > '"$ENTRY_WARN"') printf "    ScrAP-%s %dB\n", n, b
+                           n = $2; sub(/\./, "", n); b = 0; next }
+    { b += length($0) + 1 }
+    END { if (n != "" && b > '"$ENTRY_WARN"') printf "    ScrAP-%s %dB\n", n, b }
+' sdd/ANTI-PATTERNS.md)
+if [ -n "$big11" ]; then
+    over=$(echo "$big11" | awk '{gsub(/B/,"",$2); if ($2+0 > '"$ENTRY_FAIL"') print}')
+    if [ -n "$over" ]; then
+        echo "  FAIL — entr(ies) past the ${ENTRY_FAIL}B per-entry ceiling:"
+        printf '%s\n' "$over"
+        bad11=1
+    else
+        echo "  WARN — entr(ies) past the ${ENTRY_WARN}B per-entry soft limit:"
+        printf '%s\n' "$big11"
+    fi
+fi
+[ "$bad11" = 1 ] && fail=1
+[ "$bad11" = 0 ] && [ -z "$big11" ] && [ "$reg_bytes" -le "$REG_WARN" ] && echo "  PASS"
 
 exit $fail

@@ -105,7 +105,7 @@ pub(super) fn set_context_link(window: &ApplicationWindow, url: Option<String>) 
 /// `iter_at_location` is the correct read for the editor case for the reason it is
 /// correct in `preview::link_url_at`: this is an over-a-glyph hit-test, so a `None`
 /// (the margin, or past the end of a short line) is a truthful "not over a link"
-/// rather than the failure it would be when locating a line (ScrAP-15).
+/// rather than the failure it would be when locating a line (GTK4Rs/AP-15).
 pub(super) fn link_at_pointer(view: &gtk::TextView, x: f64, y: f64) -> Option<String> {
     if let Some(pv) = view.downcast_ref::<CodePreviewView>() {
         return crate::preview::link_url_at(pv, x, y).or_else(|| link_in_widget_at(view, x, y));
@@ -124,7 +124,7 @@ pub(super) fn link_at_pointer(view: &gtk::TextView, x: f64, y: f64) -> Option<St
 /// cell holding a link *plus* other content is a `GtkLabel` whose markup carries a
 /// Pango `<a href>` (`widgets::table::linkcell`). Missing either one produces the same
 /// bug — a right-click on a visible, working link whose Copy Link Location row is
-/// greyed out, for no reason the reader can see (ScrAP-259).
+/// greyed out, for no reason the reader can see (GTK4Rs/AP-239).
 ///
 /// `GtkLabel::current_uri` is the label's answer, and it is trustworthy **at the
 /// moment this runs and not much longer**: it reports `select_info->active_link`
@@ -163,7 +163,7 @@ fn link_in_widget_at(view: &gtk::TextView, x: f64, y: f64) -> Option<String> {
 /// * the editor buffer's `mark-set` — every caret move (typing, arrows, clicks);
 /// * the editor buffer's `changed` — an edit that alters the link without moving
 ///   the caret (an undo, a live external reload), which `mark-set` alone would
-///   miss. Recomputing from a delta signal only is ScrAP-38's shape;
+///   miss. Recomputing from a delta signal only is GTK4Rs/AP-47's shape;
 /// * [`set_context_link`] — a context menu opening on a link, and closing again.
 pub(crate) fn update_copy_link_action_state(window: &ApplicationWindow) {
     // The pointer half is NOT mode-gated: a right-clicked link is a reading

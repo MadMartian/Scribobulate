@@ -77,8 +77,8 @@ fn on_active_tab_changed(window: &ApplicationWindow) {
     materialize_deferred_preview(window, &st);
 
     // Re-target the window's single caret-format overlay onto THIS tab's editor
-    // (ScrAP-61). One overlay per window, re-parented on every switch — so its
-    // heading-menu accel labels resolve fonts exactly once ever (ScrAP-61
+    // (GTK4Rs/AP-106). One overlay per window, re-parented on every switch — so its
+    // heading-menu accel labels resolve fonts exactly once ever (GTK4Rs/AP-106
     // cured at the source, not merely amortised by the old per-tab lazy parenting).
     retarget_format_overlay(&st);
 
@@ -106,7 +106,7 @@ fn on_active_tab_changed(window: &ApplicationWindow) {
 /// loop. (Compositor-dependent: a Wayland client updates its cursor from frame
 /// callbacks a blocked client can't send, so there it simply won't show — no
 /// harm, just no busy hint. Verify the visible churn on the real X11 session —
-/// ScrAP-56.)
+/// GTK4Rs/AP-104.)
 fn set_busy_cursor(window: &ApplicationWindow) {
     window.set_cursor_from_name(Some("wait"));
     // `display()` is ambiguous between RootExt and WidgetExt (both apply to an
@@ -167,7 +167,7 @@ pub(super) fn resync_tab_action_state(window: &ApplicationWindow, st: &Rc<TabSta
         &st.allow_outside_links.get().to_variant(),
     );
     // Mark the newly-active tab in the View ▸ Documents radio. "Current tab" is
-    // modelled as action state (ScrAP-63), so a switch only re-points the
+    // modelled as action state (GTK4Rs/AP-76), so a switch only re-points the
     // state — it rebuilds NO menu content (`set_action_state` uses `set_state`, so
     // the `select-tab` change-state handler is not re-entered). This is the ONLY
     // update the Documents menu needs on a switch; the item SET changes only on
@@ -198,7 +198,7 @@ fn refresh_tab_surfaces(window: &ApplicationWindow) {
     // Force a repaint of the (window-scoped) format-edit surfaces against THIS
     // tab's selection — the shared cache holds whatever tab last painted them, so
     // a dedup'd update could leave a stale "Edit …" tooltip after the switch
-    // (ScrAP-61).
+    // (GTK4Rs/AP-106).
     resync_format_edit_surfaces(window);
     refresh_outline(window);
     refresh_annotations(window);
@@ -206,7 +206,7 @@ fn refresh_tab_surfaces(window: &ApplicationWindow) {
     refresh_dirty_status(window);
     // The toolbar's open-documents combo box shows the ACTIVE document's name, so a
     // plain tab switch must update its label (the item list is shared with the
-    // Documents menu model and needs no rebuild here — ScrAP-63). Rename/open/close/move
+    // Documents menu model and needs no rebuild here — GTK4Rs/AP-76). Rename/open/close/move
     // are covered by the `documents_menu` rebuild instead (`refresh_documents_menu`).
     refresh_documents_button(window);
 }
@@ -249,7 +249,7 @@ fn resync_find_bar_for_tab(window: &ApplicationWindow, st: &Rc<TabState>) {
     // last query (operator decision Q13) and restore the replace row's
     // visibility from this tab's own find_replace_mode (Phase 2 deferred this;
     // WindowChrome.replace_row now makes it reachable here).
-    // ScrAP-53: clone out of the RefCell before calling `set_text` — `set_text`
+    // GTK4Rs/AP-61: clone out of the RefCell before calling `set_text` — `set_text`
     // synchronously emits `search_changed`, whose handler does
     // `st.find_query.borrow_mut()` (`window/findbar.rs`); holding this
     // `Ref` alive across the call (e.g. via `&st.find_query.borrow()`, whose
@@ -291,7 +291,7 @@ fn resync_find_bar_for_tab(window: &ApplicationWindow, st: &Rc<TabState>) {
     // `search-changed` (which owns re-highlighting and the match count) when
     // the new query actually differs from what was already in the box —
     // silent when this tab's last query happens to match the tab just left
-    // (the ScrAP-38 "delta-only signal misses a lifecycle boundary" class).
+    // (the GTK4Rs/AP-47 "delta-only signal misses a lifecycle boundary" class).
     // While the find bar is open, explicitly re-sync highlighting and the
     // match count for the NEW tab, mirroring `open_find_bar`'s own re-sync
     // body (`window/findbar.rs`) instead of relying on that signal.
@@ -319,7 +319,7 @@ fn resync_find_bar_for_tab(window: &ApplicationWindow, st: &Rc<TabState>) {
 }
 
 /// Re-target the window's single caret-format overlay popover onto `st`'s editor
-/// (ScrAP-61). The one overlay per window is `set_parent`ed to the ACTIVE tab's
+/// (GTK4Rs/AP-106). The one overlay per window is `set_parent`ed to the ACTIVE tab's
 /// editor and re-parented here on every tab switch: `point_format_overlay`'s
 /// coordinate math is parent-relative, so the popover must be parented to the editor
 /// it points at. Non-autohide, so the app owns dismissal — pop it DOWN before the
@@ -332,7 +332,7 @@ pub(crate) fn retarget_format_overlay(st: &Rc<TabState>) {
 }
 
 /// Detach the window's single caret overlay from `editor` if it is currently
-/// parented there (ScrAP-61), so `editor` can finalize without a leftover child
+/// parented there (GTK4Rs/AP-106), so `editor` can finalize without a leftover child
 /// (`set_parent`ed popovers are not auto-unparented — the editor would be destroyed
 /// "with children left" and the popover subtree leak with a dangling parent
 /// pointer). Called before a tab whose editor may host the overlay is torn down
@@ -387,7 +387,7 @@ fn materialize_deferred_preview(window: &ApplicationWindow, st: &Rc<TabState>) {
 
     if mode == ViewMode::Preview {
         let zoom = st.chrome().zoom_level.get();
-        // Clone the source out of the RefCell before rendering (ScrAP-53 idiom):
+        // Clone the source out of the RefCell before rendering (GTK4Rs/AP-61 idiom):
         // keep no live borrow across the render call. `render` never re-enters
         // `source`, but cloning first matches `viewactions`' own render site.
         let md = st.source.borrow().clone();
@@ -550,7 +550,7 @@ mod gtk_integration_tests {
     /// view-mode/split onto the `TabState`, and `materialize_deferred_preview`
     /// replays it via `apply_tab_layout` when the tab is first shown.
     ///
-    /// Mutation guard (ScrAP-87): dropping the `apply_tab_layout` branch leaves the
+    /// Mutation guard (GTK4Rs/AP-78): dropping the `apply_tab_layout` branch leaves the
     /// window in Preview though the tab was restored to Split — the tab's stored
     /// `view_mode` would then disagree with the live layout, exactly the drift
     /// this pins. `preview_scroller().is_some()` alone would NOT catch it (a

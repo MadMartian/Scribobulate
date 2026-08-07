@@ -9,7 +9,7 @@ use std::rc::Rc;
 /// `response` round-trip. A `GtkNativeDialog` has the OPPOSITE liveness of a
 /// `GtkWindow`: GTK keeps no reference of its own across the round-trip on every
 /// backend, so without an external owner the dialog is finalized the instant the
-/// calling function returns — before the user ever sees it (ScrAP-41).
+/// calling function returns — before the user ever sees it (GTK4Rs/AP-41).
 ///
 /// [`NativeDialogHolder::show`] is the only way to obtain that guarantee: it owns
 /// the strong ref, shows the dialog, runs `on_response(&dialog, response_type)`
@@ -35,7 +35,7 @@ impl NativeDialogHolder {
         let holder = Rc::new(RefCell::new(Some(dialog.clone())));
         // Both ends of the dialog's life are recorded. A native chooser is the
         // plan's second suspect for the `g_file_equal` dangling-`GFile` fault
-        // (ScrAP-41: inverted liveness), and only a breadcrumb pair can show
+        // (GTK4Rs/AP-41: inverted liveness), and only a breadcrumb pair can show
         // whether one was live — or had just been dropped — when a crash landed.
         log::info!(
             "native dialog shown: {}",

@@ -81,7 +81,7 @@ pub(super) fn wire_live_preview(content_box: &gtk::Box, buffer: &sourceview::Buf
             // rerender_split_preview_driven_by_editor forces the editor as the
             // sync driver so that noise can never drag the editor, and lets
             // the coalesced tick re-project editor→preview as the new height
-            // settles (ScrAP-16). No guard spanning validation — that is
+            // settles (GTK4Rs/AP-16). No guard spanning validation — that is
             // unwinnable.
             rerender_split_preview_driven_by_editor(&window, &text);
         });

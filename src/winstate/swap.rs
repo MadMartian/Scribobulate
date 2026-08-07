@@ -17,7 +17,7 @@ pub(crate) struct SwapState {
     /// edit is outstanding.
     pub(crate) deadline: Cell<Option<i64>>,
     /// Whether a write is currently in flight. GIO does **not** order concurrent
-    /// replaces of the same file (ScrAP-232), so two in flight could land out of order
+    /// replaces of the same file (GTK4Rs/AP-167), so two in flight could land out of order
     /// and silently resurrect an older buffer state.
     pub(crate) in_flight: Cell<bool>,
     /// Whether a snapshot was requested while one was in flight, to be fired when it

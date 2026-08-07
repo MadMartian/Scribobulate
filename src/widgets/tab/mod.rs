@@ -1,5 +1,5 @@
 //! `TabBar`/`TabView` — a self-contained, gtk-rs-native replacement for the
-//! `GtkNotebook`-based tab strip. Kills the ScrAP-50 crash
+//! `GtkNotebook`-based tab strip. Kills the GTK4Rs/AP-60 crash
 //! class by construction (no `GtkNotebook` anywhere, so its unguarded
 //! `dnd_finished_cb` NULL deref can never fire) and adds the two features
 //! `GtkNotebook` could never host cleanly: a per-tab `×` close button (N1)
@@ -54,7 +54,7 @@
 //! that the widget tree underneath is being re-walked far more than
 //! expected). (2) Live testing showed clicks on tab handles stopped
 //! registering and the `GtkOverlay`-snapshot-without-allocation warning
-//! (ScrAP-56) started firing continuously (every few seconds, with
+//! (GTK4Rs/AP-104) started firing continuously (every few seconds, with
 //! NO user interaction at all) instead of only on a scroll-triggering
 //! switch — a real, easily-reproduced regression, not a rare edge case.
 //! Wrapping in a `GtkScrolledWindow` interposes a `GtkViewport` and hands
@@ -77,7 +77,7 @@
 //! the drag hovers over ITS OWN bar, `connect_motion` drives the live reorder
 //! preview ([`TabBar::preview_reorder`]); once it leaves (or drops
 //! elsewhere), the existing drop/cancel handlers take over. There is no
-//! second competing gesture to arbitrate against (the original ScrAP-50-hybrid's
+//! second competing gesture to arbitrate against (the original GTK4Rs/AP-60-hybrid's
 //! whole problem), so the old Shift-gate is retired outright.
 //!
 //! **The prev/next chevrons are `TabBar`'s own children, allocated in its own
@@ -86,7 +86,7 @@
 //! `set_overflow(Hidden)` clips them — the same mechanism a scrolled-off tab
 //! handle already relies on.** This took several rounds to arrive at — the
 //! full account (three earlier revisions, each a source-confirmed but
-//! distinct crash) is ScrAP-56. That entry also covers the residual
+//! distinct crash) is GTK4Rs/AP-104. That entry also covers the residual
 //! issue this module's `GtkScrollable` implementation exists to close: a
 //! hand-rolled `Cell<f64>` scroll offset (this file's original design) could
 //! make `switch_to_index`'s `queue_allocate()` land in the exact same
@@ -122,7 +122,7 @@ const TAB_SPACING: f64 = 2.0;
 /// CSS class carried by each tab handle's `×` close button. It has THREE
 /// coupled roles that must never drift: `ops::add_tab` adds it to the button,
 /// `bar::press_hit_close_button` hit-tests on it to suppress a tab-activate on a
-/// close click (the ScrAP-79 guard behind TDD 7.11), and `preview::css` styles the
+/// close click (the GTK4Rs/AP-109 guard behind TDD 7.11), and `preview::css` styles the
 /// hover-fade off it. Hoisted to one const so renaming it for a styling reason
 /// can't silently break the behavioural guard with no compile error (QA L-1). The
 /// CSS side embeds the literal in a string; `css`'s own test asserts the CSS

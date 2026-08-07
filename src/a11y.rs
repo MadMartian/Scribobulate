@@ -123,7 +123,7 @@ pub(crate) fn describe(control: &impl IsA<gtk::Widget>, description: Option<&str
 ///
 /// GTK 4.6 exposes no getter for an accessible property (`gtk_accessible_get_at_context`
 /// is 4.10), so the only read-back at this project's floor is the testing entry point
-/// `gtk_test_accessible_has_property` — present in 4.6.9 (`nm -D`-confirmed, the ScrAP-83
+/// `gtk_test_accessible_has_property` — present in 4.6.9 (`nm -D`-confirmed, the GTK4Rs/AP-114
 /// discipline), non-variadic, and asking exactly the question the regression guard needs:
 /// *was a name set at all*, which is the omission this module exists to prevent.
 // Gated to the same cfg as its only caller, `gtk_integration_tests` below, not the

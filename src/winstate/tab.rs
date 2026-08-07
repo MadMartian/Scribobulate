@@ -101,7 +101,7 @@ pub(crate) struct TabState {
     /// SYNCHRONOUS emission inside `set_selected`; a `GtkSingleSelection` also
     /// re-emits `selected-item` for its current selection AFTER the guard resets
     /// (deferred, and again on each `items-changed` during an expand/collapse) —
-    /// those are caught by `outline_spy_doc` instead (see its note; ScrAP-89).
+    /// those are caught by `outline_spy_doc` instead (see its note; GTK4Rs/AP-112).
     pub(crate) outline_spy_selecting: Cell<bool>,
     /// The `doc_index` the scroll-spy currently OWNS (last set as the visual
     /// selection, or `None` when it cleared it). Any `selected-item` activation
@@ -110,7 +110,7 @@ pub(crate) struct TabState {
     /// so `make_outline_activate` must suppress navigation for it (else expanding
     /// or collapsing a node spuriously scrolls the preview to the highlighted row).
     /// A genuine user click on a DIFFERENT heading never matches, so navigation
-    /// still works (ScrAP-89).
+    /// still works (GTK4Rs/AP-112).
     pub(crate) outline_spy_doc: Cell<Option<usize>>,
     /// Current scroll-spy connection: (preview SW, handler-ID on its
     /// vadjustment, the pointer identity of the window the handler's closure
@@ -142,7 +142,7 @@ pub(crate) struct TabState {
     pub(crate) pending_external: Cell<bool>,
     /// Set immediately before this tab's own [`crate::atomic_io::write_atomic`]
     /// call (write-temp-then-rename) and cleared by the very next
-    /// `FileMonitorEvent::Deleted` the file monitor delivers (ScrAP-54).
+    /// `FileMonitorEvent::Deleted` the file monitor delivers (GTK4Rs/AP-62).
     /// `write_atomic`'s `rename()` replaces the target's inode; with
     /// `FileMonitorFlags::NONE` (no `WATCH_MOVES`) GIO's local file monitor
     /// reports that as the watched path being deleted, then recreated — so
@@ -154,7 +154,7 @@ pub(crate) struct TabState {
     /// `arm`/`disarm`/`consume` methods are the only access, so the
     /// arm/consume/clear protocol is enforced at the type level instead of by
     /// convention across the five call sites that used to touch a `Cell`
-    /// directly (the original ScrAP-1 structural root cause QA flagged) — and,
+    /// directly (the original GTK4Rs/AP-1 structural root cause QA flagged) — and,
     /// being a plain data type with no GTK dependency, its logic is
     /// unit-tested directly rather than only reachable through a live
     /// `TabState`.
@@ -207,7 +207,7 @@ pub(crate) struct TabState {
     /// deferred tab needs no other special-casing until it is activated.
     pub(crate) needs_render: Cell<bool>,
     /// Coalesced, frame-clock-driven split editor↔preview scroll sync state
-    /// (modeled on GtkSourceView's GtkSourceMap — see [`ScrollSync`], ScrAP-16).
+    /// (modeled on GtkSourceView's GtkSourceMap — see [`ScrollSync`], GTK4Rs/AP-16).
     pub(crate) scroll: ScrollSync,
     /// True when the replace row is shown (find-replace mode vs. find-only).
     pub(crate) find_replace_mode: Cell<bool>,

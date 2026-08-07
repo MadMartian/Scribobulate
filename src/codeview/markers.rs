@@ -147,7 +147,7 @@ pub(crate) type AnnotateTrigger = std::rc::Rc<dyn Fn()>;
 /// Same chrome as the sidebar panes' in-pane × (`window::sidebar`): the audited
 /// [`Icon::WindowClose`] name rather than a raw string, so `tests/icon_resolution.rs`
 /// catches it if the name ever stops resolving in the active theme (a GNOME-only name
-/// silently renders the ⚠ placeholder elsewhere — ScrAP-39), and `.flat` so it reads as
+/// silently renders the ⚠ placeholder elsewhere — GTK4Rs/AP-48), and `.flat` so it reads as
 /// chrome rather than as a third action alongside Edit / Remove.
 ///
 /// **Deliberately not focusable.** The card focuses its first focusable descendant one
@@ -215,7 +215,7 @@ fn build_annotation_row(
 /// read-only layout above stays free of the nested GTK closure-capture ceremony the
 /// buttons need — each `move` closure (and each deferred `idle_add_local_once`)
 /// requires its own `sink`/range clone; the re-renders are deferred off the active
-/// press gesture to avoid GTK's "Broken accounting of active state" warning (ScrAP-30).
+/// press gesture to avoid GTK's "Broken accounting of active state" warning (GTK4Rs/AP-30).
 ///
 /// **Both pages — the read buttons and the edit entry+Save/Cancel — are real `GtkStack`
 /// pages, built up front and switched by NAME; never lazily constructed on click, never
@@ -337,7 +337,7 @@ fn append_edit_remove_controls(
         let stack = stack.clone();
         let entry = ce.entry.clone();
         edit.connect_clicked(move |_| {
-            // Defer off the active press gesture (ScrAP-30): flipping the stack still mutates
+            // Defer off the active press gesture (GTK4Rs/AP-30): flipping the stack still mutates
             // this button's own ancestor mid-click. Focus the entry so typing (and the
             // popover's Escape controller) reach it.
             let stack = stack.clone();
@@ -364,7 +364,7 @@ fn append_edit_remove_controls(
         let entry = ce.entry.clone();
         let original = m.comment.clone();
         cancel.connect_clicked(move |_| {
-            // Deferred for the same reason the Edit handler defers (ScrAP-30): flipping the
+            // Deferred for the same reason the Edit handler defers (GTK4Rs/AP-30): flipping the
             // stack mutates this button's own ancestor while its press gesture is still
             // active, which GTK reports as "Broken accounting of active state".
             let stack = stack.clone();
@@ -444,10 +444,10 @@ pub(crate) struct PendingMarkerOpen {
 /// definition of a wrong-shaped bound; a duration is correct in both.
 const NAV_BUDGET_US: i64 = 2_000_000; // 2s — generous; the happy path exits on convergence.
 
-/// Wall-clock budget for the ScrAP-113 re-pin guard, replacing a `ticks >= 48` ("~0.8s
+/// Wall-clock budget for the GTK4Rs/AP-118 re-pin guard, replacing a `ticks >= 48` ("~0.8s
 /// @60fps") count that inherited exactly the same flaw: at 240Hz it disarmed at
 /// ~200 ms, i.e. right at the animation boundary, so a DEFERRED validation scroll
-/// landing after that was no longer re-pinned and ScrAP-113's original symptom returned
+/// landing after that was no longer re-pinned and GTK4Rs/AP-118's original symptom returned
 /// (the view jumps to the table top and the click is dropped). Safe to keep armed this
 /// long precisely because a genuine user scroll disarms it at once (`user_scrolling`).
 const REPIN_GUARD_US: i64 = 1_500_000; // 1.5s
@@ -560,7 +560,7 @@ impl CodePreviewView {
     }
 
     /// Remember the selection action popover so `dispose` can unparent it (GTK does
-    /// not auto-unparent `set_parent`-attached native popovers — ScrAP-90).
+    /// not auto-unparent `set_parent`-attached native popovers — GTK4Rs/AP-80).
     pub(crate) fn store_overlay_popover(&self, pop: &gtk::Popover) {
         use gtk::subclass::prelude::*;
         // Held as a PersistentPopover so `dispose` tears it down through the one
@@ -598,7 +598,7 @@ impl CodePreviewView {
     ///
     /// "Open" is the card's own lag-free flag, NOT slot presence (the card is a persistent
     /// instance, so the slot stays `Some` for the view's life) and NOT `is_visible()`
-    /// (ScrAP-112) — which now differs from "open" for a second reason too: the card hides
+    /// (GTK4Rs/AP-117) — which now differs from "open" for a second reason too: the card hides
     /// itself while its chip is scrolled off the viewport, without ending its session.
     /// **No production caller by design** — the two visual-collision gates that used to
     /// call it now (correctly) ask [`marker_card_is_showing`] instead. It survives as the
@@ -645,7 +645,7 @@ impl CodePreviewView {
     ///
     /// Clones the card OUT and drops the slot borrow before dismissing: the `closed`
     /// handler only touches a `Cell`, but holding a `RefCell` borrow across a signal
-    /// emission is the ScrAP-53 re-entrant-abort shape, and it costs nothing to not do it.
+    /// emission is the GTK4Rs/AP-61 re-entrant-abort shape, and it costs nothing to not do it.
     /// Reads the slot directly rather than `marker_card()`, which would create a card just
     /// to close it.
     pub(crate) fn popdown_marker_popover(&self) {
@@ -667,10 +667,10 @@ impl CodePreviewView {
     /// the chip *is*, never where it *was*.
     ///
     /// Shares [`marker_row_y_h`] and [`chip_rect`] with the painter, so the anchor and the
-    /// drawn chip cannot drift apart (ScrAP-87/ScrAP-150). Every read here is cache-free and
+    /// drawn chip cannot drift apart (GTK4Rs/AP-78/GTK4Rs/AP-127). Every read here is cache-free and
     /// side-effect-free — `line_yrange` is a btree height read, and
     /// `buffer_to_window_coords` is a bare `y -= yoffset` — so this forces no layout
-    /// validation and is safe to call from a scroll handler (ScrAP-22). Returns `None` for an
+    /// validation and is safe to call from a scroll handler (GTK4Rs/AP-22). Returns `None` for an
     /// index this render's `markers` no longer has.
     pub(crate) fn marker_chip_rect(&self, index: usize) -> Option<gdk::Rectangle> {
         use gtk::subclass::prelude::*;
@@ -694,7 +694,7 @@ impl CodePreviewView {
     /// navigates by, and the key [`marker_index_for_src`] resolves back to an index.
     ///
     /// The card stores THIS, never the index: `markers` is rebuilt on every render, so an
-    /// index is a bet that the document has not changed underneath it (ScrAP-55, and the
+    /// index is a bet that the document has not changed underneath it (GTK4Rs/AP-74, and the
     /// ScrAP-187 family). An identity that stops resolving is the well-defined "this
     /// annotation is gone" answer, which is exactly when the card should stop pointing.
     ///
@@ -721,7 +721,7 @@ impl CodePreviewView {
     /// is what a complete click compares: `saferizer::ClickActivation` opens the
     /// popover only when a press and its release both land on the **same** marker, so a
     /// hit-test answering a bare `bool` (as this one's caller once did on release
-    /// alone) cannot express the question (ScrAP-238).
+    /// alone) cannot express the question (GTK4Rs/AP-169).
     ///
     /// The hit-box answers WHICH marker was clicked; it does not supply the card's
     /// anchor. The card re-derives that itself, so the rect stops here.
@@ -751,7 +751,7 @@ impl CodePreviewView {
     /// ordinary widgets (labels + Edit/Remove buttons), so it is accessible from
     /// there; this method only supplies the missing *reach*.
     ///
-    /// **Two-phase by necessity (ScrAP-125).** `marker_hitboxes` is repopulated on
+    /// **Two-phase by necessity (GTK4Rs/AP-97).** `marker_hitboxes` is repopulated on
     /// each `snapshot_layer(AboveText)` paint and therefore only ever holds the
     /// **visible** markers — an off-screen target has no hit-box to open against. So:
     /// arm a `pending_marker_open` request, converge-scroll to the anchor
@@ -787,7 +787,7 @@ impl CodePreviewView {
     /// annotations viewer (via [`marker_index_for_src`]) route through here, so the two
     /// callers exercise ONE code path and cannot drift.
     ///
-    /// **Two-phase by necessity (ScrAP-125).** `marker_hitboxes` is repopulated
+    /// **Two-phase by necessity (GTK4Rs/AP-97).** `marker_hitboxes` is repopulated
     /// on each `snapshot_layer(AboveText)` paint and therefore only ever holds the
     /// **visible** markers — an off-screen target has no hit-box to open against. So:
     /// arm a `pending_marker_open` request, converge-scroll to the anchor
@@ -876,12 +876,12 @@ impl CodePreviewView {
     ///    target in a long document it can therefore land near the top and **never**
     ///    converge — the second, independent failure of a frame-count bound, which no
     ///    frame count could fix.
-    ///  * Being animated, it **loses to any `set_value`** — including our own ScrAP-113
+    ///  * Being animated, it **loses to any `set_value`** — including our own GTK4Rs/AP-118
     ///    re-pin guard, since `set_value` calls `end_updating` and cancels an in-flight
     ///    animation (gtkadjustment.c:532). There is one animation slot per adjustment.
     ///
     /// So use the primitive that wins outright, and re-aim it every frame as heights
-    /// validate (the ScrAP-82 progressive restore). Each tick re-reads `line_yrange` — a
+    /// validate (the GTK4Rs/AP-115 progressive restore). Each tick re-reads `line_yrange` — a
     /// pure cached btree read with NO validation side-effect, which is exactly why it is
     /// safe to call here and exactly why it returns an *estimate* until the line
     /// validates. Re-reading is what converges it.
@@ -917,7 +917,7 @@ impl CodePreviewView {
                 return glib::ControlFlow::Break;
             }
             // The request is gone — `snapshot_layer` either dispatched it (the chip
-            // painted) or it expired. If it was dispatched, `open_marker_popover`'s ScrAP-113
+            // painted) or it expired. If it was dispatched, `open_marker_popover`'s GTK4Rs/AP-118
             // re-pin guard now owns this adjustment, and our re-aiming would be a SECOND
             // `set_value` writer fighting it over the same slot. Stop.
             if view.imp().pending_marker_open.borrow().is_none() {
@@ -1004,7 +1004,7 @@ impl CodePreviewView {
         // in-progress state. A switch to a DIFFERENT marker has different `idxs` and still
         // rebuilds; `open_next_marker_popover` advances to a strictly-different marker, so the
         // advance/switch navigation is untouched. The card's own `is_open` (never
-        // `is_visible`) is the authoritative flag (ScrAP-112).
+        // `is_visible`) is the authoritative flag (GTK4Rs/AP-117).
         let card = self.marker_card();
         if card.is_open() && card.shows_exactly(idxs) {
             return;
@@ -1078,7 +1078,7 @@ impl CodePreviewView {
         // anchored to, not a position. From here on the card owns its own geometry: it
         // re-derives the chip rectangle whenever it is shown and on every scroll, which is
         // K and M both. `drop(markers)` first: `marker_anchor_identity` borrows the same
-        // `RefCell`, and holding a borrow across a re-entrant borrow aborts (ScrAP-53).
+        // `RefCell`, and holding a borrow across a re-entrant borrow aborts (GTK4Rs/AP-61).
         drop(markers);
         // No identity means no annotation to point at — nothing to open.
         let Some(anchor_src) = self.marker_anchor_identity(idxs) else {
@@ -1167,7 +1167,7 @@ impl CodePreviewView {
         }
     }
 
-    /// Get or create the single PERSISTENT annotation card. Bug D / ScrAP-112: create it
+    /// Get or create the single PERSISTENT annotation card. Bug D / GTK4Rs/AP-117: create it
     /// once and only show/hide it — NEVER unparent/destroy per use (an unrealized popover
     /// leaves a stale tooltip timer pointing at a NULL surface → `GDK_IS_SURFACE`
     /// criticals; `GtkPopover` never calls `gtk_tooltip_unset_surface`). Reuse is also what
@@ -1503,7 +1503,7 @@ mod a11y_integration_tests {
         // The route under test. NOT `save.emit_clicked()` — that passed all along.
         entry.emit_activate();
 
-        // The sink is deferred to an idle (ScrAP-96: never re-render inside the gesture).
+        // The sink is deferred to an idle (GTK4Rs/AP-30: never re-render inside the gesture).
         assert!(
             pump_until(200, || !edits.borrow().is_empty()),
             "Enter in the Edit popover's entry must commit the annotation — it did nothing \
@@ -1697,7 +1697,7 @@ mod a11y_integration_tests {
         win.destroy();
     }
 
-    /// The ScrAP-113 re-pin guard must hold the
+    /// The GTK4Rs/AP-118 re-pin guard must hold the
     /// **post-scroll** position, never a pre-scroll snapshot.
     ///
     /// There is one animation slot per adjustment, and `set_value` beats an in-flight
@@ -1709,7 +1709,7 @@ mod a11y_integration_tests {
     ///
     /// This has to be asserted deliberately. The guard only acts on `value-changed`, and
     /// this short fixture has no tall table and so no deferred validation scroll to fire
-    /// one — mutation-checked (ScrAP-87): seeding the guard with a pre-scroll `0.0` does NOT
+    /// one — mutation-checked (GTK4Rs/AP-78): seeding the guard with a pre-scroll `0.0` does NOT
     /// fail `a_navigation_leaves_the_document_scrolled_to_the_target`, because there the
     /// guard simply never runs. So nudge the adjustment the way a deferred validation
     /// scroll would, and assert where the guard puts it back.
@@ -1751,7 +1751,7 @@ mod a11y_integration_tests {
              pre-scroll snapshot and a post-scroll one are indistinguishable"
         );
 
-        // Exactly what ScrAP-113's deferred validation scroll does: re-target the adjustment
+        // Exactly what GTK4Rs/AP-118's deferred validation scroll does: re-target the adjustment
         // to the top some frames after `popup()`. The guard runs synchronously inside this
         // emission and must put it straight back.
         vadj.set_value(0.0);
@@ -1772,7 +1772,7 @@ mod a11y_integration_tests {
     ///
     /// This is also the guard against regressing to a frame count. A past
     /// `glib::monotonic_time()` stamp is expired at *every* refresh rate, so this test
-    /// states the contract in the units that matter. Mutation-checked (ScrAP-87): reverting
+    /// states the contract in the units that matter. Mutation-checked (GTK4Rs/AP-78): reverting
     /// the expiry arm to the old `hit.is_some() || expired` shape — which returns the hit
     /// even when expired — fails this on the popover assertion.
     #[gtktest::test]
@@ -1846,16 +1846,16 @@ mod a11y_integration_tests {
     /// `dispose` must `popdown()` an open marker popover BEFORE `unparent()`ing it.
     ///
     /// HISTORY: the marker popover used to be the app's only autohide popover, so the only
-    /// one holding a real X11 seat grab (ScrAP-98). `unparent()` unrealizes its surface, and
+    /// one holding a real X11 seat grab (GTK4Rs/AP-83). `unparent()` unrealizes its surface, and
     /// doing that while the grab was live stranded it — the app stopped accepting clicks and
     /// keys while hover feedback kept working, unusable until restarted. It is now
-    /// `set_autohide(false)` like every other popover (to fix ScrAP-98 click-misrouting on its
+    /// `set_autohide(false)` like every other popover (to fix GTK4Rs/AP-83 click-misrouting on its
     /// own buttons), so there is NO live seat grab and that specific failure can no longer
     /// occur. The popdown-before-unparent ordering is retained deliberately anyway: it is
-    /// correct hygiene, and the `unparent` itself is still mandatory (ScrAP-90/112).
+    /// correct hygiene, and the `unparent` itself is still mandatory (GTK4Rs/AP-80/112).
     ///
     /// **This test cannot observe a seat grab** — there no longer is one, and Xvfb never had a
-    /// real one either (ScrAP-98, real-compositor-only). It observes the popover's own
+    /// real one either (GTK4Rs/AP-83, real-compositor-only). It observes the popover's own
     /// `closed` signal, which fires only on a real popdown, and so still pins the *ordering
     /// contract* that regresses silently under refactoring.
     ///
@@ -1910,10 +1910,10 @@ mod a11y_integration_tests {
             closed.get(),
             "dispose must popdown the marker popover before unparenting it. Historically this \
              prevented a stranded X11 seat grab (an autohide popover unrealized mid-grab left \
-             the app dead to clicks/keys, ScrAP-98); the popover is non-autohide now so no \
+             the app dead to clicks/keys, GTK4Rs/AP-83); the popover is non-autohide now so no \
              grab exists, but popdown-before-unparent is retained hygiene and the unparent \
-             itself is still mandatory (ScrAP-90) and must not become a per-use destroy \
-             (ScrAP-112)"
+             itself is still mandatory (GTK4Rs/AP-80) and must not become a per-use destroy \
+             (GTK4Rs/AP-117)"
         );
 
         win.destroy();

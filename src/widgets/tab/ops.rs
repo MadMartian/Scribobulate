@@ -262,7 +262,7 @@ impl TabBar {
     // now (`scroll_by`/`scroll_into_view` below), and `GtkAdjustment` has no
     // built-in easing; deliberately left un-eased (an instant `set_value`)
     // since a hand-rolled multi-frame ease was the residual-warning's own
-    // root cause (ScrAP-56's addendum) — the tick loop here is
+    // root cause (GTK4Rs/AP-104's addendum) — the tick loop here is
     // purely the tab-handle sibling-slide reorder animation now.
 
     pub(super) fn recompute_targets(&self) {

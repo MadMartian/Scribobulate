@@ -52,7 +52,7 @@ pub(crate) fn refresh_annotations(window: &ApplicationWindow) {
 /// annotation's identity for selection-preservation across a rebuild, and captures only a
 /// weak window ref, resolving the current mode / live widgets at call time so it stays
 /// correct across content re-renders, view-mode switches, and a cross-window tab move
-/// (ScrAP-57 — a statically captured window would drive the wrong, off-screen pane forever).
+/// (GTK4Rs/AP-52 — a statically captured window would drive the wrong, off-screen pane forever).
 fn make_annotations_activate(window: &ApplicationWindow) -> Rc<dyn Fn(OriginalByteOffset)> {
     Rc::new(glib::clone!(
         #[weak(rename_to = window)]
@@ -112,7 +112,7 @@ fn place_editor_caret(buf: &sourceview::Buffer, src_start: OriginalByteOffset) {
 /// Open the marker popover for the annotation identified by `src_start`, deferred to idle.
 /// Deferred for the same reason `win.next-annotation` is: this runs inside a click/selection
 /// gesture, and opening a popover (which takes a grab) from within that gesture risks GTK's
-/// "Broken accounting of active state" and focus-restore theft (ScrAP-30/ScrAP-107). The window is
+/// "Broken accounting of active state" and focus-restore theft (GTK4Rs/AP-30/GTK4Rs/AP-116). The window is
 /// re-resolved inside the idle (it may close first). A `None` from `marker_index_for_src` —
 /// the annotation has no chip in the current render — does nothing, surfaced by the type
 /// rather than a wrong popover.
@@ -142,7 +142,7 @@ fn open_marker_for_src_deferred(window: &ApplicationWindow, src_start: OriginalB
 ///
 /// Recomputed wholesale from the action states (source of truth), not patched from a
 /// delta signal, so it is correct at every lifecycle boundary — a toggle, a window build,
-/// a tab switch, a session restore (ScrAP-38). The section/sidebar widgets are reached from
+/// a tab switch, a session restore (GTK4Rs/AP-47). The section/sidebar widgets are reached from
 /// the two scrollers' ancestry (`scroller → section → sidebar_box`), the same tree the
 /// build wires and the restore test already asserts against — so no extra widget handles
 /// need threading through the typed state.

@@ -1,4 +1,4 @@
-//! One typed seam for `GtkTextBuffer`'s undo grouping (the ScrAP-108
+//! One typed seam for `GtkTextBuffer`'s undo grouping (the GTK4Rs/AP-110
 //! undo-barrier contract).
 //!
 //! `GtkTextBuffer`'s built-in undo (`GtkTextHistory`) sets an undo-group barrier

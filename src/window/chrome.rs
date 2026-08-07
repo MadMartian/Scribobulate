@@ -44,13 +44,13 @@ pub(super) struct Chrome {
     pub replace_row: gtk::Box,
     pub find_bar: gtk::Box,
     pub find_bar_revealer: gtk::Revealer,
-    /// This window's OWN `View ▸ Documents` submenu model (ScrAP-63) —
+    /// This window's OWN `View ▸ Documents` submenu model (GTK4Rs/AP-76) —
     /// filled per-window by `tabs.rs::refresh_documents_menu`.
     pub documents_menu: gtk::gio::Menu,
     /// This window's OWN `Format ▸` insert section — relabeled Insert↔Edit by
     /// `app::update_format_menu_labels`.
     pub format_insert_menu: gtk::gio::Menu,
-    /// This window's self-built `GtkPopoverMenuBar` (ScrAP-63). Retained
+    /// This window's self-built `GtkPopoverMenuBar` (GTK4Rs/AP-76). Retained
     /// so the nested-submenu-activation stray-menu workaround can walk
     /// its top-level item popovers and `popdown()` any GTK left mapped.
     pub menubar: gtk::PopoverMenuBar,
@@ -104,7 +104,7 @@ pub(super) fn build_chrome(
     // and every tab is always reorderable/closable/context-menu-able by
     // construction — there is no `GtkNotebook`-style per-(container, child)
     // flag to re-apply on every new tab or cross-window arrival (formerly
-    // ScrAP-50's whole failure mode).
+    // GTK4Rs/AP-60's whole failure mode).
     let tabs = crate::widgets::tab::TabView::new();
     tabs.widget().set_vexpand(true);
     tabs.append_page(&content_box);
@@ -119,7 +119,7 @@ pub(super) fn build_chrome(
     //
     // Tried and reverted: wrapping ONLY `tabs.stack_widget()` in this overlay
     // and placing the tab strip as an external sibling above it (the
-    // tree-topology fix ScrAP-56 round 4's researcher consultation
+    // tree-topology fix GTK4Rs/AP-104 round 4's researcher consultation
     // recommended, matching libadwaita's AdwTabBar/AdwTabView split). Live
     // testing showed it made the residual "Trying to snapshot ... without a
     // current allocation" warning WORSE, not better — same mechanism, just
@@ -127,7 +127,7 @@ pub(super) fn build_chrome(
     // stuck-blank window grew from a single self-healing frame to over a
     // second, additionally swallowing the toolbar and tab strip rather than
     // just the content pane. Reverted to the combined `tabs.widget()`; see
-    // ScrAP-56 round 4 for the full account and the likely REAL
+    // GTK4Rs/AP-104 round 4 for the full account and the likely REAL
     // trigger (a newly-switched-to tab's own first-layout content
     // validation, independent of the tab strip entirely).
     let conflict_toast = super::toast::make_conflict_toast(window);
@@ -165,7 +165,7 @@ pub(super) fn build_chrome(
     // expand-all/collapse-all-symbolic names so a host theme that ships them
     // (e.g. breeze-dark on KDE) provides its own idiomatic glyphs; our matching
     // chevron art is bundled via gresource only as the fallback for themes lacking
-    // those names, e.g. Adwaita (ScrAP-39).
+    // those names, e.g. Adwaita (GTK4Rs/AP-48).
     let outline_expand_all = gtk::Button::from_icon_name(Icon::ExpandAll.name());
     crate::a11y::name(&outline_expand_all, "Expand all");
     outline_expand_all.set_action_name(Some("win.outline-expand-all"));
@@ -336,7 +336,7 @@ pub(super) fn build_chrome(
     find_bar_revealer.set_reveal_child(false);
 
     // ── menu bar (per-window, self-built) ─────────────────────────────────────
-    // We build our OWN GtkPopoverMenuBar per window (ScrAP-63) instead of
+    // We build our OWN GtkPopoverMenuBar per window (GTK4Rs/AP-76) instead of
     // relying on `ApplicationWindow.show_menubar(true)` + `app.set_menubar`,
     // because the View ▸ Documents submenu lists THIS window's tabs — per-window
     // content a single shared app model can't express. It sits at the very top of

@@ -23,7 +23,7 @@ fn press_hit_close_button(bar: &TabBar, x: f64, y: f64) -> bool {
 }
 
 /// Whether `w` or any of its ancestors carries the CSS class `class`. The
-/// load-bearing half of [`press_hit_close_button`] (the ScrAP-79 guard behind
+/// load-bearing half of [`press_hit_close_button`] (the GTK4Rs/AP-109 guard behind
 /// TDD 7.11): a press lands on the close button's inner icon/label, so the class
 /// is found one or more hops UP the tree, not on the picked leaf. Split out from
 /// the `pick` plumbing so the ancestor-walk decision is unit-testable (QA H-4).
@@ -43,7 +43,7 @@ impl TabBar {
         // Overflow::Hidden clips handles/chevrons allocated outside
         // [0, width) — both the ordinary "scrolled past the viewport" case
         // (now driven by `hadjustment`, not a private offset) and the
-        // "chevron currently hidden" case (ScrAP-56).
+        // "chevron currently hidden" case (GTK4Rs/AP-104).
         obj.set_overflow(gtk::Overflow::Hidden);
 
         // `TabBar` creates and owns its own `hadjustment` — deliberately NOT
@@ -174,7 +174,7 @@ impl TabBar {
     /// is the source of truth for order after a drag-reorder — unlike
     /// `winstate::tabs_for_window`, whose registry order is mere insertion order
     /// and diverges from the strip once a tab is reordered (the same
-    /// index-vs-identity split that caused ScrAP-55). Used to build the View ▸
+    /// index-vs-identity split that caused GTK4Rs/AP-74). Used to build the View ▸
     /// Documents menu so its entries match what the user sees.
     pub(super) fn ordered_contents(&self) -> Vec<gtk::Widget> {
         self.imp()
@@ -320,7 +320,7 @@ impl TabBar {
     /// the handle to mark the drag in flight.
     ///
     /// The two steps are fused into one call precisely so the order cannot be got
-    /// wrong at the call site (ScrAP-173). Dimming calls `set_opacity`, which
+    /// wrong at the call site (GTK4Rs/AP-156). Dimming calls `set_opacity`, which
     /// issues a `queue_draw` that CLEARS the widget's cached render node walking
     /// to the root (`gtkwidget.c:3541-3552`). A `current_image()` taken in the
     /// same main-loop turn therefore finds no node and returns an **empty**
@@ -374,7 +374,7 @@ impl TabBar {
 mod gtk_integration_tests {
     use super::*;
 
-    /// TDD 7.11 / ScrAP-79 regression (area-1 automated test): the tab-activate guard
+    /// TDD 7.11 / GTK4Rs/AP-109 regression (area-1 automated test): the tab-activate guard
     /// suppresses a press only when the picked widget — or ANY ancestor — carries
     /// the close-button class, because a click lands on the button's inner
     /// icon/label, not the button itself. This pins that ancestor-walk so the guard
@@ -423,7 +423,7 @@ mod gtk_integration_tests {
     /// a blanked 300x200 widget), so any assertion on its SIZE passes on the
     /// broken code and guards nothing. The only property that discriminates is
     /// whether snapshotting it produces a render node. Do not "simplify" this to a
-    /// size check — that silently disarms the regression guard (ScrAP-173).
+    /// size check — that silently disarms the regression guard (GTK4Rs/AP-156).
     fn freeze_has_content(w: &impl IsA<gtk::Widget>) -> bool {
         let img = gtk::WidgetPaintable::new(Some(w.as_ref())).current_image();
         let snapshot = gtk::Snapshot::new();
@@ -437,11 +437,11 @@ mod gtk_integration_tests {
 
     /// Pump the main loop until `cond` holds, bounded by a timeout SOURCE rather
     /// than a wall-clock check between iterations — the latter never fires on an
-    /// idle display, so the loop would hang forever (ScrAP-88).
+    /// idle display, so the loop would hang forever (GTK4Rs/AP-79).
     ///
-    /// This citation said `ScrAP-79` until QA round 3. ScrAP-79 is a real entry
+    /// This citation said `GTK4Rs/AP-109` until QA round 3. GTK4Rs/AP-109 is a real entry
     /// about a container-level gesture also firing on a child button — which is
-    /// what the OTHER two `ScrAP-79` citations in this file correctly refer to,
+    /// what the OTHER two `GTK4Rs/AP-109` citations in this file correctly refer to,
     /// which is why a wrong one hid among them. The pump lesson is `GTK4Rs/AP-79` in the
     /// gtk4-rs SKILL and #88 in THIS register, and the prefix sweep that
     /// introduced `ScrAP-` rewrote the prefix without re-resolving the number.
@@ -455,14 +455,14 @@ mod gtk_integration_tests {
         cond()
     }
 
-    /// ScrAP-173 regression: the drag-icon freeze must be taken BEFORE the handle
+    /// GTK4Rs/AP-156 regression: the drag-icon freeze must be taken BEFORE the handle
     /// is dimmed. `set_opacity` issues a `queue_draw` that clears the widget's
     /// cached render node (`gtkwidget.c:3541-3552`), so a `current_image()` in the
     /// same main-loop turn returns an EMPTY paintable — which draws nothing on any
     /// backend, i.e. no drag icon at all.
     ///
     /// This pins the ordering invariant that `TabBar::begin_drag_visuals` encodes.
-    /// The second half is a deliberate MUTATION of the order (ScrAP-87: mutation-
+    /// The second half is a deliberate MUTATION of the order (GTK4Rs/AP-78: mutation-
     /// test the guard): it asserts the WRONG order really does produce an empty
     /// freeze, so a future refactor can't make this test vacuously pass.
     ///
@@ -502,7 +502,7 @@ mod gtk_integration_tests {
         assert!(
             !freeze_has_content(&handle),
             "a freeze taken AFTER the dim must be empty — if it is not, this guard \
-             no longer discriminates and ScrAP-173 must be re-verified"
+             no longer discriminates and GTK4Rs/AP-156 must be re-verified"
         );
 
         win.destroy();

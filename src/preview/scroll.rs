@@ -55,7 +55,7 @@ pub(crate) fn set_adj_fraction(adj: &gtk::Adjustment, fraction: f64) -> bool {
 /// so far, but line-height validation runs in an idle pass.  Called right after a
 /// re-render or while the `GtkPaned` is still settling, it pushed the adjustment
 /// into an as-yet-unvalidated region — the preview went blank-gray and GTK spammed
-/// "snapshot … without a current allocation" every frame (ScrAP-22).  `scroll_to_mark`
+/// "snapshot … without a current allocation" every frame (GTK4Rs/AP-22).  `scroll_to_mark`
 /// records the target and defers the scroll until after validation, which is robust.
 pub(crate) fn scroll_preview_to_heading(sw: &ScrolledWindow, doc_index: usize) {
     let Some(view) = sw
@@ -70,7 +70,7 @@ pub(crate) fn scroll_preview_to_heading(sw: &ScrolledWindow, doc_index: usize) {
     let offset = rd.borrow().heading_offsets.get(doc_index).copied();
     if let Some(offset) = offset {
         // The view owns the coalesced, validation-safe scroll (mark + scroll_to_mark
-        // on an idle, with rapid re-targeting collapsed to the latest) — ScrAP-22.
+        // on an idle, with rapid re-targeting collapsed to the latest) — GTK4Rs/AP-22.
         view.scroll_to_buffer_offset(offset);
     }
 }
@@ -85,7 +85,7 @@ pub(crate) fn scroll_preview_to_heading(sw: &ScrolledWindow, doc_index: usize) {
 /// slugs to nothing: silent, the document simply opens at the top).
 ///
 /// Same mark-based `scroll_to_buffer_offset` [`scroll_preview_to_heading`] uses,
-/// for the same reason (ScrAP-22). This is called right after a fresh render (a
+/// for the same reason (GTK4Rs/AP-22). This is called right after a fresh render (a
 /// just-created tab) or a just-materialized deferred one — exactly the moment
 /// line heights are least likely to be validated yet — so a one-shot
 /// `scroll_to_iter` here would risk the blank-gray / "without a current
@@ -161,7 +161,7 @@ pub(crate) fn preview_top_line(sw: &ScrolledWindow) -> Option<i32> {
 ///      would otherwise keep suppressed, so a collapsed range can never persist.
 ///
 /// This is the exact pattern `CodePreviewView::scroll_to_buffer_offset` already
-/// proved for outline navigation (ScrAP-22).
+/// proved for outline navigation (GTK4Rs/AP-22).
 ///
 /// **Deferred-idle discipline (ScrAP-152).** The idle must WEAK-capture the view
 /// and the scroller, and re-check `is_realized()` after upgrading. A strong
@@ -219,7 +219,7 @@ pub(crate) fn restore_preview_scroll_to_line(sw: &ScrolledWindow, line: i32) {
     }
     let Some(child) = sw.child() else { return };
     // The preview is a CodePreviewView — reuse its proven, coalesced,
-    // validation-forcing scroll (ScrAP-22), targeting the buffer offset of `line`.
+    // validation-forcing scroll (GTK4Rs/AP-22), targeting the buffer offset of `line`.
     if let Ok(cpv) = child.clone().downcast::<CodePreviewView>() {
         let offset = cpv
             .buffer()
@@ -253,7 +253,7 @@ pub(crate) fn restore_preview_scroll_to_line(sw: &ScrolledWindow, line: i32) {
 /// the target line (or the range clamps at the bottom). Non-animating avoids the
 /// `size_allocate` refresh freeze a running scroll animation causes
 /// (gtktextview.c:4656-4660), and this is the normal scroll path (not a
-/// pre-allocation `scroll_to_iter`), so it never re-enters ScrAP-22.
+/// pre-allocation `scroll_to_iter`), so it never re-enters GTK4Rs/AP-22.
 pub(crate) fn restore_preview_scroll_to_line_fresh(sw: &ScrolledWindow, line: i32) {
     if line <= 0 {
         return;
@@ -501,7 +501,7 @@ mod gtk_integration_tests {
 
     /// Huge-buffer robustness (mark placement + no-panic): the fresh far-restore
     /// must run its whole path on a 40k-line buffer without panicking or re-arming
-    /// the ScrAP-22 blank, and must anchor the persistent restore mark at the FAR
+    /// the GTK4Rs/AP-22 blank, and must anchor the persistent restore mark at the FAR
     /// target line (not mis-target it — the mark assert DOES fail under a pre-fix
     /// mutation, so it genuinely guards targeting). It does NOT prove the
     /// snap-to-top settling (see the module doc); that is MANUAL-TEST 3.2a.

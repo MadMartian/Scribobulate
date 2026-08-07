@@ -61,7 +61,7 @@ impl SidebarPane {
             .xalign(0.0)
             .hexpand(true)
             .build();
-        // `.heading` is a base-GTK4 section-title class (no libadwaita — ScrAP-25).
+        // `.heading` is a base-GTK4 section-title class (no libadwaita — GTK4Rs/AP-25).
         title_label.add_css_class("heading");
 
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -115,7 +115,7 @@ pub(crate) fn list_view_of(scroller: &gtk::ScrolledWindow) -> Option<gtk::ListVi
 /// (`page_size == 0`), retries on subsequent idles (bounded) so a tab-switch
 /// reveal that races the first allocate still lands. `ListView::scroll_to` is
 /// 4.12+ only (ScrAP-157 / GTK4Rs/AP-114). Does not change the selection, so
-/// outline spy guards (ScrAP-89) stay quiet.
+/// outline spy guards (GTK4Rs/AP-112) stay quiet.
 pub(crate) fn reveal_selected_row(scroller: &gtk::ScrolledWindow) {
     reveal_selected_row_attempt(scroller, 0);
 }

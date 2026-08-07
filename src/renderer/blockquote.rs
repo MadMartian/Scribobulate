@@ -8,7 +8,7 @@
 /// (`GtkTextBuffer::slice`, so each anchored child counts as one `U+FFFC` char, keeping
 /// char offsets aligned — ScrAP-74); returned ranges are absolute buffer char
 /// offsets. Pure (no GTK) so it is unit-tested; the newline-excluding split is what
-/// gives every tagged line its own tag toggle (ScrAP-76).
+/// gives every tagged line its own tag toggle (GTK4Rs/AP-72).
 pub(super) fn logical_line_ranges(text: &str, start: i32, end: i32) -> Vec<(i32, i32)> {
     let mut ranges = Vec::new();
     let mut line_start = start;
@@ -35,7 +35,7 @@ mod logical_line_ranges_tests {
     fn splits_each_line_excluding_newlines() {
         // "abc\nde\nf" over [10..18]: content runs are 10..13, 14..16, 17..18;
         // the two '\n's (offsets 13 and 16) are left out — that is what creates a
-        // per-line tag toggle (ScrAP-76).
+        // per-line tag toggle (GTK4Rs/AP-72).
         assert_eq!(
             logical_line_ranges("abc\nde\nf", 10, 18),
             vec![(10, 13), (14, 16), (17, 18)]

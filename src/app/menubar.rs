@@ -1,5 +1,5 @@
 //! Per-window menubar construction. The menubar MODEL is built per window
-//! (ScrAP-63) — because `View ▸ Documents` lists THAT window's tabs and
+//! (GTK4Rs/AP-76) — because `View ▸ Documents` lists THAT window's tabs and
 //! `Format ▸`'s insert section is relabeled per that window's selection — so the
 //! whole `GtkPopoverMenuBar` is assembled here per window rather than once on the
 //! GApplication.
@@ -42,7 +42,7 @@ fn make_format_item(label: &str, target: &str, accel: &str) -> MenuItem {
 /// Relabel `window`'s OWN Format menu Link/Image items Insert↔Edit for its editor
 /// selection `kind` (`None` = neither). Skips when that window's menu already shows
 /// `kind`. Driven per-window by `window::update_format_edit_surfaces`. Per-window
-/// since the menubar migration (ScrAP-63): each window's Format menu now
+/// since the menubar migration (GTK4Rs/AP-76): each window's Format menu now
 /// reflects its OWN selection rather than the last-focused window's leaking across
 /// every menubar.
 pub(crate) fn update_format_menu_labels(
@@ -71,7 +71,7 @@ pub(crate) fn update_format_menu_labels(
 /// One window's menubar: a self-built `GtkPopoverMenuBar` plus handles to the two
 /// submenus whose CONTENT is mutated at runtime — `View ▸ Documents` (the
 /// open-tab list) and `Format ▸`'s insert section (Link/Image Insert↔Edit). Both
-/// must be per-window (ScrAP-63), so the whole model is built here per
+/// must be per-window (GTK4Rs/AP-76), so the whole model is built here per
 /// window rather than once on the GApplication.
 pub(crate) struct BuiltMenubar {
     pub bar: gtk::PopoverMenuBar,
@@ -189,7 +189,7 @@ fn build_view_menu() -> (Menu, Menu) {
     // window's open tabs, one `win.select-tab::<id>` radio item each). The
     // submenu starts empty — its content is filled/refreshed per window by
     // `window/tabs/refresh_documents_menu` (deferred to idle: mutating a
-    // GMenu bound to a live menubar mid-activation is unsafe, ScrAP-63). It groups naturally beside Previous/Next Tab.
+    // GMenu bound to a live menubar mid-activation is unsafe, GTK4Rs/AP-76). It groups naturally beside Previous/Next Tab.
     let tab_nav_section = Menu::new();
     tab_nav_section.append_item(&MenuItem::new(
         Some(&mnem("Previous Tab")),
@@ -352,7 +352,7 @@ fn build_edit_menu() -> Menu {
 /// insertions Link / Image / Table.
 /// Heading is a submenu here (a combo box in the toolbar); both drive
 /// win.format::h{1..6}. Returns the Format menu AND its insert-section handle
-/// (per-window now, for the Insert↔Edit relabel — ScrAP-63).
+/// (per-window now, for the Insert↔Edit relabel — GTK4Rs/AP-76).
 fn build_format_menu() -> (Menu, Menu) {
     // QA round-1 L6: a bare `.unwrap()` here panicked with no context
     // beyond "called `Option::unwrap()` on a `None` value" on a pure
@@ -441,7 +441,7 @@ fn build_file_menu() -> Menu {
 /// (`setup_app`'s `set_accels_for_action`) and independent of this model.
 ///
 /// `GtkPopoverMenuBar` silently ignores `g_menu_item_set_icon()` — see
-/// ScrAP-11; icons are not set here.
+/// GTK4Rs/AP-11; icons are not set here.
 pub(crate) fn build_menubar() -> BuiltMenubar {
     let help_menu = Menu::new();
     // Keyboard Shortcuts opens the GtkShortcutsWindow via the per-window

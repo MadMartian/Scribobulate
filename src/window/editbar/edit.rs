@@ -96,7 +96,7 @@ mod gtk_integration_tests {
         crate::saferizer::BufferText::of(b).into_string()
     }
 
-    /// The undo-double-revert bug (ScrAP-108) on the surface where it was actually
+    /// The undo-double-revert bug (GTK4Rs/AP-110) on the surface where it was actually
     /// live: a FORMAT command, not an annotation. Bold a word, undo, redo,
     /// italicise a different word, then a single Undo must revert ONLY the italic
     /// — the redone bold must survive.
@@ -147,7 +147,7 @@ mod gtk_integration_tests {
         assert_eq!(
             text_of(&b),
             after_bold,
-            "one Undo after redo+format reverted the redone bold too (ScrAP-108): \
+            "one Undo after redo+format reverted the redone bold too (GTK4Rs/AP-110): \
              the redo-merge barrier was not flushed before the format edit"
         );
     }

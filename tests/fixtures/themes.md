@@ -23,7 +23,7 @@ Body prose with an [external link](https://example.com), some `inline code`,
 >   - nested one level deeper
 
 Unordered, ordered and task lists — markers are drawn in a gutter, so check each
-marker stays beside **its own** text at every depth (ScrAP-121):
+marker stays beside **its own** text at every depth (GTK4Rs/AP-96):
 
 - bullet one
 - bullet two with enough text that it wraps around onto a second visual line to

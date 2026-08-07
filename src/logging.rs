@@ -4,7 +4,7 @@
 //! runtime by `RUST_LOG`. glib/GTK's own diagnostics are bridged *into* that same
 //! sink via a glib **writer** function, so application logs and GTK/glib messages
 //! all flow through one configurable place. See POLICY.md (§Logging) and
-//! ANTI-PATTERNS ScrAP-18.
+//! ANTI-PATTERNS GTK4Rs/AP-18.
 //!
 //! Call-site convention — use the plain `log` macros and let `target` default to
 //! the module path (free per-module filtering):
@@ -137,7 +137,7 @@ pub(crate) fn init() {
     // chokepoint and can be set exactly once (it panics on a second call), so this
     // must run once. NEVER also register `glib::GlibLogger`: it bridges the opposite
     // direction (log → glib), and combining the two recurses to a stack overflow
-    // (ScrAP-18). The crash-forensics kit adds no glib sink of its own for the same
+    // (GTK4Rs/AP-18). The crash-forensics kit adds no glib sink of its own for the same
     // reason — it sits behind the Rust `log` facade, downstream of this bridge, so
     // GTK diagnostics become breadcrumbs by flowing through the one existing route.
     glib::log_set_writer_func(forward);

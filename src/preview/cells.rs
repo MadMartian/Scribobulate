@@ -81,7 +81,7 @@ fn set_cell_copymap(label: &Label, tree: CopyTree) {
 // (bug C). Instead translate the cell INTO its `ScribTableWidget` ancestor (a local
 // subtree transform, immune to the placeholder and to scroll) and add the table-top
 // buffer-Y from the cache-free `line_yrange(table_anchor)` — never `get_iter_location`,
-// which validates mid-snapshot (ScrAP-22). This is the shared `codeview.rs::cell_row_y_h`
+// which validates mid-snapshot (GTK4Rs/AP-22). This is the shared `codeview.rs::cell_row_y_h`
 // helper, used by BOTH `CodePreviewView::snapshot_layer` (marker chips) and
 // `scroll_to_cell_offset` (find's cell scroll-to-hit).
 
@@ -174,7 +174,7 @@ pub(super) fn collect_table_anchors(
 /// the highlight is a Pango attribute overlay on the label (a caption label takes one
 /// exactly like a cell label), and the scroll resolves the row by transforming the
 /// label into its `ScribTableWidget` ancestor, which is an ancestor of a caption label
-/// too (ScrAP-109).
+/// too (GTK4Rs/AP-91).
 pub(crate) fn cell_search_targets(view: &CodePreviewView) -> Vec<(i32, Label)> {
     let Some(rd) = scrib_render_data(view) else {
         return Vec::new();

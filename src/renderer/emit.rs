@@ -45,8 +45,8 @@ impl Renderer {
     /// edge. The preview view bounds every anchored child (table/rule) to `content − 1`
     /// as if it started at that edge; a child nested in a list/quote actually starts this
     /// far right, so the bound must subtract it or the child overflows the viewport by
-    /// exactly this many px → spurious Automatic h-scrollbar → ScrAP-22/23 churn/blank
-    /// (ScrAP-23a). It is the TOTAL horizontal margin the block steals from the
+    /// exactly this many px → spurious Automatic h-scrollbar → GTK4Rs/AP-22/23 churn/blank
+    /// (GTK4Rs/AP-23a). It is the TOTAL horizontal margin the block steals from the
     /// column, because the bound is `content − inset` against the FULL column width:
     /// - a **list** adds only a `left_margin` (`tags.rs` `li-{depth}` sets no right
     ///   margin), accumulating per level → `depth * list_step`;
@@ -121,7 +121,7 @@ impl Renderer {
     /// per-line applies into one continuous run: each line then carries its own tag
     /// on/off toggle, which forces GtkTextView to rebuild that line's style (and its
     /// left-margin/indent) instead of reusing the previous line's cached style — the fix
-    /// for the dropped-margin artifact on toggle-free middle lines (ScrAP-76).
+    /// for the dropped-margin artifact on toggle-free middle lines (GTK4Rs/AP-72).
     /// A continuous apply instead lets a wrapped/multi-line list item's continuation
     /// lines lose their left-margin and outdent left of the marker.
     pub(super) fn apply_tag_per_line(&self, tag: TagName, start: i32, end: i32) {
@@ -138,13 +138,13 @@ impl Renderer {
     }
 
     /// Apply a list item's uniform per-level content-margin tags over `[start, end)`,
-    /// PER logical line with the terminating `\n`s left untagged (ScrAP-72/ScrAP-76).
+    /// PER logical line with the terminating `\n`s left untagged (ScrAP-72/GTK4Rs/AP-72).
     /// The item's FIRST logical line gets `li-{depth}` (carries the small inter-item
     /// `pixels_above_lines` gap); every LATER logical line gets `li-{depth}-cont` (no
     /// gap). Both variants carry the SAME `left_margin` and `indent = 0` — the marker is
     /// drawn in the gutter (Phase 2) and is not in the flow, so there is no hanging indent
     /// to keep reliable. They differ only in the inter-item gap, which makes the split
-    /// ScrAP-76-safe (a per-line style-cache mix-up can't change a margin that is identical in
+    /// GTK4Rs/AP-72-safe (a per-line style-cache mix-up can't change a margin that is identical in
     /// both variants).
     ///
     /// **Exactly ONE `li-*` tag per line.** `[start, end)` is the item's WHOLE span, which
@@ -153,7 +153,7 @@ impl Renderer {
     /// tag are skipped: an inner `TagEnd::Item` fires before its outer one, so a nested
     /// line is always tagged at its own (deeper) depth first, and the outer pass must leave
     /// it alone. The `li-{depth}` margins are ACCUMULATIVE (they add onto the container's,
-    /// which is what nests a quoted list inside its blockquote — `tags.rs`, ScrAP-121), so two stacked `li-*` tags would literally SUM: a depth-2 item would land at
+    /// which is what nests a quoted list inside its blockquote — `tags.rs`, GTK4Rs/AP-96), so two stacked `li-*` tags would literally SUM: a depth-2 item would land at
     /// `28 + 56` instead of `56`, stranding its drawn marker far left of its own text. The
     /// old non-accumulative margins masked this — the deeper tag is added to the tag table
     /// later, so it simply won on priority and nesting worked by accident.
@@ -234,7 +234,7 @@ impl Renderer {
 
         for line in text.split('\n') {
             // The block background is self-drawn by the preview view across the
-            // whole block (ScrAP-21), so empty lines need no filler space.
+            // whole block (GTK4Rs/AP-21), so empty lines need no filler space.
             let line_with_nl = format!("{line}\n");
             let ranges = hl.highlight_line(&line_with_nl, ss).unwrap_or_default();
             for (style, s) in ranges {
@@ -247,7 +247,7 @@ impl Renderer {
                 // string is `line_with_nl` (it INCLUDES the trailing '\n'), so a per-token
                 // apply tags the newlines and coalesces the whole block into one continuous
                 // `code-block` run — which is exactly the toggle-free-middle-line state that
-                // drops the left margin (ScrAP-76). The tag is instead applied ONCE below, per
+                // drops the left margin (GTK4Rs/AP-72). The tag is instead applied ONCE below, per
                 // logical line with the '\n's left untagged (`apply_tag_per_line`). Only the
                 // per-token `fg-*` colour tags are applied in this loop.
                 let r = style.foreground.r;
@@ -274,12 +274,12 @@ impl Renderer {
         // set_left_margin/set_right_margin), and a paragraph-attribute margin tag applied
         // as one multi-paragraph range drops on the toggle-free MIDDLE lines: GTK's
         // one-line style cache (gtktextlayout.c get_style) reuses the previous line's
-        // style and loses the left margin (ScrAP-76 — same fix blockquote/list
+        // style and loses the left margin (GTK4Rs/AP-72 — same fix blockquote/list
         // use). A per-token `fg-{rrggbb}` toggle used to rescue it incidentally, but a
         // uniformly-highlighted block (unlanguaged fence, or a theme mapping every token
         // to one colour) has no such toggle. Range boundaries are unchanged:
         // [block_start, end_iter). The block's *background* is self-drawn by the preview
-        // view — record the block's char extent for it (ScrAP-21).
+        // view — record the block's char extent for it (GTK4Rs/AP-21).
         let ei = self.buf.end_iter();
         self.apply_tag_per_line(TagName::CodeBlock, block_start, ei.offset());
         self.code_blocks
@@ -310,7 +310,7 @@ mod code_block_per_line_tests {
     use super::Renderer;
     use gtk::prelude::*;
 
-    /// ScrAP-76 regression guard. The `code-block` margin tag must be applied PER LOGICAL
+    /// GTK4Rs/AP-72 regression guard. The `code-block` margin tag must be applied PER LOGICAL
     /// LINE (each `\n` left untagged), so every line of the block carries its own tag
     /// toggle — otherwise GTK's one-line style cache drops the left margin on the
     /// toggle-free middle lines.
@@ -365,7 +365,7 @@ mod code_block_per_line_tests {
             toggles,
             vec![true, true, true],
             "code-block must toggle ON at the start of EACH of the 3 block lines \
-             (per-line application, ScrAP-76), not once across the whole range"
+             (per-line application, GTK4Rs/AP-72), not once across the whole range"
         );
     }
 }

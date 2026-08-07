@@ -87,11 +87,11 @@ pub(crate) struct WindowChrome {
     /// the `documents_menu` rebuild) and on every tab switch.
     pub(crate) documents_btn: gtk::MenuButton,
     /// The Stage-2 caret/selection formatting overlay: ONE non-autohide
-    /// `GtkPopover` per window (ScrAP-61), re-parented to the active tab's editor
+    /// `GtkPopover` per window (GTK4Rs/AP-106), re-parented to the active tab's editor
     /// on every tab switch (`window/tabs/retarget_format_overlay`) rather than
     /// built once per tab. Built once at window creation (`editbar::build_format_overlay`),
     /// so its heading `GtkMenuButton` materialises its menu-model exactly once ever
-    /// (O(1)) — the source-level cure for ScrAP-61's N×6 accelerator-label
+    /// (O(1)) — the source-level cure for GTK4Rs/AP-106's N×6 accelerator-label
     /// font-resolution freeze, which per-tab overlays could only *amortise* via lazy
     /// parenting. The window tears it down on destroy.
     ///
@@ -108,11 +108,11 @@ pub(crate) struct WindowChrome {
     /// The single caret overlay's Insert Link/Image buttons (the overlay's own copy,
     /// as opposed to the toolbar's [`fmt_edit_btns`](Self::fmt_edit_btns)) —
     /// relabeled Insert↔Edit alongside them. Window-scoped since Phase-2's per-tab
-    /// overlay was folded to one-per-window (ScrAP-61).
+    /// overlay was folded to one-per-window (GTK4Rs/AP-106).
     pub(crate) overlay_edit_btns: Vec<(FmtInsertKind, gtk::Button)>,
     /// Last edit-kind painted onto the format surfaces (toolbar + the single caret
     /// overlay) — the dedup cache for the chatty mark-set relabel path. Window-scoped
-    /// (ScrAP-61): both button sets are now window-level, so the cache is too; a tab
+    /// (GTK4Rs/AP-106): both button sets are now window-level, so the cache is too; a tab
     /// switch forces a repaint (`editbar::resync_format_edit_surfaces`) because the
     /// cache reflects whichever tab last painted the shared surfaces.
     pub(crate) fmt_edit_state: Cell<Option<FmtInsertKind>>,
@@ -152,7 +152,7 @@ pub(crate) struct WindowChrome {
     /// the provider is process-global (on the display), so a bare
     /// `textview.scrib-preview` selector would collide across windows at equal
     /// priority — most-recently-loaded wins — and one window would dictate the
-    /// font-size of EVERY window's preview (ScrAP-64). A preview moved to another
+    /// font-size of EVERY window's preview (GTK4Rs/AP-77). A preview moved to another
     /// window re-matches by tree position, so cross-window tab moves need no
     /// reparenting.
     pub(crate) zoom_css_provider: gtk::CssProvider,
@@ -170,7 +170,7 @@ pub(crate) struct WindowChrome {
     /// per window when the model is shared: the app-level `set_menubar` model is
     /// observed identically by every window's menubar, so each window builds its
     /// own `GtkPopoverMenuBar::from_model` (see `app::build_menubar` and
-    /// ScrAP-63). Action STATE (enabled/checked) is still per-window for
+    /// GTK4Rs/AP-76). Action STATE (enabled/checked) is still per-window for
     /// free via `win.*` scoping — only content had to be split out.
     pub(crate) documents_menu: gtk::gio::Menu,
     /// This window's OWN `Format ▸` insert section (Link = index 0, Image = 1,
@@ -180,10 +180,10 @@ pub(crate) struct WindowChrome {
     /// also fixes the pre-migration shared-model compromise where the relabel
     /// tracked only the focused window and leaked into every other menubar.
     pub(crate) format_insert_menu: gtk::gio::Menu,
-    /// This window's self-built `GtkPopoverMenuBar` (ScrAP-63). Retained
+    /// This window's self-built `GtkPopoverMenuBar` (GTK4Rs/AP-76). Retained
     /// only so the nested-submenu-action choke point's stray-popover dismissal
     /// (`window::actions::dismiss_stray_menubar_popovers`, invoked solely through
-    /// the `nested_submenu_action*` constructors — ScrAP-116)
+    /// the `nested_submenu_action*` constructors — GTK4Rs/AP-108)
     /// can reach it: after a nested-submenu item is activated, GTK 4.6.x's
     /// `item_enter_cb` hover-switch can leave a *sibling* top-level menu popped
     /// open (always "Edit"), and the bar clears its open menu through exactly one
@@ -202,7 +202,7 @@ pub(crate) struct WindowChrome {
     /// item's own activation — GTK frees the `GtkModelButton` mid-`clicked`
     /// (gtkmenusectionbox.c refs only the popover), our prior UAF class. So every
     /// data-change event only marks this flag and defers the actual mutation to
-    /// idle (out of any signal dispatch); see ScrAP-63.
+    /// idle (out of any signal dispatch); see GTK4Rs/AP-76.
     pub(crate) documents_refresh_scheduled: Cell<bool>,
 }
 

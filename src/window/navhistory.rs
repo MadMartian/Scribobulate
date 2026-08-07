@@ -9,7 +9,7 @@
 //! switch callback (`window::tabs::wire_tab_switch_page`) — so *every* way of
 //! changing the active tab is history-bearing by default, including any added
 //! later. That is deliberate, and it inverts the usual enforcement problem
-//! (ScrAP-116's opt-in mitigation, ScrAP-219's ladder): here the *feature* is
+//! (GTK4Rs/AP-108's opt-in mitigation, ScrAP-219's ladder): here the *feature* is
 //! centralised and only the **opt-out** is per-call-site, so forgetting one adds a spurious
 //! history entry rather than silently dropping a navigation the reader made. A
 //! missing entry is invisible and unfixable from the outside; a spurious one is
@@ -104,7 +104,7 @@ fn wire_mouse_buttons(window: &ApplicationWindow) {
                 // button must be as disabled as the greyed-out menu item is
                 // (POLICY's single-`GAction` rule). `activate_action` on a
                 // disabled action is a silent no-op, which is the wanted
-                // behaviour (ScrAP-252 is the same fact read the other way —
+                // behaviour (GTK4Rs/AP-252 is the same fact read the other way —
                 // that silence is a trap when the activation is SCAFFOLDING).
                 WidgetExt::activate_action(&w, &format!("win.{}", nav_action_name(dir)), None)
                     .unwrap_or_else(|e| {

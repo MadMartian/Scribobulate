@@ -1,4 +1,4 @@
-//! Compile-checked icon names (ScrAP-39).
+//! Compile-checked icon names (GTK4Rs/AP-48).
 //!
 //! Icon names passed to `Button::from_icon_name` / `Widget::set_icon_name` /
 //! `Image::from_icon_name` are stringly-typed: a typo, or a name absent from the
@@ -71,7 +71,7 @@ pub(crate) enum Icon {
     /// `image-x-generic-symbolic`: the latter is a *mimetypes*-category icon
     /// absent from Breeze/Breeze-dark (the operator's theme), whose fallback
     /// chain never reaches Adwaita's copy, so it rendered the broken-image
-    /// placeholder there (ScrAP-39 / GTK4Rs/AP-48). `emblem-photos-symbolic` is present
+    /// placeholder there (GTK4Rs/AP-48 / GTK4Rs/AP-48). `emblem-photos-symbolic` is present
     /// in breeze, breeze-dark, and the Adwaita installed on Linux — but NOT in
     /// gvsbuild's Adwaita 50.0, so it showed the placeholder on Windows until it
     /// was bundled. Now resolves from the GResource on every platform; the swap
@@ -244,7 +244,7 @@ impl Icon {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum Resolution {
-    /// A miss renders the broken-image placeholder (ScrAP-39). The audit must fail.
+    /// A miss renders the broken-image placeholder (GTK4Rs/AP-48). The audit must fail.
     MustResolve,
     /// `format_button` gives this one a short text glyph (B, I, •, 1., …), so a miss
     /// degrades rather than breaking. The audit reports it and carries on.
@@ -344,7 +344,7 @@ impl Icon {
     /// **`MustResolve`** — every variant used at a call site with **no** fallback (a
     /// bare `from_icon_name` / `set_icon_name`: the direct-literal sites plus the
     /// `FILE`/`EDIT`/`VIEW` toolbar `Cmd`/`ViewCmd` buttons). A miss renders the
-    /// broken-image placeholder (ScrAP-39).
+    /// broken-image placeholder (GTK4Rs/AP-48).
     ///
     /// [`Icon::App`] is in this class for the same reason but with a quieter symptom:
     /// the window's `icon_name` has no fallback either, and a miss there hands the
@@ -419,7 +419,7 @@ impl Icon {
     }
 }
 
-// RESOLUTION for every `Icon` name (ScrAP-39) is gated by the
+// RESOLUTION for every `Icon` name (GTK4Rs/AP-48) is gated by the
 // `tests/icon_resolution.rs` integration target, not by a test body here. It walks
 // `Icon::every()` and classifies with `Icon::resolution`, which is why both are
 // compiled unconditionally rather than gated to `cfg(test)`.

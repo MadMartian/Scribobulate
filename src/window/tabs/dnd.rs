@@ -46,7 +46,7 @@ fn spawn_bare_window_for_tab(
     };
     if let Some(starter) = state(&win) {
         let starter_id = starter.id;
-        // QA round-1 H1 (ScrAP-61): the window's single caret overlay was parented
+        // QA round-1 H1 (GTK4Rs/AP-106): the window's single caret overlay was parented
         // to this throwaway starter tab's editor at window creation. Detach it before
         // the tab's last strong reference drops, or the editor finalizes while it
         // still has the popover child (`Finalizing … still has children left`
@@ -89,11 +89,11 @@ fn spawn_window_hosting_tab(
 ) -> Option<ApplicationWindow> {
     let (win, chrome) = spawn_bare_window_for_tab(app, source)?;
 
-    // ScrAP-90's shape, third call site — and it lives HERE, in the shared tail, not
+    // GTK4Rs/AP-80's shape, third call site — and it lives HERE, in the shared tail, not
     // in `move_tab_to_new_window` above, because BOTH pop-out paths funnel through this
     // function and only one of them is the menu action. The source window's single
     // format overlay is `set_parent`-attached to its active tab's editor (one per
-    // window — ScrAP-61), and that is the editor being handed away. GTK does not
+    // window — GTK4Rs/AP-106), and that is the editor being handed away. GTK does not
     // auto-unparent `set_parent`ed popovers, so the parent's teardown path must, and
     // the destination window immediately parents its OWN overlay onto the same editor
     // via `retarget_format_overlay`.
@@ -129,7 +129,7 @@ fn spawn_window_hosting_tab(
 
 /// View ▸ Move Tab to New Window: detach the active tab (preserving its
 /// editor/buffer/undo stack intact — `detach_tab`, never `remove_page`, per
-/// the Phase 0 spike's ScrAP-43 findings) and hand it to a brand-new window's
+/// the Phase 0 spike's GTK4Rs/AP-49 findings) and hand it to a brand-new window's
 /// tab strip. Does not itself repoint the `winstate` registry, the tab's
 /// chrome back-reference, or either window's title/tab strip:
 /// `wire_tab_arrival` below — wired on every window's tab strip, this new
@@ -213,12 +213,12 @@ pub(crate) fn wire_tab_arrival(window: &ApplicationWindow, tab_view: &TabView) {
             // page_num inside the idle.
             // Zoom is window-scoped (WindowChrome.zoom_level): a tab moved between
             // windows at DIFFERENT zoom levels adopts the destination's font for free
-            // (the shared per-window `.scrib-win-<id>` CSS class, ScrAP-64) but its
+            // (the shared per-window `.scrib-win-<id>` CSS class, GTK4Rs/AP-77) but its
             // per-render PIXEL geometry — heading scale, code-block padding, list
             // indents, and above all the anchored table-cell layout — was baked at the
             // SOURCE zoom and does NOT move on its own. Left unsynced, the two halves
             // desync into a garbled preview (destination-sized text over source-sized
-            // geometry — the cross-window face of ScrAP-64's symptom 2, table cells
+            // geometry — the cross-window face of GTK4Rs/AP-77's symptom 2, table cells
             // overlapping). So re-render the arriving tab's preview at the destination
             // zoom. Captured before the idle; the comparison skips the (common)
             // same-zoom move, and `rerender_tab_preview_in_place` no-ops in edit mode.
@@ -338,7 +338,7 @@ pub(crate) fn wire_tab_bar_dnd(window: &ApplicationWindow, tab_view: &TabView) {
             // Drag icon = the tab itself, frozen (widgets/tab §B). Capture and dim
             // are fused in `begin_drag_visuals` so the snapshot cannot be taken
             // after the dim — doing so clears the cached render node and yields an
-            // empty paintable, i.e. no drag icon at all (ScrAP-173).
+            // empty paintable, i.e. no drag icon at all (GTK4Rs/AP-156).
             if let Some(frozen) = tv.begin_drag_visuals(&content) {
                 gtk::DragIcon::set_from_paintable(drag, &frozen, 0, 0);
             }
@@ -560,7 +560,7 @@ mod gtk_integration_tests {
     /// from the editor it is handing away.
     ///
     /// The overlay is a `set_parent`-attached `GtkPopover`, and GTK does not
-    /// auto-unparent those (ScrAP-90). The destination window then parents its
+    /// auto-unparent those (GTK4Rs/AP-80). The destination window then parents its
     /// OWN overlay onto the same editor via `retarget_format_overlay`, so the
     /// editor ends up with two popover children — one of which belongs to a
     /// window that no longer owns it.

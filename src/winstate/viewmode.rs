@@ -66,7 +66,7 @@ impl std::fmt::Display for ViewMode {
 /// user copies/selects from the pane they are working in, not always the editor
 /// (TDD 9.25). Tracked stickily — updated only when focus lands in a real pane, so a
 /// transient surface (the context-menu/menu-bar popover, the find bar) that steals
-/// focus can't flip it, exactly like the editor-focus gate (ScrAP-20). Irrelevant
+/// focus can't flip it, exactly like the editor-focus gate (GTK4Rs/AP-20). Irrelevant
 /// outside split mode (there is only one visible view), so those modes ignore it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum FocusedPane {

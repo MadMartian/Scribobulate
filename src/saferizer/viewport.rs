@@ -1,5 +1,5 @@
 //! `ViewportTopIter` / `ViewportRange` — the top-of-viewport (and full visible
-//! range) `GtkTextView` read, centralized (ScrAP-15).
+//! range) `GtkTextView` read, centralized (GTK4Rs/AP-15).
 //!
 //! **Contract.** The iter at the top of a scrolled `GtkTextView`'s viewport must
 //! be derived from `visible_rect().y()` + `line_at_y(y)`, NOT `iter_at_location`.
@@ -111,14 +111,14 @@ mod tests {
         // document height validated, `upper` is the real content extent (not the
         // draft page height), so a direct `set_value` moves the viewport
         // deterministically — no deferred, one-shot `scroll_to_iter` that would land
-        // pre-validation at the top (ScrAP-82/22).
+        // pre-validation at the top (GTK4Rs/AP-115/22).
         vadj.set_value(vadj.upper() * 0.5);
         for _ in 0..50 {
             ctx.iteration(false);
             std::thread::sleep(std::time::Duration::from_millis(4));
         }
 
-        // Manual ScrAP-15 read.
+        // Manual GTK4Rs/AP-15 read.
         let vis = view.visible_rect();
         let (manual_top, _) = view.line_at_y(vis.y());
         assert!(

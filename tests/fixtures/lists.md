@@ -67,7 +67,7 @@ markers (`10.`, `11.`) and check whether a wider marker throws off the content c
 Every list below must sit WHOLLY inside the quote: each marker draws to the RIGHT of
 the quote's accent bar, never on or left of it, and the items indent from the QUOTE's
 text margin — not from the body margin. A list that is indented on the right (by the
-quote) but not on the left reads lopsided; that was the ScrAP-121 defect.
+quote) but not on the left reads lopsided; that was the GTK4Rs/AP-96 defect.
 
 > Quoted paragraph, for reference — the items below start from THIS margin.
 >
@@ -75,7 +75,7 @@ quote) but not on the left reads lopsided; that was the ScrAP-121 defect.
 > - A long quoted item that wraps across more than one visual line, so we can confirm a
 >   wrapped continuation stays inside the quote at the item's content margin.
 >   - Nested quoted item — each level steps in by exactly one level's worth from the
->     level above, no more (stacking the parent's indent onto it was the ScrAP-121
+>     level above, no more (stacking the parent's indent onto it was the GTK4Rs/AP-96
 >     corollary defect, which stranded the marker far left of its own text).
 >
 > 1. Quoted ordered item.

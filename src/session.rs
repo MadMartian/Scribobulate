@@ -9,7 +9,7 @@
 //! instead snapshots all windows ONCE and FREEZES [`save`] (see [`FROZEN`]) while
 //! it closes each window in turn, because `app.windows()` shrinks across that
 //! sequence and per-close writes would otherwise leave only the last window
-//! (ScrAP-81, TDD 15.10).
+//! (GTK4Rs/AP-113, TDD 15.10).
 //!
 //! ## Schema (v3)
 //!
@@ -85,7 +85,7 @@ thread_local! {
     /// resumed per-window `save` re-persists the whole current set, not a shrunk one.
     /// Do NOT change persistence to a single-window write, or thaw on a Save/Discard,
     /// without scoping this freeze to the quit operation itself — either would
-    /// reintroduce the TDD-15.10 / ScrAP-81 data-loss class this guard exists to
+    /// reintroduce the TDD-15.10 / GTK4Rs/AP-113 data-loss class this guard exists to
     /// prevent. (Worst case under the current design is bounded: a stale phantom
     /// window restored next launch, never lost edits.)
     static FROZEN: Cell<bool> = const { Cell::new(false) };
@@ -693,7 +693,7 @@ pub(crate) fn save(session: &Session) {
     // Hence the guard lives in the function that does the damage rather than in the
     // callers — there is no test seam on the production path, so a per-test override
     // would have to be remembered by every future window test, and forgetting it
-    // fails silently AND destructively (the ScrAP-116 shape).
+    // fails silently AND destructively (the GTK4Rs/AP-108 shape).
     //
     // It converts that failure into a loud, harmless one. It cannot fire under the
     // normal `cargo test` route, where `[env]` always sets the variable. Scope note:

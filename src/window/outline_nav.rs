@@ -73,7 +73,7 @@ fn make_outline_activate(window: &ApplicationWindow) -> Rc<dyn Fn(usize, Origina
         // The scroll-spy sets the outline selection programmatically (visual-only);
         // its selection changes must never navigate or update the persistent
         // `outline_selected`. Two complementary guards catch every spy-origin
-        // `selected-item` emission (ScrAP-89): the transient `outline_spy_selecting`
+        // `selected-item` emission (GTK4Rs/AP-112): the transient `outline_spy_selecting`
         // bool covers the synchronous notify inside `set_selected`, and
         // `outline_spy_doc` (the doc the spy currently owns) catches the emissions a
         // `GtkSingleSelection` fires AFTER the bool resets — deferred, and again on
@@ -130,7 +130,7 @@ fn navigate_to_heading(
 /// scroll it to the top. `src_offset` is a *byte* offset into the source, so it
 /// is converted to the buffer's *char* offset first. Scrolls via `scroll_to_mark`
 /// (the buffer's insert mark, deferred until line validation), not
-/// `scroll_to_iter` — same blanking hazard as the preview (ScrAP-22).
+/// `scroll_to_iter` — same blanking hazard as the preview (GTK4Rs/AP-22).
 pub(super) fn scroll_editor_to_offset(
     editor: &sourceview::View,
     buf: &sourceview::Buffer,
@@ -157,7 +157,7 @@ pub(super) fn scroll_editor_to_offset(
 //   • Data already exists: `RenderData.heading_offsets` — buffer char offsets
 //     of each heading in document order (indexed by `HeadingNode::doc_index`).
 //   • Drive from the preview ScrolledWindow vadjustment `value-changed`.
-//   • Use `visible_rect().y()` + `line_at_y` for the top-of-viewport iter (ScrAP-15).
+//   • Use `visible_rect().y()` + `line_at_y` for the top-of-viewport iter (GTK4Rs/AP-15).
 //   • Set the `SingleSelection` WITHOUT re-firing navigation (spy guard).
 
 /// Wire a scroll-spy to the current preview `ScrolledWindow`: on every scroll
@@ -234,17 +234,17 @@ pub(crate) fn wire_scroll_spy(window: &ApplicationWindow) {
     // construction (`wire_persistent_editor_scroll_spy`) — so we skip the connect
     // but still fire the initial viewport sync below.
     if let Some(preview_sw) = preview_sw {
-        // ScrAP-57: resolve the hosting window from the preview scroller AT EMISSION
+        // GTK4Rs/AP-52: resolve the hosting window from the preview scroller AT EMISSION
         // TIME, not from a captured weak ref. A cross-window tab move
         // reuses the tab's whole split subtree — this same
         // preview `ScrolledWindow` instance — and only reparents it under a different
         // window. A captured `window.downgrade()` would keep driving the SOURCE
-        // window's (now off-screen) outline forever — ScrAP-57's frozen-scroll-spy case
+        // window's (now off-screen) outline forever — GTK4Rs/AP-52's frozen-scroll-spy case
         // after a pop-out in Edit/Split. Following `preview_sw.root()` to the live host
         // window (same tactic split scroll-sync (`scrollsync.rs`) uses via the shared
         // `host_window` helper — `window::host_window`, defined in `tabs/lifecycle.rs`) makes
         // the handler self-healing, so it stays correct even if `wire_scroll_spy` is not
-        // re-run on the destination window after the move (ScrAP-46's rewire-on-mismatch was
+        // re-run on the destination window after the move (GTK4Rs/AP-52's rewire-on-mismatch was
         // necessary only because the closure captured the window statically).
         let handler_id = preview_sw.vadjustment().connect_value_changed(glib::clone!(
             #[weak(rename_to = sw)]
@@ -273,7 +273,7 @@ pub(crate) fn wire_scroll_spy(window: &ApplicationWindow) {
 /// for `ViewMode::Edit`. In split/preview mode this handler simply recomputes the
 /// same (idempotent) selection the preview scroller's handler already drives, so
 /// it is harmless there. The host window is resolved from the scroller at emission
-/// time (ScrAP-57), so it survives a cross-window tab move like the preview handler.
+/// time (GTK4Rs/AP-52), so it survives a cross-window tab move like the preview handler.
 pub(crate) fn wire_persistent_editor_scroll_spy(split: &crate::window::SplitView) {
     let editor_sw = split.editor_scroller();
     editor_sw.vadjustment().connect_value_changed(glib::clone!(
@@ -307,7 +307,7 @@ fn outline_tree_model(window: &ApplicationWindow) -> Option<gtk::TreeListModel> 
 /// Expand every heading in the outline tree — the "Expand all" header button
 /// (`win.outline-expand-all`). No-op on an empty outline. The load-bearing
 /// forward walk itself is `outline_view::expand_all_rows`, shared with the
-/// build-time full-open so the two can never drift (QA M-3; ScrAP-84).
+/// build-time full-open so the two can never drift (QA M-3; GTK4Rs/AP-111).
 pub(crate) fn outline_expand_all(window: &ApplicationWindow) {
     let Some(tree_model) = outline_tree_model(window) else {
         return;
@@ -322,12 +322,12 @@ pub(crate) fn outline_expand_all(window: &ApplicationWindow) {
 /// recursive** collapse, not merely "collapse to roots": collapsing a node DESTROYS
 /// its descendant subtree (`collapse_node` → `clear_node_children` frees the child
 /// model + rbtree, source-confirmed `gtktreelistmodel.c`), so nothing below the roots
-/// survives. Because the model is built `autoexpand=false` (ScrAP-84), later expanding a
+/// survives. Because the model is built `autoexpand=false` (GTK4Rs/AP-111), later expanding a
 /// root recreates only its *direct* children, collapsed — the user descends one level
 /// at a time (TDD 12.17). The root rows are collected *first* (they are never removed
 /// from the model, so their `GtkTreeListRow`s stay valid) before any collapse, so
 /// shifting flat positions can't skip one. No deepest-first recursion is needed —
-/// destroying the roots' subtrees is enough. ScrAP-84.
+/// destroying the roots' subtrees is enough. GTK4Rs/AP-111.
 pub(crate) fn outline_collapse_all(window: &ApplicationWindow) {
     let Some(tree_model) = outline_tree_model(window) else {
         return;
@@ -338,7 +338,7 @@ pub(crate) fn outline_collapse_all(window: &ApplicationWindow) {
     // chosen from the scroll position at `items-changed` time. When the outline is
     // scrolled to the bottom, that anchor is a deep `###` row — which the collapse
     // then DESTROYS (autoexpand=false frees a collapsed node's whole subtree,
-    // ScrAP-84).
+    // GTK4Rs/AP-111).
     // GtkListView 4.6 does not recover from losing its anchor to the removal: it
     // strands the stale far-end leaf widget materialised (vadj auto-resets to 0, but
     // the wrong row stays painted, with no expander), so Collapse-all appeared to
@@ -397,7 +397,7 @@ fn on_scroll(window: &ApplicationWindow) {
 /// Return the document-order index of the heading whose section occupies the
 /// top of the preview viewport, or `None` when above all headings.
 ///
-/// Uses `visible_rect().y()` + `line_at_y` (ScrAP-15) — not `iter_at_location`,
+/// Uses `visible_rect().y()` + `line_at_y` (GTK4Rs/AP-15) — not `iter_at_location`,
 /// which is a glyph hit-test that returns `None` at x=0 or in the margins.
 fn preview_top_doc_index(window: &ApplicationWindow) -> Option<usize> {
     let preview_sw = get_preview_sw(window)?;
@@ -405,7 +405,7 @@ fn preview_top_doc_index(window: &ApplicationWindow) -> Option<usize> {
         .child()
         .and_then(|c| c.downcast::<CodePreviewView>().ok())?;
 
-    // ScrAP-15: top-of-viewport iter via visible_rect + line_at_y (the seam).
+    // GTK4Rs/AP-15: top-of-viewport iter via visible_rect + line_at_y (the seam).
     let top_offset = crate::saferizer::viewport::ViewportTopIter::top_offset(&view);
 
     let rd = scrib_render_data(&view)?;
@@ -476,7 +476,7 @@ fn current_heading_levels(window: &ApplicationWindow) -> Vec<u8> {
 /// Flat `GtkTreeListModel` position of the deepest still-materialised (VISIBLE)
 /// row that is the heading at `doc_index` or its nearest ancestor.
 ///
-/// A `GtkTreeListModel` collapse frees the descendant rows (ScrAP-84), so a heading
+/// A `GtkTreeListModel` collapse frees the descendant rows (GTK4Rs/AP-111), so a heading
 /// under a collapsed node has no row. We take the heading's ancestor chain
 /// (`outline::ancestor_chain`, root→target) and select the DEEPEST chain member
 /// that still has a row: on Collapse all / a node collapse this rises to the
@@ -551,7 +551,7 @@ fn scroll_spy_set_selection(window: &ApplicationWindow, doc_index: Option<usize>
 
     // Resolve the flat position of the deepest still-VISIBLE row that is the target
     // heading or its nearest ancestor. When the exact heading is hidden under a
-    // collapsed node (autoexpand=false, ScrAP-84) its row doesn't exist, so we rise to
+    // collapsed node (autoexpand=false, GTK4Rs/AP-111) its row doesn't exist, so we rise to
     // the nearest visible ancestor; as ancestors re-expand we descend back toward
     // the exact heading (`deepest_visible_row_pos`). `None` (viewport above all
     // headings) clears the selection.
@@ -565,7 +565,7 @@ fn scroll_spy_set_selection(window: &ApplicationWindow, doc_index: Option<usize>
     // the exact heading is collapsed away). `make_outline_activate` suppresses any
     // `selected-item` activation matching this, catching the async / model-mutation
     // re-emissions a `GtkSingleSelection` fires OUTSIDE the transient
-    // `outline_spy_selecting` guard (ScrAP-89). Set unconditionally — even on the
+    // `outline_spy_selecting` guard (GTK4Rs/AP-112). Set unconditionally — even on the
     // no-change early-return below — so it always reflects the live selection.
     let sel_doc = (target_pos != gtk::INVALID_LIST_POSITION)
         .then(|| {
@@ -584,7 +584,7 @@ fn scroll_spy_set_selection(window: &ApplicationWindow, doc_index: Option<usize>
     }
 
     // Transient guard for the SYNCHRONOUS notify inside set_selected; the async /
-    // mutation re-emissions are handled by outline_spy_doc above (ScrAP-89).
+    // mutation re-emissions are handled by outline_spy_doc above (GTK4Rs/AP-112).
     st.outline_spy_selecting.set(true);
     sel.set_selected(target_pos);
     st.outline_spy_selecting.set(false);
@@ -728,7 +728,7 @@ mod collapse_all_tests {
         // Reproduce the real workflow: SCROLL the outline to the bottom (so the
         // ListView has materialised deep rows and is parked showing the far end),
         // THEN collapse. A model-only test that never scrolls the realized ListView
-        // misses this recycling/scroll-anchor artifact (GTK4Rs/AP-56 / ScrAP-87): the MODEL
+        // misses this recycling/scroll-anchor artifact (GTK4Rs/AP-56 / GTK4Rs/AP-78): the MODEL
         // collapses to [root] correctly either way; the bug is that GtkListView
         // strands a stale far-end leaf widget. `outline_collapse_all`'s scroll-to-top
         // re-anchor is what fixes it — mutation-test it by deleting that line and this
@@ -826,7 +826,7 @@ mod collapse_all_tests {
 
         let st = state(&window).expect("state");
         // Wait for the outline scroller to finish its first layout — reveal is a
-        // no-op while page_size is 0 (ScrAP-13 class).
+        // no-op while page_size is 0 (GTK4Rs/AP-13 class).
         assert!(
             pump_until(&ctx, 200, || {
                 st.chrome().outline_scroller.vadjustment().page_size() > 0.0

@@ -98,7 +98,7 @@ pub(crate) const FILE_CMDS: [Cmd; 10] = [
     },
     // Save every tab in this window that needs writing (dirty or deleted
     // backing file). Same icon as Save — themes' document-save-all is not
-    // universal (MustResolve icons cannot miss — ScrAP-39); the label
+    // universal (MustResolve icons cannot miss — GTK4Rs/AP-48); the label
     // differentiates. Accel is layout-stable <Primary><Alt>s (save family),
     // not <Shift>+letter (and not <Primary><Shift>s, which is Save As).
     Cmd {
@@ -215,7 +215,7 @@ pub(crate) const VIEW_CMDS: [ViewCmd; 3] = [
         icon: Icon::ViewDual,
         // NOT "<Alt><Shift>2" — a <Shift>+digit accelerator can never fire on a
         // layout where the digit's shifted glyph differs (researcher-verified
-        // GDK defect, ScrAP-44): gdk_key_event_matches uppercases
+        // GDK defect, GTK4Rs/AP-51): gdk_key_event_matches uppercases
         // the spec's keyval for the exact-match check, which is a no-op for
         // digits, so the produced '@' never matches a spec'd '2'.
         accel: "<Alt>2",
@@ -288,7 +288,7 @@ pub(crate) const EDIT_CMDS: [Cmd; 10] = [
     // layout-stable <Primary><Alt>+letter this would plausibly take is already
     // claimed (`l` by Insert Link, `c`/`u`/`o`/`h`/`m`/`n` by the format and
     // annotate commands), and inventing a <Shift>+punctuation one is the
-    // ScrAP-44 trap. Menu, toolbar and context menu reach it; the Keyboard
+    // GTK4Rs/AP-51 trap. Menu, toolbar and context menu reach it; the Keyboard
     // Shortcuts window correctly omits an unbound command.
     Cmd {
         action: "win.copy-link-location",
@@ -370,7 +370,7 @@ pub(crate) const FORMAT_CMDS: [FmtCmd; 16] = [
     },
     // Highlight (`==text==`, mark). No reliable freedesktop symbolic icon on the
     // common themes, so `icon` is empty and the toolbar falls back to the "H" glyph
-    // (same pattern as Code Span / Quote, ScrAP-39) — "H" keeps the
+    // (same pattern as Code Span / Quote, GTK4Rs/AP-48) — "H" keeps the
     // single-letter grouping with Bold/Italic/Strikethrough.
     FmtCmd {
         target: "highlight",
@@ -378,7 +378,7 @@ pub(crate) const FORMAT_CMDS: [FmtCmd; 16] = [
         icon: None,
         glyph: "H",
         // <Primary><Alt>h — a layout-stable unshifted letter ("h" for Highlight),
-        // avoiding the <Shift>+letter/punctuation matcher traps (ScrAP-44/ScrAP-51). Verified free both in ~/.config/kglobalshortcutsrc and among the
+        // avoiding the <Shift>+letter/punctuation matcher traps (GTK4Rs/AP-51/ScrAP-51). Verified free both in ~/.config/kglobalshortcutsrc and among the
         // app's own accelerators; same <Primary><Alt> family as the other
         // non-standard-shortcut format commands.
         accel: "<Primary><Alt>h",
@@ -409,10 +409,10 @@ pub(crate) const FORMAT_CMDS: [FmtCmd; 16] = [
         label: "Code Block",
         icon: None,
         glyph: "```",
-        // ScrAP-44: <Primary><Shift>grave never fires
+        // GTK4Rs/AP-51: <Primary><Shift>grave never fires
         // (Shift+` produces `~` on a US layout, and GDK's accelerator matcher
         // only case-maps letters, not punctuation). Swapped Shift for Alt on
-        // the same physical key — reliable and layout-stable, per ScrAP-44's
+        // the same physical key — reliable and layout-stable, per GTK4Rs/AP-51's
         // resolution option 1. No collision in ~/.config/kglobalshortcutsrc.
         accel: "<Primary><Alt>grave",
     },
@@ -421,17 +421,17 @@ pub(crate) const FORMAT_CMDS: [FmtCmd; 16] = [
         label: "Quote",
         icon: None,
         glyph: "❝",
-        // ScrAP-44: <Primary><Shift>period never fires
+        // GTK4Rs/AP-51: <Primary><Shift>period never fires
         // (Shift+. produces `>`). Same Alt-for-Shift swap as Code Block.
         accel: "<Primary><Alt>period",
     },
     // List block commands. Their natural accelerators (Word/Docs use Ctrl+Shift+7/8)
     // are <Shift>+digit, which GDK can never match on a layout where the shifted
-    // glyph differs (ScrAP-44) — so, like Code Block / Quote / Horizontal
+    // glyph differs (GTK4Rs/AP-51) — so, like Code Block / Quote / Horizontal
     // Bar, they take the layout-stable <Primary><Alt> family: `u` for unordered
     // (bulleted), `o` for ordered (numbered). Both confirmed free of a WM binding in
     // ~/.config/kglobalshortcutsrc. Breeze ships format-list-{un,}ordered-symbolic;
-    // the glyph fallback covers themes that don't (format_button, ScrAP-39).
+    // the glyph fallback covers themes that don't (format_button, GTK4Rs/AP-48).
     FmtCmd {
         target: "bulleted-list",
         label: "Bulleted List",
@@ -449,11 +449,11 @@ pub(crate) const FORMAT_CMDS: [FmtCmd; 16] = [
     // GFM task/checkbox list: prefixes every line with `- [ ] ` (toggles off if
     // already a task list). No standard "checklist" symbolic icon exists on the
     // common themes, so `icon` is empty and `format_button` falls back to the ☑
-    // glyph (same pattern as Code Span / Quote / Horizontal Bar, ScrAP-39).
+    // glyph (same pattern as Code Span / Quote / Horizontal Bar, GTK4Rs/AP-48).
     // Accelerator <Primary><Alt>c — "c" for Checklist (the sibling list commands use
     // a semantic letter: u=unordered, o=ordered). The more obvious Ctrl+Alt+{K,T,L}
     // are all claimed in ~/.config/kglobalshortcutsrc (layout switch / Konsole /
-    // lock), and a <Shift>+digit is an ScrAP-44 trap; `c` is an unshifted letter
+    // lock), and a <Shift>+digit is an GTK4Rs/AP-51 trap; `c` is an unshifted letter
     // (layout-stable) and verified free both in KDE's globals and among the app's
     // accelerators (Code Block is <Primary><Alt>grave, not c).
     FmtCmd {
@@ -468,7 +468,7 @@ pub(crate) const FORMAT_CMDS: [FmtCmd; 16] = [
         label: "Horizontal Bar",
         icon: None,
         glyph: "—",
-        // ScrAP-44: <Primary><Shift>minus never fires
+        // GTK4Rs/AP-51: <Primary><Shift>minus never fires
         // (Shift+- produces `_`). Same Alt-for-Shift swap as Code Block.
         accel: "<Primary><Alt>minus",
     },
@@ -547,7 +547,7 @@ pub(crate) const INLINE_ACCEL_CMDS: &[InlineCmd] = &[
     // Back / Forward through the window's document-visit history (TDD §23). The
     // browser bindings, deliberately: Alt+Left/Alt+Right canonical, plus the
     // dedicated Back/Forward keys a keyboard may carry as aliases. Both are
-    // layout-stable non-letter keys, so neither is an ScrAP-44 <Shift>+glyph trap,
+    // layout-stable non-letter keys, so neither is an GTK4Rs/AP-51 <Shift>+glyph trap,
     // and both were verified free of the app's own accelerators and of a
     // ~/.config/kglobalshortcutsrc WM binding (KDE claims Meta+Alt+Left/Right for
     // "Switch Window Left/Right" — a different combination).
@@ -589,7 +589,7 @@ pub(crate) const INLINE_ACCEL_CMDS: &[InlineCmd] = &[
     },
     // Annotate the preview selection. Ctrl+Alt+M — the Google-Docs
     // "add comment" convention (M for coMMent), and a layout-stable <Primary><Alt>+letter
-    // (an unshifted letter sidesteps the ScrAP-44 <Shift>+digit trap). Confirmed free of a
+    // (an unshifted letter sidesteps the GTK4Rs/AP-51 <Shift>+digit trap). Confirmed free of a
     // FORMAT/EDIT/FILE accel and of a ~/.config/kglobalshortcutsrc WM binding. Inline
     // (not a Cmd-table row) while the menu/toolbar surfaces are a follow-up — like
     // Go To Line, it is keyboard- and (soon) menu-reachable without a toolbar button.
@@ -603,7 +603,7 @@ pub(crate) const INLINE_ACCEL_CMDS: &[InlineCmd] = &[
     // The margin marker is self-drawn, so it is not in the a11y tree and a pointer
     // click was the only way to reach a comment; this is the parallel keyboard path
     // D1 always owed. Ctrl+Alt+N — "next", same layout-stable <Primary><Alt>+letter
-    // family as Annotate's Ctrl+Alt+M (an unshifted letter sidesteps the ScrAP-44
+    // family as Annotate's Ctrl+Alt+M (an unshifted letter sidesteps the GTK4Rs/AP-51
     // <Shift>+punctuation trap). Verified free of every FILE/EDIT/VIEW/FORMAT accel
     // and of a ~/.config/kglobalshortcutsrc WM binding.
     InlineCmd {

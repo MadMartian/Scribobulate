@@ -89,7 +89,7 @@ pub(crate) fn render(
     // over-wide lines. The vertical scrollbar is pinned always-on and the horizontal
     // is Automatic precisely because an over-wide line makes the content wider than the
     // viewport, which churns the width↔height-for-width bound and leaves the view
-    // stuck-blank until a manual resize (ScrAP-22/23). `Word` lets long unbreakable tokens
+    // stuck-blank until a manual resize (GTK4Rs/AP-22/23). `Word` lets long unbreakable tokens
     // (URLs, paths, long identifiers) overflow the wrap width → exactly that churn;
     // `Char` (like the original `WordChar`) always breaks within the width, so no line
     // is ever over-wide. Both Char(1) and Word(2) are in PangoWrapMode range and
@@ -103,7 +103,7 @@ pub(crate) fn render(
     // Install the render's typed outputs — the shared lockstep sequence
     // `re_render` mirrors exactly (D4). Fixed-height anchored children (the
     // horizontal-rule separators) get bound to the live content column; tables
-    // use the custom churn-free widget (ScrAP-23).
+    // use the custom churn-free widget (GTK4Rs/AP-23).
     install_products_into_view(
         &view,
         code_blocks,
@@ -152,7 +152,7 @@ pub(crate) fn render(
     // every frame, so GTK skips the paint (blank view + unpainted bar) until a
     // manual resize. A far programmatic scroll_to_mark (outline navigation) kicks it
     // off. Forcing the bar always-on keeps the content width constant, breaking the
-    // loop (ScrAP-22).
+    // loop (GTK4Rs/AP-22).
     //
     // Horizontal policy AUTOMATIC (researcher-verified against gtk-4-6). NEVER would
     // adopt the child's *minimum* width and ratchet (text never re-wraps on shrink —
@@ -160,11 +160,11 @@ pub(crate) fn render(
     // small (min_content_width, child-independent — :1821-1828) so it shrinks freely
     // and re-wraps. The embedded tables are clamped to the viewport by
     // `CodePreviewView::size_allocate` (bound to the view's hadjustment page_size).
-    // CRUCIAL co-requisite (ScrAP-23): the bounded children must NOT start over-wide, or
+    // CRUCIAL co-requisite (GTK4Rs/AP-23): the bounded children must NOT start over-wide, or
     // AUTOMATIC churns from frame 1, the view never gets a clean allocation,
     // page_size stays 0, and the bind is skipped forever (permanent blank). They
     // start at their small natural width and `size_allocate` grows them to the
-    // viewport before the first paint. Pin only the VERTICAL bar (ScrAP-22 oscillation).
+    // viewport before the first paint. Pin only the VERTICAL bar (GTK4Rs/AP-22 oscillation).
     let scroller = ScrolledWindow::builder()
         .child(&view)
         .vscrollbar_policy(gtk::PolicyType::Always)
@@ -172,7 +172,7 @@ pub(crate) fn render(
         // right edge — otherwise the floating bar sits over the right margin where
         // the CriticMarkup comment markers are drawn, stealing their clicks
         // (the annotation create card). With the bar always-on this is also strictly more
-        // stable for the ScrAP-22 width invariant (a fixed reserved column).
+        // stable for the GTK4Rs/AP-22 width invariant (a fixed reserved column).
         .overlay_scrolling(false)
         .build();
     // Track the user's settled reading line (on the scroller's own vadjustment,
@@ -183,7 +183,7 @@ pub(crate) fn render(
     // Wrap the preview scroller in a per-preview GtkOverlay so the CriticMarkup
     // "Annotate" bar (the preview create card) floats IN-SURFACE over the selection
     // rather than in a GtkPopover: an autohide popover takes an X11 seat grab whose
-    // cross-surface coordinate mis-delivery steals the comment entry's focus (ScrAP-98).
+    // cross-surface coordinate mis-delivery steals the comment entry's focus (GTK4Rs/AP-83).
     // The overlay child shares the toplevel surface — no grab, no second origin. This
     // Overlay becomes the preview PANE widget (SplitView::preview_scroller /
     // install_annotation_sink dig one level through it to reach the ScrolledWindow).
@@ -308,7 +308,7 @@ pub(crate) fn re_render(
     // owned by the coalesced split-scroll sync in window.rs (it forces the editor as
     // driver around this rebuild and re-projects as the new height settles), so
     // re_render deliberately does NOT touch the scroll position here. Restoring the
-    // preview's own position would fight the sync (ScrAP-16).
+    // preview's own position would fight the sync (GTK4Rs/AP-16).
     //
     // Track the new anchor children, then install the render's typed outputs
     // (self-drawn code-block/blockquote backgrounds refreshed for the new buffer
@@ -403,7 +403,7 @@ pub(crate) fn refresh_annotations_in_place(
     // markup on the cell's `GtkLabel` (built by `finalize_cell_markup`), NOT a buffer tag,
     // so the re-tag above can't touch it. Rather than force a full re-render (set_buffer,
     // which reset+restored the scroll and made the pane visibly JUMP on every annotation
-    // add/remove — the exact bug ScrAP-103's in-place path exists to avoid), repaint the
+    // add/remove — the exact bug GTK4Rs/AP-90's in-place path exists to avoid), repaint the
     // LIVE cell labels IN PLACE from the freshly rendered products' cell labels: same
     // visible text, only a background <span> added/removed, so the label does not resize →
     // no reflow, no scroll jump. Structural identity was just confirmed, so live↔products
@@ -506,7 +506,7 @@ mod gtk_integration_tests {
              app under a screen reader on GTK 4.6 (gtkatspitextbuffer.c Site A)"
         );
         // Char, not Word: Char never produces an over-wide line, preserving the
-        // no-horizontal-overflow invariant the ScrAP-22/23 width machinery needs (Word
+        // no-horizontal-overflow invariant the GTK4Rs/AP-22/23 width machinery needs (Word
         // lets long unbreakable tokens overflow → blank-view churn).
         assert_eq!(view.wrap_mode(), WrapMode::Char);
 
@@ -530,7 +530,7 @@ mod gtk_integration_tests {
     /// renders as a real link, and the cell it lives in can find the preview view that
     /// activation routes through.
     ///
-    /// The reported defect (ScrAP-259): every `☑ [#6378](…)` cell in a progress-tracker
+    /// The reported defect (GTK4Rs/AP-239): every `☑ [#6378](…)` cell in a progress-tracker
     /// table rendered its link as inert text, while the pure-link cells of the table two
     /// sections above worked — the difference invisible to the reader, so link
     /// clickability looked random. Document Rendering CAM row 2 (a rendering feature
@@ -606,11 +606,11 @@ mod gtk_integration_tests {
     }
 
     /// A wide table nested in a list item OR a blockquote must NOT push the preview
-    /// over-wide → no spurious Automatic horizontal scrollbar (TDD 12.8; ScrAP-23a).
+    /// over-wide → no spurious Automatic horizontal scrollbar (TDD 12.8; GTK4Rs/AP-23a).
     /// The failure: `CodePreviewView::size_allocate` bounds every anchored child to
     /// the content column as if it began at the content edge, but an indented table starts
     /// at its list/blockquote margin, so a naive bound leaves it exactly `inset` px
-    /// over-wide — the outer scroller then shows an h-bar and churns the ScrAP-22/23 blank.
+    /// over-wide — the outer scroller then shows an h-bar and churns the GTK4Rs/AP-22/23 blank.
     /// The fix insets the bound by the enclosing block's stolen margin (list = left only;
     /// blockquote = both sides). Wide cells force the tables to fill the column (fit_columns
     /// water-fills to the bound), so the indent is what tips them over.
@@ -660,9 +660,9 @@ mod gtk_integration_tests {
         window.destroy();
         assert!(
             upper <= page,
-            "ScrAP-23a / TDD 12.8: an indented (list/blockquote) wide table must not push \
+            "GTK4Rs/AP-23a / TDD 12.8: an indented (list/blockquote) wide table must not push \
              the preview over-wide — hadjustment upper={upper} must not exceed page_size={page} \
-             (over by {:.0}px → spurious Automatic h-scrollbar → ScrAP-22/23 churn/blank)",
+             (over by {:.0}px → spurious Automatic h-scrollbar → GTK4Rs/AP-22/23 churn/blank)",
             upper - page,
         );
     }
@@ -680,7 +680,7 @@ mod gtk_integration_tests {
     /// This asserts the STATE (buffer identity), not the symptom (a crash), on purpose:
     /// the symptom needs an unvalidated line to be cached at the moment of the swap, so a
     /// test that pumps to a settled layout would pass against the fatal version
-    /// (ScrAP-87/GTK4Rs/AP-78 masking). Identity fails immediately and everywhere.
+    /// (GTK4Rs/AP-78/GTK4Rs/AP-78 masking). Identity fails immediately and everywhere.
     ///
     /// Mutation check: restoring `view.set_buffer(Some(&buf))` in `re_render` fails the
     /// first assert.
@@ -690,7 +690,7 @@ mod gtk_integration_tests {
     /// insert — and it PASSED against the fatal version, because a dangling
     /// `GtkTextLine *` only faults once the freed memory has been recycled, which a short
     /// headless body does not reliably do. It would have been a guard that reports
-    /// "protected" while protecting nothing (ScrAP-87). The state — one buffer, never
+    /// "protected" while protecting nothing (GTK4Rs/AP-78). The state — one buffer, never
     /// replaced — is the checkable thing; the crash is not.
     #[gtktest::test]
     fn re_render_rebuilds_the_live_buffer_and_never_swaps_it() {

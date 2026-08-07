@@ -7,7 +7,7 @@
 //! minimum width, never the viewport** (`gtk_widget_get_preferred_size` →
 //! `measure(V, min_width)`); any size delta from a re-measure `queue_resize`s →
 //! propagates `alloc_needed` up → snapshot bails → blank. A width-clamp can never fix
-//! it (the viewport width never enters that measure). See ScrAP-23.
+//! it (the viewport width never enters that measure). See GTK4Rs/AP-23.
 //!
 //! This widget satisfies the only invariant that works (researcher-verified against
 //! gtk-4-6 source): **report a size independent of GTK's `for_size`, and never
@@ -74,7 +74,7 @@ mod imp {
         /// started at the content edge, but a table nested in a list/quote actually
         /// starts `inset` px further right, so `set_bound_width` subtracts this or the
         /// table overflows the viewport by `inset` px → spurious Automatic h-scrollbar →
-        /// ScrAP-22/23 churn/blank (ScrAP-23a). Set once by the renderer at build time.
+        /// GTK4Rs/AP-22/23 churn/blank (GTK4Rs/AP-23a). Set once by the renderer at build time.
         pub(crate) inset: std::cell::Cell<i32>,
     }
 
@@ -104,7 +104,7 @@ mod imp {
         }
 
         // (4) Return the cached total; NEVER measure cells here (a cell re-measure at
-        // validation `for_size` is exactly what re-arms the blank — ScrAP-23).
+        // validation `for_size` is exactly what re-arms the blank — GTK4Rs/AP-23).
         fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
             let (w, h) = self.layout.borrow().total;
             let v = if orientation == gtk::Orientation::Horizontal {
@@ -171,11 +171,11 @@ impl ScribTableWidget {
     pub(crate) fn set_bound_width(&self, px: i32) {
         use gtk::subclass::prelude::*;
         let imp = self.imp();
-        // Subtract the list/blockquote inset (ScrAP-23a): the caller passes the
+        // Subtract the list/blockquote inset (GTK4Rs/AP-23a): the caller passes the
         // content-column width as if the table started at the content edge, but a table
         // nested in a list item / blockquote actually starts `inset` px further right, so
         // fitting it into the full column leaves it `inset` px over-wide → spurious
-        // Automatic h-scrollbar → ScrAP-22/23 churn/blank. `inset` is 0 for a top-level
+        // Automatic h-scrollbar → GTK4Rs/AP-22/23 churn/blank. `inset` is 0 for a top-level
         // table, so this is a no-op there.
         let effective = (px - imp.inset.get()).max(1);
         if px <= 0 || imp.layout.borrow().bound_w == effective {
@@ -189,7 +189,7 @@ impl ScribTableWidget {
     /// Record the left inset (px) this table inherits from an enclosing list item and/or
     /// blockquote, so [`set_bound_width`](Self::set_bound_width) fits it into
     /// `content − inset` rather than the full column. Set once by the renderer at build
-    /// time, before the first `set_bound_width` (ScrAP-23a). Idempotent; clamped ≥ 0.
+    /// time, before the first `set_bound_width` (GTK4Rs/AP-23a). Idempotent; clamped ≥ 0.
     pub(crate) fn set_bound_inset(&self, px: i32) {
         use gtk::subclass::prelude::*;
         self.imp().inset.set(px.max(0));
@@ -218,7 +218,7 @@ impl ScribTableWidget {
         //    The minimum is load-bearing: a column allocated less than a cell's minimum
         //    makes that cell OVERFLOW its column, so the table ends up a few pixels
         //    wider than the bound → the view goes over-wide → the outer Automatic h-bar
-        //    appears and churns → blank (ScrAP-23). `fit_columns` never allocates below it.
+        //    appears and churns → blank (GTK4Rs/AP-23). `fit_columns` never allocates below it.
         let mut col_min = vec![0i32; ncols];
         let mut col_nat = vec![0i32; ncols];
         for cell in cells.iter() {
@@ -268,7 +268,7 @@ mod gtk_integration_tests {
 
     /// `set_bound_inset` narrows the fit target: after `set_bound_width(px)` the table's
     /// measured width is `≤ px − inset`, so an indented table fits inside the column its
-    /// enclosing list/blockquote leaves it (ScrAP-23a). Wide cells force the fit to
+    /// enclosing list/blockquote leaves it (GTK4Rs/AP-23a). Wide cells force the fit to
     /// fill the column, so the inset is what keeps it in-bounds. Mutation: dropping the
     /// `− inset` in `set_bound_width` makes the width equal `px` and fails this.
     #[gtktest::test]

@@ -69,7 +69,7 @@ impl BufferMark {
     /// The mark itself, but only when it is safe to resolve against `against` — for
     /// the `scroll_to_mark` path, which needs the `GtkTextMark` (not an iter) because
     /// `scroll_to_mark` re-applies its target across GtkTextView's lazy height
-    /// validation where a one-shot `scroll_to_iter` would land pre-validation (ScrAP-22).
+    /// validation where a one-shot `scroll_to_iter` would land pre-validation (GTK4Rs/AP-22).
     /// `None` carries the same membership guarantee as [`resolve`](Self::resolve):
     /// `scroll_to_mark` internally resolves the mark via the same unchecked path.
     pub(crate) fn scroll_mark(

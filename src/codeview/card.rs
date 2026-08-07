@@ -12,7 +12,7 @@
 //!
 //!  * Nothing re-pointed the card when the document scrolled, so it stranded over
 //!    unrelated text. (This was NOT a behaviour the autohide seat grab used to supply and
-//!    that ScrAP-98 took away: 4.6.9's autohide check handles button and touch input only,
+//!    that GTK4Rs/AP-83 took away: 4.6.9's autohide check handles button and touch input only,
 //!    never scroll, and GTK implements no anchor-tracking anywhere — ScrAP-188.)
 //!  * Nothing dismissed it on an outside click, autohide having been switched off.
 //!  * Activating a different annotation re-pointed the card with a rect captured *before*
@@ -22,7 +22,7 @@
 //!
 //! The fix is not three patches; it is to stop storing rectangles. This widget anchors to
 //! the annotation's **identity** (its `src_span.start`, the same stable key the annotations
-//! viewer navigates by — never a `Vec` index, ScrAP-55) and re-derives the chip rectangle
+//! viewer navigates by — never a `Vec` index, GTK4Rs/AP-74) and re-derives the chip rectangle
 //! from the live document *every time it is about to be shown or the view scrolls*. A
 //! stale rect is then not "a bug we fixed", it is a value that no longer exists.
 //!
@@ -38,7 +38,7 @@
 //!    us: `gtk_text_view_measure` measures `center_child`, and `gtk_text_view_child_measure`
 //!    takes the **max over every overlay** — so a 280 px card raises the *view's minimum
 //!    width*, which re-arms the marginal `Automatic` h-scrollbar and with it the whole
-//!    ScrAP-139/ScrAP-23a → ScrAP-22 churn-blank chain. There is no opt-out. And it would behave
+//!    GTK4Rs/AP-124/GTK4Rs/AP-23a → GTK4Rs/AP-22 churn-blank chain. There is no opt-out. And it would behave
 //!    *differently* on our macOS build (4.22.4, where the scroll bug is fixed) than on our
 //!    4.6.9 floor — the exact cross-platform divergence this rebuild exists to end.
 //!    Full write-up: ScrAP-189.
@@ -49,7 +49,7 @@
 //! And it is what upstream does for this exact shape of affordance: GtkSourceView's
 //! completion popup, hover and snippet tooltips are all `GtkSourceAssistant`, a
 //! `GtkPopover` subclass parented to the view with `gtk_widget_set_parent`, with
-//! `gtk_popover_set_autohide(…, FALSE)` — the same choice ScrAP-98 forced on us — that
+//! `gtk_popover_set_autohide(…, FALSE)` — the same choice GTK4Rs/AP-83 forced on us — that
 //! recomputes its position from a text position on every adjustment `value-changed` and
 //! **hides when its anchor leaves the viewport**. This module is that pattern, with the
 //! chip (not a bare text iter) as the anchor.
@@ -73,7 +73,7 @@
 //! test and silently fails the one case the issue is about. That is not hypothetical; it is
 //! what the first implementation here did, and what
 //! `presenting_recomputes_the_anchor_rather_than_reusing_a_stale_rect` was written to catch
-//! after it did. Mutation-test both points if you touch either (ScrAP-87).
+//! after it did. Mutation-test both points if you touch either (GTK4Rs/AP-78).
 //!
 //! With both in place a future caller cannot forget, because no code path asks it to
 //! remember: there is no rectangle parameter anywhere in this widget's API to get wrong
@@ -95,7 +95,7 @@ mod imp {
         /// **Identity, not geometry and not an index.** The `src_span.start` of the first
         /// annotation this card is showing — the same stable key `marker_index_for_src`
         /// resolves for the annotations viewer. An index would go stale the moment the
-        /// document re-renders and `markers` is rebuilt (ScrAP-55); a rectangle would go
+        /// document re-renders and `markers` is rebuilt (GTK4Rs/AP-74); a rectangle would go
         /// stale the moment the view scrolls. An identity goes stale only when
         /// the annotation itself is gone, which is exactly when this card should stop
         /// pointing at anything.
@@ -109,7 +109,7 @@ mod imp {
         /// **Logically showing**, which is not the same as `is_visible()`: the card stays
         /// "open" while temporarily hidden because its chip scrolled off the viewport, so
         /// it can re-show itself when the chip comes back. It is also the lag-free answer
-        /// for `has_open_marker_popover` (ScrAP-112).
+        /// for `has_open_marker_popover` (GTK4Rs/AP-117).
         pub(super) open: Cell<bool>,
 
         /// Set while the card is hidden because its chip is off the viewport, as opposed
@@ -185,7 +185,7 @@ impl AnnotationCard {
     ///
     /// `set_parent` (not a container `append`): a popover is a native child, which also
     /// means GTK will NOT unparent it for us — [`teardown`](Self::teardown) must, from the
-    /// view's `dispose` (ScrAP-90/GTK4Rs/AP-80), popping it down first (ScrAP-144).
+    /// view's `dispose` (GTK4Rs/AP-80/GTK4Rs/AP-80), popping it down first (ScrAP-144).
     pub(crate) fn new(view: &CodePreviewView) -> Self {
         let card: Self = glib::Object::builder().build();
         // Non-autohide, like every other popover in this app and like BOTH of
@@ -193,7 +193,7 @@ impl AnnotationCard {
         // grab that (GTK 4.6, researcher-confirmed) drops the popover→window coordinate
         // offset, so a mouse click on this card's OWN Edit/Remove buttons resolves as
         // OUTSIDE it and dismisses the card instead of activating the button — keyboard
-        // worked only because it skips pointer routing (ScrAP-98). Autohide also supplied
+        // worked only because it skips pointer routing (GTK4Rs/AP-83). Autohide also supplied
         // focus-on-open, Escape-dismiss and outside-click dismiss for free; the first two
         // are re-wired below and in `open_marker_popover`, and outside-click dismissal is
         // this widget's `arm_outside_dismiss` — which, unlike autohide, cannot misroute a
@@ -245,7 +245,7 @@ impl AnnotationCard {
     }
 
     /// Whether the card is logically showing an annotation — lag-free, and true even while
-    /// it is transiently hidden because its chip is scrolled off (ScrAP-112: never
+    /// it is transiently hidden because its chip is scrolled off (GTK4Rs/AP-117: never
     /// `is_visible()`, and here not even "is it on screen").
     ///
     /// This is the **session** question: does the user have an annotation open? Use it for
@@ -369,7 +369,7 @@ impl AnnotationCard {
     /// That guarantee is an *ordering* property of this specific signal, not a property of
     /// the geometry APIs, which are emphatically not self-validating: `iter_location`'s
     /// `ensure_layout` only ensures a layout *exists*, and `buffer_to_window_coords` is a
-    /// bare `y -= yoffset` with no flush (GTK4Rs/AP-142/ScrAP-156). Repositioning from a tick
+    /// bare `y -= yoffset` with no flush (GTK4Rs/AP-142/GTK4Rs/AP-142). Repositioning from a tick
     /// callback instead would sample at the UPDATE phase, before `size_allocate` runs
     /// `flush_first_validate` at LAYOUT — which is why the programmatic-navigation path
     /// uses `connect_after_paint` and not this hook.
@@ -381,7 +381,7 @@ impl AnnotationCard {
         // clamped value is the point: an earlier version here asked a bare
         // "is it visible?" predicate and then pointed at the UNCLAMPED rectangle, which
         // passes the guard and still hands GTK a negative y whenever the chip straddles
-        // the top edge — the ScrAP-26 assertion the guard exists to prevent, arrived at
+        // the top edge — the GTK4Rs/AP-26 assertion the guard exists to prevent, arrived at
         // through the guard. The seam has no shape that lets you do that.
         let on_screen = self
             .view()
@@ -478,7 +478,7 @@ impl AnnotationCard {
     /// and the failure mode if it does not hold on some backend is precisely the bug this
     /// app already shipped once: a press on the card's own button resolving as "outside"
     /// and dismissing the card instead of activating it — which is what forced `autohide`
-    /// off (ScrAP-98). Three lines is a cheap price for not re-litigating that on a
+    /// off (GTK4Rs/AP-83). Three lines is a cheap price for not re-litigating that on a
     /// platform we cannot test from here. The discriminator is surface identity, which
     /// answers the question directly and is correct under every reading.
     ///
@@ -525,7 +525,7 @@ impl AnnotationCard {
     ///
     /// Kept as one named function rather than inlined into the closure so the rule has a
     /// place to be stated, and so a future third exclusion has an obvious home instead of
-    /// growing another `if` in the handler (ScrAP-116: the mitigation lives at one choke
+    /// growing another `if` in the handler (GTK4Rs/AP-108: the mitigation lives at one choke
     /// point, not scattered across call sites).
     fn press_is_ours(&self, gesture: &gtk::GestureClick, x: f64, y: f64) -> bool {
         // (1) Delivered into the card's OWN popup surface. Surface identity answers this
@@ -559,7 +559,7 @@ impl AnnotationCard {
     ///    that left them behind would accumulate one of each on a longer-lived object.
     ///  * **Not ours** — the parenting teardown, which must be **popdown before unparent**
     ///    (ScrAP-144), with the unparent mandatory because GTK does not unparent a
-    ///    `set_parent`-attached popover for us (ScrAP-90/GTK4Rs/AP-80). That order already has a
+    ///    `set_parent`-attached popover for us (GTK4Rs/AP-80/GTK4Rs/AP-80). That order already has a
     ///    seal — [`PersistentPopover`](crate::saferizer::PersistentPopover) exists so it
     ///    cannot be written wrongly — so it is **delegated**, not re-implemented here. Two
     ///    hand-written copies of one invariant is how the invariant drifts, and the copy
@@ -667,7 +667,7 @@ mod gtk_integration_tests {
 
     /// Pump the main loop until `done` reports true, or `budget` iterations elapse.
     /// Non-blocking iteration + a short sleep, never `iteration(true)`, which starves
-    /// forever on an idle display when the condition never becomes true (ScrAP-88).
+    /// forever on an idle display when the condition never becomes true (GTK4Rs/AP-79).
     fn pump_until(budget: u32, done: impl Fn() -> bool) -> bool {
         let ctx = glib::MainContext::default();
         for _ in 0..budget {
@@ -682,7 +682,7 @@ mod gtk_integration_tests {
 
     /// Scroll the view the way a HAND does.
     ///
-    /// Not a bare `vadj.set_value`: opening the card arms the ScrAP-113 re-pin guard, which
+    /// Not a bare `vadj.set_value`: opening the card arms the GTK4Rs/AP-118 re-pin guard, which
     /// deliberately drags the scroll back for a window after the popup so a deferred
     /// validation scroll cannot move the document under the just-opened card. That guard
     /// stands down for a user scroll, and every real hand-scroll input source (wheel,
@@ -780,7 +780,7 @@ mod gtk_integration_tests {
         // Scroll to the end PROGRESSIVELY, re-aiming as the document grows. A single
         // `set_value(upper - page_size)` lands almost nowhere: line heights validate
         // lazily, so `upper` at this instant still describes a fraction of the document
-        // and the value clamps to that fraction (ScrAP-82). Re-aiming each frame is what
+        // and the value clamps to that fraction (GTK4Rs/AP-115). Re-aiming each frame is what
         // converges — and is what a hand-drag to the bottom does anyway.
         let hid = pump_until(300, || {
             if card.is_visible() {
@@ -830,7 +830,7 @@ mod gtk_integration_tests {
     ///
     /// The poison is injected rather than produced by a scroll on purpose. A scroll would
     /// make the test depend on how far the view actually scrolled, which on a freshly-built
-    /// view is a function of lazy height validation (ScrAP-82) rather than of what the fix
+    /// view is a function of lazy height validation (GTK4Rs/AP-115) rather than of what the fix
     /// does — a flaky measurement of the wrong thing. Injecting states the property
     /// directly: *whatever* the card is holding, presenting replaces it with the truth.
     ///
@@ -920,7 +920,7 @@ mod gtk_integration_tests {
         assert!(
             card.parent().is_none(),
             "teardown must also unparent the popover — GTK does not unparent a \
-             `set_parent`-attached popover for us (ScrAP-90/GTK4Rs/AP-80)"
+             `set_parent`-attached popover for us (GTK4Rs/AP-80/GTK4Rs/AP-80)"
         );
         win.destroy();
     }
@@ -1044,7 +1044,7 @@ mod gtk_integration_tests {
     ///
     /// This is why the anchor is an IDENTITY (`src_span.start`) and not a `Vec` index: the
     /// markers list is rebuilt on every render, so an index silently retargets while an
-    /// identity simply stops resolving (ScrAP-55, the ScrAP-187 family).
+    /// identity simply stops resolving (GTK4Rs/AP-74, the ScrAP-187 family).
     #[gtktest::test]
     fn an_anchor_whose_annotation_is_gone_resolves_to_nothing() {
         use gtk::subclass::prelude::*;

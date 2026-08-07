@@ -8,7 +8,7 @@ use super::{DocId, SwapHeader};
 /// The enum exists so the invariant has exactly one spelling in the tree. A `bool` would
 /// have worked and would have been re-derived, slightly differently, at each of save /
 /// save-as / discard / reload / revert — which is the failure this design exists to
-/// avoid (ScrAP-116, ScrAP-219).
+/// avoid (GTK4Rs/AP-108, ScrAP-219).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SwapSync {
     /// The document is dirty: a snapshot must exist.

@@ -1,5 +1,5 @@
 //! Geometry & scrolling helpers for [`CodePreviewView`]: cache-free line/cell
-//! buffer-Y reads (ScrAP-22/ScrAP-105), the shared persistent-mark helper, and the
+//! buffer-Y reads (GTK4Rs/AP-22/ScrAP-105), the shared persistent-mark helper, and the
 //! validation-safe scroll-to-offset / scroll-to-cell entry points. Split out of
 //! the former monolithic `codeview.rs` (F-AP-002).
 
@@ -11,7 +11,7 @@ use gtk::prelude::*;
 /// it (left-gravity) on first use. Reusing ONE persistent mark — never a
 /// create-then-delete each call — is a documented correctness rule: a
 /// create+delete each scroll races GtkTextView's first-paragraph pinning and
-/// leaves the view snapped to the top (ScrAP-22/ScrAP-65). Shared by every
+/// leaves the view snapped to the top (GTK4Rs/AP-22/ScrAP-65). Shared by every
 /// validation-safe scroll restore (`preview::scroll`'s one-shot and progressive
 /// restores, and this view's own `scroll_to_buffer_offset`) so the idiom stays
 /// byte-for-byte identical across all of them (QA M-5).
@@ -60,7 +60,7 @@ pub(crate) fn line_bottom_y(
 
 /// Vertical `(top, bottom)` buffer-Y extent of a `span`'s self-drawn decoration (a
 /// code-block card, a blockquote accent bar), clamped to the viewport edges so no
-/// off-screen (unvalidated) iter is ever measured mid-paint (ScrAP-22): a boundary whose
+/// off-screen (unvalidated) iter is ever measured mid-paint (GTK4Rs/AP-22): a boundary whose
 /// line is on-screen is read via cache-free `line_top_y`/`line_bottom_y`; a boundary
 /// past the viewport edge clamps to that edge instead.
 ///
@@ -71,9 +71,9 @@ pub(crate) fn line_bottom_y(
 /// adding a further pad here double-counted it AND, on the bottom, reached past the
 /// block's last line and bled the card onto the immediately-following line whenever no
 /// blank block-separator absorbed it — a loose continuation paragraph abutting a code
-/// block inside a list item (ScrAP-150). Shared by the code-block
+/// block inside a list item (GTK4Rs/AP-127). Shared by the code-block
 /// and blockquote loops in `snapshot_layer` (identical clamp) and exercised directly by
-/// the regression test, so the paint path and the test read the SAME formula (ScrAP-87).
+/// the regression test, so the paint path and the test read the SAME formula (GTK4Rs/AP-78).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn span_card_y_extent(
     view: &impl IsA<gtk::TextView>,
@@ -99,13 +99,13 @@ pub(crate) fn span_card_y_extent(
 
 /// `(buffer-Y, height)` — in the f32 buffer space `snapshot_layer` paints in — of a
 /// table CELL's own row: `table-top + cell-within-table`. Both halves are scroll- AND
-/// placeholder-immune (bug C / ScrAP-109): `gtk_text_view_allocate_children`
+/// placeholder-immune (bug C / GTK4Rs/AP-91): `gtk_text_view_allocate_children`
 /// parks every anchored child off-screen (x=-w, y=-h, correct SIZE but WRONG POSITION,
 /// gtktextview.c:4442) until its line validates, so
 ///  • table-top = `line_yrange` of the TABLE's OWN child-anchor iter — a cache-free
 ///    btree read that touches no allocation (NOT the cell→view translate, which reads
 ///    the poisoned origin → wrong-but-nonzero Y = the stale-chip bug; NOT
-///    `get_iter_location`, which VALIDATES the line mid-snapshot → blank view, ScrAP-22);
+///    `get_iter_location`, which VALIDATES the line mid-snapshot → blank view, GTK4Rs/AP-22);
 ///  • cell offset = cell→TABLE translate, a LOCAL subtree transform that never touches
 ///    the view-relative (poisoned) origin.
 ///
@@ -146,12 +146,12 @@ pub(crate) fn cell_row_y_h(
 /// card (which anchors itself to that chip). They MUST agree: the card points at the
 /// chip, so a second implementation is free to drift and the drift is visible as a
 /// card floating away from the chip it belongs to. Same shared-extent-helper reflex as
-/// [`span_card_y_extent`] (ScrAP-87/ScrAP-150) — one formula, two callers, one test.
+/// [`span_card_y_extent`] (GTK4Rs/AP-78/GTK4Rs/AP-127) — one formula, two callers, one test.
 ///
 /// Cache-free by construction: the base row is [`gtk::prelude::TextViewExt::line_yrange`]
-/// (a btree height read that touches no line-display cache — ScrAP-22/ScrAP-105), never
+/// (a btree height read that touches no line-display cache — GTK4Rs/AP-22/ScrAP-105), never
 /// `iter_location`. The cell refinement delegates to the placeholder-immune
-/// [`cell_row_y_h`] (ScrAP-109); while a table's cells have not allocated it falls back
+/// [`cell_row_y_h`] (GTK4Rs/AP-91); while a table's cells have not allocated it falls back
 /// to the table's own top, so the chip stays visible and snaps to the exact row on a
 /// later frame.
 pub(crate) fn marker_row_y_h(
@@ -225,7 +225,7 @@ impl CodePreviewView {
     ///
     /// 1. **Coalesce** — cancel any idle already pending in `scroll_idle` (only the
     ///    latest target survives; no stacked scrolls re-triggering validation churn,
-    ///    ScrAP-22).
+    ///    GTK4Rs/AP-22).
     /// 2. **Weak capture** — the view is captured weakly, never a strong clone. A
     ///    strong capture would pin the view alive as an unrooted *zombie* after
     ///    `window.destroy()` unrealizes-but-does-not-finalize the subtree
@@ -275,7 +275,7 @@ impl CodePreviewView {
     /// Uses one persistent left-gravity mark + `scroll_to_mark` (deferred until
     /// line validation) on an idle, NOT `scroll_to_iter` (immediate, pre-validation
     /// — blanks the view). Coalescing avoids stacking N in-flight scrolls, each of
-    /// which would re-trigger validation churn (ScrAP-22).
+    /// which would re-trigger validation churn (GTK4Rs/AP-22).
     pub(crate) fn scroll_to_buffer_offset(&self, offset: i32) {
         use gtk::subclass::prelude::*;
         let buffer = self.buffer();
@@ -306,7 +306,7 @@ impl CodePreviewView {
             // lazy line-height validator — the total height keeps changing across
             // idle passes, re-queuing a resize each frame, so paint bails
             // ("snapshot without a current allocation" → blank view + unpainted
-            // scrollbar) until it converges (ScrAP-22). The single force that makes
+            // scrollbar) until it converges (GTK4Rs/AP-22). The single force that makes
             // the far scroll land on a stable allocation is `scroll_to_mark`'s own
             // internal `flush_scroll` → `validate_yrange`. A prior `line_yrange(end)`
             // pre-read used to sit here as a supposed validation-primer; the researcher
@@ -328,7 +328,7 @@ impl CodePreviewView {
     /// Routes through the same coalesced, deferred, weak-captured, `is_realized`-gated
     /// [`scroll_to_buffer_offset`](Self::scroll_to_buffer_offset) — NEVER a one-shot
     /// adjustment `set_value`, which the lazy-validation `upper` clamp resets straight
-    /// back toward the top (ScrAP-13/65). A no-op at/above the top (the clamp already
+    /// back toward the top (GTK4Rs/AP-13/65). A no-op at/above the top (the clamp already
     /// lands there) and if the line cannot be resolved.
     pub(crate) fn reanchor_to_reading_line(&self) {
         let line = self.reading_line();
@@ -349,7 +349,7 @@ impl CodePreviewView {
     /// the SAME offset, so the coalesced scroll is a no-op and the viewport looks
     /// "stuck" (the DDD symptom) across in-cell matches.
     ///
-    /// Two-step, reusing the marker cell→table geometry (bug C / ScrAP-109):
+    /// Two-step, reusing the marker cell→table geometry (bug C / GTK4Rs/AP-91):
     /// 1. `scroll_to_mark` the table's own child anchor — brings the table into view
     ///    AND forces GtkTextView to validate + allocate the table and its cell labels
     ///    (an anchored child is parked off-screen with the WRONG position until its
@@ -372,7 +372,7 @@ impl CodePreviewView {
             return;
         };
         // Step 1: mirror scroll_to_buffer_offset's coalesced, validation-safe
-        // scroll_to_mark (ScrAP-22/ScrAP-65/ScrAP-104), then refine to the exact cell row.
+        // scroll_to_mark (GTK4Rs/AP-22/ScrAP-65/ScrAP-104), then refine to the exact cell row.
         self.imp().user_scrolling.set(false);
         self.imp().restore_target_line.set(Some(it.line()));
         let mark = move_or_create_mark(&buffer, "scrib-outline-target", &it);
@@ -416,7 +416,7 @@ mod gtk_integration_tests {
 
     /// Pump until `done()` or panic after [`PUMP_DEADLINE`] via a real glib TIMEOUT
     /// SOURCE — never a between-iterations wall-clock check, which hangs forever on a
-    /// truly idle display because `iteration(true)` blocks until there is work (ScrAP-88).
+    /// truly idle display because `iteration(true)` blocks until there is work (GTK4Rs/AP-79).
     /// The source is removed on the converged exit so it can't fire into a later
     /// test.
     fn pump_until(ctx: &gtk::glib::MainContext, msg: &str, mut done: impl FnMut() -> bool) {
@@ -511,7 +511,7 @@ mod gtk_integration_tests {
         }
     }
 
-    /// ScrAP-22 / no-regression: the `is_realized()` crash guard must NOT block a scroll on
+    /// GTK4Rs/AP-22 / no-regression: the `is_realized()` crash guard must NOT block a scroll on
     /// a live, realized, mapped view — the normal outline/find/fragment path. The
     /// viewport must actually move off the top toward the far target. (This is also why
     /// the gate is `is_realized()`, not the stricter `is_mapped()`: skipping a realized
@@ -551,7 +551,7 @@ mod gtk_integration_tests {
 
     /// The `schedule_scroll_idle` sink COALESCES: two rapid schedules leave only the
     /// latest pending (the earlier source is cancelled), so exactly one — the last —
-    /// runs. This is the ScrAP-22 "no stacked scrolls" guarantee, isolated from the
+    /// runs. This is the GTK4Rs/AP-22 "no stacked scrolls" guarantee, isolated from the
     /// scroll work. Mutation-guards the cancel-pending facet: drop the sink's
     /// `take().remove()` and BOTH closures run (`[1, 2]`), failing this. (The
     /// runs-when-realized and crash-after-destroy facets are covered by the two

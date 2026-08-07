@@ -80,7 +80,7 @@ mod imp {
         /// The `GtkOverlay` that wraps `editor_scroller` — the actual DIRECT child of
         /// the SplitView for the editor pane (measure/allocate/snapshot/ordered_panes
         /// target this), so the editor's in-surface Annotate card can float over the
-        /// scroller (ScrAP-98, mirroring the preview pane). The scroller inside it is
+        /// scroller (GTK4Rs/AP-83, mirroring the preview pane). The scroller inside it is
         /// still `set_child`ed exactly once and never reparented — the reparent
         /// invariant holds (the card is an *added overlay*, never the main child).
         pub(super) editor_overlay: OnceCell<gtk::Overlay>,
@@ -261,7 +261,7 @@ mod imp {
 
         // Snapshot only the children that were actually allocated for the current
         // mode — snapshotting a child-invisible, unallocated pane would trip the
-        // "Trying to snapshot … without a current allocation" warning (ScrAP-56).
+        // "Trying to snapshot … without a current allocation" warning (GTK4Rs/AP-104).
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let obj = self.obj();
             match self.mode.get() {
@@ -310,7 +310,7 @@ impl SplitView {
             .vexpand(true)
             .build();
         // Wrap the scroller in a GtkOverlay so the editor pane can float an in-surface
-        // Annotate card over it (ScrAP-98), mirroring the preview pane. The OVERLAY is the
+        // Annotate card over it (GTK4Rs/AP-83), mirroring the preview pane. The OVERLAY is the
         // SplitView's direct child (set_parent once); the scroller is the overlay's main
         // child, set exactly once and never reparented — so the gutter's vadjustment
         // binding never re-fires (the reparent invariant is preserved: only *added*
@@ -404,7 +404,7 @@ impl SplitView {
     /// The current preview `GtkScrolledWindow`, or `None` when the preview has
     /// been freed (edit mode has no preview to render/zoom/spy on). The mounted
     /// preview PANE is a `GtkOverlay` (built by `preview::render`) wrapping the
-    /// scroller so the CriticMarkup Annotate bar can float in-surface (ScrAP-98); dig
+    /// scroller so the CriticMarkup Annotate bar can float in-surface (GTK4Rs/AP-83); dig
     /// one level through it to the scroller every consumer expects.
     pub(crate) fn preview_scroller(&self) -> Option<gtk::ScrolledWindow> {
         self.imp()

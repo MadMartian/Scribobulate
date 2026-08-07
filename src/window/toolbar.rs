@@ -194,7 +194,7 @@ pub(super) fn build_toolbar() -> BuiltToolbar {
     // GtkDropDown has no action-name property, so it would have needed selected→action
     // and state→selected mirrors wired by hand — precisely the per-surface divergence
     // the single-GAction rule exists to prevent. (Note the Heading picker's OTHER
-    // reason for shunning GtkDropDown — its "(None)" empty-state caption, ScrAP-19 — does
+    // reason for shunning GtkDropDown — its "(None)" empty-state caption, GTK4Rs/AP-19 — does
     // NOT apply here: a theme is always active, so there is no no-selection state.)
     //
     // Presented as a labelled dropdown to match the Heading picker (`formatbar.rs`):
@@ -232,7 +232,7 @@ pub(super) fn build_toolbar() -> BuiltToolbar {
     // a non-symbolic icon's baked colour goes invisible on a dark-variant resolve).
     // `mail-mark-important-symbolic` (a marker/flag glyph, the annotation metaphor) was
     // verified present in Adwaita, breeze, AND breeze-dark on this system, so no
-    // gresource fallback is needed — unlike expand-all/collapse-all-symbolic (ScrAP-39).
+    // gresource fallback is needed — unlike expand-all/collapse-all-symbolic (GTK4Rs/AP-48).
     let annotations_btn = gtk::ToggleButton::new();
     annotations_btn.set_icon_name(Icon::MailMarkImportant.name());
     crate::a11y::name_from_action(&annotations_btn, "win.annotations");
@@ -262,7 +262,7 @@ pub(super) fn build_toolbar() -> BuiltToolbar {
     // missing from Breeze and rendered broken there. The replacement then turned out
     // to be missing from gvsbuild's Adwaita and rendered broken on Windows, so it is
     // now bundled in the GResource rather than swapped for a third name (see the Icon
-    // variant's doc — ScrAP-39, surfaced by the icon-resolution test).
+    // variant's doc — GTK4Rs/AP-48, surfaced by the icon-resolution test).
     let unsafe_images_btn = gtk::ToggleButton::new();
     unsafe_images_btn.set_icon_name(Icon::EmblemPhotos.name());
     crate::a11y::name(&unsafe_images_btn, "Show Unsafe Images");

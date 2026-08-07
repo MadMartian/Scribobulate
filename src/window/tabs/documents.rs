@@ -1,6 +1,6 @@
 //! Window title, View ▸ Documents submenu, and tab-strip label upkeep — all
 //! the surfaces that must track a window's tab SET and each tab's display name
-//! (operator decisions Q7/Q14; ScrAP-63 for the deferred GMenu
+//! (operator decisions Q7/Q14; GTK4Rs/AP-76 for the deferred GMenu
 //! rebuild). Split out of the former monolithic `window/tabs.rs`.
 
 use super::super::*;
@@ -59,7 +59,7 @@ pub(crate) fn update_window_title(window: &ApplicationWindow) {
 ///   • rename (Save As adopts a path) — `window/save.rs::adopt_and_save`
 /// A plain tab SWITCH is deliberately NOT in this list: it only re-points the
 /// `select-tab` action state (`on_active_tab_changed`), rebuilding nothing.
-/// See ScrAP-63.
+/// See GTK4Rs/AP-76.
 pub(crate) fn refresh_documents_menu(window: &ApplicationWindow) {
     let Some(chrome) = winstate::chrome(window) else {
         return;
@@ -84,7 +84,7 @@ pub(crate) fn refresh_documents_menu(window: &ApplicationWindow) {
 /// only from the coalesced idle in [`refresh_documents_menu`] — never call it
 /// directly from a signal handler. Enumerates tabs in VISUAL STRIP order (via
 /// `TabView::ordered_contents`, not registry order, which diverges after a
-/// reorder — ScrAP-55) so the list matches what the user sees, and re-asserts the
+/// reorder — GTK4Rs/AP-74) so the list matches what the user sees, and re-asserts the
 /// `select-tab` radio state so the active tab stays checked across the rebuild.
 fn rebuild_documents_menu(window: &ApplicationWindow, chrome: &winstate::WindowChrome) {
     let menu = &chrome.documents_menu;
@@ -111,7 +111,7 @@ fn rebuild_documents_menu(window: &ApplicationWindow, chrome: &winstate::WindowC
     // presentational state, so nudge it here. This covers every set/name change
     // (open, close, cross-window move, and Save-As rename), which is exactly the
     // set of events that reach the rebuild; a plain tab SWITCH keeps it current via
-    // `on_active_tab_changed` instead (no rebuild happens there — ScrAP-63).
+    // `on_active_tab_changed` instead (no rebuild happens there — GTK4Rs/AP-76).
     refresh_documents_button(window);
 }
 
@@ -353,7 +353,7 @@ mod gtk_integration_tests {
         );
 
         // (b) The label reflects the active document. The initial rebuild is
-        // deferred to idle (ScrAP-63), so drive the same refresh synchronously here —
+        // deferred to idle (GTK4Rs/AP-76), so drive the same refresh synchronously here —
         // this is exactly what the idle would call.
         super::refresh_documents_button(&window);
         assert_eq!(

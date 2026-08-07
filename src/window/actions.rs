@@ -143,7 +143,7 @@ pub(crate) const ANNOTATION_CARD_CLASS: &str = "annotation-entry";
 /// `GtkEntry`/`GtkSearchEntry` (the annotation comment card's entry, the find bar,
 /// the Find & Replace replace entry, and any future entry in the window chrome)?
 ///
-/// The established window-level focus test (ScrAP-20/ScrAP-72) — walk from the focused widget to
+/// The established window-level focus test (GTK4Rs/AP-20/ScrAP-72) — walk from the focused widget to
 /// the root rather than trust any single widget's `has_focus`. Used to stand `win.*`
 /// actions down while such an entry owns the keyboard, so the key reaches the entry's
 /// own binding instead (see `register_editor_actions`'s `select-all` wiring, commit
@@ -196,7 +196,7 @@ pub(crate) fn connect_buf_to_copy_action(window: &ApplicationWindow) {
 
     // Table-cell label selection: a GtkLabel has NO public "selection changed" signal
     // (no `cursor-position` property — the previous per-label `notify::cursor-position`
-    // was a silent no-op, so a cell selection never enabled Copy; ScrAP-28).
+    // was a silent no-op, so a cell selection never enabled Copy; GTK4Rs/AP-28).
     // Selecting text in a GtkLabel claims the PRIMARY clipboard, so re-evaluate on its
     // `changed` signal — fires for label AND buffer selections, mouse or keyboard.
     // CRUCIAL: the primary clipboard is DISPLAY-level and long-lived (it does NOT die
@@ -267,7 +267,7 @@ pub(crate) fn update_annotate_action_state(window: &ApplicationWindow) {
                 return true;
             }
             // Table-cell annotation: a table-cell GtkLabel selection is outside the buffer
-            // (selection island). Same primary-clipboard detection as Copy (ScrAP-28).
+            // (selection island). Same primary-clipboard detection as Copy (GTK4Rs/AP-28).
             crate::preview::scrib_labels(&v).is_some_and(|labels| {
                 labels
                     .borrow()
@@ -418,7 +418,7 @@ pub(crate) fn refresh_position_indicator(window: &ApplicationWindow) {
 /// idle, walk the bar's item widgets and `popdown()` any still-mapped top-level
 /// `GtkPopover` (its `unmap` resets the bar's private `active_item`, leaving keyboard
 /// state clean too). Public-API only — it touches NO `GMenu` model, so it cannot
-/// re-arm the mid-activation GMenu-mutation UAF hazard (ScrAP-63) — and it
+/// re-arm the mid-activation GMenu-mutation UAF hazard (GTK4Rs/AP-76) — and it
 /// does not swallow the item's own action (that already fired synchronously in
 /// `gtk_model_button_clicked` before this idle runs). A no-op when nothing is stray.
 /// Researcher-verified against GTK 4.6.9 source + bench; scheduled from the nested
@@ -445,12 +445,12 @@ fn dismiss_stray_menubar_popovers(window: &ApplicationWindow) {
     });
 }
 /// Build a `win.`-scoped action whose menu item lives in a **nested**
-/// `GtkPopoverMenuBar` submenu, with the ScrAP-116 stray-popover dismissal wired in
+/// `GtkPopoverMenuBar` submenu, with the GTK4Rs/AP-108 stray-popover dismissal wired in
 /// so it CANNOT be forgotten. Every such action MUST route through this
 /// constructor instead of calling [`dismiss_stray_menubar_popovers`] by hand:
 /// the manual per-call-site opt-in is a latent regression (the action still
 /// works — only the sibling top-level menu silently stays open — so a happy-path
-/// test never catches the omission). This is the single choke point ScrAP-116/GTK4Rs/AP-108
+/// test never catches the omission). This is the single choke point GTK4Rs/AP-108/GTK4Rs/AP-108
 /// demand; adding a nested-submenu action any other way re-opens the bug.
 ///
 /// `handler(&window, param)` runs the action's work; the dismissal is scheduled
@@ -458,7 +458,7 @@ fn dismiss_stray_menubar_popovers(window: &ApplicationWindow) {
 /// **before** `handler` runs so its idle is enqueued ahead of any idle `handler`
 /// itself schedules (e.g. a deferred `grab_focus`) — otherwise the stray
 /// popover's pop-down focus-restore would run last and steal the focus the
-/// handler grabbed (ScrAP-116). Both run only after the emitting handler returns, so
+/// handler grabbed (GTK4Rs/AP-108). Both run only after the emitting handler returns, so
 /// the handler's synchronous work is unaffected by the ordering.
 ///
 /// Scope: this seam covers the `win.`-scoped, stateless, `activate`-driven nested
@@ -485,18 +485,18 @@ pub(crate) fn nested_submenu_action(
 /// Stateful, `change-state`-driven sibling of [`nested_submenu_action`], for a
 /// `win.`-scoped nested-submenu RADIO action whose real work lives on
 /// `change-state` (a stateful `GSimpleAction` routes `activate` straight to
-/// `change-state`). Like the `activate` form it wires the ScrAP-116 stray-popover
+/// `change-state`). Like the `activate` form it wires the GTK4Rs/AP-108 stray-popover
 /// dismissal so it cannot be forgotten — and it additionally calls
 /// `set_state(value)` for the caller, which a stateful handler MUST do (or the
 /// radio tick never moves) and which a hand-wired `connect_change_state` can just
 /// as silently omit. Both obligations are absorbed here so the two remaining
 /// stateful nested actions stop hand-rolling them (the exact opt-in latent
-/// regression ScrAP-116's Lesson names).
+/// regression GTK4Rs/AP-108's Lesson names).
 ///
 /// The dismissal is scheduled BEFORE `handler` runs (same reason as the
 /// `activate` form: its idle must enqueue ahead of any idle `handler` schedules —
 /// e.g. a deferred `grab_focus` — or the popover's pop-down focus-restore steals
-/// it, ScrAP-116). `handler`'s synchronous work runs before either idle, so the
+/// it, GTK4Rs/AP-108). `handler`'s synchronous work runs before either idle, so the
 /// dismiss-first ordering never disturbs it. `handler(&window, value)` receives
 /// the already-applied new state value; a `None` change-state is a no-op the
 /// constructor absorbs, so the handler never sees one.
@@ -522,7 +522,7 @@ pub(crate) fn nested_submenu_stateful_action(
 }
 /// `app.`-scoped sibling of [`nested_submenu_stateful_action`]. An app-scoped
 /// nested-submenu action (e.g. `app.preview-theme`, whose command is app-wide)
-/// owns no window, so the ScrAP-116 dismissal is routed to whichever window is
+/// owns no window, so the GTK4Rs/AP-108 dismissal is routed to whichever window is
 /// active at emission time — the window the user clicked the menu in. Same
 /// `set_state` + dismiss-before-handler contract as the `win.` form; the
 /// dismissal no-ops harmlessly when the active window has no chrome or the state
@@ -662,7 +662,7 @@ mod gtk_integration_tests {
         window.destroy();
     }
 
-    /// The ScrAP-116 choke point: an action built through `nested_submenu_action`
+    /// The GTK4Rs/AP-108 choke point: an action built through `nested_submenu_action`
     /// runs its handler (with the activation parameter) AND, without any per-call
     /// wiring, routes through the stray-popover dismissal. Dismissal itself is
     /// idle-scheduled and a no-op with no stray popover (a menubar popover cannot be
@@ -720,7 +720,7 @@ mod gtk_integration_tests {
     /// already-applied value to the handler — then route the (headlessly no-op)
     /// stray-popover dismissal panic-free. Asserting BOTH the state AND the
     /// handler value mutation-guards each obligation the constructor absorbed from
-    /// the old hand-wired call site (ScrAP-87: a test that checked only one would pass
+    /// the old hand-wired call site (GTK4Rs/AP-78: a test that checked only one would pass
     /// with the other silently dropped).
     #[gtktest::test]
     fn nested_submenu_stateful_action_sets_state_and_runs_handler() {

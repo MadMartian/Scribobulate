@@ -9,7 +9,7 @@ use super::*;
 /// "active"-state accounting on the now-unparented button → `Broken accounting of active
 /// state for widget (GtkPopover)`, and (b) drops its still-held event/crossing refs on
 /// finalized widgets → `g_object_unref: G_IS_OBJECT` (one per node). Running the popdown
-/// on idle moves the whole teardown out of the dispatch. (ScrAP-30;
+/// on idle moves the whole teardown out of the dispatch. (GTK4Rs/AP-30;
 /// researcher-verified, gtk-4-6.)
 fn dismiss_context_popover(po: &gtk::Popover) {
     let po = po.clone();
@@ -68,9 +68,9 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
         // access char underlined — a plain popover never gets mnemonics-visible, so
         // we draw the underline ourselves rather than via use-underline
         // (ScrAP-70).  Text-only matches the menu bar (icons ignored —
-        // ScrAP-11); GtkPopoverMenu has a spurious scrollbar on 4.6, so this stays plain
+        // GTK4Rs/AP-11); GtkPopoverMenu has a spurious scrollbar on 4.6, so this stays plain
         // GtkPopover + GtkButton (ScrAP-9), and Change Case is a GtkStack page rather
-        // than a nested popover surface (ScrAP-71).
+        // than a nested popover surface (GTK4Rs/AP-69).
         let make_text_btn = |marked: &str, accel: &str| -> gtk::Button {
             let name_lbl = Label::new(None);
             name_lbl.set_markup(&crate::app::access_markup(marked).1);
@@ -98,7 +98,7 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
 
         // Single-surface two-page GtkStack (flat menu + Change Case submenu) and one
         // Capture/Local ShortcutController delivering bare-letter access keys — the
-        // researcher-confirmed public recipe for a non-model popover (ScrAP-70/ScrAP-71).
+        // researcher-confirmed public recipe for a non-model popover (ScrAP-70/GTK4Rs/AP-69).
         let stack = gtk::Stack::new();
         stack.set_vhomogeneous(false);
         stack.set_interpolate_size(true);
@@ -268,7 +268,7 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
 
         // Change Case is a real submenu (a second stack page) so its four variants
         // keep the SAME access keys as the menu bar's Change Case submenu (U/l/T/c) —
-        // ScrAP-71. This row slides to that page (it never dismisses).
+        // GTK4Rs/AP-69. This row slides to that page (it never dismisses).
         let change_case_marked = format!("{} ▸", crate::app::mnem("Change Case"));
         let change_case_btn = make_text_btn(&change_case_marked, "");
         {

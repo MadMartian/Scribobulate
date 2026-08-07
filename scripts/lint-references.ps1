@@ -68,7 +68,7 @@
 .NOTES
     ── WHAT THIS CANNOT DO. Read before trusting a PASS. ──────────────────────────
     Check 2 proves an entry EXISTS. It does NOT prove it is the RIGHT one. The
-    ScrAP-61 error that prompted this gate passes both checks cleanly, because 61 is
+    GTK4Rs/AP-106 error that prompted this gate passes both checks cleanly, because 61 is
     a real entry -- it was simply the wrong one for the claim it was attached to.
     A gate that looks like it covers citations, and doesn't, is worse than no gate,
     because the next author trusts the PASS. Nothing here substitutes for reading
@@ -91,11 +91,11 @@
     Run it whenever the pattern changes:  .\scripts\lint-references.ps1 -SelfTest
 
     ── HOW THE WRONG-NUMBER SLIP HAPPENS: citation proximity drift. ───────────────
-    `dnd.rs` and `lifecycle.rs` both cite ScrAP-61 correctly, for "the window's
+    `dnd.rs` and `lifecycle.rs` both cite GTK4Rs/AP-106 correctly, for "the window's
     single caret overlay" -- and the very next clause in each says "detach it
     before...". So the number reads as though it belongs to the detach. A third call
-    site was then written as "ScrAP-61's shape" by pattern-matching two siblings
-    whose local evidence pointed the wrong way. The detach obligation is ScrAP-90.
+    site was then written as "GTK4Rs/AP-106's shape" by pattern-matching two siblings
+    whose local evidence pointed the wrong way. The detach obligation is GTK4Rs/AP-80.
     The only real guard is placing a number against the claim it supports, and
     re-reading it when you copy a sibling comment.
 
@@ -613,15 +613,15 @@ if ($SelfTest) {
         'per the gtk4-rs skill AP-78 masking',
         'AP-1 leads the router',
         'GTK4Rs/AP-57 / AP-34b enum split',
-        'see ScrAP-79 and AP-88 together',
+        'see GTK4Rs/AP-109 and AP-88 together',
         'gtk4rs/AP-9 is a misspelled prefix',
         'GTK4Rs / AP-9 is not one token'
     )
     $bareApMustNotFlag = @(
-        'see ScrAP-79 for the tab-close gesture guard',
+        'see GTK4Rs/AP-109 for the tab-close gesture guard',
         'see GTK4Rs/AP-79 for the pump-loop bound',
         'a bare `AP-N` is illegal anywhere in the tree',
-        'ScrAP-162 pairs with GTK4Rs/AP-153',
+        'GTK4Rs/AP-153 pairs with GTK4Rs/AP-153',
         'SOAP-12 is not a citation',
         'the shorthand #79 inside this register',
         'Scr-AP-9 is not a citation either'
@@ -1281,6 +1281,114 @@ if ($bare8.Count) {
     Write-Host '         ScrAP-N (always resolvable; the skill may be absent). NEVER bulk-rewrite'
     Write-Host '         the prefix -- that is the mechanism that produced the one known defect.'
 } else {
+    Write-Host '   PASS' -ForegroundColor Green
+}
+
+
+Write-Host ''
+Write-Host "-- Check 9: ScrAP number immutability (no removed, renamed or reused numbers) --" -ForegroundColor Cyan
+# Port of the bash gate's check 9. Both halves must exist or this gate is exactly the
+# defect ScrAP-207 records: one gate living twice, where the port nobody runs is the
+# lenient one. The shared manifest makes the INPUT identical here by construction --
+# both ports read sdd/scrap-numbers.manifest rather than restating the number set,
+# which is the half of a duplicated gate that reviewers never diff.
+#
+# The manifest is a DIFF SEED, NOT A SNAPSHOT: it was generated from `master`, where
+# the heading set is independently known good. Never regenerate it from the working
+# file -- that would bless an already-missing heading and hold this green forever.
+$manifest = 'sdd/scrap-numbers.manifest'
+if (-not (Test-Path $manifest)) {
+    Write-Host "   FAIL - manifest $manifest is missing; number immutability is unenforced" -ForegroundColor Red
+    $failed = $true
+} else {
+    $have9 = Select-String -Path 'sdd/ANTI-PATTERNS.md' -Pattern '^## ([0-9]+[a-z]?)\.' -AllMatches |
+             ForEach-Object { $_.Matches[0].Groups[1].Value }
+    $want9 = Get-Content $manifest | Where-Object { $_ -and $_ -notmatch '^\s*#' }
+    $missing9 = $want9 | Where-Object { $have9 -notcontains $_ }
+    $added9   = $have9 | Where-Object { $want9 -notcontains $_ }
+    $dupes9   = $have9 | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name }
+    $bad9 = $false
+    if ($missing9) {
+        Write-Host "   FAIL - allocated number(s) no longer have a '## N.' heading:" -ForegroundColor Red
+        $missing9 | ForEach-Object { Write-Host "     ScrAP-$_" }
+        Write-Host '     A number is never released. If the entry was merged or superseded, leave a'
+        Write-Host '     one-line landing-spot stub under its heading -- code and sibling entries'
+        Write-Host '     still cite it.'
+        $bad9 = $true
+    }
+    if ($dupes9) {
+        Write-Host '   FAIL - number(s) used by more than one heading:' -ForegroundColor Red
+        $dupes9 | ForEach-Object { Write-Host "     ScrAP-$_" }
+        $bad9 = $true
+    }
+    if ($added9) {
+        Write-Host "   INFO - new number(s) not yet in the manifest: $($added9 -join ' ')"
+        Write-Host "     Append them to $manifest in the same commit that adds the entry."
+    }
+    if ($bad9) { $failed = $true } else { Write-Host '   PASS' -ForegroundColor Green }
+}
+
+
+Write-Host ''
+Write-Host "-- Check 10: a compressed entry keeps its implementation line --" -ForegroundColor Cyan
+# Port of the bash gate's check 10. THE LABEL IS ENUMERATED, NOT GUESSED: this file
+# spells the field five ways (**Scribobulate**, **Scribobulate.**, **Where Scribobulate
+# implements the fix**, the same with a period, and one Non-core variant naming it), so
+# both ports match the STEM. A check keyed on one spelling reports a confident absence
+# for every other -- during this migration that came within one batch of deleting a
+# field the detector "could not see".
+$bad10 = @()
+$cur10 = ''; $hasImpl = $false; $isStub = $true; $sawSym = $false
+foreach ($line in Get-Content 'sdd/ANTI-PATTERNS.md') {
+    if ($line -match '^## ([0-9]+[a-z]?)\.') {
+        if ($cur10 -and $isStub -and $sawSym -and -not $hasImpl) { $bad10 += $cur10 }
+        $cur10 = $Matches[1]; $hasImpl = $false; $isStub = $true; $sawSym = $false
+    } elseif ($line -match '^\*\*Symptom') { $sawSym = $true }
+    elseif ($line -match '^\*\*[^*]*Scribobulate') { $hasImpl = $true }
+    elseif ($line -match '^\*\*(Resolution|Root cause|Lesson|What was tried)') { $isStub = $false }
+}
+if ($cur10 -and $isStub -and $sawSym -and -not $hasImpl) { $bad10 += $cur10 }
+if ($bad10.Count) {
+    Write-Host '   FAIL - compressed entr(ies) with no implementation line:' -ForegroundColor Red
+    $bad10 | ForEach-Object { Write-Host "     ScrAP-$_" }
+    Write-Host '     A stub without it points at a lesson and answers nothing locally.'
+    $failed = $true
+} else {
+    Write-Host '   PASS' -ForegroundColor Green
+}
+
+Write-Host ''
+Write-Host "-- Check 11: register growth (bytes, not lines) --" -ForegroundColor Cyan
+# BYTES, not lines, and this register is the evidence: trimming its index cut 72% of
+# that block's bytes while the line count went UP. A line budget watched this file
+# bloat sideways and would not have seen it shrink either. Thresholds sit ABOVE the
+# measured state -- a ratchet that trips on the commit installing it teaches people to
+# raise the number rather than to consolidate.
+$REG_WARN = 520000; $REG_FAIL = 650000; $ENTRY_WARN = 11000; $ENTRY_FAIL = 15000
+$bad11 = $false
+$regBytes = (Get-Item 'sdd/ANTI-PATTERNS.md').Length
+if ($regBytes -gt $REG_FAIL) {
+    Write-Host "   FAIL - register is ${regBytes}B, past the ${REG_FAIL}B ceiling" -ForegroundColor Red
+    $bad11 = $true
+} elseif ($regBytes -gt $REG_WARN) {
+    Write-Host "   WARN - register is ${regBytes}B, past the ${REG_WARN}B soft limit" -ForegroundColor Yellow
+}
+$sizes = @{}; $n11 = ''
+foreach ($line in Get-Content 'sdd/ANTI-PATTERNS.md') {
+    if ($line -match '^## ([0-9]+[a-z]?)\.') { $n11 = $Matches[1]; $sizes[$n11] = 0 }
+    elseif ($n11) { $sizes[$n11] += $line.Length + 1 }
+}
+$over = $sizes.GetEnumerator() | Where-Object { $_.Value -gt $ENTRY_FAIL }
+$warn = $sizes.GetEnumerator() | Where-Object { $_.Value -gt $ENTRY_WARN -and $_.Value -le $ENTRY_FAIL }
+if ($over) {
+    Write-Host "   FAIL - entr(ies) past the ${ENTRY_FAIL}B per-entry ceiling:" -ForegroundColor Red
+    $over | ForEach-Object { Write-Host "     ScrAP-$($_.Key) $($_.Value)B" }
+    $bad11 = $true
+} elseif ($warn) {
+    Write-Host "   WARN - entr(ies) past the ${ENTRY_WARN}B per-entry soft limit:" -ForegroundColor Yellow
+    $warn | ForEach-Object { Write-Host "     ScrAP-$($_.Key) $($_.Value)B" }
+}
+if ($bad11) { $failed = $true } elseif (-not $warn -and $regBytes -le $REG_WARN) {
     Write-Host '   PASS' -ForegroundColor Green
 }
 

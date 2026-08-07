@@ -27,7 +27,7 @@ const PAGE_FRACTION: f64 = 0.9;
 const MIN_STEP: f64 = 1.0;
 
 /// How far outside `[0, width)` a currently-hidden chevron is shoved so the
-/// strip's `Overflow::Hidden` clips it from the paint (ScrAP-56). Any
+/// strip's `Overflow::Hidden` clips it from the paint (GTK4Rs/AP-104). Any
 /// positive margin works; this keeps it comfortably clear of the edge.
 pub(super) const OFFSCREEN_MARGIN: i32 = 4;
 

@@ -24,7 +24,7 @@
 //! goes. Implementing the invariant at the single place dirtiness is recomputed — rather
 //! than teaching each of save / save-as / discard / reload / revert its own deletion
 //! rule — is what makes every *future* path that changes dirtiness correct without being
-//! individually taught (POLICY § "one path, not two"; ScrAP-116, ScrAP-219).
+//! individually taught (POLICY § "one path, not two"; GTK4Rs/AP-108, ScrAP-219).
 //!
 //! Two properties fall out of the invariant for free, and both are load-bearing
 //! elsewhere:

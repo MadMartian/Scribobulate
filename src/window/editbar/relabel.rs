@@ -24,7 +24,7 @@ pub(crate) fn update_format_edit_surfaces(window: &ApplicationWindow) {
     refresh_format_edit_surfaces(window, false);
 }
 
-/// Forced-repaint variant, for a tab switch (ScrAP-61).  The edit-surfaces cache
+/// Forced-repaint variant, for a tab switch (GTK4Rs/AP-106).  The edit-surfaces cache
 /// (`WindowChrome.fmt_edit_state`) and both button sets (toolbar + the single caret
 /// overlay) are now window-scoped, so the cache holds whatever tab last painted the
 /// shared surfaces — a plain dedup could leave a stale "Edit …" tooltip after the
@@ -55,7 +55,7 @@ fn refresh_format_edit_surfaces(window: &ApplicationWindow, force: bool) {
             crate::a11y::name(btn, btn_kind.label(Some(*btn_kind) == kind));
         }
     }
-    // Each window now owns its Format menu (ScrAP-63), so relabel THIS
+    // Each window now owns its Format menu (GTK4Rs/AP-76), so relabel THIS
     // window's directly — the old `is_active()` gate existed only because a single
     // shared menu could reflect just one window's selection at a time.
     crate::app::update_format_menu_labels(window, kind);

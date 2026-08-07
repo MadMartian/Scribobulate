@@ -112,7 +112,7 @@ impl Renderer {
                 // checkbox is drawn in the left gutter in Phase 2 and occupies ZERO buffer
                 // chars, exactly like the bullet/number. This also drops the old anchored,
                 // inert (`set_sensitive(false)`) checkbox that sat in the text flow — an
-                // anchored child parked off-screen until its line validates (ScrAP-109) and
+                // anchored child parked off-screen until its line validates (GTK4Rs/AP-91) and
                 // part of the selection. The item's text now follows immediately.
                 if let Some(m) = self.list_markers.last_mut() {
                     m.kind = crate::renderer::ListMarkerKind::Task {
@@ -153,7 +153,7 @@ impl Renderer {
                 let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
                 // NO initial width_request: it must NOT start over-wide, or an
                 // Automatic preview scroller churns from frame 1 and the view never
-                // gets a clean allocation (ScrAP-23). `CodePreviewView::size_allocate`
+                // gets a clean allocation (GTK4Rs/AP-23). `CodePreviewView::size_allocate`
                 // grows it to the live content column before the first paint.
                 //
                 // A rule is a STOCK GtkSeparator — the only anchored widget the app
@@ -171,7 +171,7 @@ impl Renderer {
                 // Inset a rule nested in a list/blockquote by its enclosing content margin
                 // so it fills `content − inset`, not the whole column — an indented rule
                 // sized to the full column overflows by the indent → spurious Automatic
-                // h-scrollbar → ScrAP-22/23 churn (ScrAP-23a). 0 at top level.
+                // h-scrollbar → GTK4Rs/AP-22/23 churn (GTK4Rs/AP-23a). 0 at top level.
                 self.width_bounded
                     .push((sep.clone().upcast(), self.block_inset()));
                 self.anchored.push((anchor, sep.upcast()));

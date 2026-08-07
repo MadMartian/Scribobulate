@@ -189,7 +189,7 @@ static SINK: std::sync::OnceLock<&'static sink::ForensicSink> = std::sync::OnceL
 ///
 /// Called by [`crate::logging::init`], which owns registration — this module builds
 /// the sink but never installs it, so there stays exactly one place in the tree
-/// where the process's logger is decided (ScrAP-18's discipline, applied to the
+/// where the process's logger is decided (GTK4Rs/AP-18's discipline, applied to the
 /// Rust side of the bridge as well as the glib side).
 pub(crate) fn install(inner: env_logger::Logger) -> &'static sink::ForensicSink {
     let id = identity::collect();

@@ -7,7 +7,7 @@ Jump links (same-document fragments):
 - [Jump to Deep](#deep)
 
 The same three targets **inside a table**, in both cell shapes — a cell that is nothing
-but a link, and a cell holding a link beside other content (ScrAP-259):
+but a link, and a cell holding a link beside other content (GTK4Rs/AP-239):
 
 | Shape | Jump |
 |-------|------|

@@ -165,7 +165,7 @@ pub fn run() -> glib::ExitCode {
     // is reached through the X11 input-method path, and the workaround's mechanism
     // (redirecting `XDG_CONFIG_HOME` at a tree of symlinks) has no Windows analogue.
     // Nothing is lost by omitting it — the function already returns immediately on
-    // GTK >= 4.12, and the Windows build is 4.22 (ScrAP-3).
+    // GTK >= 4.12, and the Windows build is 4.22 (GTK4Rs/AP-3).
     #[cfg(unix)]
     workaround::workaround_gtk46_compose_crash();
 
@@ -174,7 +174,7 @@ pub fn run() -> glib::ExitCode {
     // decided before the Application registers: g_application_run() forwards argv
     // to the existing primary instance *at registration*, which happens before any
     // activate/open/command-line handler runs — so a flag parsed there would simply
-    // be forwarded and never spawn a new process (ScrAP-17).  We therefore scan argv
+    // be forwarded and never spawn a new process (GTK4Rs/AP-17).  We therefore scan argv
     // ourselves, set NON_UNIQUE (same app-id, so icon/WM-class/settings identity is
     // unchanged — it just never does single-instance negotiation), and strip the
     // switch so the remaining args still flow into HANDLES_OPEN as file paths.
@@ -199,7 +199,7 @@ pub fn run() -> glib::ExitCode {
     // platform does not run, so every launch elects itself primary and TDD
     // §8.1/8.2 fail silently with two processes on one document — with no error
     // to catch, since "no peer found" and "no way to look" return the same value
-    // (ScrAP-174). `platform/mac/single_instance.rs` substitutes an equivalent
+    // (GTK4Rs/AP-157). `platform/mac/single_instance.rs` substitutes an equivalent
     // handoff and feeds it
     // into the very same `open`/`activate` handlers, so the behaviour below this
     // line is identical on both platforms.
