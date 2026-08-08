@@ -29,7 +29,31 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-FLOOR=76.76
+# LOWERED 76.76 -> 76.30 by operator decision. Recording it because the rule above says
+# never to, and an unexplained drop is indistinguishable from the silent drift that rule
+# exists to catch — so this is the deliberate exception, not the failure mode recurring.
+#
+# Cause: 6d73875 added two modules whose tests are real but INVISIBLE to this gate —
+# src/farscroll.rs and src/saferizer/scrollpos.rs are GTK machinery (idle sources,
+# adjustments, scroll calls) exercised by `#[gtktest::test]` bodies behind the
+# `gtk-integration-tests` feature, which this unit-only run deliberately does not enable.
+# So they read 0% here while being covered in the integration suite. Their uncovered lines
+# alone took the total from >=76.76 to 76.20.
+#
+# What was measured before choosing this (so nobody re-derives it):
+#   76.20  as 6d73875 left it
+#   76.31  after extracting farscroll's pure decision cores and unit-testing them (15
+#          tests, all mutation-verified). Small because test bodies count in the
+#          DENOMINATOR too — 58 added lines bought 2 net covered production lines.
+#   76.66  measured, farscroll.rs excluded from IGNORE entirely
+#   ~76.77 predicted, both modules excluded — would have cleared the old floor untouched
+# The exclusion route was offered and not taken; this is the recorded alternative.
+#
+# 76.30 is the current figure rounded DOWN per the rule above (76.31 printed), so it gates
+# today's tree exactly and admits no further slippage. RAISE IT AGAIN as soon as either
+# module gains unit-reachable logic — the aspiration is still 80%, and this is a lower
+# starting point for the ratchet, not a new normal.
+FLOOR=76.30
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

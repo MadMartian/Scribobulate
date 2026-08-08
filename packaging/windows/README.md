@@ -143,25 +143,40 @@ exit /b %RC%
 
 ### One command for all of it
 
-`pipeline.ps1` wraps the above plus POLICY's build-pipeline gates, sets the GTK
-environment for you, and stops at the first failure:
+`pipeline.ps1` sets the GTK environment for you and runs the build pipeline, stopping
+at the first failure:
 
 ```powershell
-.\packaging\windows\pipeline.ps1                   # POLICY steps 1-5
-.\packaging\windows\pipeline.ps1 -SkipIntegration  # steps 1-4 only (unattended-safe)
-.\packaging\windows\pipeline.ps1 -Package          # ...then stage + build the installer
+.\packaging\windows\pipeline.ps1                   # run the pipeline
+.\packaging\windows\pipeline.ps1 -SkipIntegration  # skip the GTK suite (unattended-safe)
+.\packaging\windows\pipeline.ps1 -Package          # also build the installer
+.\packaging\windows\pipeline.ps1 -ListSteps        # print the derived step list
+.\packaging\windows\pipeline.ps1 -SelfTest         # validate the contract and the derivation
 ```
 
-`-Package` forwards `-Prefix` to `stage.ps1`, decides the staged tree's path itself
-and passes it on as `/DStageDir`, and **fails** if Inno Setup is not installed. That
-last one is deliberate: `-Package` was asked for explicitly, so a green run that
-quietly produced no installer is worse than a red one.
+**Which steps run, in what order, and how each is judged is not documented here.**
+That is `scripts/pipeline.steps`, and this runner *derives* its step list from that file
+rather than restating it. A list in this README would be a second copy of the contract,
+and the only thing a second copy reliably does is stop matching — which is what the
+previous version of this section did, advertising "POLICY steps 1-5" after the step list
+had grown past it. Run `-ListSteps` for the current answer; it cannot be stale.
 
-Step 5's carve-out for known-failing tests is **by name** (`$skippedTests`), so
-nothing else can hide behind it, and each skip is printed. The list is currently
-empty — the whole GTK suite passes on Windows, and the step header says `no skips`
-— so add an entry only with an ISSUES.md entry to go with it, and remove it the
-moment the test passes.
+`-ListSteps` exists to be **diffed against the other platforms' runners**. All three
+derive from the one contract, so a clean diff is evidence they conform to it rather than
+merely resembling each other. Output is LF-terminated deliberately, so the comparison
+needs no normalisation to be read.
+
+`-Package` runs `packaging\windows\package.ps1`, which owns the staging and the Inno
+Setup invocation — including forwarding `-Prefix` to `stage.ps1`, choosing the staged
+tree's path and passing it as `/DStageDir`, and failing outright if Inno Setup is
+missing. That last is deliberate: packaging was asked for explicitly, so a green run
+that quietly produced no installer is worse than a red one.
+
+Test carve-outs are **contract data**, in `scripts/pipeline.steps` as
+`carveout.windows`, not a variable in this script — so all three platforms exclude the
+same tests or knowingly differ. Each is applied by name via `--skip` and printed in the
+run, and the mechanism works while the list is empty, which is what lets the step say
+`no carve-outs` and have it mean something. The list is empty today.
 
 ## Why this is a script, not CI
 

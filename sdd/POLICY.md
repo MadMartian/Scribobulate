@@ -19,6 +19,16 @@
   the three standalone targets instead — see "Verifying a change on macOS" below,
   now measured rather than only designed: 147/147 suite cases pass, and all three
   standalone targets pass.
+  **Build it ON a Mac — cross-compiling from Linux is a closed dead end.** The native
+  build is routine and produces the `.app` and `.dmg`. The *cross* build is not:
+  installing the `x86_64-apple-darwin` target and running `cargo check --target` fails
+  inside `gtk4-sys` on pkg-config cross-compilation, and the target was removed again
+  (verified in QA round 1). These two are easy to conflate and the distinction is the
+  whole point — a successful native build says nothing about the cross one, so a report
+  that "it builds fine on the Mac" does not reopen this. The consequence is a standing
+  constraint on how the project is verified, not a preference: **no seat but the macOS
+  one can produce or check a macOS artefact**, which is why the manual suite carries
+  platform-specific items instead of assuming parity.
 - **Windows builds** use MSVC plus a gvsbuild-produced GTK4/GtkSourceView 5
   runtime; the full pipeline and its pitfalls are in
   `packaging/windows/README.md`. `src/workaround.rs` is `#[cfg(unix)]`-gated
@@ -42,6 +52,21 @@
   gate (TDD §6) is defined against release binaries.
 
 ## Build pipeline
+
+**The pipeline is executable, and `scripts/pipeline.steps` is the contract.** Run
+`scripts/pipeline.sh` (Windows: `packaging/windows/pipeline.ps1`) rather than working
+through the list below by hand. Each runner *derives* its step list from that contract
+instead of restating it, and `--list-steps` prints the derived list so the ports can be
+diffed against each other — comparison proves the ports agree, derivation proves they
+conform, and only the second is worth having (ScrAP-207).
+
+The steps below remain the authority on *why* each gate exists and what it is defending;
+the contract owns the ordered list, each step's verdict rule, and the per-platform
+command. **Do not restate a command or a step's applicability here** — same rule, and same
+reason, as the coverage floor and the input limits: a second copy is how the first one
+silently stops matching. A step that does not apply to a platform is declared in that
+platform's *run output* with its reason, never omitted and never left in a source comment
+where the pipeline's user cannot see it.
 
 Before any change is considered valid, run these steps in order:
 
@@ -176,6 +201,19 @@ Before any change is considered valid, run these steps in order:
    correct** — check 2 proves an entry exists, never that it is the right one; a real
    number naming the wrong lesson passes. That residue is a review obligation, and
    the reason it arises is documented in the script.
+
+10. **Installer artefact** — OPT-IN (`--package` / `-Package`), and the only step that is.
+    Every other gate answers "is this change valid?" and belongs after every edit; this
+    one answers "can a stranger install this?", takes minutes, and answers the same way
+    whether or not the last edit touched packaging. It is a gate rather than a chore
+    because the property it defends is invisible from inside the repo: `install.sh`
+    builds from source into `~/.local` and needs cargo plus the `-dev` libraries, so a
+    tree can look perfectly installable to everyone who already has a toolchain and be
+    unusable by the audience the artefact exists for. Each platform's command is in the
+    contract; all three read the version from `Cargo.toml`, because a hand-maintained
+    version string in a second place is the same defect class as everything else here.
+    A skipped packaging step is **announced** in the run output, never omitted — the
+    same rule as a non-applicable step, for the same reason.
 
 Do not skip any step. If `clippy` emits a warning, fix it — do not suppress it
 with `#[allow(...)]` unless there is a documented reason in a comment on the same

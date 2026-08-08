@@ -9,6 +9,7 @@
 | G | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
 | J | The app dies occasionally with SIGSEGV inside GTK/GIO, with no reproduction and nothing recorded at the moment of death | Medium |
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
+| O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
 
 ## A. Tables are selection islands
 
@@ -710,3 +711,75 @@ affordance cannot observe the click at all.
 - Leave it, which is the standing choice: the failure is one wasted click that fixes
   itself, and every route past it trades a silent no-op for a silent loss of the drag.
 
+
+## O. A GTK4/Quartz autorelease-pool crash intermittently SIGABRTs the macOS integration suite
+
+**Severity**: Medium (the macOS GTK suite cannot be trusted to complete; no data at risk,
+and no Scribobulate code is implicated — but a red run there means nothing until re-run)
+
+`cargo test --features gtk-integration-tests --test gtk_suite` intermittently aborts the
+whole test process on macOS. Not one specific test — whichever happens to trigger a
+text-view mark-set at the wrong moment relative to macOS's input-method state.
+
+**Measured** via four independent **Apple crash reports** — the system crash reporter, not
+a Rust panic (`termination: {namespace: OBJC, flags: 646, code: 1}`) — across four separate
+runs. That distinction is the one that matters diagnostically: the Rust harness reports
+only that the process died, which is equally consistent with a defective test, and the
+discriminating evidence exists only at OS level. All four stacks are identical in
+signature:
+
+```
+gtk_text_view_mark_set_handler                                   (libgtk-4.1.dylib)
+  -> discard_preedit                                             (libgtk-4.1.dylib)
+  -> +[NSTextInputContext currentInputContext_withFirstResponderSync:]   (AppKit)
+  -> TSM input-method session (de)activation                     (HIToolbox)
+  -> nested CFRunLoop pump for NSPasteboard promised-data resolution
+  -> objc_autoreleasePoolPop -> AutoreleasePoolPage::busted_die() (libobjc.A.dylib)
+```
+
+**No Scribobulate frame appears anywhere in the faulting stack.** The cause is GTK4's
+Quartz backend firing `discard_preedit` on any `GtkTextView` mark-set — i.e. on any caret
+or selection change — which activates/deactivates the macOS input-method bridge, which
+pumps a nested run loop for pasteboard-promise resolution and corrupts the autorelease
+pool stack. Not reachable from application code.
+
+**Rate and distribution** (n=6 full-suite runs, isolated): **4 crashed, 2 clean — about
+two in three.** Of the 4 crashes, **3 were on the same test**,
+`select_all_stands_down_for_every_text_entry_and_recovers_for_the_editor`; the single
+outlier was the first observation, which was also a contaminated run (a concurrent build
+on the same machine). All 4 crash reports carry a byte-identical stack signature.
+
+**Why this is still not filed against that test**, even though it is the dominant trigger
+— the argument is the stack, not the distribution. No application frame appears in it, so
+nothing in that test's *code* is faulting; what the test does is arrive at the toolkit
+path more often. It exists to verify select-all standing down across *every* text entry,
+so its body is mostly rapid focus-switching between entries — which is precisely what
+drives `discard_preedit` / `NSTextInputContext` activation churn. A test that exercises
+the mechanism hardest crashing most is consistent with the mechanism, not evidence of a
+defect in the test.
+
+> **An earlier version of this entry claimed the opposite and was wrong.** On n=3 it read
+> "2 crashed on *different* tests, so a defective test would fail on the same one every
+> time" — and offered that distribution as the load-bearing proof. A larger sample
+> inverted it: the spread was an artefact of a small n whose one cross-test data point
+> came from the contaminated run. The mechanism argument survived unchanged because it
+> never rested on the distribution; the distribution argument did not. Recorded because
+> the retracted reasoning is more instructive than the correction — a frequency pattern
+> read off three samples is a hypothesis, and it was stated here as evidence.
+
+**Unverified**: whether it reproduces on other macOS or GTK versions. Linux and Windows
+have no equivalent Quartz/AppKit/TSM path, so it is plausibly macOS-only *by
+construction* — but that is an argument, not a test result.
+
+**Mitigation options**
+- **Re-run and treat a single abort as inconclusive** — what the macOS seat does today.
+  Cheap, but it means the suite's silence is weaker evidence there than on Linux.
+- **Raise it upstream** with the two crash reports. The stack is specific enough to be
+  actionable and nothing about it is project-specific.
+- **Re-test on a newer GTK** when one is available; this is the kind of interaction an
+  upstream fix moves without anyone here doing anything.
+
+Measured on macOS 26.6.1 (25G76), GTK 4.22.4 (Homebrew), by the macOS seat. Primary
+evidence is machine-local and not transferable:
+`~/Library/Logs/DiagnosticReports/gtk_suite-9047c36e3af692e9-2026-08-07-232935.ips` and
+`…-2026-08-08-015722.ips`.

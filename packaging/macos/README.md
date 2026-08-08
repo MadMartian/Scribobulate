@@ -20,8 +20,19 @@ something is broken.
 
 ```bash
 packaging/macos/bundle.sh                    # -> target/macos/Scribobulate.app
+packaging/macos/dmg.sh                       # -> Scribobulate-<version>-<arch>.dmg
 open target/macos/Scribobulate.app --args "$PWD/path/to/document.md"
 ```
+
+`dmg.sh` rebuilds via `bundle.sh` and wraps the result in a drag-install disk image.
+It takes the version from the built `.app`'s `CFBundleShortVersionString` rather than
+re-parsing `Cargo.toml` — one derivation, not two that can drift — and the architecture
+from `uname -m` rather than assuming.
+
+`packaging/macos/pipeline.sh` runs the build pipeline, deriving its step list from
+`scripts/pipeline.steps`; `--list-steps` prints that derived list for diffing against the
+Linux and Windows runners, and `--package` builds the `.dmg` as a pipeline step. Which
+steps exist and how each is judged lives in the contract, deliberately not here.
 
 **Pass an absolute path.** A bundle launched through `open` does not inherit the
 shell's working directory, so a relative path resolves against `/` instead.
@@ -66,7 +77,7 @@ not findings to quote.
 | **Icon theme** | GTK finds Adwaita via `XDG_DATA_DIRS`, which points into `/opt/homebrew`. **Measured**: with that path removed, 11 icon names fall back to the broken-image placeholder — i.e. the packaged app reproduces the exact defect the icon audit exists to catch. Stage the theme into `Contents/Resources/share/icons` and point `XDG_DATA_DIRS` there. | ~15 MB |
 | **GLib schemas** | GTK4 defines `org.gtk.gtk4.Settings.FileChooser` and friends (confirmed), and GLib aborts on a missing schema — so a bundle without `gschemas.compiled` is *expected* to die when a file dialog opens. Not yet reproduced. Stage it into `Contents/Resources/share/glib-2.0/schemas`. | ~3 KB |
 | **gdk-pixbuf loaders** | Non-native image formats resolve through the loader cache of the *process*, not the file. Stage `lib/gdk-pixbuf-2.0/**` and set `GDK_PIXBUF_MODULE_FILE` if the packaged app must render WebP/AVIF. | small |
-| **Signing** | `bundle.sh` signs ad-hoc (`codesign --sign -`), which is enough to launch locally. Distribution needs a Developer ID certificate, `--options runtime`, and notarization. Whether an *unsigned* bundle would launch here is untested. | — |
+| **Signing** | `bundle.sh` signs ad-hoc (`codesign --sign -`), which is enough to launch locally. Distribution needs a Developer ID certificate, `--options runtime`, and notarization. **Gatekeeper refuses an ad-hoc-signed `.dmg` that carries a quarantine flag — measured, not assumed:** with `com.apple.quarantine` set, `spctl -a -t open` rejects the image (`source=no usable signature`) and `spctl -a -t exec` rejects the `.app` (exit 3). That was tested on the machine that *built* it, which is the case most likely to be allowed — so anyone who downloads it will be refused too, and must right-click ▸ Open or clear the attribute. The `.dmg` is a transfer format here, not a distribution channel. | — |
 
 Nothing here needs the GSK renderer to be configured: `scribobulate::run`
 (`src/lib.rs`, which `main()` delegates to) sets `GSK_RENDERER=cairo` in-process

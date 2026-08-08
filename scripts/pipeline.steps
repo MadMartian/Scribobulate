@@ -1,0 +1,331 @@
+# Shared step contract for the build pipeline.
+#
+# READ BY ALL THREE RUNNERS — scripts/pipeline.sh (Linux), packaging/windows/pipeline.ps1
+# (Windows) and packaging/macos/pipeline.sh (macOS). It is the one definition of what the
+# pipeline IS, and it exists because there was none: POLICY § Build pipeline was written
+# as instructions to a reader rather than as a contract a program could consume, so each
+# platform encoded its own reading of it. pipeline.ps1 numbered its steps 1-5, 9, plus
+# unnumbered staging steps, and inserted a 4b that POLICY does not mention. Nothing
+# detected the divergence, because nothing had an opinion about what the step list was.
+#
+# DERIVATION, NOT COMPARISON. Every runner must BUILD its step list by reading this file,
+# and `--list-steps` / `-ListSteps` prints exactly that derived list. The distinction is
+# load-bearing and was paid for one level down: `--list-scan` proved the two lint ports
+# agreed WITH EACH OTHER and for a long time proved neither honoured
+# lint-references.scan — it printed a set some checks did not consume (ScrAP-207). It
+# worked only because both ports genuinely read the contract, so agreement and
+# conformance happened to coincide. Where a port RESTATES instead of deriving, a clean
+# diff proves only that two restatements match, which two people copying the same wrong
+# list also achieve. Comparison proves agreement; derivation proves conformance.
+#
+# THE CONTRACT PINS INTENT, NOT COMMANDS. `intent` is the invariant; `cmd.<platform>` is
+# how that platform satisfies it. This is deliberate and was measured: `xmllint`, `bash`
+# and `cargo llvm-cov` are all absent from the PowerShell PATH, so POLICY step 8 as
+# written (`xmllint --noout`) cannot run on Windows — but its intent is satisfiable there
+# with a built-in and no new dependency. A contract of COMMANDS would have forced Windows
+# to install xmllint or file a false non-applicable declaration, and both are wrong.
+#
+# A NON-APPLICABLE STEP IS DECLARED IN THE RUN OUTPUT, NOT OMITTED. An unexplained
+# asymmetry is what the next contributor "fixes" into a bug. And the declaration must
+# reach the pipeline's USER: pipeline.ps1 declared step 6 at runtime with its reason but
+# declared steps 7 and 8 only in a source comment, so someone reading the run saw
+# `1, 2, 3, 4, 4b, 5, 6, 9` with no indication that 7 and 8 existed. A declaration only a
+# code reader can find is not a declaration.
+#
+# RECORD THE SEMANTIC REASON, NEVER THE TOOLING ONE. `na.<platform>` carries a KIND
+# because the two kinds are acted on differently: `permanent` is true even with perfect
+# tooling; `tooling` is fixable by installing something. Step 6 is the worked example and
+# shows why it matters — it is non-applicable on Windows for BOTH reasons (semantically,
+# unix-only code shifts numerator and denominator so a Windows figure can legitimately
+# fall below the floor with no regression; incidentally, cargo llvm-cov is not installed
+# there). The contract cites the SEMANTIC one, because if it cited the tooling one the
+# first person to run a single `cargo install` would enable a gate that produces a
+# meaningless number — and a meaningless gate that runs is worse than one honestly
+# declared off.
+#
+# GRAMMAR. Every line is `keyword  key  value...` — the value is the remainder of the
+# line, so it may contain spaces. Uniform arity is deliberate: both a POSIX shell and
+# PowerShell must parse this identically, and a format with per-keyword arity is where
+# two parsers quietly disagree. Compound keywords (`cmd.linux`) keep the platform inside
+# the keyword rather than adding a fourth field.
+#
+#   platform  <id>   <display name>
+#   step      <ord>  <id>                  ordinal fixes the run order
+#   intent    <id>   <what must be true>   the invariant; never a command
+#   verdict   <id>   exit | marker:<text>  how the step is judged
+#   class     <id>   required | informational | review
+#   cmd.<plat> <id>  <command line>        how THIS platform satisfies the intent
+#   na.<plat> <id>   permanent|tooling <reason>
+#   carveout.<plat> <id>  <test name>      by-name test exclusions, may be absent
+#   setup     <plat> <description>         per-platform setup PHASE, not a step
+#
+# SETUP IS A PHASE, NOT A STEP. Windows needs four environment variables before ANY step:
+# PATH must carry the GTK bin for the runtime (a built binary will not start without it),
+# PKG_CONFIG_PATH for the build probe, and LIB/INCLUDE for the MSVC link — the last two
+# being conditional concatenations, because prepending onto an unset variable leaves a
+# trailing `;` and an empty entry in those lists means "the current directory" to the
+# toolchain. That produces environment, has no verdict, and cannot be skipped or
+# reordered. Modelling it as "step 0" would force Linux and macOS to declare a
+# non-applicable step 0 — noise that dilutes the declarations carrying real information.
+# So it is declared here and MUST NOT appear in `--list-steps`.
+#
+# CARVE-OUTS ARE CONTRACT DATA, AND THE MECHANISM MUST SURVIVE BEING EMPTY. There are
+# none today. That is exactly why the mechanism has to work while the list is empty —
+# that is what lets a step print "no carve-outs" and have it MEAN something rather than
+# be silence. Express them here rather than letting each runner invent its own.
+#
+# A carve-out is APPLIED, not merely announced. Each one appends `--skip <name>` to that
+# platform's command, so the run does what the announcement says. The first version of
+# this printed the list and ran the command unmodified — invisible while the list is
+# empty, and the day someone added one the run would have printed `skipped: <test>` for
+# a test it actually ran. An announcement that contradicts the run is worse than the
+# silence the mechanism replaced.
+# Because applying a carve-out means appending libtest arguments, a step that carries one
+# must be a `cargo test` invocation, and the runners VALIDATE that rather than assuming
+# it — an assumption that holds only until someone adds a carve-out to a step where it
+# cannot mean anything.
+#
+# RUNNING THIS CONTRACT FROM POWERSHELL: do NOT use `Invoke-Expression` as the analogue
+# of a POSIX `eval`. It throws on `cmd.windows diagram` — the outer shell expands the
+# `$d` inside that double-quoted argument before the inner interpreter ever sees it
+# ("The variable '$d' cannot be retrieved because it has not been set"). Dispatch via
+# `cmd /c`, which does not treat `$` as special, and confirm the step still
+# DISCRIMINATES (a malformed `<svg><g></svg>` must still fail it) rather than merely
+# running. Measured on GTK 4.22.4 / Win10 by the Windows seat.
+#
+# CLASSES. `required` fails the run. `informational` never fails it. `review` is a human
+# obligation with no command — announced in the run output so it cannot be silently
+# forgotten, but not something a script can judge. Step 7 is the only `review` step and
+# it is honest about that: pretending a script can decide whether a behaviour change
+# carries its MANUAL-TEST.md check would be a gate that always passes.
+#
+# PROVENANCE TRAVELS WITH THE ARTEFACT. A packaging step is allowed to run in a run where
+# a required step was skipped by operator override — `--skip-integration` plus `--package`
+# is legitimate on a box where the GTK suite cannot run, and refusing the combination
+# would be paternalistic about two flags the operator passed deliberately. But the
+# packaging step MUST then name what did not run:
+#
+#     10. package — WARNING: built without step 5 (integration), skipped by --skip-integration
+#
+# so that whoever ends up holding the installer can tell what gated it. Silence here is
+# the same failure as omitting a non-applicable step: the run looks identical to one where
+# everything passed.
+# Only OPERATOR OVERRIDES are reported, not contract-declared non-applicable steps. A step
+# that is permanently non-applicable on a platform is always absent there, so naming it on
+# every package is noise that trains the reader to skim past the line — and the line's
+# whole value is that it appears only when something unusual happened.
+#
+# `packaging` is OPT-IN: skipped unless the runner is asked for it (`--package` /
+# `-Package`), and required when it runs. Building installers on every change would add
+# minutes to a gate meant to run after every edit, and the Windows pipeline already made
+# this call before the contract existed — its staging and installer steps sit behind a
+# `-Package` switch. The contract follows the existing behaviour rather than overriding
+# it. A skipped packaging step is still ANNOUNCED, for the same reason a non-applicable
+# one is: an omission the reader cannot see is how a step quietly stops existing.
+
+platform linux    Linux
+platform macos    macOS
+platform windows  Windows
+
+# ---------------------------------------------------------------------------
+# Step 1 — formatting
+# ---------------------------------------------------------------------------
+step   1  fmt
+intent fmt  Every source file matches rustfmt's canonical formatting
+verdict fmt  exit
+class  fmt  required
+cmd.linux   fmt  cargo fmt --check
+cmd.macos   fmt  cargo fmt --check
+cmd.windows fmt  cargo fmt --check
+
+# ---------------------------------------------------------------------------
+# Step 2 — lint
+#
+# The feature flag is not optional. Without it the gtk-integration-tests modules are not
+# compiled at all, so neither clippy nor cargo test sees them and they rot unnoticed —
+# they reached the point of NOT COMPILING while every gate stayed green, because a suite
+# outside the gate protects nothing (ScrAP-124).
+# ---------------------------------------------------------------------------
+step   2  clippy
+intent clippy  The tree lints clean with zero warnings, with the GTK integration suite compiled in
+verdict clippy  exit
+class  clippy  required
+cmd.linux   clippy  cargo clippy --all-targets --features gtk-integration-tests -- -D warnings
+cmd.macos   clippy  cargo clippy --all-targets --features gtk-integration-tests -- -D warnings
+cmd.windows clippy  cargo clippy --all-targets --features gtk-integration-tests -- -D warnings
+
+# ---------------------------------------------------------------------------
+# Step 3 — release build
+# ---------------------------------------------------------------------------
+step   3  build
+intent build  The release binary compiles cleanly; release is the reference for behaviour and footprint
+verdict build  exit
+class  build  required
+cmd.linux   build  cargo build --release
+cmd.macos   build  cargo build --release
+cmd.windows build  cargo build --release
+
+# ---------------------------------------------------------------------------
+# Step 4 — default test suite
+# ---------------------------------------------------------------------------
+step   4  test
+intent test  The display-free test suite passes
+verdict test  exit
+class  test  required
+cmd.linux   test  cargo test
+cmd.macos   test  cargo test
+cmd.windows test  cargo test
+
+# ---------------------------------------------------------------------------
+# Step 4b — skip report
+#
+# INFORMATIONAL BY DESIGN, and the reason is the whole point of the step. libtest
+# CAPTURES a passing test's output, so a body that announces "I verified nothing" is
+# silenced exactly when it passes. This step re-runs with output shown and greps for the
+# marker, so a runtime skip is visible rather than indistinguishable from a pass.
+# A skip nobody sees is a pass.
+#
+# The marker's label is the RUBRIC, not the test name, so renaming a test does not break
+# the grep. Never `#[cfg(platform)]` a test to achieve a skip — a cfg'd-out test is not
+# skipped, it is deleted: not compiled, not reported, not counted, and no harness
+# distinguishes "never built" from "passed" (ScrAP-212).
+# ---------------------------------------------------------------------------
+step   4b  skipreport
+intent skipreport  Tests that skipped themselves at runtime are surfaced with their rubric and reason
+verdict skipreport  marker:SKIPPED [
+class  skipreport  informational
+cmd.linux   skipreport  cargo test -- --nocapture
+cmd.macos   skipreport  cargo test -- --nocapture
+cmd.windows skipreport  cargo test -- --nocapture
+
+# ---------------------------------------------------------------------------
+# Step 5 — GTK integration tests
+#
+# The per-platform difference here is genuine and the contract expresses it rather than
+# papering over it. Linux has no display in a headless run and supplies one with xvfb-run.
+# macOS cannot use the `--lib` target at all: its dual-harness bodies abort the process
+# off the main thread (ScrAP-171; measured 2026-07-30, GTK 4.22.4/Quartz — SIGABRT after
+# ~95 non-GTK tests), so it runs the main-thread suite plus the standalone targets.
+# Windows runs against the real windowing system.
+#
+# Run it through Cargo so .cargo/config.toml's [env] applies — these tests close real
+# windows, which runs the production session-save path, and that path resolves
+# XDG_STATE_HOME from the environment. Without the override the suite rewrites the
+# tester's own session.toml.
+#
+# WINDOWS CARRIES `--test-threads=1` AND THE OTHER TWO DO NOT. This is a DIAGNOSABILITY
+# measure, not a correctness one — `#[gtktest::test]` already serialises GTK bodies, so
+# no platform needs it to pass. It is here because libtest buffers output per thread, so
+# a parallel run of a suite that WEDGES prints no test names at all, and "zero test
+# names" then reads as evidence the hang happened at or before the first test. That
+# misreading cost a well-argued but wrong startup-stall hypothesis once already
+# (ScrAP-166), on Windows, which is where a wedging GTK suite is most likely. It is
+# scoped to the platform whose failure mode it serves rather than slowing the other two.
+# ---------------------------------------------------------------------------
+step   5  integration
+intent integration  The GTK integration suite passes against a real display, through Cargo so the [env] pins apply
+verdict integration  exit
+class  integration  required
+cmd.linux   integration  xvfb-run -a cargo test --features gtk-integration-tests
+cmd.macos   integration  cargo test --features gtk-integration-tests --test gtk_suite --test icon_resolution --test macos_dark_mode --test popover_deferred_focus
+cmd.windows integration  cargo test --features gtk-integration-tests -- --test-threads=1
+
+# ---------------------------------------------------------------------------
+# Step 6 — coverage ratchet
+#
+# Linux-canonical BY DESIGN. See the header's "record the semantic reason" note: the
+# declarations below cite the semantics, never the missing tool.
+# ---------------------------------------------------------------------------
+step   6  coverage
+intent coverage  Scoped line coverage has not regressed below the ratchet floor
+verdict coverage  exit
+class  coverage  required
+cmd.linux   coverage  scripts/coverage.sh
+na.macos    coverage  permanent  src/platform/mac/*.rs compiles only here and is mostly GTK/CoreFoundation glue with no headless test, so it drags the scoped total below a Linux-calibrated floor. The floor's job is to gate Linux, where these files do not exist at all.
+na.windows  coverage  permanent  Unix-only code (atomic_io.rs and its tests) is not compiled here, shifting both numerator and denominator, so a Windows figure can legitimately fall below the Linux floor with no regression. Never lower the Linux floor to make a Windows run pass.
+
+# ---------------------------------------------------------------------------
+# Step 7 — UI-behaviour coverage alignment
+#
+# A `review` step: a human obligation, announced so it cannot be silently forgotten. No
+# script can decide whether a change altered user-visible behaviour, and a gate that
+# always passes is worse than an honest announcement.
+# ---------------------------------------------------------------------------
+step   7  uibehaviour
+intent uibehaviour  A change to user-visible behaviour carries its tests/MANUAL-TEST.md check, tracing to the sdd/TDD.md rubric it verifies
+verdict uibehaviour  review
+class  uibehaviour  review
+
+# ---------------------------------------------------------------------------
+# Step 8 — architecture diagram
+#
+# The Windows command is the worked example for intent-not-command. It uses a .NET
+# built-in with no new dependency, and it DISCRIMINATES — fed `<svg><g></svg>` it rejects
+# with a parse error, which was mutation-tested rather than assumed, because an XML check
+# that accepts anything is worse than none.
+# ---------------------------------------------------------------------------
+step   8  diagram
+intent diagram  The architecture SVG parses as well-formed XML, so librsvg does not reject what a browser recovers from
+verdict diagram  exit
+class  diagram  required
+cmd.linux   diagram  xmllint --noout sdd/system-overview.svg
+cmd.macos   diagram  xmllint --noout sdd/system-overview.svg
+cmd.windows diagram  powershell -NoProfile -Command "$d = New-Object System.Xml.XmlDocument; $d.Load('sdd/system-overview.svg')"
+
+# ---------------------------------------------------------------------------
+# Step 9 — cross-reference gate
+#
+# A gate is its pattern AND the set of files it runs over, and parity is required in
+# both. The two ports share one pattern, one self-test corpus, and one file enumeration
+# (scripts/lint-references.scan) which both READ rather than restate.
+# ---------------------------------------------------------------------------
+step   9  references
+intent references  Every cross-reference in the tree resolves, and the citation-form rules hold
+verdict references  exit
+class  references  required
+cmd.linux   references  scripts/lint-references.sh
+cmd.macos   references  scripts/lint-references.sh
+cmd.windows references  powershell -NoProfile -File scripts/lint-references.ps1
+
+# ---------------------------------------------------------------------------
+# Step 10 — the installer artefact
+#
+# ONE step, not a bundle/installer pair. Windows and macOS do stage-then-wrap in two
+# phases; Linux's dpkg-deb and rpmbuild each stage and package in one call. Splitting
+# the step to match two platforms would force the third to declare a non-applicable
+# half, which is noise standing in for a distinction that is really about HOW each
+# platform packages — exactly what `intent`-not-command exists to absorb.
+#
+# The intent is the property every platform must satisfy, and it is the one the plan
+# names: an artefact a NON-DEVELOPER can install with NO toolchain. `install.sh` does
+# not satisfy it and is not this step — it builds from source into ~/.local and needs
+# cargo plus the -dev libraries, which makes it a developer convenience.
+#
+# VERSION COMES FROM Cargo.toml ON ALL THREE. A hand-maintained version string in a
+# second place is the same defect class as everything else this contract prevents. Each
+# platform derives it ONCE: Linux parses the [package] table, Windows reads it for the
+# Inno Setup define, macOS reads it back out of the built .app's
+# CFBundleShortVersionString rather than re-parsing Cargo.toml a second time.
+# ---------------------------------------------------------------------------
+step   10  package
+intent package  A transferable installer artefact a non-developer can install with no toolchain, versioned from Cargo.toml
+verdict package  exit
+class  package  packaging
+cmd.linux   package  packaging/linux/build-deb.sh && packaging/linux/build-rpm.sh
+cmd.macos   package  packaging/macos/dmg.sh
+cmd.windows package  powershell -NoProfile -File packaging/windows/package.ps1
+
+# ---------------------------------------------------------------------------
+# Per-platform setup phase (NOT steps — must not appear in --list-steps)
+# ---------------------------------------------------------------------------
+setup linux    none
+setup macos    none
+setup windows  PATH (GTK bin, for the runtime), PKG_CONFIG_PATH (build probe), LIB and INCLUDE (MSVC link) — the last two conditionally concatenated, since prepending onto an unset variable leaves a trailing ';' and an empty entry means "the current directory" to the toolchain
+
+# ---------------------------------------------------------------------------
+# Test carve-outs
+#
+# NONE TODAY. The mechanism must work while this list is empty — that is what lets step 5
+# print "no carve-outs" and have it mean something rather than be silence. Add lines as
+# `carveout.<platform>  integration  <exact test name>`.
+# ---------------------------------------------------------------------------

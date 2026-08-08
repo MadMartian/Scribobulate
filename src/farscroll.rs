@@ -32,17 +32,65 @@ use std::rc::Rc;
 /// **Precondition.** None: on an already-validated view `f` runs on the next main
 /// loop turn, so callers need not know whether the view is warm.
 ///
-/// **Why this works** (GTK 4.6.9, unchanged through the 4.6–4.12 target).
-/// `gtk_text_view_invalidate` installs `incremental_validate_callback` at
-/// `GTK_TEXT_VIEW_PRIORITY_VALIDATE` — a *public* macro, `GDK_PRIORITY_REDRAW + 5`
-/// = 125 (gtktextview.h:102, gtktextview.c:4852-4856) — and that callback returns
-/// `TRUE`, so the source stays attached *and permanently ready* until
-/// `gtk_text_layout_is_valid` (gtktextview.c:4808-4826). An idle at
-/// `G_PRIORITY_DEFAULT_IDLE` (200) is numerically lower priority, so GLib cannot
-/// dispatch it while that source is pending. "Layout invalid" and "a 125-priority
-/// idle is permanently ready" are the same condition, which makes a 200-priority
-/// idle an exact *validation has finished* event — the signal GTK otherwise does
-/// not expose (`GtkTextLayout` is private in GTK4).
+/// **Why this works** (source-identical in GTK 4.6.9 and 4.22.4 — both trees read;
+/// the 4.6–4.12 target sits inside that range).
+/// `gtk_text_view_invalidate` installs **two** idles, not one, and both outrank the
+/// 200 used here:
+/// - `first_validate_callback` at `GTK_PRIORITY_RESIZE - 2` = **108**
+///   (gtktextview.c:4846). One-shot — it returns `FALSE` and re-arms by
+///   *reinstallation*, its flush having removed the source first (:4760).
+/// - `incremental_validate_callback` at `GTK_TEXT_VIEW_PRIORITY_VALIDATE` — a
+///   *public* macro, `GDK_PRIORITY_REDRAW + 5` = **125** (gtktextview.h:102,
+///   gtktextview.c:4854). This is the one that carries the guarantee: it validates
+///   2000px per pass and returns `TRUE`, so the source stays attached *and
+///   permanently ready*, flipping to `FALSE` only once `gtk_text_layout_is_valid`
+///   (:4808-4826).
+///
+/// **The two are not interchangeable, and it matters which one carries the guarantee.**
+/// On the ordinary path it is the 125 source *alone*: the 108 one dispatches once, early,
+/// and is gone. They do different work, too — 108's flush routes to
+/// `gtk_text_view_validate_onscreen` (the *onscreen* portion), while 125 grinds the whole
+/// document to `gtk_text_layout_is_valid`. The 108 source earns its place only when a
+/// *re-invalidation* lands on an already-pending oracle: `gtk_text_view_invalidate`
+/// reinstalls it, and `flush_first_validate` removes itself *first* (:4760) precisely so
+/// an invalidation arriving mid-flush installs a fresh one.
+///
+/// Do not summarise this as "both gate the oracle". That reading invites the next reader
+/// to notice 108 returns `FALSE`, conclude it is redundant, and be *right on the ordinary
+/// path and wrong on the re-invalidation path* — an invariant held by two mechanisms,
+/// each of which reads as dead code while the other is intact.
+/// GLib dispatches only
+/// sources at or above the priority of the first ready one it finds — `check`
+/// says so in its own comment, *"never dispatch sources with less priority than
+/// the first one we choose to dispatch"* (gmain.c:4104-4105, GLib 2.72.4; the
+/// floor is enforced by the `break` at :4017), with no anti-starvation escape —
+/// and a `g_idle_add_full` source is unconditionally ready (`g_idle_prepare`
+/// /`g_idle_check` both `return TRUE`, gmain.c:5909-5921). So "layout
+/// invalid" and "a 125-priority idle is permanently ready" are the same
+/// condition, which makes a 200-priority idle a *validation has finished* event —
+/// the signal GTK otherwise does not expose (`GtkTextLayout` is private in GTK4).
+///
+/// **Not an absolute, in two ways that matter.**
+/// - *Same `GMainContext` only.* A source on another thread-default context is
+///   ordered against nothing here.
+/// - *A nested main-loop iteration can slip past it.* `g_main_dispatch` blocks a
+///   source for the duration of its own callback unless it set
+///   `G_SOURCE_CAN_RECURSE` (gmain.c:3397), which `g_idle_add_full` never sets
+///   (gmain.c:5997-6019 — priority and callback only), and both `prepare` and
+///   `check` `continue` past blocked sources (gmain.c:3717, :4015) *before* the
+///   line that raises the floor (:4104), so a blocked source cannot hold it. So
+///   a main-loop iteration pumped from *inside*
+///   `incremental_validate_callback`'s call stack — anchored-child allocation is
+///   the realistic route in this app — can dispatch this idle with the layout
+///   still invalid. That is why the callers below do not merely assume validity:
+///   an early fire meets an invalid layout, `scroll_to_mark` queues instead of
+///   flushing, nothing moves, and the deadline below picks it up. A silent no-op,
+///   never a wrong scroll.
+///
+/// Note the symmetry, because it is why the deadline is *necessary* rather than
+/// belt-and-braces: the guarantee is exactly as strong as "the 125 source stays
+/// ready", and that is the same predicate as the starvation risk. The property
+/// that makes this idle precise is the property that can starve it.
 ///
 /// The priority is passed explicitly rather than taken from `idle_add_local_once`'s
 /// default: it is the entire mechanism, so it is stated where it can be read.
@@ -146,9 +194,9 @@ where
             };
             let upper = view.vadjustment().map(|a| a.upper()).unwrap_or(0.0);
             ticks += 1;
-            let stalled = upper == last_upper;
+            let fire = watchdog_should_fire(upper, last_upper, ticks);
             last_upper = upper;
-            if !stalled && ticks < WATCHDOG_MAX_TICKS {
+            if !fire {
                 return glib::ControlFlow::Continue; // still laying out — keep waiting
             }
             run(&once, &weak);
@@ -165,6 +213,41 @@ const WATCHDOG_TICK: std::time::Duration = std::time::Duration::from_secs(5);
 /// settling (which would otherwise extend the progress check forever).
 const WATCHDOG_MAX_TICKS: u32 = 12;
 
+/// Whether the deadline should give up waiting on this tick.
+///
+/// Split out from the timer closure so the two subtleties above are pinned by tests
+/// rather than only by prose — both are the kind of thing a later "cleanup" reverses:
+///
+/// * The predicate is `upper` **CHANGED**, deliberately not `upper` **GREW**. The range
+///   does not climb monotonically, so a "grew" test would read a legitimate shrink as a
+///   stall and fire mid-validation — landing the re-issue on partial heights, the one
+///   outcome this design exists to avoid.
+/// * The comparison is an exact `==` on an `f64` **on purpose**, because `upper` is
+///   integer-derived and no float arithmetic accumulates on that path. An epsilon would
+///   swallow exactly the granularity this bug operates at (a one-pixel nudge).
+///
+/// The first tick passes `f64::NAN` as `last_upper`, and `NAN == NAN` is false — so a
+/// fresh watchdog never reads its own uninitialised state as a stall. That is load-bearing,
+/// not incidental, which is why it has a test of its own.
+fn watchdog_should_fire(upper: f64, last_upper: f64, ticks: u32) -> bool {
+    let stalled = upper == last_upper;
+    stalled || ticks >= WATCHDOG_MAX_TICKS
+}
+
+/// Whether the caret is still at the end the keystroke asked for.
+///
+/// The caret *is* the generation token for a pending re-issue (see
+/// [`wire_buffer_ends_scroll`]): if the reader has moved since, the re-issue is stale and
+/// must be abandoned rather than yanking them back. Split out so that rule is testable
+/// without a buffer.
+fn caret_still_at_requested_end(to_end: bool, iter_is_end: bool, iter_offset: i32) -> bool {
+    if to_end {
+        iter_is_end
+    } else {
+        iter_offset == 0
+    }
+}
+
 /// Whether `view` has a viewport to scroll *within*.
 ///
 /// A realized view that has never been allocated has a zero-height text window, and
@@ -173,7 +256,16 @@ const WATCHDOG_MAX_TICKS: u32 = 12;
 /// scrollable range is real yet" (ScrAP-13); zero means the view is not yet on screen
 /// and the caller should leave the position alone.
 fn has_viewport(view: &gtk::TextView) -> bool {
-    view.vadjustment().is_some_and(|a| a.page_size() > 0.0)
+    viewport_is_real(view.vadjustment().map(|a| a.page_size()))
+}
+
+/// The decision behind [`has_viewport`], over the page size alone.
+///
+/// Split out so the rule is stated once and testable without a display: a view with
+/// no vadjustment at all and one whose adjustment is still a draft (`page_size` 0)
+/// are the same answer — not on screen yet, leave the position alone.
+fn viewport_is_real(page_size: Option<f64>) -> bool {
+    page_size.is_some_and(|p| p > 0.0)
 }
 
 /// Make Ctrl+Home / Ctrl+End reach the real ends of a large document in `view`.
@@ -211,12 +303,8 @@ pub(crate) fn wire_buffer_ends_scroll(view: &gtk::TextView) {
             let buffer = view.buffer();
             let insert = buffer.get_insert();
             let iter = buffer.iter_at_mark(&insert);
-            let caret_still_at_the_end_it_asked_for = if to_end {
-                iter.is_end()
-            } else {
-                iter.offset() == 0
-            };
-            if !caret_still_at_the_end_it_asked_for || !has_viewport(view) {
+            let still_there = caret_still_at_requested_end(to_end, iter.is_end(), iter.offset());
+            if !still_there || !has_viewport(view) {
                 return;
             }
             // `scroll_to_mark`, never `scroll_to_iter`: it schedules rather than
@@ -286,6 +374,117 @@ pub(crate) fn scroll_to_mark_when_ready(
     });
 }
 
+#[cfg(test)]
+mod decision_tests {
+    use super::*;
+
+    // ---- watchdog_should_fire ------------------------------------------------------
+    //
+    // These pin the two rules the timer closure's prose argues for. Both are reversible
+    // by a plausible "cleanup" (== into >, == into an epsilon compare), and neither is
+    // observable from the integration tests, which exercise the healthy path where the
+    // watchdog never fires at all.
+
+    #[test]
+    fn a_fresh_watchdog_does_not_read_its_own_uninitialised_state_as_a_stall() {
+        // The first tick compares against NAN, and NAN == NAN is false. If this ever
+        // became true the deadline would fire on tick 1 of every wait, defeating the
+        // whole design by re-issuing against partial heights immediately.
+        assert!(!watchdog_should_fire(1000.0, f64::NAN, 1));
+    }
+
+    #[test]
+    fn an_unchanged_range_is_a_stall_and_fires() {
+        assert!(watchdog_should_fire(4288.0, 4288.0, 3));
+    }
+
+    #[test]
+    fn a_growing_range_is_progress_and_keeps_waiting() {
+        assert!(!watchdog_should_fire(5014.0, 4288.0, 3));
+    }
+
+    #[test]
+    fn a_shrinking_range_is_progress_too_and_must_not_be_read_as_a_stall() {
+        // CHANGED, not GREW. A re-wrap or swap legitimately shrinks the range (measured
+        // in this codebase thrashing 3552 -> 4288 -> 5014 -> 2604 -> 8719). A "grew"
+        // predicate would call this a stall and fire mid-validation.
+        assert!(!watchdog_should_fire(2604.0, 5014.0, 3));
+    }
+
+    #[test]
+    fn a_one_pixel_change_still_counts_as_progress() {
+        // The exact `==` is deliberate: an epsilon comparison would swallow precisely
+        // this granularity, and a one-pixel height nudge cancelling a scroll is the
+        // upstream defect this module exists for.
+        assert!(!watchdog_should_fire(4288.0, 4287.0, 3));
+    }
+
+    #[test]
+    fn the_tick_cap_fires_even_while_the_range_is_still_changing() {
+        // A range that oscillates instead of settling would extend the progress check
+        // forever; the absolute cap bounds it.
+        assert!(watchdog_should_fire(8719.0, 2604.0, WATCHDOG_MAX_TICKS));
+    }
+
+    #[test]
+    fn the_tick_cap_is_a_floor_not_an_equality() {
+        // Guards against a `==` that a stray extra tick would step straight over.
+        assert!(watchdog_should_fire(8719.0, 2604.0, WATCHDOG_MAX_TICKS + 1));
+    }
+
+    // ---- viewport_is_real ----------------------------------------------------------
+
+    #[test]
+    fn a_view_with_no_adjustment_has_no_viewport() {
+        assert!(!viewport_is_real(None));
+    }
+
+    #[test]
+    fn a_draft_adjustment_with_zero_page_size_has_no_viewport() {
+        // ScrAP-13: page_size is this codebase's proxy for "the scrollable range is real
+        // yet". Scrolling against a zero viewport lands WRONG, not nowhere.
+        assert!(!viewport_is_real(Some(0.0)));
+    }
+
+    #[test]
+    fn a_positive_page_size_is_a_real_viewport() {
+        assert!(viewport_is_real(Some(600.0)));
+    }
+
+    // ---- caret_still_at_requested_end ----------------------------------------------
+
+    #[test]
+    fn a_caret_left_at_the_buffer_end_still_wants_its_end_scroll() {
+        assert!(caret_still_at_requested_end(true, true, 12_345));
+    }
+
+    #[test]
+    fn a_caret_moved_away_from_the_end_supersedes_the_pending_re_issue() {
+        assert!(!caret_still_at_requested_end(true, false, 12_345));
+    }
+
+    #[test]
+    fn a_caret_left_at_offset_zero_still_wants_its_start_scroll() {
+        assert!(caret_still_at_requested_end(false, false, 0));
+    }
+
+    #[test]
+    fn a_caret_moved_away_from_the_start_supersedes_the_pending_re_issue() {
+        assert!(!caret_still_at_requested_end(false, false, 1));
+    }
+
+    #[test]
+    fn the_two_directions_are_judged_by_different_tests_not_one_shared_one() {
+        // A caret at the end of an EMPTY buffer is both is_end() and offset 0, so a
+        // single shared predicate would answer the same for opposite requests. This
+        // pins that each direction reads its own field.
+        assert!(caret_still_at_requested_end(true, true, 0));
+        assert!(caret_still_at_requested_end(false, true, 0));
+        // ...and that a non-empty end position is NOT accepted as a start position.
+        assert!(!caret_still_at_requested_end(false, true, 500));
+    }
+}
+
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
     use super::*;
@@ -329,6 +528,68 @@ mod gtk_integration_tests {
             }
         }
         (buffer, view, scroller, window)
+    }
+
+    /// Consecutive turns `upper` must hold one value before the layout counts as
+    /// validated. Large enough that a lull between validation chunks is never mistaken
+    /// for the end of them.
+    const SETTLED_TURNS: u32 = 200;
+
+    /// Pump until GTK has finished validating line heights, judged by the vadjustment's
+    /// range CONVERGING rather than by crossing a pixel threshold.
+    ///
+    /// **This exists because the obvious version is a portability bug.** It was
+    /// `pump_until(.., || adjustment.upper() > 600_000.0)`, and that passed only on the
+    /// platform it was calibrated on. Measured settled `upper` for this fixture:
+    ///
+    /// | platform | settled `upper` | `> 600_000`? |
+    /// |---|---|---|
+    /// | Linux / X11 | 702 018 px | yes |
+    /// | Windows, macOS | 540 014 px | **no — unsatisfiable** |
+    ///
+    /// The constant sat *between* the platforms. Validation completed on all three
+    /// (measured: 267 chunks, converged) and the predicate stayed false on two, so the
+    /// only reachable outcome there was `pump_until`'s 30 s watchdog — a green test
+    /// where it was written and a guaranteed timeout everywhere else. A document's
+    /// settled height is a font-metric question, so **no constant can stand in for
+    /// "laid out"**; only convergence can. Eight of this module's nine pump sites
+    /// already used relative oracles and none of them failed — the one absolute site was
+    /// the one that broke, which was visible in the file before anyone measured
+    /// anything.
+    ///
+    /// Two details that are load-bearing rather than incidental:
+    /// * The predicate is `upper` **unchanged in VALUE**, not "no longer notifying".
+    ///   `upper` emits at least one further *same-value* `notify` after validation
+    ///   finishes (measured +8–10 ms, GTK 4.22.4), so an oracle counting notifications
+    ///   reports a false "still validating".
+    /// * It waits for a change **first**. Otherwise the initial pre-validation value —
+    ///   momentarily stable while nothing has been laid out yet — would satisfy a bare
+    ///   stability test and report a cold view as settled. `cold_editor` deliberately
+    ///   stops pumping the moment a viewport exists (ScrAP-87), so the range really is
+    ///   still tiny at that point: 567 px against a settled 540 014.
+    ///
+    /// Callers take this helper rather than writing a predicate, so a second absolute
+    /// threshold cannot reappear one test at a time.
+    fn pump_until_layout_validated(adjustment: &gtk::Adjustment) {
+        let adjustment = adjustment.clone();
+        let mut last = f64::NAN;
+        let mut unchanged = 0u32;
+        let mut ever_changed = false;
+        pump_until("layout validation to finish", move || {
+            let upper = adjustment.upper();
+            if upper == last {
+                unchanged += 1;
+            } else {
+                // NAN != NAN, so the first turn always lands here and seeds `last`
+                // without being counted as a change.
+                if !last.is_nan() {
+                    ever_changed = true;
+                }
+                unchanged = 0;
+                last = upper;
+            }
+            ever_changed && unchanged >= SETTLED_TURNS
+        });
     }
 
     /// Pump until `done()`, bounded by a real glib timeout SOURCE — never a
@@ -670,9 +931,7 @@ mod gtk_integration_tests {
             .expect("the fixture has that many lines");
         buffer.place_cursor(&elsewhere);
 
-        pump_until("layout validation to finish", || {
-            adjustment.upper() > 600_000.0
-        });
+        pump_until_layout_validated(&adjustment);
         // Further settled turns, so a re-issue would have had every chance.
         pump_until("the layout to settle", {
             let mut turns = 0;

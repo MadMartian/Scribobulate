@@ -90,11 +90,24 @@ waiting for you when you reopen it.
 
 ### Linux
 
+Install the package — no Rust toolchain, no development libraries:
+
+```bash
+sudo apt install ./scribobulate_0.1.0_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./scribobulate-0.1.0-1.x86_64.rpm  # Fedora, RHEL
+```
+
+Or build from source, which is what you want if you intend to change it:
+
 ```bash
 sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev
 cargo build --release
 ./target/release/scribobulate path/to/document.md
 ```
+
+To build the packages yourself, `packaging/linux/build-deb.sh` and
+`build-rpm.sh` (the latter needs `rpm` installed on a Debian host). Both take the
+version from `Cargo.toml` and install the same payload.
 
 ### macOS
 

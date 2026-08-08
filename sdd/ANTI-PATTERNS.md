@@ -218,7 +218,7 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 121 | Two `GtkTextTag`s that both set `left-margin` on a line (a list item inside a blockquote) do not compose | A |
 | 122 | Translating a stripped-then-parsed document's ranges back to original coordinates instead of per-position translation silently swallows the stripped bytes (the range-merge gotcha) | C |
 | 123 | A coverage ratchet's floor recorded as stale prose drifts from the real (climbing) figure, silently loosening the gate | C |
-| 124 | A test suite gated behind a Cargo feature the build pipeline never enables rots invisibly until it doesn't compile | A |
+| 124 | A test suite gated behind a Cargo feature is invisible to every gate that does not enable it — it rots until it stops compiling, and every line it covers reads as 0% | A |
 | 125 | Scheduling work that depends on paint-populated state via `idle_add_local_once` reads the previous frame's state and silently no-ops | A |
 | 126 | Styling a `GtkTextView`'s background via `textview { background-color }` alone works on Default but is defeated by the user's system theme | A |
 | 127 | Reaching for CSS selector specificity to arbitrate between two `GtkCssProvider`s is a category error | A |
@@ -1093,7 +1093,7 @@ GTK4 is single-threaded, yet many pitfalls below present as **races** — interm
 **Resolution**: ratchet the floor and the stated figure together whenever coverage rises; verify a ratchet change by the gate's EXIT CODE, never the printed percentage.
 **Non-core (tooling/process) — do NOT fold into the gtk4-rs skill.**
 
-## 124. A test suite gated behind a Cargo feature the build pipeline never enables rots invisibly until it doesn't compile
+## 124. A test suite gated behind a Cargo feature is invisible to every gate that does not enable it — it rots until it stops compiling, and every line it covers reads as 0%
 > *Core-GTK half in the gtk4-rs skill as GTK4Rs/AP-98 (automated-UI-testing); the tooling/process remainder (which pipeline step compiles this?) stays project-specific — same precedent as #36.*
 
 **Symptom**: Scribobulate's 398 `gtk-integration-tests` (the only suite covering real GTK wiring — real windows, real paint) went invisible to every pipeline gate; a type refactor broke their build while fmt/clippy/build/test/coverage all stayed green through multiple debrief cycles.
@@ -1101,6 +1101,13 @@ GTK4 is single-threaded, yet many pitfalls below present as **races** — interm
 **Resolution**: put the feature in the pipeline — `clippy --features gtk-integration-tests` and a dedicated `xvfb-run -a cargo test --features gtk-integration-tests` step (a display is not an excuse).
 **Non-core (tooling/process remainder — which CI step compiles a gated suite) — do NOT fold into the gtk4-rs core skill.** Sibling of #123.
 **See**: gtk4-rs skill → automated-UI-testing (GTK4Rs/AP-98, the core "green ≠ covered for a gated suite" lesson).
+
+**Second case — the same blindness, seen by the COVERAGE gate (2026-08-07).** The gate above compiles the suite; `scripts/coverage.sh` deliberately does not (it is unit-only, and the floor is calibrated that way). So a module whose tests are *entirely* feature-gated reports **0%** while being thoroughly tested. `src/farscroll.rs` and `src/saferizer/scrollpos.rs`, both added by `6d73875`, read 0% while carrying seven `#[gtktest::test]` bodies between them, and their uncovered lines took scoped line coverage from ≥76.76 to **76.20** — the ratchet was red on `master` and stayed red, because step 6 was prose on Linux and nobody ran it. It surfaced the first time an executable pipeline ran the step.
+Two traps for whoever tries to fix it, both measured here:
+- **Adding unit tests is a weak lever**, because test bodies count in the DENOMINATOR too — extracting farscroll's pure decision cores and writing 15 tests moved the total only 76.20 → **76.31** (58 added lines bought 2 net covered production lines). Reaching a floor this way needs absurd volume: ~355 fully-covered new lines to gain the 0.56pt actually required.
+- **The obvious fix is not sufficient either** — excluding `farscroll.rs` from `IGNORE` was measured at **76.66**, still short, because the breach spanned two modules rather than one. Verify an exclusion by running it, not by arithmetic on one file.
+**Resolution taken**: `FLOOR` lowered 76.76 → 76.30 by operator decision, with the alternatives and the reason recorded beside the constant — because the rule is *never lower the floor*, so an unexplained drop is indistinguishable from the drift #123 exists to catch.
+**The general form, and the reason this is one entry and not two**: a Cargo feature gate does not merely hide a suite from the compiler — it makes every line that suite covers read as *uncovered*, so **"0% coverage" and "no tests at all" are identical in the report and only one of them is true.** That is #212's shape ("`#[cfg(unix)]` on a test and 'skipped on Windows' are indistinguishable in the report") arriving through the coverage tool instead of the test report.
 
 ## 125. Scheduling work that depends on paint-populated state via `idle_add_local_once` reads the previous frame's state and silently no-ops
 > *Core GTK4. Instance of the deferred-work/ordering family — presents as a race, is really a temporal-ordering hazard.*
@@ -1680,7 +1687,8 @@ will survive** (reset the adjustment to the top for a collapse-to-root). Core-GT
 
 ## 166. Never diagnose a hung test suite from a parallel run
 **Symptom**: `cargo test --features gtk-integration-tests` never completed on Windows. Killed after ~10 minutes, it had printed **no test names at all** and emitted a flood of one warning. "Zero test names" was reported as evidence that it hung *at or before the first test*, and both a reviewing agent and this one reasoned from that: the leading hypothesis became a main-loop or renderer stall during startup, and a plausible, well-argued case was built on it.
-**Scribobulate**: `sdd/ISSUES.md` entry P (records the corrected diagnosis and the eliminated hypotheses as do-not-revisit).
+**Scribobulate**: `scripts/pipeline.steps` carries `--test-threads=1` on `cmd.windows integration`, with the reason recorded at the step — a serialised run prints test names as it goes, so a wedge names the body it wedged on instead of producing the silence that invited the wrong diagnosis. Scoped to Windows, which is where a wedging GTK suite is most likely; `#[gtktest::test]` already serialises GTK bodies, so no platform needs it to pass.
+> *This line previously read "`sdd/ISSUES.md` entry P". That issue was fixed and deleted, as issues are meant to be, and the pointer dangled from that moment — SDD principle 6's exact failure, committed inside the register that exists to hold what outlives an issue. Replaced with the durable mitigation rather than a second ephemeral pointer.*
 **See**: general-engineering-principles (GEP-31).
 
 ## 167. An `Option`-returning lookup whose `None` is also a legitimate answer will fail silently forever
@@ -3598,13 +3606,11 @@ re-applying a non-animating `set_value(upper - page_size)` on every vadjustment
 `notify::upper`, i.e. staying pinned to the bottom while the layout settles. It lands on
 the correct value, and it is a **livelock**: pinning the viewport to the moving
 validation frontier makes GTK re-validate a screenful at a time around the new first
-paragraph instead of letting its own idle run 2000-pixel chunks. Measured, same fixture,
-"validation complete" instrumented: 20 000 lines took 98 ms unpinned and 1494 ms pinned;
-40 000 lines took 1655 ms unpinned and had **still not finished at 60 s** pinned (the
-range had reached 750 564 px of a true 1 422 018). Do not chase a frontier with the
-viewport. Only an aim that moves *with* the frontier livelocks; the preview's existing
-far-restore, which pins to a *fixed* target line and stops once the frontier passes it, is
-not implicated (researcher-confirmed).
+paragraph instead of letting its own idle run 2000-pixel chunks. Measured: 20 000 lines
+took 98 ms unpinned, 1494 ms pinned; 40 000 lines took 1655 ms unpinned and had **still
+not finished at 60 s** pinned. Do not chase a frontier with the viewport. Only an aim that
+moves *with* it livelocks — a fixed-target progressive restore self-terminates and is not
+implicated (researcher-confirmed).
 
 **Root cause** — two GTK mechanisms which, in many runs, are *the same event*
 (researcher, source-traced): `gtk_text_view_value_changed` **destroys**
@@ -3686,13 +3692,11 @@ projection into one pane orphans a scroll the *other* pane had queued — the re
 arriving from our own code. Guarded by a test rather than by reasoning, and it passes because
 the re-issue never depended on GTK's pending scroll surviving.
 
-**Testing note, because the two halves need opposite harnesses.** Line validation runs on
-an idle, so a `sleep` between `MainContext::iteration(false)` turns *throttles* it (a 2 ms
-sleep stretched a 100 ms settle past 3 s) — pump tight. The scroll it carries runs on a
-~200 ms frame-clock animation, so a tight pump that advances no wall clock starves *that* —
-**turns are not time**, and a settle loop of N iterations cannot exercise anything driven by
-`GdkFrameClock`. Both failures are silent and both report success. This module's tests use
-each style deliberately; check which mechanism a new one is waiting on before copying either.
+**Testing note — the two halves need opposite harnesses.** Validation runs on an idle, so a
+`sleep` between `iteration(false)` turns *throttles* it (2 ms stretched a 100 ms settle past
+3 s); the scroll runs on a frame-clock animation, so a tight pump advancing no wall clock
+starves *that*. **Turns are not time.** Both fail silently and report success — check which
+clock a new test is waiting on before copying either style.
 
 **Cost**: **High**. Benign but shipped for the whole life of the editor pane and reported
 by the operator, and the same root cause silently breaks every other far navigation in the
@@ -3700,6 +3704,17 @@ pane (a cold go-to-line to line 30 000 measured landing on line 177). Two mechan
 to be separated before either was fixable, the first design had to be built before its
 livelock was visible, and both the defect and the fix are invisible to any test whose
 harness settles the layout first (ScrAP-87 / GTK4Rs/AP-78).
+
+The invariant is **not absolute**, and the exception is worth carrying: GLib blocks a
+source for the duration of its own callback unless it set `G_SOURCE_CAN_RECURSE` (which
+`g_idle_add_full` does not), and blocked sources do not set the priority floor — so a
+main-loop iteration pumped from *inside* the validate callback's stack (anchored-child
+allocation is the realistic route here) can dispatch the idle with the layout still
+invalid. It degrades safely: `scroll_to_mark` then queues instead of flushing, so the
+result is a no-op, never a wrong scroll. Also same-`GMainContext` only. And the guarantee
+is exactly as strong as "the 125 source stays ready" — **the same predicate as the
+starvation risk below**. One fact wearing two faces: what makes the idle precise is what
+can starve it, which is why the deadline is necessary rather than belt-and-braces.
 
 That idle is bounded by a second source on a **timer**, not an idle: `g_timeout_add` runs
 at `G_PRIORITY_DEFAULT` (0), strictly *above* the validate idle, so it cannot be starved by
