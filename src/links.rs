@@ -14,6 +14,17 @@ use std::path::{Path, PathBuf};
 /// github-slugger algorithm (lowercase → strip everything else → spaces to
 /// hyphens); no hyphen/space collapsing or trimming.  `char::is_alphanumeric` is
 /// Unicode-aware so non-ASCII headings slug like GitHub's (precomposed forms).
+///
+/// **Do not add trimming, however reasonable the bug report sounds.** A heading
+/// that begins or ends with an emoji slugs with a *leading or trailing hyphen* —
+/// the symbol is dropped but the space beside it still becomes one — so
+/// `## Stem Repair 🩹` is `#stem-repair-`, not `#stem-repair`. That surprises
+/// readers and gets reported as an anchor bug, but it is exactly what GitHub
+/// does (`## 🚀 Getting Started` → `#-getting-started` is the widely-seen half of
+/// the same behaviour), and it is verified against `github-slugger@2.0.0` in the
+/// test below. Trimming here would fix the hand-written link and silently break
+/// every anchor GitHub actually generates — the document is what is wrong in that
+/// report, not this function.
 pub(crate) fn slugify(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
@@ -523,6 +534,25 @@ mod tests {
         // underscores and existing hyphens survive; no collapsing of repeats.
         assert_eq!(slugify("a_b"), "a_b");
         assert_eq!(slugify("a  b"), "a--b");
+    }
+
+    /// An emoji in a heading drops out but the space beside it does not, so the
+    /// slug gains a leading or trailing hyphen. Pinned because it looks like a
+    /// defect and the "obvious" fix — trimming — would break every anchor GitHub
+    /// really generates; see [`slugify`]'s doc comment.
+    ///
+    /// Expectations measured against `github-slugger@2.0.0` (the algorithm
+    /// GitHub's own pipeline uses), not derived from this implementation, so the
+    /// test cannot agree with itself about a wrong answer.
+    #[test]
+    fn an_emoji_in_a_heading_leaves_a_hyphen_where_it_stood() {
+        assert_eq!(
+            slugify("Plant Support & Stem Repair 🩹"),
+            "plant-support--stem-repair-"
+        );
+        assert_eq!(slugify("🚀 Getting Started"), "-getting-started");
+        // …and a heading whose emoji is not space-separated keeps no hyphen.
+        assert_eq!(slugify("Roadmap🚀"), "roadmap");
     }
 
     #[test]

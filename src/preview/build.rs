@@ -41,6 +41,7 @@ pub(super) struct RenderProducts {
     pub(super) blockquote_ranges: Vec<crate::span::BufferSpan>,
     pub(super) blockquote_bar: gtk::gdk::RGBA,
     pub(super) heading_offsets: Vec<i32>,
+    pub(super) heading_slugs: Vec<String>,
     pub(super) heading_map: HashMap<String, i32>,
     /// CriticMarkup comment markers to draw in the preview's right margin.
     pub(super) markers: Vec<crate::codeview::MarkerData>,
@@ -328,6 +329,7 @@ pub(super) fn build_render_products_into(
     let original_owned = md_norm.into_owned();
 
     let heading_offsets: Vec<i32> = r.headings.iter().map(|&(_, off)| off).collect();
+    let heading_slugs: Vec<String> = r.headings.iter().map(|(slug, _)| slug.clone()).collect();
     let heading_map: HashMap<String, i32> = r.headings.into_iter().collect();
 
     RenderProducts {
@@ -346,6 +348,7 @@ pub(super) fn build_render_products_into(
         blockquote_ranges: r.blockquote_ranges,
         blockquote_bar: palette.blockquote_bar,
         heading_offsets,
+        heading_slugs,
         heading_map,
         markers,
         list_markers: r.list_markers,

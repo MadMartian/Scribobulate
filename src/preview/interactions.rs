@@ -164,6 +164,18 @@ pub(crate) fn activate_link_url(view: &CodePreviewView, url: &str) {
         // to link a heading it does not have, and launching it externally would be
         // worse than doing nothing.
         if let Some(target) = target {
+            // Record BEFORE scrolling (TDD 23.11/23.12): the departure spot is the
+            // reader's live position, and `scroll_to_buffer_offset` immediately
+            // overwrites the view's tracked reading line with its own target — so
+            // reading it afterwards would stamp the entry being left with the place
+            // being navigated TO, and Back would land where Forward does.
+            if let Some((window, tab)) = crate::winstate::tab_for_descendant(view) {
+                crate::window::record_in_document_jump(
+                    &window,
+                    &tab,
+                    crate::winstate::NavSpot::Heading(slug),
+                );
+            }
             view.scroll_to_buffer_offset(target);
         }
         return;

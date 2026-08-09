@@ -45,6 +45,7 @@ pub(crate) fn render(
         blockquote_ranges,
         blockquote_bar,
         heading_offsets,
+        heading_slugs,
         heading_map,
         mut markers,
         list_markers,
@@ -66,6 +67,7 @@ pub(crate) fn render(
         links,
         heading_map,
         heading_offsets,
+        heading_slugs,
         image_tints,
         table_anchors,
         shifts,
@@ -270,6 +272,7 @@ pub(crate) fn re_render(
         blockquote_ranges,
         blockquote_bar,
         heading_offsets,
+        heading_slugs,
         heading_map,
         mut markers,
         list_markers,
@@ -290,6 +293,7 @@ pub(crate) fn re_render(
         rd.links = links;
         rd.heading_map = heading_map;
         rd.heading_offsets = heading_offsets;
+        rd.heading_slugs = heading_slugs;
         rd.image_tints = image_tints;
         rd.table_anchors = collect_table_anchors(&anchored);
         rd.shifts = shifts;
@@ -470,6 +474,7 @@ pub(crate) fn refresh_annotations_in_place(
         rd.links = products.links;
         rd.heading_map = products.heading_map;
         rd.heading_offsets = products.heading_offsets;
+        rd.heading_slugs = products.heading_slugs;
         rd.shifts = products.shifts;
         rd.original_owned = products.original_owned;
     }

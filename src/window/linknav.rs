@@ -122,6 +122,11 @@ fn open_doc_link_target(window: &ApplicationWindow, path: &Path, fragment: Optio
         // nothing to scroll — `preview_scroller()` returns `None` for it below.
         if let Some(fragment) = fragment {
             if let Some(sw) = tab.split.preview_scroller() {
+                // The arrival carries the heading (TDD 23.11), so Forward lands
+                // back on it rather than on wherever that tab happens to sit.
+                // Recorded against the window the tab is now in, which is `win`
+                // and not necessarily the one the link was clicked in.
+                record_fragment_arrival(&win, &tab, fragment);
                 scroll_preview_to_fragment(&sw, fragment);
             }
         }
@@ -182,10 +187,32 @@ fn open_doc_link_target(window: &ApplicationWindow, path: &Path, fragment: Optio
         // that needs to be built.
         if let (Some(fragment), Some(t)) = (fragment, new_tab) {
             if let Some(sw) = t.split.preview_scroller() {
+                record_fragment_arrival(&window, &t, &fragment);
                 scroll_preview_to_fragment(&sw, &fragment);
             }
         }
     });
+}
+
+/// Record a cross-document fragment link's ARRIVAL as a within-document place
+/// (TDD 23.11), so Forward re-lands on the heading instead of on whatever
+/// position the target tab was left at.
+///
+/// Passes `from: None` deliberately: the departure was a *different* document, so
+/// there is nothing in this tab for the reader to have moved off, and
+/// `record_jump` only ever stamps the entry it is leaving when that entry names
+/// this same tab. The tab switch itself was already recorded by the switch-page
+/// choke point before we get here, so this appends the position within it.
+fn record_fragment_arrival(
+    window: &ApplicationWindow,
+    tab: &std::rc::Rc<crate::winstate::TabState>,
+    fragment: &str,
+) {
+    crate::window::record_in_document_jump(
+        window,
+        tab,
+        crate::winstate::NavSpot::Heading(fragment.to_string()),
+    );
 }
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
@@ -504,6 +531,95 @@ mod gtk_integration_tests {
             scroll_target_offset(&target_view),
             None,
             "no fragment means no scroll target — unchanged from before this fix"
+        );
+
+        drain_pending_idle();
+        window.destroy();
+    }
+
+    /// TDD 23.11's cross-document clause walked end to end: following
+    /// `TARGET.md#section-two` records the tab switch *and* the heading it
+    /// arrived at, so Back retraces both — first back up the target document,
+    /// then across to the source — and Forward is the inverse of each.
+    ///
+    /// The middle stop is the one worth having, and it found a second defect. The
+    /// arrival stamps the just-created target tab's entry with the position it was
+    /// at *before* the fragment scrolled it, which for a brand-new tab is **line
+    /// 0** — so this crosses ScrAP-262's path in the cross-document direction,
+    /// where the reader never chose the departure at all; it is simply where a
+    /// fresh document starts. But that position is read in the same synchronous
+    /// turn the tab is built in, before GTK has allocated the view, and
+    /// `line_at_y` answers an unallocated view with the buffer's **last** line
+    /// (ScrAP-263) — so the stamp was the end of the document, and one Back threw
+    /// the reader there.
+    ///
+    /// Mutation-checked against both mechanisms, which fail with different
+    /// signatures: dropping the viewport gate in `saferizer::viewport` lands the
+    /// first Back on line 6 (the target's last line), and restoring the
+    /// `line <= 0` return in `restore_preview_scroll_to_line` lands it on line 4
+    /// (section two — Back did nothing at all).
+    #[gtktest::test]
+    fn a_fragment_link_to_another_document_walks_back_across_both_stops() {
+        let (_dir, dir) = canonical_tempdir();
+        let target_path = dir.join("TARGET.md");
+        std::fs::write(&target_path, TARGET_MD).unwrap();
+        let source_md = "# Source\n\n[link](TARGET.md#section-two)\n";
+        let source_path = dir.join("SOURCE.md");
+        std::fs::write(&source_path, source_md).unwrap();
+
+        let app = make_app("com.extollit.scribobulate.integrationtest.linknav.navwalk");
+        let window = new_window(&app, "IT", source_md, Some(&source_path));
+        let source_tab = state(&window).expect("state registered after new_window");
+        let source_id = source_tab.id;
+        let source_view = preview_view_of(&source_tab);
+
+        activate_doc_link(&source_view, "TARGET.md#section-two");
+        pump_until_tabs(&window, 2);
+
+        let target_tab = crate::winstate::tabs_for_window(&window)
+            .into_iter()
+            .find(|t| t.path.borrow().as_deref() == Some(target_path.as_path()))
+            .expect("one of the two tabs backs TARGET.md");
+        let target_view = preview_view_of(&target_tab);
+        let section_two = target_view
+            .buffer()
+            .iter_at_offset(heading_map_offset(&target_view, "section-two"))
+            .line();
+        assert_eq!(
+            target_view.reading_line(),
+            section_two,
+            "precondition: the link landed on the heading in the new document"
+        );
+
+        // Stop 1 — still in the target document, back at the top it opened on.
+        WidgetExt::activate_action(&window, "win.nav-back", None).expect("nav-back activates");
+        assert_eq!(
+            state(&window).map(|t| t.id),
+            Some(target_tab.id),
+            "the first Back retraces the jump WITHIN the document that was opened"
+        );
+        assert_eq!(
+            target_view.reading_line(),
+            0,
+            "and returns it to where it was before the fragment scrolled it"
+        );
+
+        // Stop 2 — across the document boundary, back to where the link was.
+        WidgetExt::activate_action(&window, "win.nav-back", None).expect("nav-back activates");
+        assert_eq!(
+            state(&window).map(|t| t.id),
+            Some(source_id),
+            "only the second Back crosses back to the document holding the link"
+        );
+
+        // Forward retraces both, in order.
+        WidgetExt::activate_action(&window, "win.nav-forward", None).expect("activates");
+        assert_eq!(state(&window).map(|t| t.id), Some(target_tab.id));
+        WidgetExt::activate_action(&window, "win.nav-forward", None).expect("activates");
+        assert_eq!(
+            target_view.reading_line(),
+            section_two,
+            "the last Forward returns to the heading the link named"
         );
 
         drain_pending_idle();

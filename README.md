@@ -77,8 +77,10 @@ waiting for you when you reopen it.
   - Several documents per window; drag tabs to reorder, between windows, or
     out to a new window
   - One process for the whole session — open more files without spawning more apps
-  - Back and Forward through the documents you have been reading, on the keys and
-    mouse buttons your browser uses (Alt+←/→, or the thumb switches)
+  - Back and Forward through the documents you have been reading — and the
+    sections within them, so following a table-of-contents link is a step you can
+    take back — on the keys and mouse buttons your browser uses (Alt+←/→, or the
+    thumb switches)
   - Session restore brings back windows, tabs, zoom, split, and sidebars
 - **Safe by default**
   - Links and images stay inside the document's folder unless you opt in

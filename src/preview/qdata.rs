@@ -40,6 +40,13 @@ pub(crate) struct RenderData {
     /// Buffer char offset of each heading's text start, in document order — the
     /// outline sidebar's scroll targets (indexed by `outline::HeadingNode::doc_index`).
     pub heading_offsets: Vec<i32>,
+    /// Each heading's anchor slug, in the same document order as `heading_offsets`
+    /// and indexed by the same `doc_index`. `heading_map` answers slug→offset;
+    /// this answers the inverse the Back/Forward history needs, so an outline
+    /// activation can record the *slug* it navigated to (a reference that
+    /// survives an edit) rather than the positional index it was handed
+    /// (the weakest reference there is — Document-Reference CAM).
+    pub heading_slugs: Vec<String>,
     /// (anchor, tint widget) for every rendered image: the click-through overlay box
     /// shown when the image is inside the buffer selection (`connect_image_tints`).
     pub image_tints: Vec<(TextChildAnchor, gtk::Widget)>,

@@ -2530,3 +2530,31 @@ created by an act of navigation, and traversing history is not one of them.**
 - **When** the window is closed and a later launch restores the session
 - **Then** the restored window starts with no history — Back and Forward are insensitive, and the restored active document is the only thing in it
 - **And** within a session the history is bounded (oldest entries are dropped past a fixed depth), so a long reading session cannot grow it without limit
+
+### 23.11 Following a link to a section of the same document is a navigation
+- **Given** a document that links to its own headings — a table of contents, a cross-reference, or the outline sidebar listing them
+- **When** the reader follows one of those links, or activates an outline row, while that document is already the active one
+- **Then** the preview scrolls to that heading **and** a history entry is recorded: Back becomes available even though the active document never changed, and the tab strip's selection never moves
+- **And** the same holds for the *arrival* of a cross-document fragment link (§19.10): the target document is recorded with the heading it was opened at, so Forward re-lands on the heading rather than on wherever that tab happened to be sitting
+- **And** the viewport movements that are **not** navigations record nothing — find-next, the split-pane scroll sync, the reading-position restores of the [Reading-Position Preservation CAM](CAM.md#reading-position-preservation-cam--events-that-perturb-a-text-pane-viewport), and an outline activation in pure-edit mode (which moves the editor caret, not the preview)
+
+### 23.12 Back returns to where the link was followed from
+- **Given** the reader followed such a link
+- **When** they invoke Back
+- **Then** the viewport returns to the position they were reading at **when they clicked** — not to the top of the document, and not to wherever the entry was originally created for — and Forward returns to the heading. The active document is not changed, reloaded or re-rendered by either press
+- **And** that holds when the position they clicked from *was* the top of the document, which is where a reader following a table of contents at the head of the file always is: Back scrolls back up to it, rather than treating "already at the top" as nothing to restore and leaving the reader on the section they asked to leave (ScrAP-262)
+- **And** for a document the *link itself opened*, the position Back returns it to is its **top** — the reader arrived there and never chose a position in it, so it must not be thrown to the document's end or left sitting on the section it opened at (ScrAP-263)
+- **And** re-following the link for the section the reader is already in moves the viewport but adds no entry, so Back never needs two presses to leave a place reached once
+
+### 23.13 Sections and documents are one history, in the order they happened
+- **Given** a reader who has moved both between documents and between sections within them
+- **When** they walk Back
+- **Then** the two kinds of navigation interleave in the order they occurred: a step that crosses a document boundary switches tabs, a step within one document does not, and neither kind is skipped or reordered because of the other
+- **And** the bound of 23.10 counts both, so a long walk through one document's own sections cannot grow the history without limit
+
+### 23.14 A section the document no longer has is not a stop
+- **Given** history entries naming headings, and the document is then reloaded or edited so some of those headings no longer exist
+- **When** the reader traverses
+- **Then** an entry whose heading is gone falls back to naming *just that document*: the traversal still activates it and leaves its viewport exactly where the reader left it — the same silent outcome §19.12 gives a link whose fragment matches nothing, never a jump to the top, which would destroy a reading position the reader never offered up
+- **And** an entry that falls back to the document the reader is *already* on is not a stop at all — the traversal continues to the next place, and Back reports itself insensitive rather than remaining available with nothing perceptible behind it
+- **And** the commands' sensitivity always agrees with what a traversal will actually do: Back is never reported available on the strength of an entry that has already gone stale, whichever way the document was rebuilt — an in-place re-render or a wholesale one (23.5)

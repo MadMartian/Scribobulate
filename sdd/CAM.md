@@ -455,6 +455,23 @@ The invalidation classes (matrix columns):
 | 3 | Task-checkbox toggle span | source bytes | ✓ | ✓ | — | The toggle re-locates a well-formed marker at the span and returns `None` otherwise, which the caller makes a clean no-op |
 | 4 | Pending marker-open request | marker-list **index** + buffer offset | ✓ | ✓ | ⚠ | Bounded by a wall-clock deadline and re-aimed each frame, but the target is a **positional index** into a list a re-render replaces — see the rule on positional references below |
 | 5 | Scroll re-anchor target line | buffer line | ✓ | ✓ | — | Re-read each frame; a drifted line mis-positions the viewport only, and the next settle corrects it |
+| 6 | Back/Forward history entry's **place** in a document (TDD §23) | heading **slug**, or a buffer line | ◑ | ✓ | ✓ | Two strengths, chosen by what the recording site can know. A slug is re-resolved against the tab's live heading map, and a render that no longer contains it **degrades the entry to "just this document"** rather than letting it point somewhere wrong (23.14). A line is the weak form — an arbitrary scroll position offers no stronger handle — and takes row 5's bargain: it clamps and mis-positions the viewport only |
+
+**Row 6's `◑` under content mutation is the one deliberate weakness in this matrix,
+and it is bounded rather than unnoticed.** A slug survives an edit (class A) by
+construction — that is the whole reason it is stored instead of the offset the
+`heading_map` holds — but the *line* half does not, and it cannot be upgraded: the
+reference describes a position the reader chose by scrolling, and no identity exists
+for "42% of the way down, between two paragraphs". What keeps it acceptable is the
+failure *shape*, not its likelihood: a drifted line scrolls the reader to slightly
+the wrong place in the right document, which is visible, harmless, and immediately
+correctable by scrolling — the same bargain row 5 already makes. That is a different
+class of outcome from rows 1–4, where a stale reference *acts* on the wrong text.
+
+The sweep this row's addition obliges (the cross-CAM new-row rule): the only other
+state pointing into a document across time is rows 1–5, all of which predate it and
+were re-read when this row was written; no gap was found, so nothing was fixed under
+it. Rows 1–5 are unchanged.
 
 Rules that give the matrix its teeth:
 

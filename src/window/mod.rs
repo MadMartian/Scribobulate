@@ -129,7 +129,9 @@ use lifecycle::*;
 pub(crate) use linknav::activate_doc_link;
 use livepreview::*;
 use navhistory::*;
-pub(crate) use navhistory::{nav_action_name, refresh_nav_history_actions};
+pub(crate) use navhistory::{
+    nav_action_name, record_in_document_jump, refresh_nav_history_actions,
+};
 use sidebar::*;
 pub(crate) use splitview::SplitView;
 use tabs::*;

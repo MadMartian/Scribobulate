@@ -49,11 +49,45 @@ cd "$(dirname "$0")/.."
 #   ~76.77 predicted, both modules excluded — would have cleared the old floor untouched
 # The exclusion route was offered and not taken; this is the recorded alternative.
 #
-# 76.30 is the current figure rounded DOWN per the rule above (76.31 printed), so it gates
-# today's tree exactly and admits no further slippage. RAISE IT AGAIN as soon as either
-# module gains unit-reachable logic — the aspiration is still 80%, and this is a lower
-# starting point for the ratchet, not a new normal.
-FLOOR=76.30
+# RAISED 76.30 -> 76.61 by the Back/Forward within-document navigation work (the feature
+# of TDD 23.11-14, the decomposition that followed it, and the two traversal fixes).
+# 76.62 printed, rounded down per the rule above. Recorded not because a ratchet step is
+# notable, but because the arithmetic is counter-intuitive in BOTH directions and someone
+# will otherwise re-derive it — this one change pushed the number down and up repeatedly
+# before settling:
+#
+#   DOWN — it added GTK-wired code this unit-only run cannot reach, exactly the
+#     farscroll/scrollpos situation above: ~49 lines across `preview/*` and
+#     `winstate/registry.rs` for the feature (-0.26pt on their own), and 13 lines in
+#     `src/saferizer/viewport.rs` for the ScrAP-263 allocation gate (-0.06pt), a file that
+#     reads 0.00% here (37 lines, 37 missed) while being covered in the integration suite.
+#     The gate adds no decision core that could offset itself: the whole of its new logic
+#     is one predicate over a GTK rectangle.
+#
+#   UP, more than paying for all of it — the decision cores went into
+#     `winstate/navhistory/` WITH the unit tests that exercise them (99%+ across the tree),
+#     and test bodies count in the numerator as well as the denominator. The decomposition
+#     raised it again: splitting the pure core into place/record/maintain/decide gave the
+#     two judgements the GTK half used to take inline (`departure_stamp`, `traversal_to`) a
+#     home where they are unit-testable at all — 14 new tests, both files at 100%.
+#
+# The exclusion route is NOT taken for any of it, for the reason it was declined above: it
+# was offered and refused once, and reversing that quietly inside a feature change would
+# make the scope drift on a maintainer's convenience rather than on a decision. The honest
+# alternative for the ScrAP-263 gate specifically — contorting its predicate into a pure
+# function over an integer so a unit test could reach it — was rejected as writing code to
+# satisfy the metric rather than the reader.
+#
+# The trap that costs an afternoon: those unit tests count ONLY while they live inside a
+# `#[cfg(test)] mod tests` in the file itself. Split them into a sibling `navhistory/
+# tests.rs` and cargo-llvm-cov stops reporting the file at all (`copymap/tests.rs` is
+# likewise absent from the summary) — 132 covered lines silently leave the denominator and
+# the gate fails with nothing about the product having changed. Weigh that against the
+# 500-line soft limit before splitting a test module out; `preview/scroll.rs` and
+# `window/outline_nav.rs` both keep theirs inline for this reason.
+#
+# The aspiration is still 80%.
+FLOOR=76.61
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:
@@ -75,6 +109,16 @@ FLOOR=76.30
 #                   scroll reveal, easing) → gated.
 #   window/tabs/    switch, lifecycle, actions, dnd, contextmenu, documents, mod —
 #                   all tab-lifecycle wiring → excluded via the `window/(tabs/)?` term.
+#   window/navhistory/  mod (GAction registration + mouse gestures), traverse (page
+#                   switch + scroll calls), record (live view reads) → excluded, on
+#                   the same terms as its siblings. **This is a restoration, not a
+#                   widening**: the identical code was excluded as the single file
+#                   `window/navhistory.rs`, and decomposing it into a directory made
+#                   the path stop matching `window/[a-z_]+\.rs` — the same reason
+#                   `tabs/` and `editbar/` are spelled out above. The split moved its
+#                   decisions the other way, into the GATED `winstate/navhistory/`
+#                   (`decide.rs`, `place.rs`, both 100%), which is the floor-raising
+#                   direction POLICY's scope rule names.
 #   preview/        annotate.rs (selection→source mapping, entry-card placement
 #                   math) is pure → gated; annotate/overlay.rs (GtkPopover/GtkOverlay
 #                   wiring) → excluded.
@@ -109,6 +153,6 @@ FLOOR=76.30
 # gate compares the FLOOR against the UNSCOPED total (37.9% vs 71.7%) and fails every
 # run. That reads as "your change tanked coverage" rather than "the filter missed",
 # which is the worst way for a gate to break — keep the class if you edit this.
-IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\])?[a-z_]+|app[/\\](appactions|menubar|openbatch|open|setup)|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|widgets[/\\](table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
+IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app[/\\](appactions|menubar|openbatch|open|setup)|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|widgets[/\\](table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
 
 exec cargo llvm-cov --summary-only --fail-under-lines "$FLOOR" --ignore-filename-regex "$IGNORE" "$@"

@@ -1073,9 +1073,14 @@ impl CodePreviewView {
         if let Some(l) = self.imp().restore_target_line.get() {
             return l;
         }
-        let y_top = self.vadjustment().map(|a| a.value()).unwrap_or(0.0) as i32;
-        let (it, _) = self.line_at_y(y_top);
-        it.line()
+        // Through the seam, not a hand-rolled `vadjustment().value()` +
+        // `line_at_y`: that pair is answerable only once the view has been
+        // allocated, and before then `line_at_y` returns the buffer's LAST line
+        // rather than declining (ScrAP-263). This is read on paths that run in the
+        // same synchronous turn a view is built in — the cross-document
+        // fragment-link arrival stamps a Back/Forward departure from it — so the
+        // unallocated case is reached in production, not just in tests.
+        crate::saferizer::viewport::ViewportTopIter::of(self).line()
     }
 
     /// Register this render's width-bounded anchored children — fixed-HEIGHT widgets

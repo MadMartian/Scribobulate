@@ -105,6 +105,19 @@ fn navigate_to_heading(
     src_offset: OriginalByteOffset,
 ) {
     let Some(st) = state(window) else { return };
+    // Activating an outline row is a navigation to a section of the document
+    // already being read, exactly as a TOC link is, so it is history-bearing on
+    // the same terms (TDD 23.11). Recorded BEFORE the scroll, because the
+    // departure spot is the reader's live position and the scroll overwrites the
+    // view's tracked reading line with its own target.
+    //
+    // Only for the two modes that actually move the PREVIEW: pure-edit mode moves
+    // the editor caret instead, and a `NavSpot` describes a preview reading
+    // position, so recording there would create an entry no traversal could
+    // honour.
+    if matches!(current_mode(window), ViewMode::Preview | ViewMode::Split) {
+        record_outline_activation(window, &st, doc_index);
+    }
     match current_mode(window) {
         ViewMode::Preview => {
             if let Some(sw) = st.split.preview_scroller() {
@@ -126,6 +139,32 @@ fn navigate_to_heading(
         ViewMode::Edit => scroll_editor_to_offset(&st.editor, &st.editor_buf, src_offset),
     }
 }
+/// Record an outline activation as a within-document navigation, addressing the
+/// heading by its **slug** rather than by the `doc_index` the row carries.
+///
+/// The index is a positional reference into a collection every re-render
+/// rebuilds — "the weakest reference there is" (Document-Reference CAM) — and it
+/// goes stale with the document's text completely unchanged, so nothing about the
+/// content would warn us. The slug for that index comes from the same render that
+/// produced the row, so the two cannot disagree; a heading the render did not
+/// produce simply records nothing.
+fn record_outline_activation(window: &ApplicationWindow, st: &Rc<TabState>, doc_index: usize) {
+    let Some(sw) = st.split.preview_scroller() else {
+        return;
+    };
+    let Some(view) = sw
+        .child()
+        .and_then(|c| c.downcast::<CodePreviewView>().ok())
+    else {
+        return;
+    };
+    let slug = crate::preview::scrib_render_data(&view)
+        .and_then(|rd| rd.borrow().heading_slugs.get(doc_index).cloned());
+    if let Some(slug) = slug {
+        crate::window::record_in_document_jump(window, st, crate::winstate::NavSpot::Heading(slug));
+    }
+}
+
 /// Move the editor caret to the heading at source byte offset `src_offset` and
 /// scroll it to the top. `src_offset` is a *byte* offset into the source, so it
 /// is converted to the buffer's *char* offset first. Scrolls via `scroll_to_mark`

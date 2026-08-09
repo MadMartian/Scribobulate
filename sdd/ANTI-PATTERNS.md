@@ -37,6 +37,53 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > previously grew into a stale, 3 kB duplicate of the column it was shadowing. Edited only by the
 > Scribobulate maintainer agent.
 
+## Stub structure — the shape a compressed entry MUST take
+
+> **A stub is exactly four lines: the `##` heading and three one-line fields, with no
+> blank lines between them and no other sections.** Copy this template literally.
+>
+> ```
+> ## N. Title stating the trap, not the fix
+> **Symptom**: what a reader OBSERVES, in one sentence — the surprising behaviour, not the cause.
+> **Scribobulate**: where THIS project implements the fix, plus its regression guards.
+> **See**: gtk4-rs skill → <module> (GTK4Rs/AP-N).
+> ```
+>
+> **Why it is written down here.** The stub form is not derivable from the routing rule
+> above, and the file's own long entries actively mislead about it: most `A`-tagged
+> entries carrying full essays (#232, #243, #260 …) are **migration backlog**, not
+> exemplars, so an agent that samples a neighbour and copies its shape produces another
+> wall of prose and believes it has stubbed. This section exists so the shape is read,
+> not inferred. The majority of entries in this file are already in exactly this form —
+> when in doubt, look at #1, #11, #22, #100 or #104.
+>
+> **Field rules.**
+> - **One line per field.** Long is fine (see #63); wrapped is not, and neither is a
+>   second paragraph. If a field wants to become prose, the content belongs in the
+>   external register the `**See**` line points at, or in a code comment.
+> - **`**Symptom**`** is the *observation*, phrased so someone hitting the bug
+>   recognises it — that is what makes the index searchable by symptom. Mechanism,
+>   measurements, dead ends and lessons all belong in the skill entry, never here.
+> - **`**Scribobulate**`** is the one thing no external register can carry, and lint
+>   check 10 enforces its presence. Name the module/seam and the regression guards.
+>   When there genuinely is no implementation, say so in the standard words rather than
+>   dropping the field: *"none — a discipline lesson with no implementation in this
+>   tree. (Stated, not omitted: an absent field and a dropped one look identical.)"*
+> - **`**See**`** names the skill module (bare name — no `references/` prefix, no
+>   `.md`) and the `GTK4Rs/AP-N` citation. Append `Findings: <file>` on the SAME line if
+>   there is a findings doc; it is never a fourth field. For a lesson with no external
+>   home, this line reads *"project-specific; the fix + rationale live in a code comment
+>   at <site>."*
+>
+> **When to stub.** At MINT time, per the routing rule above — a lesson about gtk4-rs
+> itself is woven into the skill and stubbed here in the same change, never written full
+> and compressed later. A `B`/`C` lesson (no reusable home) stays here **in full** and is
+> not a stub; those are the entries legitimately running to dozens of lines.
+>
+> **One caveat when stubbing at mint time:** the usual "the full essay lives in this
+> file's git history" does not apply, because it was never committed in full. Say where
+> the canonical text went, so nobody searches `git log` for an essay that was never there.
+
 ## Number reservations — read before minting an entry
 
 > **The gaps here are RESERVED, and the highest number in this file is NOT the next
@@ -73,7 +120,7 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > the row is noise that will eventually be read as a live claim. Clear a row in the
 > same commit that merges the entries it was holding.
 >
-> **The next free number is 261.** Do not derive it from the highest entry below —
+> **The next free number is 264.** Do not derive it from the highest entry below —
 > unmerged branches hold ranges that are invisible from this file, which is exactly
 > how a collision happens. Check the table, **announce the range you are claiming**,
 > and never fill a reserved gap.
@@ -350,6 +397,9 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 258 | Replacing a live `GtkTextView`'s buffer is a use-after-free, not a swap — the layout's line-display cache survives `set_buffer` and dangles | A |
 | 259 | A rendering feature built for one of a construct's widget shapes leaves the others inert, and the reader sees one capability behaving at random | A |
 | 260 | A `GtkTextView` scroll aimed past the lazily-validated frontier is parked and never re-issued — and the validation idle cancels the one scroll it does animate | A |
+| 261 | A derived-state hook installed at the producer misses the rebuild shape the producer also has | C |
+| 262 | A restore seam's "nothing to do at the boundary" shortcut is a claim about its first caller, and the second caller loses a real destination | B |
+| 263 | `line_at_y` on a not-yet-allocated `GtkTextView` reports the buffer's LAST line, so a viewport read taken in the turn a view is built in is maximally wrong | A |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -2702,76 +2752,9 @@ possible framing: it sends you to read code that is not the problem.
 **See**: general-engineering-principles (GEP-4).
 
 ## 243. GLib's I/O thread pool is one process-wide pool of ten — moving I/O off the main thread makes it contend with the crash-recovery writer
-
-**Symptom.** Document reads and writes were moved off the GTK main thread with
-`gio::spawn_blocking` (issue: the window froze for as long as the filesystem took
-to answer). Nothing broke. What was not visible from the API is that the
-crash-recovery snapshot writer's `replace_async` goes through the **same pool**, so
-a slow or unresponsive filesystem now delays the mechanism that protects unsaved
-work — the one thing that must not be delayed while the filesystem is misbehaving.
-
-**Where Scribobulate implements the fix.** `src/docio/pool.rs` — `MAX_CONCURRENT = 4`
-admitted operations, a FIFO of waiters, and a `Slot` released on `Drop`. Its module
-doc carries the measurements; `sdd/TECH.md` § Concurrency model carries the
-consequence. Unit-tested headlessly (the gate is a plain future over a
-`thread_local`, so it needs no display); the tests caught a real double-release in
-the hand-off path.
-
-**Sourced facts** (researcher, GLib 2.72; findings doc
-`~/Documents/Projects/AI/Research/Gtk4Rust/researcher-findings-gio-task-thread-pool-sharing-starvation.md`,
-rig `_src/gio-taskpool-starvation/`):
-
-- One file-static pool (`gtask.c:619`), `G_TASK_POOL_SIZE 10` (`:643`), created at
-  `:2195`. `GLocalFile` overrides **no** async `GFile` vfuncs, so `replace_async`
-  falls through to `g_file_real_replace_async` → `g_task_run_in_thread`;
-  `GLocalFileOutputStream` implements no pollable interface, so
-  `g_output_stream_async_write_is_via_threads()` is TRUE and `goutputstream.c:1225`
-  dispatches to the same place. Both workloads, one queue.
-- It grows, but slowly: `:629-646` adds **one** thread per compounding wait (100 ms
-  base, ×1.03 per running task), from GLib's own worker thread (`:2205`) so growth
-  survives a wedged main loop. The pool is **not** capped at 330 —
-  `set_max_threads(tasks_running+1)` is unbounded; the constant only stops the
-  *wait* compounding, at which point it is ≈21 minutes per additional thread.
-- MEASURED completion time of a 64 KiB snapshot write with N tasks blocked forever
-  on an empty pipe: **9 → 0.2 ms · 10 → 206.6 ms · 15 → 686 ms · 20 → 1.36 s ·
-  30 → 3.05 s · 50 → 8.37 s.** The cliff is exactly the base pool size. It never
-  fails to complete at any N.
-- The real two-stage path (`replace_async` → `write_all_async`) does **not** double
-  the penalty (15 → 567 ms, 20 → 1.23 s, 30 → 2.87 s): once the pool grows to admit
-  stage 1, stage 2 finds capacity ~120-190 ms later. Recorded so nobody
-  "optimises" the two-stage writer back into `replace_contents` chasing a latency
-  win that is not there — and that function is the one that renames a truncated
-  temp over the previous good file on a write error (#232).
-- `io_priority` is not a lever: `:2199` sets a queue sort function that compares
-  `blocking_other_task` first, and that flag is set only for tasks queued from
-  *inside* a pool thread (`:1534`). Nothing dispatched from the main thread sets it.
-- `g_task_start_task_thread` has exactly two exits and both are
-  `g_thread_pool_push` (`:1516` early-cancel, `:1536` normal), with a `g_assert` on
-  pool creation (`:2197`) and a non-exclusive pool that queues rather than blocking
-  the caller. **The blocking func can never run inline on the calling thread**, so
-  the freeze this whole change removes cannot silently return by that route.
-- Completion order is **not** guaranteed to match dispatch order, and the explicit
-  re-sort above makes that stronger than mere concurrency: a later-queued task can
-  dispatch earlier at equal priority. A per-document in-flight gate is therefore
-  **required**, not belt-and-braces (see #244 and `winstate::WriteGate`).
-
-**The rule.** Moving work off the main thread does not make it free — it makes it
-**contend**, and what it contends with is whatever else the runtime put in the same
-pool, which is not visible from the API you called. Before dispatching a new class
-of work to a shared pool, ask what is *already* in it and what that thing's latency
-budget is; then bound your own use at the source, because there is nothing to tune
-downstream.
-
-**Not taken, and why it is recorded.** The researcher's third option — give the
-snapshot writer a dedicated thread of its own, which is immune to every mechanism
-above — is the only fix that holds when document I/O hangs unboundedly (NFS). It
-was declined because the project's architecture rule is that the application owns
-no threads (`sdd/POLICY.md` § "All GTK access on the main thread"), and the bound
-above is sufficient for every non-hanging filesystem. If that rule is ever revisited,
-this is the case that should reopen it.
-
-**See**: gtk4-rs skill → threading-async-and-memory (GTK4Rs/AP-243).
-
+**Symptom**: moving document reads and writes off the GTK main thread with `gio::spawn_blocking` cured the freeze and broke nothing visible — but the crash-recovery snapshot writer's `replace_async` goes through the SAME pool, so a slow or unresponsive filesystem now delays the one mechanism that protects unsaved work, at exactly the moment the filesystem is misbehaving.
+**Scribobulate**: `src/docio/pool.rs` bounds this project's own use at the source — `MAX_CONCURRENT = 4` admitted operations, a FIFO of waiters, a `Slot` released on `Drop`; its module doc carries the measurements and `sdd/TECH.md` § Concurrency model the consequence. Unit-tested headlessly (a plain future over a `thread_local`, so it needs no display), and those tests caught a real double-release in the hand-off path. The per-document in-flight gate beside it (#244, `winstate::WriteGate`) is REQUIRED rather than belt-and-braces, because completion order is not dispatch order. Not taken, and recorded because it is the right fix under a different rule: a dedicated thread for the snapshot writer, immune to all of this and the only option that holds when document I/O hangs unboundedly (NFS), declined against POLICY's "the application owns no threads" — if that rule is ever revisited, this is the case that should reopen it.
+**See**: gtk4-rs skill → threading-async-and-memory (GTK4Rs/AP-243). Findings: `~/Documents/Projects/AI/Research/Gtk4Rust/researcher-findings-gio-task-thread-pool-sharing-starvation.md` (GLib 2.72, rig `_src/gio-taskpool-starvation/`). Kin: #244.
 ## 244. Making a window-scoped operation async turns "which tab is active?" into two different questions
 **Symptom.** `save_window` resolved its target with `state(window)` — the window's
 active tab. That was exact for as long as the write was synchronous, because
@@ -3588,150 +3571,138 @@ feature.
 ---
 
 ## 260. A `GtkTextView` scroll aimed past the lazily-validated frontier is parked and never re-issued — and the validation idle cancels the one scroll it does animate
+**Symptom**: Ctrl+Home / Ctrl+End in a large document stop part-way and pressing again gets further — the caret lands correctly every time, only the viewport does not follow. Presses needed scale with size (8 000 lines fine, 14 000 three, 20 000+ never); nothing logged, nothing failing, suite green.
+**Scribobulate**: `src/farscroll.rs` owns the re-issue — an idle *below* GTK's permanently-ready priority-125 validate source, which is therefore an exact "the layout is valid now" event GTK does not otherwise expose, bounded by a `g_timeout_add` keyed on STALLED PROGRESS rather than elapsed time (a legitimately huge document takes as long as it takes, and a fixed deadline would pre-empt the correct answer). `window/tabs/lifecycle.rs`'s `build_tab_editor` — the one place every editor view is built — installs it, so a view cannot be constructed without it; the re-issue's licence to act is the caret still being where the keystroke put it, so a later navigation retires a pending one with no generation bookkeeping. `saferizer::scrollpos` owns the writes (`jump`, and `reconfigure` for the mirror-image failure: `configure`/`clamp_page` write `priv->value` with no `end_updating`, so a running animation's next frame silently overwrites them), all backed by `clippy.toml` bans on `TextViewExt::scroll_to_mark` and `AdjustmentExt::set_value`/`configure`/`clamp_page` so neither half can be re-entered by a new call site without the ban naming the route. It also covers the app as its OWN second source: any adjustment write destroys that view's `first_validate_idle`, so a split-pane sync projection into one pane orphans a scroll the other pane had queued — the reported symptom, arriving from our own code. Verified on the operator's real session against a deliberately rebuilt pre-fix binary (never a stash — ScrAP-239): 200 000 lines, the control still at line 1 after 120 s, the fixed build at line 199 959 by 40 s.
+**See**: gtk4-rs skill → textview-scrolling-and-adjustments (GTK4Rs/AP-260) for the mechanism, the refuted pin-to-the-frontier design (a livelock: 20 000 lines took 98 ms unpinned and 1494 ms pinned), the private-`is_animating` corollary and the "turns are not time" testing note. Upstream GNOME/gtk #7507 / #2205 / #5065 are filed and STALLED — **do not file again**; this needs an application-side answer for the foreseeable life of the project. Kin: #82, #13 (same lazy-validation cause on a FRESH view, where this is a warm one), #87.
+## 261. A derived-state hook installed at the producer misses the rebuild shape the producer also has
 
-> *Core GTK4 (GtkTextView layout validation, GtkAdjustment animation, the GLib idle
-> priority band). **Send to the gtk4-rs skill** — textview-scrolling-and-adjustments.
-> Kin to ScrAP-82 (a one-shot far `scroll_to_mark` landing near the top) and ScrAP-13:
-> same lazy-validation cause, but those are about a scroll issued too EARLY on a fresh
-> view, and this is about one issued to a WARM, already-mapped view that GTK has simply
-> not finished laying out.*
+**Symptom**: a hook that keeps state consistent with the rendered document fires for
+every re-render *except* the one the feature exists for. The headless test — which
+drives the in-place re-render — passes; on the live display the same scenario leaves
+the state stale, silently, with no warning and no log line.
 
-**Symptom**: Ctrl+Home / Ctrl+End in a large document do not reach either end — it stops
-part-way and pressing again gets further. The caret lands correctly every time; only the
-viewport does not follow. Nothing logged, nothing failing, suite green. Presses needed
-scale with size: 8 000 lines fine, 10 000 two, 14 000 three, 20 000+ never.
+**What was tried**:
+- Hooking the point where the render stores its heading map into the per-render data.
+  This looks like the precise choke point (it is where the value changes) and is where
+  a test naturally drives it, so it reads as correct and is green.
+- Reasoning that the fresh-render path could be skipped because a fresh render means a
+  new tab with no state pointing at it yet. False: a fresh render is *also* how an
+  existing tab is rebuilt.
 
-**What was tried** — one design, prototyped and then **refuted by measurement**:
-re-applying a non-animating `set_value(upper - page_size)` on every vadjustment
-`notify::upper`, i.e. staying pinned to the bottom while the layout settles. It lands on
-the correct value, and it is a **livelock**: pinning the viewport to the moving
-validation frontier makes GTK re-validate a screenful at a time around the new first
-paragraph instead of letting its own idle run 2000-pixel chunks. Measured: 20 000 lines
-took 98 ms unpinned, 1494 ms pinned; 40 000 lines took 1655 ms unpinned and had **still
-not finished at 60 s** pinned. Do not chase a frontier with the viewport. Only an aim that
-moves *with* it livelocks — a fixed-target progressive restore self-terminates and is not
-implicated (researcher-confirmed).
+**Root cause**: "the preview was rebuilt" is **two code paths, not one**. Preview mode's
+external reload rebuilds by a wholesale render into a brand-new scroller/view widget;
+split mode re-renders the existing view in place. A hook installed on the in-place path
+is absent from the wholesale one, and nothing types, lints or tests the difference — the
+producer's shape is invisible from the hook's own site.
 
-**Root cause** — two GTK mechanisms which, in many runs, are *the same event*
-(researcher, source-traced): `gtk_text_view_value_changed` **destroys**
-`first_validate_idle` (gtktextview.c:8437-8443, *"it's just a waste of time"*), and that
-idle is the only thing that ever consumes a pending scroll. So one adjustment write does
-both halves at once — truncates the animation *and* orphans the queued request:
-- **The scroll is parked and abandoned.** `gtk_text_view_scroll_to_mark` queues the
-  request and flushes it immediately *only* if `gtk_text_layout_is_valid`; otherwise it
-  waits for `flush_first_validate`, which returns early unless `first_validate_idle` is
-  armed. The idle that lazily validates the rest of a big document,
-  `incremental_validate_callback`, never touches `pending_scroll` — and the next
-  `queue_scroll` frees the old one. So on a still-validating layout the request is simply
-  lost. Compounding it, every line past the frontier reports identical geometry
-  (`line_yrange` → `y` = the frontier, `h` = 0, measured), so nothing downstream can
-  compute the destination either.
-- **The animation is cancelled after one frame.** `scroll_to_mark` scrolls by
-  `gtk_adjustment_animate_to_value` (~200 ms). Any plain `gtk_adjustment_set_value` calls
-  `gtk_adjustment_end_updating` and kills a running animation, and
-  `gtk_text_view_set_vadjustment_values` ends with exactly that whenever its first-paragraph
-  re-anchor moves — which it does on nearly every validation pass. `size_allocate` guards
-  both refreshes with `gtk_adjustment_is_animating`; `gtk_text_view_update_adjustments`,
-  the path the validation idle takes, does not. Measured: a Ctrl+Home from 30 000 travelled
-  to 23 108 in one frame and never moved again.
+**Resolution**: move the hook off the producer and put it **immediately in front of its
+consumer** — here, reconcile the history against the live heading set inside the function
+that computes the two actions' sensitivity, so the reconciliation and the value it
+protects are computed in the same call and cannot disagree. Path coverage then stops
+mattering: neither rebuild shape has to remember anything. Once both callers were in one
+module the helper was demoted to module-private, so reconciling from a *third* render
+site does not compile (ScrAP-219's ladder).
 
-This is a **documented-contract violation**, not a quirk: `scroll_to_iter`'s doc comment
-(gtktextview.c:2734-2738) directs you to `scroll_to_mark` *"which saves a point to be
-scrolled to after line validation"* — the point is saved, then deleted. Commit `9d7f1caca7`
-(2014) added the `is_animating` guard to `size_allocate` describing this exact failure, but
-never covered `update_adjustments` and still has not. **Nine predicates diffed across
-4.6 → main (4.23.2) are identical: a GTK upgrade is not a fix.** Also user-reachable:
-`scroll_pages` cancels a pending scroll (:6626), so PageUp discards a queued Ctrl+End.
+**Lesson**: when a producer has more than one code shape, a hook on the producer is a
+latent regression — the next shape added will not have it, and a test written against the
+shape you are looking at will not notice. Prefer siting derived state in front of the
+**consumer** that must not be stale: there is one consumer, its correctness is checkable
+locally, and the producer count becomes irrelevant. Corollary for verification: a headless
+test that drives *a* rebuild proves nothing about the rebuild the user actually triggers —
+enumerate the shapes before believing the green.
 
-**Already filed upstream and stalled — do not file again.** GNOME/gtk **#7507** (2025) is
-mechanism (1) with no merge request; **#2205** (2019) is mechanism (2) by name in its title;
-**#5065** (2022) is (1) from the other side. The position is not "GTK is wrong": GTK knows, and
-the partial fix `9d7f1caca7` has stood since 2014. Plan accordingly — this needs an
-application-side answer for the foreseeable life of the project.
+**Cost**: the defect shipped through a full green gate set (fmt, clippy, 808 unit, 1034
+headless, 227 main-thread, and a mutation check that killed its mutant) and was caught
+only by driving the real app on the operator's display. Second occurrence of this file's
+two-rebuild-shape hazard — Severity: High
 
-**Resolution**: re-issue the scroll from an idle GTK's own validator starves.
-`GTK_TEXT_VIEW_PRIORITY_VALIDATE` is `GDK_PRIORITY_REDRAW + 5` = 125, and that source
-stays attached *and permanently ready* until the layout is valid — so an idle at
-`G_PRIORITY_DEFAULT_IDLE` (200) cannot be dispatched until validation has finished, which
-makes it an exact "the layout is now valid" event, the signal GTK does not otherwise
-expose. `src/farscroll.rs` owns that primitive and wires `move-cursor` for the
-buffer-ends step; `window/tabs/lifecycle.rs`'s `build_tab_editor` — the one place every
-editor view is built — installs it. The re-issue's licence to act is the caret still
-being where the keystroke put it, so a later navigation retires a pending one with no
-generation bookkeeping. Measured exact (`value == upper - page_size`) at 8 000 / 20 000 /
-40 000 lines, cold and warm, with no effect on validation speed.
+**Scribobulate**: `window/navhistory.rs`'s `reconcile_nav_history_headings` is private and
+called from `refresh_nav_history_actions` (before it reads `nav_can`) and from `traverse`
+(before it steps); `preview/render.rs` deliberately calls nothing.
 
-**Verified on the operator's real KDE/X11 session** (and Go To Line 90 000 on a cold
-120 000-line document lands there and stays), differential against a deliberately
-rebuilt pre-fix binary (never a stash — ScrAP-239). 200 000 lines, Ctrl+End on a
-just-opened document: the control sat at line 1 and was **still at line 1 after 120 s**;
-the fixed build sat at line 1 at 2 s and was at **line 199 959** by 40 s, the deferred
-re-issue firing at 18.8 s (instrumented) — which is simply how long GTK takes to lay that
-document out (the reason the deadline below triggers on stalled progress, not elapsed time). A 30 000-line document settles before a driven keystroke can even arrive, so
-**both** builds pass there: the live harness removes the precondition exactly as a
-`#[gtktest::test]` does (ScrAP-87).
+**See**: kin #52 (the same two rebuild shapes, reached through a stale *signal* rather
+than a missing hook — different root cause, same architectural fact); TDD 23.14.
 
-**A related GTK fact worth knowing**: the guard GTK uses on itself is **not available to
-you**. `gtk_adjustment_is_animating` — the test `gtk_text_view_size_allocate` uses before
-refreshing the adjustment — is declared in `gtkadjustmentprivate.h`, so it is neither public
-GTK API nor bound in gtk-rs. An application therefore *cannot* ask "is a scroll animation
-running?" and cannot replicate GTK's own guard. The only available discipline is to not need
-the question: prefer non-animating `set_value` for app-initiated positioning, and know that
-any such write silently truncates an animated scroll already in flight.
+---
 
-**Lesson**: on a lazily-validating widget, a request the toolkit *cannot* satisfy yet is
-not deferred — it is dropped, and the toolkit's own background work will cancel whatever
-it *does* start. The remedy is never to fight the settling (chasing it can livelock the
-very work you are waiting for) but to **wait for it on an event that means "settled"** —
-and where a toolkit exposes no such signal, the **priority band of its own deferred work
-is one**: a source below the toolkit's cannot run until the toolkit's is done.
+## 262. A restore seam's "nothing to do at the boundary" shortcut is a claim about its first caller, and the second caller loses a real destination
 
-The app was **its own** second source of this: any adjustment write reaches
-`value_changed` and destroys that view's `first_validate_idle`, so a split-pane sync
-projection into one pane orphans a scroll the *other* pane had queued — the reported symptom,
-arriving from our own code. Guarded by a test rather than by reasoning, and it passes because
-the re-issue never depended on GTK's pending scroll surviving.
+**Symptom**: Back and Forward do nothing at all for a jump *within* one document —
+the commonest shape of the feature, following a table of contents at the head of the
+file — while the same commands work for every other navigation. Nothing is logged,
+the buttons light and grey correctly, and the recorded history is provably right
+(`nav-back` reports itself available, the entry names the right place). Only the
+viewport never moves. Both directions look broken at once, which misdirects the
+diagnosis to the recording half: Back scrolls nowhere, so Forward is then asked to
+return to the section the reader never left, and *it* looks broken too.
 
-**Testing note — the two halves need opposite harnesses.** Validation runs on an idle, so a
-`sleep` between `iteration(false)` turns *throttles* it (2 ms stretched a 100 ms settle past
-3 s); the scroll runs on a frame-clock animation, so a tight pump advancing no wall clock
-starves *that*. **Turns are not time.** Both fail silently and report success — check which
-clock a new test is waiting on before copying either style.
+**What was tried**: reading the recording path first — the two choke points, the
+slug that gets recorded, the reconciliation that degrades stale headings, the
+suppression depth — on the reasoning that "neither direction works" means the
+history is empty or wrong. All of it was correct, and every one of the feature's
+twenty-one automated tests was green.
 
-**Cost**: **High**. Benign but shipped for the whole life of the editor pane and reported
-by the operator, and the same root cause silently breaks every other far navigation in the
-pane (a cold go-to-line to line 30 000 measured landing on line 177). Two mechanisms had
-to be separated before either was fixable, the first design had to be built before its
-livelock was visible, and both the defect and the fix are invisible to any test whose
-harness settles the layout first (ScrAP-87 / GTK4Rs/AP-78).
+**Root cause**: the traversal restores a recorded reading line through
+`preview::restore_preview_scroll_to_line`, which opened with `if line <= 0 { return; }`,
+documented as *"no-op for `line <= 0` (already at/above the top)"*. That parenthesis
+is true of the seam's original caller and only of it: a zoom re-render restores a
+view to where it already is, so restoring line 0 is genuinely redundant there. Back
+and Forward then reused the same seam to *travel* to a recorded place, where line 0
+is not a redundant refresh but a destination — "take the reader back to the top" —
+and the guard swallowed it. And it swallowed exactly the case the feature exists
+for: a reader following a TOC link is, by definition, at the top of the document, so
+the departure stamped onto the entry they leave is line **0** essentially every time.
+The seam had absorbed a precondition that belonged to a caller, and nothing at the
+new call site could see it — the parameter is an `i32` either way.
 
-The invariant is **not absolute**, and the exception is worth carrying: GLib blocks a
-source for the duration of its own callback unless it set `G_SOURCE_CAN_RECURSE` (which
-`g_idle_add_full` does not), and blocked sources do not set the priority floor — so a
-main-loop iteration pumped from *inside* the validate callback's stack (anchored-child
-allocation is the realistic route here) can dispatch the idle with the layout still
-invalid. It degrades safely: `scroll_to_mark` then queues instead of flushing, so the
-result is a no-op, never a wrong scroll. Also same-`GMainContext` only. And the guarantee
-is exactly as strong as "the 125 source stays ready" — **the same predicate as the
-starvation risk below**. One fact wearing two faces: what makes the idle precise is what
-can starve it, which is why the deadline is necessary rather than belt-and-braces.
+**Why the tests all passed**: every existing body parked the reader at a non-zero
+line, and the shared fixture's own comment explains why — it carries "enough filler
+that a heading's line and the reader's departure line are far apart (an assertion
+that passed for both would prove nothing)". That reasoning is sound and it
+systematically excluded the boundary: choosing a *non-degenerate* input so the
+assertion discriminates is the same choice as never testing the degenerate one, and
+here the degenerate one was the majority of real use.
 
-That idle is bounded by a second source on a **timer**, not an idle: `g_timeout_add` runs
-at `G_PRIORITY_DEFAULT` (0), strictly *above* the validate idle, so it cannot be starved by
-the thing the idle waits on — the exact inverse of the idle's own vulnerability. It triggers
-on stalled progress rather than elapsed time, because a legitimately huge document takes as
-long as it takes and a fixed deadline would pre-empt the correct answer. Without it, a layout
-that never converges starves the primary path *by design*, on precisely the documents this
-exists for.
+**Resolution**: `restore_preview_scroll_to_line` now clamps a negative line (a bad
+value) and *scrolls* to 0 (a position) like any other line, and its doc comment
+states the contract as a destination rather than as a refresh, names the sibling
+`restore_preview_scroll_to_line_fresh` whose brand-new view genuinely is at the top,
+and says the two are not interchangeable. Regression guard:
+`window/navhistory/record.rs`'s
+`back_from_a_link_followed_at_the_top_of_the_document_returns_to_the_top` —
+mutation-checked, the restored early return fails it (`16` against an expected `0`)
+and leaves all twenty-one other navigation tests green, which is precisely the
+evidence that the existing suite could not have caught this.
 
-**Now enforced by** `farscroll::scroll_to_mark_when_ready` and `saferizer::scrollpos`
-(`jump`, and `reconfigure` for the **mirror-image** failure: `configure`/`clamp_page` write
-`priv->value` directly with no `end_updating`, so they do not truncate a running animation —
-its next frame overwrites *them*, and the write silently does not stick), all backed by
-`clippy.toml` bans (`TextViewExt::scroll_to_mark`,
-`AdjustmentExt::set_value`/`configure`/`clamp_page`) — so neither half of this can be re-entered by a new call site
-without the ban naming the route. Ctrl+Home / Ctrl+End are wired at each pane's own
-construction site, so a view cannot be built without them.
+**Lesson**: an early-return that means "there is nothing to do here" is a statement
+about the caller's *context*, not about the argument's value, and a shared seam has
+no access to context — so the second caller inherits a silent, invisible drop. Before
+adding a caller to a restore/refresh helper, read its no-op guards as preconditions
+and ask whether they hold for the new call; before writing one, prefer a guard that
+rejects an impossible *value* (a negative line) over one that assumes a *situation*
+(the view is already there). The testing corollary is the sharper half: when a
+fixture is deliberately chosen to be non-degenerate so an assertion can discriminate,
+that same choice deletes the boundary case from the suite — write the boundary case
+as its own body, because for a feature triggered from a document's own table of
+contents the boundary *is* the common path.
 
-**See**: `src/farscroll.rs`, `src/saferizer/scrollpos.rs`; gtk4-rs skill →
-textview-scrolling-and-adjustments.
+**Cost**: one full read of the recording half, the pure history core and the
+reconciliation before the traversal was suspected at all — the "both directions are
+dead" symptom argues for the shared upstream (recording) and against the shared
+downstream (the restore seam), and it argues wrongly. Shipped through the whole gate
+set and the feature's own twenty-one tests — Severity: High
+
+**Scribobulate**: `preview/scroll.rs`'s `restore_preview_scroll_to_line`
+(no `line <= 0` return; negatives clamped), reached from
+`window/navhistory/traverse.rs`'s `restore_place` for a `NavSpot::Line`, and from
+`window/zoom.rs` for the zoom re-render it was originally written for.
+
+**See**: kin #261 (the sibling defect in the same feature, found the same way — a
+correct-looking mechanism whose *other* path nobody enumerated); TDD 23.12; MANUAL-TEST §23.
+
+---
+
+## 263. `line_at_y` on a not-yet-allocated `GtkTextView` reports the buffer's LAST line, so a viewport read taken in the turn a view is built in is maximally wrong
+**Symptom**: a `doc.md#section` link opens the target scrolled to the right heading, and one Back throws the reader to the END of the document just opened — silently, because the recorded history honestly names the last line: the measurement was the bug, not the recording.
+**Scribobulate**: `saferizer/viewport.rs` gates `ViewportTopIter::of` / `ViewportRange::of` on `visible_rect().height() > 0`, answering with the buffer start when there is no layout; `codeview`'s `reading_line` and `preview/scroll.rs`'s `preview_top_line` route through that seam instead of hand-rolling `vadjustment().value()` + `line_at_y`. Guards: `the_top_of_an_unallocated_view_is_the_start_of_the_buffer_not_its_end` (carries the raw pre-fix call as an in-body control, without which a correct `0` is indistinguishable from a view that simply had not scrolled) and `a_fragment_link_to_another_document_walks_back_across_both_stops`. Audited: the seven `line_at_y` sites outside the seam are test bodies on mapped views or already gated, and no clippy ban was added because every current use is legitimate — it would be all false positives.
+**See**: gtk4-rs skill → textview-scrolling-and-adjustments (GTK4Rs/AP-263). Findings: tests/reports/gtk4skiller-brief-ScrAP-263.md (local, gitignored — the woven brief, incl. the measurement tables).

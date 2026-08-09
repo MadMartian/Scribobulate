@@ -1,7 +1,7 @@
 //! The thread-local window/tab registry: id allocation, register/add/remove/rehome,
 //! and the `state`/`chrome`/`tabs_for_window` lookups every call site reaches through.
 
-use super::{NavDir, NavHistory, TabId, TabState, WindowChrome, WindowId};
+use super::{NavDir, NavHistory, NavPlace, NavSpot, TabId, TabState, WindowChrome, WindowId};
 use gtk::prelude::*;
 use gtk::ApplicationWindow;
 use std::cell::{Cell, RefCell};
@@ -143,7 +143,7 @@ pub(crate) fn remove_tab(window: &ApplicationWindow, tab_id: TabId) {
 
 // ── Back/Forward history (TDD §23) ───────────────────────────────────────────
 // The window's [`NavHistory`] lives in its [`WindowEntry`] (see that field's doc
-// comment). These five functions are the whole crate-facing surface; the pure
+// comment). These functions are the whole crate-facing surface; the pure
 // rules are in [`super::navhistory`], and the UI side — the two GActions, their
 // sensitivity, and the suppression call sites — is `window::navhistory`.
 
@@ -167,15 +167,54 @@ pub(crate) fn nav_record(window: &ApplicationWindow, tab_id: TabId) {
     with_nav(window, |nav| nav.record(tab_id));
 }
 
-/// Step `window`'s history one entry in `dir`, returning the tab to activate.
-pub(crate) fn nav_step(window: &ApplicationWindow, dir: NavDir) -> Option<TabId> {
+/// Record a navigation *within* one document (TDD 23.11) — a same-document
+/// `#anchor`, an outline-sidebar click, or a cross-document fragment's arrival.
+/// `from` is the reader's live position, stamped onto the entry being left;
+/// `None` leaves that entry's existing spot alone. See [`NavHistory::record_jump`].
+pub(crate) fn nav_record_jump(
+    window: &ApplicationWindow,
+    tab_id: TabId,
+    from: Option<NavSpot>,
+    to: NavSpot,
+) {
+    with_nav(window, |nav| nav.record_jump(tab_id, from, to));
+}
+
+/// Step `window`'s history one entry in `dir`, returning the place to activate.
+pub(crate) fn nav_step(window: &ApplicationWindow, dir: NavDir) -> Option<NavPlace> {
     with_nav(window, |nav| nav.step(dir)).flatten()
+}
+
+/// Reconcile every window's history against the headings `tab_id` now has
+/// (TDD 23.14), after a render replaced its heading map.
+///
+/// Sweeps all windows for the same reason [`nav_forget_everywhere`] does: a tab
+/// dragged to another window leaves entries behind in the window it came from
+/// only until that removal runs, and a reconcile keyed on "the window that owns
+/// it now" would miss the ones that matter. `resolves` answers whether a slug is
+/// still a heading of that document.
+pub(crate) fn nav_degrade_stale_headings(tab_id: TabId, resolves: impl Fn(&str) -> bool) {
+    WINDOWS.with(|m| {
+        for entry in m.borrow().values() {
+            entry
+                .nav
+                .borrow_mut()
+                .degrade_stale_headings(tab_id, &resolves);
+        }
+    });
 }
 
 /// Whether a [`nav_step`] in `dir` would go anywhere — the single source of the
 /// two actions' enabled state (TDD 23.5).
 pub(crate) fn nav_can(window: &ApplicationWindow, dir: NavDir) -> bool {
     with_nav(window, |nav| nav.can(dir)).unwrap_or(false)
+}
+
+/// The place `window`'s history says the reader is on — read by the recording
+/// side to decide whether the reader has moved off the heading their current
+/// entry already names (see `window::navhistory::departure_spot`).
+pub(crate) fn nav_current(window: &ApplicationWindow) -> Option<NavPlace> {
+    with_nav(window, |nav| nav.current().cloned()).flatten()
 }
 
 /// Open a scope in which page switches on `window` are not navigations (TDD

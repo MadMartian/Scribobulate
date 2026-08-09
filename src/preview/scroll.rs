@@ -8,6 +8,7 @@ use crate::codeview::CodePreviewView;
 use gtk::prelude::*;
 use gtk::{ScrolledWindow, TextView};
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 /// Fractional scroll position of a `GtkAdjustment`: 0.0 (top) … 1.0 (bottom).
@@ -111,6 +112,43 @@ pub(crate) fn scroll_preview_to_fragment(sw: &ScrolledWindow, fragment: &str) ->
     }
 }
 
+/// The buffer **line** the heading anchor `slug` sits on in this preview, or
+/// `None` when the slug names no heading of the document currently rendered
+/// there.
+///
+/// One caller, in the Back/Forward history (TDD §23), and it needs the *line*
+/// rather than the offset `heading_map` stores: it compares this against the
+/// reader's live reading line to decide whether they have moved off the heading
+/// their current entry already names, and so whether stamping a departure would
+/// downgrade a re-establishable slug to a bare line for nothing. Reading it here
+/// rather than at that call site keeps `RenderData` a preview concern, exactly as
+/// `scroll_preview_to_fragment` does for the scroll itself.
+pub(crate) fn preview_heading_line(sw: &ScrolledWindow, slug: &str) -> Option<i32> {
+    let view = sw.child()?.downcast::<CodePreviewView>().ok()?;
+    let offset = scrib_render_data(&view)?
+        .borrow()
+        .heading_map
+        .get(slug)
+        .copied()?;
+    Some(view.buffer().iter_at_offset(offset).line())
+}
+
+/// The anchor slugs of every heading this preview currently renders, or `None`
+/// when it has not rendered a document yet.
+///
+/// **The `None` and the empty set are different answers and a caller must not
+/// collapse them.** Its one consumer degrades Back/Forward entries whose heading
+/// the document no longer has (TDD 23.14); reading "no preview built yet" — a
+/// deferred tab — as "this document has no headings" would degrade every entry
+/// for a tab whose headings are simply not computed, which is the same class of
+/// mistake as GTK4Rs/AP-34.
+pub(crate) fn preview_heading_slugs(sw: &ScrolledWindow) -> Option<HashSet<String>> {
+    let view = sw.child()?.downcast::<CodePreviewView>().ok()?;
+    let rd = scrib_render_data(&view)?;
+    let slugs = rd.borrow().heading_map.keys().cloned().collect();
+    Some(slugs)
+}
+
 /// Fractional scroll position of a preview/editor scroller.
 pub(crate) fn preview_scroll_fraction(sw: &ScrolledWindow) -> f64 {
     adj_fraction(&sw.vadjustment())
@@ -134,9 +172,10 @@ pub(crate) fn preview_top_line(sw: &ScrolledWindow) -> Option<i32> {
         return Some(cpv.reading_line());
     }
     let view = child.downcast::<TextView>().ok()?;
-    let y_top = sw.vadjustment().value() as i32;
-    let (top_iter, _) = view.line_at_y(y_top);
-    Some(top_iter.line())
+    // Same seam the `CodePreviewView` arm reaches through `reading_line` — a
+    // hand-rolled `vadjustment().value()` + `line_at_y` answers with the buffer's
+    // LAST line on a view that has not been allocated (ScrAP-263).
+    Some(crate::saferizer::viewport::ViewportTopIter::of(&view).line())
 }
 
 /// Restore a `GtkTextView` scroller to an exact buffer `line`, validation-safe
@@ -210,14 +249,29 @@ fn restore_textview_scroll_to_line(sw: &ScrolledWindow, view: &TextView, line: i
 }
 
 /// Restore a scroller to an exact buffer `line` — the *same-buffer* entry point
-/// (a zoom re-render or reload, where the rendered content is unchanged and only
-/// its scale differs, so an exact line anchor preserves the reading position with
-/// none of the pixel-fraction drift). No-op for `line <= 0` (already at/above the
-/// top) or a non-`GtkTextView` scroller.
+/// (a zoom re-render, or a Back/Forward traversal onto a recorded reading line),
+/// where the rendered content is unchanged and an exact line anchor preserves the
+/// reading position with none of the pixel-fraction drift. No-op for a
+/// non-`GtkTextView` scroller.
+///
+/// **Line 0 is a destination like any other, and this function used to drop it.**
+/// The early return said "`line <= 0` — already at/above the top", which is a
+/// statement about the *caller* that only the zoom caller could make: it re-renders
+/// a view that is already sitting where it is being restored to, so scrolling to
+/// the top is genuinely redundant there. Back/Forward then reused this seam to
+/// travel to a recorded place, where line 0 means "take the reader back to the top
+/// of the document" — and the guard silently swallowed exactly the commonest case
+/// of the feature, a table of contents at the head of the file: the reader is at
+/// line 0 when they follow a TOC link, so Back had nowhere it was willing to go and
+/// Forward then re-scrolled to the section they were already on. Both directions
+/// looked broken while the history underneath was correct (ScrAP-262).
+///
+/// A negative line is still clamped rather than honoured — that is a *bad value*,
+/// not a position — but 0 is scrolled to. Note the deliberately different contract
+/// of the sibling [`restore_preview_scroll_to_line_fresh`], whose view is brand-new
+/// and therefore genuinely at the top; it is not interchangeable with this one.
 pub(crate) fn restore_preview_scroll_to_line(sw: &ScrolledWindow, line: i32) {
-    if line <= 0 {
-        return;
-    }
+    let line = line.max(0);
     let Some(child) = sw.child() else { return };
     // The preview is a CodePreviewView — reuse its proven, coalesced,
     // validation-forcing scroll (GTK4Rs/AP-22), targeting the buffer offset of `line`.

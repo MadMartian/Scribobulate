@@ -113,8 +113,10 @@ editor with the resource footprint of a native desktop application.
    running Scribobulate process. Tabs within a window can be closed, dragged
    to reorder, cycled with the keyboard, moved out into their own window, or
    dragged directly into a different open window. **Back** and **Forward** retrace
-   the documents you have been reading in that window — the same keys and mouse
-   buttons a web browser uses, plus the View menu and the toolbar.
+   the documents you have been reading in that window, and the sections within
+   them — following a table-of-contents link, or an outline entry, is a step you
+   can take back, returning to the position you followed it from. The same keys
+   and mouse buttons a web browser uses, plus the View menu and the toolbar.
 7. Quit and come back later: every window reopens with its own tabs, view
    mode, split arrangement, and zoom level exactly as they were left.
 
