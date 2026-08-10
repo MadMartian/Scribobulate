@@ -280,6 +280,18 @@ silently returning in a future change.
   report it. A test whose subject is a **symlink** goes through
   `testsymlink::symlink_or_skip`, which does this and also asserts the fixture is
   really a symlink before the test trusts its own verdict.
+- **A test that installs PROCESS-global state restores it before it returns.** libtest
+  runs the whole suite in one process, so a signal disposition, an alternate signal
+  stack, an environment variable or any process-wide hook left armed by one test
+  silently reconfigures every test after it — and the failure then surfaces in an
+  unrelated test, later, and intermittently, which is the shape that reads as "the gate
+  is flaky" rather than "the suite is broken". Restore from an RAII guard that also
+  holds whatever mutex serialises the installers, so the restore cannot be lost to an
+  early return or a panic, and so nothing can re-arm between the restore and the
+  assertion that checks it (`forensics::signal::tests::ArmedHandler`). This is at its
+  worst when the hijacked state is *diagnostic* machinery: it does not fail silently, it
+  manufactures authoritative-looking evidence about the wrong subject — ScrAP-265, where
+  the artefact was a full crash report naming an application that had not crashed.
 
 ### GTK-object integration tests
 

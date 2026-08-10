@@ -95,8 +95,16 @@ cd "$(dirname "$0")/.."
 # unit tests, in scope and at 99.26%. That is the extraction the scope rule asks for
 # working as intended, not a windfall.
 #
+# RAISED 76.77 -> 76.86 by the ScrAP-265 fatal-handler test-hygiene fix. 76.87 printed,
+# rounded DOWN per the rule above. Recorded only because the direction is the opposite of
+# what the note two paragraphs up would predict: the change adds no product code at all —
+# it is a test-only RAII guard plus its guard test — and `forensics/` is deliberately IN
+# scope (see IGNORE below), so the added test bodies land in the numerator with almost
+# nothing new in the denominator. A pure-hygiene change moving the ratchet is not an
+# anomaly here; it is what "test bodies count too" looks like when the module is gated.
+#
 # The aspiration is still 80%.
-FLOOR=76.77
+FLOOR=76.86
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

@@ -10,7 +10,7 @@
 | J | The app dies occasionally with SIGSEGV inside GTK/GIO, with no reproduction and nothing recorded at the moment of death | Medium |
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
-| P | The coverage gate intermittently dies by SIGSEGV and prints a convincing crash report — the forensics signal handler is never uninstalled, so it out-lives its own test | Medium |
+| Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
 
 ## A. Tables are selection islands
 
@@ -787,53 +787,37 @@ evidence is machine-local and not transferable:
 
 ---
 
-## P. The coverage gate intermittently dies by SIGSEGV, and the report it prints belongs to the test that armed the handler
+## Q. A wall-clock growth-ratio guard fails on a loaded machine
 
-**Severity**: Medium (no shipped behaviour is affected and no data is at risk — but a
-required pipeline step turns a good change red about one run in three, and it fails by
-printing a *full, plausible Scribobulate crash report*, so the next reader's first
-conclusion is that the app crashed)
+**Severity**: Low (nothing shipped is affected; a required pipeline step goes red on a
+correct tree, and the failure text accuses a specific, already-fixed regression by name,
+so the next reader starts by re-auditing code that is fine)
 
-`scripts/coverage.sh` — POLICY's build-pipeline step 6, which runs
-`cargo llvm-cov … --tests` — intermittently ends with the `--lib` binary dying by
-signal 11:
+`renderer::normalize::normalize_inline_tabs_tests::tab_normalisation_over_a_single_enormous_line_grows_linearly`
+asserts that normalising 512 KiB of tabs takes less than **8x** the time of 128 KiB —
+4x the input. The intent is sound and deliberately machine-independent: the exponent is
+what regressed once (a per-tab backwards line walk), and the test's own doc argues,
+correctly, that an absolute wall-clock bound would be "either flaky or blind".
 
-```
-error: test failed, to rerun pass `--lib`
-Caused by: process didn't exit successfully: …/scribobulate-<hash> (signal: 11, SIGSEGV)
-```
+**Measured**: one failure in 40 consecutive `scripts/coverage.sh` runs on the reference
+host, 2026-08-09 — `normalisation grew 8.1x for 4x the input (4.814539ms ->
+38.939987ms)`. The ratio is a quotient of two wall-clock samples whose **numerator is
+about 5 ms**, so a single scheduler preemption of the small run is enough to move it
+across a threshold set at 8 against an expectation of 4. The instrumented (llvm-cov)
+build widens the window further, and 39 of the 40 runs passed.
 
-**Measured:**
+Not the same defect as the SIGSEGV that used to share this symptom (a coverage run going
+red about one time in three); that one was the fatal-signal handler outliving its own
+test and is fixed — see ScrAP-265. This is the residue that reproduced *instead* of it.
 
-- One failure in three consecutive runs of the unmodified script; the two others
-  completed and passed the floor (exit 0).
-- The failing run's stderr carried a complete crash report — identity header, fault
-  address, instruction pointer, backtrace — whose **breadcrumbs were the forensics
-  test's own fixture**: `opened /tmp/a.md` and `monitor event`, the two lines
-  `a_fatal_signal_leaves_a_full_report_and_still_kills_the_process` records into a
-  leaked `Ring` before forking. So the process that faulted was the **parent** test
-  binary, *after* that test ran, with that test's handler and ring still armed.
-- `forensics::signal::install` has no uninstall and the test does not restore the
-  previous disposition (`src/forensics/signal.rs`), so the handler and the leaked ring
-  survive for the remainder of the test process by construction, not by accident.
-- Not reproducible in isolation: `cargo llvm-cov --lib -- forensics::` ran **8/8
-  clean**, so whatever faults is elsewhere in the suite.
+**Why it is not fixed here**: the repair is a judgement about how to make a complexity
+assertion robust, not a one-line threshold bump, and the same shape is used by at least
+one sibling guard (`annotate::scan`'s), so whatever is chosen should be chosen for both.
+The candidates, none of them free: take the best of N repetitions rather than one sample
+(kills preemption noise, costs runtime); raise the baseline until scheduler noise is a
+rounding error (costs runtime, and the absolute-ceiling half of the test already bounds
+that); or count a proxy for work done — iterations, comparisons — instead of time, which
+is the only variant that is not a timing test at all and is the one worth pricing first.
 
-**Inferred, and deliberately marked as such — nobody has measured what faults.** That
-module's own doc notes the handler "necessarily displaces" Rust's stack-overflow guard
-handler for SIGSEGV. A stack overflow in another libtest thread — plausible under
-llvm-cov, whose instrumentation enlarges frames, on a suite that recurses through
-Markdown parsing — would then surface as a process-wide SIGSEGV death carrying the
-stale ring, instead of the clean per-thread "has overflowed its stack" abort. That fits
-every measurement above and is still a hypothesis; the next step is to capture the
-faulting thread rather than to act on it.
-
-**Why it is not fixed here**: the change belongs to the forensics module, not to the
-navigation work this was found during, and the obvious repair — save the previous
-`sigaction`s and restore them when the test ends — touches the one piece of code whose
-whole job is to be correct while the process is dying. It wants its own cycle with its
-own mutation check.
-
-**Workaround**: re-run `scripts/coverage.sh`. A SIGSEGV whose printed breadcrumbs are
-`opened /tmp/a.md` / `monitor event` is this issue and not an application crash — those
-two strings exist only in that test's fixture.
+**Workaround**: re-run. A ratio between 8 and roughly 10 on an otherwise-green suite is
+this issue; a genuine return of the quadratic walk reads ~16x and does not come and go.

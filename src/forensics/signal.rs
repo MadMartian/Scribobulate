@@ -70,6 +70,15 @@ static IN_HANDLER: AtomicBool = AtomicBool::new(false);
 ///
 /// `report_path` is the file the handler will create *if* it ever runs; nothing is
 /// created now, so an ordinary run leaves no litter.
+///
+/// **There is deliberately no uninstall.** A production process wants this armed for
+/// its whole life, and an uninstall would only add a window in which it can die
+/// unreported. The one place that is wrong is a *test* process — libtest runs the
+/// whole suite in one — so the tests below arm through `tests::ArmedHandler` (not a
+/// doc link: it is `cfg(test)`, so one would dangle in an ordinary build), which
+/// puts the dispositions and the alternate stack back. A test that calls this function
+/// directly leaves the handler armed over every test after it; that is not a style
+/// point, it is a measured failure (see that type's documentation).
 pub(crate) fn install(report_path: &std::path::Path, header: &str, ring: &'static Ring) {
     // Leak all three deliberately: they must stay valid for the whole process
     // lifetime, and a handler that had to check whether its state was still alive
@@ -893,6 +902,178 @@ mod tests {
     /// costs nothing where the bodies return early.
     static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// The lock above, plus everything [`install`] displaces in the process — put back
+    /// when the test that armed the handler ends.
+    ///
+    /// **Why this exists.** [`install`] deliberately has no uninstall: production arms
+    /// the handler once and wants it for the whole process lifetime. A *test* process
+    /// is the one place where that is wrong, because libtest runs the entire suite in
+    /// one process — so a handler armed by a test here stayed armed over every test
+    /// after it, with that test's leaked `Ring` still published. Two consequences, both
+    /// measured:
+    ///
+    /// * any later fatal signal in the suite wrote a **complete, plausible
+    ///   Scribobulate crash report** whose breadcrumbs were this module's fixture
+    ///   (`opened /tmp/a.md`, `monitor event`). A reader's first conclusion was that
+    ///   the application had crashed — the report named the wrong process, the wrong
+    ///   activity, and a defect that did not exist;
+    /// * arming necessarily displaces Rust's own stack-overflow handler for SIGSEGV,
+    ///   and `install_alternate_stack` replaces the calling thread's alternate stack
+    ///   with it (this module's own header says so). A stack overflow later in the
+    ///   suite therefore stopped being a per-thread "has overflowed its stack" abort
+    ///   and became a process-wide SIGSEGV — measured both ways with the same probe,
+    ///   which is what turned the second bullet from a hypothesis into a cause.
+    ///
+    /// ScrAP-265 holds the whole account, including the half that generalises past
+    /// signals.
+    ///
+    /// **Restoring is test-only on purpose.** Exporting an `uninstall` from the module
+    /// would add a `pub(crate)` item with no production caller — the same argument
+    /// [`install_alternate_stack`] already records for staying private — and a
+    /// production uninstall is a *capability nobody wants*: a window in which the
+    /// process can die unreported.
+    struct ArmedHandler {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        previous: [libc::sigaction; FATAL_SIGNALS.len()],
+        previous_stack: libc::stack_t,
+        restored: bool,
+    }
+
+    impl ArmedHandler {
+        /// Take the install lock, record what this process looks like *now*, and arm
+        /// the handler.
+        ///
+        /// The snapshot is read back out of the kernel rather than assumed: what
+        /// SIGSEGV points at before this call is Rust's stack-overflow handler, which
+        /// is nothing this module could reconstruct.
+        fn arm(report_path: &std::path::Path, header: &str, ring: &'static Ring) -> Self {
+            let lock = INSTALL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            // SAFETY: both out-parameters are live and correctly typed; a null `act`
+            // queries the current disposition without changing it, and a null first
+            // argument to `sigaltstack` likewise queries the calling thread's stack.
+            let (previous, previous_stack) = unsafe {
+                let mut previous: [libc::sigaction; FATAL_SIGNALS.len()] = std::mem::zeroed();
+                for (slot, signal) in previous.iter_mut().zip(FATAL_SIGNALS) {
+                    libc::sigaction(signal, std::ptr::null(), slot);
+                }
+                let mut previous_stack: libc::stack_t = std::mem::zeroed();
+                libc::sigaltstack(std::ptr::null(), &mut previous_stack);
+                (previous, previous_stack)
+            };
+
+            install(report_path, header, ring);
+
+            Self {
+                _lock: lock,
+                previous,
+                previous_stack,
+                restored: false,
+            }
+        }
+
+        /// Put the process back where [`arm`](Self::arm) found it.
+        ///
+        /// Idempotent, so a test may call it explicitly — to observe the disarmed
+        /// process while still holding the lock — and `Drop` can then call it
+        /// unconditionally.
+        ///
+        /// The 64 KiB alternate stack `install` leaked stays leaked. It is unreachable
+        /// once the previous stack is back, and freeing memory a signal handler might
+        /// still be standing on is not a trade worth making to tidy a test process.
+        fn disarm(&mut self) {
+            if self.restored {
+                return;
+            }
+            self.restored = true;
+            // SAFETY: every value restored here was read out of this same process, on
+            // this same thread, by `arm`.
+            unsafe {
+                for (slot, signal) in self.previous.iter().zip(FATAL_SIGNALS) {
+                    libc::sigaction(signal, slot, std::ptr::null_mut());
+                }
+                libc::sigaltstack(&self.previous_stack, std::ptr::null_mut());
+            }
+        }
+
+        /// What SIGSEGV pointed at before this guard armed the handler.
+        ///
+        /// Read from the guard rather than by the caller, because the caller cannot
+        /// take the snapshot safely: the install lock is what makes "what does SIGSEGV
+        /// point at" a stable question, and it is held from [`arm`](Self::arm) onwards.
+        /// A test that read it a line earlier could sample a *sibling* test's armed
+        /// handler and then assert that the process was restored to it — measured, not
+        /// theorised; that is how the first draft of the guard test failed.
+        fn displaced_sigsegv_handler(&self) -> libc::sighandler_t {
+            let index = FATAL_SIGNALS
+                .iter()
+                .position(|signal| *signal == libc::SIGSEGV)
+                .expect("SIGSEGV is one of the signals this handler takes");
+            self.previous[index].sa_sigaction
+        }
+
+        /// The alternate signal stack this thread had before arming, as the triple
+        /// [`current_alternate_stack`] reports.
+        fn displaced_alternate_stack(&self) -> (*mut c_void, usize, c_int) {
+            let stack = self.previous_stack;
+            (stack.ss_sp, stack.ss_size, stack.ss_flags)
+        }
+    }
+
+    impl Drop for ArmedHandler {
+        fn drop(&mut self) {
+            self.disarm();
+        }
+    }
+
+    /// The disposition SIGSEGV currently carries, as the raw handler address.
+    fn current_sigsegv_handler() -> libc::sighandler_t {
+        // SAFETY: a live out-parameter and a null `act`, which queries only.
+        unsafe {
+            let mut current: libc::sigaction = std::mem::zeroed();
+            libc::sigaction(libc::SIGSEGV, std::ptr::null(), &mut current);
+            current.sa_sigaction
+        }
+    }
+
+    /// The calling thread's alternate signal stack, as the triple that identifies it.
+    fn current_alternate_stack() -> (*mut c_void, usize, c_int) {
+        // SAFETY: a live out-parameter and a null first argument, which queries only.
+        unsafe {
+            let mut current: libc::stack_t = std::mem::zeroed();
+            libc::sigaltstack(std::ptr::null(), &mut current);
+            (current.ss_sp, current.ss_size, current.ss_flags)
+        }
+    }
+
+    /// Fork a child that does nothing but die by `SIGSEGV`, and wait for it.
+    ///
+    /// The child drops its core limit first, so a `core_pattern` handler is not
+    /// invoked for a deliberate crash; `_exit` guards against the raise returning,
+    /// which it does whenever the disposition in force is one that resumes.
+    ///
+    /// `install` runs in the **parent** in every caller, before the fork, deliberately:
+    /// it allocates, and allocating in a forked child of a multi-threaded process can
+    /// deadlock on a `malloc` lock another thread held at fork time.
+    fn a_child_raises_sigsegv() {
+        // SAFETY: the child touches nothing that allocates or locks.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork failed");
+        if child == 0 {
+            unsafe {
+                let no_core = libc::rlimit {
+                    rlim_cur: 0,
+                    rlim_max: 0,
+                };
+                libc::setrlimit(libc::RLIMIT_CORE, &no_core);
+                libc::raise(libc::SIGSEGV);
+                libc::_exit(0);
+            }
+        }
+        let mut status = 0;
+        // SAFETY: reaping the child forked above.
+        unsafe { libc::waitpid(child, &mut status, 0) };
+    }
+
     /// A forked child is the only honest harness here: the thing under test *kills
     /// the process*, so it cannot run in the test process, and mocking the signal
     /// away would leave every interesting part — the pre-computed path, the
@@ -914,16 +1095,17 @@ mod tests {
             );
             return;
         }
-        // Taken AFTER the skip: a platform that cannot run the body has no `install`
+        // Armed AFTER the skip: a platform that cannot run the body has no `install`
         // to serialise against, and holding a lock across an early return is noise.
-        let _guard = INSTALL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The guard also DISARMS on the way out — see [`ArmedHandler`] for what an
+        // un-disarmed handler cost the rest of the suite.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("crash-test.log");
         let ring: &'static Ring = Box::leak(Box::new(Ring::new()));
         ring.record("2026-07-29T01:54:00.000Z INFO  scribobulate::app::open: opened /tmp/a.md");
         ring.record("2026-07-29T01:54:38.000Z INFO  scribobulate::window::reload: monitor event");
 
-        install(
+        let _armed = ArmedHandler::arm(
             &path,
             "scribobulate 0.1.0 (test, release)\npid: test\n",
             ring,
@@ -1029,13 +1211,12 @@ mod tests {
             );
             return;
         }
-        let _guard = INSTALL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("crash-abort.log");
         let ring: &'static Ring = Box::leak(Box::new(Ring::new()));
         ring.record("2026-07-31T12:00:00.000Z INFO  scribobulate::window: the last thing it did");
 
-        install(
+        let _armed = ArmedHandler::arm(
             &path,
             "scribobulate 0.1.0 (test, release)\npid: test\n",
             ring,
@@ -1095,6 +1276,91 @@ mod tests {
             text.find("panic: index out of bounds").unwrap()
                 < text.find("signal: SIGABRT").unwrap(),
             "the faults must read oldest-first:\n{text}"
+        );
+    }
+
+    /// **The handler must not outlive the test that armed it.**
+    ///
+    /// [`install`] publishes into process-wide state and has no uninstall, so before
+    /// [`ArmedHandler`] existed the two tests above left the *whole rest of the suite*
+    /// running with this module's handler armed and this module's leaked `Ring`
+    /// published. What that cost was a coverage run — POLICY's build-pipeline step 6 —
+    /// dying by SIGSEGV and printing a complete, plausible Scribobulate crash report
+    /// whose breadcrumbs were the fixture two tests up. The report named the wrong
+    /// process, the wrong activity, and an application defect that did not exist, and
+    /// the first thing anyone reading it concluded was that the app had crashed.
+    ///
+    /// **Both halves are here on purpose** (ScrAP-217): "no report was written" and
+    /// "this harness cannot write reports at all" produce identical output, so the
+    /// *armed* half is the positive control that gives the disarmed half a meaning.
+    ///
+    /// **And both restorations are asserted separately** (ScrAP-254): putting the
+    /// disposition back is on its own sufficient to make the report half pass, so the
+    /// alternate stack — the half Rust's own stack-overflow handler needs back, and the
+    /// half that decides whether a later overflow reads as "has overflowed its stack"
+    /// or as a process-wide SIGSEGV — carries its own assertion rather than riding
+    /// along on a sufficient sibling.
+    ///
+    /// **Mutation guard, both ways:** make [`ArmedHandler::disarm`] return early and
+    /// the disposition, stack and report assertions all fail; delete only its
+    /// `sigaltstack` line and the stack assertion fails alone.
+    #[test]
+    fn the_fatal_handler_does_not_outlive_the_test_that_armed_it() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            eprintln!(
+                "SKIPPED [ScrAP-265 fatal-handler test hygiene]: needs a forked child \
+                 raising a real SIGSEGV against a glibc handler. NOT verified by this \
+                 run."
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("must-not-grow.log");
+        let ring: &'static Ring = Box::leak(Box::new(Ring::new()));
+        ring.record("2026-08-09T09:00:00.000Z INFO  scribobulate::app::open: opened /tmp/a.md");
+
+        let mut armed = ArmedHandler::arm(
+            &path,
+            "scribobulate 0.1.0 (test, release)\npid: test\n",
+            ring,
+        );
+
+        // The positive control: while armed, a fatal signal DOES produce a report.
+        assert_eq!(
+            current_sigsegv_handler(),
+            on_fatal as *const () as libc::sighandler_t,
+            "arming did not take SIGSEGV — the rest of this test would pass vacuously"
+        );
+        a_child_raises_sigsegv();
+        let armed_len = std::fs::metadata(&path)
+            .expect("the armed handler wrote no report — the control is broken, not the check")
+            .len();
+        assert!(armed_len > 0, "the armed handler wrote an empty report");
+
+        armed.disarm(); // still holding the install lock, so nothing else can re-arm
+
+        assert_eq!(
+            current_sigsegv_handler(),
+            armed.displaced_sigsegv_handler(),
+            "SIGSEGV still points somewhere this module put it — Rust's stack-overflow \
+             handler is displaced for the rest of the suite, so a later overflow dies \
+             as a process-wide SIGSEGV instead of naming itself"
+        );
+        assert_eq!(
+            current_alternate_stack(),
+            armed.displaced_alternate_stack(),
+            "this thread is still on the handler's leaked alternate stack"
+        );
+
+        // …and behaviourally: the same fault that grew the report a moment ago now
+        // leaves it untouched. `O_APPEND` means any run of the handler would show up
+        // as growth, so an unchanged length is the whole property.
+        a_child_raises_sigsegv();
+        assert_eq!(
+            std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+            armed_len,
+            "a fatal signal AFTER this test finished with the handler still wrote a \
+             crash report — with this test's breadcrumbs in it"
         );
     }
 
