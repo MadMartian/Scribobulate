@@ -194,10 +194,12 @@ Every module below runs on the GTK main thread; see [Concurrency model](#concurr
 | `preview/` | Owns construction of the read-only preview widget and its interaction, scroll and CSS wiring. |
 | `codeview/` | Owns `CodePreviewView`, the preview's `GtkTextView` subclass that self-draws code-block backgrounds, task checkboxes, list markers and the right-margin annotation chips. |
 | `codeview/card.rs` | Owns `AnnotationCard`, the `GtkPopover` subclass an annotation chip opens: its anchor (the annotation's identity, never a rectangle), its scroll-tracking, its dismissal and its teardown. |
+| `codeview/navkeys.rs` | Owns keeping the preview's navigation keys reachable when an anchored table cell holds the focus: a capture-phase key controller — the only phase that still sees a key a focused selectable `GtkLabel` has claimed — re-emitting the `move-cursor` GTK's own binding would have. Decision-free; it reads `keynav` (ScrAP-264). |
 | `codeview/geometry.rs` | Owns the view's cache-free line/cell geometry reads, and the chip-rectangle arithmetic the painter and the annotation card share. |
 | `renderer/` | Owns the low-level rendering mechanics that turn the parsed Markdown event stream into buffer text and tags. |
 | `tags.rs` | Owns the preview's `GtkTextTag` set and its style setup. |
 | `span.rs` | Owns `BufferSpan`, the named character-offset range the renderer uses to record where each block landed. |
+| `keynav.rs` | Owns which document movement a navigation key means — a mirror of `gtktextview.c`'s own binding table — and whether the widget holding focus makes that movement the document's to perform. Display-free, so both are settled by unit test (ScrAP-264). |
 | `farscroll.rs` | Owns every far scroll in either pane, and the one fact they all need: *when GTK has finished laying the document out*. Until it has, a scroll aimed past the validated frontier is uncomputable or silently dropped, so both the buffer-ends key wiring and the mark-based navigation seam re-issue against a settled layout (ScrAP-260). |
 | `copymap.rs` | Owns display-free copy-as-Markdown for the preview. |
 | `format/` | Owns the display-free Markdown formatting core behind the Format commands. |

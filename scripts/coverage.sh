@@ -86,8 +86,17 @@ cd "$(dirname "$0")/.."
 # 500-line soft limit before splitting a test module out; `preview/scroll.rs` and
 # `window/outline_nav.rs` both keep theirs inline for this reason.
 #
+# RAISED 76.61 -> 76.77 by the ScrAP-264 anchored-child navigation-key repair. 76.78
+# printed, rounded DOWN to 76.77 per the rule above — the printed figure is already
+# rounded, so 76.78 fails its own measurement. The arithmetic is the shape the note
+# above predicts, in the favourable direction for once: the GTK half (`codeview/navkeys.rs`) lands in an
+# already-IGNOREd path and so moves nothing, while the whole of the decision — the
+# key->movement table and the focus-site rule — went into `src/keynav.rs` WITH its 14
+# unit tests, in scope and at 99.26%. That is the extraction the scope rule asks for
+# working as intended, not a windfall.
+#
 # The aspiration is still 80%.
-FLOOR=76.61
+FLOOR=76.77
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

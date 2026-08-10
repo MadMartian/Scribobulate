@@ -955,6 +955,9 @@
 - **Then** the pending jump is abandoned rather than dragging the reader to a place they have stopped asking for
 - **And given** the read-only preview pane rather than the editor
 - **Then** the same keys behave the same way — read-only does not exempt a pane from carrying GTK's buffer-ends bindings
+- **And given** the focus sits on a **table cell** in the preview (the reader clicked into one, or tabbed to it) rather than on the pane itself
+- **Then** these keys — and the rest of the document-navigation set: Home, End, ←, →, ↑, ↓, PageUp, PageDown, and their Ctrl forms — still move the *document*, exactly as they do with the pane focused; a cell is part of the document the reader is navigating, not a place navigation stops working (ScrAP-264)
+- **And** a **selection-extending** key (any Shift form) still acts on the cell's own text, which is the only selection a table cell can hold, so keyboard selection inside a cell is not taken away to buy the above
 
 ### 9.34 Every far navigation arrives, however large the document
 - **Given** a freshly opened or reloaded document of tens of thousands of lines, which GTK has not finished laying out

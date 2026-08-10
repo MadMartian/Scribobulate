@@ -105,6 +105,24 @@ PATH_RX='((sdd|tests|packaging|gtktest|scripts|data|src)/[A-Za-z0-9._/-]+\.md|\b
 # blind spot left is a typo that eats the separator too (`GTK4RsAP-9`) — the same
 # unavoidable hole `ScrXAP-9` has, and not worth more machinery.
 #
+# THAT SENTENCE WAS WRONG, and the second blind spot is the interesting one: `AP-[0-9]+`
+# requires DIGITS, so the METAVARIABLE form — a passage of prose that tells a reader to
+# write `AP-N` — is invisible to this check, in both directions. Measured 2026-08-09:
+# `AGENTS.md` carried a stale "Citing an anti-pattern" task-trigger prescribing the
+# retired bare `AP-N` and `skill AP-N` spellings, one bullet below the current one that
+# calls them illegal, and it survived every run of this gate since the gate was written —
+# while `sdd/ANTI-PATTERNS.md` asserted, in the same tree, that those forms "are gone
+# from the tree ... measured rather than asserted". A rule can be enforced on every
+# CITATION and still be contradicted by the INSTRUCTION that teaches it, which is check
+# 5b's lesson (ScrAP-222) reappearing on a check that has no 5b. The stale bullet is
+# deleted; the gate is NOT extended, deliberately — a check on bare `AP-N` in prose fires
+# on every legitimate passage that DESCRIBES the illegal form (this comment, and
+# `ANTI-PATTERNS.md`'s citation-convention paragraph), so it needs 5b's discriminator
+# ("prescribes it without naming `GTK4Rs/AP-N` on the same line"), and adding a check
+# means the PowerShell twin plus the shared self-test corpus in the same change, which
+# cannot be verified from a Linux seat alone (step 9's parity rule). Left as a named,
+# open blind spot rather than a half-ported gate.
+#
 # TWO STAGES, NOT ONE REGEX, and the reason is portability rather than taste. The rule
 # is "an `AP-N` not preceded by `Scr` or by `GTK4Rs/`", which is a lookbehind — POSIX ERE
 # has none, `grep -P` is absent from the BSD grep macOS ships, and this file already

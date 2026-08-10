@@ -184,6 +184,7 @@ part of row 1 is about *showing* the markup, not editing it.
 | 13 | Survives **zoom** at every level — Pango scale for type, the `px()` path for pixel metrics; the theme never emits CSS `font-size` (zoom owns it exclusively) | ScrAP-127; ScrAP-64 |
 | 14 | **Switches theme at runtime** without restart, in every open window | `re_render_all_windows` |
 | 15 | **Legibility floor** asserted per theme (body contrast gate, headless) | `palette::contrast` |
+| 16 | **Keyboard parity in container contexts** — a rendering choice that puts a **focusable** widget in the document must not disable the pane's own keyboard behaviour: with focus on that widget, every document-navigation key (←, →, ↑, ↓, Home, End, PageUp, PageDown and their Ctrl forms) still moves the *document*, exactly as with the pane focused, while a selection-extending (Shift) key still acts on the widget's own text. A focused child with key bindings of its own consumes them in its target phase and they never reach the view — silently, with no warning and no log line. **Swept** when written (2026-08-09): the renderer anchors four child kinds — the table widget, a rule `GtkSeparator`, an image `GtkPicture` and a missing-image `GtkImage` — and only the table's cells take focus; the repair is sited on the pane rather than per child, so it covers those and any future one | `keynav`; `codeview::navkeys`; ScrAP-264 |
 
 Rows 9–10 and 13 are **reference rows**: they defer to gates that already own
 those concerns ([`THEMING.md`](THEMING.md) and the "No hard-coded styling" rule in
@@ -192,7 +193,13 @@ They appear in the matrix so the obligation is not forgotten, but the CAM does n
 restate their rules.
 
 Row 12 is the rendering twin of row 11: row 11 governs a feature's *interaction*
-inside a table cell, row 12 governs its *appearance* there. It earns its place —
+inside a table cell, row 12 governs its *appearance* there. Row 16 is the third of
+that family and points the other way: 11 and 12 ask whether the *feature* works inside
+the container, 16 asks whether the *container* has broken something the pane already
+did. A rendering choice that reaches for a real widget — which this project makes
+routinely, because a table cell and a pure-link cell must be widgets — imports that
+widget's own event handling into the middle of a document, and what it takes away is
+visible nowhere near the feature that added it. It earns its place —
 the annotation and find highlights each already carry two independent hardcoded
 copies (body tag + cell representation) with nothing keeping them in sync, a live
 defect this row would have caught before any theme existed.

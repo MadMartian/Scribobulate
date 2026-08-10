@@ -46,6 +46,7 @@ mod card;
 mod geometry;
 mod gutter;
 mod markers;
+mod navkeys;
 
 pub(crate) use geometry::move_or_create_mark;
 pub(crate) use markers::{
@@ -929,6 +930,11 @@ impl CodePreviewView {
         // the key arrives (ScrAP-260). Wired here, at the one place a preview view is
         // constructed, so it cannot be missed by a later render path.
         crate::farscroll::wire_buffer_ends_scroll(obj.upcast_ref());
+        // …and keep those bindings reachable when an anchored table cell holds the
+        // focus: a selectable cell label consumes the horizontal and buffer-ends keys
+        // with its own bindings, so they never reach the view and the document does
+        // not move (ScrAP-264). Wired at the same one place, for the same reason.
+        navkeys::wire_document_navigation_keys(&obj);
         // A genuine user scroll supersedes any cached programmatic reading anchor,
         // so a subsequent zoom re-captures the live position rather than snapping
         // back to the last zoom-restore/outline target.

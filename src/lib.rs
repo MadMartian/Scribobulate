@@ -52,6 +52,7 @@ pub(crate) mod farscroll;
 pub(crate) mod forensics;
 pub(crate) mod format;
 pub(crate) mod icons;
+pub(crate) mod keynav;
 pub(crate) mod limits;
 pub(crate) mod links;
 pub(crate) mod logging;
