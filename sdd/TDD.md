@@ -1538,6 +1538,7 @@
 - **Then** a broken-image placeholder icon (`image-missing`) is shown in its place — the render **never** silently degrades to the bare alt string
 - **And** the placeholder's tooltip states the reason and the offending `src`: "Blocked image (enable Show Unsafe Images to load): …", "Image not found: …", or "Could not load image: …"
 - **And** in particular, toggling "Show Unsafe Images" on an image whose file is absent at that instant replaces the "blocked" placeholder with a "not found" placeholder (icon retained) — it does **not** remove the icon and leave only alt text, which read as the toggle having done nothing
+- **And** "blocked" is reserved for a reference the toggle could actually admit — a remote URL, or a local path that **exists** and escapes the document folder. A path that is *contained* (or would be) but has **no file behind it at render time** reads as **not found**, with the gate on or off: it is unresolvable, not refused, and the "enable Show Unsafe Images" wording would otherwise invite the reader to lift a safety gate that was never what stopped them. This is what a document and its images arriving together — a checkout, a sync, a generator — looks like when the image loses the race by a frame (the render is a snapshot; the reason it gives must still be true)
 
 ### 14.10 Toggle re-renders live editor content in split mode
 - **Given** the application is in split (side-by-side) mode and the user has typed a new unsafe image into the editor

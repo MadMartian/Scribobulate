@@ -11,6 +11,7 @@
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
 | Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
+| R | An image that lands on disk *after* the render referencing it stays a "not found" placeholder until something re-renders the preview | Low |
 
 ## A. Tables are selection islands
 
@@ -821,3 +822,39 @@ is the only variant that is not a timing test at all and is the one worth pricin
 
 **Workaround**: re-run. A ratio between 8 and roughly 10 on an otherwise-green suite is
 this issue; a genuine return of the quadratic walk reads ~16x and does not come and go.
+
+---
+
+## R. An image that arrives after the render stays a placeholder
+
+**Severity**: Low (the placeholder now states the true reason, and any re-render fixes
+it; what remains is that the reader has to cause one)
+
+A render resolves every image `src` against the disk **at that instant**. Nothing
+watches a path that resolved to nothing, so when the file appears a moment later the
+preview keeps showing the "Image not found" placeholder until something re-renders it —
+a reload, a view-mode switch, a zoom step, a theme change, or the "Show Unsafe Images"
+toggle.
+
+**How it is reached**: a document and its images arriving together, which is the normal
+shape of a checkout, an `rsync`, a static-site generator, or writing the Markdown before
+copying the picture in. The live-reload path re-renders the instant the *document*
+lands, so an image written even a few milliseconds later loses the race.
+
+**Measured** (2026-08-10, `#[gtktest::test]` driving the real reload path): with the
+image absent at reload the placeholder appears; writing the file afterwards and pumping
+the main loop changes nothing; the next re-render shows the image.
+
+**Why it is not fixed here**: the operator scoped this cycle to the *classification*
+half — the same situation used to report "Blocked image (enable Show Unsafe Images to
+load)", accusing a safe sibling file of being unsafe and inviting the reader to switch
+the containment gate off to see it (ScrAP-34b). That misdirection is fixed and is what
+made this urgent. Self-healing is a separate, larger change: the renderer would have to
+report the local candidates that resolved to nothing, the tab would hold a
+`gio::FileMonitor` per distinct absent path (GIO monitors a path that does not exist yet
+and reports `Created`), and the handler would re-render in place. Bounded by the number
+of distinct missing images in the document, and it needs a rubric of its own before it
+is built.
+
+**Workaround**: reload the document (File ▸ Reload) once the image is in place — a
+touch of the file works too, since auto-reload re-renders.

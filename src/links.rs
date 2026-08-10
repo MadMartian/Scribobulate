@@ -304,6 +304,61 @@ pub(crate) fn resolve_contained_image(src: &str, doc_dir: Option<&Path>) -> Opti
     target.starts_with(&base).then_some(target)
 }
 
+/// The containment gate's verdict *with its reason*, which
+/// [`resolve_contained_image`] cannot express: it answers `None` both for a real
+/// file that escapes the document folder and for a path with no file behind it at
+/// all, and those two are opposite things to tell the reader.
+///
+/// This is the enum split ScrAP-34b names, applied to the whole gate rather than to
+/// one corner of it. That entry's fix reached only the untitled-buffer case (no
+/// `doc_dir`, relative `src`), so a **contained** reference whose file was simply
+/// absent at render time still read as `Escapes` — an image sitting safely beside
+/// its document was reported blocked by the safety policy, and the placeholder's own
+/// tooltip then told the reader to lift that policy to see it. That is a lie about
+/// where the boundary is, and it teaches exactly the wrong reflex (VULN-002's gate is
+/// the thing being invited off). It bit hardest through live reload, where a document
+/// and its images arrive together and the image can lose the race by a frame — the
+/// gate is a pure function, so it cannot see that a file merely has not landed *yet*,
+/// and only the reason it reports keeps that transient honest.
+///
+/// Both callers of the gate go through here so the two content types cannot drift on
+/// this question the way they already did once — a link click has distinguished the
+/// two since [`resolve_doc_link`] was written, and an image never did.
+///
+/// **The reason is not an existence oracle worth worrying about**: it is shown to the
+/// user, who can already `stat` anything this process can, and never to the document —
+/// with the gate on there is no network path for a `Missing`/`Refused` answer to leave
+/// by. Refusal is unchanged in *effect* either way: nothing outside the folder is ever
+/// loaded, whichever reason the placeholder gives.
+enum Containment {
+    /// At or beneath the document folder — the canonicalized target, safe to load.
+    Inside(PathBuf),
+    /// A real file, but outside the document folder. The safety policy refuses it.
+    Escapes,
+    /// Nothing on disk resolves here (or a relative `src` with no `doc_dir` to
+    /// resolve it against) — unresolvable, not refused.
+    Absent,
+}
+
+/// Run the containment gate and report *why* it answered as it did. See
+/// [`Containment`].
+fn containment_of(src: &str, doc_dir: Option<&Path>) -> Containment {
+    if let Some(target) = resolve_contained_image(src, doc_dir) {
+        return Containment::Inside(target);
+    }
+    // Refused or unresolvable? Re-resolve the same candidate the gate just built —
+    // through `local_candidate`, so the tilde expands on the identical path the gate
+    // used (an unexpanded `~/x.png` canonicalizes as `<doc_dir>/~/x.png`, fails, and
+    // would report a file that exists as absent).
+    let Some(candidate) = local_candidate(src, doc_dir) else {
+        return Containment::Absent;
+    };
+    match dunce::canonicalize(&candidate) {
+        Ok(_) => Containment::Escapes,
+        Err(_) => Containment::Absent,
+    }
+}
+
 /// The result of resolving an image `src` against the safety policy, used by
 /// `renderer.rs` to decide what (if anything) to load or display.
 #[derive(Debug)]
@@ -316,13 +371,17 @@ pub(crate) enum ImageResolution {
     /// Load via `gdk::Texture::from_file(&gio::File::for_uri(uri))`.
     Remote(String),
     /// Blocked by the safety policy: a remote URL with `allow_unsafe_images`
-    /// false, or a local path that escapes the document folder. The renderer
-    /// shows a broken-image placeholder icon and suppresses the alt text.
+    /// false, or a local path that **exists** and escapes the document folder. The
+    /// renderer shows a broken-image placeholder icon and suppresses the alt text.
+    /// Reserved for a reference the "Show Unsafe Images" toggle could actually
+    /// admit — the placeholder says so, so anything else here misdirects the reader
+    /// into lifting a gate that was never what stopped them.
     Refused,
     /// Cannot resolve: no `doc_dir` for a relative path, or the file simply
-    /// does not exist (canonicalize error). The renderer shows a broken-image
-    /// placeholder with an "Image not found" tooltip (not bare alt text) — see
-    /// `renderer::image_placeholder_tooltip`.
+    /// does not exist (canonicalize error) — including a path that would be
+    /// perfectly *contained* if anything were there. The renderer shows a
+    /// broken-image placeholder with an "Image not found" tooltip (not bare alt
+    /// text) — see `renderer::image_placeholder_tooltip`.
     Missing,
 }
 
@@ -330,7 +389,9 @@ pub(crate) enum ImageResolution {
 ///
 /// When `allow_unsafe_images` is **false** (the default, VULN-002), the existing
 /// containment gate is enforced: local paths must stay at or beneath the document
-/// folder (`resolve_contained_image`), and remote http/https URLs are `Refused`.
+/// folder (`containment_of`), and remote http/https URLs are `Refused`. A local path
+/// the gate turns down is `Refused` only when a file is really there to refuse;
+/// otherwise it is `Missing` (ScrAP-34b).
 ///
 /// When `allow_unsafe_images` is **true**, the containment gate is lifted for
 /// local paths (still canonicalized so symlinks resolve to their real target)
@@ -380,20 +441,21 @@ pub(crate) fn resolve_image(
             Err(_) => ImageResolution::Missing,
         }
     } else {
-        // An untitled buffer (doc_dir is None) cannot resolve a relative path at
-        // all — this is not a policy refusal but an inability to resolve, so it
-        // is `Missing` ("Image not found" placeholder) rather than `Refused`
-        // ("Blocked image" placeholder); the distinction drives the tooltip, not
-        // whether an icon appears.  An absolute path with no doc_dir still goes
-        // through the containment check (it will fail, yielding Refused — correct,
-        // since we have no base to compare against).
-        if doc_dir.is_none() && !Path::new(src).is_absolute() {
-            return ImageResolution::Missing;
-        }
-        // Enforce the existing containment gate (VULN-002).
-        match resolve_contained_image(src, doc_dir) {
-            Some(path) => ImageResolution::Local(path),
-            None => ImageResolution::Refused,
+        // Enforce the containment gate (VULN-002), and report the reason it gave.
+        // "Refused" and "unresolvable" are different answers to the reader — the
+        // first says the safety policy stopped this, the second says there is
+        // nothing here — and the distinction drives the tooltip, not whether an icon
+        // appears (§14.9). `containment_of` owns it for both content types; see its
+        // doc comment for what collapsing them cost (ScrAP-34b).
+        //
+        // Every case the old special-casing here handled falls out of that verdict:
+        // an untitled buffer (no `doc_dir`) has nothing to resolve a relative `src`
+        // against, and an absolute path with no `doc_dir` has no base to be inside
+        // of, so it can only ever be `Escapes` or `Absent` — never wrongly admitted.
+        match containment_of(src, doc_dir) {
+            Containment::Inside(path) => ImageResolution::Local(path),
+            Containment::Escapes => ImageResolution::Refused,
+            Containment::Absent => ImageResolution::Missing,
         }
     }
 }
@@ -438,10 +500,12 @@ pub(crate) enum LinkResolution {
 /// doc comment on [`crate::winstate::TabState::allow_outside_links`] for why:
 /// permission re-roots at every hop instead of ratcheting outward).
 ///
-/// Reuses [`resolve_contained_image`] verbatim for the containment check itself
-/// (component-wise `Path::starts_with`, canonicalize-first) — same untrusted-
-/// content policy, same escape vectors (`../secrets`, a `docs-evil/` sibling
-/// masquerading as `docs/`, a symlink under the doc dir pointing outside).
+/// Reuses [`containment_of`] — and through it [`resolve_contained_image`] verbatim —
+/// for the containment check itself (component-wise `Path::starts_with`,
+/// canonicalize-first): same untrusted-content policy, same escape vectors
+/// (`../secrets`, a `docs-evil/` sibling masquerading as `docs/`, a symlink under the
+/// doc dir pointing outside), and the same refused-vs-unresolvable verdict an image
+/// gets.
 pub(crate) fn resolve_doc_link(
     href: &str,
     doc_dir: Option<&Path>,
@@ -468,25 +532,16 @@ pub(crate) fn resolve_doc_link(
             Err(_) => return LinkResolution::Missing,
         }
     } else {
-        match resolve_contained_image(path_part, Some(doc_dir)) {
-            Some(t) => t,
-            None => {
-                // Distinguish "exists but escapes the folder" (Refused) from
-                // "doesn't exist at all" (Missing) — resolve_contained_image
-                // collapses both to None, but the click handler needs to tell
-                // the reader WHY nothing happened rather than leaving a click
-                // looking broken. This is why `~/notes.md` must tilde-expand on
-                // the same path the gate uses: unexpanded it canonicalizes as
-                // `<doc_dir>/~/notes.md`, fails, and reports Missing — telling
-                // the reader a file that exists does not exist.
-                let Some(candidate) = local_candidate(path_part, Some(doc_dir)) else {
-                    return LinkResolution::Missing;
-                };
-                return match dunce::canonicalize(&candidate) {
-                    Ok(_) => LinkResolution::Refused,
-                    Err(_) => LinkResolution::Missing,
-                };
-            }
+        // "Exists but escapes the folder" (Refused) and "doesn't exist at all"
+        // (Missing) are different things to tell the reader — the click handler has
+        // to say WHY nothing happened rather than leave a click looking broken.
+        // `containment_of` owns that distinction for links and images alike (it was
+        // hand-rolled here and absent there, which is how the image side came to
+        // report a safe-but-not-yet-present file as blocked by the safety policy).
+        match containment_of(path_part, Some(doc_dir)) {
+            Containment::Inside(t) => t,
+            Containment::Escapes => return LinkResolution::Refused,
+            Containment::Absent => return LinkResolution::Missing,
         }
     };
 
@@ -783,11 +838,66 @@ mod tests {
         let outer = tempfile::tempdir().unwrap();
         let base = outer.path().join("doc");
         fs::create_dir(&base).unwrap();
-        // `../` traversal refused when allow_unsafe is false.
+        // A real file the `../` traversal reaches — `Refused` is a statement about a
+        // file that IS there, so the fixture has to put one there (before, this
+        // asserted `Refused` over a path with nothing behind it, and so would have
+        // passed just as well if the gate had refused everything unconditionally).
+        fs::write(outer.path().join("secret.png"), b"x").unwrap();
         assert!(matches!(
             resolve_image("../secret.png", Some(&base), false),
             ImageResolution::Refused
         ));
+    }
+
+    /// ScrAP-34b, the half its original fix did not reach: with the containment gate
+    /// ON, a reference that is perfectly *contained* but has no file behind it yet
+    /// must read as **not found**, never as blocked by the safety policy.
+    ///
+    /// The live-reload path is how this surfaced. A document and its images arrive
+    /// together (a checkout, a sync, a generator, or a paste-then-copy), the reload
+    /// re-renders the instant the document lands, and an image that loses that race by
+    /// a frame was reported blocked — with a tooltip inviting the reader to turn the
+    /// safety gate off to "fix" an image the gate had never objected to. The render is
+    /// a snapshot either way; the reason it gives is the only part that can be honest
+    /// about a file that simply has not landed yet.
+    #[test]
+    fn resolve_image_reports_a_contained_absent_file_as_missing_not_refused() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+
+        for src in ["late.png", "./late.png", "sub/late.png"] {
+            let verdict = resolve_image(src, Some(dir.path()), false);
+            assert!(
+                matches!(verdict, ImageResolution::Missing),
+                "a contained but absent `{src}` must be Missing (\"Image not found\"), \
+                 not Refused (\"enable Show Unsafe Images\"), got {verdict:?}"
+            );
+        }
+
+        // And the same reference resolves once the file lands — the verdict tracks
+        // the disk, so it is the render that is a snapshot, not the gate that is stuck.
+        fs::write(dir.path().join("late.png"), b"x").unwrap();
+        assert!(matches!(
+            resolve_image("late.png", Some(dir.path()), false),
+            ImageResolution::Local(_)
+        ));
+    }
+
+    /// The companion to the escape test above: an escaping path with **nothing** at the
+    /// end of it is unresolvable, not refused. Enabling "Show Unsafe Images" would not
+    /// make it appear, so the placeholder must not send the reader to that toggle.
+    #[test]
+    fn resolve_image_reports_an_escaping_absent_path_as_missing() {
+        use std::fs;
+        let outer = tempfile::tempdir().unwrap();
+        let base = outer.path().join("doc");
+        fs::create_dir(&base).unwrap();
+        let verdict = resolve_image("../nothing-here.png", Some(&base), false);
+        assert!(
+            matches!(verdict, ImageResolution::Missing),
+            "an escaping path with no file behind it is unresolvable, got {verdict:?}"
+        );
     }
 
     #[test]
