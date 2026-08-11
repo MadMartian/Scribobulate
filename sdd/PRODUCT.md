@@ -91,7 +91,10 @@ editor with the resource footprint of a native desktop application.
    jump to any section with a click (toggle it from the View menu or with F9), and
    the **annotations viewer** beneath it to see every comment in the document at
    once and jump to any one — so a document under review no longer hides its feedback
-   in the margins. Choose a **reading theme** for the preview — the default follows the desktop, or
+   in the margins. Either sidebar hands the keyboard over when you show it, and the
+   comments can be walked forwards and backwards without the pointer at all, which
+   matters because the margin markers are drawn rather than built from widgets and a
+   screen reader cannot reach them directly. Choose a **reading theme** for the preview — the default follows the desktop, or
    pick a book-like page (View ▸ Reading Theme, or the toolbar). Scribobulate ships
    **System** (desktop-matching), **Sepia**, **Synthwave**, **Terminal**, and **Candy**; the
    choice is remembered, and themes are plain data a reader can add to or adjust.
@@ -136,6 +139,6 @@ editor with the resource footprint of a native desktop application.
 | **Single instance** | The guarantee that launching Scribobulate again reuses the running process instead of starting a new one. |
 | **Annotation** | A reviewer's comment attached to a span of a document, stored inline in the Markdown file as CriticMarkup so it travels with the file. |
 | **Highlight** | The span of text an annotation refers to, shown with a coloured background in the preview. |
-| **Comment marker** | The margin indicator in the preview that reveals an annotation's comment — and its Edit / Remove actions — when clicked. |
+| **Comment marker** | The margin indicator in the preview that reveals an annotation's comment — and its Edit / Remove actions — when clicked, or when the reader walks onto that annotation from the keyboard. |
 | **Annotation card** | The small panel a comment marker opens, showing one annotation's claim and comment with its Edit / Remove actions. It stays attached to its marker: it moves as the document scrolls, steps aside when its marker scrolls out of view and returns with it, and closes on Escape, on a click anywhere else, or from the × in its corner. |
 | **CriticMarkup** | The plain-text convention Scribobulate uses to store annotations in the file (`{==highlight==}{>>comment<<}`), readable in any editor. |

@@ -6,6 +6,7 @@
 //! (decision 3: reuse the edit path, never a second write path).
 
 use super::*;
+use crate::annotations::Direction;
 use crate::codeview::{AnnotationEdit, CreateAnnotation};
 
 /// Register the `win.annotate` action — a first-class command so annotation is
@@ -41,20 +42,32 @@ pub(super) fn register_annotate_action(window: &ApplicationWindow) {
     window.add_action(&action);
 }
 
-/// Register `win.next-annotation` — the **accessibility** counterpart to
-/// `win.annotate`. The margin-marker design puts the comment on a self-drawn
-/// margin marker rather than an anchored widget (an anchored `U+FFFC` would shift
-/// every buffer-offset consumer), and the accepted cost was that a drawn glyph is not
-/// in the a11y tree: a pointer click was the ONLY way to read a comment. This action
-/// is the parallel keyboard path D1 always owed — it walks to the next annotation and
-/// opens its popover, whose contents are ordinary accessible widgets.
+/// Register `win.next-annotation` and `win.prev-annotation` — the **accessibility**
+/// counterpart to `win.annotate`. The margin-marker design puts the comment on a
+/// self-drawn margin marker rather than an anchored widget (an anchored `U+FFFC` would
+/// shift every buffer-offset consumer), and the accepted cost was that a drawn glyph is
+/// not in the a11y tree: a pointer click was the ONLY way to read a comment. These
+/// actions are the parallel keyboard path D1 always owed — they walk to the neighbouring
+/// annotation and open its popover, whose contents are ordinary accessible widgets.
 ///
-/// Always enabled: unlike `win.annotate` (gated on a selection), this needs no
-/// precondition a user could observe — it is a no-op only when the document has no
-/// annotations at all, which is exactly the case where greying it out would be
+/// **A pair, not a command with a direction.** Forward-only navigation is not a smaller
+/// version of navigation: overshooting means cycling the entire document to come back
+/// one step, which on a heavily reviewed file is not a shortcut a reader will use. They
+/// are two `GAction`s because an accelerator addresses an action by name and GTK has no
+/// notion of a parameter carried on a key press; the *behaviour* is one function with a
+/// direction argument, which is where the two cannot drift.
+///
+/// Always enabled: unlike `win.annotate` (gated on a selection), these need no
+/// precondition a user could observe — they are a no-op only when the document has no
+/// annotations at all, which is exactly the case where greying them out would be
 /// indistinguishable from the feature being broken.
-pub(super) fn register_next_annotation_action(window: &ApplicationWindow) {
-    let action = SimpleAction::new("next-annotation", None);
+pub(super) fn register_annotation_step_actions(window: &ApplicationWindow) {
+    register_annotation_step(window, "next-annotation", Direction::Next);
+    register_annotation_step(window, "prev-annotation", Direction::Previous);
+}
+
+fn register_annotation_step(window: &ApplicationWindow, name: &str, direction: Direction) {
+    let action = SimpleAction::new(name, None);
     action.connect_activate({
         let win = window.downgrade();
         move |_, _| {
@@ -63,18 +76,9 @@ pub(super) fn register_next_annotation_action(window: &ApplicationWindow) {
             // a menu, the GtkPopoverMenu is still popping down and would restore focus
             // over our popover.
             glib::idle_add_local_once(move || {
-                let Some(w) = win.upgrade() else { return };
-                let Some(view) = preview_text_view(&w)
-                    .and_then(|tv| tv.downcast::<crate::codeview::CodePreviewView>().ok())
-                else {
-                    return;
-                };
-                // Walk from the caret so repeated presses advance through the document.
-                let from = view
-                    .buffer()
-                    .iter_at_mark(&view.buffer().get_insert())
-                    .offset();
-                view.open_next_marker_popover(from);
+                if let Some(w) = win.upgrade() {
+                    super::annotations_nav::step_annotation(&w, direction);
+                }
             });
         }
     });
@@ -264,7 +268,6 @@ fn splice_minimal(buf: &gtk::TextBuffer, old: &str, new: &str) {
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
     use super::*;
-    use crate::codeview::{AnnotationEdit, CreateAnnotation};
 
     fn buf_with(text: &str) -> gtk::TextBuffer {
         let b = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);

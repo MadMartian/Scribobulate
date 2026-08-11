@@ -334,6 +334,18 @@ fn build_edit_menu() -> Menu {
     let annotate_item = MenuItem::new(Some(&mnem("Annotate")), Some("win.annotate"));
     set_inline_accel(&annotate_item, "win.annotate");
     editor_section.append_item(&annotate_item);
+    // The annotation walk, beside the command that creates one. Menu items are how a
+    // reader FINDS a keyboard command — a shortcut nobody can discover is reachable
+    // only by the people who already knew — and the Action CAM owes every command a
+    // menu-bar surface in any case.
+    for (label, action) in [
+        ("Next Annotation", "win.next-annotation"),
+        ("Previous Annotation", "win.prev-annotation"),
+    ] {
+        let item = MenuItem::new(Some(&mnem(label)), Some(action));
+        set_inline_accel(&item, action);
+        editor_section.append_item(&item);
+    }
     editor_section.append(Some(&mnem("Insert Emoji")), Some("win.insert-emoji"));
     let change_case = Menu::new();
     change_case.append(Some(&mnem("UPPER CASE")), Some("win.change-case::upper"));

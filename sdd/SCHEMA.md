@@ -63,7 +63,8 @@ member. For a stateful action the work is driven by `change-state`, not
 | `win.find` | — | — | Reveal the find bar. |
 | `win.find-replace` | — | — | Reveal the find bar with the replace row expanded. |
 | `win.annotate` | — | — | Attach a CriticMarkup comment to the selection. |
-| `win.next-annotation` | — | — | Move to the next annotation in the document. |
+| `win.next-annotation` | — | — | Go to the next annotation in the document, wrapping at the end. |
+| `win.prev-annotation` | — | — | Go to the previous annotation in the document, wrapping at the start. |
 | `win.view-mode` | `s` | `s` | The window's view mode. Radio group; targets below. |
 | `win.split-swap` | — | `b` | Whether the split panes are swapped. |
 | `win.split-orientation` | — | `b` | Whether the split is oriented vertically rather than horizontally. |

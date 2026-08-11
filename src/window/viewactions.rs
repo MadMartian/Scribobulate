@@ -303,11 +303,23 @@ fn register_sidebar_actions(
     // visibility is seeded explicitly below; runtime changes reconcile via the shared
     // recompute (which the closure defers to so the two toggles can never disagree
     // about the sidebar-box state).
-    register_bool_action(window, "outline", outline_initial, |window, _on| {
+    // Revealing a pane also focuses its list — see `sidebar::focus_list_deferred` for
+    // why that belongs on the toggle and not in the shared reconcile.
+    register_bool_action(window, "outline", outline_initial, |window, on| {
         reconcile_sidebar_visibility(window);
+        if on {
+            if let Some(st) = state(window) {
+                super::sidebar::focus_list_deferred(&st.chrome().outline_scroller);
+            }
+        }
     });
-    register_bool_action(window, "annotations", annotations_initial, |window, _on| {
+    register_bool_action(window, "annotations", annotations_initial, |window, on| {
         reconcile_sidebar_visibility(window);
+        if on {
+            if let Some(st) = state(window) {
+                super::sidebar::focus_list_deferred(&st.chrome().annotations_scroller);
+            }
+        }
     });
     // Seed the three visibilities directly (no typed state yet — see the doc above).
     sidebar.outline_section.set_visible(outline_initial);

@@ -225,6 +225,7 @@ impl AnnotationCard {
             }
         ));
         card.add_controller(esc);
+        card.add_controller(app_accelerator_controller());
 
         // Backstop only. Nothing in GTK closes a non-autohide popover on its own, and
         // every deliberate dismissal routes through `dismiss()` — but `closed` is also
@@ -579,12 +580,53 @@ impl AnnotationCard {
     }
 }
 
+/// A `GtkShortcutController` re-offering every application accelerator locally, so the
+/// app's keyboard stays alive while this card holds the focus.
+///
+/// **Why a focused popover needs its own copy at all** (ScrAP-266). This card is `set_parent`ed and
+/// therefore its own `GtkNative` — a widget-tree descendant of the view, but a separate
+/// GDK surface. A key pressed while it has focus is delivered to *that* surface and never
+/// reaches the window surface's handling, where `gtk_application_set_accels_for_action`'s
+/// bindings live. MEASURED (4.6.9/X11): with the card focused, **no** application
+/// accelerator fires — not the annotation walk, not even an unrelated `F8` pane toggle —
+/// and the identical keystroke works the instant Escape returns focus to the view. So the
+/// card was a keyboard dead zone for as long as it was open, which is precisely how long
+/// a reader walking annotations keeps it open.
+///
+/// **BUBBLE phase, deliberately.** The application's own accelerators are effectively
+/// global-scope and beat a focused `GtkText`'s bindings (ScrAP-137) — which is a hazard
+/// this controller must not re-import from the other side, because the card hosts a real
+/// text entry while its comment is being edited. A bubble-phase controller is offered the
+/// key only after the focused widget has declined it, so `Ctrl+A` in the comment entry
+/// stays the entry's and never reaches here.
+///
+/// The bindings come from [`crate::app::accelerator_bindings`] — the same table
+/// `register_accelerators` binds from — so this cannot advertise a key the app does not
+/// bind, or miss one it does. A `GtkNamedAction` resolves through the widget's action
+/// muxer, which walks the widget-tree parents to the window, so the `win.` actions are
+/// found even though the surface is not the window's.
+fn app_accelerator_controller() -> gtk::ShortcutController {
+    let controller = gtk::ShortcutController::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Bubble);
+    for (action, accel) in crate::app::accelerator_bindings() {
+        let Some(trigger) = gtk::ShortcutTrigger::parse_string(accel) else {
+            continue; // an unparseable accel is already inert app-wide; nothing to add
+        };
+        controller.add_shortcut(gtk::Shortcut::new(
+            Some(trigger),
+            Some(gtk::NamedAction::new(&action)),
+        ));
+    }
+    controller
+}
+
 /// Live-display tests for the annotation card's anchoring contract.
 /// Need a real display and a real paint; run with `cargo test --features
 /// gtk-integration-tests`, under Xvfb if headless.
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
     use super::*;
+    use crate::annotations::Direction;
     use crate::codeview::CodePreviewView;
 
     /// One annotation near the top and a long tail of filler, so the chip can be scrolled
@@ -714,7 +756,7 @@ mod gtk_integration_tests {
             "precondition: the chip painted"
         );
         assert!(
-            view.open_next_marker_popover(0),
+            view.open_stepped_marker_popover(0, Direction::Next),
             "precondition: the fixture has an annotation"
         );
         assert!(
@@ -940,7 +982,7 @@ mod gtk_integration_tests {
         view.set_annotation_sink(std::rc::Rc::new(|_| {}));
         card.dismiss();
         assert!(
-            view.open_next_marker_popover(0),
+            view.open_stepped_marker_popover(0, Direction::Next),
             "reopen with the sink installed"
         );
         assert!(
@@ -1015,7 +1057,7 @@ mod gtk_integration_tests {
         view.set_annotation_sink(std::rc::Rc::new(|_| {}));
         card.dismiss();
         assert!(
-            view.open_next_marker_popover(0),
+            view.open_stepped_marker_popover(0, Direction::Next),
             "reopen with the sink installed"
         );
         assert!(
@@ -1068,6 +1110,82 @@ mod gtk_integration_tests {
             "with its annotation gone the card must have nothing to anchor to and stay \
              down, not pin itself to a stale or reused position"
         );
+        win.destroy();
+    }
+
+    /// **The card must not be a keyboard dead zone.** Every application accelerator is
+    /// re-offered locally, from the one table that binds them app-wide.
+    ///
+    /// A `set_parent`ed popover is its own `GtkNative`, and a key pressed while it holds
+    /// focus never reaches the window's accelerator machinery — MEASURED on 4.6.9/X11: with
+    /// the card focused, not even an unrelated `F8` pane toggle fired, and the same
+    /// keystroke worked the instant Escape returned focus to the view. So the card owns a
+    /// local copy or the app has no keyboard for as long as a comment is open.
+    ///
+    /// Asserted against `accelerator_bindings()` rather than a hand-listed set, because a
+    /// hand-listed one is a second copy of the accel SSOT and would pass while the real
+    /// answer drifted. The phase assertion is the other half: BUBBLE is what keeps a
+    /// focused comment entry's own `Ctrl+A` its own (ScrAP-137 from the other side), and
+    /// nothing about the visible result would reveal it had been changed.
+    #[gtktest::test]
+    fn the_card_re_offers_every_application_accelerator_locally() {
+        let (win, _view, card) = open_card();
+
+        // A `GtkPopover` carries shortcut controllers of GTK's own (measured: four on a
+        // bare card), so ours is identified by what it OFFERS — the `win.` named actions —
+        // not by being the only one there.
+        let bindings = crate::app::accelerator_bindings();
+        let mut offered: Vec<String> = Vec::new();
+        let mut ours: Option<gtk::ShortcutController> = None;
+        let controllers = card.observe_controllers();
+        for i in 0..controllers.n_items() {
+            let Some(controller) = controllers
+                .item(i)
+                .and_downcast::<gtk::ShortcutController>()
+            else {
+                continue;
+            };
+            let mut names: Vec<String> = Vec::new();
+            for j in 0..controller.n_items() {
+                let Some(shortcut) = controller.item(j).and_downcast::<gtk::Shortcut>() else {
+                    continue;
+                };
+                if let Some(named) = shortcut.action().and_downcast::<gtk::NamedAction>() {
+                    let name = named.action_name().to_string();
+                    // Membership in the app's own table, not a `win.` prefix: the table
+                    // carries `app.` actions too, and GTK's own popover controllers carry
+                    // named actions of their own that must not be mistaken for ours.
+                    if bindings.iter().any(|(action, _)| *action == name) {
+                        names.push(name);
+                    }
+                }
+            }
+            if !names.is_empty() {
+                assert!(
+                    ours.is_none(),
+                    "one controller re-offers the application accelerators, not several — \
+                     two copies would fire an action twice per keypress"
+                );
+                offered = names;
+                ours = Some(controller);
+            }
+        }
+        let controller = ours.expect("the card installs an application-accelerator controller");
+        assert_eq!(
+            controller.propagation_phase(),
+            gtk::PropagationPhase::Bubble,
+            "BUBBLE, so a focused comment entry keeps the keys it binds itself — a \
+             capture-phase copy would re-import the window-accel-beats-GtkText hole \
+             (ScrAP-137) inside the card"
+        );
+        for (action, accel) in bindings {
+            // A detailed name (`win.format::bold`) is bound as a whole by GtkNamedAction.
+            assert!(
+                offered.contains(&action),
+                "the card must re-offer {action} ({accel}); it is bound app-wide, so \
+                 while the card holds focus it would otherwise simply stop working"
+            );
+        }
         win.destroy();
     }
 }

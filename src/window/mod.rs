@@ -65,7 +65,7 @@ pub(crate) use actions::{bool_action_state, change_action_state, set_action_enab
 pub(crate) use annotate::apply_annotation_edit;
 pub(crate) use annotate::document_source;
 pub(crate) use annotate::refresh_preview_after_annotation;
-use annotate::{register_annotate_action, register_next_annotation_action};
+use annotate::{register_annotate_action, register_annotation_step_actions};
 pub(crate) use annotations_nav::{reconcile_sidebar_visibility, refresh_annotations};
 pub(crate) use chrome::render_and_wire_preview;
 pub(crate) use contextmenu::attach_context_menu;
@@ -434,7 +434,7 @@ fn build_window(
     // ── action registration ──────────────────────────────────────────────────
     register_editor_actions(&window, &heading_btn);
     register_annotate_action(&window);
-    register_next_annotation_action(&window);
+    register_annotation_step_actions(&window);
     register_view_actions(
         &window,
         &toolbar,
@@ -725,6 +725,21 @@ mod gtk_integration_tests {
     /// `pub(super)` so every GTK test under `window/` reaches the SAME helper rather than
     /// each re-deriving one. A helper that only its own module can import is a helper the
     /// next module will quietly reimplement, slightly differently (ScrAP-219).
+    /// Pump the main loop until `done` reports true, or `budget` turns elapse; reports
+    /// whether it converged. A tight pump, deliberately: everything waited on here is
+    /// idle-driven (a deferred focus grab), not frame-clock driven, and inserting a sleep
+    /// between turns stretches an idle settle out of all proportion (GTK4Rs/AP-261).
+    fn pump_until(budget: u32, done: impl Fn() -> bool) -> bool {
+        let ctx = gtk::glib::MainContext::default();
+        for _ in 0..budget {
+            if done() {
+                return true;
+            }
+            ctx.iteration(false);
+        }
+        done()
+    }
+
     pub(super) fn test_app(id: &str) -> gtk::Application {
         let app = gtk::Application::new(Some(id), gtk::gio::ApplicationFlags::NON_UNIQUE);
         app.register(gtk::gio::Cancellable::NONE)
@@ -1072,7 +1087,7 @@ mod gtk_integration_tests {
         let entries = crate::annotations::extract_entries(md);
         assert_eq!(entries.len(), 1);
         let src_start = entries[0].src_span.start;
-        annotations_nav::navigate_to_annotation(&win, src_start);
+        annotations_nav::navigate_to_annotation(&win, src_start, crate::codeview::CardFocus::Leave);
 
         let st = state(&win).expect("tab state");
         let expected_char = md[..src_start.raw()].chars().count() as i32;
@@ -1081,6 +1096,83 @@ mod gtk_integration_tests {
             expected_char,
             "split-mode activation places the editor caret on the annotation, char-correct \
              past multi-byte text (TDD 20.4 / 20.14)"
+        );
+    }
+
+    /// **Pure-edit mode has an annotation walk at all.** The command used to reach for
+    /// the preview's marker layer directly, so in edit mode — where there is no preview
+    /// view — it returned before doing anything: the mode a reviewer does most of their
+    /// keyboard work in had no Next/Previous Annotation, silently, and because the
+    /// action is deliberately always-enabled there was not even a greyed-out control to
+    /// say so.
+    ///
+    /// Two annotations and both directions, because a one-annotation forward-only check
+    /// would pass on an implementation that always answers "the first one".
+    #[gtktest::test]
+    fn edit_mode_steps_the_editor_caret_between_annotations_in_both_directions() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.annstepedit");
+        // Multi-byte text before BOTH annotations, so a byte-vs-char slip in the caret
+        // conversion would land the walk on the wrong character (TDD 20.14's hazard,
+        // reached from the caret side).
+        let md = "café ☕ {==first==}{>>note one<<} then ☕☕ {==second==}{>>note two<<} end.";
+        let win = new_window(&app, "IT-annstepedit", md, None);
+        change_action_state(&win, "view-mode", &"edit".to_variant());
+
+        let entries = crate::annotations::extract_entries(md);
+        assert_eq!(entries.len(), 2, "fixture has two annotations");
+        let char_of = |src: crate::span::OriginalByteOffset| md[..src.raw()].chars().count() as i32;
+        let st = state(&win).expect("tab state");
+        let caret = || st.editor_buf.property::<i32>("cursor-position");
+
+        st.editor_buf.place_cursor(&st.editor_buf.start_iter());
+        annotations_nav::step_annotation(&win, crate::annotations::Direction::Next);
+        assert_eq!(
+            caret(),
+            char_of(entries[0].src_span.start),
+            "the first step in edit mode must move the editor caret to the first annotation"
+        );
+
+        annotations_nav::step_annotation(&win, crate::annotations::Direction::Next);
+        assert_eq!(
+            caret(),
+            char_of(entries[1].src_span.start),
+            "and the second step must ADVANCE — the walk is measured from the caret it \
+             just moved, so a step that did not move it would repeat forever"
+        );
+
+        annotations_nav::step_annotation(&win, crate::annotations::Direction::Previous);
+        assert_eq!(
+            caret(),
+            char_of(entries[0].src_span.start),
+            "Previous must come back one, not lap the document"
+        );
+    }
+
+    /// Revealing a sidebar pane focuses its list, because nothing else can: the lists sit
+    /// several Tab stops behind the tab bar and the pane's own ×, and a reader who showed
+    /// the annotations viewer in order to use it was left unable to reach it.
+    ///
+    /// Asserted through `focus_widget()` containment rather than `has_focus()` on the
+    /// list — a `GtkListView` delegates focus to the row it lands on, so the narrower
+    /// probe answers false on a perfectly working focus move (GTK4Rs/AP-119's shape).
+    #[gtktest::test]
+    fn revealing_the_annotations_pane_focuses_its_list() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.annfocusreveal");
+        let md = "Intro.\n\nA {==claim==}{>>a note<<} here.\n\nMore prose.\n";
+        let win = new_window(&app, "IT-annfocusreveal", md, None);
+        win.present();
+        let st = state(&win).expect("tab state");
+        let scroller = st.chrome().annotations_scroller.clone();
+
+        change_action_state(&win, "annotations", &true.to_variant());
+        let focused_in_list = pump_until(200, || {
+            sidebar::list_view_of(&scroller)
+                .zip(GtkWindowExt::focus(&win))
+                .is_some_and(|(list, focused)| focused.is_ancestor(&list) || focused == list)
+        });
+        assert!(
+            focused_in_list,
+            "showing the annotations pane must hand the keyboard to its list"
         );
     }
 

@@ -86,12 +86,18 @@ impl AnnotationObject {
 /// single click or keyboard move of the `SingleSelection` fires it, navigating to the
 /// annotation and opening its comment card.
 ///
+/// `on_escape` fires when Escape is pressed with the list focused: the list, not the
+/// card, owns that key, because activating a row deliberately leaves the focus here
+/// (`CardFocus::Leave`) and a popover's own Escape controller only sees a key when a
+/// popover descendant is focused.
+///
 /// `initial_selected`, when `Some(src_start)`, pre-selects the row for that annotation
 /// *before* the selection-change handler is connected — so restoring the selection across a
 /// rebuild does not re-fire navigation (TDD 20.11).
 pub(crate) fn build_annotations_content(
     entries: &[AnnotationEntry],
     on_activate: Rc<dyn Fn(OriginalByteOffset)>,
+    on_escape: Rc<dyn Fn()>,
     initial_selected: Option<OriginalByteOffset>,
 ) -> gtk::Widget {
     if entries.is_empty() {
@@ -111,10 +117,19 @@ pub(crate) fn build_annotations_content(
         store.append(&AnnotationObject::new(e));
     }
 
+    // `autoselect` BEFORE `model`, and the order is load-bearing, not style. GObject
+    // applies construct properties in the order given, and `gtk_single_selection_set_model`
+    // selects item 0 while `autoselect` is still its default TRUE — so building
+    // `.model(…).autoselect(false)` yields a list that opens with its FIRST ROW
+    // HIGHLIGHTED although the reader has activated nothing, quietly contradicting the
+    // one thing this selection means ("the annotation you last went to", TDD 20.10). The
+    // phantom is not even recoverable state: nothing recorded it in `annotations_selected`,
+    // so it vanishes at the next rebuild. Setting `autoselect` first means the model
+    // arrives with nothing to auto-select.
     let selection = gtk::SingleSelection::builder()
-        .model(&store)
         .autoselect(false)
         .can_unselect(true)
+        .model(&store)
         .build();
 
     // Re-select the previously activated annotation by IDENTITY (its src_start),
@@ -199,5 +214,78 @@ pub(crate) fn build_annotations_content(
 
     let list_view = gtk::ListView::new(Some(selection), Some(factory));
     list_view.add_css_class("annotations");
+
+    // Escape dismisses the card this list opened and hands the keyboard back to the
+    // document. BUBBLE phase is right here (unlike the card's own capture-phase
+    // controller, which has to out-run a focused entry): the `GtkListView` binds no
+    // Escape of its own, so the key reaches this controller unopposed.
+    let esc = gtk::EventControllerKey::new();
+    esc.connect_key_pressed(move |_, keyval, _, _| {
+        if keyval == gtk::gdk::Key::Escape {
+            on_escape();
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    list_view.add_controller(esc);
     list_view.upcast()
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+    use crate::annotations::extract_entries;
+
+    fn selection_of(content: &gtk::Widget) -> gtk::SingleSelection {
+        content
+            .clone()
+            .downcast::<gtk::ListView>()
+            .expect("a document with annotations builds a ListView")
+            .model()
+            .and_then(|m| m.downcast::<gtk::SingleSelection>().ok())
+            .expect("the list is single-selection")
+    }
+
+    /// The list opens with **nothing** selected until the reader activates something.
+    ///
+    /// `GtkSingleSelection` selects item 0 when a model is set while `autoselect` is
+    /// still TRUE, so the natural `.model(…).autoselect(false)` builder order shipped a
+    /// first row highlighted before the reader had touched it — a claim about state that
+    /// was not true, and not even recoverable (nothing recorded it, so it vanished at the
+    /// next rebuild). Mutation check: swap the two builder calls back and this fails.
+    #[gtktest::test]
+    fn a_freshly_built_list_selects_nothing() {
+        let entries = extract_entries("A {==claim==}{>>one<<} and {==other==}{>>two<<} end.");
+        assert_eq!(entries.len(), 2, "fixture has two annotations");
+        let content = build_annotations_content(&entries, Rc::new(|_| {}), Rc::new(|| {}), None);
+        assert_eq!(
+            selection_of(&content).selected(),
+            gtk::INVALID_LIST_POSITION,
+            "the viewer's selection means 'the annotation you last went to', so before \
+             the reader goes anywhere it must be empty (TDD 20.10)"
+        );
+    }
+
+    /// …and a restored selection still lands on the row it names, by identity.
+    /// The companion to the test above: together they pin that the ONLY way a row
+    /// becomes selected is that someone asked for it.
+    #[gtktest::test]
+    fn a_restored_selection_lands_on_the_annotation_it_names() {
+        let entries = extract_entries("A {==claim==}{>>one<<} and {==other==}{>>two<<} end.");
+        let second = entries[1].src_span.start;
+        let content =
+            build_annotations_content(&entries, Rc::new(|_| {}), Rc::new(|| {}), Some(second));
+        let selection = selection_of(&content);
+        assert_eq!(selection.selected(), 1);
+        let selected_src = selection
+            .selected_item()
+            .and_downcast::<AnnotationObject>()
+            .expect("the selected row is an annotation")
+            .src_start();
+        assert_eq!(
+            selected_src, second,
+            "restored by identity, not by position"
+        );
+    }
 }

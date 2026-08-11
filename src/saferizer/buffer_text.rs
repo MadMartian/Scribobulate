@@ -53,6 +53,13 @@ impl BufferText {
     pub(crate) fn char_offset_at(&self, byte_off: usize) -> i32 {
         char_offset_at_byte(self.as_str(), byte_off)
     }
+
+    /// The BYTE offset corresponding to `GtkTextBuffer` char offset `char_off` in this
+    /// text. See [`byte_offset_at_char`] for the contract; this is the same function
+    /// with the text supplied by the seam.
+    pub(crate) fn byte_offset_at(&self, char_off: i32) -> usize {
+        byte_offset_at_char(self.as_str(), char_off)
+    }
 }
 
 /// Convert a **byte** offset into the `GtkTextBuffer` **char** offset the iter
@@ -94,6 +101,34 @@ pub(crate) fn char_offset_at_byte(text: &str, byte_off: usize) -> i32 {
         b -= 1;
     }
     text[..b].chars().count() as i32
+}
+
+/// Convert a `GtkTextBuffer` **char** offset into the **byte** offset that source-space
+/// arithmetic wants — the exact inverse of [`char_offset_at_byte`], and total in the
+/// same way.
+///
+/// # Contract
+///
+/// Returns the byte offset at which the `char_off`-th character begins. Past the end it
+/// clamps to `text.len()`; a negative offset clamps to `0`. It cannot panic and has no
+/// failure value.
+///
+/// # Why it belongs beside its inverse
+///
+/// The direction that already existed converts a stored annotation span into a caret
+/// position. This one answers the other half of the same question — *where is the caret,
+/// in the space the annotations are recorded in* — which is what a "go to the next
+/// annotation from here" walk needs before it can compare anything. Written by hand at
+/// the call site it would be the same one-line `chars().count()` slip
+/// [`char_offset_at_byte`] documents, only inverted: comparing a raw char offset against
+/// byte spans mis-orders every annotation that follows any multi-byte text, so the walk
+/// silently skips or repeats one (TDD 20.14's hazard, arriving from the other side).
+pub(crate) fn byte_offset_at_char(text: &str, char_off: i32) -> usize {
+    let n = char_off.max(0) as usize;
+    text.char_indices()
+        .nth(n)
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len())
 }
 
 impl Deref for BufferText {
@@ -140,6 +175,46 @@ mod gtk_integration_tests {
             buf.char_count() as usize,
             "BufferText must count the anchored child like char_count()",
         );
+    }
+}
+
+#[cfg(test)]
+mod byte_offset_tests {
+    use super::{byte_offset_at_char, char_offset_at_byte};
+
+    /// The inverse direction, held to the same totality contract: every char offset —
+    /// in range, past the end, negative — has a defined byte answer and none panics.
+    #[test]
+    fn every_char_offset_maps_to_the_byte_that_character_starts_at() {
+        // 1 + 2 + 3 + 4 + 1 bytes: one of each UTF-8 width.
+        let text = "aé→😀b";
+        for (ch, byte) in [(0, 0), (1, 1), (2, 3), (3, 6), (4, 10)] {
+            assert_eq!(byte_offset_at_char(text, ch), byte, "char {ch}");
+        }
+        // One past the last character is the end of the string, not a panic.
+        assert_eq!(byte_offset_at_char(text, 5), text.len());
+        assert_eq!(byte_offset_at_char(text, 9_999), text.len());
+        // A negative offset clamps to the start.
+        assert_eq!(byte_offset_at_char(text, -3), 0);
+        // Pure ASCII is the identity, so the common path is untouched.
+        assert_eq!(byte_offset_at_char("plain ascii", 6), 6);
+        assert_eq!(byte_offset_at_char("", 0), 0);
+    }
+
+    /// The two directions are inverses on character boundaries — the property the
+    /// annotation walk depends on, since it converts the caret one way and compares it
+    /// against spans produced the other.
+    #[test]
+    fn the_two_conversions_round_trip_on_boundaries() {
+        let text = "aé→😀b ends";
+        for ch in 0..text.chars().count() as i32 {
+            let byte = byte_offset_at_char(text, ch);
+            assert_eq!(
+                char_offset_at_byte(text, byte),
+                ch,
+                "round trip at char {ch}"
+            );
+        }
     }
 }
 

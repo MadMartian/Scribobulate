@@ -5,6 +5,7 @@
 
 use super::card::AnnotationCard;
 use super::CodePreviewView;
+use crate::annotations::Direction;
 use crate::widgets::comment_entry::CommentEntry;
 use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
@@ -49,7 +50,7 @@ pub(crate) struct MarkerSource {
 /// find/replace, image-tint selection. The margin marker inserts no buffer char
 /// at all, so all those maps stay pristine. Accepted trade-off: a self-drawn
 /// glyph is not in the a11y tree, so `win.next-annotation`
-/// (`open_next_marker_popover`) is the keyboard read path.
+/// (`open_stepped_marker_popover`) is the keyboard read path.
 #[derive(Clone)]
 pub(crate) struct MarkerData {
     /// Buffer char offset the marker sits beside (end of a highlighted claim, or
@@ -412,11 +413,40 @@ impl Deadline {
     }
 }
 
+/// Whether opening a comment card should move the keyboard focus into it.
+///
+/// The two answers belong to two different gestures, and conflating them is what made
+/// the annotations viewer unusable from the keyboard: a reader who *clicks a chip* or
+/// presses Next/Previous Annotation is asking to READ that comment, so the card takes
+/// focus and its Escape / Edit / Remove become reachable. A reader ARROWING DOWN THE
+/// VIEWER is browsing, and every row they pass through opened a card that stole the
+/// focus out from under the list — so the second arrow press went to the card, which
+/// binds no arrows, and the browse ended after exactly one row.
+///
+/// `Leave` therefore skips **both** halves of the focus move (the view's own
+/// `grab_focus` as well as the card's `child_focus`), because either one alone is
+/// enough to take focus off the list. The cost is that the card's Escape controller —
+/// which only sees a key when a card descendant is focused — cannot dismiss it; the
+/// surface that kept the focus owns that key instead (the viewer's own Escape).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CardFocus {
+    /// Move focus into the card, as a chip click and the annotation commands do.
+    Take,
+    /// Leave focus where the caller has it, as the annotations viewer's rows do.
+    Leave,
+}
+
 /// An armed request to open marker `target`'s popover as soon as its chip is painted,
 /// abandoned once `deadline` passes. Held in the view's `pending_marker_open` and fired
 /// by `snapshot_layer`.
 pub(crate) struct PendingMarkerOpen {
     pub(crate) target: usize,
+    /// Whether the navigation that armed this request wants the card to take focus.
+    ///
+    /// Carried on the request because the open happens on a later frame, in
+    /// `snapshot_layer`'s idle dispatch, long after the gesture that decided it has
+    /// returned — the intent has nowhere else to live across that gap.
+    pub(crate) focus: CardFocus,
     /// Buffer offset of the target's anchor, recorded at arm time.
     ///
     /// Carried on the request rather than re-derived from `markers[target]` at
@@ -462,41 +492,6 @@ pub(crate) fn group_by_line(ys: &[i32]) -> Vec<(i32, Vec<usize>)> {
         }
     }
     out
-}
-
-/// Index of the marker to visit next from buffer char offset `from`: the smallest
-/// anchor **strictly after** `from`, wrapping to the document's smallest anchor when
-/// `from` sits at or past the last one. `None` only when there are no markers.
-///
-/// Strictly-after is what makes repeated activations advance rather than re-open the
-/// annotation already under the caret; the wrap is what makes the command a cycle
-/// instead of a dead end at the last annotation. Selection is by anchor, never by
-/// position in `markers` — the two coincide today (the renderer emits in document
-/// order) but nothing enforces that, and a silent dependency on it would surface as
-/// "Next Annotation visits them out of order" long after the render changed. Ties
-/// resolve to the lowest index, matching the order `group_by_line` packs co-located
-/// markers into their shared hit-box.
-///
-/// Pure, so the part of the a11y path that can be wrong *without any visible symptom*
-/// is unit-tested without a display. What the caller does with the index — scroll,
-/// await the paint, open the popover — is the same shell the pointer path already
-/// exercises.
-pub(crate) fn next_marker_index(anchors: &[i32], from: i32) -> Option<usize> {
-    let after = anchors
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|&(_, anchor)| anchor > from)
-        .min_by_key(|&(_, anchor)| anchor)
-        .map(|(index, _)| index);
-    after.or_else(|| {
-        anchors
-            .iter()
-            .copied()
-            .enumerate()
-            .min_by_key(|&(_, anchor)| anchor)
-            .map(|(index, _)| index)
-    })
 }
 
 impl CodePreviewView {
@@ -738,54 +733,35 @@ impl CodePreviewView {
             .map(|(_, idxs)| idxs.clone())
     }
 
-    /// Open the comment popover for the FIRST annotation anchored strictly after
-    /// `from` (buffer char offset), wrapping to the first annotation in the document
-    /// when there is none. Returns `false` only when the document has no annotations.
+    /// Step to the annotation one step from buffer offset `from` and open its card —
+    /// the production chain `window::annotations_nav::step_annotation` runs, composed
+    /// here for tests that hold a bare view with no window to dispatch through.
     ///
-    /// **This is the accessibility path.** The margin marker is self-drawn in
-    /// `snapshot_layer`, so it is not a widget and therefore not in the a11y tree —
-    /// a pointer click was the ONLY way to read a comment, which left keyboard and
-    /// screen-reader users with no route to them at all (the drawn marker is
-    /// deliberate: an anchored `U+FFFC` marker would shift every buffer-offset
-    /// consumer — see [`MarkerData`]). Once the popover opens its contents are
-    /// ordinary widgets (labels + Edit/Remove buttons), so it is accessible from
-    /// there; this method only supplies the missing *reach*.
-    ///
-    /// **Two-phase by necessity (GTK4Rs/AP-97).** `marker_hitboxes` is repopulated on
-    /// each `snapshot_layer(AboveText)` paint and therefore only ever holds the
-    /// **visible** markers — an off-screen target has no hit-box to open against. So:
-    /// arm a `pending_marker_open` request, converge-scroll to the anchor
-    /// (`converge_and_scroll_to_offset`), and let `snapshot_layer` fire the request the
-    /// instant the chip paints. When the target is already on screen the fast path opens
-    /// it immediately, so the common case does not flash.
-    ///
-    /// The whole navigation is bounded by `NAV_BUDGET_US` — a **wall-clock** deadline,
-    /// not a frame count; on expiry the document is left scrolled to the
-    /// target rather than silently doing nothing.
-    pub(crate) fn open_next_marker_popover(&self, from: i32) -> bool {
-        use gtk::subclass::prelude::*;
-        // Pick the target by ANCHOR (buffer offset), not by hit-box: the target may be
-        // off-screen and thus absent from `marker_hitboxes` entirely. The choice is
-        // delegated to the pure `next_marker_index` so it can be tested headlessly, then
-        // handed to the shared index-addressed primitive below.
-        let target = {
-            let markers = self.imp().markers.borrow();
-            let anchors: Vec<i32> = markers.iter().map(|m| m.anchor).collect();
-            match next_marker_index(&anchors, from) {
-                Some(index) => index,
-                None => return false, // no annotations in this document
-            }
+    /// It **composes** the real functions rather than reimplementing the walk, so a
+    /// test that passes says something about the shipped path; the only thing it leaves
+    /// out is the window layer's per-mode presentation, which needs a window to have.
+    /// Gated to the integration-test cfg — the same cfg as its only callers, so a plain
+    /// `cargo test` does not report it as dead code.
+    #[cfg(all(test, feature = "gtk-integration-tests"))]
+    pub(crate) fn open_stepped_marker_popover(&self, from: i32, direction: Direction) -> bool {
+        let Some(src) = self.marker_src_at_step(from, direction) else {
+            return false; // no annotations in this document
         };
-        self.open_marker_popover_at(target)
+        match self.marker_index_for_src(src) {
+            Some(index) => self.open_marker_popover_at(index, CardFocus::Take),
+            None => false,
+        }
     }
 
     /// Open the comment popover for the marker at `index` in this render's `markers`
     /// (document order). Returns `false` only when `index` is out of range.
     ///
     /// **The single index-addressed navigation primitive.** Both the accessibility
-    /// `win.next-annotation` path (via [`open_next_marker_popover`]) and the
-    /// annotations viewer (via [`marker_index_for_src`]) route through here, so the two
-    /// callers exercise ONE code path and cannot drift.
+    /// `win.next-annotation` / `win.prev-annotation` path (via
+    /// [`open_marker_popover_step`]) and the annotations viewer (via
+    /// [`marker_index_for_src`]) route through here, so the two callers exercise ONE
+    /// code path and cannot drift. `focus` is the one thing they disagree about, and it
+    /// is a parameter rather than a second path for exactly that reason.
     ///
     /// **Two-phase by necessity (GTK4Rs/AP-97).** `marker_hitboxes` is repopulated
     /// on each `snapshot_layer(AboveText)` paint and therefore only ever holds the
@@ -797,9 +773,9 @@ impl CodePreviewView {
     /// by `NAV_BUDGET_US` — a **wall-clock** deadline, not a frame count; on expiry the
     /// document is left scrolled to the target rather than silently doing nothing.
     ///
-    /// [`open_next_marker_popover`]: Self::open_next_marker_popover
+    /// [`open_marker_popover_step`]: Self::open_marker_popover_step
     /// [`marker_index_for_src`]: Self::marker_index_for_src
-    pub(crate) fn open_marker_popover_at(&self, index: usize) -> bool {
+    pub(crate) fn open_marker_popover_at(&self, index: usize, focus: CardFocus) -> bool {
         use gtk::subclass::prelude::*;
         // A new navigation supersedes any converge-scroll still running from a previous
         // one: bump the token so older tick(s) self-cancel instead of fighting this
@@ -818,7 +794,7 @@ impl CodePreviewView {
         };
         // Fast path: already painted this frame ⇒ open without scrolling.
         if let Some((_rect, idxs)) = self.marker_hitbox_containing(index) {
-            self.open_marker_popover(&idxs);
+            self.open_marker_popover(&idxs, focus);
             return true;
         }
         // Arm the open-request BEFORE scrolling: `snapshot_layer` fires it the instant the
@@ -830,6 +806,7 @@ impl CodePreviewView {
             .pending_marker_open
             .replace(Some(PendingMarkerOpen {
                 target: index,
+                focus,
                 anchor,
                 deadline,
             }));
@@ -847,6 +824,24 @@ impl CodePreviewView {
     /// well-defined "no chip for this annotation" answer — surfaced by the type rather
     /// than by opening a wrong popover — reached when the annotation was filtered out of
     /// `markers` or the render is momentarily stale.
+    /// The **identity** (`src_span.start`) of the annotation one step from buffer char
+    /// offset `from` in `direction`, wrapping — the inverse lookup of
+    /// [`marker_index_for_src`], and the preview's answer to "which annotation is next".
+    ///
+    /// Answers an identity rather than an index so the window layer can hand it to the
+    /// one mode-aware navigator every surface shares, instead of the marker layer having
+    /// to know what split mode owes the editor. An index would also be a bet that the
+    /// render does not change between choosing and arriving (GTK4Rs/AP-74).
+    ///
+    /// [`marker_index_for_src`]: Self::marker_index_for_src
+    pub(crate) fn marker_src_at_step(&self, from: i32, direction: Direction) -> Option<usize> {
+        use gtk::subclass::prelude::*;
+        let markers = self.imp().markers.borrow();
+        let anchors: Vec<i32> = markers.iter().map(|m| m.anchor).collect();
+        let index = crate::annotations::step_index(&anchors, from, direction)?;
+        Some(markers.get(index)?.source.construct.captured_at().start)
+    }
+
     pub(crate) fn marker_index_for_src(&self, start: usize) -> Option<usize> {
         use gtk::subclass::prelude::*;
         self.imp()
@@ -981,7 +976,14 @@ impl CodePreviewView {
 
     /// Build and pop up the comment popover for the annotations on one line.
     /// `pub(super)` so the view's own `snapshot_layer` can dispatch a pending open.
-    pub(super) fn open_marker_popover(&self, idxs: &[usize]) {
+    ///
+    /// This is also where the reader's **position** becomes the annotation they just
+    /// opened: the caret is moved to the group's anchor. Every route in — a chip click,
+    /// a stepped command, the viewer, the deferred paint dispatch — passes through here,
+    /// so putting it at this one funnel is what makes "where am I in this document's
+    /// annotations" a single answer rather than one per surface (ScrAP-9's reflex applied
+    /// to position rather than to a command).
+    pub(super) fn open_marker_popover(&self, idxs: &[usize], focus: CardFocus) {
         use gtk::subclass::prelude::*;
         // CHOKE-POINT crash guard (ScrAP-152/GTK4Rs/AP-128/GTK4Rs/AP-63). Every path that opens
         // a marker popover funnels through here, and it ends in `popup()`, which realizes
@@ -1002,12 +1004,34 @@ impl CodePreviewView {
         // Most visibly it wipes Edit's inline entry the instant it appears, so Edit reads as
         // "does nothing" (mac/Windows, cross-platform). Skipping the rebuild here preserves the
         // in-progress state. A switch to a DIFFERENT marker has different `idxs` and still
-        // rebuilds; `open_next_marker_popover` advances to a strictly-different marker, so the
+        // rebuilds; `open_stepped_marker_popover` advances to a strictly-different marker, so the
         // advance/switch navigation is untouched. The card's own `is_open` (never
         // `is_visible`) is the authoritative flag (GTK4Rs/AP-117).
         let card = self.marker_card();
         if card.is_open() && card.shows_exactly(idxs) {
             return;
+        }
+        // The reader is now AT this annotation — record that by moving the caret to the
+        // group's anchor, which is what `open_marker_popover_step` reads on the next
+        // press. Without it the stepped walk asked "which annotation follows the caret?"
+        // while nothing on the keyboard path ever moved the caret, so every press
+        // re-opened the same first annotation and the whole a11y read path reached
+        // exactly one comment in the document (only a mouse click into the text, which
+        // moves the caret itself, could advance it).
+        //
+        // Read the anchor and DROP the borrow before placing the cursor: `place_cursor`
+        // emits `mark-set` synchronously and its handlers reach back into this view, so
+        // holding a `markers` borrow across it would abort on a re-entrant borrow
+        // (GTK4Rs/AP-61). Collapsing a selection this way cannot dismiss the card we are
+        // about to open — a selection that merely becomes empty is explicitly not a
+        // supersession (TDD 17.39).
+        let caret = {
+            let markers = self.imp().markers.borrow();
+            idxs.first().and_then(|&i| markers.get(i)).map(|m| m.anchor)
+        };
+        if let Some(anchor) = caret {
+            let buffer = self.buffer();
+            buffer.place_cursor(&buffer.iter_at_offset(anchor));
         }
         let markers = self.imp().markers.borrow();
         let sink = self.imp().annotation_sink.borrow().clone();
@@ -1072,7 +1096,14 @@ impl CodePreviewView {
         // non-user and re-pinned. `grab_focus()` is a harmless complement (does not scroll,
         // gtktextview.c:5704).
         let saved_scroll = self.vadjustment().map(|a| a.value());
-        let _ = self.grab_focus();
+        // Only on `CardFocus::Take`: on `Leave` this would pull focus off the annotations
+        // viewer the reader is arrowing through, which is half of the defect `CardFocus`
+        // exists to fix — and it is a *complement* to the re-pin guard below, never a
+        // precondition of it (it does not scroll, gtktextview.c:5704), so skipping it
+        // leaves that guard intact.
+        if focus == CardFocus::Take {
+            let _ = self.grab_focus();
+        }
         self.imp().user_scrolling.set(false);
         // Hand the card what it is showing and — crucially — the annotation IDENTITY it is
         // anchored to, not a position. From here on the card owns its own geometry: it
@@ -1109,13 +1140,18 @@ impl CodePreviewView {
         // are dead until the user clicks inside. The idle runs after the surface is mapped, so
         // Edit is focused when the popover first presents. Same idle-defer family as the Edit
         // handler; focusing a button does not scroll, so it doesn't disturb the Bug-B re-pin.
-        glib::idle_add_local_once(glib::clone!(
-            #[weak]
-            popover,
-            move || {
-                let _ = popover.child_focus(gtk::DirectionType::TabForward);
-            }
-        ));
+        //
+        // Skipped entirely on `CardFocus::Leave`, where the caller's own surface keeps the
+        // focus and therefore owns Escape (see `CardFocus`).
+        if focus == CardFocus::Take {
+            glib::idle_add_local_once(glib::clone!(
+                #[weak]
+                popover,
+                move || {
+                    let _ = popover.child_focus(gtk::DirectionType::TabForward);
+                }
+            ));
+        }
         if let (Some(vadj), Some(saved)) = (self.vadjustment(), saved_scroll) {
             // Re-pin `saved` on each `value-changed` UNLESS the user has taken over scrolling
             // OR a newer navigation has superseded this card.
@@ -1245,89 +1281,6 @@ impl CodePreviewView {
 }
 
 #[cfg(test)]
-mod next_marker_tests {
-    use super::next_marker_index;
-
-    #[test]
-    fn no_markers_yields_no_target() {
-        // The one case `open_next_marker_popover` reports as `false`: a document with
-        // no annotations. Every other input must produce a target, because the action
-        // is deliberately always-enabled (a greyed-out Next Annotation would be
-        // indistinguishable from the feature being broken).
-        assert_eq!(next_marker_index(&[], 0), None);
-        assert_eq!(next_marker_index(&[], 999), None);
-    }
-
-    #[test]
-    fn picks_the_nearest_anchor_after_the_caret() {
-        let anchors = [10, 40, 90];
-        assert_eq!(next_marker_index(&anchors, 0), Some(0));
-        assert_eq!(next_marker_index(&anchors, 11), Some(1));
-        assert_eq!(next_marker_index(&anchors, 40), Some(2));
-    }
-
-    #[test]
-    fn a_caret_exactly_on_a_marker_advances_past_it() {
-        // Strictly-after. Activating the action with the caret already at an
-        // annotation must move ON, not re-open the same popover forever — the
-        // difference between a working "next" and one that appears frozen.
-        assert_eq!(next_marker_index(&[10, 40, 90], 10), Some(1));
-    }
-
-    #[test]
-    fn past_the_last_marker_wraps_to_the_lowest_anchor() {
-        // Wrap targets the smallest ANCHOR, not index 0 — distinct only when `markers`
-        // is not in anchor order, which is why the next test exists.
-        assert_eq!(next_marker_index(&[10, 40, 90], 90), Some(0));
-        assert_eq!(next_marker_index(&[10, 40, 90], 10_000), Some(0));
-    }
-
-    #[test]
-    fn anchor_order_wins_over_vec_order() {
-        // `markers` happens to arrive in document order today; this pins the contract
-        // that `next_marker_index` does not rely on it. Anchors descend by index here,
-        // so any implementation that walked the Vec would answer 0/2 instead of 2/1.
-        let anchors = [90, 40, 10];
-        assert_eq!(
-            next_marker_index(&anchors, 0),
-            Some(2),
-            "nearest after 0 is 10"
-        );
-        assert_eq!(next_marker_index(&anchors, 10), Some(1), "then 40");
-        assert_eq!(next_marker_index(&anchors, 40), Some(0), "then 90");
-        assert_eq!(next_marker_index(&anchors, 90), Some(2), "wrap back to 10");
-    }
-
-    #[test]
-    fn co_located_markers_resolve_to_the_lowest_index() {
-        // Several annotations sharing one anchor collapse into a single grouped
-        // hit-box (`group_by_line`); the popover lists the whole group, so which
-        // member is named as the target only has to be stable and in document order.
-        assert_eq!(next_marker_index(&[10, 40, 40, 90], 10), Some(1));
-        assert_eq!(next_marker_index(&[40, 40, 40], 90), Some(0), "wrap, tied");
-    }
-
-    #[test]
-    fn a_lone_marker_cycles_back_to_itself() {
-        // Degenerate but reachable: one annotation, caret past it. Wrapping to itself
-        // is correct — it re-opens the only comment there is.
-        assert_eq!(next_marker_index(&[10], 0), Some(0));
-        assert_eq!(next_marker_index(&[10], 10), Some(0));
-        assert_eq!(next_marker_index(&[10], 50), Some(0));
-    }
-
-    #[test]
-    fn a_marker_at_offset_zero_is_reachable_by_wrapping() {
-        // An annotation on the document's very first character can never be the
-        // "strictly after" answer for any caret >= 0, so the wrap is its ONLY route.
-        // Without the wrap branch this marker would be permanently unreachable by
-        // keyboard — precisely the gap this action exists to close.
-        assert_eq!(next_marker_index(&[0, 40], 0), Some(1));
-        assert_eq!(next_marker_index(&[0, 40], 40), Some(0));
-    }
-}
-
-#[cfg(test)]
 mod marker_tests {
     use super::group_by_line;
 
@@ -1356,7 +1309,7 @@ mod marker_tests {
 }
 
 /// Live-display tests for the annotation **accessibility** path
-/// (`open_next_marker_popover`). Excluded from the default `cargo test` (they need a
+/// (`open_stepped_marker_popover`). Excluded from the default `cargo test` (they need a
 /// real display and a real paint); run with `cargo test --features
 /// gtk-integration-tests`, under Xvfb if headless.
 ///
@@ -1478,7 +1431,7 @@ mod a11y_integration_tests {
         });
 
         assert!(
-            view.open_next_marker_popover(0),
+            view.open_stepped_marker_popover(0, Direction::Next),
             "the fixture has annotations"
         );
         assert!(
@@ -1559,7 +1512,7 @@ mod a11y_integration_tests {
         );
 
         assert!(
-            view.open_next_marker_popover(0),
+            view.open_stepped_marker_popover(0, Direction::Next),
             "a document WITH annotations must report a target"
         );
         assert!(
@@ -1603,17 +1556,18 @@ mod a11y_integration_tests {
         let first = anchors.iter().copied().min().expect("two anchors");
 
         // The precondition MUST be about the target itself, not "some marker is
-        // off-screen": if the target were already painted, `open_next_marker_popover`
+        // off-screen": if the target were already painted, `open_stepped_marker_popover`
         // would take the fast path, the test would pass, and it would prove nothing
         // about the scroll branch it exists to cover.
-        let target = next_marker_index(&anchors, first).expect("a second annotation follows");
+        let target = crate::annotations::step_index(&anchors, first, Direction::Next)
+            .expect("a second annotation follows");
         assert!(
             view.marker_hitbox_containing(target).is_none(),
             "precondition: the TARGET marker must be off-screen, else this exercises \
              the fast path and the scroll branch stays untested"
         );
 
-        assert!(view.open_next_marker_popover(first));
+        assert!(view.open_stepped_marker_popover(first, Direction::Next));
         assert!(
             pump_until(400, || view.has_open_marker_popover()),
             "the off-screen annotation must be scrolled to and its popover opened              once the paint repopulates the hit-boxes"
@@ -1649,13 +1603,14 @@ mod a11y_integration_tests {
             .map(|m| m.anchor)
             .collect();
         let first = anchors.iter().copied().min().expect("two anchors");
-        let target = next_marker_index(&anchors, first).expect("a second annotation follows");
+        let target = crate::annotations::step_index(&anchors, first, Direction::Next)
+            .expect("a second annotation follows");
         assert!(
             view.marker_hitbox_containing(target).is_none(),
             "precondition: the target must be off-screen, else no scroll is needed"
         );
 
-        assert!(view.open_next_marker_popover(first));
+        assert!(view.open_stepped_marker_popover(first, Direction::Next));
         assert!(
             pump_until(400, || view.has_open_marker_popover()),
             "precondition: the navigation completed"
@@ -1735,7 +1690,7 @@ mod a11y_integration_tests {
             .map(|m| m.anchor)
             .collect();
         let first = anchors.iter().copied().min().expect("two anchors");
-        assert!(view.open_next_marker_popover(first));
+        assert!(view.open_stepped_marker_popover(first, Direction::Next));
         assert!(
             pump_until(400, || view.has_open_marker_popover()),
             "precondition: the navigation completed and armed the guard"
@@ -1800,6 +1755,7 @@ mod a11y_integration_tests {
             .pending_marker_open
             .replace(Some(PendingMarkerOpen {
                 target: 0,
+                focus: CardFocus::Take,
                 anchor: 0,
                 deadline: Deadline::in_us(-1), // already in the past
             }));
@@ -1836,7 +1792,7 @@ mod a11y_integration_tests {
         pump_until(60, || false);
 
         assert!(
-            !view.open_next_marker_popover(0),
+            !view.open_stepped_marker_popover(0, Direction::Next),
             "no annotations => no target"
         );
         assert!(!view.has_open_marker_popover(), "and nothing may be shown");
@@ -1877,7 +1833,7 @@ mod a11y_integration_tests {
             "precondition: chips painted"
         );
         assert!(
-            view.open_next_marker_popover(0),
+            view.open_stepped_marker_popover(0, Direction::Next),
             "precondition: the fixture has annotations"
         );
         assert!(
@@ -1940,11 +1896,142 @@ mod a11y_integration_tests {
 
         // Directly attempt an open, bypassing the deferred dispatch. The guard must
         // return before any `popup()`.
-        view.open_marker_popover(&[0]);
+        view.open_marker_popover(&[0], CardFocus::Take);
 
         assert!(
             !view.has_open_marker_popover(),
             "the is_realized() guard must skip the open (no popup on an unrealized view)"
         );
+    }
+
+    /// **The defect the whole keyboard read path turned on.** Opening an annotation must
+    /// move the caret to it, because the caret is what the next step is measured from.
+    ///
+    /// Without it the walk asked "which annotation follows the caret?" while nothing on
+    /// the keyboard path ever moved the caret — so every press re-opened the FIRST
+    /// annotation and the reader could reach exactly one comment in the document. Only a
+    /// mouse click into the text (which moves the caret itself) advanced it, which is
+    /// why it read as "works with the mouse, frozen on the keyboard".
+    ///
+    /// Asserted on the CARET, not on the card: the card is the visible symptom, but the
+    /// caret is the state the walk reads, and it is the state a future change could
+    /// break while the first press still looks perfect.
+    #[gtktest::test]
+    fn opening_an_annotation_moves_the_caret_to_it_so_the_next_step_advances() {
+        use gtk::subclass::prelude::*;
+        let pane = crate::preview::render(MD, None, 1.0, false);
+        let view = view_of(pane.clone());
+        let win = gtk::Window::new();
+        win.set_default_size(700, 400);
+        win.set_child(Some(&pane));
+        win.present();
+        assert!(
+            pump_until(200, || hitbox_count(&view) > 0),
+            "precondition: the first chip must paint"
+        );
+
+        let anchors: Vec<i32> = view
+            .imp()
+            .markers
+            .borrow()
+            .iter()
+            .map(|m| m.anchor)
+            .collect();
+        assert_eq!(anchors.len(), 2, "fixture has exactly two annotations");
+        let caret =
+            |v: &CodePreviewView| v.buffer().iter_at_mark(&v.buffer().get_insert()).offset();
+        // Start from a known position rather than whatever the render left behind — the
+        // claim under test is about the DELTA the open produces, so the origin has to be
+        // pinned or the first assertion could pass by coincidence.
+        let buffer = view.buffer();
+        buffer.place_cursor(&buffer.start_iter());
+        assert_eq!(caret(&view), 0, "precondition: the caret is at the top");
+
+        // Step once from the top: the first annotation opens AND becomes the position.
+        assert!(view.open_stepped_marker_popover(caret(&view), Direction::Next));
+        assert!(pump_until(400, || view.has_open_marker_popover()));
+        let first = anchors.iter().copied().min().expect("two anchors");
+        assert_eq!(
+            caret(&view),
+            first,
+            "opening an annotation must leave the caret ON it — this is what makes a \
+             second press advance instead of re-opening the same comment"
+        );
+
+        // Step again FROM THE CARET, exactly as the command does. It must reach the
+        // other annotation, not the one already open.
+        assert!(view.open_stepped_marker_popover(caret(&view), Direction::Next));
+        assert!(pump_until(400, || caret(&view) != first));
+        assert_eq!(
+            caret(&view),
+            anchors.iter().copied().max().expect("two anchors"),
+            "the second step must reach the SECOND annotation"
+        );
+
+        // And back: Previous returns to the first, so an overshoot costs one press
+        // rather than a lap of the document.
+        assert!(view.open_stepped_marker_popover(caret(&view), Direction::Previous));
+        assert!(pump_until(400, || caret(&view) == first));
+
+        win.destroy();
+    }
+
+    /// `CardFocus::Leave` must leave the keyboard where the caller had it, and
+    /// `CardFocus::Take` must move it into the card.
+    ///
+    /// Both directions in one body deliberately: asserting only that `Leave` does not
+    /// steal focus passes just as well on a build where NOTHING ever focuses the card,
+    /// which would silently kill Escape and Tab-to-Edit for every pointer user
+    /// (GTK4Rs/AP-254's lesson applied at authoring time — an assertion that cannot
+    /// distinguish the two failures is not measuring the thing it names).
+    #[gtktest::test]
+    fn a_card_takes_the_focus_only_when_the_opener_asked_for_it() {
+        let pane = crate::preview::render(MD, None, 1.0, false);
+        let view = view_of(pane.clone());
+        let win = gtk::Window::new();
+        win.set_default_size(700, 400);
+        // A focusable stand-in for the surface a real caller keeps the focus on (the
+        // annotations list). Anything focusable serves: what is under test is whether
+        // the card takes focus away, not what held it.
+        let elsewhere = gtk::Button::with_label("elsewhere");
+        let box_ = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        box_.append(&elsewhere);
+        pane.set_vexpand(true);
+        box_.append(&pane);
+        win.set_child(Some(&box_));
+        win.present();
+        assert!(
+            pump_until(200, || hitbox_count(&view) > 0),
+            "precondition: chips painted"
+        );
+        assert!(
+            pump_until(200, || {
+                let _ = elsewhere.grab_focus();
+                elsewhere.has_focus()
+            }),
+            "precondition: the stand-in can hold the focus (a mapped, active toplevel)"
+        );
+
+        view.open_marker_popover(&[0], CardFocus::Leave);
+        assert!(pump_until(200, || view.has_open_marker_popover()));
+        // Pump well past the idle the Take path would have used, so this is a real
+        // negative and not merely an early read.
+        let _ = pump_until(60, || false);
+        assert!(
+            elsewhere.has_focus(),
+            "CardFocus::Leave must not move the focus — a viewer row that steals it \
+             ends the reader's browse after one row"
+        );
+
+        view.popdown_marker_popover();
+        view.open_marker_popover(&[1], CardFocus::Take);
+        assert!(pump_until(200, || view.has_open_marker_popover()));
+        assert!(
+            pump_until(200, || !elsewhere.has_focus()),
+            "CardFocus::Take must move the focus into the card, or Escape and \
+             Tab-to-Edit are dead for every pointer user"
+        );
+
+        win.destroy();
     }
 }

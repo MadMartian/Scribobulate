@@ -540,7 +540,10 @@ mod gtk_integration_tests {
         // The popover targets a marker by buffer anchor, but the view must have been
         // through a layout pass first — pump until the open takes.
         assert!(
-            pump_until(400, || old_view.open_next_marker_popover(0)),
+            pump_until(400, || old_view.open_stepped_marker_popover(
+                0,
+                crate::annotations::Direction::Next
+            )),
             "precondition: the fixture's annotation yields an openable marker"
         );
         assert!(

@@ -26,6 +26,7 @@ pub(crate) use open::{
     attach_file_backing, dialog_dir_for, find_open_tab_for_path, focus_tab, remember_dialog_dir,
     LAST_DIALOG_DIR,
 };
+pub(crate) use setup::accelerator_bindings;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 pub(crate) use setup::register_accelerators;
 pub(crate) use setup::setup_app;

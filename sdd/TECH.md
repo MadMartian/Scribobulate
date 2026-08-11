@@ -186,14 +186,14 @@ Every module below runs on the GTK main thread; see [Concurrency model](#concurr
 | `window/zoom.rs` | Owns the preview zoom ladder and its application to the window. |
 | `window/sidebar.rs` | Owns `SidebarPane`, the shared chrome of a sidebar section. |
 | `window/outline_nav.rs` | Owns the outline sidebar's data side: rebuilding the heading tree and navigating from it. |
-| `window/annotations_nav.rs` | Owns the annotations viewer's data side. |
+| `window/annotations_nav.rs` | Owns the annotations viewer's data side, and the one mode-aware annotation navigator the viewer's rows and the Next/Previous Annotation commands both route through — so a view mode cannot be served by one and not the other. |
 | `winstate/` | Owns the typed per-window and per-tab state registry, and the pure decision cores that read it. |
 | `widgets/tab/` | Owns the tab-strip widget: `TabBar`, its rows, and their drag, close and context-menu mechanics. |
 | `widgets/table/` | Owns `ScribTableWidget`, the custom widget rendering Markdown tables inside the preview. |
 | `widgets/table/linkcell.rs` | Owns a link in a table cell across **both widget shapes one renders in** — the pure-link cell's button and the read-back of its caption, the link markup a mixed cell's label carries, and the single activation both delegate to. Owning both is the point: the shapes are indistinguishable to a reader, so nothing may reach one without reaching the other. |
 | `preview/` | Owns construction of the read-only preview widget and its interaction, scroll and CSS wiring. |
 | `codeview/` | Owns `CodePreviewView`, the preview's `GtkTextView` subclass that self-draws code-block backgrounds, task checkboxes, list markers and the right-margin annotation chips. |
-| `codeview/card.rs` | Owns `AnnotationCard`, the `GtkPopover` subclass an annotation chip opens: its anchor (the annotation's identity, never a rectangle), its scroll-tracking, its dismissal and its teardown. |
+| `codeview/card.rs` | Owns `AnnotationCard`, the `GtkPopover` subclass an annotation chip opens: its anchor (the annotation's identity, never a rectangle), its scroll-tracking, its dismissal and its teardown — and, because it is its own `GtkNative` and therefore outside the window's accelerator reach, the local re-offer of every application accelerator (ScrAP-266). |
 | `codeview/navkeys.rs` | Owns keeping the preview's navigation keys reachable when an anchored table cell holds the focus: a capture-phase key controller — the only phase that still sees a key a focused selectable `GtkLabel` has claimed — re-emitting the `move-cursor` GTK's own binding would have. Decision-free; it reads `keynav` (ScrAP-264). |
 | `codeview/geometry.rs` | Owns the view's cache-free line/cell geometry reads, and the chip-rectangle arithmetic the painter and the annotation card share. |
 | `renderer/` | Owns the low-level rendering mechanics that turn the parsed Markdown event stream into buffer text and tags. |
@@ -205,7 +205,7 @@ Every module below runs on the GTK main thread; see [Concurrency model](#concurr
 | `format/` | Owns the display-free Markdown formatting core behind the Format commands. |
 | `outline.rs` | Owns the display-free document-outline model. |
 | `outline_view.rs` | Owns the outline sidebar widget. |
-| `annotations.rs` | Owns the display-free annotations-viewer model. |
+| `annotations.rs` | Owns the display-free annotations-viewer model, and `step_index` — the one answer to "which annotation is next/previous from here", applied in whichever space the caller counts in (the preview's buffer offsets, the editor's source bytes). |
 | `annotations_view.rs` | Owns the annotations viewer widget. |
 | `annotate/` | Owns the CriticMarkup annotation core: scanning annotations out of the source, and the pure, total mutations that add, edit and remove them. Also owns `AnchoredSpan`, the range-plus-its-own-text handle every deferred mutation addresses its construct through (ScrAP-187). |
 | `tasklist.rs` | Owns the display-free logic for toggling a Markdown task-list checkbox in the source. |

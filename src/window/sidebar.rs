@@ -103,6 +103,30 @@ pub(crate) fn list_view_of(scroller: &gtk::ScrolledWindow) -> Option<gtk::ListVi
     scroller.child().and_downcast::<gtk::ListView>()
 }
 
+/// Move the keyboard focus into `scroller`'s list, deferred one idle turn.
+///
+/// Called when a sidebar toggle **reveals** its pane, which is the only keyboard route
+/// to these lists there is: they sit several Tab stops behind the tab bar and the pane's
+/// own close ×, and nothing else focuses them, so a reader who showed the annotations
+/// list still could not get to it. Revealing a pane in order to use it and then not
+/// being given it is the gap this closes; hiding is unaffected, and so is every
+/// non-toggle path (a tab switch, a session restore) that merely *reconciles*
+/// visibility — those must never move the focus, which is why this is called from the
+/// toggle's own handler rather than from `reconcile_sidebar_visibility`.
+///
+/// Deferred because the pane became visible in this same turn and its list has no
+/// allocation yet, and because a toggle activated from the menu bar is racing that
+/// menu's pop-down focus-restore (ScrAP-107). A no-op on the empty-state placeholder,
+/// which is a plain label and takes no focus.
+pub(crate) fn focus_list_deferred(scroller: &gtk::ScrolledWindow) {
+    let scroller = scroller.clone();
+    glib::idle_add_local_once(move || {
+        if let Some(list_view) = list_view_of(&scroller) {
+            let _ = list_view.grab_focus();
+        }
+    });
+}
+
 /// Scroll `scroller`'s `GtkListView` so the currently selected row is in view with
 /// the minimum amount of scrolling. No-op when the scroller holds the empty-state
 /// placeholder, when nothing is selected, or when the row is already visible.

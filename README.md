@@ -63,7 +63,9 @@ waiting for you when you reopen it.
   *in* the Markdown as portable markup the author (or the next agent) can read
   inline. No side channel, no extra tool.
   - Margin markers to open, edit, or remove a comment
-  - Annotations sidebar lists every comment in the document
+  - Annotations sidebar lists every comment in the document (F8)
+  - Walk the comments from the keyboard, without hunting for margin markers
+    (Ctrl+Alt+N / Ctrl+Alt+P)
 - **Find what you need**
   - Search the whole document, including table cells (Ctrl+F)
   - Replace in edit and split modes (Ctrl+H)

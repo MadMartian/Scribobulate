@@ -211,23 +211,26 @@ fn connect_theme_change(app: &Application) {
     }
 }
 
-/// Register every keyboard accelerator from the command descriptors so bindings
-/// can never drift from the accel strings stored there. `pub(crate)` only so the
-/// `gtk-integration-tests` guard in `shortcuts.rs` can assert that what this binds
-/// matches what the shortcuts window / tooltips display (QA M-4).
-pub(crate) fn register_accelerators(app: &Application) {
+/// Every `(detailed action name, accelerator)` pair the command descriptors declare —
+/// the one enumeration of "what is bound to what".
+///
+/// Extracted so [`register_accelerators`] is not the only thing that can answer it.
+/// A second consumer exists because a focused popover with its own GDK surface never
+/// reaches the window's accelerator machinery, and has to re-offer the same set locally
+/// (`codeview::card`); re-listing the tables there would be a second copy of exactly the
+/// thing every one of these tables exists to prevent (POLICY, "Keyboard accelerators are
+/// part of the single-source-of-truth contract").
+pub(crate) fn accelerator_bindings() -> Vec<(String, &'static str)> {
+    let mut out: Vec<(String, &'static str)> = Vec::new();
     for cmd in FILE_CMDS.iter().chain(EDIT_CMDS.iter()) {
         if !cmd.accel.is_empty() {
-            app.set_accels_for_action(cmd.action, &[cmd.accel]);
+            out.push((cmd.action.to_string(), cmd.accel));
         }
     }
     // View-mode accelerators use the detailed action name syntax so GTK
     // activates the correct string-variant target (D2, VIEW_CMDS descriptor).
     for cmd in VIEW_CMDS.iter().filter(|c| !c.accel.is_empty()) {
-        app.set_accels_for_action(
-            &format!("win.view-mode::{}", cmd.action_target),
-            &[cmd.accel],
-        );
+        out.push((format!("win.view-mode::{}", cmd.action_target), cmd.accel));
     }
     // Every command with no Cmd-table row — tab/window navigation, zoom, the
     // outline toggle, Go To Line, and the F1/Ctrl+? shortcuts-help overlay — is
@@ -236,19 +239,52 @@ pub(crate) fn register_accelerators(app: &Application) {
     // and display can never drift. `app.about` intentionally has NO accelerator.
     // These `win.*` actions route to whichever window is focused.
     for cmd in crate::app::INLINE_ACCEL_CMDS {
-        app.set_accels_for_action(cmd.action, cmd.accels);
+        for accel in cmd.accels {
+            out.push((cmd.action.to_string(), accel));
+        }
     }
     // Format accelerators — detailed win.format::<target> syntax, same as
     // view-mode.  Headings bind to Shift+F1..F6 (chosen to avoid the existing
     // Alt+Shift+2 "Side by Side" accelerator — used by formatters).
     for cmd in FORMAT_CMDS.iter().filter(|c| !c.accel.is_empty()) {
-        app.set_accels_for_action(&format!("win.format::{}", cmd.target), &[cmd.accel]);
+        out.push((format!("win.format::{}", cmd.target), cmd.accel));
     }
-    for n in 1..=6u8 {
-        app.set_accels_for_action(
-            &format!("win.format::h{n}"),
-            &[format!("<Shift>F{n}").as_str()],
-        );
+    for (n, accel) in HEADING_ACCELS.iter().enumerate() {
+        out.push((format!("win.format::h{}", n + 1), accel));
+    }
+    out
+}
+
+/// The six heading accelerators, in `h1..h6` order. A `const` rather than a formatted
+/// `<Shift>F{n}` because [`accelerator_bindings`] must hand out `&'static str`s, and
+/// because the set is closed: there are exactly six heading levels.
+const HEADING_ACCELS: [&str; 6] = [
+    "<Shift>F1",
+    "<Shift>F2",
+    "<Shift>F3",
+    "<Shift>F4",
+    "<Shift>F5",
+    "<Shift>F6",
+];
+
+/// Register every keyboard accelerator from the command descriptors so bindings
+/// can never drift from the accel strings stored there. `pub(crate)` only so the
+/// `gtk-integration-tests` guard in `shortcuts.rs` can assert that what this binds
+/// matches what the shortcuts window / tooltips display (QA M-4).
+pub(crate) fn register_accelerators(app: &Application) {
+    // One `set_accels_for_action` per action, carrying ALL of its accelerators:
+    // the call REPLACES an action's accel list rather than adding to it, so an
+    // action with two bindings (Ctrl++ and Ctrl+= — see `INLINE_ACCEL_CMDS`) must
+    // be registered in a single call or the second silently unbinds the first.
+    let mut by_action: Vec<(String, Vec<&'static str>)> = Vec::new();
+    for (action, accel) in accelerator_bindings() {
+        match by_action.iter_mut().find(|(name, _)| *name == action) {
+            Some((_, accels)) => accels.push(accel),
+            None => by_action.push((action, vec![accel])),
+        }
+    }
+    for (action, accels) in &by_action {
+        app.set_accels_for_action(action, accels);
     }
 }
 

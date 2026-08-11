@@ -119,8 +119,13 @@ here is the real thing, not a flat list of named cells.
 
 Tier 2, plus a guarantee expressed as a rule rather than as an accessible object:
 **every drawn affordance has a keyboard- and AT-reachable `GAction` equivalent.**
-`win.next-annotation` already is one; the task checkbox would need a "toggle the task at
-the caret" action, and the annotation chip an "open the annotation at the caret" one.
+`win.next-annotation` already is one — and as of 2026-08-10 it is a working one in every
+view mode, with a `win.prev-annotation` counterpart, which matters to this option's cost
+estimate: the premise "we already have the pattern" was previously true of the
+registration and not of the behaviour (the walk never advanced past the first annotation,
+and did nothing at all in edit mode). The task checkbox would still need a "toggle the
+task at the caret" action, and the annotation chip an "open the annotation at the caret"
+one — the walk goes to the NEXT annotation, which is not the same question.
 The drawn thing stays invisible to AT; the *capability* it offers does not.
 
 **Pros**: reachable today at 4.6, no architectural change, and it is arguably the

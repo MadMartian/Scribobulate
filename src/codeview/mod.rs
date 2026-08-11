@@ -50,8 +50,8 @@ mod navkeys;
 
 pub(crate) use geometry::move_or_create_mark;
 pub(crate) use markers::{
-    AnnotateTrigger, AnnotationEdit, AnnotationSink, CreateAnnotation, MarkerData, MarkerSource,
-    PendingMarkerOpen,
+    AnnotateTrigger, AnnotationEdit, AnnotationSink, CardFocus, CreateAnnotation, MarkerData,
+    MarkerSource, PendingMarkerOpen,
 };
 
 mod imp {
@@ -859,7 +859,9 @@ mod imp {
                                 .borrow()
                                 .iter()
                                 .find(|(_, idxs)| idxs.contains(&p.target))
-                                .map(|(_, idxs)| idxs.clone());
+                                // The focus intent travels with the request, not with the
+                                // paint: the gesture that decided it returned frames ago.
+                                .map(|(_, idxs)| (idxs.clone(), p.focus));
                             if hit.is_some() {
                                 *pending = None; // satisfied
                             }
@@ -867,7 +869,7 @@ mod imp {
                         }
                     }
                 };
-                if let Some(idxs) = dispatch {
+                if let Some((idxs, focus)) = dispatch {
                     // WEAK capture, not a strong clone (ScrAP-152/GTK4Rs/AP-128/GTK4Rs/AP-63): a
                     // strong clone would pin this view alive as an unrooted zombie if its
                     // window is destroyed between this paint and the idle firing, and the
@@ -890,7 +892,7 @@ mod imp {
                     glib::idle_add_local_once(glib::clone!(
                         #[weak(rename_to = view)]
                         obj,
-                        move || view.open_marker_popover(&idxs)
+                        move || view.open_marker_popover(&idxs, focus)
                     ));
                 }
             } // end AboveText
@@ -982,7 +984,10 @@ impl CodePreviewView {
                 #[weak(rename_to = o)]
                 obj,
                 move |gesture: &gtk::GestureClick, idxs: Vec<usize>, _, _| {
-                    o.open_marker_popover(&idxs);
+                    // A chip click is the reader asking to READ this comment, so the card
+                    // takes focus — the pointer path's long-standing behaviour, now stated
+                    // rather than implied (see `CardFocus`).
+                    o.open_marker_popover(&idxs, markers::CardFocus::Take);
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                 }
             ),

@@ -612,6 +612,19 @@ pub(crate) const INLINE_ACCEL_CMDS: &[InlineCmd] = &[
         label: "Next Annotation",
         accels: &["<Primary><Alt>n"],
     },
+    // Read the PREVIOUS annotation's comment. The counterpart to Next, and not
+    // optional garnish: with only a forward walk, overshooting an annotation costs a
+    // lap of the entire document to get back one step. Ctrl+Alt+P — the same
+    // layout-stable <Primary><Alt>+letter family, and the conventional "previous" to
+    // Next's N. Verified free of every FILE/EDIT/VIEW/FORMAT accel; KDE's
+    // ~/.config/kglobalshortcutsrc binds Meta+Alt+P (cycle-panels), a different
+    // modifier set, so there is no WM collision.
+    InlineCmd {
+        action: "win.prev-annotation",
+        group: "Edit",
+        label: "Previous Annotation",
+        accels: &["<Primary><Alt>p"],
+    },
     // Ctrl++ and, as an alias for keyboards where + needs Shift, Ctrl+= — both
     // bound; only Ctrl++ is displayed. (This alias is exactly what used to be
     // dropped from the shortcuts window / tooltip — QA M-4's live drift.)

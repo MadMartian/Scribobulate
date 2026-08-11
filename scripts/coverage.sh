@@ -103,8 +103,17 @@ cd "$(dirname "$0")/.."
 # nothing new in the denominator. A pure-hygiene change moving the ratchet is not an
 # anomaly here; it is what "test bodies count too" looks like when the module is gated.
 #
+# RAISED 76.86 -> 76.96 by the annotations keyboard-navigation change. 76.97 printed,
+# rounded DOWN per the rule above. The direction is again test-weighted rather than
+# product-weighted: the walk's decision core (`annotations::step_index`) and the caret
+# conversion (`saferizer::byte_offset_at_char`) are both pure and both land in scope
+# fully covered, while the GTK halves they replaced — the action bodies, the viewer
+# widget, the focus moves — are in excluded files. Extracting the choice out of the
+# marker layer is exactly the move the scope rule asks for, so the ratchet moving is
+# the mechanism working.
+#
 # The aspiration is still 80%.
-FLOOR=76.86
+FLOOR=76.96
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

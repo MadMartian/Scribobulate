@@ -704,6 +704,20 @@ the operator. Each approved deviation is recorded here so it is not re-litigated
 This list records only the approved deviations; the matrices themselves are the
 rule.
 
+- **Next / Previous Annotation** (`win.next-annotation` / `win.prev-annotation`,
+  group `Edit`) — **PENDING operator green-light, recorded here so it is visible
+  rather than silently deviating.** Both have their `GAction`, their Edit-menu item,
+  their accelerator surfaced everywhere the SSOT table reaches (menu hint, Keyboard
+  Shortcuts window), and one consistent enabled state. Neither has a **toolbar
+  button**, which the Action CAM's "Other action" column requires. The argument for
+  the deviation is that they are *reading-position* commands with no state a button
+  could usefully show, in a toolbar that is already at its width budget — the same
+  shape as Go To Line, which has also never had one. `win.next-annotation` has
+  carried this deviation unrecorded since it landed; adding its counterpart is what
+  surfaced it. If the operator declines, both get buttons in the `edit` section
+  together — never one of them, since a pair that appears half in a surface is worse
+  than a pair that appears in none.
+
 - **Annotate** (`win.annotate`, group `Edit`) — the approved deviation from the
   Action CAM is the command's presence in the **caret formatting overlay**, a
   Format surface an Edit action would not otherwise occupy. Justified because

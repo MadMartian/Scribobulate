@@ -2028,6 +2028,22 @@
 - **Then** the card returns to its read state — claim, stored comment, Edit and Remove — and stays open on the same annotation; the reader does not lose their place over an edit they backed out of
 - **And** the document is unchanged, and pressing Edit again offers the **stored** comment, not the abandoned draft
 
+### 17.54 The annotation walk advances, and it goes back
+- **Given** a document holding several comment-bearing annotations
+- **When** the reader invokes **Next Annotation** repeatedly (Ctrl+Alt+N, or Edit ▸ Next Annotation)
+- **Then** each invocation moves on to the next annotation in document order and opens its comment — never re-opening the one already showing — wrapping from the last back to the first
+- **And when** they invoke **Previous Annotation** (Ctrl+Alt+P, or Edit ▸ Previous Annotation)
+- **Then** the walk goes the other way, wrapping from the first back to the last, so overshooting an annotation costs one keypress rather than a lap of the whole document
+- **And** the walk is measured from where the reader *is*: clicking or navigating into the document between presses resumes the walk from there, rather than from wherever it last was
+- **And** both are ordinary commands — one action each, an Edit-menu item each, and both listed in the Keyboard Shortcuts help window
+
+### 17.55 The walk reaches annotations in every view mode
+- **Given** a document with annotations, in preview, split, or pure-edit mode
+- **When** the reader walks to an annotation
+- **Then** preview and split scroll to it and open its comment card (split additionally placing the editor caret on it), and pure-edit moves the editor caret to the annotation's source position — each mode presenting it exactly as it presents an activated annotations-viewer row, because there is one navigator and not one per surface
+- **And** in pure edit the caret lands on the right character past multi-byte text (as §20.14 requires of the viewer)
+- **And** a document with no annotations at all does nothing, quietly: the command stays enabled, because a greyed-out Next Annotation is indistinguishable from a broken one
+
 ## 18. Preview reading themes
 
 The preview pane's purpose is reading. A *reading theme* restyles everything the
@@ -2223,10 +2239,11 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **And given** pure-edit mode, activating an entry moves the editor caret to the annotation's source position and opens **no** card
 - **And given** split mode, activating an entry scrolls the preview to the annotation — the preview is the scroll driver (mirroring outline 12.9) — opens its card, **and** moves the editor caret onto that annotation, so the reviewer can begin editing it there, with the editor scroll-following the preview into the same region
 
-### 20.5 Single click and keyboard both navigate
+### 20.5 Single click and keyboard both navigate — and the keyboard keeps the list
 - **Given** the viewer has focus or is clicked
 - **When** the user single-clicks an entry, or moves the selection with up/down/PgUp/PgDown
 - **Then** navigation happens immediately (no double-click required)
+- **And** the keyboard focus **stays in the list** across the navigation, so the next arrow press moves to the next row: browsing the list is a sequence of presses, not one press per trip through the Tab order. (The comment card the navigation opens therefore does *not* take focus — unlike a card opened by clicking its margin chip or by the Next/Previous Annotation commands, where the reader has asked to act on that one annotation and the card's own Escape/Edit/Remove must be reachable.)
 
 ### 20.6 Navigation resolves the correct annotation even when membership isn't 1:1
 - **Given** a document where a bare highlight or inert kind sits *before* a comment-bearing annotation (so the annotation's list position differs from its chip's position)
@@ -2248,10 +2265,12 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** each is toggled on or off
 - **Then** they stack (bold headers, no draggable divider) when both are shown, either fills the sidebar alone when it's the only one shown, and the **whole sidebar is hidden** — content reclaims the full width — only when both are hidden
 
-### 20.10 The viewer does not scroll-spy
+### 20.10 The viewer does not scroll-spy, and claims nothing it was not told
 - **Given** the annotations viewer is shown with a selected row
 - **When** the user scrolls the document or moves the caret without activating a viewer entry
 - **Then** the viewer's selection does **not** change — it reflects only what the user last activated (annotations are notes, not sections that own a region)
+- **And given** a list shown for the first time in a window, with nothing yet activated
+- **Then** **no** row is selected: the highlight means "the annotation you last went to", so before the reader goes anywhere there is nothing to show
 
 ### 20.11 The list rebuilds as the document changes
 - **Given** the viewer is shown
@@ -2293,6 +2312,18 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** the user switches to tab A
 - **Then** the still-present selection is restored (20.11) **and** that selected row is scrolled into view — the highlight is never left correct-but-off-screen under a stale scroller position from the previous tab
 - **And** restoring the selection still does not re-navigate (20.11); the list scroll is visual-only
+
+### 20.19 Showing a sidebar pane hands the keyboard to its list
+- **Given** the outline or annotations pane is hidden
+- **When** the user shows it (View ▸ Annotations / F8, View ▸ Outline / F9, or the toolbar button)
+- **Then** the keyboard focus moves into that pane's list, so the arrow keys drive it at once — a reader who asked for a pane in order to use it is given it, rather than having to Tab past the tab strip and the pane's own × to reach it
+- **And** merely *reconciling* visibility — a tab switch, a session restore, the pane already being shown — never moves the focus; only the toggle does
+- **And** hiding a pane does not move the focus either
+
+### 20.20 Escape leaves the list without leaving the reader stranded
+- **Given** the annotations list holds the keyboard focus, having opened an annotation's comment card
+- **When** the user presses Escape
+- **Then** the card is dismissed and the focus returns to the document pane (the editor in pure-edit mode, the preview otherwise), so Escape means the same thing here as it does in the card itself (§17.39)
 
 ## 21. Crash forensics
 

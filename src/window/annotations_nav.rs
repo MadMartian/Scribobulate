@@ -7,8 +7,9 @@
 //! resolves to a chip index — never a positional row index.
 
 use super::*;
-use crate::annotations::extract_entries;
+use crate::annotations::{extract_entries, step_index, Direction};
 use crate::annotations_view::build_annotations_content;
+use crate::codeview::CardFocus;
 use crate::span::OriginalByteOffset;
 
 /// Rebuild the annotations list from the document currently shown, preserving the
@@ -34,7 +35,12 @@ pub(crate) fn refresh_annotations(window: &ApplicationWindow) {
     // outside this seam's touch set — so re-name it at this boundary as the original
     // source byte it is.
     let selected = st.annotations_selected.get().map(OriginalByteOffset::new);
-    let content = build_annotations_content(&entries, make_annotations_activate(window), selected);
+    let content = build_annotations_content(
+        &entries,
+        make_annotations_activate(window),
+        make_annotations_escape(window),
+        selected,
+    );
     st.chrome().annotations_scroller.set_child(Some(&content));
     // Selection is applied inside `build_annotations_content` before the navigation
     // handler is connected; now scroll that row into view. Deferred one idle so the
@@ -64,9 +70,53 @@ fn make_annotations_activate(window: &ApplicationWindow) -> Rc<dyn Fn(OriginalBy
             if let Some(st) = state(&window) {
                 st.annotations_selected.set(Some(src_start.raw()));
             }
-            navigate_to_annotation(&window, src_start);
+            // `CardFocus::Leave` — the reader is arrowing (or clicking) through the list
+            // and the list must keep the keyboard, or the second arrow press lands in the
+            // card instead and the browse stops dead after one row. See `CardFocus`.
+            navigate_to_annotation(&window, src_start, CardFocus::Leave);
         }
     ))
+}
+
+/// Build the Escape handler for the annotations viewer: dismiss whatever card the list
+/// opened and hand the keyboard back to the document.
+///
+/// This key is the viewer's because the focus is: a row activation deliberately leaves
+/// focus in the list (`CardFocus::Leave`), and the card's own CAPTURE-phase Escape
+/// controller only ever sees a key event when a card descendant is focused. So the
+/// surface holding the focus owns the dismissal — the alternative, a card that cannot be
+/// closed from the keyboard that opened it, is worse than the focus theft it replaced.
+fn make_annotations_escape(window: &ApplicationWindow) -> Rc<dyn Fn()> {
+    Rc::new(glib::clone!(
+        #[weak(rename_to = window)]
+        window,
+        move || {
+            if let Some(view) = preview_text_view(&window)
+                .and_then(|tv| tv.downcast::<crate::codeview::CodePreviewView>().ok())
+            {
+                view.popdown_marker_popover();
+            }
+            focus_document_pane(&window);
+        }
+    ))
+}
+
+/// Move the keyboard focus to the pane the reader reads in — the editor in pure-edit
+/// mode, the preview otherwise.
+///
+/// The return leg of every "focus went to a sidebar list" move, so a keyboard reader is
+/// never stranded in the chrome. Resolved from the CURRENT mode at call time rather than
+/// captured, for the same reason the navigation callbacks are (GTK4Rs/AP-52).
+pub(super) fn focus_document_pane(window: &ApplicationWindow) {
+    let Some(st) = state(window) else { return };
+    let focused = match current_mode(window) {
+        ViewMode::Edit => st.editor.clone().upcast::<gtk::Widget>().grab_focus(),
+        _ => match preview_text_view(window) {
+            Some(view) => view.grab_focus(),
+            None => false,
+        },
+    };
+    let _ = focused;
 }
 
 /// Navigate the active pane to the annotation at `src_start` and open its comment card
@@ -75,10 +125,14 @@ fn make_annotations_activate(window: &ApplicationWindow) -> Rc<dyn Fn(OriginalBy
 /// makes the preview the scroll driver and places the editor caret on the annotation so the
 /// reviewer can edit it there. Pure-edit — which has no card — moves the editor caret (Q2,
 /// TDD 20.4/20.14).
-pub(super) fn navigate_to_annotation(window: &ApplicationWindow, src_start: OriginalByteOffset) {
+pub(super) fn navigate_to_annotation(
+    window: &ApplicationWindow,
+    src_start: OriginalByteOffset,
+    focus: CardFocus,
+) {
     let Some(st) = state(window) else { return };
     match current_mode(window) {
-        ViewMode::Preview => open_marker_for_src_deferred(window, src_start),
+        ViewMode::Preview => open_marker_for_src_deferred(window, src_start, focus),
         ViewMode::Split => {
             // The editor↔preview sync treats the editor as driver by default and would undo
             // a preview-only jump on the next tick; make the preview the driver so the
@@ -86,7 +140,7 @@ pub(super) fn navigate_to_annotation(window: &ApplicationWindow, src_start: Orig
             // user input on the editor switches the driver back.
             st.scroll.driver.set(ScrollDriver::Preview);
             place_editor_caret(&st.editor_buf, src_start);
-            open_marker_for_src_deferred(window, src_start);
+            open_marker_for_src_deferred(window, src_start, focus);
         }
         ViewMode::Edit => {
             super::outline_nav::scroll_editor_to_offset(&st.editor, &st.editor_buf, src_start)
@@ -116,7 +170,11 @@ fn place_editor_caret(buf: &sourceview::Buffer, src_start: OriginalByteOffset) {
 /// re-resolved inside the idle (it may close first). A `None` from `marker_index_for_src` —
 /// the annotation has no chip in the current render — does nothing, surfaced by the type
 /// rather than a wrong popover.
-fn open_marker_for_src_deferred(window: &ApplicationWindow, src_start: OriginalByteOffset) {
+fn open_marker_for_src_deferred(
+    window: &ApplicationWindow,
+    src_start: OriginalByteOffset,
+    focus: CardFocus,
+) {
     glib::idle_add_local_once(glib::clone!(
         #[weak(rename_to = window)]
         window,
@@ -129,10 +187,74 @@ fn open_marker_for_src_deferred(window: &ApplicationWindow, src_start: OriginalB
             // `marker_index_for_src` (codeview, outside this seam) still takes a raw
             // original-source byte; unwrap at the call boundary.
             if let Some(index) = view.marker_index_for_src(src_start.raw()) {
-                view.open_marker_popover_at(index);
+                view.open_marker_popover_at(index, focus);
             }
         }
     ));
+}
+
+/// Walk one annotation from where the reader is, in `direction`, and go there — the
+/// body of `win.next-annotation` and `win.prev-annotation`.
+///
+/// **Mode-complete by construction.** The command used to reach for the preview's marker
+/// layer directly, so in pure-edit mode — where there is no preview view — it was a
+/// silent no-op: the one mode a reviewer does most of their keyboard work in had no
+/// annotation walk at all, and because the action is deliberately always-enabled there
+/// was not even a greyed-out control to explain the silence. Choosing the target here
+/// and handing it to [`navigate_to_annotation`] means each mode presents it the way that
+/// mode already presents a viewer row (card in preview, card + editor caret in split,
+/// editor caret in edit), with no second navigation path to drift.
+///
+/// The *choice* is one pure function ([`step_index`]) applied in whichever space the
+/// mode counts in — the preview's chip anchors are buffer offsets, the editor's
+/// annotations are source byte spans — so "which annotation is next" cannot mean two
+/// different things in two modes.
+pub(super) fn step_annotation(window: &ApplicationWindow, direction: Direction) {
+    let Some(st) = state(window) else { return };
+    // Preview and split both have a preview view, and in split it is the scroll driver
+    // (the same reason `navigate_to_annotation` makes it one), so its caret is where the
+    // reader is. Pure-edit has no view and steps over the source instead.
+    let from_preview = preview_text_view(window)
+        .and_then(|tv| tv.downcast::<crate::codeview::CodePreviewView>().ok())
+        .filter(|_| current_mode(window) != ViewMode::Edit);
+    let target = match from_preview {
+        Some(view) => {
+            let buffer = view.buffer();
+            let caret = buffer.iter_at_mark(&buffer.get_insert()).offset();
+            // The marker layer still speaks raw original-source bytes (as
+            // `marker_index_for_src` does); re-name it at this boundary.
+            view.marker_src_at_step(caret, direction)
+                .map(OriginalByteOffset::new)
+        }
+        None => {
+            let md = st.editor_text();
+            let entries = extract_entries(&md);
+            let starts: Vec<OriginalByteOffset> =
+                entries.iter().map(|e| e.src_span.start).collect();
+            let caret = editor_caret_src_byte(&st.editor_buf);
+            step_index(&starts, caret, direction).map(|index| starts[index])
+        }
+    };
+    // No annotations at all in this document — the one case where doing nothing is the
+    // whole correct answer (which is also why the action is not gated on it: a greyed-out
+    // Next Annotation is indistinguishable from a broken one).
+    let Some(target) = target else { return };
+    navigate_to_annotation(window, target, CardFocus::Take);
+}
+
+/// The editor caret's position as an offset into the ORIGINAL source, so it can be
+/// compared against annotation spans.
+///
+/// The editor buffer holds the source verbatim, so this is the caret's character offset
+/// converted back to a byte offset — the inverse of [`place_editor_caret`], and it must
+/// go through the same shared seam rather than a local `char_indices` walk (TDD 20.14's
+/// hazard in the other direction: a raw character offset compared against a byte span
+/// mis-orders every annotation that follows multi-byte text).
+fn editor_caret_src_byte(buf: &sourceview::Buffer) -> OriginalByteOffset {
+    let (s, e) = buf.bounds();
+    let text = crate::saferizer::BufferText::of_range(buf, &s, &e);
+    let caret_char = buf.iter_at_mark(&buf.get_insert()).offset();
+    OriginalByteOffset::new(text.byte_offset_at(caret_char))
 }
 
 /// Recompute the three sidebar visibilities from the two toggle actions (the four-state
