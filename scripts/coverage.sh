@@ -112,8 +112,19 @@ cd "$(dirname "$0")/.."
 # marker layer is exactly the move the scope rule asks for, so the ratchet moving is
 # the mechanism working.
 #
+# RAISED 76.96 -> 77.01 by the ScrAP-268 SIGTRAP fix. 77.02 printed, rounded DOWN per
+# the rule above. Test-weighted again, and for the ScrAP-265 reason two notes up:
+# `forensics/` is in scope, the product change is two lines (`SIGTRAP` in the const, its
+# name in `signal_name`), and everything else is test bodies landing in the numerator.
+#
+# Recorded also as a live instance of the READ THE RIGHT COLUMN warning at the top of
+# this file, because I walked straight into it: the same run prints 77.81% for REGIONS
+# and 77.02% for LINES, and a floor set from the leading figure passes review, passes
+# reading, and fails every run thereafter. The two columns being ~0.8pt apart is exactly
+# wide enough to look like a plausible ratchet step.
+#
 # The aspiration is still 80%.
-FLOOR=76.96
+FLOOR=77.01
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

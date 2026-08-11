@@ -942,7 +942,15 @@ RUST_LOG=warn,scribobulate::scroll=trace   # just the scroll hot path
 ```
 
 CI: run the test binary with `G_DEBUG=fatal-criticals` so any `Gtk-CRITICAL`
-becomes a hard failure instead of a silent log line.
+becomes a hard failure instead of a silent log line. **The test binary, and only
+it** — the flag is a no-op against the *running application*, MEASURED (GLib 2.72.4):
+for structured logs, which GTK's own diagnostics are, GLib consults
+`g_log_always_fatal` inside `g_log_writer_default`, and `logging::init` replaces that
+writer with the bridge — so a promoted `Gtk-WARNING`/`Gtk-CRITICAL` is recorded and
+survived. The suite runners install no bridge (`gtk_suite.rs` says why), which is what
+keeps the line above true where it is claimed. `g_error` is unaffected either way: its
+fatality is decided after the writer returns, and it kills the process with `SIGTRAP`
+rather than `abort()` (ScrAP-268).
 
 Log messages must be self-contained — an agent reading them should understand
 what the application was doing without needing to cross-reference source code.

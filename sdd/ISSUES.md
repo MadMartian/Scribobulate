@@ -10,7 +10,6 @@
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
 | Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
-| S | The crash-forensics handler does not take `SIGTRAP`, so a GLib **fatal** death — the `g_error` family — leaves no report at all | Medium |
 
 ## A. Tables are selection islands
 
@@ -744,59 +743,3 @@ this issue; a genuine return of the quadratic walk reads ~16x and does not come 
 
 ---
 
-## S. A GLib-fatal death leaves no forensic report, because the handler does not take `SIGTRAP`
-
-**Severity**: Medium (nothing shipped behaves worse for it, and crash recovery still
-snapshots unsaved edits — but the crash-forensics kit exists precisely so a death is
-never silent, and for one whole class of death it is. The gap is invisible from the
-outside: the report file simply is not there, which reads as "the kit failed" or as an
-ordinary kill rather than as a signal the handler was never asked to take)
-
-The fatal-signal handler installs itself for exactly four signals — `SIGSEGV`, `SIGBUS`,
-`SIGILL`, `SIGABRT` (`forensics/signal.rs`, one `const` array, and its doc comment calls
-them "the four ways this application can die without running another line of its own
-code"). That enumeration is one short. A **fatal** GLib log message — `g_error`, and the
-`g_assert_not_reached` / "code should not be reached" family GTK uses freely — does not
-reach `abort()` on Linux/x86: GLib's fatal path executes a breakpoint instruction, so the
-process dies of `SIGTRAP`, which carries its default disposition and terminates with no
-handler having run. Nothing is written: no report, no breadcrumb flush, no signal line.
-
-**Measured, already, in this tree**: the dangling line-display cache that `set_buffer`
-leaves behind kills the process two ways, and one of them is the `g_error`
-`gtk_text_btree_line_number couldn't find line` — recorded as `→ SIGTRAP` at the seam
-that now avoids it (`preview/build.rs`). So this is not a hypothetical class: a death
-this project has actually produced is in it. The particular trigger is fixed; the blind
-spot is not, and every GTK `g_error` reachable from any other path lands in it — as does
-any run under `G_DEBUG=fatal-warnings`, where routine warnings are promoted into exactly
-this death.
-
-Unix only, and correctly so: the handler is `unix`-gated because POSIX signals are, and
-Windows has no fatal-signal handler by design. This is a claim about the Linux/macOS
-build, not a missing Windows feature.
-
-**Nothing is failing, and that is the point.** TDD 21.4's own **Given** enumerates the
-same four signals the code does ("segmentation fault, bus error, illegal instruction,
-abort"), so the rubric is satisfied, the suite is green, and the implementation matches
-its contract exactly. The gap is *in the enumeration* — a scope decision made once and
-inherited by both sides — so whoever closes it has two edits, not one: widen the signal
-list **and** widen 21.4's Given, or the rubric will keep certifying the narrower promise.
-
-**Mitigation options**:
-- **Add `SIGTRAP` to the handler's signal list** — a one-`const` change, plus extending
-  the existing raise-and-reap child test (which forks, raises, and reaps for `SIGSEGV`)
-  to cover it, so the enumeration is asserted rather than trusted. Cheap and it closes
-  the class. The one thing to check first: a debugger-attached run also stops on
-  `SIGTRAP`, so confirm the handler's re-raise leaves a `gdb` session usable rather than
-  swallowing the trap the debugger wanted.
-- **Verify the mechanism before relying on the reasoning.** That GLib's fatal path
-  breakpoints rather than aborts is inferred from this tree's own measurement plus GLib's
-  documented behaviour, not traced in GLib's source here. Raising `SIGTRAP` in a scratch
-  process with the handler armed proves the *coverage* half outright; provoking a real
-  `g_error` proves the *arrival* half. Both are minutes, and the second is what would
-  make the entry's premise measured rather than argued.
-- **Accept the limitation**: not advisable. It silently narrows what the diagnostics
-  facility can be trusted to have caught, and an absent report is indistinguishable from
-  a clean exit — so the next unexplained disappearance gets investigated as though the
-  kit had reported nothing to report.
-
----

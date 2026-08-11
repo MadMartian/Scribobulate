@@ -47,9 +47,39 @@ use libc::{c_int, c_void};
 use super::rawbuf::RawBuf;
 use super::ring::Ring;
 
-/// The signals worth a report: the four ways this application can die without
+/// The signals worth a report: the five ways this application can die without
 /// running another line of its own code.
-const FATAL_SIGNALS: [c_int; 4] = [libc::SIGSEGV, libc::SIGBUS, libc::SIGILL, libc::SIGABRT];
+///
+/// # Why `SIGTRAP` is here, when nothing in this process raises one deliberately
+///
+/// The other four are hardware faults or `abort()`. `SIGTRAP` is how a **GLib fatal
+/// log message** dies on unix, and that is the death this application has actually
+/// produced: `g_error` — GTK's `gtk_text_btree_line_number couldn't find line` among
+/// them (ScrAP-258) — plus every warning promoted by `G_DEBUG=fatal-warnings`.
+/// `_g_log_abort` assumes a debugger is attached on every non-Windows target and
+/// executes `G_BREAKPOINT()` (`int $03` on x86) instead of `g_abort()`, so the process
+/// dies of a breakpoint trap whose default disposition terminates it with no handler
+/// having run. Enumerating only the four left that whole class silent (ScrAP-268).
+///
+/// MEASURED, GLib 2.72.4 on this machine: `g_error` and a `G_DEBUG=fatal-warnings`
+/// warning both exit **133** (128 + `SIGTRAP`), while `g_assert_not_reached()` takes
+/// `_g_log_abort`'s *other* branch and exits **134** (`SIGABRT`) — which is why the
+/// assertion family was covered all along and the `g_error` family was not. The
+/// end-to-end proof lives in
+/// [`tests::a_glib_fatal_message_dies_by_a_signal_this_handler_takes`], which drives a
+/// real `G_LOG_LEVEL_ERROR` through a real child process rather than asserting the
+/// mechanism from prose.
+///
+/// **Taking it costs no debugging session** (MEASURED under gdb 12.1): a debugger
+/// intercepts the trap through ptrace and reports `SIGTRAP … Pass to program: No`, so
+/// it stops at the faulting frame exactly as before and this handler never runs there.
+const FATAL_SIGNALS: [c_int; 5] = [
+    libc::SIGSEGV,
+    libc::SIGBUS,
+    libc::SIGILL,
+    libc::SIGABRT,
+    libc::SIGTRAP,
+];
 
 /// Handler-readable state, published once at install time.
 ///
@@ -462,6 +492,7 @@ fn signal_name(signal: c_int) -> &'static str {
         libc::SIGBUS => "SIGBUS",
         libc::SIGILL => "SIGILL",
         libc::SIGABRT => "SIGABRT",
+        libc::SIGTRAP => "SIGTRAP",
         _ => "unknown",
     }
 }
@@ -1045,7 +1076,8 @@ mod tests {
         }
     }
 
-    /// Fork a child that does nothing but die by `SIGSEGV`, and wait for it.
+    /// Fork a child that does nothing but die by `signal`, wait for it, and return the
+    /// wait status so a caller can assert *how* it died.
     ///
     /// The child drops its core limit first, so a `core_pattern` handler is not
     /// invoked for a deliberate crash; `_exit` guards against the raise returning,
@@ -1053,8 +1085,9 @@ mod tests {
     ///
     /// `install` runs in the **parent** in every caller, before the fork, deliberately:
     /// it allocates, and allocating in a forked child of a multi-threaded process can
-    /// deadlock on a `malloc` lock another thread held at fork time.
-    fn a_child_raises_sigsegv() {
+    /// deadlock on a `malloc` lock another thread held at fork time. The child inherits
+    /// the handlers and the alternate stack and does nothing but raise.
+    fn a_child_raises(signal: c_int) -> c_int {
         // SAFETY: the child touches nothing that allocates or locks.
         let child = unsafe { libc::fork() };
         assert!(child >= 0, "fork failed");
@@ -1065,13 +1098,14 @@ mod tests {
                     rlim_max: 0,
                 };
                 libc::setrlimit(libc::RLIMIT_CORE, &no_core);
-                libc::raise(libc::SIGSEGV);
+                libc::raise(signal);
                 libc::_exit(0);
             }
         }
         let mut status = 0;
         // SAFETY: reaping the child forked above.
         unsafe { libc::waitpid(child, &mut status, 0) };
+        status
     }
 
     /// A forked child is the only honest harness here: the thing under test *kills
@@ -1111,26 +1145,7 @@ mod tests {
             ring,
         );
 
-        // SAFETY: the child touches nothing that allocates or locks — it drops its
-        // core limit (so a `core_pattern` handler is not invoked for a deliberate
-        // crash) and raises. `_exit` guards against the raise somehow returning.
-        let child = unsafe { libc::fork() };
-        assert!(child >= 0, "fork failed");
-        if child == 0 {
-            unsafe {
-                let no_core = libc::rlimit {
-                    rlim_cur: 0,
-                    rlim_max: 0,
-                };
-                libc::setrlimit(libc::RLIMIT_CORE, &no_core);
-                libc::raise(libc::SIGSEGV);
-                libc::_exit(0);
-            }
-        }
-
-        let mut status = 0;
-        // SAFETY: reaping the child forked above.
-        unsafe { libc::waitpid(child, &mut status, 0) };
+        let status = a_child_raises(libc::SIGSEGV);
 
         // TDD 21.4: the process still dies from the signal it was killed by.
         assert!(
@@ -1176,6 +1191,220 @@ mod tests {
             mapping.starts_with(|c: char| c.is_ascii_hexdigit()) && mapping.contains('-'),
             "mapping line has no load address: {mapping:?}"
         );
+    }
+
+    /// **The enumeration is asserted, not trusted** — every signal in
+    /// [`FATAL_SIGNALS`] is actually taken, reported by name, and re-raised.
+    ///
+    /// The sibling above proves the whole artefact for one signal. This proves the
+    /// *set*, which is the half that was wrong: the list said four, and a GLib fatal
+    /// message dies of a fifth (`SIGTRAP`), so that entire class of death — `g_error`,
+    /// and every warning `G_DEBUG=fatal-warnings` promotes — left no report at all
+    /// (ScrAP-268). A list nothing ranges over is a list that silently stops matching
+    /// what the process can die of, so adding a signal here now costs a line and
+    /// removing one fails loudly.
+    ///
+    /// Cheap to widen, and deliberately assertion-per-signal rather than "some report
+    /// appeared": `signal: <name>` is what makes a report say *which* death it
+    /// describes, and `signal_name` returning `"unknown"` would still write a file.
+    ///
+    /// **The expected names are written out here rather than read from
+    /// [`signal_name`]** — deriving them from the code under test makes the test agree
+    /// with itself, which is exactly what happened in the round that wrote it: unnaming
+    /// `SIGTRAP` left this green while the report said `signal: unknown (5)`
+    /// (GTK4Rs/AP-160's shape, caught by mutation rather than by reading).
+    ///
+    /// **Redundancy, recorded honestly** (ScrAP-254): the length check below *also*
+    /// fails if `SIGTRAP` is dropped from [`FATAL_SIGNALS`], which
+    /// [`a_glib_fatal_message_dies_by_a_signal_this_handler_takes`] catches too. They
+    /// are not the same claim — this one holds that the const was not quietly narrowed,
+    /// that one holds that GLib still dies there — and neither implies the other.
+    #[test]
+    fn every_enumerated_fatal_signal_is_reported_and_still_kills_the_process() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            eprintln!(
+                "SKIPPED [TDD 21.4 fatal-signal enumeration]: needs a forked child \
+                 raising real signals against a glibc handler. NOT verified by this run."
+            );
+            return;
+        }
+        const EXPECTED: [(c_int, &str); 5] = [
+            (libc::SIGSEGV, "SIGSEGV"),
+            (libc::SIGBUS, "SIGBUS"),
+            (libc::SIGILL, "SIGILL"),
+            (libc::SIGABRT, "SIGABRT"),
+            (libc::SIGTRAP, "SIGTRAP"),
+        ];
+        assert_eq!(
+            FATAL_SIGNALS.len(),
+            EXPECTED.len(),
+            "FATAL_SIGNALS changed without this table: every signal the handler takes \
+             is driven through a real death here, so name the new one (or say why the \
+             removed one can no longer kill this process)"
+        );
+
+        for (signal, name) in EXPECTED {
+            assert!(
+                FATAL_SIGNALS.contains(&signal),
+                "{name} is not in FATAL_SIGNALS"
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("crash-enumerated.log");
+            let ring: &'static Ring = Box::leak(Box::new(Ring::new()));
+            ring.record("2026-08-11T10:00:00.000Z INFO  scribobulate::app::open: opened /tmp/a.md");
+
+            let _armed = ArmedHandler::arm(
+                &path,
+                "scribobulate 0.1.0 (test, release)\npid: test\n",
+                ring,
+            );
+            let status = a_child_raises(signal);
+
+            assert!(
+                libc::WIFSIGNALED(status),
+                "a child that raised {name} exited normally (status {status}) — the \
+                 handler swallowed it"
+            );
+            assert_eq!(
+                libc::WTERMSIG(status),
+                signal,
+                "{name} was re-raised as a different signal"
+            );
+
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+                panic!("{name} is in FATAL_SIGNALS but its death left no crash report")
+            });
+            assert!(
+                text.contains(&format!("signal: {name} ({signal})")),
+                "the report for {name} does not name it:\n{text}"
+            );
+            assert!(text.contains("opened /tmp/a.md"), "{name}: no breadcrumbs");
+        }
+    }
+
+    /// The report path a doomed child writes to, handed over the environment.
+    ///
+    /// Absent — every ordinary run — [`the_glib_fatal_probe_child`] does nothing at
+    /// all, which is what keeps a test that deliberately kills its process out of the
+    /// suite proper.
+    const GLIB_FATAL_PROBE_REPORT: &str = "SCRIBOBULATE_GLIB_FATAL_PROBE_REPORT";
+
+    /// The message the probe's fatal log carries, so the parent can tell "GLib reached
+    /// its fatal path" from "the child died of something else".
+    const GLIB_FATAL_PROBE_MESSAGE: &std::ffi::CStr = c"scribobulate glib-fatal probe";
+
+    /// **The arrival half: a real GLib fatal message, in a real process.**
+    ///
+    /// [`FATAL_SIGNALS`]'s inclusion of `SIGTRAP` rests on a claim about *somebody
+    /// else's* library — that `_g_log_abort` breakpoints rather than aborts on unix.
+    /// The enumeration test above proves only the coverage half (the handler takes the
+    /// signal); it would pass identically if that claim were false and no GLib death
+    /// ever landed there. So this drives `G_LOG_LEVEL_ERROR` through GLib itself and
+    /// asserts where the process ends up.
+    ///
+    /// **Why a re-executed child rather than a fork.** The other tests here fork and
+    /// raise, because a forked child of a multi-threaded process may not allocate — and
+    /// `g_log` allocates and takes locks, so a fork would risk a *hang* rather than a
+    /// failure. `Command` gives a fresh, single-threaded process instead, at the cost of
+    /// re-entering libtest by name.
+    ///
+    /// **It cannot pass vacuously.** A wrong test name makes libtest run nothing and
+    /// exit 0, which fails the signal assertion; a child that died for an unrelated
+    /// reason fails the stderr assertion; and removing `SIGTRAP` from [`FATAL_SIGNALS`]
+    /// leaves the child dying by SIGTRAP with **no report**, which is the mutation this
+    /// test exists to catch (confirmed by doing it).
+    ///
+    /// MEASURED, GLib 2.72.4: `g_error` and a `G_DEBUG=fatal-warnings` warning exit 133
+    /// (`SIGTRAP`); `g_assert_not_reached()` exits 134 (`SIGABRT`) via the same
+    /// function's other branch. If a future GLib aborts instead, this fails and says
+    /// so — the enumeration is then merely wider than it needs to be, not wrong.
+    #[test]
+    fn a_glib_fatal_message_dies_by_a_signal_this_handler_takes() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            eprintln!(
+                "SKIPPED [TDD 21.4 GLib-fatal arrival]: needs a re-executed child and a \
+                 glibc handler. NOT verified by this run."
+            );
+            return;
+        }
+        use std::os::unix::process::ExitStatusExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("crash-glib-fatal.log");
+        // The lib test binary names its tests without the crate name.
+        let child_test = format!(
+            "{}::the_glib_fatal_probe_child",
+            module_path!()
+                .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+                .unwrap_or(module_path!())
+        );
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("the running test binary's own path"),
+        )
+        .args(["--exact", &child_test, "--nocapture"])
+        .env(GLIB_FATAL_PROBE_REPORT, &path)
+        .output()
+        .expect("re-executing the test binary");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(GLIB_FATAL_PROBE_MESSAGE.to_str().unwrap()),
+            "the child never emitted the fatal GLib message, so it died of something \
+             else and proves nothing:\n{stderr}"
+        );
+        assert_eq!(
+            output.status.signal(),
+            Some(libc::SIGTRAP),
+            "a GLib FATAL message no longer lands on SIGTRAP (status {:?}) — \
+             FATAL_SIGNALS was widened on the premise that it does:\n{stderr}",
+            output.status
+        );
+
+        let text = std::fs::read_to_string(&path)
+            .expect("a GLib fatal death left no crash report — the whole point of taking SIGTRAP");
+        assert!(text.contains("signal: SIGTRAP"), "{text}");
+        assert!(
+            text.contains("a GLib fatal message is about to fire"),
+            "{text}"
+        );
+    }
+
+    /// The doomed half of [`a_glib_fatal_message_dies_by_a_signal_this_handler_takes`]:
+    /// arm the handler, then die the way GTK dies.
+    ///
+    /// A no-op unless [`GLIB_FATAL_PROBE_REPORT`] is set, which only that test does.
+    /// No [`ArmedHandler`] here on purpose — this process is about to be killed by the
+    /// very handler it installs, so there is nothing to restore and no later test to
+    /// protect (ScrAP-265's rule is about a *surviving* process).
+    ///
+    /// The fatal message goes through `glib::ffi::g_log` rather than a `g_*!` macro:
+    /// POLICY's logging section bans those for application logging, and spelling the
+    /// call out makes it obvious this is a deliberate provocation of GLib's fatal path
+    /// rather than a stray log line.
+    #[test]
+    fn the_glib_fatal_probe_child() {
+        let Ok(path) = std::env::var(GLIB_FATAL_PROBE_REPORT) else {
+            return;
+        };
+        let ring: &'static Ring = Box::leak(Box::new(Ring::new()));
+        ring.record("2026-08-11T10:00:00.000Z INFO  scribobulate::probe: a GLib fatal message is about to fire");
+        install(
+            std::path::Path::new(&path),
+            "scribobulate 0.1.0 (glib-fatal probe)\npid: probe\n",
+            ring,
+        );
+
+        // SAFETY: a NUL-terminated literal format and argument; `g_log` at
+        // `G_LOG_LEVEL_ERROR` is fatal by definition and does not return.
+        unsafe {
+            glib::ffi::g_log(
+                std::ptr::null(),
+                glib::ffi::G_LOG_LEVEL_ERROR,
+                c"%s".as_ptr(),
+                GLIB_FATAL_PROBE_MESSAGE.as_ptr(),
+            );
+        }
+        unreachable!("a G_LOG_LEVEL_ERROR message returned instead of killing the process");
     }
 
     /// **H-2, the cross-writer half.** The fatal-signal handler must not destroy the
@@ -1234,25 +1463,7 @@ mod tests {
         )
         .expect("the panic hook's report");
 
-        // SAFETY: the child allocates nothing and takes no lock — it drops its core
-        // limit so a `core_pattern` handler is not invoked for a deliberate crash, and
-        // raises. `_exit` guards against the raise somehow returning.
-        let child = unsafe { libc::fork() };
-        assert!(child >= 0, "fork failed");
-        if child == 0 {
-            unsafe {
-                let no_core = libc::rlimit {
-                    rlim_cur: 0,
-                    rlim_max: 0,
-                };
-                libc::setrlimit(libc::RLIMIT_CORE, &no_core);
-                libc::raise(libc::SIGABRT);
-                libc::_exit(0);
-            }
-        }
-        let mut status = 0;
-        // SAFETY: reaping the child forked above.
-        unsafe { libc::waitpid(child, &mut status, 0) };
+        let status = a_child_raises(libc::SIGABRT);
         assert!(
             libc::WIFSIGNALED(status),
             "child exited normally ({status})"
@@ -1331,7 +1542,7 @@ mod tests {
             on_fatal as *const () as libc::sighandler_t,
             "arming did not take SIGSEGV — the rest of this test would pass vacuously"
         );
-        a_child_raises_sigsegv();
+        a_child_raises(libc::SIGSEGV);
         let armed_len = std::fs::metadata(&path)
             .expect("the armed handler wrote no report — the control is broken, not the check")
             .len();
@@ -1355,7 +1566,7 @@ mod tests {
         // …and behaviourally: the same fault that grew the report a moment ago now
         // leaves it untouched. `O_APPEND` means any run of the handler would show up
         // as growth, so an unchanged length is the whole property.
-        a_child_raises_sigsegv();
+        a_child_raises(libc::SIGSEGV);
         assert_eq!(
             std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
             armed_len,
