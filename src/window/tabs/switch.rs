@@ -209,6 +209,13 @@ fn refresh_tab_surfaces(window: &ApplicationWindow) {
     // Documents menu model and needs no rebuild here — GTK4Rs/AP-76). Rename/open/close/move
     // are covered by the `documents_menu` rebuild instead (`refresh_documents_menu`).
     refresh_documents_button(window);
+    // …and so does the window title ("notes.md (+2 documents) — Scribobulate"), for
+    // the same reason and from the same accessor — a switch changes which document
+    // the title names, while leaving the tab count and every strip label alone. Just
+    // the title, deliberately NOT `update_window_title`: that would relabel every
+    // tab and re-queue a Documents-menu rebuild a switch cannot have invalidated
+    // (GTK4Rs/AP-76). Derived-view CAM row 4, column D.
+    super::documents::retitle_window(window);
 }
 
 /// Phase 3 — clear both window-shared background-tab notification toasts (so

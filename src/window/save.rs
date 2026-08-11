@@ -931,15 +931,19 @@ mod gtk_integration_tests {
         });
     }
 
-    /// **Save As in a multi-tab window keeps the count title (TDD 15.7).**
+    /// **Save As in a multi-tab window keeps the sibling count (TDD 15.7).**
     ///
     /// The second, quieter half of the same defect, and the one no amount of staring
     /// at the old call site would have surfaced: it retitled the *window* from one
-    /// tab's filename, so a Save As in a three-tab window replaced
-    /// "3 documents — Scribobulate" with a single filename — a window title actively
-    /// misdescribing what the window holds. Routing through the choke point fixes
-    /// both instances at once, which is the argument for deleting the second
-    /// derivation rather than patching it.
+    /// tab's filename ALONE, dropping the count of everything else the window held —
+    /// a window title actively misdescribing its contents. Routing through the choke
+    /// point fixes both instances at once, which is the argument for deleting the
+    /// second derivation rather than patching it.
+    ///
+    /// The title now leads with the active document's name in both cases, so what
+    /// distinguishes a correct Save As from the old derivation is the `(+1 document)`
+    /// the choke point adds and a filename-only derivation cannot: the assertion is
+    /// still against the shared formula, and it is still the multi-tab half of it.
     #[gtktest::test]
     fn save_as_in_a_multi_tab_window_keeps_the_count_title() {
         let dir = tempfile::tempdir().unwrap();
@@ -968,9 +972,17 @@ mod gtk_integration_tests {
 
             assert_eq!(
                 window.title().as_deref(),
-                Some(winstate::window_title_for_tabs(2, None).as_str()),
-                "a window with two documents is titled by its count, however the \
-                 active one acquired its name"
+                Some(winstate::window_title_for_tabs(2, Some("one-of-two.md")).as_str()),
+                "a window with two documents names the active one AND counts the \
+                 other, however the active one acquired its name"
+            );
+            // …and the count is what a filename-only derivation would have dropped:
+            // pin it literally too, so this cannot pass on a title that agrees with
+            // the formula only because the formula itself lost the count.
+            assert!(
+                window.title().is_some_and(|t| t.contains("(+1 document)")),
+                "the sibling count must survive a Save As, got {:?}",
+                window.title()
             );
             window.destroy();
         });

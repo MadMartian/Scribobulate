@@ -55,25 +55,39 @@ pub(crate) fn is_blank_welcome(path_present: bool, buffer_text: &str, welcome: &
 pub(crate) const APP_NAME: &str = "Scribobulate";
 
 /// Pure decision core of the window-title formula (operator decisions Q7/Q14,
-/// TDD 15.7): a bare count with 2+ tabs (no single filename would be
-/// representative), else the sole tab's filename, else the bare app name for
-/// an untitled/welcome tab or a transient zero-tab window (about to close).
+/// TDD 15.7): **the ACTIVE tab's filename**, plus a parenthetical count of the
+/// window's OTHER tabs once there is at least one — `notes.md (+2 documents) —
+/// Scribobulate`. An untitled/welcome active tab has no filename to lead with, so
+/// the app name takes that slot and carries the count itself (`Scribobulate (+2
+/// documents)`), exactly as a lone untitled tab reads a bare `Scribobulate`.
+///
+/// `others` — `tab_count - 1` — is what the parenthetical counts, not `tab_count`:
+/// "+2" means "two more documents *besides* the one named", so it is the count the
+/// "+" makes true. It is deliberately singular at one (`(+1 document)`) — a title
+/// bar is the most-read string in the app and "+1 documents" is the kind of blemish
+/// that outlives every release.
 ///
 /// **This is the only function that produces a window title.** Every path that
-/// names a window — open, session restore, link navigation, tab open/close/move,
-/// and Save As — resolves through here, directly or via `docio::title_for`,
+/// names a window — open, session restore, link navigation, tab open/close/move/
+/// switch, and Save As — resolves through here, directly or via `docio::title_for`,
 /// which is a one-tab call to it. A second
 /// derivation is how Save As came to set a title without the app-name suffix and
 /// without the multi-tab count: it looked correct at its own call site and could
 /// only be seen by comparing two places (Derived-view CAM row 4, column B).
-pub(crate) fn window_title_for_tabs(tab_count: usize, single_tab_name: Option<&str>) -> String {
-    if tab_count > 1 {
-        format!("{tab_count} documents — {APP_NAME}")
-    } else {
-        match single_tab_name {
-            Some(name) => format!("{name} — {APP_NAME}"),
-            None => APP_NAME.to_string(),
-        }
+///
+/// A zero-tab window (transient, about to close) has no active tab and no others,
+/// so it reads as the bare app name — `saturating_sub` keeps that case arithmetic,
+/// not a special case.
+pub(crate) fn window_title_for_tabs(tab_count: usize, active_tab_name: Option<&str>) -> String {
+    let others = tab_count.saturating_sub(1);
+    let extra = match others {
+        0 => String::new(),
+        1 => " (+1 document)".to_string(),
+        n => format!(" (+{n} documents)"),
+    };
+    match active_tab_name {
+        Some(name) => format!("{name}{extra} — {APP_NAME}"),
+        None => format!("{APP_NAME}{extra}"),
     }
 }
 
@@ -255,15 +269,35 @@ mod tests {
     }
 
     #[test]
-    fn window_title_is_a_count_at_two_or_more_tabs() {
+    fn window_title_names_the_active_tab_and_counts_the_others() {
+        // One tab: the active tab's name and nothing else — no "(+0 documents)".
         assert_eq!(
             window_title_for_tabs(1, Some("foo.md")),
             "foo.md — Scribobulate"
         );
         assert_eq!(window_title_for_tabs(1, None), "Scribobulate");
+        // The parenthetical counts the OTHER documents, so it is one less than the
+        // tab count — three tabs means two besides the one named.
         assert_eq!(
             window_title_for_tabs(3, Some("foo.md")),
-            "3 documents — Scribobulate"
+            "foo.md (+2 documents) — Scribobulate"
+        );
+        assert_eq!(
+            window_title_for_tabs(9, Some("foo.md")),
+            "foo.md (+8 documents) — Scribobulate"
+        );
+        // Singular at exactly one other — never "(+1 documents)".
+        assert_eq!(
+            window_title_for_tabs(2, Some("foo.md")),
+            "foo.md (+1 document) — Scribobulate"
+        );
+        // An untitled active tab still reports its siblings; the app name takes the
+        // name slot (as it does for a lone untitled tab) rather than the count
+        // silently disappearing with the filename.
+        assert_eq!(window_title_for_tabs(2, None), "Scribobulate (+1 document)");
+        assert_eq!(
+            window_title_for_tabs(4, None),
+            "Scribobulate (+3 documents)"
         );
         assert_eq!(window_title_for_tabs(0, None), "Scribobulate"); // transient zero-tab window
     }

@@ -451,7 +451,7 @@
 - **Given** a new/untitled document (no backing file) with content entered
 - **When** the user invokes Save (Ctrl+S) or Save As (File ▸ Save As… / Ctrl+Shift+S)
 - **Then** a Save As file chooser appears; choosing a location writes the content, the window adopts that file (Copy Full Path / Reload become available), and the document then reads as saved (clean)
-- **And** the window is retitled by the *same* formula every other naming path uses (15.7) — so a one-tab window reads "`saved-as.md` — Scribobulate", suffix included, and a window holding several tabs keeps its "*N* documents — Scribobulate" count rather than being retitled to the one filename just chosen
+- **And** the window is retitled by the *same* formula every other naming path uses (15.7) — so a one-tab window reads "`saved-as.md` — Scribobulate", suffix included, and a window holding several tabs reads "`saved-as.md` (+*N* documents) — Scribobulate", keeping the count of its other documents rather than being retitled to the chosen filename alone
 - **And given** a chosen filename that already ends in `.md` (case-insensitive)
 - **Then** the file is saved with that single `.md` extension, never a doubled `notes.md.md`
 - **And given** the document has just been Save-As'd (or is a first save of a previously-untitled document)
@@ -1586,11 +1586,15 @@
 - **When** the user drags a tab sideways within its own window's tab strip
 - **Then** the tab's position in the strip changes accordingly, with no effect on its content or active state
 
-### 15.7 Window title and tab labels reflect tab count; the tab strip is always visible
+### 15.7 Window title names the active document and counts the others; the tab strip is always visible
 - **Given** a window with exactly one tab
-- **Then** the window title shows that tab's filename (or "Scribobulate" if untitled), and the tab strip is nonetheless visible (rewritten — a hidden strip is the only grab handle a tab drag has, native reorder and the custom drag source alike, so hiding it at one tab made that tab permanently undraggable; no longer conditioned on tab count or how many other windows are open)
+- **Then** the window title shows that tab's filename (or "Scribobulate" if untitled) with no parenthetical count, and the tab strip is nonetheless visible (rewritten — a hidden strip is the only grab handle a tab drag has, native reorder and the custom drag source alike, so hiding it at one tab made that tab permanently undraggable; no longer conditioned on tab count or how many other windows are open)
 - **And given** a window with two or more tabs
-- **Then** the window title shows a count ("*N* documents — Scribobulate"), the tab strip is visible, and each tab's own label shows its filename plus a "•" marker while it has unsaved changes
+- **Then** the window title shows the **active** tab's filename followed by a count of the window's *other* tabs — "notes.md (+2 documents) — Scribobulate", singular at exactly one other ("notes.md (+1 document) — Scribobulate") — the tab strip is visible, and each tab's own label shows its filename plus a "•" marker while it has unsaved changes
+- **And given** the active tab is untitled (no backing file) while the window holds others
+- **Then** the app name takes the filename's place and still carries the count ("Scribobulate (+2 documents)"), exactly as a lone untitled tab reads a bare "Scribobulate"
+- **And when** the user switches tabs, with no other change to the window
+- **Then** the title re-aims at the newly active document and keeps the same count — the title tracks *which* document is on screen, not merely how many there are
 - **And** hovering a tab shows a tooltip with the backing file's full absolute path, or "Unsaved" for a tab that has never been saved to a path (updated the moment a Save As adopts a path)
 
 ### 15.8 View mode and split arrangement are restored per tab

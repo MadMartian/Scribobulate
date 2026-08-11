@@ -3098,6 +3098,30 @@ consecutive runs, identical coordinates, correct result). The cheap general form
 **an input that is delivered is not an input that was handled** — when a drive step's
 effect is invisible, instrument the handler rather than re-reading the screenshot.
 
+**A third instance, and the one that shows the class has a TIME axis — a probe can be
+correct for years and be converted to wrong by an APP change that never touches it.**
+Measured on Windows (Win10 19045, Windows PowerShell 5.1 / .NET Framework, no GTK
+involved): `System.Diagnostics.Process` **caches** `MainWindowTitle` on first access,
+so a driver holding one process object across an action re-reads the pre-action title —
+silently, no error, no staleness indicator — while `GetWindowTextW` (ground truth) and a
+**freshly constructed** `Get-Process` object both return the new caption, and
+`$p.Refresh()` clears the cache. **The trap needs a read BEFORE the change and a re-read
+on the SAME object** — a held object whose *first* read happens after the change answers
+correctly — which is exactly why a harness can hold one for years and never see it,
+until someone adds an earlier read. The trap is not "a cached property exists": it is
+that the harness's correctness rested on an **undocumented app invariant** — "the window
+title only changes when the tab set changes" — which held until the title started
+naming the *active* document, at which point a plain tab switch retitles the window and
+a held probe grades the previous tab (measured on the app itself, not just a control
+subject: held-then-switch-then-re-read returned the pre-switch document twice). Nothing
+in the harness was edited on the day it became wrong. Rule: **a cached OS probe is a bet on how often the value changes; a
+feature that makes it change more often converts the probe from correct to wrong, and
+the diff that broke it does not touch the probe.** So read such a value through a fresh
+object on every read (the piped `Get-Process … | Select MainWindowTitle` form is safe
+precisely because it constructs one per call — never "optimise" it into a held
+variable), and when a change makes an observable change more often, ask what was
+sampling it.
+
 *Non-core (verification tooling / test-harness design — not a GTK widget contract).
 The transferable half is "assert the setup, not its delivery", plus the GTK-specific
 fact that activating a disabled `GAction` is a silent no-op with no signal to hook.*
@@ -3105,7 +3129,7 @@ Kin #245 (the same silence one layer down — the input *channel* delivering not
 while every diagnostic says otherwise), #217 (positive controls), #239 (a control
 that cannot differ has stopped being a control).
 
-**Scribobulate**: none — a discipline lesson with no implementation in this tree. (Stated, not omitted: an absent field and a dropped one look identical.)
+**Scribobulate**: no application code — but the third instance's corrective IS carried in this tree, as the fresh-`Get-Process` rule in `tests/MANUAL-TEST.md` §A.3's Windows launch step.
 **See**: gtk4-rs skill → ui-testing (GTK4Rs/AP-252).
 
 ## 253. The `org.gtk.Actions` probe answers about the operator's app when addressed by the well-known name — a `--new-instance` app must be probed by its UNIQUE name

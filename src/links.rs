@@ -382,6 +382,20 @@ pub(crate) enum ImageResolution {
     /// perfectly *contained* if anything were there. The renderer shows a
     /// broken-image placeholder with an "Image not found" tooltip (not bare alt
     /// text) — see `renderer::image_placeholder_tooltip`.
+    ///
+    /// **By design, this answer is a point-in-time disk check and nothing watches
+    /// the path afterwards.** An image file that lands *after* the render that
+    /// referenced it therefore stays a placeholder until something re-renders the
+    /// preview (reload, view-mode switch, zoom, theme change, the Show Unsafe Images
+    /// toggle) — which is reachable in ordinary use, since a checkout, an `rsync` or
+    /// a static-site generator can write the document a few milliseconds before its
+    /// pictures, and the live-reload path re-renders the moment the *document*
+    /// lands. Stated here because it is a deliberate limitation rather than an
+    /// oversight: self-healing is a larger change (the renderer would have to report
+    /// which local candidates resolved to nothing, the tab would hold a
+    /// `gio::FileMonitor` per distinct absent path — GIO does monitor a path that
+    /// does not exist yet and reports `Created` — and the handler would re-render in
+    /// place), and it wants a TDD rubric of its own before it is built.
     Missing,
 }
 
@@ -774,7 +788,8 @@ mod tests {
         use std::fs;
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path();
-        // A same-directory file whose NAME contains a colon — the exact ISSUES case.
+        // A same-directory file whose NAME contains a colon — the case that was
+        // reported broken.
         // Before the fix, `resolve_image`'s inlined `split_once(':')` read "notes" (or
         // "assets/notes") as a URL scheme and returned Refused; now it has no scheme
         // and resolves as the contained local file it is.

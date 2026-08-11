@@ -5,13 +5,17 @@
 
 use super::super::*;
 
-/// Window title (operator decisions Q7/Q14): the sole tab's filename when
-/// there is exactly one, or a bare count ("3 documents — Scribobulate") when
-/// there are several — no single filename would be representative. Also
-/// keeps every tab's own label text in sync, since it depends on the same
-/// "how many tabs does this window have" fact — called on every event that
-/// changes a window's tab count (create, close, and both sides of a
-/// cross-window move).
+/// Window title (operator decisions Q7/Q14): the ACTIVE tab's filename, plus a
+/// count of the window's other tabs once it has any ("notes.md (+2 documents) —
+/// Scribobulate"). Also keeps every tab's own label text in sync, since it
+/// depends on the same "how many tabs does this window have" fact — called on
+/// every event that changes a window's tab count (create, close, and both sides
+/// of a cross-window move).
+///
+/// A plain tab SWITCH changes no tab's label and no count, but it does change
+/// which document the title names — that path calls [`retitle_window`] alone
+/// (via `switch::refresh_tab_surfaces`), so a switch costs one `set_title` and
+/// rebuilds nothing (GTK4Rs/AP-76).
 pub(crate) fn update_window_title(window: &ApplicationWindow) {
     let tabs = winstate::tabs_for_window(window);
     let Some(chrome) = winstate::chrome(window) else {
@@ -21,17 +25,7 @@ pub(crate) fn update_window_title(window: &ApplicationWindow) {
     // empty-of-purpose window behind — there's nothing useful for the
     // command to do, so it's disabled rather than a no-op / confusing prompt.
     set_action_enabled(window, "move-tab-new-window", tabs.len() > 1);
-    let single_name = tabs.first().and_then(|tab| {
-        tab.path
-            .borrow()
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-    });
-    window.set_title(Some(&winstate::window_title_for_tabs(
-        tabs.len(),
-        single_name.as_deref(),
-    )));
+    retitle_window(window);
     for tab in &tabs {
         set_tab_label(&chrome, tab);
     }
@@ -39,6 +33,46 @@ pub(crate) fn update_window_title(window: &ApplicationWindow) {
     // new, close, and cross-window move all funnel through here — so refresh this
     // window's View ▸ Documents list too.
     refresh_documents_menu(window);
+}
+
+/// Set `window`'s title from the one shared formula
+/// ([`winstate::window_title_for_tabs`]) — the ACTIVE tab's filename plus a count
+/// of the others.
+///
+/// Its own function, rather than a step inside [`update_window_title`], because
+/// the title now has two distinct triggers with different costs: anything that
+/// changes the tab SET or a tab's NAME (which must also relabel the strip and
+/// rebuild the Documents menu) goes through `update_window_title`, while a plain
+/// tab switch changes only *which* tab is named and comes straight here. Both
+/// resolve the name the same way, so the two triggers cannot disagree about what
+/// the window is called.
+///
+/// The active tab is read via `winstate::state` — the same accessor the toolbar's
+/// documents combo uses (`documents_button_label`) — so title and combo name the
+/// same document by construction. A window momentarily without an active tab (the
+/// instant between removing the active tab and the notebook settling on its
+/// successor) has no filename to show and falls back to the app name; the
+/// switch-page that follows retitles it for real.
+///
+/// Visibility is deliberately `pub(super)`, not `pub(crate)`: the only legitimate
+/// callers are this module and its sibling `switch`, and a title-only refresh
+/// reachable from anywhere else is how a call site that *also* changed a tab's name
+/// or the tab set comes to retitle the window without relabelling the strip or
+/// rebuilding the Documents menu — a half-updated derived view (Derived-view CAM
+/// row 4). Outside `window::tabs` the entry point is `update_window_title`, and the
+/// compiler enforces that rather than a convention (GTK4Rs/AP-130).
+pub(super) fn retitle_window(window: &ApplicationWindow) {
+    let active_name = state(window).and_then(|tab| {
+        tab.path
+            .borrow()
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+    });
+    window.set_title(Some(&winstate::window_title_for_tabs(
+        winstate::tab_count(window),
+        active_name.as_deref(),
+    )));
 }
 
 /// Schedule a rebuild of `window`'s `View ▸ Documents` submenu to match its open
@@ -395,6 +429,97 @@ mod gtk_integration_tests {
             chrome.documents_btn.label().map(|s| s.to_string()),
             Some("alpha.md".to_string()),
             "switching back retargets the combo label to the first document"
+        );
+
+        window.destroy();
+    }
+
+    /// **The window title names the ACTIVE document and counts the others (TDD
+    /// 15.7).** Three claims, none implied by the others:
+    ///
+    /// 1. A lone tab is named with no parenthetical at all.
+    /// 2. Opening a second document adds `(+1 document)` — singular — to the title.
+    /// 3. A plain tab SWITCH re-aims the title at the newly active document. This is
+    ///    the one the old count-only title had no way to get wrong, and the reason
+    ///    `refresh_tab_surfaces` now retitles: nothing else fires on a switch, so
+    ///    without that call the title would name whichever document happened to be
+    ///    active when the tab SET last changed and then quietly stop tracking.
+    ///
+    /// Asserted against `window.title()` — the property the desktop actually reads —
+    /// and against literal strings rather than a second call to the formula: a test
+    /// that recomputes the formula agrees with any change to it, including a wrong
+    /// one (GTK4Rs/AP-160's "makes the test agree with itself"). The one-shared-formula
+    /// claim is `save.rs`'s to make; this test's job is the *content*.
+    #[gtktest::test]
+    fn window_title_names_the_active_document_and_counts_the_others() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.wintitle"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+
+        let window = crate::window::new_window(
+            &app,
+            "IT",
+            "# Alpha",
+            Some(Path::new("/tmp/scrib-it/alpha.md")),
+        );
+        assert_eq!(
+            window.title().map(|s| s.to_string()),
+            Some("alpha.md — Scribobulate".to_string()),
+            "a lone document is named on its own — no sibling count"
+        );
+
+        // A second document, switched to on creation (defer = false → switch-page
+        // fires synchronously). Singular: one other document, not "(+1 documents)".
+        crate::window::create_tab_in_window(
+            &window,
+            "# Beta",
+            Some(Path::new("/tmp/scrib-it/beta.md")),
+            false,
+            false,
+        )
+        .expect("second tab created");
+        assert_eq!(
+            window.title().map(|s| s.to_string()),
+            Some("beta.md (+1 document) — Scribobulate".to_string()),
+            "the title names the newly active document and counts the other one"
+        );
+
+        // A third, then switch back to the first: the title must follow the ACTIVE
+        // tab, and the count must follow the tab SET independently of it.
+        crate::window::create_tab_in_window(
+            &window,
+            "# Gamma",
+            Some(Path::new("/tmp/scrib-it/gamma.md")),
+            false,
+            false,
+        )
+        .expect("third tab created");
+        assert_eq!(
+            window.title().map(|s| s.to_string()),
+            Some("gamma.md (+2 documents) — Scribobulate".to_string()),
+            "two other documents pluralise the count"
+        );
+
+        let chrome = winstate::chrome(&window).expect("chrome registered");
+        let first = winstate::tabs_for_window(&window)
+            .into_iter()
+            .find(|t| {
+                t.path
+                    .borrow()
+                    .as_deref()
+                    .and_then(Path::file_name)
+                    .is_some_and(|n| n == "alpha.md")
+            })
+            .expect("first tab still present");
+        chrome.tabs.focus_page(&first.content_box);
+        assert_eq!(
+            window.title().map(|s| s.to_string()),
+            Some("alpha.md (+2 documents) — Scribobulate".to_string()),
+            "a plain tab switch re-aims the title at the now-active document, \
+             keeping the same sibling count"
         );
 
         window.destroy();

@@ -232,7 +232,7 @@ The event classes (matrix columns):
 | 1 | Outline tree (headings) | ✓ | ✓ | ✓ | ✓ | `refresh_outline` |
 | 2 | Outline scroll-spy highlight | ✓ | ✓ | ✓ | ✓ | `wire_scroll_spy`; ScrAP-46/ScrAP-57/ScrAP-89 |
 | 3 | Annotations viewer (flat list) | ✓ | ✓ | ✓ | ✓ | `refresh_annotations`; `preview::refresh_annotations_in_place` |
-| 4 | Window title, tab label + tooltip, View ▸ Documents (menu **and** toolbar combo) | ✓ (dirty) | ✓ | — | ✓ | `update_window_title`; `refresh_active_tab_label`/`badge_tab_label`; `refresh_documents_menu`; `refresh_documents_button` |
+| 4 | Window title, tab label + tooltip, View ▸ Documents (menu **and** toolbar combo) | ✓ (dirty) | ✓ | — | ✓ | `update_window_title`/`retitle_window`; `refresh_active_tab_label`/`badge_tab_label`; `refresh_documents_menu`; `refresh_documents_button` |
 | 5 | Status bar — dirty/conflict message | ✓ | ✓ | — | ✓ | `refresh_dirty_status` |
 | 6 | Status bar — Ln/Col indicator | ✓ | ✓ | ✓ | ✓ | `refresh_position_indicator` |
 | 7 | Find bar — match count and match highlights | ✓ | ✓ | ✓ | ✓ | `update_match_count_label`; `refresh_preview_find_highlight` (Document Rendering CAM row 8) |

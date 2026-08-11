@@ -7,11 +7,10 @@
 | E | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
 | F | Split mode intermittently blanks the view on an edit — a `GtkOverlay` snapshotted without a current allocation; rare, first-time-only, recovers on a mode toggle | Medium |
 | G | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
-| J | The app dies occasionally with SIGSEGV inside GTK/GIO, with no reproduction and nothing recorded at the moment of death | Medium |
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
 | Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
-| R | An image that lands on disk *after* the render referencing it stays a "not found" placeholder until something re-renders the preview | Low |
+| S | The crash-forensics handler does not take `SIGTRAP`, so a GLib **fatal** death — the `g_error` family — leaves no report at all | Medium |
 
 ## A. Tables are selection islands
 
@@ -589,86 +588,6 @@ cost and the alternatives.
   primary use case (large agent-generated documents) defeats the negligible-footprint thesis the
   project exists to honour.
 
-## J. Occasional SIGSEGV inside GTK/GIO, with nothing recorded at the moment of death
-
-**Severity**: Medium (real and user-facing — the application vanishes mid-work — but
-now rare and untriggerable, with no known reproduction. **Two of the five occurrences
-below are accounted for and fixed** (2026-08-06): they were the dangling
-line-display cache described in ANTI-PATTERNS #258, which the preview's re-render no
-longer creates. Three are not, and this entry is what remains of them.
-Its worst consequence stays bounded — crash recovery snapshots unsaved edits while
-they are unsaved, so an occurrence costs seconds of work and an interrupted session
-rather than the whole unsaved buffer — but a bounded symptom is not a diagnosed cause)
-
-Recovered from the operator's kernel log and journald, before the forensics kit
-existed:
-
-| When | Signal | Fault addr | Faulting frame |
-|---|---|---|---|
-| 2026-07-03 11:05:30 | SIGSEGV | `0x18` | `libgtk-4.so.1.600.9` vaddr `0x1DD28A` (static fn, unnamed) |
-| 2026-07-03 11:08:17 | SIGSEGV | `0x18` | same IP |
-| 2026-07-29 13:43:44 | SIGSEGV | `0x1` | `libgio-2.0.so.0.7200.4` **`g_file_equal +0x20`** |
-
-Both remaining instructions are **reads** (`error 4`) of a small offset off a
-null-or-garbage base — the signature of a field read on a freed or invalid GObject —
-and the `0x1DD28A` pair recurred minutes apart, so the path is repeatable even though
-the trigger is unknown. (Two further occurrences, 2026-07-13 and 2026-07-29 01:54, both
-at vaddr `0x375219`, were the fixed defect; they are dropped from this table rather
-than kept as history.)
-
-**The one identified frame is a lead, not a diagnosis.** `g_file_equal +0x20`
-faulting on address `0x1` is GIO dereferencing an invalid `GFile`. The app never
-calls `File::equal` itself, so a `GFile` handed to GTK/GIO was freed and compared
-later. Two candidates, unconfirmed: the live-reload `FileMonitor` (`app/open.rs`,
-monitor held on `TabState::file_monitor`) — asynchronous disk events fit the
-"different circumstances each time" description — and `FileChooserNative`, which
-per ScrAP-41 has inverted liveness and needs an external owning reference.
-
-**The recording gap is closed; the crash is not.** The application carries a
-crash-forensics kit (`src/forensics/`, TECH.md § Diagnostics and crash forensics):
-a persistent log in the state directory, an always-on breadcrumb ring, and a
-fatal-signal handler that writes a report naming the signal, the fault address,
-the instruction pointer, the build, the last 64 things the application did, and the
-process's executable mappings — the last of which makes a frame resolve to
-module + offset without the core dump Ubuntu's apport will not produce and the
-symbols the distribution does not ship. Lifecycle breadcrumbs are recorded at
-`info` regardless of `RUST_LOG`, and they specifically cover both suspects: every
-`FileMonitor` event (including one delivered for a tab that no longer exists) and
-every native dialog's show and response.
-
-**One recording gap remains, and it under-counts.** The handler traps fatal signals;
-it does **not** trap `SIGTRAP`, which is how a glib `G_LOG_LEVEL_ERROR` (`g_error`)
-kills the process. A death by that route leaves no report at all — the fixed defect
-took that arm roughly half the time, so any future occurrence may too. Trapping it is
-small and worth doing.
-
-**What is still open is the diagnosis.** The next occurrence should produce a
-report in `$XDG_STATE_HOME/scribobulate/`, and the next launch after it says so.
-The question to take to that report is which of the two `GFile` candidates was live
-in the seconds before the fault; with that answer, the follow-up is a targeted
-`G_DEBUG=fatal-warnings` run under gdb on the implicated path, since the first GTK
-CRITICAL is usually upstream of the eventual segfault.
-
-**Resolving a frame from a kernel log** (still needed for a crash from a build
-without the kit, and for correlating a report against `journalctl -k`): see
-ScrAP-204 — the naive reading of a `segfault at … ip … in <lib>[<VMA>+<size>]`
-line names the wrong function.
-
-**Do not treat a clean run as evidence of a fix.** These surfaced three times in four
-weeks, so an absence of crashes over a session or a test pass says nothing.
-
-**Mitigation options**:
-- **Wait for a report and diagnose from it** (current state): the kit now records what
-  the earlier occurrences could not, and the two `GFile` suspects are both
-  breadcrumbed.
-- **Trap `SIGTRAP` in the forensics handler**: independent of the diagnosis and worth
-  doing regardless — without it, a glib-fatal death is invisible.
-- **Audit the two `GFile` suspects directly** rather than waiting: the `FileMonitor`
-  held on a tab that may already be gone, and the native dialog's inverted liveness.
-  Cheaper than a crash, but speculative — neither is confirmed.
-- **Accept the limitation**: not viable. An unexplained SIGSEGV in the toolkit is
-  worth chasing on its own terms.
-
 ## N. A click inside an existing selection never reaches the preview's click affordances
 
 **Severity**: Low (one wasted click, self-correcting — the click clears the selection and
@@ -825,36 +744,59 @@ this issue; a genuine return of the quadratic walk reads ~16x and does not come 
 
 ---
 
-## R. An image that arrives after the render stays a placeholder
+## S. A GLib-fatal death leaves no forensic report, because the handler does not take `SIGTRAP`
 
-**Severity**: Low (the placeholder now states the true reason, and any re-render fixes
-it; what remains is that the reader has to cause one)
+**Severity**: Medium (nothing shipped behaves worse for it, and crash recovery still
+snapshots unsaved edits — but the crash-forensics kit exists precisely so a death is
+never silent, and for one whole class of death it is. The gap is invisible from the
+outside: the report file simply is not there, which reads as "the kit failed" or as an
+ordinary kill rather than as a signal the handler was never asked to take)
 
-A render resolves every image `src` against the disk **at that instant**. Nothing
-watches a path that resolved to nothing, so when the file appears a moment later the
-preview keeps showing the "Image not found" placeholder until something re-renders it —
-a reload, a view-mode switch, a zoom step, a theme change, or the "Show Unsafe Images"
-toggle.
+The fatal-signal handler installs itself for exactly four signals — `SIGSEGV`, `SIGBUS`,
+`SIGILL`, `SIGABRT` (`forensics/signal.rs`, one `const` array, and its doc comment calls
+them "the four ways this application can die without running another line of its own
+code"). That enumeration is one short. A **fatal** GLib log message — `g_error`, and the
+`g_assert_not_reached` / "code should not be reached" family GTK uses freely — does not
+reach `abort()` on Linux/x86: GLib's fatal path executes a breakpoint instruction, so the
+process dies of `SIGTRAP`, which carries its default disposition and terminates with no
+handler having run. Nothing is written: no report, no breadcrumb flush, no signal line.
 
-**How it is reached**: a document and its images arriving together, which is the normal
-shape of a checkout, an `rsync`, a static-site generator, or writing the Markdown before
-copying the picture in. The live-reload path re-renders the instant the *document*
-lands, so an image written even a few milliseconds later loses the race.
+**Measured, already, in this tree**: the dangling line-display cache that `set_buffer`
+leaves behind kills the process two ways, and one of them is the `g_error`
+`gtk_text_btree_line_number couldn't find line` — recorded as `→ SIGTRAP` at the seam
+that now avoids it (`preview/build.rs`). So this is not a hypothetical class: a death
+this project has actually produced is in it. The particular trigger is fixed; the blind
+spot is not, and every GTK `g_error` reachable from any other path lands in it — as does
+any run under `G_DEBUG=fatal-warnings`, where routine warnings are promoted into exactly
+this death.
 
-**Measured** (2026-08-10, `#[gtktest::test]` driving the real reload path): with the
-image absent at reload the placeholder appears; writing the file afterwards and pumping
-the main loop changes nothing; the next re-render shows the image.
+Unix only, and correctly so: the handler is `unix`-gated because POSIX signals are, and
+Windows has no fatal-signal handler by design. This is a claim about the Linux/macOS
+build, not a missing Windows feature.
 
-**Why it is not fixed here**: the operator scoped this cycle to the *classification*
-half — the same situation used to report "Blocked image (enable Show Unsafe Images to
-load)", accusing a safe sibling file of being unsafe and inviting the reader to switch
-the containment gate off to see it (ScrAP-34b). That misdirection is fixed and is what
-made this urgent. Self-healing is a separate, larger change: the renderer would have to
-report the local candidates that resolved to nothing, the tab would hold a
-`gio::FileMonitor` per distinct absent path (GIO monitors a path that does not exist yet
-and reports `Created`), and the handler would re-render in place. Bounded by the number
-of distinct missing images in the document, and it needs a rubric of its own before it
-is built.
+**Nothing is failing, and that is the point.** TDD 21.4's own **Given** enumerates the
+same four signals the code does ("segmentation fault, bus error, illegal instruction,
+abort"), so the rubric is satisfied, the suite is green, and the implementation matches
+its contract exactly. The gap is *in the enumeration* — a scope decision made once and
+inherited by both sides — so whoever closes it has two edits, not one: widen the signal
+list **and** widen 21.4's Given, or the rubric will keep certifying the narrower promise.
 
-**Workaround**: reload the document (File ▸ Reload) once the image is in place — a
-touch of the file works too, since auto-reload re-renders.
+**Mitigation options**:
+- **Add `SIGTRAP` to the handler's signal list** — a one-`const` change, plus extending
+  the existing raise-and-reap child test (which forks, raises, and reaps for `SIGSEGV`)
+  to cover it, so the enumeration is asserted rather than trusted. Cheap and it closes
+  the class. The one thing to check first: a debugger-attached run also stops on
+  `SIGTRAP`, so confirm the handler's re-raise leaves a `gdb` session usable rather than
+  swallowing the trap the debugger wanted.
+- **Verify the mechanism before relying on the reasoning.** That GLib's fatal path
+  breakpoints rather than aborts is inferred from this tree's own measurement plus GLib's
+  documented behaviour, not traced in GLib's source here. Raising `SIGTRAP` in a scratch
+  process with the handler armed proves the *coverage* half outright; provoking a real
+  `g_error` proves the *arrival* half. Both are minutes, and the second is what would
+  make the entry's premise measured rather than argued.
+- **Accept the limitation**: not advisable. It silently narrows what the diagnostics
+  facility can be trusted to have caught, and an absent report is indistinguishable from
+  a clean exit — so the next unexplained disappearance gets investigated as though the
+  kit had reported nothing to report.
+
+---
