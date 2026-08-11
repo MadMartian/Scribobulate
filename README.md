@@ -130,6 +130,14 @@ packaging/macos/bundle.sh          # -> target/macos/Scribobulate.app
 open target/macos/Scribobulate.app --args path/to/document.md
 ```
 
+Or `packaging/macos/install.sh` to also get a `scribobulate` command on PATH
+(symlinked into Homebrew's `bin/`, so it needs no `sudo`):
+
+```bash
+packaging/macos/install.sh
+scribobulate path/to/document.md
+```
+
 Not a self-contained redistributable — the built app still links these
 Homebrew libraries at runtime. More: [`packaging/macos/README.md`](packaging/macos/README.md).
 

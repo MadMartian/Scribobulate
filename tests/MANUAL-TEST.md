@@ -1685,7 +1685,11 @@ why item 8.2m exists. Count instances with `pgrep -a scribobulate`.
 
 **5. Install.** `packaging/macos/bundle.sh`, then
 `open target/macos/Scribobulate.app --args "$PWD/<file>.md"` — an **absolute** path,
-because a bundle does not inherit the shell's working directory.
+because a bundle does not inherit the shell's working directory. To also confirm the
+`scribobulate` PATH command (`packaging/macos/install.sh`), open a **fresh** terminal
+after running it — a shell opened before the symlink was created still has the old
+`hash`ed PATH lookup — and run `scribobulate "$PWD/<file>.md"`; `which scribobulate`
+should resolve into `$(brew --prefix)/bin`.
 
 **6. Tokened (desktop-integrated) launch.** Finder ▸ Open With, or
 `open -a Scribobulate.app <file>`.

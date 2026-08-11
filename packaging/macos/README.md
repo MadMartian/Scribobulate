@@ -95,6 +95,24 @@ brew install duti
 duti -s com.extollit.scribobulate net.daringfireball.markdown all
 ```
 
+## Putting `scribobulate` on PATH
+
+```bash
+packaging/macos/install.sh   # -> target/macos/Scribobulate.app, plus a symlink on PATH
+scribobulate path/to/document.md
+```
+
+Builds the bundle (via `bundle.sh`) and symlinks its own executable —
+`Scribobulate.app/Contents/MacOS/scribobulate` — into Homebrew's `bin/`
+directory, which this project already requires for its GTK4 dependencies and
+which is therefore already writable with no `sudo` and already on PATH. The
+symlink stays inside `Contents/MacOS/`, so a terminal launch runs the identical
+executable Finder or the Dock would, Dock/Cmd-Tab identity included — a copy
+made outside the bundle would not carry that.
+
+This is the developer-convenience counterpart to the top-level `install.sh` on
+Linux, not the redistributable installer — that is `dmg.sh` above.
+
 ## Verifying a bundle
 
 ```bash
