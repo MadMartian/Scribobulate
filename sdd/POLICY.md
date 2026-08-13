@@ -947,7 +947,9 @@ it** — the flag is a no-op against the *running application*, MEASURED (GLib 2
 for structured logs, which GTK's own diagnostics are, GLib consults
 `g_log_always_fatal` inside `g_log_writer_default`, and `logging::init` replaces that
 writer with the bridge — so a promoted `Gtk-WARNING`/`Gtk-CRITICAL` is recorded and
-survived. The suite runners install no bridge (`gtk_suite.rs` says why), which is what
+survived. This holds for every promotion route, not just this one: `fatal-warnings`,
+`fatal-criticals` and a programmatic `g_log_set_always_fatal` are all defused the same
+way, so there is no variant of the flag that arms the app. The suite runners install no bridge (`gtk_suite.rs` says why), which is what
 keeps the line above true where it is claimed. `g_error` is unaffected either way: its
 fatality is decided after the writer returns, and it kills the process with `SIGTRAP`
 rather than `abort()` (ScrAP-268).

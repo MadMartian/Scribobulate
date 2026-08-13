@@ -2356,7 +2356,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** each of those is recorded — with the path or tab it concerns — in both the persistent log and the in-memory breadcrumb ring, while stderr stays as quiet as it is today
 
 ### 21.4 A crash writes a report naming the fault
-- **Given** the application dies from a fatal signal — segmentation fault, bus error, illegal instruction, abort, **or the breakpoint trap a GLib *fatal* log message dies of** (`g_error`, and any warning `G_DEBUG=fatal-warnings` promotes: GLib breakpoints rather than aborting on unix, so this death is a `SIGTRAP` and is no less a crash for it)
+- **Given** the application dies from a fatal signal — segmentation fault, bus error, illegal instruction, abort, **or the breakpoint trap a GLib *fatal* log message dies of** (`g_error`, and any level promoted to fatal by a `G_DEBUG=fatal-*` flag or by `g_log_set_always_fatal`: GLib breakpoints rather than aborting on unix, so this death is a `SIGTRAP` and is no less a crash for it — `g_assert_not_reached()` is the lone abort)
 - **When** the state directory is inspected afterwards
 - **Then** a crash report file exists whose first lines name the signal, the faulting address, the faulting instruction pointer with the module and offset it falls in, and 21.1's build identity
 - **And** the process still terminates from that same signal — the handler reports and re-raises, it never swallows the fault or changes the exit status

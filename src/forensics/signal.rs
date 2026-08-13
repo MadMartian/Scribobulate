@@ -55,16 +55,19 @@ use super::ring::Ring;
 /// The other four are hardware faults or `abort()`. `SIGTRAP` is how a **GLib fatal
 /// log message** dies on unix, and that is the death this application has actually
 /// produced: `g_error` — GTK's `gtk_text_btree_line_number couldn't find line` among
-/// them (ScrAP-258) — plus every warning promoted by `G_DEBUG=fatal-warnings`.
+/// them (ScrAP-258) — plus **any** level promoted to fatal, by `G_DEBUG=fatal-warnings`,
+/// `G_DEBUG=fatal-criticals` or a programmatic `g_log_set_always_fatal`.
 /// `_g_log_abort` assumes a debugger is attached on every non-Windows target and
 /// executes `G_BREAKPOINT()` (`int $03` on x86) instead of `g_abort()`, so the process
 /// dies of a breakpoint trap whose default disposition terminates it with no handler
 /// having run. Enumerating only the four left that whole class silent (ScrAP-268).
 ///
-/// MEASURED, GLib 2.72.4 on this machine: `g_error` and a `G_DEBUG=fatal-warnings`
-/// warning both exit **133** (128 + `SIGTRAP`), while `g_assert_not_reached()` takes
-/// `_g_log_abort`'s *other* branch and exits **134** (`SIGABRT`) — which is why the
-/// assertion family was covered all along and the `g_error` family was not. The
+/// MEASURED, GLib 2.72.4 on this machine: `g_error`, a `G_DEBUG=fatal-warnings`
+/// warning, a `G_DEBUG=fatal-criticals` critical and a `g_log_set_always_fatal`
+/// message all exit **133** (128 + `SIGTRAP`), on the legacy and structured log paths
+/// alike, while `g_assert_not_reached()` takes `_g_log_abort`'s *other* branch and
+/// exits **134** (`SIGABRT`) — which is why the assertion family was covered all along
+/// and every other fatal message was not. The
 /// end-to-end proof lives in
 /// [`tests::a_glib_fatal_message_dies_by_a_signal_this_handler_takes`], which drives a
 /// real `G_LOG_LEVEL_ERROR` through a real child process rather than asserting the
@@ -1199,7 +1202,8 @@ mod tests {
     /// The sibling above proves the whole artefact for one signal. This proves the
     /// *set*, which is the half that was wrong: the list said four, and a GLib fatal
     /// message dies of a fifth (`SIGTRAP`), so that entire class of death — `g_error`,
-    /// and every warning `G_DEBUG=fatal-warnings` promotes — left no report at all
+    /// and every level a `G_DEBUG=fatal-*` or `g_log_set_always_fatal` promotes — left
+    /// no report at all
     /// (ScrAP-268). A list nothing ranges over is a list that silently stops matching
     /// what the process can die of, so adding a signal here now costs a line and
     /// removing one fails loudly.
@@ -1314,8 +1318,9 @@ mod tests {
     /// leaves the child dying by SIGTRAP with **no report**, which is the mutation this
     /// test exists to catch (confirmed by doing it).
     ///
-    /// MEASURED, GLib 2.72.4: `g_error` and a `G_DEBUG=fatal-warnings` warning exit 133
-    /// (`SIGTRAP`); `g_assert_not_reached()` exits 134 (`SIGABRT`) via the same
+    /// MEASURED, GLib 2.72.4: `g_error`, and every level promoted to fatal by
+    /// `G_DEBUG=fatal-warnings`/`fatal-criticals` or `g_log_set_always_fatal`, exit 133
+    /// (`SIGTRAP`); only `g_assert_not_reached()` exits 134 (`SIGABRT`), via the same
     /// function's other branch. If a future GLib aborts instead, this fails and says
     /// so — the enumeration is then merely wider than it needs to be, not wrong.
     #[test]
