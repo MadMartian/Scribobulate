@@ -178,6 +178,56 @@ Three rules carry over from the work already done and are not optional:
   project-level change that takes effect for everyone on merge, which is why the existing
   workflow's triggers are documented in its own header rather than treated as a job detail.
 
+## SESSION HANDOFF — 2026-08-14, read this first
+
+**Branch state.** `ci` was **squashed from 22 commits to one** (`8e45913`) so it rebases onto
+`master` in a single conflict pass rather than twenty-two; the two branches overlap on thirteen
+files, nearly all append-mostly registers. **The pre-squash history is preserved at tag
+`pre-squash-ci-20260814` → `c2f52b3`, which exists both here and on `github`.** Do not delete
+it until `ci` has merged. `github/ci` matches local `ci`.
+
+**Other seats.** Four seats worked this session: `linux` (this one, on `ci`), `windows`, `mac`,
+and `linux-master` (on `master`). Their `origin` **is this repository**, so a commit here is
+immediately visible to them and no GitHub round-trip is needed to collaborate — GitHub carries
+CI and durability only. All were told to `git fetch && git reset --hard origin/ci` rather than
+pull, because the squash left no common recent ancestor.
+
+**Register allocation is by conversation, not by reading the tail** — see POLICY § SDD register
+writes. `master` currently holds `ScrAP-283`, `ISSUES S` and `ISSUES T`; `ci` holds up to
+`ScrAP-282` and `ISSUES R`. **`master`'s registers look complete and are behind**; that misread
+happened three times this session.
+
+### Open, and none of it is blocked on a seat
+
+1. **`windows/bootstrap-vcredist`** (Windows seat) implements the ruled `msvc-runtime` change
+   and is **not landed**, pending two operator decisions: whether the **unverified end-to-end
+   pair** blocks landing (that seat has no clean machine — every box that can build this
+   already has the MSVC runtime, so removing the DLLs and launching proves nothing), and
+   whether **+23.7 MB** of embedded redistributable is acceptable versus downloading it and
+   requiring a network.
+2. **The coverage floor is a two-branch standoff and needs one decision, not two.** `ci`
+   requires whole-number floors (POLICY step 6) and sits at a stale `76` against a measured
+   77.83; `master` has no such rule and shipped `77.37`. **No single value is correct under
+   both rule-sets** — under `master`'s rule, 77 is a forbidden lowering. Both seats froze
+   deliberately rather than each moving toward the other. Do not let one seat resolve it alone.
+3. **`GApplication::startup` CRITICAL** — root-caused to a missing `app.register()` in one test
+   fixture, fix proven and landed on `master`. The transferable half (GTK's guard tests
+   `is_registered` while its message names `startup`) went to the `gtk4-rs` skill, not here.
+
+### The failure mode that cost the most time, so the next session recognises it
+
+**An artefact answering a narrower question than the one asked of it** — six instances, four
+seats, one day. Two remotes sharing the name `origin`. A ScrAP manifest ending at 268 because a
+branch was behind rather than because 269 was free. Non-contiguous ISSUES letters where
+"highest present" was never next-free. A `grep` scoped to one checkout, twice. A licence gate
+whose string anchor discriminates documents but not *revisions* of one. And
+`.claude/settings.json` answering "what does the project configure" when the question was "what
+is configured". **In every case the artefact was read correctly and looked complete.**
+
+The remedy that worked was not caution: it was **publishing the command rather than the
+conclusion**, so the other seat could re-run it in one line. Several were caught by the seat
+that had not made the mistake.
+
 ## Outstanding before the first release: licence attribution
 
 **Status: BLOCKING a published release. Execution and packaging are green on all three
@@ -579,8 +629,62 @@ Enterprise, not the dev box's VS 2022 Community.
 ### The MSVC row is being DELETED, not closed — RULED by the operator
 
 **Decision: bootstrap Microsoft's redistributable; stop shipping the CRT DLLs.** The
-alternative (keep app-local, add a click-through EULA) was assessed and rejected. The
-elevation cost below is accepted knowingly.
+alternative (keep app-local, add a click-through EULA) was assessed and rejected.
+
+**THE RULING'S PREMISE HAS NOW BEEN READ, AND IT HOLDS — MEASURED.** The reasoning is *stop
+distributing Distributable Code and the obligation evaporates*, but we redistribute a
+**different** Microsoft binary in its place, `vc_redist.x64.exe`, embedded in our own
+installer. Both load-bearing propositions were checked against primary text rather than
+inherited:
+
+- **Redistributing the unmodified package is explicitly PERMITTED and RECOMMENDED**, not
+  merely common. The VS Distributable List (`https://aka.ms/vs/17/redistribution`) names *the
+  Redistributable package* as a redistributable artefact, limited to licensed Visual Studio
+  users; Learn's *Redistribute Visual C++ Files* says to *"run it as a prerequisite on the
+  target system before you install your application"* and recommends it. **Microsoft's own
+  deployment walkthrough packs `vc_redist.*.exe` inside a third-party installer**, which is
+  exactly what we do.
+- **The package path removes the need for our own MSVC click-through.** MEASURED on the docs;
+  the discharge of duty (2) is INFERRED from them. Microsoft's walkthrough does not have the
+  outer installer present a Microsoft EULA.
+
+**ONE CAVEAT THAT BITES US SPECIFICALLY, and it must not be smoothed over.** We invoke the
+package with `/install /passive /norestart`. Under `/passive` — and `/quiet` — **Microsoft's
+installer presents no click-through either.** So the comfortable phrase *"Microsoft's UI
+collects the agreement"* is true only of an **interactive** run, and ours is not one. This
+does **not** revoke the permission to redistribute, and `/passive` is the standard invocation;
+it means the discharge rests on the *authorised deployment model*, not on a dialogue the user
+actually sees. Recorded rather than relied on silently, and the reason `notices/20-msvc.md`
+carries a line naming the component and its licensor.
+
+**Residual, INFERRED and low weight:** a pedant could argue duty (2) still attaches to us as
+redistributor of the package. Microsoft's published walkthrough and prerequisite guidance are
+the counterweight. **Not grounds to reopen the EULA work.**
+
+**The licence text is not on the build machine, and the artefact that is there would have
+passed the gate.** `<VS>\Licenses\` holds SDK, NuGet and .NET EULAs but not the Visual Studio
+licence; `Licenses\1033\Redist.txt` is **187 bytes** and is a referral to
+`https://aka.ms/vs/17/redist.txt`, not terms. **It contains the `msvc-runtime` row's declared
+anchor `Distributable Code`** — because that phrase is in the pointer's own first line — so it
+exists, is non-empty, and matches. Had the row ever been closed by vendoring it, **all four
+conditions would have gone green on a 187-byte referral.** That is `pcre2/COPYING`'s shape
+again, on the row where being wrong would have cost the most.
+
+**The gate's scope narrowed relative to the artefact, and the change did not create the blind
+spot — it moved something into an existing one.** `vc_redist.x64.exe` is compiled into
+`setup.exe` and never enters the staged tree, so no condition can see it. Neither can Inno
+Setup's own code, which has shipped in **every installer this project has produced** and was
+never in scope — unnoticed because the gate had never been green before. **A PASS makes an
+unlit area read as an empty one.** Remedy chosen: the gate now prints its scope beside the
+verdict, naming both non-staged carriers, rather than growing a row for a file that would fail
+condition 2 by construction. Extending the gate to reach non-staged inputs was rejected —
+the installer's contents are known only to ISCC, so it would be a list checked against another
+list. Inno Setup itself owes nothing (its `license.txt` clause 2 is satisfied by not modifying
+what it generates; clause 3's acknowledgment is "appreciated but not required").
+
+The elevation cost below is accepted knowingly, and **is narrower than this ruling assumed**:
+`PrivilegesRequired=lowest` is unchanged, setup raises no prompt of its own, and `vc_redist`
+prompts for itself alone and only on a machine that lacks the runtime.
 
 **Three things this changes, and the third is the one that can be got wrong silently:**
 

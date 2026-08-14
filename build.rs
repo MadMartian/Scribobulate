@@ -89,6 +89,15 @@ fn generate_third_party_notices() {
         .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
         .collect();
     parts.sort();
+    // FILENAME ORDER IS LOAD-BEARING, and the constraint is on the LAST file rather than
+    // the first. `to_md()` opens with an unheaded paragraph crediting the `bat` project,
+    // so it is adopted by whichever authored heading precedes it -- which means the final
+    // authored section must be the one that INTRODUCES the generated body
+    // (`90-grammars.md`). A new section belongs anywhere in 10-80; adding one after
+    // grammars silently reparents that credit under it. The numbering leaves the gap on
+    // purpose. This note lives here and NOT in a `notices/` file because everything in
+    // that directory ships to users inside THIRD-PARTY-LICENSES.md -- build guidance in a
+    // legal notice is the wrong artefact, which was learned by putting it there first.
 
     // A missing input is a defect, not an empty section: rendering from an empty
     // directory would silently produce a document with no preamble, and nothing
