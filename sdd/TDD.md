@@ -8,7 +8,7 @@
 | 4 | Editing & saving | 4.1 – 4.9 |
 | 5 | Reconciliation (conflict handling) | 5.1 – 5.4 |
 | 6 | Resource footprint (viability gate) | 6.1 – 6.5 |
-| 7 | Window & layout | 7.0b – 7.18 |
+| 7 | Window & layout | 7.0b – 7.20 |
 | 8 | Single-instance lifecycle | 8.1 – 8.7 |
 | 9 | Menu bar, toolbar, and actions | 9.1 – 9.36 |
 | 10 | Markdown formatting commands | 10.1 – 10.20 |
@@ -731,7 +731,7 @@
 - **Then** a new window opens containing that tab (same outcome as 7.10 on X11)
 
 ### 7.17 An installed Scribobulate carries its own icon everywhere
-- **Given** Scribobulate has been installed for the platform — `install.sh` on Linux, the `.app` bundle on macOS, or an equivalent OS packaging step — and is running
+- **Given** Scribobulate has been installed for the platform — `packaging/linux/install.sh` on Linux, the `.app` bundle on macOS, or an equivalent OS packaging step — and is running
 - **When** the user looks at the title bar, the taskbar/dock, or the window switcher
 - **Then** each shows Scribobulate's own application icon, never the toolkit's generic default
 - **And** an *uninstalled* run is not held to this: the surfaces the OS owns (taskbar/dock, switcher) may show a generic icon, because on some platforms an unpackaged binary has no application identity to attach one to
@@ -749,6 +749,16 @@
 - **And** the dialog is dismissable exactly as it is in a normal window: Escape closes About and cancels the confirmation, and all three confirmation buttons act
 - **And** when it closes, the document window is showing its content again — fully painted, never a black or blank rectangle where the document was
 - **And** the document window is still full-screen afterwards, and the green button still takes an ordinary window into full-screen as before
+
+### 7.20 Every install route delivers the same payload, attribution included
+- **Given** any of the three Linux install routes — the `.deb`, the `.rpm`, or the from-source install into `~/.local`
+- **When** the install completes
+- **Then** all six payload files are present: the binary, the desktop entry, the application icon, the reading-themes file, the man page, and `THIRD-PARTY-LICENSES.md`
+- **And** `THIRD-PARTY-LICENSES.md` is not optional documentation — the syntax-highlighting grammars are statically linked into the binary under licences that require their notices to accompany a binary distribution, so an install lacking it is a licence violation rather than a cosmetic gap
+- **And** the rpm marks that file as a licence, so `--excludedocs` cannot drop it
+- **And** the routes cannot diverge on *what* an install consists of: the payload is defined once and every route reads that definition
+- **And** the from-source route pins the desktop entry's `Exec`/`TryExec` to the absolute binary path, because its bin directory is frequently absent from the launcher's `PATH`
+- **And** installing does not widen permissions on directories it did not create — a user-private directory under the install prefix keeps the mode the user gave it
 
 ---
 

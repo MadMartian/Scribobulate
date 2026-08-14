@@ -1567,7 +1567,37 @@ PID you launched (`xdotool search --pid`), never to a name or class.
 
 **4. Force-kill.** `kill -9 <pid>` — the PID you launched, never a pattern match.
 
-**5. Install.** `./install.sh`, then check the title bar, the taskbar, and Alt-Tab.
+**5. Install.** `packaging/linux/install.sh`, then check the title bar, the taskbar, and Alt-Tab.
+
+Install into a throwaway `HOME` rather than your own — the script writes to `~/.local`
+and registers a MIME default, and there is no reason for a test to do either to your
+session:
+
+```bash
+env HOME=/tmp/scribtest XDG_DATA_HOME=/tmp/scribtest/.local/share \
+    XDG_CONFIG_HOME=/tmp/scribtest/.config packaging/linux/install.sh --no-build
+```
+
+**All six payload files must be present**, because `payload.sh` is shared with the two
+package builders and a file missing here is a file missing from the `.deb` and `.rpm`
+too — `bin/scribobulate`, `share/applications/scribobulate.desktop`,
+`share/icons/hicolor/scalable/apps/<app-id>.svg`, `share/scribobulate/themes.toml`,
+`share/man/man1/scribobulate.1.gz`, and
+`share/doc/scribobulate/THIRD-PARTY-LICENSES.md`. The last is an attribution
+obligation, not documentation: the syntax grammars are statically linked into the
+binary and their licences require the notice to travel with it, so an install missing
+it is a licence violation rather than a cosmetic gap. Confirm `Exec=`/`TryExec=` in the
+installed desktop entry are the **absolute** binary path, not the bare command.
+
+Then `packaging/linux/uninstall.sh` and confirm all six are gone. A generated
+`applications/mimeinfo.cache` legitimately remains — it is the desktop database's, not
+ours. (TDD 7.20)
+
+**Permission check, and it is the one worth not skipping.** Before installing, create
+`$HOME/.local/share/keyrings` mode `700`. After installing it must **still** be `700`.
+The payload sets directory permissions explicitly so a package cannot carry the
+builder's umask into `/usr`, and applying that sweep to a live `~/.local` would widen
+directories the user deliberately made private.
 
 **6. Tokened (desktop-integrated) launch.** `gio open <file>`, or open it from the
 file manager. The distinction matters: a tokened launch carries a startup token and

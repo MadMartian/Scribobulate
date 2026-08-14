@@ -365,6 +365,28 @@ fi
 scan_subset()     { echo "$SCAN_SET" | grep -E  "$1" || true; }
 scan_subset_not() { echo "$SCAN_SET" | grep -Ev "$1" || true; }
 
+# Check 12's predicate, factored out so the CHECK and its SELF-TEST run the SAME code
+# over the same bytes. That is not tidiness: check 6's port bug survived a fully
+# populated corpus precisely because the corpus tested the pattern directly instead of
+# going through the call site, so a self-test that re-implements this rule over strings
+# would be decorative in the identical way. The fixtures are real files and this
+# function is what reads them.
+#
+# Returns 0 (violation) when $1 is a BOM-less file containing a byte above 0x7F.
+#
+# DETECTOR NOTE, and it is load-bearing: `grep -P '[\x80-\xFF]'` DOES NOT WORK for this.
+# In a UTF-8 locale -P matches CODE POINTS U+0080-U+00FF, so it silently cannot see an
+# em dash (U+2014) or a box-drawing rule (U+2500) -- it would pass vacuously on the very
+# files this check polices. And `grep -P` refuses LC_ALL=C outright, so the obvious
+# correction errors instead of tightening, and a trailing `|| echo 0` then prints a clean
+# zero over the failure. Both were measured, in that order, while auditing these files.
+# `tr` has no regex engine and no locale behaviour, so it is the same arithmetic here and
+# in the PowerShell port.
+ps1_encoding_violation() {
+    [ "$(LC_ALL=C head -c 3 "$1" | od -An -tx1 | tr -d ' \n')" = "efbbbf" ] && return 1
+    [ "$(LC_ALL=C tr -d '\000-\177' < "$1" | wc -c)" -gt 0 ]
+}
+
 # The `prescriptive` class is a LABEL ON SET MEMBERS, not a fourth enumeration. Before
 # this, check 5b read an explicit list of documents that was neither the bounded nor the
 # unbounded set, so `--list-scan` did not print what 5b consumed either. Asserting
@@ -446,9 +468,19 @@ tests/MANUAL-TEST.md|the plan lives in tests/MANUAL-TEST.md'
     # resolve it and find it present. This corpus is about what must not be extracted
     # AS A PATH AT ALL — bare prose mentions, the `PLAN.<topic>.md` placeholder, and
     # the link-parser fixture.
+    # The lowercase members are NOT filler. `grep -E` is case-sensitive and passes them
+    # without trying, but the PowerShell port's Select-String and -like default the OTHER
+    # WAY, and a corpus with no lowercase case let that port ship a live false positive
+    # while its own self-test stayed green: the first hosted Windows run flagged
+    # `plan.switch_to` and `plan.spot` -- ordinary Rust field accesses on a local named
+    # `plan` -- as dangling documents, on a tree Linux passed. A shared corpus is only
+    # shared if it carries the cases that discriminate between the two engines, so these
+    # stay here even though this port cannot fail them.
     path_must_not_match='see POLICY.md for the rule
 a PLAN.<topic>.md is deleted by design once implemented
-doc_link_fragment("./sub/PLAN.md#caf%C3%A9")'
+doc_link_fragment("./sub/PLAN.md#caf%C3%A9")
+if plan.switch_to.is_some() {
+restore_place(&tab, plan.spot.as_ref());'
     # `|| true` on every extraction: under `set -euo pipefail` a no-match `grep` exits
     # 1, `pipefail` propagates it through `| head`, and the assignment kills the script
     # SILENTLY — self-test exits 1 having printed nothing, which reads exactly like a
@@ -647,6 +679,36 @@ Scr-AP-9 is not a citation either'
         fi
         rm -rf "$st_probe"
         trap - EXIT
+    fi
+
+    # Check 12's two fixtures, run through check 12's OWN predicate (ps1_encoding_violation)
+    # rather than through a re-implementation. That is the whole design: check 6's port bug
+    # survived a fully populated corpus because the corpus matched the pattern DIRECTLY and
+    # never reached the call site, so a self-test that re-derived this rule over strings
+    # would be decorative in exactly the same way. These are real files on disk and this is
+    # the function the gate runs.
+    #
+    # BOTH DIRECTIONS ARE ASSERTED, and the second is the one people leave out. Flagging the
+    # BOM-less file only proves the check can say no; the invariant is a DISJUNCTION, so a
+    # check that also flagged the BOM'd file would be banning the legitimate case and would
+    # still pass a one-directional test.
+    st12_bad="tests/fixtures/encoding/bomless-nonascii.ps1"
+    st12_ok="tests/fixtures/encoding/bom-nonascii.ps1"
+    if [ ! -f "$st12_bad" ] || [ ! -f "$st12_ok" ]; then
+        echo "  FAIL: check 12's fixtures are missing, so the check is uncertified."
+        echo "    expected $st12_bad and $st12_ok"
+        st_fail=1
+    else
+        if ! ps1_encoding_violation "$st12_bad"; then
+            echo "  FAIL: check 12 did NOT flag $st12_bad"
+            echo "    — a BOM-less .ps1 carrying a byte above 0x7F must be refused."
+            st_fail=1
+        fi
+        if ps1_encoding_violation "$st12_ok"; then
+            echo "  FAIL: check 12 flagged $st12_ok"
+            echo "    — a BOM makes non-ASCII legal; the invariant is BOM **or** pure ASCII."
+            st_fail=1
+        fi
     fi
 
     [ $st_fail -eq 0 ] && echo "self-test: PASS" || echo "self-test: FAIL"
@@ -1102,7 +1164,12 @@ fi
 # and the port READMEs all mention it in prose, where a mention is not a declaration.
 # This lists the files that OPERATIONALLY declare it — the ones a wrong value breaks.
 echo "── Check 7: app-ID drift between src/icons.rs and the packaging files ──"
-APP_ID_FILES="install.sh uninstall.sh data/scribobulate.desktop data/resources.gresource.xml packaging/macos/Info.plist.in"
+# `packaging/linux/payload.sh` replaced `install.sh` here when install.sh moved into
+# packaging/linux/ and began sourcing the shared payload definition. The swap is the
+# rule above applied, not an exemption from it: install.sh now READS `$APP_ID` and no
+# longer declares it, so scanning it would check a prose mention, while payload.sh is
+# where the literal actually lives for all three Linux install routes.
+APP_ID_FILES="packaging/linux/payload.sh packaging/linux/uninstall.sh data/scribobulate.desktop data/resources.gresource.xml packaging/macos/Info.plist.in"
 canonical_app_id=$(grep -oE 'Icon::App => "[^"]+"' src/icons.rs | sed -E 's/.*"(.*)"/\1/' || true)
 app_id_problems=""
 if [ -z "$canonical_app_id" ]; then
@@ -1325,7 +1392,12 @@ fi
 # the number rather than to consolidate.
 REG_WARN=520000; REG_FAIL=650000; ENTRY_WARN=11000; ENTRY_FAIL=15000
 echo "── Check 11: register growth (bytes, not lines) ──"
-reg_bytes=$(wc -c < sdd/ANTI-PATTERNS.md)
+# CR stripped before counting, so the number is a property of the CONTENT and not of the
+# checkout. Measured across two seats on byte-identical source: a CRLF worktree reported
+# 534,622B where the blob is 530,444B — a 4,178B gap that is exactly the file's line count,
+# i.e. the check whose whole point is "bytes, not lines" was moving by the line count. Both
+# ports must strip; fixing one alone re-creates the divergence in the other direction.
+reg_bytes=$(tr -d '\r' < sdd/ANTI-PATTERNS.md | wc -c)
 bad11=0
 if [ "$reg_bytes" -gt "$REG_FAIL" ]; then
     echo "  FAIL — register is ${reg_bytes}B, past the ${REG_FAIL}B ceiling"
@@ -1334,6 +1406,16 @@ if [ "$reg_bytes" -gt "$REG_FAIL" ]; then
 elif [ "$reg_bytes" -gt "$REG_WARN" ]; then
     echo "  WARN — register is ${reg_bytes}B, past the ${REG_WARN}B soft limit"
 fi
+# KNOWN AND UNFIXED: this half counts CHARACTERS where the whole-file half above counts
+# BYTES. `awk`'s length() is character-based in a UTF-8 locale, so an entry's reported size
+# is short by its non-ASCII byte count — measured, ScrAP-278 reports 5990 against 6024
+# actual, and the register carries 3688 non-ASCII bytes overall. The PowerShell port has the
+# identical mismatch ($line.Length). It fails in the direction that matters: the undercount
+# is proportional to non-ASCII density, so it under-reports the discursive entries with em
+# dashes and typographic quotes — which are the long ones the ceiling exists to catch. A
+# ratchet that slips loosest exactly where it should grip. Left unfixed deliberately at a
+# ~34-byte gap; fixing it means changing both ports together and re-verifying on Windows,
+# and the thresholds would want re-deriving against the corrected unit.
 big11=$(awk '
     /^## [0-9]+[a-z]?\./ { if (n != "" && b > '"$ENTRY_WARN"') printf "    ScrAP-%s %dB\n", n, b
                            n = $2; sub(/\./, "", n); b = 0; next }
@@ -1354,4 +1436,39 @@ fi
 [ "$bad11" = 1 ] && fail=1
 [ "$bad11" = 0 ] && [ -z "$big11" ] && [ "$reg_bytes" -le "$REG_WARN" ] && echo "  PASS"
 
+
+# ── Check 12 ───────────────────────────────────────────────────────────────────
+echo ""
+echo "── Check 12: .ps1 files must carry a UTF-8 BOM or contain no byte above 0x7F ──"
+# WHY A DISJUNCTION RATHER THAN "KEEP THEM ASCII". Windows PowerShell 5.1 decodes a
+# BOM-less .ps1 as the ANSI codepage. A UTF-8 byte inside a STRING LITERAL then arrives
+# as a different character, and a curly quote is a string DELIMITER -- the literal ends
+# early, the parse dies, and the error names an unrelated brace hundreds of lines away.
+# pwsh 7 defaults to UTF-8 and is immune. That asymmetry is the whole hazard: the
+# contract-windows job runs pwsh 7 and would certify the break GREEN, while the
+# execute-windows job runs 5.1 and is the engine that actually meets it.
+#
+# A BOM removes the hazard rather than merely satisfying a rule, so it is a legitimate
+# alternative and not a workaround. MEASURED on a real Windows host: a BOM-less .ps1
+# carrying an em dash in a string literal fails 5.1 (exit 1, parse error) and passes
+# pwsh 7; with a BOM, both engines run it correctly. Hence "BOM **or** pure ASCII" --
+# banning non-ASCII outright would forbid the safe file along with the dangerous one.
+#
+# WHAT THIS REPLACES IS AN UNWRITTEN RULE. Before this check the invariant actually in
+# force was "non-ASCII is allowed, but only in comments, never in a string literal",
+# where the difference between harmless and fatal is which side of a quote mark a
+# character sits on. That is unenforceable by review and one copy-paste from breaking.
+bad12=""
+for f in $(scan_subset '\.ps1$'); do
+    ps1_encoding_violation "$f" && bad12+="  $f — non-ASCII byte in a BOM-less .ps1"$'\n'
+done
+if [ -n "$bad12" ]; then
+    echo "  FAIL"
+    printf '%s' "$bad12"
+    echo "  → add a UTF-8 BOM to the file, or keep it pure ASCII. A BOM is the stronger"
+    echo "    fix: it makes non-ASCII safe anywhere in the file, literals included."
+    fail=1
+else
+    echo "  PASS"
+fi
 exit $fail

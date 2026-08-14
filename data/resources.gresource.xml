@@ -67,25 +67,25 @@
     <!--
       The application icon. Sits at the freedesktop path an app icon belongs at,
       so this one file serves both consumers without a copy or an alias: the
-      GResource below, and install.sh (which mirrors the same relative path into
+      GResource below, and packaging/linux/install.sh (which mirrors the same relative path into
       hicolor). Any OS packaging step that rasterizes an app icon reads it from
       here too.
 
       Without it here, the About dialog's .logo_icon_name() and the window's
-      .icon_name() resolve only if install.sh has been run — so every
+      .icon_name() resolve only if packaging/linux/install.sh has been run — so every
       uninstalled `cargo run` showed the broken-image placeholder where the app
-      logo belongs. Note this masks itself on a developer box: once install.sh
+      logo belongs. Note this masks itself on a developer box: once packaging/linux/install.sh
       has run, the icon resolves from hicolor forever after, so the bug is
       invisible to anyone who has ever installed. It is a normal
       full-colour icon, NOT symbolic: it must keep its own palette rather than
       being recoloured to the theme foreground.
 
       On Windows the same gap cannot mask itself, because there is no
-      `install.sh` step at all — the staged tree ships only gvsbuild's stock
+      `packaging/linux/install.sh` step at all — the staged tree ships only gvsbuild's stock
       Adwaita + hicolor, so the lookup found nothing and the title bar, taskbar
       and Alt+Tab all fell back to GTK's generic default. Bundling here makes the
       name resolve on EVERY platform. This file is the source of truth for the
-      app icon: install.sh installs this path, and
+      app icon: packaging/linux/install.sh installs this path, and
       packaging/windows/scribobulate.ico is rendered from it.
     -->
     <file>scalable/apps/com.extollit.scribobulate.svg</file>

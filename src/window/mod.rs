@@ -355,7 +355,7 @@ fn build_window(
         // Compile-checked and resolution-tested like every other icon name
         // (GTK4Rs/AP-48). Resolves from the bundled GResource, so it works on
         // Windows and from an uninstalled `cargo run`, not just where
-        // `install.sh` has populated the hicolor theme.
+        // `packaging/linux/install.sh` has populated the hicolor theme.
         .icon_name(crate::icons::Icon::App.name())
         .build();
 

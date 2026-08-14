@@ -110,7 +110,7 @@ symlink stays inside `Contents/MacOS/`, so a terminal launch runs the identical
 executable Finder or the Dock would, Dock/Cmd-Tab identity included — a copy
 made outside the bundle would not carry that.
 
-This is the developer-convenience counterpart to the top-level `install.sh` on
+This is the developer-convenience counterpart to the top-level `packaging/linux/install.sh` on
 Linux, not the redistributable installer — that is `dmg.sh` above.
 
 ## Verifying a bundle

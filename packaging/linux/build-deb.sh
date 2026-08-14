@@ -53,6 +53,19 @@ Copyright: $(date +%Y) extollIT Enterprises <sales@extollit.com>
 License: Apache-2.0
  On Debian systems the full text of the Apache License version 2.0 can be
  found in /usr/share/common-licenses/Apache-2.0
+
+Files: usr/bin/$PKG
+Copyright: $(date +%Y) extollIT Enterprises <sales@extollit.com>
+ and the copyright holders of the bundled syntax-highlighting grammars
+License: Apache-2.0 and MIT and BSD-2-Clause and BSD-3-Clause
+ The binary statically links syntax-highlighting grammar definitions obtained
+ through the two-face crate (the syntect assets used by bat). Those grammars
+ carry their own permissive upstream licences, all of which require their
+ notices to accompany a binary distribution. The verbatim notices are shipped
+ in /usr/share/doc/$PKG/THIRD-PARTY-LICENSES.md.
+ .
+ On Debian systems the full text of the Apache License version 2.0 can be
+ found in /usr/share/common-licenses/Apache-2.0
 EOF
 
 # Mandatory for a native package. `-9n` keeps the artefact reproducible.

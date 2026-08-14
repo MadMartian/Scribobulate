@@ -1,0 +1,636 @@
+# The build pipeline as a gate rather than an errand.
+#
+# WHAT THIS CLOSES. Three independently written runners derive their step list from
+# scripts/pipeline.steps, and `--list-steps` prints that derived list so the ports can be
+# diffed. Nothing performed the diff, because no single machine has all three ports: a
+# Linux box has no PowerShell and no Quartz, so the Windows port's parity was INFERRED
+# rather than measured. Every unenforced assurance in this repository has eventually
+# turned out to be false; this is the machine where the comparison can finally happen.
+#
+# IT INVOKES THE RUNNERS AND NAMES NO STEP. There is deliberately not one `cargo` or
+# `clippy` invocation below. A workflow that listed the steps would be a FOURTH restatement
+# of a contract whose whole design is derivation, and a clean diff between restatements
+# proves only that two people copied the same list (ScrAP-207). `execute-linux` runs
+# `scripts/pipeline.sh` whole and takes its verdict; when a step is added to the contract,
+# this file does not change.
+#
+# TWO JOBS ANSWER TWO DIFFERENT QUESTIONS, and the plan that ordered this work is explicit
+# that the first is not enough on its own. `parity` proves the ports AGREE about the step
+# list. `execute-linux` proves a port can actually RUN one — which is a separate claim,
+# measured rather than hypothetical: the Windows port once passed `-ListSteps`
+# byte-identically, `-SelfTest`, and a twelve-case mutation battery while an output-stream
+# bug made it report `pipeline PASSED` with exit 0 after a step had failed. Contract-parsing
+# evidence is evidence about contract parsing. Execution on Windows and macOS follows as
+# each platform's provisioning is solved, in ascending order of difficulty.
+#
+# TRIGGERS ARE A CROSS-PROJECT DECISION, NOT A BRANCH DETAIL. A workflow file is not scoped
+# by the branch it sits on: it runs against the shared repository the moment anything
+# merges. An earlier `windows.yml` was removed on the Windows port branch for exactly that
+# reason (packaging/windows/README.md). This one runs on every branch deliberately — a gate
+# that only fires on master reports after the fact — and carries no `pull_request` trigger,
+# which for a single-maintainer repository that pushes branches directly would only
+# duplicate every run. Add it when a fork PR first arrives.
+name: pipeline
+
+on:
+  push:
+  # Packaging runs HERE, not on a tag and not on every push. The operator cuts a release
+  # when satisfied; this builds the three installers from that exact commit and attaches
+  # them to it, so the artefact set IS the release's contents by construction. A push
+  # trigger would spend a Windows gvsbuild unpack on commits nobody is shipping.
+  release:
+    types: [published]
+  # Retained PERMANENTLY, not as a bring-up crutch. A gate is trusted only once shown to
+  # fail, and that obligation cannot be met by cutting throwaway public releases -- so
+  # packaging must be drivable without one. `package: true` runs the identical path a
+  # release takes, minus the upload to a release that does not exist.
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Also run the packaging step and upload the installers
+        type: boolean
+        default: false
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # --------------------------------------------------------------------------------------
+  # The three contract jobs.
+  #
+  # Each runs on the platform whose port it is, and each does two separable things: its own
+  # `--self-test` (does this port still DERIVE its list from the contract?) and its parity
+  # artefact (what list does it derive?). Conformance is established here, on the port's own
+  # platform; the `parity` job below can only compare.
+  #
+  # None of them provisions a toolchain. Every runner exits from `--list-steps` and
+  # `--self-test` before touching its environment, deliberately, so a parity artefact does
+  # not depend on whether the box has GTK installed — which is what makes a three-platform
+  # matrix affordable enough to run on every push.
+  # --------------------------------------------------------------------------------------
+  contract-linux:
+    name: contract (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pipeline runner derives its steps from the contract
+        run: scripts/pipeline.sh --self-test
+      - name: Cross-reference gate derives its scan set from the contract
+        run: scripts/lint-references.sh --self-test
+      - name: Emit parity artefacts
+        run: |
+          mkdir -p artefacts
+          scripts/pipeline.sh --list-steps > artefacts/steps.linux.txt
+          scripts/lint-references.sh --list-scan > artefacts/scan.linux.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parity-linux
+          path: artefacts/
+
+  contract-macos:
+    name: contract (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pipeline runner derives its steps from the contract
+        run: packaging/macos/pipeline.sh --self-test
+      # The cross-reference gate has two PORTS but runs on three PLATFORMS: the contract
+      # names scripts/lint-references.sh for both Linux and macOS. That makes macOS a place
+      # the bash port can silently diverge — BSD find/sed/sort are not GNU's — and a
+      # divergence there is ScrAP-207's shape on an axis nobody had looked at. So its scan
+      # set is compared too, rather than assumed to follow from sharing a file.
+      - name: Cross-reference gate derives its scan set from the contract
+        run: scripts/lint-references.sh --self-test
+      - name: Emit parity artefacts
+        run: |
+          mkdir -p artefacts
+          packaging/macos/pipeline.sh --list-steps > artefacts/steps.macos.txt
+          scripts/lint-references.sh --list-scan > artefacts/scan.macos.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parity-macos
+          path: artefacts/
+
+  contract-windows:
+    name: contract (windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pipeline runner derives its steps from the contract
+        run: packaging/windows/pipeline.ps1 -SelfTest
+      - name: Cross-reference gate derives its scan set from the contract
+        run: scripts/lint-references.ps1 -SelfTest
+      - name: Emit parity artefacts
+        run: |
+          New-Item -ItemType Directory -Force -Path artefacts | Out-Null
+          packaging/windows/pipeline.ps1 -ListSteps > artefacts/steps.windows.txt
+          scripts/lint-references.ps1 -ListScan > artefacts/scan.windows.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parity-windows
+          path: artefacts/
+
+  # --------------------------------------------------------------------------------------
+  # The comparison.
+  #
+  # `--self-test` runs FIRST and on every run, not once when the script was written: it is
+  # the in-repo half of the bar this gate is held to — a gate is trusted only once it has
+  # been shown to FAIL on a deliberately injected failure, and a comparator that certifies
+  # parity without ever demonstrating it can refuse is the defect a gate exists to prevent.
+  # Its battery includes the vacuous pass this job's own shape invites: if one contract job
+  # dies before uploading, `merge-multiple` produces a directory whose survivors agree.
+  # --------------------------------------------------------------------------------------
+  parity:
+    name: parity
+    needs: [contract-linux, contract-macos, contract-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: parity-*
+          merge-multiple: true
+          path: artefacts
+      - name: Comparator fails on an injected mismatch
+        run: scripts/pipeline-parity.sh --self-test
+      - name: Every port derives the same lists
+        run: scripts/pipeline-parity.sh artefacts
+
+  # --------------------------------------------------------------------------------------
+  # Execution — Linux first, per the plan's ascending order of difficulty.
+  #
+  # This job's whole content is `scripts/pipeline.sh`. Everything above it is provisioning
+  # for the steps the contract already names: the GTK/GtkSourceView headers step 3 builds
+  # against, Xvfb for step 5's real windows, xmllint for step 8, cargo-llvm-cov for step 6.
+  # When the contract gains a step, this job gains its provisioning and nothing else.
+  #
+  # G_DEBUG=fatal-criticals IS NOT SET, and its absence is deliberate rather than an
+  # oversight — POLICY § Logging recommends it for a CI test run, and this job measured why
+  # it cannot be taken process-wide here. It was set on the first run and produced exactly
+  # two aborts, of opposite kinds:
+  #
+  #   - a REAL defect: a `change_action_state` on a stateless action had been emitting
+  #     `GLib-GIO-CRITICAL g_action_change_state: assertion 'state_type != NULL' failed`
+  #     silently for as long as the test existed. Fixed.
+  #   - a CORRECT test: `saferizer::popover_anchor`'s round-trip deliberately reads an unset
+  #     anchor on a never-parented popover, which is the case the seam exists for — and GTK
+  #     itself fires `GTK_IS_WIDGET` from `gtk_popover_get_pointing_to`'s fallback path on
+  #     the way (gtkpopover.c:2278/:2280, researcher-confirmed). The CRITICAL is the
+  #     documented behaviour under test.
+  #
+  # G_DEBUG is process-wide and read at startup, and both live in GTK/GLib log domains, so
+  # `log_set_fatal_mask` cannot separate them either. Reshaping the second test to keep the
+  # setting would be narrowing a correct test so a gate passes, which is the trade this
+  # project refuses everywhere else. The honest replacement — scanning the run's output for
+  # CRITICALs against an allow-list of the documented one, as a contract step with a
+  # `marker:` verdict the way step 4b already works — is a change to the pipeline contract
+  # rather than to CI, and is not made here.
+  # --------------------------------------------------------------------------------------
+  execute-linux:
+    name: execute (linux)
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: "1"
+      # A hosted runner is a shared vCPU, and the two growth-ratio guards in this tree
+      # measure an algorithmic exponent with a wall clock. Both failed here at 8.6x and
+      # 8.7x against a threshold of 8.0 with the code correct -- ordinary scheduling
+      # noise, not a regression. This raises the SAMPLE COUNT, never the threshold: the
+      # guards take the MINIMUM of N draws, timing noise is strictly additive, so a noisy
+      # machine needs more draws to find the same floor rather than a looser bound. A
+      # threshold that cleared 8.6 would sit inside the quadratic band it exists to
+      # catch. The override announces itself in the log, so a green run here is never
+      # mistakable for a green run at the default. See src/testtiming.rs.
+      SCRIBTEST_TIMING_SAMPLES: "25"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GTK4, GtkSourceView 5 and the gates' tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libgtk-4-dev libgtksourceview-5-dev \
+            xvfb libxml2-utils fonts-dejavu-core
+
+      # Packaging tooling, and ONLY when packaging -- ubuntu-latest ships dpkg-deb but
+      # neither rpmbuild nor fakeroot. fakeroot is not optional dressing: build-deb.sh
+      # uses it so the payload is owned by root:root, and without it every file carries
+      # the building user's uid, which dpkg installs VERBATIM. The package then "works"
+      # on the machine that built it and ships wrong ownership to everyone else -- a
+      # defect no exit code reports. The script degrades gracefully when it is absent,
+      # which is exactly why CI must not let it be absent.
+      - name: Debian and RPM packaging tools
+        if: github.event_name == 'release' || inputs.package
+        run: sudo apt-get install --no-install-recommends -y rpm fakeroot
+
+      - name: Rust components the pipeline's steps need
+        run: rustup component add rustfmt clippy llvm-tools-preview
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # A dev subcommand, not a crate dependency — POLICY § Build pipeline step 6. Cached
+      # as a binary because building it costs minutes and it changes only when pinned.
+      - uses: actions/cache@v4
+        id: llvmcov
+        with:
+          path: ~/.cargo/bin/cargo-llvm-cov
+          key: cargo-llvm-cov-${{ runner.os }}-v1
+      - name: Install cargo-llvm-cov
+        if: steps.llvmcov.outputs.cache-hit != 'true'
+        run: cargo install cargo-llvm-cov --locked
+
+      # The gate. No step is named here; the runner derives them from the contract --
+      # `--package` is the runner's own opt-in flag for the `packaging`-class step, not a
+      # step name, so the derivation rule holds.
+      - name: Run the pipeline
+        run: scripts/pipeline.sh ${{ (github.event_name == 'release' || inputs.package) && '--package' || '' }}
+
+      # THE ARTEFACT IS VERIFIED AS AN ARTEFACT, NOT AS AN EXIT CODE. A packaging step
+      # that exits 0 having produced a zero-byte file is this project's own measured
+      # defect class (ScrAP-276), so existence and a floor on size are asserted here
+      # rather than inferred from a green step.
+      - name: The installers exist and are not empty
+        if: github.event_name == 'release' || inputs.package
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=0
+          for f in target/deb/*.deb target/rpm/RPMS/*/*.rpm; do
+            sz=$(stat -c%s "$f")
+            echo "  $f  ($sz bytes)"
+            [ "$sz" -ge 1000000 ] || { echo "::error::$f is implausibly small ($sz bytes)"; exit 1; }
+            found=$((found + 1))
+          done
+          [ "$found" -ge 2 ] || { echo "::error::expected a .deb and an .rpm; found $found"; exit 1; }
+
+      - name: Upload the Linux installers
+        if: github.event_name == 'release' || inputs.package
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-linux
+          path: |
+            target/deb/*.deb
+            target/rpm/RPMS/*/*.rpm
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------------------
+  # execute (macos) — the second platform to actually RUN a step, and the cheap one.
+  #
+  # WHY MACOS BEFORE WINDOWS, against the ordering the original plan recommended. That
+  # ordering ranked macOS hardest because of `codesign` and bundling — but that difficulty
+  # is entirely step 10, which is `packaging`-class and absent from a default run. An
+  # execution job never reaches it. Once packaging is set aside the two invert: macOS needs
+  # `brew install`, minutes and no build, where Windows needs a multi-gigabyte gvsbuild.
+  #
+  # WHAT THIS JOB IS EVIDENCE OF, beyond "the code compiles on a Mac". `packaging/macos/
+  # pipeline.sh` is a THIRD bash port of the same contract, and macOS is the one place
+  # BSD-versus-GNU divergence can hide in it — the scan-set comparison already covers
+  # `lint-references.sh` on this platform, but that is a different script. It is also the
+  # first automated evidence for ScrAP-171's dual-harness split, which until now was
+  # measured only by hand on the operator's own machine.
+  #
+  # STEP 6 IS DECLARED NON-APPLICABLE HERE by the contract itself (`na.macos coverage`,
+  # with the semantic reason beside it), so this job installs no coverage tooling. That is
+  # the contract deciding, not the workflow: nothing below names a step.
+  #
+  # BROUGHT UP ON PUSH, and the plan's `workflow_dispatch`-only bring-up state was tried
+  # and abandoned for a reason worth recording: `workflow_dispatch` requires admin rights
+  # on the repository, so for any contributor who lacks them a dispatch-gated job does not
+  # run "on request" — it does not run AT ALL, and reports a green skip while doing it.
+  # That is a gate whose failure mode is a vacuous pass, which is the one shape this
+  # project refuses everywhere else. The bring-up isolation the gate was meant to buy comes
+  # instead from the branch: a workflow file is not scoped by the branch it sits on for
+  # anyone who MERGES it, but it does only run its own branch's pushes until then, so an
+  # unstable job turning a scratch branch red is exactly the feedback wanted here and
+  # affects nobody else. Dispatch remains a trigger on the workflow, for whoever does hold
+  # admin rights; it is simply not this job's gate.
+  #
+  # The unknown that gate was hedging against is real and stands: step 5 opens real windows
+  # and a hosted runner's session is not a logged-in desktop. Watching it fail on a branch
+  # is a better way to learn that than never running it.
+  # --------------------------------------------------------------------------------------
+  execute-macos:
+    name: execute (macos)
+    runs-on: macos-latest
+    env:
+      RUST_BACKTRACE: "1"
+      # A hosted runner is a shared vCPU, and the two growth-ratio guards in this tree
+      # measure an algorithmic exponent with a wall clock. Both failed here at 8.6x and
+      # 8.7x against a threshold of 8.0 with the code correct -- ordinary scheduling
+      # noise, not a regression. This raises the SAMPLE COUNT, never the threshold: the
+      # guards take the MINIMUM of N draws, timing noise is strictly additive, so a noisy
+      # machine needs more draws to find the same floor rather than a looser bound. A
+      # threshold that cleared 8.6 would sit inside the quadratic band it exists to
+      # catch. The override announces itself in the log, so a green run here is never
+      # mistakable for a green run at the default. See src/testtiming.rs.
+      SCRIBTEST_TIMING_SAMPLES: "25"
+    steps:
+      - uses: actions/checkout@v4
+
+      # `gtk4` does NOT pull in an icon theme, and without one roughly half the toolbar
+      # renders broken-image placeholders — POLICY § Build records this for the hand-build
+      # and it is no different here. `gtksourceview5` brings its own GTK dependency; naming
+      # gtk4 explicitly keeps the requirement legible rather than incidental.
+      - name: Install GTK4, GtkSourceView 5 and an icon theme
+        run: brew install gtk4 gtksourceview5 adwaita-icon-theme
+
+      - name: Rust components the pipeline's steps need
+        run: rustup component add rustfmt clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # The gate. No step is named here; the runner derives them from the contract --
+      # `--package` is the runner's own opt-in flag for the `packaging`-class step.
+      - name: Run the pipeline
+        run: packaging/macos/pipeline.sh ${{ (github.event_name == 'release' || inputs.package) && '--package' || '' }}
+
+      # Existence and size, not the step's exit code -- see the Linux job's twin.
+      - name: The disk image exists and is not empty
+        if: github.event_name == 'release' || inputs.package
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(target/macos/*.dmg)
+          [ ${#dmgs[@]} -ge 1 ] || { echo "::error::no .dmg was produced"; exit 1; }
+          for f in "${dmgs[@]}"; do
+            sz=$(stat -f%z "$f")
+            echo "  $f  ($sz bytes)"
+            [ "$sz" -ge 1000000 ] || { echo "::error::$f is implausibly small ($sz bytes)"; exit 1; }
+          done
+
+      - name: Upload the macOS disk image
+        if: github.event_name == 'release' || inputs.package
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-macos
+          path: target/macos/*.dmg
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------------------
+  # execute (windows) — the platform with the measured history of executing wrongly.
+  #
+  # This is the job the whole plan was aimed at. The Windows port has twice been
+  # confidently wrong in a way only execution could catch: once reporting `pipeline PASSED`
+  # with exit 0 after a step had failed, and once writing `-ListSteps` through
+  # [Console]::Out, which PowerShell's `>` does not redirect, producing a zero-byte parity
+  # artefact at exit 0 (ScrAP-276). Contract-parsing evidence never had a chance of seeing
+  # either.
+  #
+  # GTK COMES PREBUILT, and this is the one place this job departs from what
+  # packaging/windows/README.md derived for CI. That file assumed provisioning meant
+  # RUNNING gvsbuild -- a multi-gigabyte source build of the whole dependency chain, plus
+  # MSYS2, plus the ~6.5 GB tree its cache note is about. gvsbuild also PUBLISHES the
+  # result: GTK4_Gvsbuild_<version>_x64.zip, built by their CI from
+  # `gtk4 libadwaita gtksourceview5 pygobject protobuf-c adwaita-icon-theme gtkmm`, which
+  # is a superset of what this project needs (gtk4, gtksourceview5, and the icon theme
+  # without which half the toolbar renders placeholders). It unpacks to the same
+  # `C:\gtk-build\gtk\x64\release` prefix the port already defaults to, so nothing
+  # downstream learns that CI provisioned differently from the dev box.
+  #
+  # The README's two hard-won CI notes SURVIVE this change rather than being bypassed:
+  # cache only the install prefix and never the build tree (there is no build tree here at
+  # all, which is the strongest form of that rule); and PIN THE VERSION, because an
+  # unpinned install silently changes which GTK you are testing against. The pin is the
+  # release tag below and is the only thing to bump when moving GTK.
+  #
+  # LONG PATHS ARE ENABLED FOR GIT ONLY, deliberately, and the system-wide
+  # LongPathsEnabled registry key is left at its default, so the runner stays in the
+  # CONSTRAINED MAX_PATH regime that the Windows-only test in src/atomic_io.rs exists to
+  # exercise. Enabling it would mask that failure mode.
+  #
+  # WHAT THIS NOTE USED TO SAY, AND WHY IT NO LONGER DOES: it justified the choice by
+  # claiming the runner thereby exercises a case "the operator's dev box cannot, since it
+  # has long paths on". MEASURED on the Windows seat that runs this project by hand:
+  # LongPathsEnabled = 0, and `git config core.longpaths` is EMPTY at system, global and
+  # local scope. That box is in the same constrained regime as the runner, so the
+  # justification was false and the contrast it drew did not exist. The PRACTICE is
+  # unchanged and still correct on its own terms -- stay at the default, do not mask the
+  # case -- but it is no longer propped up by a claim about a difference nobody had
+  # checked. (Scoped honestly: that measurement is of one Windows seat. If a second
+  # development machine has long paths on, the old sentence may be true of it and was
+  # still not true as written.)
+  #
+  # NO MSYS2, and no toolchain beyond rustup's components: the setup phase the contract
+  # declares for this platform (PATH, PKG_CONFIG_PATH, LIB, INCLUDE) is derived by
+  # pipeline.ps1 itself from the prefix, which is why nothing below sets them.
+  # --------------------------------------------------------------------------------------
+  execute-windows:
+    name: execute (windows)
+    runs-on: windows-latest
+    env:
+      RUST_BACKTRACE: "1"
+      # A hosted runner is a shared vCPU, and the two growth-ratio guards in this tree
+      # measure an algorithmic exponent with a wall clock. Both failed here at 8.6x and
+      # 8.7x against a threshold of 8.0 with the code correct -- ordinary scheduling
+      # noise, not a regression. This raises the SAMPLE COUNT, never the threshold: the
+      # guards take the MINIMUM of N draws, timing noise is strictly additive, so a noisy
+      # machine needs more draws to find the same floor rather than a looser bound. A
+      # threshold that cleared 8.6 would sit inside the quadratic band it exists to
+      # catch. The override announces itself in the log, so a green run here is never
+      # mistakable for a green run at the default. See src/testtiming.rs.
+      SCRIBTEST_TIMING_SAMPLES: "25"
+      # The GTK pin. Bump this line to move GTK; nothing else in this job names a version.
+      GVSBUILD_VERSION: "2026.8.0"
+      SCRIB_GTK_PREFIX: 'C:\gtk-build\gtk\x64\release'
+    steps:
+      # Before checkout, so the checkout itself is covered by it.
+      - name: Long paths for git only, never the system-wide registry key
+        run: git config --system core.longpaths true
+
+      - uses: actions/checkout@v4
+
+      - name: Rust components the pipeline's steps need
+        run: rustup component add rustfmt clippy
+
+      - uses: actions/cache@v4
+        id: gtk
+        with:
+          path: C:\gtk-build
+          key: gvsbuild-gtk4-${{ env.GVSBUILD_VERSION }}-x64
+
+      - name: Fetch the pinned prebuilt GTK4 stack
+        if: steps.gtk.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = "$env:RUNNER_TEMP\gtk4.zip"
+          $url = "https://github.com/wingtk/gvsbuild/releases/download/" +
+                 "$env:GVSBUILD_VERSION/GTK4_Gvsbuild_${env:GVSBUILD_VERSION}_x64.zip"
+          Write-Host "Fetching $url"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          New-Item -ItemType Directory -Force -Path $env:SCRIB_GTK_PREFIX | Out-Null
+          Expand-Archive -Path $zip -DestinationPath $env:SCRIB_GTK_PREFIX -Force
+
+      # An unpacked prefix that is missing the pkg-config files or the GTK DLL would send
+      # the port into its own "cannot probe" diagnostic, which is a true statement about
+      # the environment dressed as a statement about the port. Fail here instead, where
+      # the message names the actual cause.
+      #
+      # The DLL is matched by PATTERN, not by an exact name, and that is a correction
+      # rather than a looser check: this first asked for `libgtk-4-1.dll` and failed on a
+      # correct prefix, because an MSVC build does not carry the `lib` prefix a GNU one
+      # does -- gvsbuild ships `gtk-4-1.dll`. Pinning either spelling encodes a build
+      # convention this job has no reason to care about, and the trailing number is an ABI
+      # revision that will move on its own schedule. What the setup phase actually needs is
+      # "a GTK-4 runtime DLL is on the prefix's bin", so that is what is asserted, and the
+      # resolved name is printed so the next reader can see what it found rather than
+      # trusting that something matched.
+      - name: Verify the prefix is what the contract's setup phase expects
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($p in @('lib\pkgconfig\gtk4.pc',
+                           'lib\pkgconfig\gtksourceview-5.pc')) {
+              $full = Join-Path $env:SCRIB_GTK_PREFIX $p
+              if (-not (Test-Path $full)) { throw "GTK prefix incomplete: missing $p" }
+          }
+          $dll = Get-ChildItem -Path (Join-Path $env:SCRIB_GTK_PREFIX 'bin') `
+                               -Filter '*gtk-4*.dll' -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $dll) { throw "GTK prefix incomplete: no *gtk-4*.dll in bin" }
+          Write-Host "GTK prefix OK: $env:SCRIB_GTK_PREFIX (runtime: $($dll.Name))"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # Inno Setup 6, and ONLY when packaging -- installed ONLY IF ABSENT.
+      #
+      # MEASURED, and it corrects the assumption this step shipped with: the
+      # windows-latest image ALREADY CARRIES ISCC, via Chocolatey, on PATH. The first
+      # version of this step installed a second copy unconditionally via winget and put
+      # its directory on GITHUB_PATH, which made `Get-Command iscc` return TWO matches
+      # and step 10 die with both paths concatenated into one command line. Provisioning
+      # a tool the image already has is not free; it is a way to break the tool.
+      #
+      # So: probe first, install only on a miss, and never reorder what is already there.
+      # The install branch is kept rather than deleted because a future image is free to
+      # drop Inno, and a packaging job that fails with "Inno Setup 6 not found" months
+      # from now is a worse outcome than a branch that usually does nothing. It announces
+      # which path it took, so the log says whether it acted.
+      - name: Inno Setup 6, for the installer
+        if: github.event_name == 'release' || inputs.package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $iscc = Get-Command iscc -CommandType Application -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+          if ($iscc) {
+              Write-Host "ISCC already present at $($iscc.Source); installing nothing."
+              exit 0
+          }
+          Write-Host 'ISCC not on PATH; installing Inno Setup 6.'
+          winget install --id JRSoftware.InnoSetup --silent --accept-package-agreements `
+                --accept-source-agreements --disable-interactivity
+          $dirs = @("$env:LOCALAPPDATA\Programs\Inno Setup 6",
+                    "${env:ProgramFiles(x86)}\Inno Setup 6",
+                    "$env:ProgramFiles\Inno Setup 6")
+          $hit = $dirs | Where-Object { Test-Path (Join-Path $_ 'ISCC.exe') } | Select-Object -First 1
+          if (-not $hit) { throw "ISCC.exe not found after install; looked in: $($dirs -join '; ')" }
+          Write-Host "ISCC installed at $hit"
+          Add-Content -Path $env:GITHUB_PATH -Value $hit
+
+      # The gate. No step is named here; the runner derives them from the contract --
+      # `-Package` is the runner's own opt-in flag for the `packaging`-class step.
+      - name: Run the pipeline
+        shell: pwsh
+        run: powershell -NoProfile -File packaging/windows/pipeline.ps1 ${{ (github.event_name == 'release' || inputs.package) && '-Package' || '' }}
+
+      # Existence and size, not the step's exit code -- see the Linux job's twin. The
+      # Windows seat measured this artefact at 14,814,966 bytes, so a floor of 1 MB is
+      # far below a healthy build and far above the zero-byte failure being guarded.
+      - name: The installer exists and is not empty
+        if: github.event_name == 'release' || inputs.package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Get-ChildItem -Path 'build\installer' -Filter '*.exe' -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $exe) { throw "no installer was produced in build\installer" }
+          Write-Host ("  {0}  ({1} bytes)" -f $exe.FullName, $exe.Length)
+          if ($exe.Length -lt 1000000) { throw "$($exe.Name) is implausibly small ($($exe.Length) bytes)" }
+
+      - name: Upload the Windows installer
+        if: github.event_name == 'release' || inputs.package
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-windows
+          path: build/installer/*.exe
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------------------
+  # Attach the three platforms' installers to the release that triggered this run.
+  #
+  # A SEPARATE JOB because it is the only thing here that needs `contents: write`, and a
+  # write token should not be live in the jobs that compile and run arbitrary test code.
+  # It also cannot start until all three have produced something, which is the property
+  # that makes a partial release impossible: `needs` failing means no upload at all,
+  # rather than a release carrying two installers out of three and no sign of the missing
+  # one.
+  #
+  # It runs ONLY on a real release. A `workflow_dispatch` with `package: true` still
+  # builds and still uploads to the run's own artefacts -- that is the path used to show
+  # the packaging jobs failing without cutting a throwaway public release -- but there is
+  # no release to attach to, and inventing one would be the opposite of what dispatch is
+  # for.
+  # --------------------------------------------------------------------------------------
+  attach-installers:
+    name: attach installers to the release
+    if: github.event_name == 'release'
+    needs: [execute-linux, execute-macos, execute-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: installers
+
+      # The vacuous pass this job's shape invites, and the same one the parity job guards
+      # against: `download-artifact` succeeds having written nothing, `gh release upload`
+      # with no arguments is not obviously an error, and the release quietly gains no
+      # files. Count them first, and name the number expected rather than "some".
+      - name: Every platform contributed an installer
+        run: |
+          set -euo pipefail
+          ls -l installers
+          n=$(find installers -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' \
+                -o -name '*.dmg' -o -name '*.exe' \) | wc -l)
+          echo "found $n installer file(s)"
+          [ "$n" -ge 4 ] || { echo "::error::expected at least 4 (.deb .rpm .dmg .exe); found $n"; exit 1; }
+
+      - name: Attach them
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ github.event.release.tag_name }}" \
+             installers/*.deb installers/*.rpm installers/*.dmg installers/*.exe \
+             --clobber --repo "${{ github.repository }}"

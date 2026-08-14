@@ -115,9 +115,18 @@ cargo build --release
 ./target/release/scribobulate path/to/document.md
 ```
 
+To install a source build into `~/.local` — desktop entry, icon, man page and the
+Markdown file association, no root:
+
+```bash
+packaging/linux/install.sh      # builds, then installs
+packaging/linux/uninstall.sh    # removes it again
+```
+
 To build the packages yourself, `packaging/linux/build-deb.sh` and
-`build-rpm.sh` (the latter needs `rpm` installed on a Debian host). Both take the
-version from `Cargo.toml` and install the same payload.
+`build-rpm.sh` (the latter needs `rpm` installed on a Debian host). All three routes
+take the version from `Cargo.toml` and install the same payload, defined once in
+`packaging/linux/payload.sh`.
 
 ### macOS
 

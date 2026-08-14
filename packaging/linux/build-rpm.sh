@@ -95,6 +95,10 @@ cp -a $payload/. %{buildroot}/
 %dir %{_datadir}/$PKG
 %{_datadir}/$PKG/themes.toml
 %{_mandir}/man1/$PKG.1.gz
+# %license, not %doc: rpm marks these so they survive an --excludedocs install, which
+# is exactly the case a licence notice must not be dropped by. The syntect grammars are
+# statically linked into the binary and their terms require the notice to travel with it.
+%license %{_datadir}/doc/$PKG/THIRD-PARTY-LICENSES.md
 
 %post
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q %{_datadir}/applications || :

@@ -62,6 +62,8 @@ mod keynav;
 mod limits;
 mod links;
 mod logging;
+// Test-only in `lib.rs` (`#[cfg(test)]`); this root is always built `--cfg test`.
+mod notices;
 mod outline;
 mod outline_view;
 mod palette;
@@ -79,6 +81,9 @@ mod tasklist;
 // it needs no gate here — but it does need the declaration, or the suite build breaks
 // the moment a symlink test in it reaches the shared helper.
 mod testsymlink;
+// Same story as `testsymlink` above: test-only in `lib.rs`, needs the declaration here or
+// the suite build breaks the moment a timing guard in it reaches the shared sampler.
+mod testtiming;
 mod theme;
 mod widgets;
 mod window;

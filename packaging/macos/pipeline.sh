@@ -183,24 +183,53 @@ validate_contract() {
                     errs=$((errs + 1))
                 fi
             fi
+        done
+    done
 
-            # A repo-relative script named in THIS platform's own command must exist.
-            # Only $PLATFORM, never another platform's: a macOS runner cannot verify a
-            # .ps1 is present, and checking it anyway would fail this gate on every
-            # non-Windows machine. Contract ENTRIES stay validated for all three
-            # platforms from everywhere (the loop above); FILES only where they live.
-            if [ "$plat" = "$PLATFORM" ] && [ -n "$cmd" ]; then
-                local first_word
-                first_word=$(echo "$cmd" | awk '{print $1}')
-                case "$first_word" in
-                    */*.sh)
-                        if [ ! -f "$first_word" ]; then
-                            echo "pipeline: step '$id' cmd.$plat names '$first_word', which does not exist" >&2
-                            errs=$((errs + 1))
-                        fi
-                        ;;
-                esac
-            fi
+    # A carve-out is applied by appending libtest `--skip` arguments, so a step that
+    # carries one must be a `cargo test` invocation. Checked rather than assumed: the
+    # assumption holds right up until somebody adds a carve-out to a step where it cannot
+    # mean anything, and then it is applied silently to a command that ignores it.
+    # Checked for EVERY platform, since a carve-out is per-platform data.
+    for id in $ids; do
+        local plat cmdline
+        for plat in $platforms; do
+            [ -n "$(carveouts_for "$id" "$plat")" ] || continue
+            cmdline=$(contract_value "cmd.$plat" "$id")
+            case "$cmdline" in
+                *"cargo test"*) ;;
+                *)
+                    echo "pipeline: step '$id' has carveout.$plat, but cmd.$plat is not a" >&2
+                    echo "  'cargo test' invocation, so --skip cannot apply to it." >&2
+                    errs=$((errs + 1))
+                    ;;
+            esac
+        done
+    done
+
+    # Repo-relative scripts named in THIS platform's commands must exist.
+    #
+    # Only this platform's: a macOS runner cannot check that a .ps1 is present, and
+    # pretending otherwise would make the gate fail on every non-Windows machine. That
+    # asymmetry is deliberate and is the one place cross-platform validation legitimately
+    # stops — the entries are checked everywhere (above), the FILES only where they live.
+    #
+    # Worth having because an opt-in step is exactly where a typo survives: `package`
+    # does not run unless asked, so a misspelled path there would otherwise be found by
+    # whoever first tries to cut a release, which is the worst moment to find it.
+    for id in $ids; do
+        local cmdline tok
+        cmdline=$(contract_value "cmd.$PLATFORM" "$id")
+        [ -n "$cmdline" ] || continue
+        for tok in $cmdline; do
+            case "$tok" in
+                */*.sh|*/*.ps1)
+                    if [ ! -e "$tok" ]; then
+                        echo "pipeline: step '$id' cmd.$PLATFORM names '$tok', which does not exist" >&2
+                        errs=$((errs + 1))
+                    fi
+                    ;;
+            esac
         done
     done
 
@@ -378,15 +407,13 @@ run_step() {
 report_carveouts() {
     local id="$1"
     local list
-    list=$(awk -v kw="carveout.$PLATFORM" -v key="$id" '
-        $1 == kw && $2 == key { $1=""; $2=""; sub(/^[[:space:]]+/,""); print }
-    ' "$CONTRACT")
+    list=$(carveouts_for "$id")
     if [ -z "$list" ]; then
         case "$id" in
             integration|test) echo "    carve-outs: none" ;;
         esac
     else
-        echo "    carve-outs: $(echo "$list" | wc -l) by name"
+        echo "    carve-outs: $(echo "$list" | wc -l) by name, applied via --skip"
         echo "$list" | sed 's/^/      skipped: /'
     fi
 }

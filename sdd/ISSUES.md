@@ -9,8 +9,10 @@
 | G | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
-| Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
+| P | Coverage is still not fully host-independent: `theme.rs`'s search path walks the ambient `XDG_DATA_DIRS`, and the Windows config dir is unpinnable | Low |
+| Q | A complexity guard in `renderer::normalize` measures an exponent with a wall clock, and flakes on both a hosted CI runner and a loaded reference host | Low |
 | R | A tab added to an already-overflowing strip is laid out on top of its left-hand neighbour, and stays there | Low |
+| S | The Windows pipeline port announces carve-outs it does not apply — the two bash ports now append `--skip`, so the first carve-out added makes Windows report a test as skipped that it ran | Low |
 
 ## A. Tables are selection islands
 
@@ -707,37 +709,106 @@ evidence is machine-local and not transferable:
 
 ---
 
-## Q. A wall-clock growth-ratio guard fails on a loaded machine
+## P. Two residual paths still take their coverage from the host's environment
 
-**Severity**: Low (nothing shipped is affected; a required pipeline step goes red on a
-correct tree, and the failure text accuses a specific, already-fixed regression by name,
-so the next reader starts by re-auditing code that is fine)
+**Severity**: Low (no user-visible effect; it degrades a *gate* rather than the app)
 
-`renderer::normalize::normalize_inline_tabs_tests::tab_normalisation_over_a_single_enormous_line_grows_linearly`
-asserts that normalising 512 KiB of tabs takes less than **8x** the time of 128 KiB —
-4x the input. The intent is sound and deliberately machine-independent: the exponent is
-what regressed once (a per-tab backwards line walk), and the test's own doc argues,
-correctly, that an absolute wall-clock bound would be "either flaky or blind".
+The main instance is fixed: `.cargo/config.toml`'s `[env]` now pins `XDG_CONFIG_HOME` to a
+scratch directory, `Config::load()` carries a mutation-tested assertion that it is set, and
+the two-host differential that exposed this (`scripts/coverage.sh` against the same run with
+a scrubbed config dir) is now byte-identical where it used to differ by four lines.
 
-**Measured**: one failure in 40 consecutive `scripts/coverage.sh` runs on the reference
-host, 2026-08-09 — `normalisation grew 8.1x for 4x the input (4.814539ms ->
-38.939987ms)`. The ratio is a quotient of two wall-clock samples whose **numerator is
-about 5 ms**, so a single scheduler preemption of the small run is enough to move it
-across a threshold set at 8 against an expectation of 4. The instrumented (llvm-cov)
-build widens the window further, and 39 of the 40 runs passed.
+**Two paths remain, and they are the same defect wearing different variables:**
+
+1. **`theme.rs`'s search path**, measured at 3 lines. `find_themes_file()` walks
+   `system_data_dirs()` — `XDG_DATA_HOME`, then each entry of `XDG_DATA_DIRS` — so how much
+   of that loop executes depends on how many data directories the host advertises. A
+   developer box reports more than a hosted runner, so those lines are covered here and not
+   there. **Do not fix this by pinning `XDG_DATA_DIRS`**: it is how GTK finds icon themes and
+   GSettings schemas, and pinning it would break icon resolution across the integration
+   suite. The right fix is a deterministic unit test over the path assembly, which means
+   making the directory list a parameter rather than an ambient read.
+2. **The Windows config directory.** `config_home_fallback()` resolves through `APPDATA`
+   there, which is not pinned and should not be — it is a directory the whole toolchain
+   uses. The behavioural hazard (a test reading the developer's real `config.toml`) therefore
+   persists on Windows, where the assertion in `Config::load()` is deliberately `unix`-gated
+   so it cannot fire on a correct run. Coverage is unaffected there, since step 6 is
+   contract-declared non-applicable on Windows.
+
+**The general form, which is the part worth keeping**: coverage produced by the *ambient
+environment* rather than by a test is false comfort. It looks like tested code and is
+nobody's assertion, so it silently moves with the host — and pinning a variable only
+relocates the accident. `config_home_fallback()` illustrates the trade honestly: pinning
+`XDG_CONFIG_HOME` made its three lines *uncovered* on every host, which is worse-looking and
+strictly more truthful, because nothing ever tested them. A deterministic test is the real
+answer in all three places.
+
+**Consequence for the ratchet — now bounded rather than tracked**: `FLOOR` is a whole
+number and advances one whole point at a time (POLICY step 6). That is deliberately wider
+than this entry's residual: ~0.02pt cannot move a threshold quoted in points, so the two
+paths above no longer put the gate at risk of a false red. They still cost something real —
+the floor cannot rise to the next integer until coverage clears it *with margin on every
+host*, and a residual that moves the figure is exactly what eats that margin — so closing
+them is still worth doing. It is no longer urgent. `scripts/coverage.sh` is the source of
+truth for the value and carries the arithmetic; ScrAP-123 carries the lesson.
+
+---
+
+## Q. A complexity guard measures an exponent with a wall clock, and flakes on a loaded machine
+
+**Severity**: Low (a false red, never a false green — it cannot hide a regression, only
+invent one; but a required pipeline step goes red on a correct tree, and the failure text
+accuses a specific, already-fixed regression by name, so the next reader starts by
+re-auditing code that is fine)
+
+`renderer::normalize`'s `tab_normalisation_over_a_single_enormous_line_grows_linearly`
+times normalisation of 128 KiB and 512 KiB inputs and asserts the ratio is `< 8.0`, on the
+reasoning that the *exponent* is the property that regressed and a ratio is
+machine-independent where a wall-clock bound is "either flaky or blind". The reasoning is
+right about the property and wrong about the immunity.
+
+**Measured, on two hosts of the same platform:**
+
+- *Hosted Linux runner*: `8.7x (6.32ms -> 54.918ms)`, failing the pipeline at step 4. The
+  same commit passes locally 5 runs out of 5, and a second CI run of the identical tree
+  **passed** — so it is intermittent rather than a property of that machine. The tell is in
+  the absolute numbers: the runner's small sample is ~6.3 ms where this box is well under a
+  millisecond, so CI is not merely noisier, it is roughly an order of magnitude slower per
+  byte. A ratio taken from a 6 ms denominator on a shared vCPU has scheduling jitter of the
+  same order as the signal it is measuring.
+- *Reference host*: one failure in 40 consecutive `scripts/coverage.sh` runs, 2026-08-09 —
+  `normalisation grew 8.1x for 4x the input (4.814539ms -> 38.939987ms)`. Same shape, much
+  rarer. The instrumented (llvm-cov) build widens the window further.
+
+**A ratio is machine-independent only while both samples sit in the same regime.** Two
+plausible contributors, and they are not exclusive: scheduler preemption on a shared core,
+and the 512 KiB input (plus an equal-sized output) crossing a cache boundary the 128 KiB one
+does not — on a smaller-cache machine the larger sample pays a per-byte penalty the smaller
+never sees, and the ratio inflates with the exponent unchanged.
 
 Not the same defect as the SIGSEGV that used to share this symptom (a coverage run going
 red about one time in three); that one was the fatal-signal handler outliving its own
 test and is fixed — see ScrAP-265. This is the residue that reproduced *instead* of it.
 
-**Why it is not fixed here**: the repair is a judgement about how to make a complexity
-assertion robust, not a one-line threshold bump, and the same shape is used by at least
-one sibling guard (`annotate::scan`'s), so whatever is chosen should be chosen for both.
-The candidates, none of them free: take the best of N repetitions rather than one sample
-(kills preemption noise, costs runtime); raise the baseline until scheduler noise is a
-rounding error (costs runtime, and the absolute-ceiling half of the test already bounds
-that); or count a proxy for work done — iterations, comparisons — instead of time, which
-is the only variant that is not a timing test at all and is the one worth pricing first.
+**Options, roughly in order of honesty:**
+
+1. **Count operations, not time.** The property is algorithmic, so measure the algorithm —
+   instrument the line walk with a step counter and assert *that* grows linearly.
+   Machine-independent by construction rather than by hope. Costs a counter reachable from
+   tests.
+2. **Move both inputs outside cache** (e.g. 4 MiB and 16 MiB) so both are bandwidth-bound and
+   the ratio reflects the exponent again. Simple; costs run time.
+3. **Best-of-N per size.** Timing noise is one-sided, so a minimum is the robust estimator.
+   Helps with preemption, does nothing about a cache-regime difference.
+4. **Widen the threshold.** Cheapest and the worst: 8.7 already sits between linear (~4x) and
+   quadratic (~16x), so widening spends the discrimination the guard exists for.
+
+Whichever is taken, take it for both: the same shape is used by at least one sibling guard
+(`annotate::scan`'s), so the choice is not local to this test.
+
+Do **not** simply delete it — it guards a real regression that has happened once (a per-tab
+backwards line walk, pre-fix cost measured in tens of seconds). The companion absolute
+ceiling (3 s for 512 KiB) still holds and is not implicated.
 
 **Workaround**: re-run. A ratio between 8 and roughly 10 on an otherwise-green suite is
 this issue; a genuine return of the quadratic walk reads ~16x and does not come and go.
@@ -802,3 +873,45 @@ reconcile.
   screenshot cannot tell them apart.
 - Accept it. It is cosmetic, it needs an overflowing strip, and the tooltip still
   identifies the document.
+
+---
+
+## S. The Windows pipeline port announces carve-outs it does not apply
+
+**Severity**: Low (inert today — the contract declares no carve-outs; it becomes a false
+green on the first one added)
+
+`scripts/pipeline.sh` and `packaging/macos/pipeline.sh` both append libtest `--skip`
+arguments for a step's declared carve-outs, and both refuse a contract whose
+carve-out-bearing command is not a `cargo test` invocation. `packaging/windows/pipeline.ps1`
+does neither: `Show-Carveouts` prints the list and `Invoke-ContractStep` then runs the
+contract command unmodified.
+
+So the three ports agree on *what* is carved out and disagree on whether it happens. The
+gap is invisible while `scripts/pipeline.steps` declares no `carveout.*` rows — which is
+exactly what makes it worth recording, because the run that first exposes it is the one that
+adds a carve-out, and what it prints is `skipped: <test>` for a test it ran. A Windows
+release build would then carry a green verdict for a suite that never omitted anything, and
+the report is the only place anyone would look.
+
+The port's own comment used to justify announce-only as parity with the Linux port, which
+was true when written; the bash ports have since gained application, so that justification
+now argues the opposite of what it says. The comment has been corrected in place — this
+entry tracks the behaviour, not the prose.
+
+**Mitigation options**:
+- **Port the bash implementation.** `carveout_skip_args` / `apply_carveouts` and the
+  `validate_contract` rule are ~30 lines between them and the shape is already settled on
+  two platforms. Needs a PowerShell host to exercise: per POLICY's rule that a gate is
+  trusted only once it has been shown to fail, the `--` separator handling and the
+  validation rejection both want a real run before the change is believed. That host was not
+  available when this was found, which is why the entry exists rather than the fix.
+- **Make it a contract-level refusal.** Have all three ports reject a `carveout.windows`
+  row outright until the Windows port applies it. Turns a silent false report into a loud
+  refusal at the moment someone tries to use the feature, and costs nothing to write on the
+  two ports that already work. Leaves Windows unable to carry a carve-out at all.
+- **Drop the announcement.** Printing nothing is at least not a false claim. Loses the
+  "carve-outs: none" statement that makes the silence mean something on the other two ports,
+  and buries the divergence rather than surfacing it.
+- **Accept it**, on the grounds that the list is empty. The weakest option: the cost lands
+  on whoever adds the first carve-out, who has no reason to suspect the report.

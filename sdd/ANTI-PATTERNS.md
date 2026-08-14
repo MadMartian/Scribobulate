@@ -14,8 +14,20 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 >   **librsvg**, **syntect**, **serde/`toml`**, the OS, the toolchain — *and* every process/tooling
 >   concern (testing, CI, packaging, review discipline). None of those components is reused outside
 >   Scribobulate, so extracting their lessons would buy no reuse and cost a hop. **Do not fold them
->   into the core skill.** (A separate home for the purely general engineering-discipline lessons is
->   under consideration but undecided; until it exists, they stay here too.)
+>   into the core skill.**
+>
+> **THERE ARE TWO REUSABLE DESTINATIONS, NOT ONE — and the second is live, not pending.** A purely
+> general engineering-discipline lesson (verification and gate design, experiment method, claims and
+> relay hygiene, cross-platform toolchain hazards, trust-boundary design) goes to the
+> **general-engineering-principles** skill and keeps a stub citing `GEP-N`, exactly as a gtk4-rs
+> lesson keeps a `GTK4Rs/AP-N` one. Route it via the `gep` member in the `skills` ToasterTalk room;
+> they allocate the number, never this seat. **An earlier version of this note said that home was
+> "under consideration but undecided", which was false for a long time before anyone noticed** — 59
+> entries already cited GEP numbers while the note said the destination did not exist. It is
+> recorded here rather than quietly corrected because that stale sentence is what caused the lapse:
+> nine general lessons in a row were written as full project entries by agents who read it and
+> believed it. A routing note that has fallen behind the practice does not merely fail to help, it
+> actively misroutes.
 >
 > **`glib`/`gio` are IN scope for the skill** (operator, 2026-08): its stated coverage is *gtk4,
 > glib, gio, gdk*, so a GLib or GIO lesson routes there like any other gtk4-rs lesson — the earlier
@@ -120,13 +132,24 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > the row is noise that will eventually be read as a live claim. Clear a row in the
 > same commit that merges the entries it was holding.
 >
-> **The next free number is 269.** (266, 267 and 268 have all landed below; this line said
-> 264 while 264 was already in the file, which is the drift the "do not derive it"
-> instruction is aimed at — the line is only useful if the commit that mints a number
+> **The next free number is 290.** (289 and everything below it have landed; this line
+> once said 264 while 264 was already in the file, which is the drift the "do not derive
+> it" instruction is aimed at — the line is only useful if the commit that mints a number
 > also advances it.) Do not derive it from the highest entry below —
 > unmerged branches hold ranges that are invisible from this file, which is exactly
 > how a collision happens. Check the table, **announce the range you are claiming**,
 > and never fill a reserved gap.
+>
+> **276–289 are the `ci` branch's entries, renumbered off 269–282 when it rebased onto
+> `master`, and that is the SECOND time this branch has paid the renumber** — the first
+> moved its 262/263 to 269/270 for the same reason. Both times the branch derived its
+> range from the highest entry *in its own checkout*, and both times `master` had
+> independently minted into the range while the branch was unmerged. A manifest ending at
+> 268 says "268 is the highest number this checkout can see", not "269 is free"; the two
+> read identically and only one is true. This is the concrete cost the paragraph above is
+> abstract about: fourteen entries, their in-file cross-references, six citing files and a
+> conflict pass, for a range that was never anyone's to take. Announce the range, and
+> announce it to the seat that owns this file (POLICY § SDD register writes).
 
 > **Provenance.** This registry was duplicated until now: the copy above lived inside
 > entry #164, and a **stale** second copy inside entry #168 (measured a day earlier) still
@@ -136,10 +159,12 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > held is resolved above. **Keep this the only copy.**
 
 ---
-**Disposition tags (migration bucket, provisional).** `A` = GTK4-core, belongs in the `gtk4-rs`
-skill (body here becomes a pointer stub); `B` = general-engineering discipline, destination ON
-HOLD pending operator review — treat as provisional; `C` = stays in this register, per the
-routing rule above; `D` = dead landing-spot stub for a merged/superseded number. **Numbers are immutable: never renumbered,
+**Disposition tags.** `A` = GTK4-core, belongs in the `gtk4-rs` skill (body here becomes a pointer
+stub); `B` = general-engineering discipline, belongs in the **general-engineering-principles**
+skill, stub here citing `GEP-N` — **this destination is live and in use, not pending**; `C` = stays
+in this register, per the routing rule above; `D` = dead landing-spot stub for a merged/superseded
+number. A `B` entry still carrying a full body is migration backlog, not an exemplar — the same
+caveat the stub-structure section makes for `A`. **Numbers are immutable: never renumbered,
 never reused; a deleted entry keeps its `## N.` heading forever.**
 
 | #   | Anti-pattern | Disp |
@@ -415,6 +440,20 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 273 | A runtime skip announcement shredded by libtest's own progress output — and one shred read `SKIPPED [rubric]: ok` | B |
 | 274 | A provenance tally that counts measurements instead of outcomes, and so reports the opposite of its evidence | B |
 | 275 | A `GFileMonitor` created while its parent DIRECTORY is absent is permanently dead on Windows, and self-heals everywhere else | A |
+| 276 | A parity artefact written to the console instead of the success stream — the documented diff produced an empty file, and the self-test rebuilt the list rather than calling the printer | B |
+| 277 | A process-wide fatal-criticals switch cannot run over a suite containing a test whose subject IS a by-design CRITICAL — and the same run proves the switch's worth | A/B |
+| 278 | A filename or file-existence predicate standing in for a semantic question — three measured cases in one night, each confidently wrong | A |
+| 279 | `gvsbuild --configuration release` compiles GTK's assertions OUT, so the development box cannot enforce the contracts CI enforces | A |
+| 280 | Provisioning for a machine you cannot inspect — installing a tool the image already had, and discovering one path component while pinning its sibling | B |
+| 281 | A corpus that exercises the PATTERN cannot see a bug in the FLAG on the call site that consumes it | B |
+| 282 | An operation counter is a complexity oracle only for operations you control | C |
+| 283 | A false premise can file a measurable fact as unmeasurable, and the two protect each other | B |
+| 284 | A dialog raised over a natively full-screen macOS window seizes a Space of its own and leaves the parent black | A |
+| 285 | *(merged into 245)* A drive tool's zero exit is a claim about the tool, never about delivery | B |
+| 286 | A reconciliation agreed in the room and never written into the artefact reopens on the next read | B |
+| 287 | A scope claim is only as wide as the thing it was measured over — a runtime survey answered an attribution question | B |
+| 288 | `$PSScriptRoot` is empty while `param()` defaults bind under `powershell -File`, and correct everywhere else | B |
+| 289 | An HTTP 200 is a claim about the transaction, not about the document — four fetched licence texts were anti-bot pages | B |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -1156,6 +1195,44 @@ GTK4 is single-threaded, yet many pitfalls below present as **races** — interm
 **Symptom**: POLICY's coverage prose cited "~66.48% lines" while the real figure had climbed to 67.83% over several unrelated cycles — nothing alerted, since a ratchet only fires on a DROP.
 **Root cause**: the figure lived in three places (the coverage-gate script's floor constant, POLICY's inline snippet, prose) with no single source of truth; a contributing misread nearly set the floor from `cargo-llvm-cov`'s eye-catching FIRST (Regions) column instead of the gated LINES column.
 **Resolution**: ratchet the floor and the stated figure together whenever coverage rises; verify a ratchet change by the gate's EXIT CODE, never the printed percentage.
+
+**Extension (2026-08-08), same family, opposite axis — the floor was calibrated to a
+MACHINE, not a platform.** The first CI run of this gate on a hosted Linux runner measured
+**76.26%** on the commit that prints **76.31%** on the calibrating developer's box, and the
+entire gap is `src/config.rs`: `Config::load()` reads the ambient config directory, so it
+takes a different branch depending on whose home directory it finds and covers four more
+lines locally. The floor was tracking the tester as much as the tree — and this is invisible
+until a second host of the SAME platform runs the gate, which is why it survived every
+POLICY protection about not lowering the floor for a *different* platform. Two things follow:
+a threshold derived to the second decimal from one host's run is **false precision**, and
+**a test that reads the developer's environment is a coverage defect before it is a test
+defect** — the fix is to remove the ambient dependence (pin the directory the way
+`.cargo/config.toml`'s `[env]` pins `XDG_STATE_HOME`), not to keep re-calibrating per host.
+
+**The settled corrective, and the transferable half: quote a threshold at a precision the
+measurement supports, then stop maintaining it.** Re-deriving the floor per host was the
+treatment for the symptom; the cure was to make the number too coarse to care — `FLOOR` is
+now a whole number advancing one whole point at a time, which is wider than any residual
+host-dependence and therefore cannot be moved by one. The rule generalises past coverage:
+**a gate whose threshold needs re-derivation on every measurement is quoted too finely**,
+and each re-derivation is a fresh chance to copy the wrong column (ScrAP-256's mechanism).
+Widening the units also silences a whole class of non-findings — sub-point drift stops
+being something anyone has to explain, adjudicate, or escalate. `scripts/coverage.sh` holds
+the value and the arithmetic; POLICY step 6 holds the rule. Kin to ScrAP-256 (a
+threshold maintained by hand out of a report) and ScrAP-181 (a suite is evidence only about
+the environments it has run in).
+
+**Sharpened while fixing it — pinning the variable is only half the lesson.** The deeper
+fault is **coverage produced by the ambient environment rather than by a test**: it looks
+like tested code, is nobody's assertion, and moves with the host. Pinning relocates the
+accident rather than removing it, and the honest measure of that is what pinning
+`XDG_CONFIG_HOME` did to `config_home_fallback()` — its three lines went from *covered* to
+*uncovered* on every host, which reads worse and is strictly more truthful, because nothing
+had ever tested them. Only a deterministic test converts those lines into real evidence.
+Corollary for the ratchet: **do not raise a floor onto a figure that is not yet
+reproducible** — a floor derived from a number that still moves between hosts re-creates
+this entry, which is why the floor stayed round while the residual paths are open.
+
 **Non-core (tooling/process) — do NOT fold into the gtk4-rs skill.**
 
 ## 124. A test suite gated behind a Cargo feature is invisible to every gate that does not enable it — it rots until it stops compiling, and every line it covers reads as 0%
@@ -2817,6 +2894,37 @@ at; what is established is that the two channels can diverge and that neither
 because the window lookup silently returned an empty string and `import -window ""`
 blocks — a second instance of the same shape one layer down.
 
+**Second measured case — macOS, and the divergence is FINER-GRAINED** (macOS seat, GTK
+4.22.4/Quartz): `cliclick kp:esc` **exits 0, posts an event, and the application never
+receives it**, while `c:` clicks and `kd:/t:/ku:` typed text from the *same tool* land
+normally. So it is not "keyboard vs pointer" as it was on X11 — it is one *sub-channel* of
+the keyboard, which reads healthier still. `osascript -e 'tell application "System Events"
+to key code 53'` delivers where cliclick does not.
+
+**It fails FAVOURABLY, which is what makes it expensive**: Escape appears not to dismiss a
+dialog on a build where it works by hand, so a correct application reads as broken and the
+time goes into chasing a defect that does not exist. The X11 case wastes a run; this one
+wastes a diagnosis. The discriminator is a known-good pair — Ctrl+F opens the find bar,
+Escape closes it — used to prove the primitive before believing any negative key result.
+Procedure lives in `tests/MANUAL-TEST.md` §A.2's drive loop, cited from §7.19m where it cost
+the time.
+
+**The general form, sharpened by the second case**: *a drive tool's exit code is a claim
+about the tool's own execution, never about delivery to the application.* Hence instrument
+the receiving handler rather than re-reading the screen.
+
+**Third measured case — and it is OUTSIDE the UI-drive scope, which is the point** (Windows
+seat, provisioning for the librsvg licence notice): `cargo install cargo-about` **exits 0
+having installed no binary** unless `--features cli` is passed — it builds the library and
+stops, and nothing in the output distinguishes that from a successful tool install. The
+general form survives the move from a *drive* tool to a *build* tool unchanged: an exit code
+is a claim about the invoked process's own execution, never about the effect you invoked it
+for. Recorded here rather than as a sibling entry because the root cause is identical; note
+that the skill's copy (GTK4Rs/AP-245) is UI-testing-scoped and this case does **not** belong
+in it. Same session, same shape one step further out: the tool's *default resolve* would have
+attributed 360 crates instead of 198, so "it ran and produced a notice" was equally
+consistent with a correct notice and a badly wrong one.
+
 **The rule.** **Assert a positive control on every input channel before trusting a
 drive**: send one keystroke and one click whose effect you can check independently
 (a tab count, a log line, a file on disk), and only then run the real scenario. Until
@@ -3665,81 +3773,9 @@ than a missing hook — different root cause, same architectural fact); TDD 23.1
 ---
 
 ## 262. A restore seam's "nothing to do at the boundary" shortcut is a claim about its first caller, and the second caller loses a real destination
-
-**Symptom**: Back and Forward do nothing at all for a jump *within* one document —
-the commonest shape of the feature, following a table of contents at the head of the
-file — while the same commands work for every other navigation. Nothing is logged,
-the buttons light and grey correctly, and the recorded history is provably right
-(`nav-back` reports itself available, the entry names the right place). Only the
-viewport never moves. Both directions look broken at once, which misdirects the
-diagnosis to the recording half: Back scrolls nowhere, so Forward is then asked to
-return to the section the reader never left, and *it* looks broken too.
-
-**What was tried**: reading the recording path first — the two choke points, the
-slug that gets recorded, the reconciliation that degrades stale headings, the
-suppression depth — on the reasoning that "neither direction works" means the
-history is empty or wrong. All of it was correct, and every one of the feature's
-twenty-one automated tests was green.
-
-**Root cause**: the traversal restores a recorded reading line through
-`preview::restore_preview_scroll_to_line`, which opened with `if line <= 0 { return; }`,
-documented as *"no-op for `line <= 0` (already at/above the top)"*. That parenthesis
-is true of the seam's original caller and only of it: a zoom re-render restores a
-view to where it already is, so restoring line 0 is genuinely redundant there. Back
-and Forward then reused the same seam to *travel* to a recorded place, where line 0
-is not a redundant refresh but a destination — "take the reader back to the top" —
-and the guard swallowed it. And it swallowed exactly the case the feature exists
-for: a reader following a TOC link is, by definition, at the top of the document, so
-the departure stamped onto the entry they leave is line **0** essentially every time.
-The seam had absorbed a precondition that belonged to a caller, and nothing at the
-new call site could see it — the parameter is an `i32` either way.
-
-**Why the tests all passed**: every existing body parked the reader at a non-zero
-line, and the shared fixture's own comment explains why — it carries "enough filler
-that a heading's line and the reader's departure line are far apart (an assertion
-that passed for both would prove nothing)". That reasoning is sound and it
-systematically excluded the boundary: choosing a *non-degenerate* input so the
-assertion discriminates is the same choice as never testing the degenerate one, and
-here the degenerate one was the majority of real use.
-
-**Resolution**: `restore_preview_scroll_to_line` now clamps a negative line (a bad
-value) and *scrolls* to 0 (a position) like any other line, and its doc comment
-states the contract as a destination rather than as a refresh, names the sibling
-`restore_preview_scroll_to_line_fresh` whose brand-new view genuinely is at the top,
-and says the two are not interchangeable. Regression guard:
-`window/navhistory/record.rs`'s
-`back_from_a_link_followed_at_the_top_of_the_document_returns_to_the_top` —
-mutation-checked, the restored early return fails it (`16` against an expected `0`)
-and leaves all twenty-one other navigation tests green, which is precisely the
-evidence that the existing suite could not have caught this.
-
-**Lesson**: an early-return that means "there is nothing to do here" is a statement
-about the caller's *context*, not about the argument's value, and a shared seam has
-no access to context — so the second caller inherits a silent, invisible drop. Before
-adding a caller to a restore/refresh helper, read its no-op guards as preconditions
-and ask whether they hold for the new call; before writing one, prefer a guard that
-rejects an impossible *value* (a negative line) over one that assumes a *situation*
-(the view is already there). The testing corollary is the sharper half: when a
-fixture is deliberately chosen to be non-degenerate so an assertion can discriminate,
-that same choice deletes the boundary case from the suite — write the boundary case
-as its own body, because for a feature triggered from a document's own table of
-contents the boundary *is* the common path.
-
-**Cost**: one full read of the recording half, the pure history core and the
-reconciliation before the traversal was suspected at all — the "both directions are
-dead" symptom argues for the shared upstream (recording) and against the shared
-downstream (the restore seam), and it argues wrongly. Shipped through the whole gate
-set and the feature's own twenty-one tests — Severity: High
-
-**Scribobulate**: `preview/scroll.rs`'s `restore_preview_scroll_to_line`
-(no `line <= 0` return; negatives clamped), reached from
-`window/navhistory/traverse.rs`'s `restore_place` for a `NavSpot::Line`, and from
-`window/zoom.rs` for the zoom re-render it was originally written for.
-
-**See**: kin #261 (the sibling defect in the same feature, found the same way — a
-correct-looking mechanism whose *other* path nobody enumerated); TDD 23.12; MANUAL-TEST §23.
-
----
+**Symptom**: Back and Forward do nothing for a jump *within* one document — the commonest shape of the feature — while every other navigation works, nothing is logged, and the recorded history is provably right.
+**Scribobulate**: `preview/scroll.rs`'s `restore_preview_scroll_to_line` (no `line <= 0` early return; negatives clamped), reached from `window/navhistory/traverse.rs`'s `restore_place` and from `window/zoom.rs`; guard `back_from_a_link_followed_at_the_top_of_the_document_returns_to_the_top`, mutation-checked; TDD 23.12; MANUAL-TEST §23.
+**See**: general-engineering-principles (GEP-53).
 
 ## 263. `line_at_y` on a not-yet-allocated `GtkTextView` reports the buffer's LAST line, so a viewport read taken in the turn a view is built in is maximally wrong
 **Symptom**: a `doc.md#section` link opens the target scrolled to the right heading, and one Back throws the reader to the END of the document just opened — silently, because the recorded history honestly names the last line: the measurement was the bug, not the recording.
@@ -3754,10 +3790,9 @@ correct-looking mechanism whose *other* path nobody enumerated); TDD 23.12; MANU
 **See**: gtk4-rs skill → controllers-and-bindings (GTK4Rs/AP-264, woven 2026-08-09; it sits beside **GTK4Rs/AP-53**, which already owns the general propagation rule — a focused composite's own class-level keybinding beats an ancestor's bubble-phase controller however propagation is configured — so the skill entry spends itself on the corrective, the gates and the diagnostic signature rather than restating the mechanism). Root cause: a selectable `GtkLabel` is focusable and carries its own `move-cursor` class key bindings for the horizontal and buffer-ends keys, so it consumes them in its target phase and they never bubble to the host view; measured GTK 4.6.9/X11 with capture+bubble controllers on the view — the view's capture phase sees the key, its bubble phase never does, `move-cursor` never fires, and a `GtkLinkButton` cell (the other cell shape) swallows nothing. Findings: tests/reports/gtk4skiller-brief-ScrAP-264.md (local, gitignored); the mechanism and the measurement tables are also carried permanently by the two modules' own rustdoc.
 
 ## 265. A test that arms a process-global fatal-signal handler and never disarms it re-points the rest of the suite — and displaces the runtime's own stack-overflow guard, so a later overflow stops naming itself
-**Symptom**: a required gate (here the coverage step) dies by `signal: 11, SIGSEGV` about one run in three, and dies **articulately** — stderr carries a complete, plausible application crash report with an identity header, fault address, instruction pointer and backtrace. Every reader's first conclusion is that the application crashed. It did not: the report's breadcrumbs are a *test fixture's* two lines, the process that faulted is the test binary, and the fault landed long after the test that armed the handler had already reported `ok`. Re-running the gate "fixes" it, so the whole thing reads as an application flake.
+**Symptom**: A required gate dies by SIGSEGV about one run in three and writes a complete, plausible application crash report — for a process that did not crash.
 **Scribobulate**: `forensics::signal::tests::ArmedHandler` — an RAII guard that takes the install lock, snapshots every fatal disposition in `FATAL_SIGNALS` (four when this was written, five since ScrAP-268) **and** the calling thread's alternate signal stack, arms, and restores both on drop. Production `install` keeps no uninstall on purpose: a process wants the handler for its whole life, and an uninstall is only a window in which it can die unreported — so the remedy belongs to the test harness, not to the module's public surface. Guard: `the_fatal_handler_does_not_outlive_the_test_that_armed_it`, which asserts the armed state as well as the disarmed one (ScrAP-217 — "no report was written" and "this harness cannot write reports at all" are the same output) and asserts the two restorations *separately* (ScrAP-254 — restoring the disposition alone is sufficient to make the report assertion pass, so the alternate stack, which is the half the language runtime needs back, carries its own).
-**Root cause, measured** — 2026-08-09, glibc/Linux, the same overflow probe run both ways: arming takes SIGSEGV away from Rust's stack-overflow handler and `sigaltstack` away from that thread's guard stack. **Left armed**, a stack overflow on an unrelated thread ends the whole process with `(signal: 11, SIGSEGV)` and writes the crash report described above. **Disarmed**, the identical overflow prints `thread '<unknown>' has overflowed its stack` / `fatal runtime error: stack overflow` and aborts on SIGABRT. So the handler never *caused* the fault; it replaced a diagnosis that names itself with one that confidently names something else.
-**The transferable half, which is bigger than signals**: state a test writes into the *process* is not scoped to that test, and it fails somewhere else, later, intermittently — the shape that makes a gate look flaky rather than broken. It is worst when the hijacked state is **diagnostic** machinery, because then the failure is not silent but eloquent: it manufactures authoritative-looking evidence about the wrong subject, and the more trustworthy the reporting mechanism is, the further the investigation goes in the wrong direction before anyone checks whether the breadcrumbs belong to the process that died. The reflex worth keeping: read a crash report's identifying detail (here, two fixture strings that exist nowhere but one test) *before* believing its subject.
+**See**: general-engineering-principles (GEP-54).
 
 ## 266. A focused popover that is its own `GtkNative` is an application-keyboard dead zone
 **Symptom**: while the annotation comment card holds the focus, NO application accelerator fires — not the command that opened it, and not an unrelated `F8` pane toggle either — yet the card's own Escape and Tab-to-Edit work, and the identical keystroke works the instant Escape returns focus to the view. Discriminator: press a COMPLETELY UNRELATED accelerator in the same state; if that is dead too, the keystroke was never delivered and the command's own handler is the wrong subject.
@@ -3963,3 +3998,205 @@ SKIPPED [TDD 24.13 stored spelling]: test copymap::tests::within_heading_exclude
 **Symptom**: live reload never works for one document, on Windows only, with no error, no warning, and a perfectly valid non-null `GFileMonitor` to inspect — while the same code on Linux and macOS starts working within seconds, so it is invisible to every developer not sitting at a Windows box.
 **Scribobulate**: not reachable today — every site that attaches a monitor (`app::attach_file_backing`, the rename re-attach, crash-orphan recovery) does so for a document whose directory exists. Recorded because the reachable version is one ordinary feature away: a monitor armed on a not-yet-created path, or a document on a removable volume. If that is ever built, Windows needs its own rescan; GIO will neither provide one nor say so.
 **See**: gtk4-rs skill → app-lifecycle-and-env (GTK4Rs/AP-275), which holds the three-layer source trace, the per-backend self-heal behaviour, and the two transferable halves (a well-formed question aimed at the wrong level; an API that cannot report failure is not one that does not fail).
+---
+
+## 276. A parity artefact written to the console instead of the success stream — the documented diff produced an empty file, and the self-test rebuilt the list rather than calling the printer
+**Symptom**: `-ListSteps > file` exits 0, prints the list to the log, and writes a zero-byte file — while `-SelfTest` passed on the same runner seconds earlier.
+**Scribobulate**: `packaging/windows/pipeline.ps1` (`Write-StepList`, `Invoke-SelfTest`), compared by `scripts/pipeline-parity.sh` from `.github/workflows/pipeline.yml`.
+**See**: general-engineering-principles — the self-test half (GEP-3), the success-signal half (GEP-52).
+
+## 277. A process-wide fatal-criticals switch cannot run over a suite containing a test whose subject IS a by-design CRITICAL — and the same run proves the switch's worth
+
+> *Core GTK/GLib log machinery, wearing a gate-design problem. **Weave candidate for the
+> gtk4-rs skill** — its automated-testing material. Kin to GTK4Rs/AP-257 (a warning family
+> whose members are benign and real, told apart by name and count) and ScrAP-217 (a negative
+> result is worthless without a positive control).*
+
+**Symptom**: a CI job that sets `G_DEBUG=fatal-criticals` — the standing recommendation for
+a CI test run, since it turns a `Gtk-CRITICAL` into a hard failure rather than a line in a
+log nobody reads — aborts the suite with `SIGTRAP` and no Rust panic. The Rust harness
+reports only "process didn't exit successfully"; the discriminating evidence is the CRITICAL
+printed immediately above it, and the test name only if the run was serialised.
+
+**What the run actually produced — two aborts of opposite kinds, and this is the finding**:
+
+1. **A real defect.** `change_action_state` on `win.find-replace`, which is a *stateless*
+   `SimpleAction::new(.., None)`, emitting `GLib-GIO-CRITICAL g_action_change_state:
+   assertion 'state_type != NULL' failed`. The call was a silent no-op — the setup step it
+   belonged to was already performed by the line above it — and it had been emitting that
+   CRITICAL unread for as long as the test had existed (ScrAP-252's shape: a setup step that
+   silently does nothing).
+2. **A correct test.** `saferizer::popover_anchor`'s round-trip deliberately reads an unset
+   anchor on a never-`set_parent`'d popover, which is the exact case the seam exists to
+   absorb — and GTK gets there through `gtk_popover_get_pointing_to`'s fallback, which
+   computes the bounds of a NULL parent and fires `GTK_IS_WIDGET` itself
+   (`gtkpopover.c:2278/:2280`, researcher-confirmed). The CRITICAL **is the documented
+   behaviour under test.**
+
+**Root cause**: `G_DEBUG` is process-wide and read at startup, so it cannot distinguish
+"a CRITICAL nobody meant" from "the CRITICAL this test is about". `glib::log_set_fatal_mask`
+is per-*domain* and does not separate them either — one is `GLib-GIO`, the other `Gtk`, and
+both are domains the suite legitimately produces.
+
+**The trap is which way you resolve it.** Both single-sided readings are wrong, and each is
+the obvious one from where it is seen: *drop the setting* and you discard the mechanism that
+just found a real defect nothing else could see; *reshape the test* — parent the popover, and
+the abort goes away — and you have narrowed a correct test so a gate passes, which is the
+trade this project refuses everywhere else. Note how plausible the second is: the edit is one
+line and the test still passes.
+
+**Corrective**: treat a by-design CRITICAL as a **named, allow-listed** fact rather than
+something to switch off globally or edit away. Keep `G_DEBUG=fatal-criticals` as a
+**diagnostic** — per-run, by hand, when hunting a specific CRITICAL, where it converts
+"somewhere in this run" into a backtrace — and do not set it over the suite. The honest
+replacement, when it is worth building, is a scan of the run's output for CRITICALs against
+an allow-list of the documented one, with a `marker:` verdict of the kind the pipeline
+contract's step 4b already uses; that is a change to the contract rather than to CI, and is
+deliberately not made in the same breath as the discovery. General form: **a process-wide
+fatality switch and a suite that deliberately exercises the failure it makes fatal are
+incompatible, and the resolution is an allow-list — not the removal of either.**
+
+**Where Scribobulate implements the fix**: `.github/workflows/pipeline.yml` (the
+`execute-linux` job records the whole finding beside its absence), POLICY § Logging;
+the defect half in `src/a11y.rs`, the by-design half in `src/saferizer/popover_anchor.rs`.
+
+---
+
+## 278. A filename or file-existence predicate standing in for a semantic question — three measured cases in one night, each confidently wrong
+
+**Symptom**: a check answers with total confidence and is wrong, in whichever direction costs more. A cross-reference gate reported two dangling documents that were Rust field accesses. A licence audit reported four projects as shipping no licence text when one of them ships eleven. A dependency probe reported seven runtime contracts as missing from a machine that resolves all of them.
+
+**What was tried**: in each case the first instinct was to trust the result and act on it — file the dangling references, vendor the missing licences, stage the missing DLLs. Two of the three were caught only because the answer disagreed with something already known; the third was caught by reading the loaded-module list instead of asking the filesystem.
+
+**Root cause**: all three predicates are *structural* stand-ins for *semantic* questions, and the substitution is invisible at the call site.
+- `\bPLAN\.[A-Za-z0-9_-]+` asks "is this a document path?" — under a case-insensitive matcher it answers yes for `plan.switch_to`, an ordinary field access.
+- `^(licence|license|copying|copyright|notice)` asks "does this project ship a licence?" — it answers no for a directory of SPDX-named texts (`LGPL-2.1-or-later.txt`, `MIT.txt`).
+- `Test-Path api-ms-win-crt-heap-l1-1-0.dll` asks "does this dependency resolve?" — it answers no for an **API set contract**, which is not a file at all and resolves through the loader's schema.
+
+**Resolution**: match the instrument to the question. Case-sensitivity where the pattern is case-bearing; **enumerate the directory, never the filename pattern**; and ask the loader, not the filesystem, whether a dependency resolves. Where a semantic question has no cheap structural proxy, pay for the semantic answer — reading a running process's module list cost one command.
+
+**Lesson**: a predicate over a NAME or over EXISTENCE is a proxy, and every proxy has a domain where it silently inverts. The tell is that it never returns "I don't know" — it returns a clean answer of the wrong kind. Before trusting one, ask what it would say about the case you have *not* got, and prefer the instrument that observes the actual mechanism over the one that observes its filename.
+
+**Three further measured cases, and the escalation is the point — here the wrong answer becomes a false legal claim.** Building the Windows installer's licence gate, a "the licence file exists" condition passed for all three of these (measured in the gvsbuild prefix):
+
+- **`pcre2/COPYING` is four lines saying to read a `LICENCE` file that is not shipped.** A licence file containing no licence.
+- **`cairo/COPYING` is a summary** pointing at `COPYING-LGPL-2.1` and `COPYING-MPL-1.1`, neither of which is present.
+- **`gettext/COPYING` is GPL-3.0 — the licence of the gettext *tools*.** The shipped DLL is `intl.dll`, i.e. libintl, which is LGPL-2.1. Staging that file would have attached a **GPL-3 notice to a component not under it**.
+
+The third inverts the usual failure direction: the proxy does not under-attribute, it makes a confident false statement *about the product*, which is worse than shipping nothing and is the kind of error a downstream redistributor acts on. The corrective is the same instrument-matching rule one notch stricter — the gate now requires each row to declare a **string that must occur in its licence text**, so the condition tests the text's identity rather than the file's presence. Note the ordering trap this closes: "vendor a licence for every project shipping none" and "check that each vendored file exists" are both reasonable, and neither can see a file that exists, is named correctly, and says the wrong thing.
+
+**A fourth case from the same table, and it ran through three proxies before landing.** The `share/icons/hicolor` row was first reconciled by **counting** files — 15 SVGs plus two metadata files. The count was correct, and agreed by two seats, so the row was treated as settled. But a count cannot see *identity*: the SVGs turned out to be GtkSourceView's `lang-*`/`completion-*` completion-provider set, not the Adwaita artwork the row had assumed. Two people agreeing on the measured half is not corroboration of the inferred half — it is the reason nobody re-examines it.
+
+The third proxy is the instructive one, because it was **a careful inference from complete evidence, and still wrong**. With the artwork correctly identified, the licence was inferred as the project's LGPL-2.1 on the sound-looking grounds that the SVGs carry no per-file licence header and no licence file sits beside them in the installed prefix. Both observations are true. The conclusion is false: upstream's `data/icons/meson.build` installs the icon subdirectory *only*, so the `data/icons/COPYING` that actually governs them — CC-BY-SA-3.0, explicitly not the code licence — **is never installed**. The evidence was complete about the installed tree and the question was about the work.
+
+**The rule that generalises past licensing has been split out to general-engineering-principles (GEP-50)** — *a derived artefact is a filtered view, so absence in it is evidence about the filter, not about the thing declared.* What stays here is the local form and why this project walked into it anyway: we already held the narrow version ("an empty directory is evidence about the packaging, not about whether attribution is owed") and still missed the deeper one, because a *populated* directory that merely lacks a COPYING reads as informative where an empty one reads as suspicious.
+
+**Cost**: three separate near-misses in one session, each of which would have produced confident, wrong, committed work — a false bug report against correct code, three unnecessary vendored licences, and a set of DLLs staged for no reason. All three were caught by disbelieving a green or a clean result. — Severity: High
+
+---
+
+## 279. `gvsbuild --configuration release` compiles GTK's assertions OUT, so the development box cannot enforce the contracts CI enforces
+
+**Symptom**: a test aborts in CI and cannot be reproduced on the Windows development machine under any condition — single case, full suite, same GTK version number. The abort is a fatal GLib assertion inside GTK itself (`gsk_renderer_dispose: assertion failed: (!priv->is_realized)`, exit `0xC0000409`), so it reads as a platform or timing difference rather than a build difference.
+
+**What was tried**: ruling out the GTK version (identical, 4.22.4, checked against the upstream pin); the application's own code path; teardown ordering across the full suite; and "assertions wholesale compiled out", which was inferred from a one-sided string grep and then **retracted as unsound** — a single-binary grep cannot distinguish "this assertion is present" from "some string sharing those bytes is present".
+
+**Root cause**: GTK's own meson adds `-DG_DISABLE_ASSERT` when `debug=false` and `optimization ∈ {2,3,s}` — i.e. under `--buildtype release`. `gvsbuild`'s **default** is `debug-optimized` (meson `debugoptimized`, assertions live), which is what its published release archives are built with; an explicit `--configuration release` gets a real release buildtype and every `g_assert` in GTK/GSK vanishes at compile time. **Both install to a directory named `release`**, so nothing on disk distinguishes them.
+
+**Resolution**: test against the artefact CI consumes rather than one that resembles it — unpack the published archive to a separate prefix and point the prefix variable at it per-invocation, leaving the working toolchain untouched. Confirm by the paired literals (`!priv->is_realized` and the enclosing function name present in one binary, absent in the other) and by a positive control that *aborts* where it previously exited 0.
+
+**Lesson**: **a version number is not a build.** Where a toolchain offers a configuration that removes runtime checking, "green on the development machine" is systematically weaker evidence than it reads for every assertion-backed contract in the dependency — and the weakness is invisible from that machine, because the check that would reveal it is the check that was compiled out. Ask what your build *enforces*, not what it *is*.
+
+**Where Scribobulate implements the fix**: the Windows seat's standing practice, recorded in `packaging/windows/README.md`; `.github/workflows/pipeline.yml` pins the published archive by release tag.
+
+**Scope, and one line of it is now closed**: MEASURED on GTK 4.22.4 / gvsbuild 2026.8.0 / MSVC / Windows 10 Pro 19045, both binaries on one machine; the meson logic is SOURCED, not measured across versions. **Ubuntu's distro GTK compiles assertions IN** — `libgtk-4-1` 4.6.9+ds-0ubuntu0.22.04.2 carries both literals (measured by the skill maintainer). That is single-binary and therefore sound only as a **positive**: a PRESENT is real evidence because the stringified expression plus `G_STRFUNC` is only produced by an expanded `g_assert`, but an ABSENT elsewhere would need the two-binary pairing before anyone believed it. So **the Linux seat structurally could have caught this class and the Windows development box structurally could not**, which is also why the same suite being green on three machines was only ever proving this about one of them. MSYS2 and Homebrew remain unanswered.
+
+**See**: routed to the `gtk4-rs` skill as a GTK-stack lesson — any GTK project with a locally built Windows toolchain has this exposure. Its primary sibling there is GTK4Rs/AP-160 ("a green suite is evidence only about the environments it has run in"): this is the sharper child — not environments but **build configurations behind an identical version number**, and where GTK4Rs/AP-160's gap is at least visible from the machine you stand on, this one is definitionally not.
+
+**Cost**: a CI failure that could not be reproduced locally, resolved only by diffing two binaries and reading compiled-in string literals; and a retracted intermediate conclusion along the way. The standing consequence is larger than the one bug — every `g_assert`-backed GTK contract was unenforced on the machine the project is developed on. — Severity: High
+
+---
+
+## 280. Provisioning for a machine you cannot inspect — installing a tool the image already had, and discovering one path component while pinning its sibling
+**Symptom**: Two consecutive packaging failures on a hosted runner, both in provisioning, neither reproducible on any development machine.
+**Scribobulate**: `packaging/windows/package.ps1` — the installer-compiler lookup takes the first match (its comment records the doubled-path invocation), and the redistributable directory is selected by content rather than by name; the workflow probes before installing and announces which branch it took.
+**See**: general-engineering-principles (GEP-55).
+
+## 281. A corpus that exercises the PATTERN cannot see a bug in the FLAG on the call site that consumes it
+**Symptom**: A gate's self-test stays green through a mutation battery aimed at the defect, and adding plainly discriminating cases does not change it.
+**Scribobulate**: `scripts/lint-references.ps1` and `scripts/lint-references.sh` — case sensitivity at the match site, pinned by the `case-flag-site` arm of the shared `-SelfTest`/`--self-test` corpus, which now routes through the same invocation the check itself uses.
+**See**: general-engineering-principles (GEP-3).
+
+## 282. An operation counter is a complexity oracle only for operations you control
+
+**Symptom**: a wall-clock growth-ratio guard flakes on shared CI. The obvious repair — count operations instead of time, machine-independent by construction — was built, and the resulting guard could not fail.
+
+**Root cause**: two, and the second is the general one. The test corpus made the counted structure trivially small, so a linear and a logarithmic lookup performed identically. More fundamentally, the regression being guarded did its work **inside the standard library** (`str::find` scanning the source), which no counter in the project can reach: a reintroduction ticks the counter exactly as often as correct code, leaving the ratio linear while the run takes minutes.
+
+**Resolution**: keep the **absolute** ceiling, which has wide headroom, has never flaked, and is what actually catches the regression; remove the wall-clock **ratio**, whose signal and noise envelope overlap; and address the flake by raising the SAMPLE COUNT on noisy machines rather than the threshold, since the estimator is the minimum of N draws and additive noise only needs more draws to find the same floor.
+
+**Lesson**: "count operations, not time" is right only where the operations that scale are **yours**. Before replacing a timing oracle with a counting one, ask where the work in the regression actually happens — if it is behind an API you do not instrument, the counter measures call frequency, which was never in question. A guard that cannot fail is worse than the flaky one it replaced.
+
+**Cost**: an implementation, a mutation test, and a revert — cheap, and only because the mutation was run. Recorded because the reasoning is persuasive enough to be re-attempted. — Severity: Low
+
+---
+
+## 283. A false premise can file a measurable fact as unmeasurable, and the two protect each other
+**Symptom**: A document states that something "remains unmeasured" — a claim that was never true — and it survives review because the sentence explaining *why* it cannot be measured sits a few lines above it and is itself false.
+**Scribobulate**: `packaging/windows/README.md`'s long-paths section, where both coupled sentences are corrected together and each says the other must be edited with it, and the matching claim in `.github/workflows/pipeline.yml`.
+**See**: general-engineering-principles (GEP-56).
+
+## 284. A dialog raised over a natively full-screen macOS window seizes a Space of its own and leaves the parent black
+
+**Symptom**: with a window in macOS native full screen, opening About or the unsaved-changes Save/Discard/Cancel prompt makes the **dialog** go full screen into a Space of its own instead of floating over its parent; dismissing it returns to an unpainted black parent, and Escape never reaches the dialog. Reproduces **only from inside the `.app` bundle**, never from a bare `cargo run` binary — so the cheapest way to test it is the way that cannot see it.
+
+**Root cause**: GDK attaches a transient child via `-[NSWindow addChildWindow:ordered:]` from inside `gtk_window_realize`, and AppKit runs a genuine enter-full-screen transition on the *child* when the parent already occupies a full-screen Space. GDK tags every toplevel `NSWindowCollectionBehaviorFullScreenPrimary` unconditionally.
+
+**Resolution**: hold `transient-for` aside until the window has realized, tag the `NSWindow` `FullScreenAuxiliary` from the `realize` handler, then hand the parent back. Armed for every toplevel at startup rather than per dialog, so no future dialog site can forget it.
+
+**Lesson**: a window-system relationship established by the toolkit *at realize time* can mean something different when the parent is in a platform mode the toolkit does not model. Where a backend tags every toplevel with one collection behaviour unconditionally, "transient" is not the whole contract.
+
+**Where Scribobulate implements the fix**: `src/platform/mac/fullscreen.rs`. Guards: `the_transient_parent_is_withheld_until_the_window_has_realized` (mutation-checked in both directions, asserting both halves as **states** rather than as schedulings), the `is_secondary`/auxiliary unit tests, and `tests/MANUAL-TEST.md` §7.19m — which must be run **from the bundle**, since a bare binary cannot reproduce it (TDD 7.19).
+
+**See**: gtk4-rs skill → widgets-and-composites. Measured and written up by the macOS seat.
+
+**Cost**: a user-visible defect on every modal over a full-screen window, invisible to the development path most likely to be used. — Severity: High
+
+---
+
+## 285. Merged into ScrAP-245 — a drive tool's zero exit is a claim about the tool, never about delivery
+
+**Symptom**: `cliclick kp:esc` exits 0, posts an event the application never receives, while clicks and typed text from the same tool land — a working build reads as broken.
+
+**Merged, not deleted.** This is the macOS instance of ScrAP-245's root cause (input channels diverging silently with no tool reporting an error), so it lives there as a second measured case rather than as a numbered essay beside it — one root cause, one entry. The number is retired and kept as a landing spot; it is never reused.
+
+**Scribobulate**: `tests/MANUAL-TEST.md` §A.2's drive loop, cited from §7.19m.
+
+**See**: ScrAP-245, and gtk4-rs skill → ui-testing-debugging (GTK4Rs/AP-245), which took the same fold decision independently.
+
+---
+
+## 286. A reconciliation agreed in the room and never written into the artefact is not a decision — it reopens on the next read, and the seat that measured it pays twice
+**Symptom**: A question settled days ago comes back phrased as though it had never been asked, because the artefact still carries the superseded claim that the conversation corrected.
+**Scribobulate**: `sdd/PLAN.build-pipeline-ci.md` — the hicolor row now states the 15/17 reconciliation inline, the `BuilderBlocks.ttf` row is marked open with its measurement rather than carrying only a verdict, and "The design, agreed and not yet written" now names the owning seat and says why leaving it unsaid stalled it.
+**See**: general-engineering-principles (GEP-48).
+
+## 287. A scope claim is only as wide as the thing it was measured over — "which platform bundles the runtime" answered "which platform owes attribution"
+**Symptom**: An obligation recorded as affecting one platform — with a measurement backing it — is in fact live on all three.
+**Scribobulate**: `packaging/linux/payload.sh` stages `THIRD-PARTY-LICENSES.md` for all three Linux routes (rpm marks it `%license`; the deb `copyright` gained a `Files: usr/bin/*` stanza naming the grammars' licences); `sdd/PLAN.build-pipeline-ci.md` now separates the two obligations; `tests/MANUAL-TEST.md` §A.1 item 5 asserts all six payload files.
+**See**: general-engineering-principles (GEP-49).
+
+## 288. `$PSScriptRoot` is EMPTY while parameter defaults are evaluated under `powershell -File`, and correct everywhere else
+**Symptom**: A script's `param()` default resolves against the drive root under one invocation form and correctly under every other, with nothing at the use site to show it.
+**Scribobulate**: `packaging/windows/stage.ps1`'s `param()` block. Not currently reachable — `package.ps1` invokes it with `&` and passes both parameters explicitly, and the README's `.\stage.ps1` form is safe; `pipeline.yml` does use `-File`, but for scripts that touch `$PSScriptRoot` only in the body.
+**See**: general-engineering-principles (GEP-51).
+
+
+---
+
+## 289. An HTTP 200 is a claim about the transaction, not about the document — four fetched licence texts were anti-bot pages
+**Symptom**: four of the first nine upstream licence fetches returned HTTP 200 carrying an anti-bot interstitial, all four byte-identical at 4626 bytes, with the client reporting success for every one — while the two requests that failed loudly (406, 404) were the harmless ones.
+**Scribobulate**: the Windows licence gate's fourth condition — every row of `packaging/windows/licenses.psd1` declares an `Expect` string that must occur in its licence text, asserted when the text is fetched and re-checked at build time by `packaging/windows/verify-licenses.ps1`. `packaging/windows/licenses/PROVENANCE.md` records the pinned versions and SHA-256s, and `packaging/windows/licenses/.gitattributes` (`* -text`) keeps those hashes true on a CRLF checkout — without it a fresh clone on an `autocrlf` seat rewrites the texts and every recorded hash silently describes bytes that are no longer on disk (measured: 219,581-byte blob vs 223,875 on disk, the delta exactly the line count).
+**Case — the guard's SCOPE did not follow what it guards, and a plausible wrong explanation nearly closed over the gap.** That `.gitattributes` covers `packaging/windows/licenses/` only. `LICENSE` and `THIRD-PARTY-LICENSES.md` were staged from the repo root by a *later* commit and were still `text: auto`, so the Windows installer shipped them CRLF while Linux and macOS shipped LF: measured 205,287 B installed against a 201,166 B blob, delta 4,121 = exactly the line count. (`THIRD-PARTY-LICENSES.md` has since stopped being versioned at all — `build.rs` generates it and normalises to LF — which removes its variance by construction rather than by guard. `LICENSE` is still versioned and still varies.) **Harmless here** (no SHA-256 is recorded for these two, and CRLF is arguably right for a file a Windows user opens in Notepad) — but it is only harmless by luck, since the guard was written *because* silent rewriting falsifies recorded bytes, and nothing extends it to files added afterwards. Two rules follow: **a byte count for a text file is only reproducible if it states its line-ending convention**, and when two seats report different sizes for one file, **check the line count against the delta before accepting any causal story.** The first explanation offered here was that a pending edit accounted for the difference — plausible, wrong, and self-ratcheting, because the file was about to grow and the story would have survived by being adjusted rather than falsified.
+**Case — the anchor discriminates DOCUMENTS, not REVISIONS of one, and that is one notch coarser than it looks.** The FTL text vendored first was SPDX's re-wrap, not FreeType 2.14.3's own file: same licence, different edition — 5,979 B against 6,743 B, paragraphs unwrapped, section rules stripped, stale `http://www.freetype.org` URL — sitting beside a provenance line asserting 2.14.3. The gate passed it and **would pass it again**, because the declared anchor occurs in both. The earlier catches here were the wrong *document*; this was the right document in the wrong *revision*. **Deliberately not escalated to a hash anchor**: that fails every row on any upstream whitespace change and teaches re-baselining rather than reading, which converts a check that catches real substitutions into a ritual. The limit is documented instead. What caught it was not a check but going to the build tree for a neighbouring file — so **prefer vendoring from the source tree the artefact was built from over a tagged download**: a tag asserts upstream published those bytes under that name; the build tree *is* the bytes the shipped binary was built from.
+**See**: general-engineering-principles (GEP-52).

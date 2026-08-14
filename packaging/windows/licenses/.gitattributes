@@ -1,0 +1,13 @@
+# Licence texts are redistributed BYTE-VERBATIM, so nothing in this directory
+# may be line-ending converted.
+#
+# This is not a style preference. core.autocrlf is true on the Windows seat, and
+# with the default text=auto a fresh clone would write these files back out with
+# CRLF -- a different file, byte for byte, from the one that was fetched and
+# hashed. The SHA-256 values recorded in PROVENANCE.md would then match nothing
+# on disk, and the provenance record would quietly become false on every Windows
+# checkout while remaining true on Linux.
+#
+# -text disables the conversion in both directions, so the blob, the worktree
+# and the staged installer all carry the same bytes on every platform.
+* -text

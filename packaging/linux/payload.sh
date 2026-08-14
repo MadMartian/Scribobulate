@@ -48,37 +48,72 @@ require_fresh_binary() {
     fi
 }
 
-# Install the payload into $1 as a filesystem root. Both packages get exactly this.
+# Install the payload into $1 as a filesystem root. ALL THREE Linux install routes get
+# exactly this — the two package builders and install.sh.
+#
+#   stage_payload <root> <bin> <version> [prefix] [exec_path]
+#
+# `prefix` is the path segment between the root and the FHS directories, and it exists
+# because the user-local layout is the system one with a different anchor: the packages
+# pass `usr` and write $root/usr/bin, $root/usr/share/…, while install.sh passes an EMPTY
+# prefix with root=~/.local and writes ~/.local/bin, ~/.local/share/…. XDG's user tree is
+# deliberately shaped like /usr, so this is one layout with two anchors rather than two
+# layouts — and expressing it as two would be the drift this file exists to prevent.
+#
+# `exec_path`, when non-empty, is written into the desktop entry's Exec/TryExec instead
+# of the bare command. The packages leave it empty and ship the entry VERBATIM, because
+# /usr/bin is always on the launcher's PATH; install.sh passes the absolute binary path,
+# because ~/.local/bin frequently is not.
 stage_payload() {
-    local root="$1" bin="$2" version="$3"
+    local root="$1" bin="$2" version="$3" prefix="${4-usr}" exec_path="${5-}"
+    # Collapse the empty-prefix case so paths never contain a doubled slash: with a
+    # prefix it is "$root/usr", without it just "$root".
+    local base="$root${prefix:+/$prefix}"
 
-    install -Dm755 "$bin" "$root/usr/bin/$PKG"
+    install -Dm755 "$bin" "$base/bin/$PKG"
 
-    # Ships VERBATIM. install.sh rewrites Exec/TryExec to an absolute path because
-    # ~/.local/bin may not be on the launcher's PATH; /usr/bin always is, so the
-    # unmodified entry is correct here and stays byte-identical to the one in data/.
-    install -Dm644 "data/$PKG.desktop" "$root/usr/share/applications/$PKG.desktop"
+    install -Dm644 "data/$PKG.desktop" "$base/share/applications/$PKG.desktop"
+    if [ -n "$exec_path" ]; then
+        # Pin Exec/TryExec to the absolute binary path so the launcher works whether or
+        # not the bin directory is on its PATH. Done here rather than in the caller so
+        # the entry has exactly one writer and cannot be installed twice.
+        sed -i -e "s|^Exec=$PKG|Exec=$exec_path|" \
+               -e "s|^TryExec=$PKG|TryExec=$exec_path|" \
+            "$base/share/applications/$PKG.desktop"
+    fi
 
     # The same SVG the binary compiles into its GResource, so the icon the window
     # resolves internally and the one the shell reads off disk cannot diverge. The
     # shell is a separate process and cannot see our GResource, which is why this
     # copy exists at all.
     install -Dm644 "data/icons/scalable/apps/$APP_ID.svg" \
-        "$root/usr/share/icons/hicolor/scalable/apps/$APP_ID.svg"
+        "$base/share/icons/hicolor/scalable/apps/$APP_ID.svg"
 
     # Preview reading themes. Found via glib::system_data_dirs() — never hard-code
     # /usr/share on the READING side; on a KDE box its first entry is
     # /usr/share/plasma. The same file is compiled into the binary as a fallback, so
     # this copy is an override rather than a requirement.
-    install -Dm644 "data/themes.toml" "$root/usr/share/$PKG/themes.toml"
+    install -Dm644 "data/themes.toml" "$base/share/$PKG/themes.toml"
+
+    # Third-party attribution, and it is an OBLIGATION rather than a courtesy: the
+    # syntect syntax grammars reach the binary through the `two-face` crate and are
+    # STATICALLY LINKED into it, under MIT/Apache-2.0/BSD-2-Clause/BSD-3-Clause — all of
+    # which require the notice to travel with a binary distribution. A statically linked
+    # dependency leaves no file of its own in the installed tree, which is exactly why
+    # this was missed: every artefact on every platform shipped without it while the
+    # About dialog told users the file was "in the distribution". It was in the
+    # repository. Staged here, in the ONE definition all three Linux routes read, so no
+    # route can acquire the binary without acquiring its notices.
+    install -Dm644 "THIRD-PARTY-LICENSES.md" \
+        "$base/share/doc/$PKG/THIRD-PARTY-LICENSES.md"
 
     # A binary on $PATH with no `man` entry is an incomplete install on a system where
     # `man` is how you ask. Generated rather than carried as a source file: everything
     # in it is already stated in Cargo.toml or the desktop entry, and a second
     # hand-maintained copy would drift. `gzip -9n` because the timestamp gzip would
     # otherwise embed makes the artefact non-reproducible.
-    mkdir -p "$root/usr/share/man/man1"
-    cat > "$root/usr/share/man/man1/$PKG.1" <<EOF
+    mkdir -p "$base/share/man/man1"
+    cat > "$base/share/man/man1/$PKG.1" <<EOF
 .TH SCRIBOBULATE 1 "$(date +%Y-%m-%d)" "$PKG $version" "User Commands"
 .SH NAME
 $PKG \- native Markdown viewer and editor that renders on the CPU
@@ -107,12 +142,30 @@ per theme id.
 .SH LICENSE
 Apache License 2.0.
 EOF
-    gzip -9n "$root/usr/share/man/man1/$PKG.1"
-    chmod 644 "$root/usr/share/man/man1/$PKG.1.gz"
+    gzip -9n "$base/share/man/man1/$PKG.1"
+    chmod 644 "$base/share/man/man1/$PKG.1.gz"
 
     # Directory permissions set EXPLICITLY, not inherited. `mkdir -p`/`install -D`
     # apply the building user's umask, and on a 002 umask that yields group-writable
     # /usr, /usr/bin and /usr/share which the package manager then applies verbatim to
     # the installed system. It builds, installs and runs; only lintian says otherwise.
-    find "$root" -type d -exec chmod 755 {} +
+    #
+    # PACKAGE STAGING ONLY, and the guard is load-bearing rather than tidy. `$root` is a
+    # throwaway staging directory for the two builders, so a recursive chmod over it
+    # touches nothing but files this function just wrote. For install.sh `$root` is the
+    # user's LIVE `~/.local`, where the same sweep would walk the whole tree and force
+    # 755 onto directories that are deliberately private — `~/.local/share/keyrings` and
+    # anything else a user or another application chose 700 for. Widening a permission
+    # the user narrowed is a silent, non-obvious consequence of installing a text
+    # editor, so the sweep is scoped to the case that needs it.
+    if [ -n "$prefix" ]; then
+        find "$root/$prefix" -type d -exec chmod 755 {} +
+    else
+        # Same intent, bounded to what this function created: the four directories it
+        # owns, never their ancestors and never their unrelated siblings.
+        for d in "bin" "share/applications" "share/icons/hicolor/scalable/apps" \
+                 "share/$PKG" "share/doc/$PKG" "share/man/man1"; do
+            [ -d "$base/$d" ] && chmod 755 "$base/$d"
+        done
+    fi
 }

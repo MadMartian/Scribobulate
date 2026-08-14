@@ -20,9 +20,11 @@ the GTK4 runtime it needs, wrapped in a per-user installer.
 gvsbuild build --configuration release --vs-ver vs2022 gtk4 gtksourceview5
 gvsbuild build --configuration release --vs-ver vs2022 --fast-build adwaita-icon-theme
 
-# 2. The app itself
+# 2. The app itself — ALL FOUR variables, not just the first two
 $env:PKG_CONFIG_PATH = "C:\gtk-build\gtk\x64\release\lib\pkgconfig"
 $env:PATH = "C:\gtk-build\gtk\x64\release\bin;$env:PATH"
+$env:LIB = "C:\gtk-build\gtk\x64\release\lib;$env:LIB"
+$env:INCLUDE = "C:\gtk-build\gtk\x64\release\include;$env:INCLUDE"
 cargo build --release
 
 # 3. Stage the redistributable tree
@@ -33,6 +35,19 @@ cargo build --release
     /DStageDir="$PWD\build\stage\Scribobulate" `
     packaging\windows\scribobulate.iss
 ```
+
+**Two of those four are easy to omit and neither failure names them.** Setting only
+`PKG_CONFIG_PATH` and `PATH` gets you past `pkg-config` and then fails at link time with
+`LINK : fatal error LNK1181: cannot open input file 'gtk-4.lib'`, which reads as a broken
+GTK install rather than a missing environment. `LIB` and `INCLUDE` are what fix it, and
+`build.bat` has always set all four (it also guards the empty-entry case, since an empty
+element in `LIB`/`INCLUDE` means "the current directory" to the toolchain). This block
+listed only two until it was measured against a bare shell.
+
+**A failed link still leaves a VALID `THIRD-PARTY-LICENSES.md` behind**, because `build.rs`
+runs and generates it before anything is linked. So the file's presence does NOT imply the
+build succeeded — what protects staging is `stage.ps1`'s precondition on
+`target\release\scribobulate.exe`, not the notices file existing.
 
 Output: `build\installer\Scribobulate-<version>-x64-setup.exe`. The version is read
 out of `Cargo.toml` by the `.iss` itself, so nothing here restates it.
@@ -178,15 +193,22 @@ same tests or knowingly differ. Each is applied by name via `--skip` and printed
 run, and the mechanism works while the list is empty, which is what lets the step say
 `no carve-outs` and have it mean something. The list is empty today.
 
-## Why this is a script, not CI
+## Windows and CI
 
-**Scribobulate has no GitHub Actions workflow, and adding one is out of scope for
-this port.** The delivery mechanism here is deliberately a local script: something a
-developer runs to build, gate and package the app on their own machine.
+**There is a workflow now — `.github/workflows/pipeline.yml` — and it does not replace
+this script.** Its Windows job runs `pipeline.ps1 -SelfTest` and `-ListSteps` so the
+port's derived step list can finally be diffed against the other two, which no single
+machine could do. Executing the *whole* pipeline on a hosted Windows runner is still
+unsolved: it needs a gvsbuild GTK, which is the provisioning job the two notes at the
+end of this section exist to shorten. So this file stays the way a developer builds,
+gates and packages the app on their own machine, and CI is a caller of it rather than a
+second port.
 
-A `.github/workflows/windows.yml` was added on the port branch and has since been
-**removed**. Worth recording why, because it is not merely a scope preference: its
-triggers were
+That decision was reached the long way, and the reasoning below is why the workflow that
+exists looks the way it does.
+
+A `.github/workflows/windows.yml` was added on the port branch and was **removed**.
+Worth recording why, because it was not merely a scope preference: its triggers were
 
 ```yaml
 on:
@@ -200,7 +222,9 @@ so it was not branch-local infrastructure — it would have run against the shar
 repository the moment anything merged, committing the whole project to a CI system
 nobody had agreed to. **A workflow file is not scoped by the branch it sits on**,
 which is the whole reason its presence was a cross-project decision rather than a
-port detail, and why it was removed rather than left for the merge to sort out.
+port detail, and why it was removed rather than left for the merge to sort out. The
+decision has since been made deliberately, at the project level, and the workflow that
+carries it records this constraint in its own header.
 
 The knowledge it carried is preserved rather than discarded — it is all in this file
 and in `pipeline.ps1`: the gvsbuild version pin (an unpinned install silently changes
@@ -217,17 +241,84 @@ not have to:
   ~144 MB; the full tree is ~6.5 GB of sources and intermediates and would exhaust a
   repository cache quota for no benefit, since nothing downstream reads the build tree.
 - **Enable long paths for git only** (`git config --system core.longpaths true`), never
-  the system-wide `LongPathsEnabled` registry key. Leaving that at its default is what
-  makes a runner exercise the constrained `MAX_PATH` case that this dev box cannot
-  (it has long paths enabled). Enabling it would mask the failure mode you want caught.
-  Note this is **necessary but not sufficient** — `unique_tmp_path_for` uses
+  the system-wide `LongPathsEnabled` registry key, so the runner stays in the
+  constrained `MAX_PATH` regime the `#[cfg(windows)]` test in `src/atomic_io.rs` exists
+  to exercise. Enabling it would mask that failure mode.
+
+  **What this used to say, and why it no longer does.** It justified the choice by
+  claiming a runner thereby exercises a case "this dev box cannot (it has long paths
+  enabled)". That contrast was never checked, and it is false for the Windows seat's
+  box: `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled` is **0**
+  there, and `git config core.longpaths` is empty at system, global and local scope.
+  Both the runner and that dev box are in the constrained regime, so the practice is
+  right on its own terms and simply is not a contrast. (Measured on one Windows host —
+  another machine may well have the key set, which is the point: it is a per-machine
+  fact, not something to assert about "the dev box".) The same claim was corrected in
+  `.github/workflows/pipeline.yml` first and left standing here, which is worse than
+  correcting neither — the tree then contradicts itself and a reader cannot tell which
+  copy was measured. If either is edited again, edit both.
+
+  Note the setting is **necessary but not sufficient** — `unique_tmp_path_for` uses
   `with_file_name`, so the temp file is a sibling of the *target*, and the overflow
   needs a deep **document** directory, which a shallow runner workspace does not
-  provide. What actually drives the case is the `#[cfg(windows)]` test
-  `write_atomic_survives_a_document_directory_that_overflows_max_path` in
-  `src/atomic_io.rs`, which builds the deep directory itself and asserts both
-  preconditions; its own comments record what remains unmeasured (a host with
-  `LongPathsEnabled=0`, where the constrained branch runs instead of the success one).
+  provide. What actually drives the case is
+  `write_atomic_survives_a_document_directory_that_overflows_max_path`, which builds
+  the deep directory itself and asserts both preconditions. Its comments once recorded
+  the constrained branch as unmeasured; that gap is **now closed** — the test passes on
+  a host with `LongPathsEnabled=0`, which is where the constrained branch runs rather
+  than the success one. The test deliberately does not pin the outcome: what must hold
+  either way is the atomicity contract.
+
+### The dev prefix and CI's GTK are not the same binary
+
+`gvsbuild build --configuration release` (above) is not merely a label. It sets Meson
+`--buildtype=release`, and GTK's own `meson.build` reacts to that:
+
+```
+if debug
+  gtk_debug_cflags += '-DG_ENABLE_DEBUG'
+elif optimization in ['2','3','s']
+  gtk_debug_cflags += ['-DG_DISABLE_CAST_CHECKS', '-DG_DISABLE_ASSERT']
+endif
+```
+
+So a `--configuration release` prefix has **`g_assert` compiled out of GTK and GSK**.
+The prebuilt zip CI consumes (`GTK4_Gvsbuild_<ver>_x64.zip`) is built *without*
+`--configuration`, i.e. gvsbuild's `debug-optimized` default, and **keeps its
+assertions**.
+
+**Nothing on disk distinguishes them.** gvsbuild rewrites the configuration string to
+`release` for install pathing, so both land in `C:\gtk-build\gtk\x64\release`. Same
+version number, same directory name, same `pkg-config --modversion`. Only the
+compiled-in literals differ:
+
+```
+:: present in CI's build, ABSENT from a --configuration release build
+findstr /C:"!priv->is_realized" <prefix>\bin\gtk-4-1.dll
+```
+
+The consequence is not academic and is not fixed by testing more carefully: **every
+`g_assert`-backed GTK/GSK contract is unenforced on a `--configuration release` prefix
+and enforced on CI.** A local run cannot fail that whole class of defect. This was
+measured, not theorised — a realized `GskRenderer` dropped without `unrealize()` exits
+0 against a release prefix and aborts against CI's with
+`Gsk:ERROR:gskrenderer.c:130:gsk_renderer_dispose: assertion failed: (!priv->is_realized)`,
+which is how that defect reached a hosted runner from a green desk.
+
+**Practice: when the question touches GTK behaviour, test against the zip CI uses.**
+Unpack `GTK4_Gvsbuild_<pinned version>_x64.zip` anywhere and point the toolchain at it
+for that run only:
+
+```powershell
+$env:SCRIB_GTK_PREFIX = 'C:\path\to\unpacked-zip'
+$env:PATH             = "$env:SCRIB_GTK_PREFIX\bin;$env:PATH"
+$env:PKG_CONFIG_PATH  = "$env:SCRIB_GTK_PREFIX\lib\pkgconfig"
+```
+
+Per-invocation, never a persisted user or machine variable — the everyday prefix stays
+where it is, and `--configuration release` remains correct for the footprint gate and
+for release as the behavioural reference (above). This is not a replacement for the dev
+prefix; it is the second one you reach for when the answer must match CI.
 
 ## How the app icon reaches Windows
 

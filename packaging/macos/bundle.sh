@@ -71,6 +71,19 @@ sed "s/@VERSION@/$VERSION/g" "$REPO_ROOT/packaging/macos/Info.plist.in" \
     > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
+# --- Third-party notices -------------------------------------------------------
+# The syntect grammar assets `two-face` compiles into the binary (MIT, Apache-2.0,
+# BSD-2-Clause, BSD-3-Clause) require the notice to travel with every binary
+# distribution, on every platform -- independent of the dylib-bundling gap noted
+# above (this app links Homebrew's dylibs rather than bundling them, so it owes no
+# runtime-attribution obligation, but it owes this one). The About dialog already
+# claims "Full notices: THIRD-PARTY-LICENSES.md (in the distribution)"; without
+# this the claim is false on macOS. No librsvg notice is staged here -- that one
+# exists only because the Windows installer bundles a statically-linked librsvg
+# with its Rust crate graph, which this bundle does not do.
+cp "$REPO_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
+cp "$REPO_ROOT/THIRD-PARTY-LICENSES.md" "$APP/Contents/Resources/THIRD-PARTY-LICENSES.md"
+
 # Ad-hoc signature. Unsigned bundles are increasingly refused outright on Apple
 # Silicon; this is enough to launch locally and is NOT distribution signing
 # (that needs a Developer ID certificate plus notarization).

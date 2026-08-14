@@ -50,7 +50,17 @@ if (-not $StageDir) { $StageDir = Join-Path $repo 'build\stage\Scribobulate' }
 # packaging/windows/README.md documents, while a machine-scope install lands under Program
 # Files. Hardcoding either one makes the other look like "Inno Setup is not installed".
 function Find-Iscc {
-    $onPath = Get-Command iscc -CommandType Application -ErrorAction SilentlyContinue
+    # `-First 1` is load-bearing, not tidiness. Get-Command returns EVERY match on PATH,
+    # so on a machine carrying two Inno installs `$onPath.Source` is an ARRAY, and a
+    # returned array interpolates space-joined into the command line built below --
+    # producing `ISCC.exe C:\...\ISCC.exe C:\...\ISCC.exe` and a failure whose message
+    # names Inno Setup twice and explains nothing. MEASURED on a GitHub windows-latest
+    # runner, which ships ISCC via Chocolatey on PATH: a second, user-scope install put a
+    # sibling ahead of it and step 10 died with both paths concatenated. Two installs is
+    # an ordinary state for a developer box too; the first match is the one PATH order
+    # already chose.
+    $onPath = Get-Command iscc -CommandType Application -ErrorAction SilentlyContinue |
+              Select-Object -First 1
     if ($onPath) { return $onPath.Source }
     # Roots checked for emptiness BEFORE Join-Path: with $ErrorActionPreference = 'Stop',
     # Join-Path on an unset root is a terminating error, so a probe written the obvious way

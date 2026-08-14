@@ -24,10 +24,12 @@ fn main() {
 
     emit_git_commit();
 
+    generate_third_party_notices();
+
     // One source dir: `data/icons` is a freedesktop icon tree holding every
     // bundled icon, the application icon included. Its layout mirrors the
     // install target exactly (`scalable/apps/…` here becomes
-    // `hicolor/scalable/apps/…` under install.sh), so the same file serves the
+    // `hicolor/scalable/apps/…` under packaging/linux/install.sh), so the same file serves the
     // GResource and the system install with no alias and no second copy.
     glib_build_tools::compile_resources(
         &["data/icons"],
@@ -43,6 +45,74 @@ fn main() {
     // outcome `res.compile()`'s `expect` below exists to make impossible.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         embed_windows_resources();
+    }
+}
+
+/// Generate `THIRD-PARTY-LICENSES.md` from its inputs.
+///
+/// **The file is DERIVED and is deliberately not versioned** (`.gitignore`). It used to
+/// be committed while claiming to be generated, which was false -- its whole history was
+/// one commit and nothing regenerated it, so a `two-face` bump would have left the legal
+/// notices describing a grammar set we no longer ship. Guarding a committed copy with a
+/// staleness gate was the first attempt; generating it removes the failure mode instead
+/// of policing it, which is the same reasoning as the typed seams in POLICY.
+///
+/// Hand-authored prose lives in `notices/*.md`, one file per section, emitted in filename
+/// order ahead of the generated body. Those ARE versioned: they are the input. Adding a
+/// section means adding a file, never editing the output.
+///
+/// **This writes into the source tree rather than `OUT_DIR`, which is a deliberate
+/// deviation.** All seven packaging scripts across the three platforms consume
+/// `<repo-root>/THIRD-PARTY-LICENSES.md`, and every one of them runs `cargo build` first,
+/// so generating here means none of them changes and none of them can read a stale or
+/// missing file. Emitting to `OUT_DIR` would buy convention at the cost of teaching three
+/// packagers a path they cannot easily discover.
+///
+/// CRLF is normalised to LF: `two-face`'s embedded assets are not uniformly LF (one theme
+/// licence carries CRLF inside the crate's own data), and an artefact whose byte count
+/// differs per platform for invisible reasons is one nobody can verify -- that exact
+/// discrepancy already sent one seat chasing a wrong explanation.
+fn generate_third_party_notices() {
+    println!("cargo:rerun-if-changed=notices");
+    // Watch the OUTPUT too, so deleting or hand-editing it regenerates rather than
+    // persisting. Without this the "it cannot be stale" claim is false: cargo re-runs a
+    // build script only when a declared input changes, so a corrupted output survives
+    // every subsequent build. MEASURED -- injecting a CR byte into the generated file
+    // survived `cargo build` until this line existed. Safe against a perpetual re-run
+    // because the write below is conditional: unchanged content leaves the mtime alone.
+    println!("cargo:rerun-if-changed=THIRD-PARTY-LICENSES.md");
+
+    let mut parts: Vec<std::path::PathBuf> = std::fs::read_dir("notices")
+        .expect("notices/ not found: the authored sections are the generator's input")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    parts.sort();
+
+    // A missing input is a defect, not an empty section: rendering from an empty
+    // directory would silently produce a document with no preamble, and nothing
+    // downstream inspects it closely enough to notice.
+    assert!(
+        !parts.is_empty(),
+        "no notices/*.md sections found -- the hand-authored inputs are missing"
+    );
+
+    let mut out = String::new();
+    for part in &parts {
+        out.push_str(&std::fs::read_to_string(part).expect("read notices section"));
+    }
+    out.push_str(&two_face::acknowledgement::listing().to_md());
+
+    let rendered = out.replace("\r\n", "\n");
+
+    // Write only on a real change. Rewriting identical bytes would bump the mtime of a
+    // file this script declares as an input, so every `cargo build` would re-run the
+    // whole build script -- including the GResource compile -- for no reason.
+    let current = std::fs::read_to_string("THIRD-PARTY-LICENSES.md").unwrap_or_default();
+    if current != rendered {
+        std::fs::write("THIRD-PARTY-LICENSES.md", &rendered)
+            .expect("write THIRD-PARTY-LICENSES.md");
     }
 }
 
@@ -128,7 +198,7 @@ fn embed_windows_resources() -> ! {
 
 #[cfg(windows)]
 fn embed_windows_resources() {
-    // The same art as the GResource app icon and install.sh's hicolor drop, but
+    // The same art as the GResource app icon and packaging/linux/install.sh's hicolor drop, but
     // pre-rendered: `rc.exe` takes .ico only, and PE icons are raster by nature.
     println!("cargo:rerun-if-changed=packaging/windows/scribobulate.ico");
 

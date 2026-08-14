@@ -80,6 +80,11 @@ tempfile = "3"
 gtk-integration-tests = ["gtktest", "inventory"]
 
 [build-dependencies]
+# Same version and features as the normal dependency above, deliberately: on a native
+# build cargo then shares one compiled unit rather than building two-face twice. It is
+# needed at build time because `build.rs` generates THIRD-PARTY-LICENSES.md from
+# `two_face::acknowledgement::listing()` -- see that file and `src/notices.rs`.
+two-face = { version = "0.5.1", default-features = false, features = ["syntect-fancy"] }
 # Build-time only (never linked into the shipped binary): compiles
 # data/resources.gresource.xml into an embedded GResource blob at build time
 # via the external `glib-compile-resources` tool (part of the same GLib dev

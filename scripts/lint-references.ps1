@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     POLICY.md § "Build pipeline" step 9 — static reference lint. PowerShell port of
     scripts/lint-references.sh, for Windows developers who have no bash.
@@ -544,6 +544,30 @@ function Get-ScanSubset {
     ,$out
 }
 
+# Check 12's predicate, factored out so the CHECK and its SELF-TEST run the SAME code
+# over the same bytes -- the twin of ps1_encoding_violation() in the bash port. Check 6's
+# port bug survived a fully populated corpus precisely because the corpus tested the
+# pattern directly instead of going through the call site, so a self-test that
+# re-implements this rule over strings would be decorative in the identical way.
+#
+# Returns $true when $Path is a BOM-less file containing a byte above 0x7F.
+#
+# READS BYTES, NOT TEXT, DELIBERATELY. Get-Content would decode the file first -- which is
+# the very ambiguity under test -- and 5.1 and pwsh 7 decode a BOM-less file DIFFERENTLY
+# (ANSI codepage vs UTF-8), so a text-level check would answer differently on the two
+# engines and reintroduce the divergence it exists to detect. ReadAllBytes has no encoding.
+# A plain foreach rather than a Where-Object pipeline: a pipeline returns a COLLECTION,
+# and a collection's truthiness is its own 5.1 trap.
+function Test-Ps1EncodingViolation {
+    param([Parameter(Mandatory)] [string] $Path)
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        return $false
+    }
+    foreach ($b in $bytes) { if ($b -gt 0x7F) { return $true } }
+    return $false
+}
+
 # ── Self-test: prove the pattern discriminates, in BOTH directions ─────────────
 if ($SelfTest) {
     # Kept string-for-string with scripts/lint-references.sh's own corpus. That
@@ -590,10 +614,19 @@ if ($SelfTest) {
     # A directory-qualified path that EXISTS (`sdd/ISSUES.md`) is not a false positive
     # and is deliberately absent: 6a is supposed to extract it, then resolve it and
     # find it present. This corpus is about what must not be extracted AS A PATH.
+    # The lowercase members are the ones that matter HERE, and they are the reason this
+    # corpus is worth keeping string-for-string with the bash gate's. `grep -E` passes
+    # them without trying; Select-String and -like default the other way, so before the
+    # -CaseSensitive/-clike fixes at check 6 this port extracted `plan.switch_to` from
+    # ordinary Rust and reported it as a dangling document -- on a tree the Linux port
+    # passed. The self-test stayed green throughout, because no corpus member exercised
+    # the one axis the two engines disagree on. It does now.
     $pathMustNotMatch = @(
         'see POLICY.md for the rule',
         'a PLAN.<topic>.md is deleted by design once implemented',
-        'doc_link_fragment("./sub/PLAN.md#caf%C3%A9")'
+        'doc_link_fragment("./sub/PLAN.md#caf%C3%A9")',
+        'if plan.switch_to.is_some() {',
+        'restore_place(&tab, plan.spot.as_ref());'
     )
     # Check 8's corpus, kept string-for-string with the bash gate's. It exercises
     # `Test-BareAp` -- the predicate the check itself calls -- not the two patterns in
@@ -808,6 +841,83 @@ if ($SelfTest) {
         }
     }
 
+    # Check 12's two fixtures, run through check 12's OWN predicate
+    # (Test-Ps1EncodingViolation) rather than through a re-implementation, and kept
+    # file-for-file with the bash port's own fixture assertions. Check 6's port bug
+    # survived a fully populated corpus because the corpus matched the pattern DIRECTLY
+    # and never reached the call site; these are real files on disk and this is the
+    # function the gate runs.
+    #
+    # BOTH DIRECTIONS ARE ASSERTED, and the second is the one people leave out. Flagging
+    # the BOM-less file only proves the check can say no; the invariant is a DISJUNCTION,
+    # so a check that also flagged the BOM'd file would be banning the legitimate case and
+    # would still pass a one-directional test.
+    $st12Bad = 'tests/fixtures/encoding/bomless-nonascii.ps1'
+    $st12Ok  = 'tests/fixtures/encoding/bom-nonascii.ps1'
+    if (-not (Test-Path -LiteralPath $st12Bad) -or -not (Test-Path -LiteralPath $st12Ok)) {
+        Write-Host '   FAIL: check 12 fixtures are missing, so the check is uncertified.' -ForegroundColor Red
+        Write-Host ("     expected {0} and {1}" -f $st12Bad, $st12Ok) -ForegroundColor Red
+        $bad++
+    } else {
+        if (-not (Test-Ps1EncodingViolation (Resolve-Path -LiteralPath $st12Bad).Path)) {
+            Write-Host ("   FAIL: check 12 did NOT flag {0}" -f $st12Bad) -ForegroundColor Red
+            Write-Host '     a BOM-less .ps1 carrying a byte above 0x7F must be refused.' -ForegroundColor Red
+            $bad++
+        }
+        if (Test-Ps1EncodingViolation (Resolve-Path -LiteralPath $st12Ok).Path) {
+            Write-Host ("   FAIL: check 12 flagged {0}" -f $st12Ok) -ForegroundColor Red
+            Write-Host '     a BOM makes non-ASCII legal; the invariant is BOM OR pure ASCII.' -ForegroundColor Red
+            $bad++
+        }
+    }
+
+    # -- Flag assertion: every Select-String over a shared pattern is -CaseSensitive --
+    #
+    # THIS GUARDS A FLAG, NOT A PATTERN. Do not "improve" it into another string corpus:
+    # a corpus structurally CANNOT see this defect. $pathPattern is byte-identical to the
+    # bash port's PATH_RX and was never wrong -- grep -E and Select-String simply disagree
+    # about what that identical string MEANS, and the disagreement lives in this ARGUMENT.
+    # Check 6 shipped without the flag while a fully populated path-must-not-match corpus
+    # passed, because the corpus matched the pattern DIRECTLY and never went through the
+    # call site. MEASURED on Windows PowerShell 5.1: with -CaseSensitive reverted at check
+    # 6, this self-test stayed GREEN in every mutation state -- including both guards
+    # reverted -- while the full run reproduced the CI failure byte-for-byte. Fifty more
+    # lowercase corpus members would all have passed. It was the wrong INSTRUMENT, not an
+    # under-populated one.
+    #
+    # THE LONG-TERM FIX IS DIFFERENT, AND THIS IS NOT IT: route the path-must-not-match
+    # corpus through the REAL check-6 invocation, flags and all, so the flag becomes
+    # observable BEHAVIOURALLY rather than textually. That wants the port opened properly;
+    # do it when this file is next substantially touched, and delete this assertion then.
+    # A source grep is crude, but the hazard IS a source-level property -- so for once the
+    # instrument matches the defect class, which is precisely what the corpus failed to do.
+    $flagPatterns = @('$pathPattern', '$issuePattern', '$bareApPattern')
+    $flagSites = 0
+    $selfLines = @(Get-Content -LiteralPath $PSCommandPath)
+    for ($i = 0; $i -lt $selfLines.Count; $i++) {
+        $line = $selfLines[$i]
+        if ($line -cnotmatch 'Select-String') { continue }
+        foreach ($fp in $flagPatterns) {
+            if ($line -cnotlike "*-Pattern $fp*") { continue }
+            $flagSites++
+            if ($line -cnotlike '*-CaseSensitive*') {
+                Write-Host ("   FAIL: line {0} matches {1} without -CaseSensitive." -f ($i + 1), $fp) -ForegroundColor Red
+                Write-Host '     Select-String defaults case-INSENSITIVE where grep -E is case-SENSITIVE,' -ForegroundColor Red
+                Write-Host '     so this site silently diverges from the bash port it is a port OF.' -ForegroundColor Red
+                Write-Host ('     ' + $line.Trim()) -ForegroundColor Red
+                $bad++
+            }
+        }
+    }
+    # A renamed pattern variable would leave the loop above matching nothing and reporting
+    # success forever, which is the failure this whole exercise is about. Assert the
+    # assertion still has a subject.
+    if ($flagSites -eq 0) {
+        Write-Host '   FAIL: no Select-String over a shared pattern was found -- this assertion' -ForegroundColor Red
+        Write-Host '     has lost its subject (renamed variable?) and is now vacuous.' -ForegroundColor Red
+        $bad++
+    }
+
     Pop-Location
     if ($bad) {
         Write-Host "self-test: FAILED ($bad case(s))" -ForegroundColor Red
@@ -817,9 +927,9 @@ if ($SelfTest) {
     # running and passing, so the summary said "four corpora" over six -- a reader auditing
     # whether check 8 is covered would conclude it is not, and would "add" what exists.
     # If you add a corpus above, add its count here in the same change.
-    Write-Host ("self-test: OK ({0}/{0} must-match, {1}/{1} must-not-match, {2}/{2} path-extract, {3}/{3} path-must-not-match, {4}/{4} bare-AP-flag, {5}/{5} bare-AP-silent)" -f `
+    Write-Host ("self-test: OK ({0}/{0} must-match, {1}/{1} must-not-match, {2}/{2} path-extract, {3}/{3} path-must-not-match, {4}/{4} bare-AP-flag, {5}/{5} bare-AP-silent, {6}/{6} case-flag-site)" -f `
         $mustMatch.Count, $mustNotMatch.Count, $pathMustMatch.Count, $pathMustNotMatch.Count, `
-        $bareApMustFlag.Count, $bareApMustNotFlag.Count) -ForegroundColor Green
+        $bareApMustFlag.Count, $bareApMustNotFlag.Count, $flagSites) -ForegroundColor Green
     exit 0
 }
 
@@ -1103,7 +1213,15 @@ $missingPaths = @()
 # but a live document may still point AT one, which is filtered target-side below.
 $scan6a = Get-ScanSubset -Not '^scripts/lint-references\.(sh|ps1)$'
 foreach ($rel in $scan6a) {
-    foreach ($h in (Select-String -LiteralPath $rel -Pattern $pathPattern -AllMatches -ErrorAction SilentlyContinue)) {
+    # -CaseSensitive for the reason spelled out at checks 1 and 8, which this site did not
+    # inherit and should have: Select-String defaults the OTHER WAY from `grep -E`, and
+    # $pathPattern is byte-identical to the bash port's PATH_RX. Without it the `\bPLAN\.`
+    # alternative matches any lowercase `plan.<field>` -- a Rust field access on a local
+    # named `plan` -- which then has `.md` appended below and reported as a dangling
+    # document. MEASURED: the first hosted Windows execution failed here on
+    # `plan.switch_to` and `plan.spot` in window/navhistory/traverse.rs, while Linux passed
+    # the same tree. Two ports, one pattern string, opposite defaults.
+    foreach ($h in (Select-String -LiteralPath $rel -Pattern $pathPattern -CaseSensitive -AllMatches -ErrorAction SilentlyContinue)) {
         foreach ($m in $h.Matches) {
             $target = $m.Value
             # Excluded as a TARGET, not merely as a scanned file: MANUAL-TEST.md points
@@ -1119,8 +1237,23 @@ foreach ($rel in $scan6a) {
             # src/links.rs's `./sub/PLAN.md#caf%C3%A9` link-parser fixture reads as a
             # dangling plan, which is a false positive in the one class of file
             # guaranteed to hold link-shaped strings that point nowhere.
-            if ($target -like 'PLAN.*' -and $target -notlike 'PLAN.*.md') {
-                if ($target -eq 'PLAN.md') { continue }
+            # -clike/-cnotlike/-ceq, not the case-INSENSITIVE defaults: this is the second
+            # half of the same hazard as the -CaseSensitive above, and fixing only the
+            # regex would leave a lowercase `plan.foo` that arrived some other way still
+            # being handed a `.md` extension it never had.
+            # NOTHING EXERCISES THESE THREE OPERATORS TODAY, AND THEY ARE STILL NOT DEAD
+            # CODE. MEASURED on Windows PowerShell 5.1: reverting them ALONE to -like/
+            # -notlike/-eq leaves both this self-test AND the full run green, because the
+            # -CaseSensitive above stops a lowercase match before it can ever reach here.
+            # So the standard single-mutant reading -- "no test fails, therefore delete it"
+            # -- is wrong: this is the second-line guard for a lowercase `plan.foo` that
+            # arrives by some route the regex did not filter, and its value is the day the
+            # first mechanism is narrowed. Routing the path-must-not-match corpus through
+            # the real check-6 invocation (see the flag assertion in the self-test) is what
+            # would finally exercise it; until then, redundant-but-load-bearing, kept
+            # deliberately.
+            if ($target -clike 'PLAN.*' -and $target -cnotlike 'PLAN.*.md') {
+                if ($target -ceq 'PLAN.md') { continue }
                 $target = $target + '.md'
             }
             if (-not (Test-Path $target) -and -not (Test-Path (Join-Path 'sdd' $target))) {
@@ -1170,7 +1303,12 @@ Write-Host '-- Check 7: app-ID drift between src/icons.rs and the packaging file
 #
 # Only files that OPERATIONALLY declare it are listed. README.md, the SVG and the port
 # READMEs mention it in prose, and a mention is not a declaration.
-$appIdFiles = @('install.sh', 'uninstall.sh', 'data/scribobulate.desktop',
+# 'packaging/linux/payload.sh' replaced 'install.sh' here when install.sh moved into
+# packaging/linux/ and began sourcing the shared payload definition. The swap is the
+# rule above applied, not an exemption from it: install.sh now READS $APP_ID and no
+# longer declares it, so scanning it would check a prose mention, while payload.sh is
+# where the literal actually lives for all three Linux install routes.
+$appIdFiles = @('packaging/linux/payload.sh', 'packaging/linux/uninstall.sh', 'data/scribobulate.desktop',
                 'data/resources.gresource.xml', 'packaging/macos/Info.plist.in')
 $appIdProblems = @()
 $iconsSrc = Get-FileText 'src/icons.rs'
@@ -1366,7 +1504,31 @@ Write-Host "-- Check 11: register growth (bytes, not lines) --" -ForegroundColor
 # raise the number rather than to consolidate.
 $REG_WARN = 520000; $REG_FAIL = 650000; $ENTRY_WARN = 11000; $ENTRY_FAIL = 15000
 $bad11 = $false
-$regBytes = (Get-Item 'sdd/ANTI-PATTERNS.md').Length
+# CR stripped before counting, so the number is a property of the CONTENT and not of the
+# checkout. Get-Item .Length is the file on disk, and on a CRLF checkout that is one extra
+# byte per line: measured 534,622B here against 530,444B for the same blob on an LF
+# checkout, a gap of exactly the file's line count. The check's whole point is "bytes, not
+# lines", so it was varying by the one quantity it exists to be insensitive to. The bash
+# port strips the same way; fixing one alone re-creates the divergence inverted.
+# Resolve-Path, NOT a bare relative path. `[System.IO.File]` resolves relative paths against
+# [Environment]::CurrentDirectory -- the PROCESS working directory -- which Push-Location does
+# not change. Every other line in this check hands relative paths to CMDLETS, which do honour
+# the PowerShell location, so this is the one place the distinction bites. Measured with the
+# location on the repo, the process CWD elsewhere, and a decoy file planted in it: the bare
+# form read the decoy and reported 40 bytes, exit 0, GREEN -- a growth ratchet reporting that
+# the register had shrunk below every threshold. Check 12 already spells this out at the
+# Resolve-Path below; that comment was written about the only line in the file with the
+# problem, and this line briefly made it two.
+#
+# GetByteCount and not .Length: the register carries ~5700 bytes above 0x7F, so the decoded
+# string is 526,664 chars against 530,444 bytes. Counting characters would have swapped a
+# 4178-byte CRLF error for a 3780-byte encoding error and looked equally fixed.
+#
+# LATENT, not live: ReadAllText strips a UTF-8 BOM before the string is seen, while the bash
+# port's `tr -d '\r' | wc -c` counts it -- a 3-byte divergence armed for whoever next saves
+# this register from an editor that adds one. The file has no BOM today (measured).
+$regBytes = [System.Text.Encoding]::UTF8.GetByteCount(
+    ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath 'sdd/ANTI-PATTERNS.md').Path) -replace "`r", ''))
 if ($regBytes -gt $REG_FAIL) {
     Write-Host "   FAIL - register is ${regBytes}B, past the ${REG_FAIL}B ceiling" -ForegroundColor Red
     $bad11 = $true
@@ -1376,6 +1538,14 @@ if ($regBytes -gt $REG_FAIL) {
 $sizes = @{}; $n11 = ''
 foreach ($line in Get-Content 'sdd/ANTI-PATTERNS.md') {
     if ($line -match '^## ([0-9]+[a-z]?)\.') { $n11 = $Matches[1]; $sizes[$n11] = 0 }
+    # KNOWN AND UNFIXED, and the bash port has it identically (awk length() is char-based in
+    # a UTF-8 locale): this per-entry half counts CHARACTERS while the whole-file half above
+    # counts BYTES. Measured on the Linux seat -- ScrAP-278 reports 5990 against 6024 actual,
+    # 3688 non-ASCII bytes register-wide. It fails in the direction that matters: the
+    # undercount is proportional to non-ASCII density, so it under-reports the discursive
+    # entries carrying em dashes and typographic quotes, which are the long ones the ceiling
+    # exists to catch. Left unfixed deliberately at a ~34-byte gap; fixing it means changing
+    # both ports together, re-verifying here, and re-deriving the thresholds in the new unit.
     elseif ($n11) { $sizes[$n11] += $line.Length + 1 }
 }
 $over = $sizes.GetEnumerator() | Where-Object { $_.Value -gt $ENTRY_FAIL }
@@ -1392,6 +1562,49 @@ if ($bad11) { $failed = $true } elseif (-not $warn -and $regBytes -le $REG_WARN)
     Write-Host '   PASS' -ForegroundColor Green
 }
 
+
+# -- Check 12 -------------------------------------------------------------------
+Write-Host ''
+Write-Host '-- Check 12: .ps1 files must carry a UTF-8 BOM or contain no byte above 0x7F --' -ForegroundColor Cyan
+# WHY A DISJUNCTION RATHER THAN "KEEP THEM ASCII". Windows PowerShell 5.1 decodes a
+# BOM-less .ps1 as the ANSI codepage. A UTF-8 byte inside a STRING LITERAL then arrives
+# as a different character, and a curly quote is a string DELIMITER -- the literal ends
+# early, the parse dies, and the error names an unrelated brace hundreds of lines away.
+# pwsh 7 defaults to UTF-8 and is immune. THAT ASYMMETRY IS THE WHOLE HAZARD: the
+# contract-windows job runs pwsh 7 and would certify the break GREEN, while the
+# execute-windows job runs 5.1 and is the engine that actually meets it.
+#
+# A BOM removes the hazard rather than merely satisfying a rule, so it is a legitimate
+# alternative and not a workaround. MEASURED on a real Windows host: a BOM-less .ps1
+# carrying an em dash in a string literal fails 5.1 (exit 1, parse error) and passes
+# pwsh 7; with a BOM, both engines run it correctly. Hence "BOM OR pure ASCII" --
+# banning non-ASCII outright would forbid the safe file along with the dangerous one.
+#
+# WHAT THIS REPLACES IS AN UNWRITTEN RULE. Before this check the invariant actually in
+# force was "non-ASCII is allowed, but only in comments, never in a string literal",
+# where the difference between harmless and fatal is which side of a quote mark a
+# character sits on. That is unenforceable by review and one copy-paste from breaking.
+# Resolve-Path, not the bare relative path: [System.IO.File] resolves a relative path
+# against [Environment]::CurrentDirectory, which is the PROCESS working directory and is
+# NOT changed by Push-Location. Every other check here hands relative paths to cmdlets,
+# which do honour the PowerShell location, so this line is the one place in the file where
+# that distinction bites -- a bare $rel would throw FileNotFound, or worse, silently read
+# a same-named file from wherever the process happened to start.
+$bad12 = @()
+foreach ($rel in (Get-ScanSubset '\.ps1$')) {
+    if (Test-Ps1EncodingViolation (Resolve-Path -LiteralPath $rel).Path) {
+        $bad12 += ("  {0} -- non-ASCII byte in a BOM-less .ps1" -f $rel)
+    }
+}
+if ($bad12.Count) {
+    $failed = $true
+    Write-Host '   FAIL' -ForegroundColor Red
+    foreach ($b in $bad12) { Write-Host $b }
+    Write-Host '   -> add a UTF-8 BOM to the file, or keep it pure ASCII. A BOM is the stronger'
+    Write-Host '      fix: it makes non-ASCII safe anywhere in the file, literals included.'
+} else {
+    Write-Host '   PASS' -ForegroundColor Green
+}
 Pop-Location
 Write-Host ''
 if ($failed) {

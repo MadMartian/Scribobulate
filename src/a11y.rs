@@ -216,9 +216,17 @@ mod gtk_integration_tests {
         // Reveal the surfaces whose controls are built but hidden, so the walk reaches
         // the find bar's buttons and both sidebars' headers rather than silently passing
         // over an empty tree (ScrAP-209: a guard whose setup leaves nothing to inspect passes with the fix deleted).
+        // The find bar is revealed through the revealer directly — a primitive with no
+        // enablement gate — and NOT through `win.find-replace`, which is a stateless
+        // activate action (`SimpleAction::new(.., None)`): a `change_action_state` on it
+        // is a no-op that emits `GLib-GIO-CRITICAL g_action_change_state: assertion
+        // 'state_type != NULL' failed`. That call was here and contributed nothing; the
+        // candidate count is identical without it (61 either way, measured), so its only
+        // effect was a CRITICAL that went unread until CI ran the suite under
+        // `G_DEBUG=fatal-criticals` and it became a SIGTRAP. The two sidebars below ARE
+        // stateful toggles, so they keep the state route (ScrAP-252).
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        window.change_action_state("find-replace", &true.to_variant());
         window.change_action_state("outline", &true.to_variant());
         window.change_action_state("annotations", &true.to_variant());
 

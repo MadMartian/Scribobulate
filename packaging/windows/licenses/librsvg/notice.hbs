@@ -1,0 +1,27 @@
+THIRD-PARTY RUST NOTICES for librsvg (rsvg-2-2.dll)
+
+Scribobulate's Windows installer redistributes librsvg as bin\rsvg-2-2.dll. That DLL
+statically links a graph of Rust crates, which leave no file of their own in the
+installed tree -- so shipping librsvg's COPYING.LIB attributes librsvg and nothing it
+absorbed. This file is that missing attribution. It does NOT replace COPYING.LIB, which
+covers librsvg itself under LGPL-2.1-or-later.
+
+Licences are listed in full below, grouped by licence, naming every crate that uses each.
+Note in particular that this graph is not uniformly MIT/Apache: it includes Unicode-3.0
+(the icu_* family) and MPL-2.0 (the Servo-lineage CSS crates), each of which carries its
+own terms and is listed under its own heading rather than folded into a general
+permissive paragraph.
+
+{{#each licenses}}
+================================================================================
+{{name}}
+SPDX identifier: {{id}}
+Used by:
+{{#each used_by}}    {{crate.name}} {{crate.version}}
+{{/each}}
+--------------------------------------------------------------------------------
+{{text}}
+
+{{/each}}
+================================================================================
+End of third-party Rust notices.

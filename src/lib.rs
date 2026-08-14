@@ -57,6 +57,12 @@ pub(crate) mod keynav;
 pub(crate) mod limits;
 pub(crate) mod links;
 pub(crate) mod logging;
+/// Test-only. Renders `THIRD-PARTY-LICENSES.md` from `notices/*.md` plus `two-face`'s
+/// acknowledgement listing, and gates the committed copy against it. Generator and gate
+/// are one code path so they cannot drift; `UPDATE_NOTICES=1 cargo test` rewrites the
+/// file. Not gated on the GTK-suite feature: it is an ordinary unit test.
+#[cfg(test)]
+pub(crate) mod notices;
 pub(crate) mod outline;
 pub(crate) mod outline_view;
 pub(crate) mod palette;
@@ -85,6 +91,13 @@ pub(crate) mod tasklist;
 /// consumers are ordinary unit tests.
 #[cfg(test)]
 pub(crate) mod testsymlink;
+/// Test-only wall-clock sampling shared by the two growth-ratio guards, so the noise
+/// remedy is not written into one of them and forgotten in the other — which is exactly
+/// what happened, and what both hosted CI runners then failed on. Carries the
+/// `SCRIBTEST_TIMING_SAMPLES` knob. Not gated on the GTK-suite feature: its consumers are
+/// ordinary unit tests.
+#[cfg(test)]
+pub(crate) mod testtiming;
 pub(crate) mod theme;
 pub(crate) mod widgets;
 pub(crate) mod window;

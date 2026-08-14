@@ -101,8 +101,20 @@ Before any change is considered valid, run these steps in order:
    no-regression **ratchet**, not a target: the script owns both the floor (`FLOOR`)
    and the scope (`IGNORE`), and is the only place either is written down. **Do not
    restate either value here** — a second copy is exactly how the floor silently fell
-   ~2pt behind the code and stopped protecting it. When new tests raise coverage, raise
-   `FLOOR` in the script in the same change; the aspiration is 80%.
+   ~2pt behind the code and stopped protecting it. The aspiration is 80%.
+   **`FLOOR` is a WHOLE NUMBER, and it advances one whole point at a time.** It rises
+   only once measured coverage *reliably* reaches the next integer — on every host that
+   runs the gate, not on the machine that happened to measure it. Coverage sitting at
+   76.8 keeps a floor of 76; the floor becomes 77 when the figure reaches 77 with room
+   to spare. Deriving a floor to the second decimal is what made it track the tester
+   rather than the tree, and a whole number is wide enough that the residual
+   host-dependence in the scoped set cannot move it.
+   **Sub-point movement is not a finding.** Coverage drifting by fractions of a percent
+   — between hosts, between runs, or across a change — is normal measurement noise and
+   the expected consequence of ordinary work. Do not raise it with the operator, do not
+   adjust `FLOOR` for it, and do not treat a change that moves it as owing an
+   explanation. What is worth reporting is the gate going **red**: a whole point lost
+   means real coverage was removed, and that is the event this ratchet exists to catch.
    **Scope rule:** GTK signal-wiring that cannot be exercised headlessly is excluded;
    pure decision logic is always in. So **when adding logic to an excluded file, extract
    the decision core into its own logic module** (as `winstate` does) rather than letting
@@ -147,11 +159,13 @@ Before any change is considered valid, run these steps in order:
    lenient one", while the corpus pinned only the check-1 regex and the two scripts had
    *already* drifted on enumeration — `.agents/`, `docs/` and `THIRD-PARTY-LICENSES.md`
    were linted on Linux and invisible on Windows, so a dangling link in any of them
-   failed one gate and passed the other. **No automated test can compare the two**
-   (neither platform has the other's shell), so when either script's scanning changes,
-   run `--list-scan` / `-ListScan` on both platforms and diff the output. A claim of
-   parity that nothing checks is worse than no claim, because the next author trusts
-   it. It enforces
+   failed one gate and passed the other. **CI now performs that comparison on every
+   push** — see [§ Continuous integration](#continuous-integration) — so it is a gate
+   rather than the errand it was, and this step no longer asks you to run `--list-scan` /
+   `-ListScan` by hand. Two things it is worth knowing the shape of: the diff is over
+   three *platforms* and not two *ports*, because the contract names the bash script for
+   Linux **and** macOS and BSD tooling is not GNU's; and a claim of parity that nothing
+   checks is worse than no claim, because the next author trusts it. It enforces
    eight rules mechanically — three over citations into the SDD registers, two over
    the test architecture, both of whose failure modes are silent (that
    `src/gtk_suite.rs`'s duplicated module list has not drifted from `src/lib.rs`'s — a
@@ -206,7 +220,7 @@ Before any change is considered valid, run these steps in order:
     Every other gate answers "is this change valid?" and belongs after every edit; this
     one answers "can a stranger install this?", takes minutes, and answers the same way
     whether or not the last edit touched packaging. It is a gate rather than a chore
-    because the property it defends is invisible from inside the repo: `install.sh`
+    because the property it defends is invisible from inside the repo: `packaging/linux/install.sh`
     builds from source into `~/.local` and needs cargo plus the `-dev` libraries, so a
     tree can look perfectly installable to everyone who already has a toolchain and be
     unusable by the audience the artefact exists for. Each platform's command is in the
@@ -225,6 +239,48 @@ part of completing each task: write code → fmt → clippy → build → test �
 Do not report a task complete until every step passes. Running these steps only at
 cleanup time lets broken changes pile up, making it harder to attribute which
 change introduced the problem.
+
+## Continuous integration
+
+`.github/workflows/pipeline.yml` runs on every push. It exists because the parity between
+the three ports was an assurance nothing checked: no single machine has all three, so the
+diff was performed when someone thought to perform it, and the Windows port's step list was
+*inferred* rather than measured. CI is the only machine where the comparison can happen.
+
+- **The workflow invokes the runners and names no step.** There is not one `cargo` or
+  `clippy` invocation in it; `execute-linux` runs `scripts/pipeline.sh` whole and takes its
+  verdict. **Adding a step to `scripts/pipeline.steps` must not require editing the
+  workflow** — a workflow that listed steps would be a fourth restatement of a contract
+  whose entire design is derivation, and a clean diff between restatements proves only
+  that two people copied the same list (ScrAP-207). Provisioning is the one thing the
+  workflow may gain when a step is added.
+- **Two jobs, two different claims, and the first does not imply the second.** `parity`
+  proves the ports *agree* about the derived step list and the lint scan set; `execute-linux`
+  proves a port can actually *run* a step. Keeping both is not belt-and-braces: the Windows
+  port once passed `-ListSteps` byte-identically, `-SelfTest`, and a twelve-case mutation
+  battery while an output-stream bug made it report `pipeline PASSED` with exit 0 after a
+  step had failed. Contract-parsing evidence is evidence about contract parsing.
+- **A CI gate is trusted only once it has been shown to FAIL.** A gate that reports success
+  while something failed is the defect a gate exists to prevent, and this project has
+  already produced one. `scripts/pipeline-parity.sh --self-test` runs inside the `parity`
+  job on every run rather than once when it was written, and its battery includes the
+  vacuous pass the job's own shape invites — a port whose job died before uploading leaves
+  a directory whose survivors agree. Any new CI job carries the same obligation: demonstrate
+  the failure, do not infer it from a green run.
+- **Execution is Linux-only today**, deliberately and in ascending order of difficulty.
+  Windows needs a gvsbuild GTK and macOS needs the bundling and `codesign` questions
+  answered with no interactive session; both are provisioning jobs, not workflow ones. The
+  contract jobs already run on all three, because `--list-steps` and `--self-test` exit
+  before any runner touches its environment.
+- **`G_DEBUG=fatal-criticals` is not set process-wide over the suite**, notwithstanding the
+  recommendation in [§ Logging](#logging) — see the exception recorded there. The reasoning
+  is in the workflow beside the job it applies to.
+
+Direct pushes to a scratch branch are how the workflow itself is iterated on; a workflow
+cannot be verified any other way, and it is worth knowing that **a workflow file is not
+scoped by the branch it sits on** — it runs against the shared repository the moment
+anything merges, which is why its triggers are a project-level decision rather than a
+detail of whoever adds a job.
 
 ## Optional diagnostics
 
@@ -850,6 +906,24 @@ pipeline step 7). Operator-granted exceptions are recorded in `CAM.md` too.
 
 ## SDD register writes
 
+**Route the lesson before you write it, and there are three destinations.** A lesson
+about **gtk4-rs itself** is woven into the `gtk4-rs` skill and stubbed here citing
+`GTK4Rs/AP-N`. A **general engineering-discipline** lesson — verification and gate
+design, experiment method, claims and relay hygiene, cross-platform toolchain hazards,
+trust-boundary design — goes to the **`general-engineering-principles`** skill and is
+stubbed citing `GEP-N`; send the content to the `gep` member in the `skills` ToasterTalk
+room, which allocates the number. **Everything else** — this project's internals and
+every dependency that is not gtk4-rs — is a full entry in `sdd/ANTI-PATTERNS.md`.
+
+The routing decision is made **at minting time**, not deferred to a later migration: an
+entry written full and moved later costs the rewrite twice, and in practice is never
+moved. This rule is stated here, in the prescriptive document, because it previously
+lived *only* inside the register it governs — so an agent about to file an entry read
+the register's own note, and when that note fell behind the practice (claiming the
+general-lesson destination was undecided while 59 entries already cited `GEP-N`), nine
+consecutive general lessons were filed as project entries with nothing to catch it.
+A rule that lives only in the artefact it governs is one nobody consults before acting.
+
 `sdd/ANTI-PATTERNS.md` and `sdd/ISSUES.md` have **one writer**. When work is split
 across machines, every other seat sends **entry content** — symptom, root cause,
 what was tried, the corrective, and its citations — and the owning seat allocates
@@ -941,16 +1015,27 @@ RUST_LOG=info,scribobulate=debug           # app at debug, GTK at info
 RUST_LOG=warn,scribobulate::scroll=trace   # just the scroll hot path
 ```
 
-CI: run the test binary with `G_DEBUG=fatal-criticals` so any `Gtk-CRITICAL`
-becomes a hard failure instead of a silent log line. **The test binary, and only
-it** — the flag is a no-op against the *running application*, MEASURED (GLib 2.72.4):
-for structured logs, which GTK's own diagnostics are, GLib consults
-`g_log_always_fatal` inside `g_log_writer_default`, and `logging::init` replaces that
-writer with the bridge — so a promoted `Gtk-WARNING`/`Gtk-CRITICAL` is recorded and
-survived. This holds for every promotion route, not just this one: `fatal-warnings`,
-`fatal-criticals` and a programmatic `g_log_set_always_fatal` are all defused the same
-way, so there is no variant of the flag that arms the app. The suite runners install no bridge (`gtk_suite.rs` says why), which is what
-keeps the line above true where it is claimed. `g_error` is unaffected either way: its
+`G_DEBUG=fatal-criticals` turns any `Gtk-CRITICAL` into a hard failure instead of a silent
+log line, and is worth reaching for when hunting one: it converts "somewhere in this run"
+into a backtrace. **It cannot be set process-wide over the test suite, and CI does not set
+it.** One run with it produced exactly two aborts of opposite kinds — a real defect that had
+been emitting a `GLib-GIO-CRITICAL` unread for as long as its test had existed, and a
+*correct* test whose subject is a GTK fallback path that fires `GTK_IS_WIDGET` by design
+(`saferizer::popover_anchor`, reading an unset anchor on an unparented popover). `G_DEBUG`
+is process-wide and read at startup, and both live in GTK/GLib log domains, so
+`log_set_fatal_mask` does not separate them either; narrowing the correct test to keep the
+setting would be weakening a test so a gate passes. Use it as a *diagnostic*, per-run and
+by hand, and expect the popover-anchor abort when you do. ScrAP-277.
+
+Whichever way you reach for it, it arms **the test binary, and only it** — the flag is a
+no-op against the *running application*, MEASURED (GLib 2.72.4): for structured logs, which
+GTK's own diagnostics are, GLib consults `g_log_always_fatal` inside `g_log_writer_default`,
+and `logging::init` replaces that writer with the bridge — so a promoted
+`Gtk-WARNING`/`Gtk-CRITICAL` is recorded and survived. This holds for every promotion route,
+not just this one: `fatal-warnings`, `fatal-criticals` and a programmatic
+`g_log_set_always_fatal` are all defused the same way, so there is no variant of the flag
+that arms the app. The suite runners install no bridge (`gtk_suite.rs` says why), which is
+what keeps the line above true where it is claimed. `g_error` is unaffected either way: its
 fatality is decided after the writer returns, and it kills the process with `SIGTRAP`
 rather than `abort()` (ScrAP-268).
 

@@ -4,9 +4,12 @@
     scripts/pipeline.steps, and optionally stages the runtime and builds the installer.
 
 .DESCRIPTION
-    This is a LOCAL developer script. It is deliberately not CI: Scribobulate has no
-    GitHub Actions workflow, and adding one is out of scope for the Windows port (see
-    packaging/windows/README.md "Why this is a script, not CI").
+    This is the LOCAL developer entry point, and it stays one now that CI exists.
+    .github/workflows/pipeline.yml does not reimplement it: the workflow's Windows job
+    invokes THIS script for -SelfTest and -ListSteps, so there is still exactly one
+    Windows runner and CI is a caller of it rather than a second port. Executing the
+    full pipeline on a hosted Windows runner is not yet solved (it needs a gvsbuild GTK);
+    see packaging/windows/README.md "Windows and CI".
 
     IT DERIVES, IT DOES NOT RESTATE. Every step, its ordinal, class, intent, verdict
     rule and command come from scripts/pipeline.steps. This file previously carried its
@@ -351,17 +354,31 @@ function Test-Contract {
 # declare a non-applicable step 0 -- noise that dilutes the declarations carrying real
 # information.
 #
-# Written through [Console]::Out with explicit LF. PowerShell would emit CRLF, which makes
-# a byte-exact diff against the shell port's output fail on every line for a reason that
-# has nothing to do with the step list -- and the usual fix, normalising CR away at
-# compare time, weakens the very artefact whose job is to be compared.
+# EMITTED ON THE SUCCESS STREAM, and that is the whole of the fix recorded here.
+#
+# This used to build one string and write it through [Console]::Out with explicit LF, to
+# spare a byte-exact diff from failing on every line over CRLF. The reasoning was sound and
+# the consequence was fatal to the artefact's purpose: [Console]::Out writes to the
+# PROCESS's stdout handle, which PowerShell's `>` does not redirect -- `>` captures the
+# SUCCESS STREAM. So `pipeline.ps1 -ListSteps > steps.txt` printed the list to the console
+# and wrote an EMPTY FILE, and the documented parity procedure (diff it against
+# `scripts/pipeline.sh --list-steps`) could not have worked for anyone who ever tried it.
+# Measured the first time CI redirected it: the job exited 0 with a zero-byte artefact.
+#
+# The line terminator is a property of the PLATFORM, not drift in the step list, so it
+# belongs to whoever COMPARES -- scripts/pipeline-parity.sh strips a trailing CR and
+# announces when it had to, which is where a difference that means nothing can be absorbed
+# without weakening what the artefact says. Trading capturability for a terminator was the
+# wrong trade in the other direction.
+#
+# THE SELF-TEST BELOW NOW CALLS THIS FUNCTION. It used to rebuild the printed list inline
+# -- a THIRD restatement, inside the check whose job is to catch restatements -- which is
+# exactly why -SelfTest stayed green while -ListSteps produced nothing capturable.
 # --------------------------------------------------------------------------------------
 function Write-StepList {
-    $sb = New-Object System.Text.StringBuilder
     foreach ($id in @(Get-DerivedStepIds)) {
-        $null = $sb.Append((Get-StepOrdinal $id)).Append("`t").Append($id).Append("`t").Append((Get-ContractValue 'class' $id)).Append("`n")
+        '{0}{1}{2}{1}{3}' -f (Get-StepOrdinal $id), "`t", $id, (Get-ContractValue 'class' $id)
     }
-    [Console]::Out.Write($sb.ToString())
 }
 
 # --------------------------------------------------------------------------------------
@@ -378,11 +395,13 @@ function Invoke-SelfTest {
     if (-not (Test-Contract)) { return $false }
     Write-Host '   contract is well-formed'
 
-    # The list -ListSteps prints must be the list the run loop iterates. Both derive from
-    # Get-DerivedStepIds, so this compares the artefact against its own source.
+    # The list -ListSteps prints must be the list the run loop iterates. It calls
+    # Write-StepList rather than rebuilding the same line format inline: the inline version
+    # was a third restatement sitting inside the check whose subject is restatement, and it
+    # asserted about a list -ListSteps never produced. It stayed green through the whole
+    # period in which -ListSteps wrote nothing a redirection could capture.
     $derived = @(Get-DerivedStepIds)
-    $printed = @()
-    foreach ($id in $derived) { $printed += (Get-StepOrdinal $id) + "`t" + $id + "`t" + (Get-ContractValue 'class' $id) }
+    $printed = @(Write-StepList)
     $printedIds = @($printed | ForEach-Object { ($_ -split "`t")[1] })
     if (($printedIds -join '|') -cne ($derived -join '|')) {
         Write-Err 'pipeline: -ListSteps does not print the derived step list'
@@ -493,13 +512,20 @@ function Invoke-ContractCommand {
 # Carve-outs are reported even when there are none -- that is what lets the statement MEAN
 # something rather than be silence.
 #
-# ANNOUNCE-ONLY, matching scripts/pipeline.sh, which prints carve-outs and then runs the
-# contract command unmodified. That parity is deliberate: injecting `--skip` here would
-# make the Windows run genuinely exclude tests the Linux run does not, which is precisely
-# the per-platform divergence the contract exists to remove, and it would require assuming
-# every carve-out-bearing command is a cargo test invocation. The list is empty today so
-# nothing is currently mis-reported; the gap is flagged for a contract-level decision
-# rather than patched unilaterally on one platform.
+# ANNOUNCE-ONLY, and this port is now the ONLY one that is. The comment here used to
+# justify that as parity with scripts/pipeline.sh -- true when it was written, false now:
+# both bash ports append the libtest `--skip` arguments in run_step, and both validate the
+# assumption this comment once cited as the blocker (that a carve-out-bearing command is a
+# `cargo test` invocation) in validate_contract rather than assuming it. So the divergence
+# runs the other way, and the announcement here is a claim the run does not honour.
+#
+# Inert only because the carve-out list is empty. The first carve-out added makes this port
+# print `skipped: <test>` for a test it ran -- a green report of a run that did not happen,
+# which is the shape ScrAP-201 already cost this project once on this very port, and
+# ScrAP-207's "the platform nobody runs is the lenient one" on the applying axis.
+#
+# Not patched here because no PowerShell host was available to show the change failing
+# first, and an unexercised gate is the thing ScrAP-207 warns about, not the cure for it.
 function Show-Carveouts {
     param([string] $Id)
     $list = @()

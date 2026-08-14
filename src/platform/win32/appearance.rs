@@ -283,7 +283,31 @@ mod gtk_integration_tests {
             texture.download(&mut data, w * 4);
             let idx = ((h / 2) * w + w / 2) * 4;
             // Cairo ARGB32 on a little-endian host: B, G, R, A.
-            Some((data[idx + 2], data[idx + 1], data[idx]))
+            let pixel = (data[idx + 2], data[idx + 1], data[idx]);
+            // A REALIZED RENDERER MUST BE UNREALIZED BEFORE IT DROPS, or
+            // `gsk_renderer_dispose` fires `assertion failed: (!priv->is_realized)` and
+            // takes the whole process with it -- a fatal GLib assertion, so SIGABRT, which
+            // on Windows surfaces as the __fastfail code 0xC0000409 and reads as
+            // STATUS_STACK_BUFFER_OVERRUN rather than as anything about GSK (ScrAP-268 on
+            // how that family dies). This omission shipped and stayed invisible: it is
+            // measured green on the operator's own Windows host and aborted on the very
+            // first hosted-runner execution of this suite, which is the whole argument for
+            // running the port somewhere other than where it was written. Unrealize on
+            // every path that realized -- there is deliberately no `?` between the two.
+            //
+            // AND THE AUTHORING HOST IS STRUCTURALLY BLIND TO THE OMISSION, which is the
+            // part worth carrying forward. This helper drives realize-and-drop twice per
+            // run, non-vacuously -- the None arm below fails the test, so a pass proves
+            // both renders happened -- and it still cannot fail on the operator's Windows
+            // box: measured green there both as a single case and across the full 250-case
+            // suite, on the SAME GTK 4.22.4 the CI runner pins. So "measured on a real
+            // Windows host" is true and is NOT assurance about the renderer contract, and
+            // a reader will take it as coverage unless told otherwise. A non-observation
+            // is not immunity (ScrAP-80's shape). The mechanism behind the split is still
+            // unexplained and deliberately not guessed at; the fix stands on GSK's
+            // documented contract, not on a theory of the difference.
+            renderer.unrealize();
+            Some(pixel)
         });
         window.destroy();
         px

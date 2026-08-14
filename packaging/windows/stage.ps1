@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Stage a self-contained Scribobulate tree for Windows distribution.
 
@@ -71,6 +71,87 @@ if ($missing.Count -gt 0) {
 
 Copy-Item $exeSrc "$OutDir\bin\"
 
+# ---------------------------------------------------------------------------
+# The MSVC runtime, app-local, so the installer is TURN-KEY.
+#
+# WITHOUT THIS THE INSTALLER IS NOT SELF-CONTAINED and fails on a clean machine.
+# Every binary staged above imports `vcruntime140.dll`, and it resolves on a
+# developer box only because the VC++ redistributable is already installed there
+# -- MEASURED: a launched staged build loads both files out of System32. A box
+# that can BUILD this software is structurally incapable of noticing their
+# absence, which is why nothing caught it until the import table was read.
+#
+# EXACTLY TWO FILES, and the second is the reason to take the whole import
+# CLOSURE rather than a sample: `vcruntime140_1.dll` (the C++ exception-handling
+# runtime) is pulled by **cairo-2.dll alone** -- not by scribobulate.exe. Staging
+# only what our own executable imports yields an installer that starts and then
+# dies the moment cairo loads. MEASURED over all 36 staged binaries: those two,
+# and no msvcp140/concrt140/mfc/vcomp import anywhere in the tree.
+#
+# THE UCRT IS NOT STAGED, DELIBERATELY. The `api-ms-win-crt-*` names in the
+# import tables are API SET CONTRACTS, not files: the loader resolves them
+# through the API set schema, so a file-existence check on them answers "missing"
+# while the dependency resolves perfectly. MEASURED at runtime -- not one
+# `api-ms-win-crt-*.dll` is loaded; every contract collapses to `ucrtbase.dll`,
+# an OS component since Windows 10 RTM.
+#
+# TAKEN FROM THE REDIST DIRECTORY, NOT System32. System32's copy is the
+# operating system's; app-local deployment is licensed from the Visual Studio
+# redistributable directory, and copying the OS's file is a different act with
+# different terms.
+#
+# The path is DISCOVERED, never hardcoded: the version directory differs per
+# machine and per VS update. `vswhere.exe` is at a fixed location on every
+# machine with VS 2017 or later.
+# ---------------------------------------------------------------------------
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+if (-not (Test-Path $vswhere)) {
+    throw "vswhere.exe not found at $vswhere -- cannot locate the MSVC redistributable. " +
+          "Visual Studio 2017 or later (or Build Tools) is required to stage a turn-key installer."
+}
+$vsRoot = & $vswhere -latest -products * -property installationPath
+if (-not $vsRoot) { throw "vswhere reported no Visual Studio installation." }
+
+# The redist package version, read from the file the VC toolset maintains for it.
+# NOTE: this is the PACKAGE version and does NOT equal the DLLs' own FileVersion
+# (observed 14.44.35112 for the directory against 14.44.35211.0 in the files).
+# Do not derive one from the other, and do not assert they match.
+$redistVerFile = Join-Path $vsRoot 'VC\Auxiliary\Build\Microsoft.VCRedistVersion.default.txt'
+if (-not (Test-Path $redistVerFile)) { throw "VC redist version file not found at $redistVerFile" }
+$redistVer = (Get-Content $redistVerFile -Raw).Trim()
+$redistX64 = Join-Path $vsRoot "VC\Redist\MSVC\$redistVer\x64"
+if (-not (Test-Path $redistX64)) { throw "MSVC redistributable not found at $redistX64" }
+
+# THE TOOLSET DIRECTORY IS DISCOVERED TOO, and this is the half I got wrong first.
+# Having correctly refused to hardcode the VERSION directory, I then hardcoded
+# `Microsoft.VC143.CRT` -- the v143 toolset, which is Visual Studio 2022's. CI runs
+# VS 18 Enterprise with redist 14.51.36231 and a different toolset directory, so
+# staging threw on the runner while working perfectly on a 2022 box. Discovering
+# one path component and pinning its sibling is not "mostly discovered"; the
+# hardcoded half decides whether it works.
+#
+# Selected by CONTENT rather than by name: the directory that actually holds the
+# runtime is the one we want, whatever Microsoft calls the toolset this year.
+$crtDir = Get-ChildItem -Path $redistX64 -Directory -Filter 'Microsoft.VC*.CRT' |
+          Where-Object { Test-Path (Join-Path $_.FullName 'vcruntime140.dll') } |
+          Sort-Object Name -Descending |
+          Select-Object -First 1 -ExpandProperty FullName
+if (-not $crtDir) {
+    $saw = (Get-ChildItem -Path $redistX64 -Directory | Select-Object -ExpandProperty Name) -join ', '
+    throw "No Microsoft.VC*.CRT directory containing vcruntime140.dll under $redistX64 (saw: $saw)"
+}
+
+# Announced, because the resolved directory and the file versions are the two
+# facts a future reader will want and neither is guessable from this source.
+Write-Host "MSVC runtime from $crtDir"
+foreach ($crt in @('vcruntime140.dll', 'vcruntime140_1.dll')) {
+    $src = Join-Path $crtDir $crt
+    if (-not (Test-Path $src)) { throw "Missing $crt in $crtDir" }
+    Copy-Item $src "$OutDir\bin\"
+    $v = (Get-Item $src).VersionInfo.FileVersion
+    Write-Host "  $crt  $v"
+}
+
 # GLib's helper executables. These are NOT optional tooling -- gdbus.exe is a
 # load-bearing part of single-instance behaviour on Windows, and omitting it
 # produces a build that starts perfectly and then opens a second PROCESS for
@@ -117,11 +198,47 @@ New-Item -ItemType Directory -Force -Path "$OutDir\share\icons" | Out-Null
 Copy-Item "$GtkPrefix\share\icons\Adwaita" "$OutDir\share\icons\" -Recurse
 Copy-Item "$GtkPrefix\share\icons\hicolor" "$OutDir\share\icons\" -Recurse
 
-# Only the RNG/DTD validation schemas. GtkSourceView's .lang specs and style
-# schemes are compiled into gtksourceview-5-0.dll as GResource, so there is
-# nothing else to ship for syntax highlighting.
+# The RNG/DTD validation schemas. GtkSourceView's .lang specs and style schemes
+# are compiled into gtksourceview-5-0.dll as GResource, so there is nothing else
+# to ship for syntax highlighting.
+#
+# THE COPY IS RECURSIVE AND THE PREFIX HOLDS MORE THAN THAT -- which is how a font
+# nobody uses reached every installer built to date. The comment above used to say
+# "only the RNG/DTD validation schemas" and describe the INTENT, while the code
+# took the whole directory. So the exclusion is spelled out below rather than left
+# to a reader to notice the gap between the two.
 if (Test-Path "$GtkPrefix\share\gtksourceview-5") {
     Copy-Item "$GtkPrefix\share\gtksourceview-5" "$OutDir\share\" -Recurse
+}
+
+# BuilderBlocks.ttf is dropped: a 4-glyph synthetic font (.notdef/block/empty/
+# smallblock) that exists for GtkSourceMap's minimap mosaic, and Scribobulate has
+# no minimap. MEASURED, not reasoned -- the claim was confirmed by installing the
+# built installer and running it, twice on one install, with the font present and
+# then removed, at pinned window geometry: the editor rendered PIXEL-IDENTICAL
+# both times. The only 236 differing pixels sat in a 42x16 box on the "View"
+# menubar label, a focus underline left by the test's own keystrokes.
+#
+# Looking alone would NOT have settled this. An unused font is invisible, so a
+# correct-looking window cannot tell "unused" from "used and fine"; only the A/B
+# discriminates. The consumer is established from the shipped DLL's own strings,
+# where the minimap CSS `font-family: BuilderBlocks; font-size: 4px` sits beside
+# GTK_SOURCE_IS_MAP and gtk_source_map_set_view -- so this no longer rests on a
+# grep for GtkSourceMap in our source.
+#
+# DENYLIST, NOT ALLOWLIST, deliberately. Copying only the three known-good
+# subdirectories would silently omit anything upstream adds that we DO need, and
+# a missing runtime file is a worse failure than a stray 500-byte one. The cost
+# is the reverse blind spot: a future addition here ships unnoticed, and the
+# licence gate will not catch it because the gtksourceview row claims the whole
+# subtree by pattern.
+#
+# Not conditional on the file existing: Remove-Item is given a path that may be
+# absent if upstream ever drops it, and this must not become the line that breaks
+# staging on a gvsbuild bump.
+$sourceViewFonts = Join-Path $OutDir 'share\gtksourceview-5\fonts'
+if (Test-Path $sourceViewFonts) {
+    Remove-Item $sourceViewFonts -Recurse -Force
 }
 
 # The reading themes, as the Linux packages already install them
@@ -142,6 +259,47 @@ if (Test-Path "$GtkPrefix\share\gtksourceview-5") {
 # still win against it.
 New-Item -ItemType Directory -Force -Path "$OutDir\share\scribobulate" | Out-Null
 Copy-Item "$RepoRoot\data\themes.toml" "$OutDir\share\scribobulate\"
+
+# ---------------------------------------------------------------------------
+# The licence texts the product is obliged to carry. No scribobulate.iss change
+# is needed for any of them: line 76 already takes {#StageDir}\* with
+# recursesubdirs, so whatever lands here is installed.
+#
+# THE INSTALLER WAS SHOWING THE LICENCE AND SHIPPING IT NOWHERE. scribobulate.iss
+# sets LicenseFile to the repo's LICENSE, which displays it in the setup wizard
+# and installs nothing. The installed tree contained no licence text at all --
+# not ours, not the syntax grammars', not librsvg's Rust graph's -- while the
+# wizard made the obligation look discharged. An absence that reads as handled is
+# worse than a plain omission, and it is what the three "row matches no staged
+# file" entries in licenses.psd1 were reporting.
+#
+# TWO GO TO THE ROOT AND ONE DOES NOT. LICENSE and THIRD-PARTY-LICENSES.md are
+# about the product as a whole and sit where a person looks first. The librsvg
+# notice is about one DLL in bin\, so it goes under share\licenses\librsvg\ --
+# and it has to be staged from the repo rather than copied out of the GTK prefix,
+# because the crates it attributes are statically linked into rsvg-2-2.dll and
+# leave no file of their own in any installed tree.
+#
+# MISSING SOURCES THROW. A missing DLL above throws, and a missing licence is the
+# more serious absence -- it must not be the one failure this script shrugs off.
+# verify-licenses.ps1 would catch it later, but a packager that knowingly emits a
+# short tree makes a downstream gate the only thing standing between us and
+# shipping it, which is one process change away from nothing at all.
+# ---------------------------------------------------------------------------
+New-Item -ItemType Directory -Force -Path "$OutDir\share\licenses\librsvg" | Out-Null
+
+$notices = @(
+    @{ From = "$RepoRoot\LICENSE"
+       To   = "$OutDir\LICENSE" }
+    @{ From = "$RepoRoot\THIRD-PARTY-LICENSES.md"
+       To   = "$OutDir\THIRD-PARTY-LICENSES.md" }
+    @{ From = "$RepoRoot\packaging\windows\licenses\librsvg\THIRD-PARTY-RUST-NOTICES.txt"
+       To   = "$OutDir\share\licenses\librsvg\THIRD-PARTY-RUST-NOTICES.txt" }
+)
+foreach ($n in $notices) {
+    if (-not (Test-Path $n.From)) { throw "Licence text not found at $($n.From)" }
+    Copy-Item $n.From $n.To
+}
 
 $files = Get-ChildItem $OutDir -Recurse -File
 $size  = ($files | Measure-Object Length -Sum).Sum
