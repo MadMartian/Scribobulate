@@ -391,6 +391,16 @@ if ($Report) {
 
 if ($problems.Count -eq 0) {
     Write-Host 'Licences: PASS' -ForegroundColor Green
+    # SCOPE PRINTED WITH THE GREEN, not only in a document beside it. This gate
+    # enumerates the STAGED TREE; the installer is the staged tree PLUS files
+    # compiled into setup.exe, and those are invisible to every condition here.
+    # A bare PASS reads as "everything in the artefact is accounted for", which
+    # is true of the tree and not of the installer -- so the qualification has to
+    # travel with the result rather than wait to be looked up.
+    Write-Host '   Scope: the staged tree only. The installer additionally carries' -ForegroundColor DarkGray
+    Write-Host '   Inno Setup''s own code and vc_redist.x64.exe, neither of which is' -ForegroundColor DarkGray
+    Write-Host '   staged and neither of which any condition above can see.' -ForegroundColor DarkGray
+    Write-Host '   See packaging\windows\licenses\PROVENANCE.md.' -ForegroundColor DarkGray
     exit 0
 }
 

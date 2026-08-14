@@ -262,6 +262,59 @@ attribute — and the gate makes the half-done version of that change impossible
 both directions: dropping the row while still staging the DLLs fails condition 1,
 dropping the DLLs while keeping the row fails condition 2.
 
+### The pointer that would have passed all four conditions
+
+Worth recording, because it is the strongest evidence yet for the anchor's limit
+and it sits on the very row that was argued about. Visual Studio 2022 does ship a
+file at `Licenses\1033\Redist.txt` — **187 bytes, and it is a pointer, not
+terms**:
+
+> Distributable Code for Microsoft Visual Studio 2022 (Includes Utilities &
+> BuildServer Files)
+>
+> For the latest version of this Redist file, please visit
+> `https://aka.ms/vs/17/redist.txt`.
+
+Had the `msvc-runtime` row been "closed" by vendoring that, **all four conditions
+would have gone green** — the file exists, is non-empty, and contains the row's
+declared anchor `Distributable Code`, because the anchor string is right there in
+the pointer. Exactly the `pcre2/COPYING` shape, on the row where getting it wrong
+would have mattered most.
+
+## What this gate does NOT cover, and why a PASS is narrower than it looks
+
+**`verify-licenses.ps1` enumerates the staged tree. The installer is the staged
+tree PLUS files compiled into `setup.exe`**, and no condition can see those. Two
+third-party binaries are in that gap:
+
+- **Inno Setup's own code**, in `setup.exe` and the `unins000.exe` it writes.
+  MEASURED against `license.txt` shipped with Inno Setup 6: clause 2 requires
+  binary redistributions to *"retain all occurrences of the above copyright
+  notice and web site addresses that are currently in place (for example, in the
+  About boxes)"* — satisfied by not modifying what Inno generates. Clause 3's
+  acknowledgment in product documentation is *"appreciated but not required"*.
+  **No action owed, established from the text rather than assumed.**
+- **`vc_redist.x64.exe`**, embedded via `dontcopy` and run at install time. It
+  carries Microsoft's own terms and presents them itself, which is the entire
+  basis of the ruling that removed the `msvc-runtime` row.
+
+**This gap is older than the change that exposed it.** Inno's code has been in
+every installer this project has ever produced and was never in the gate's scope.
+What moved is the *Microsoft* part: it used to sit inside the lit area as two
+staged DLLs and now sits outside it. Nothing about the artefact became less
+attributed — but the gate reaching **PASS** makes an unlit area easy to read as
+an empty one, which is why the scope is now printed with the green rather than
+only recorded here.
+
+**The redistributable's version varies by build machine, deliberately.**
+`package.ps1` resolves it through `vswhere` and
+`Microsoft.VCRedistVersion.default.txt`, so CI (VS 18 Enterprise) and a developer
+box (VS 2022 Community) embed different Microsoft binaries and produce installers
+differing by megabytes **from the same commit**. That is correct and better than
+a pin — a constant would be wrong on one of the two machines, the same argument
+as the version floor being read off the embedded file. It is recorded here so
+that a diff of two installers is not read as a defect.
+
 ## Two of these were fetched from the build tree, not downloaded
 
 `freetype/` and `hicolor-icon-theme/` come from the source trees gvsbuild
