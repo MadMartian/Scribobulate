@@ -3,5 +3,6 @@
 //! give macOS its own *behaviour*.
 
 pub(crate) mod appearance;
+pub(crate) mod fullscreen;
 pub(crate) mod process;
 pub(crate) mod single_instance;

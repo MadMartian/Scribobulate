@@ -740,6 +740,14 @@
 - **When** the tab it belongs to is closed, moved to another window, or its document is reloaded from an external change
 - **Then** the app remains fully responsive to clicks and keyboard input afterward — it never becomes silently unresponsive as though it still held an input grab
 
+### 7.19 A dialog raised over a full-screen window opens inside it
+- **Given** a document window has been put into the operating system's own full-screen mode using the OS's control (the green button on macOS), so it occupies the whole display
+- **When** the user opens any dialog the app raises over that window — Help ▸ About, or the Save/Discard/Cancel prompt for unsaved changes
+- **Then** the dialog appears at its own modest size, floating over the document window, in the same full-screen workspace — the display never switches away from the document to show the dialog somewhere else
+- **And** the dialog is dismissable exactly as it is in a normal window: Escape closes About and cancels the confirmation, and all three confirmation buttons act
+- **And** when it closes, the document window is showing its content again — fully painted, never a black or blank rectangle where the document was
+- **And** the document window is still full-screen afterwards, and the green button still takes an ordinary window into full-screen as before
+
 ---
 
 ## 8. Single-instance lifecycle

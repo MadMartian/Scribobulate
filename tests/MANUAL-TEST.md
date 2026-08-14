@@ -666,6 +666,8 @@ gtk4-rs skill's dev-loop doc on why geometry/rendering bugs leave no warning.
 
 - [ ] **7.17** **Installed app carries its own icon (TDD 7.17).** Install for the platform first (platform procedure: §A, *Install*) — the rubric does not apply to an uninstalled run. Then check the app's own icon wherever the platform shows one (title bar, taskbar/Dock, task switcher) (an **absolute** path — a bundle does not inherit the shell's working directory, and a relative one silently opens a blank document) and check the Dock and Cmd-Tab. Each surface shows the robot icon, never a generic placeholder ("exec" on macOS). Also open **Help ▸ About** → the dialog's logo is the app icon, not a broken-image placeholder; that surface comes from the GResource rather than the OS packaging, so it is the half that must hold even uninstalled. Machine-checkable half on macOS: `lsappinfo info -only bundleid,name -app "$(pgrep -f Scribobulate.app | head -1)"` reports `com.extollit.scribobulate` / `Scribobulate` rather than a null identifier and a lowercase name
 
+- [ ] **7.19m** **A dialog raised over a natively full-screen window stays inside it (TDD 7.19).** *macOS only, and `m`-suffixed for the reason the rule gives: the mechanism is macOS's own — a full-screen window gets its own **Space**, and `-[NSWindow addChildWindow:]` against a parent already in one runs a real enter-full-screen transition on the **child**; `src/platform/mac/fullscreen.rs` carries the full trace.* **Run this from the `.app` bundle** (platform procedure: §A.2, *Install*), never `target/release/scribobulate` — the fault does not reproduce from a bare binary at all, so a bare run is a guaranteed false PASS. Put the window into full screen with the OS's own control (the green button, or `set value of attribute "AXFullScreen" of window 1 to true`), then, **for each of the two dialogs in turn** — **Help ▸ About**, and the unsaved-changes prompt (edit the document, then Ctrl+W): (a) the dialog opens **small, over the document**, and the display does **not** flip to another Space — machine-checkable as `value of attribute "AXFullScreen"` reading `false` for the dialog and `true` for the document window, both listed at once; (b) **Escape dismisses it** (About closes; the prompt cancels); (c) after it closes the document window shows its **content**, not a black rectangle, and is still full screen; (d) on the prompt, **Cancel, Discard and Save each act** (Cancel leaves the tab open and still dirty; Discard closes it with the file unchanged on disk; Save writes it). The pre-fix signature, worth recognising: the dialog itself became full screen in a Space of its own (`styleMask` gaining `0x4000`), and coming back left the parent black. **Driving note — the Escape half is the one the harness lies about:** `cliclick kp:esc` posts an event this app never receives, so Escape reads as broken on a build where it works; send it as `osascript -e 'tell application "System Events" to key code 53'` and prove the primitive on a known-good target (Ctrl+F opens the find bar, Escape closes it) before believing any Escape result.
+
 ### §8 Single-instance lifecycle
 - [ ] **8.1** App running, launch again (no `-n`) with a different file → opens in a new window of the SAME process — one PID (platform procedure: §A, *Launch & instance identity*)
 - [ ] **8.2** Open a file already open in a background tab; reopen via a **tokened** launch (platform procedure: §A, *Tokened launch*) → that window focuses, tab activates. Repeat via a **bare terminal** launch → focus-steal-prevention may substitute a taskbar flash instead (expected desktop behavior, not a bug — TDD 8.2 note)
@@ -1645,7 +1647,16 @@ Then two countermeasures, which are **continuous, not one-time setup**:
   behind the app. **Check the arithmetic before believing any other diagnosis.**
 - **Click / type / keys** — prefer `cliclick` (Homebrew) over raw `osascript`;
   same event-posting mechanism, but its move-only mode is what makes calibration
-  practical.
+  practical. **Exception, measured: `cliclick kp:<key>` does not reach this app.**
+  `kp:esc` exits 0, posts an event, and the app never sees it — while `cliclick`'s
+  own `c:` clicks and `t:` typed text (including `kd:ctrl t:f ku:ctrl`) all land
+  normally, so the pointer channel working proves nothing about this one
+  (GTK4Rs/AP-245). It fails **favourably**: the app looks like it has stopped
+  handling that key, which is indistinguishable from the defect you are usually
+  testing for. Send named keys as `osascript -e 'tell application "System Events"
+  to key code <n>'` (Escape is `53`), and before trusting any negative result from
+  a key, prove the primitive against a known-good target in the same session —
+  Ctrl+F opens the find bar and Escape closes it, which is one keystroke each way.
 - **Scroll** — **not available** in either `System Events` or `cliclick`; neither
   exposes a wheel primitive. Synthesize via JXA, with the cursor positioned over
   the target widget first (GTK routes wheel events to what is under the pointer,

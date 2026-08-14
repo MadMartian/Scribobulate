@@ -96,6 +96,13 @@ fn on_startup(app: &Application) {
     // has below.
     #[cfg(target_os = "macos")]
     crate::platform::mac::appearance::track_system_dark_mode();
+    // Classifies every secondary window as auxiliary as it is realized, so a dialog
+    // raised over a natively-fullscreen window floats above it instead of seizing a
+    // Space of its own (GDK tags every toplevel `FullScreenPrimary`). Subscribes to
+    // GTK's toplevel list, so it must run before the first window is built — after
+    // that, a window already constructed would never be seen.
+    #[cfg(target_os = "macos")]
+    crate::platform::mac::fullscreen::track_transient_windows();
     #[cfg(windows)]
     crate::platform::win32::track_system_dark_mode();
     add_new_action(app);
