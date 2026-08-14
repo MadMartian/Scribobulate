@@ -53,7 +53,11 @@ pub(super) struct Chrome {
     /// This window's self-built `GtkPopoverMenuBar` (GTK4Rs/AP-76). Retained
     /// so the nested-submenu-activation stray-menu workaround can walk
     /// its top-level item popovers and `popdown()` any GTK left mapped.
-    pub menubar: gtk::PopoverMenuBar,
+    /// `None` on macOS, where the menus live in the system menu bar instead.
+    pub menubar: Option<gtk::PopoverMenuBar>,
+    /// This window's whole menu model, retained for the platforms that render it
+    /// outside the window (`platform::mac::menubar`).
+    pub menu_model: gtk::gio::Menu,
 }
 
 /// Render `md` into a preview widget wired the way every "swap this into
@@ -344,10 +348,16 @@ pub(super) fn build_chrome(
     // `win.*` items resolve against this window's action muxer automatically once
     // the bar is in the tree (no explicit action-group insertion needed), and F10
     // still selects it (the bar self-registers on the window in `root()`).
+    //
+    // On macOS `bar` is `None` — that desktop keeps menus in the system menu bar,
+    // where `platform::mac::menubar` exports this same model — so nothing is
+    // packed and the toolbar becomes the window's first row (TDD 9.35).
     let menubar = crate::app::build_menubar();
 
     let outer_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    outer_box.append(&menubar.bar);
+    if let Some(bar) = &menubar.bar {
+        outer_box.append(bar);
+    }
     outer_box.append(toolbar);
     outer_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     outer_box.append(&content_paned);
@@ -385,5 +395,6 @@ pub(super) fn build_chrome(
         documents_menu: menubar.documents_menu,
         format_insert_menu: menubar.format_insert_menu,
         menubar: menubar.bar,
+        menu_model: menubar.model,
     }
 }

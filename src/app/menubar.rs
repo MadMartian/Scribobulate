@@ -15,15 +15,32 @@ use crate::winstate::FmtInsertKind;
 use gtk::gio::{Menu, MenuItem};
 use gtk::prelude::*;
 
-/// Set a menu item's displayed `accel` attribute from the single
-/// `INLINE_ACCEL_CMDS` table (QA M-4), for a command with no Cmd-table row. The
-/// menu hint is thus the SAME string `register_accelerators` binds and the
+/// Set a menu item's displayed `accel` attribute from a **declared** accelerator
+/// string, re-spelled for the host by [`crate::accel::for_host`] — the same
+/// transform `register_accelerators` applies, so the hint GTK draws beside the
+/// item is the key the app actually binds on this platform.
+///
+/// Every `accel` attribute in this file goes through here. Setting the attribute
+/// from a raw descriptor string is what would silently re-introduce the Ctrl-on-macOS
+/// bug for one menu while the binding moved to Command — a per-surface spelling,
+/// which is exactly what POLICY's accelerator single-source-of-truth rule forbids.
+/// A no-op for an empty accel, so callers need no `is_empty` branch of their own.
+fn set_accel(item: &MenuItem, accel: &str) {
+    if accel.is_empty() {
+        return;
+    }
+    item.set_attribute_value("accel", Some(&crate::accel::for_host(accel).to_variant()));
+}
+
+/// [`set_accel`] for a command with no Cmd-table row, reading its canonical
+/// accelerator from the single `INLINE_ACCEL_CMDS` table (QA M-4). The menu hint
+/// is thus derived from the SAME string `register_accelerators` binds and the
 /// shortcuts window / toolbar tooltip show — the four can no longer drift.
 /// `panic`s if `action` isn't an inline command (a compile-time wiring invariant).
 fn set_inline_accel(item: &MenuItem, action: &str) {
     let accel = inline_accel(action)
         .unwrap_or_else(|| panic!("menu accel: {action} missing from INLINE_ACCEL_CMDS"));
-    item.set_attribute_value("accel", Some(&accel.to_variant()));
+    set_accel(item, accel);
 }
 
 /// Build one `win.format::<target>` menu item with an optional accel hint. Shared by
@@ -33,9 +50,7 @@ fn set_inline_accel(item: &MenuItem, action: &str) {
 fn make_format_item(label: &str, target: &str, accel: &str) -> MenuItem {
     let item = MenuItem::new(Some(&mnem(label)), None);
     item.set_action_and_target_value(Some("win.format"), Some(&target.to_variant()));
-    if !accel.is_empty() {
-        item.set_attribute_value("accel", Some(&accel.to_variant()));
-    }
+    set_accel(&item, accel);
     item
 }
 
@@ -74,7 +89,21 @@ pub(crate) fn update_format_menu_labels(
 /// must be per-window (GTK4Rs/AP-76), so the whole model is built here per
 /// window rather than once on the GApplication.
 pub(crate) struct BuiltMenubar {
-    pub bar: gtk::PopoverMenuBar,
+    /// The in-window `GtkPopoverMenuBar`, on the platforms whose desktop puts the
+    /// menus inside the window.
+    ///
+    /// `None` on macOS, where the menus belong in the *system* menu bar
+    /// (`platform::mac::menubar` exports [`model`](Self::model) there). This is
+    /// not merely a style choice: the system reveals a fullscreen window's title
+    /// bar whenever the pointer nears the top edge, and that overlay lands
+    /// exactly on the window's own first row — so an in-window menu bar there is
+    /// unreachable by the gesture that reaches for it (TDD 9.35).
+    pub bar: Option<gtk::PopoverMenuBar>,
+    /// The assembled menu model itself — the top-level File/Edit/Format/View/Help
+    /// submenus. Handed back so a platform that renders menus outside the window
+    /// can export the *same* model the in-window bar would have shown, rather
+    /// than assembling a second one that could drift from it.
+    pub model: Menu,
     /// `View ▸ Documents` — starts empty; `window/tabs/refresh_documents_menu`
     /// fills it (in visual strip order) once the window's first tab is registered.
     pub documents_menu: Menu,
@@ -94,9 +123,7 @@ fn build_command_menu(cmds: &[Cmd]) -> Menu {
             section = Menu::new();
         }
         let item = MenuItem::new(Some(&mnem(cmd.label)), Some(cmd.action));
-        if !cmd.accel.is_empty() {
-            item.set_attribute_value("accel", Some(&cmd.accel.to_variant()));
-        }
+        set_accel(&item, cmd.accel);
         section.append_item(&item);
     }
     if section.n_items() > 0 {
@@ -158,9 +185,7 @@ fn build_view_menu() -> (Menu, Menu) {
             Some("win.view-mode"),
             Some(&cmd.action_target.to_variant()),
         );
-        if !cmd.accel.is_empty() {
-            item.set_attribute_value("accel", Some(&cmd.accel.to_variant()));
-        }
+        set_accel(&item, cmd.accel);
         section.append_item(&item);
     }
     // Window-management commands that don't touch files (operator decision)
@@ -485,9 +510,18 @@ pub(crate) fn build_menubar() -> BuiltMenubar {
     menubar.append_submenu(Some("_View"), &view_menu);
     menubar.append_submenu(Some("_Help"), &help_menu);
 
-    let bar = gtk::PopoverMenuBar::from_model(Some(&menubar));
+    // macOS renders this model in the SYSTEM menu bar instead
+    // (`platform::mac::menubar::track_active_window`), so no in-window bar is
+    // built there at all — the two must never both exist, which is the defect
+    // this returns `None` to prevent (TDD 9.35).
+    let bar = if cfg!(target_os = "macos") {
+        None
+    } else {
+        Some(gtk::PopoverMenuBar::from_model(Some(&menubar)))
+    };
     BuiltMenubar {
         bar,
+        model: menubar,
         documents_menu,
         format_insert_menu,
     }

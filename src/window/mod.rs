@@ -632,6 +632,7 @@ fn build_window_chrome_state(
         documents_menu: chrome.documents_menu.clone(),
         format_insert_menu: chrome.format_insert_menu.clone(),
         menubar: chrome.menubar.clone(),
+        menu_model: chrome.menu_model.clone(),
         format_menu_kind: Cell::new(None),
         documents_refresh_scheduled: Cell::new(false),
     })

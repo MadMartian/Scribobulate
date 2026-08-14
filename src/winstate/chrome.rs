@@ -190,7 +190,23 @@ pub(crate) struct WindowChrome {
     /// channel — a top-level popover's `unmap`. The workaround walks these item
     /// popovers on idle and `popdown()`s any still mapped (a latent
     /// GtkPopoverMenuBar behaviour, not our code).
-    pub(crate) menubar: gtk::PopoverMenuBar,
+    ///
+    /// `None` on macOS: the menus are rendered as a native `NSMenu` from
+    /// [`menu_model`](Self::menu_model) and there is no in-window bar at all, so
+    /// the workaround above has nothing to walk and correctly does nothing.
+    pub(crate) menubar: Option<gtk::PopoverMenuBar>,
+    /// This window's whole menu model — the File/Edit/Format/View/Help submenus
+    /// the in-window bar renders, kept so a platform that renders menus *outside*
+    /// the window can export the same model rather than assembling a second one.
+    /// Read by `platform::mac::menubar` each time this window becomes active, so
+    /// the system menu bar shows this window's `View ▸ Documents` list and its
+    /// own `Format ▸` Insert↔Edit labels.
+    ///
+    /// Stored unconditionally (like `menubar` above) so `build_chrome` needs no
+    /// platform branch of its own; only macOS's `platform::mac::menubar` seam
+    /// reads it, so a non-macOS build sees no call site at all.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) menu_model: gtk::gio::Menu,
     /// Last edit-kind applied to [`format_insert_menu`](Self::format_insert_menu),
     /// to skip redundant remove/insert churn (was a process-global thread-local
     /// before the per-window menubar migration).

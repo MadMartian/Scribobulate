@@ -39,6 +39,9 @@ waiting for you when you reopen it.
 
 ## Features
 
+*(Shortcuts below are shown in Linux/Windows form. On macOS, Ctrl becomes ⌘ —
+see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
+
 - **Light on your machine** — native rendering on the CPU, not a browser engine.
   Leaves GPU memory free for the models and tools you actually care about.
 - **Live reload** — when an agent (or anything else) rewrites an open file, the

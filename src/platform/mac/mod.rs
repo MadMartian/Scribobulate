@@ -4,5 +4,6 @@
 
 pub(crate) mod appearance;
 pub(crate) mod fullscreen;
+pub(crate) mod menubar;
 pub(crate) mod process;
 pub(crate) mod single_instance;

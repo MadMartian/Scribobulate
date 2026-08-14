@@ -42,6 +42,7 @@
 // `scripts/lint-references.sh` compares the two lists as a build gate. Do not
 // "tidy" the duplication away without replacing that gate.
 mod a11y;
+mod accel;
 mod annotate;
 mod annotations;
 mod annotations_view;

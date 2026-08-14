@@ -45,6 +45,12 @@ fn xml_escape(s: &str) -> String {
 
 /// One `<GtkShortcutsShortcut>` child (accelerator kind, the default). Empty
 /// accelerators are the caller's responsibility to skip.
+///
+/// `accel` arrives as the **declared** string and is re-spelled for the host by
+/// [`crate::accel::for_host`] — the same transform `register_accelerators` and the
+/// menu hints apply, so this window advertises the key the platform actually
+/// binds. `GtkShortcutsShortcut` renders the modifier glyphs itself from the
+/// parsed accelerator, so on macOS `<Meta>` draws as ⌘ with no further help.
 fn shortcut_xml(title: &str, accel: &str) -> String {
     format!(
         "<child><object class=\"GtkShortcutsShortcut\">\
@@ -52,7 +58,7 @@ fn shortcut_xml(title: &str, accel: &str) -> String {
            <property name=\"accelerator\">{}</property>\
          </object></child>",
         xml_escape(title),
-        xml_escape(accel),
+        xml_escape(&crate::accel::for_host(accel)),
     )
 }
 
@@ -152,16 +158,32 @@ mod tests {
     /// The generated XML must be well-formed enough to contain every group and to
     /// escape the accelerator angle brackets (a raw `<Primary>` would break the
     /// XML). Checked without a display by inspecting the string.
+    /// The host's spelling of File ▸ Open's accelerator, as it must appear
+    /// escaped in the generated XML. Pinned as a `#[cfg]`'d literal rather than
+    /// derived through `accel::for_host` (ScrAP-181): the *point* of the
+    /// assertion is that this window advertises Command on macOS, and deriving
+    /// the expectation from the transform under test would make it agree with
+    /// itself and pass whichever modifier it emitted.
+    #[cfg(target_os = "macos")]
+    const OPEN_ACCEL_XML: &str = "&lt;Meta&gt;o";
+    #[cfg(not(target_os = "macos"))]
+    const OPEN_ACCEL_XML: &str = "&lt;Primary&gt;o";
+
     #[test]
     fn interface_xml_has_groups_and_escapes_accels() {
         let xml = interface_xml();
         for group in ["File", "Edit", "Format", "View", "Windows &amp; Tabs"] {
             assert!(xml.contains(group), "interface XML missing group {group:?}");
         }
-        // Accelerators must be entity-escaped, never raw.
-        assert!(xml.contains("&lt;Primary&gt;o"), "Open accel not escaped");
+        // Accelerators must be entity-escaped, never raw — and spelled for this
+        // platform, so a macOS reader is told ⌘O rather than a key the app does
+        // not bind.
         assert!(
-            !xml.contains("<property name=\"accelerator\"><Primary>"),
+            xml.contains(OPEN_ACCEL_XML),
+            "Open accel missing or not escaped as {OPEN_ACCEL_XML:?}"
+        );
+        assert!(
+            !xml.contains("<property name=\"accelerator\"><"),
             "an accelerator was emitted with raw angle brackets"
         );
     }
@@ -188,12 +210,16 @@ mod tests {
                 cmd.action,
                 cmd.group,
             );
+            // The host's spelling, since that is what the window renders. Which
+            // spelling is right for this platform is pinned by
+            // `OPEN_ACCEL_XML` above and by `accel`'s own literal-pinned tests;
+            // here the subject is coverage of the table, not the transform.
+            let shown = crate::accel::for_host(cmd.accels[0]);
             assert!(
-                xml.contains(&xml_escape(cmd.accels[0])),
-                "INLINE_ACCEL_CMDS {:?} canonical accelerator {:?} is not shown \
+                xml.contains(&xml_escape(&shown)),
+                "INLINE_ACCEL_CMDS {:?} canonical accelerator {shown:?} is not shown \
                  in the shortcuts window",
                 cmd.action,
-                cmd.accels[0],
             );
         }
     }
@@ -206,6 +232,7 @@ mod tests {
 mod gtk_integration_tests {
     use super::*;
     use gtk::prelude::*;
+    use std::borrow::Cow;
 
     /// Every accelerator we render must be parseable by GTK, or the
     /// `GtkShortcutsShortcut` shows nothing / warns. Guards EVERY accelerator in
@@ -220,11 +247,16 @@ mod gtk_integration_tests {
                 cmd.action
             );
             for accel in cmd.accels {
-                assert!(
-                    gtk::accelerator_parse(*accel).is_some(),
-                    "INLINE_ACCEL_CMDS {:?} has an unparseable accelerator {accel:?}",
-                    cmd.action
-                );
+                // Both the declared string and the host's re-spelling of it must
+                // parse: the declared one is what the table asserts, the
+                // re-spelling is what is actually bound and drawn.
+                for form in [Cow::Borrowed(*accel), crate::accel::for_host(accel)] {
+                    assert!(
+                        gtk::accelerator_parse(form.as_ref()).is_some(),
+                        "INLINE_ACCEL_CMDS {:?} has an unparseable accelerator {form:?}",
+                        cmd.action
+                    );
+                }
             }
         }
     }
@@ -252,10 +284,14 @@ mod gtk_integration_tests {
                 .iter()
                 .map(|s| gtk::accelerator_parse(s.as_str()))
                 .collect();
+            // Compared in the HOST's spelling, which is what `register_accelerators`
+            // binds. That the host's spelling is the right one is pinned separately
+            // by `accel`'s literal expectations — this guard's subject is bind ↔
+            // display drift, not the transform.
             let expected: Vec<_> = cmd
                 .accels
                 .iter()
-                .map(|a| gtk::accelerator_parse(*a))
+                .map(|a| gtk::accelerator_parse(crate::accel::for_host(a).as_ref()))
                 .collect();
             assert_eq!(
                 bound, expected,

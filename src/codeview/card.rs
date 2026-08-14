@@ -609,7 +609,7 @@ fn app_accelerator_controller() -> gtk::ShortcutController {
     let controller = gtk::ShortcutController::new();
     controller.set_propagation_phase(gtk::PropagationPhase::Bubble);
     for (action, accel) in crate::app::accelerator_bindings() {
-        let Some(trigger) = gtk::ShortcutTrigger::parse_string(accel) else {
+        let Some(trigger) = gtk::ShortcutTrigger::parse_string(&accel) else {
             continue; // an unparseable accel is already inert app-wide; nothing to add
         };
         controller.add_shortcut(gtk::Shortcut::new(

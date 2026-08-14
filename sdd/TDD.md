@@ -10,7 +10,7 @@
 | 6 | Resource footprint (viability gate) | 6.1 – 6.5 |
 | 7 | Window & layout | 7.0b – 7.18 |
 | 8 | Single-instance lifecycle | 8.1 – 8.7 |
-| 9 | Menu bar, toolbar, and actions | 9.1 – 9.31 |
+| 9 | Menu bar, toolbar, and actions | 9.1 – 9.36 |
 | 10 | Markdown formatting commands | 10.1 – 10.20 |
 | 11 | Find & replace | 11.1 – 11.8 |
 | 12 | Document outline | 12.1 – 12.21 |
@@ -1006,7 +1006,17 @@
 - **Then** the toolbar shows **File, Edit, and View** and hides **Format, Split, and Zoom** (those three `View ▸ Toolbar` checkboxes start unticked) — a deliberately short default toolbar the user extends by ticking the sections their workflow needs; formatting stays fully available meanwhile via the Format menu and its accelerators even with the Format section hidden
 
 ### 9.23 The menus are keyboard-navigable via mnemonics and access keys
-- **Given** the application window is focused
+> **Platform scope: the Alt+letter clause below is Linux and Windows only.** It
+> describes a menu bar drawn *inside* the window, which is what those desktops
+> expect (9.35). macOS has no mnemonic mechanism at all — its menus are native,
+> Option+letter types an alternate character rather than addressing a menu, and
+> the toolkit strips the `_` markers when it builds the native items, so there is
+> nothing underlined to press. The keyboard route to the menus there is the
+> system's own (Ctrl+F2, "Move focus to the menu bar"), which the application
+> neither provides nor can break. This is a carve-out for the *menu bar* only:
+> every clause below about the **context menus'** access keys holds on all three
+> platforms, because those are drawn by the application (9.24).
+- **Given** the application window is focused, on a platform whose menus are in the window
 - **When** the user presses Alt+F, Alt+E, Alt+R, Alt+V, or Alt+H
 - **Then** the File, Edit, Format, View, or Help menu opens respectively, with the access letter shown underlined while Alt is held
 - **And when** a menu (or one of its submenus) is open and the user presses a row's underlined letter with no modifier
@@ -1094,6 +1104,36 @@
 - **And given** preview-only mode, which has no editor pane and so no caret
 - **Then** the command is disabled in the menu bar and toolbar (like every other editor-only Edit command, 9.11) yet **enabled in the preview's context menu whenever that right-click landed on a link** — reading a link's target is not an editing operation
 - **And** a right-clicked target lasts exactly as long as its menu: once the context menu closes, the command reverts to what the caret alone allows, so no surface stays enabled for a link nobody is pointing at
+
+### 9.35 The menus appear where the desktop keeps menus, and only once
+- **Given** the application is running on macOS
+- **When** the user looks for the menus
+- **Then** they are in the **system menu bar** at the top of the screen — File, Edit, Format, View and Help, following the standard application menu that carries About, Hide and Quit
+- **And** there is **no second menu row inside the window**: the window's own first row is the toolbar, and no File/Edit/Format/View/Help strip is drawn below the title bar
+- **And** the system menu bar shows **the application's own menus**, never a toolkit placeholder — an Edit menu holding only the generic Undo/Cut/Copy/Paste entries, or a Window menu the application never defined, means the real model was never handed over
+- **And given** the window has been put into the operating system's own full-screen mode
+- **When** the user moves the pointer to the top of the screen to reach the menus, and clicks a menu once
+- **Then** that menu opens on the **first** click — the reveal that the pointer triggers *is* the menu bar, so nothing is drawn over the menus and no click is spent on something else
+- **And** no other control is activated by that click, and in particular the window is not closed by it
+- **And given** more than one document window is open
+- **When** the user brings a different window to the front and opens View ▸ Documents
+- **Then** the list names **that** window's tabs, and Format ▸'s Link/Image items read Insert or Edit according to **that** window's selection — the menus follow the active window rather than showing whichever window was built last
+- **And** each item's enabled state follows the active window too: a command unavailable in that window is greyed there and available in the other
+- **And given** any other platform, whose desktops keep menus inside the window
+- **Then** the menu bar is the window's first row exactly as before, and the system menu bar is not used
+
+### 9.36 Keyboard shortcuts use the platform's own command modifier
+- **Given** the application is running on macOS
+- **When** the user presses the shortcut for any command — Save, Open, Copy, Find, Undo, New Document
+- **Then** it is the **Command** key that invokes it: Cmd+S saves, Cmd+O opens, Cmd+F finds
+- **And** the same combination with Control instead does nothing — the shortcut moved, it was not merely duplicated
+- **And** every surface that *shows* a shortcut agrees with the key that works: the menu item's hint, the toolbar tooltip, the context-menu hint and the Keyboard Shortcuts window all read ⌘, never ⌃
+- **And given** a shortcut the operating system itself reserves — Cmd+H hides an application, Cmd+Option+H hides the others
+- **Then** the system keeps it: pressing Cmd+H hides Scribobulate rather than opening Find & Replace
+- **And** the command that would have claimed it is still reachable from the keyboard under a different combination, and every surface shows that combination — a command may be moved by this rule, never silently left with a shortcut that does nothing
+- **And given** any other platform
+- **Then** the shortcuts are unchanged — Ctrl+S saves, and every surface reads "Ctrl"
+- **And** on no platform do two different commands share one keystroke
 
 ## 10. Markdown formatting commands
 

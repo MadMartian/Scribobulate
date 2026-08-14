@@ -117,16 +117,30 @@ fn on_startup(app: &Application) {
     register_accelerators(app);
 
     // ── menu bar ─────────────────────────────────────────────────────────
-    // The menubar model is now built PER WINDOW (`build_menubar`, packed as a
-    // self-built `GtkPopoverMenuBar` in `window::build_chrome`) rather than
-    // set once on the GApplication — because `View ▸ Documents` lists THAT
-    // window's tabs, and a GMenuModel's content (labels + item count) can't
-    // vary per window when the model is shared app-wide. `win.*` action state
-    // stays per-window for free; only content had to be split out. We
-    // deliberately do NOT call `app.set_menubar` here: it would also export
-    // the model to a global-menu shell and duplicate our in-window bar
-    // (GTK4Rs/AP-76). Accelerators (`set_accels_for_action`) remain
-    // app-level (see `register_accelerators`) and are unaffected by the model split.
+    // The menubar model is built PER WINDOW (`build_menubar`) rather than set
+    // once on the GApplication — because `View ▸ Documents` lists THAT window's
+    // tabs, and a GMenuModel's content (labels + item count) can't vary per
+    // window when the model is shared app-wide. `win.*` action state stays
+    // per-window for free; only content had to be split out. Accelerators
+    // (`set_accels_for_action`) remain app-level (see `register_accelerators`)
+    // and are unaffected by the model split.
+    //
+    // WHERE that model is rendered is the platform's business, and there are two
+    // answers. Linux and Windows pack a self-built `GtkPopoverMenuBar` into the
+    // window (`window::build_chrome`); this file calls no `set_menubar` for them,
+    // which is what keeps a global-menu shell from exporting a second copy of the
+    // bar already on screen (GTK4Rs/AP-76).
+    //
+    // macOS is the opposite case, and reading that rule as universal is what left
+    // it with TWO menu bars. GTK's Quartz backend installs a native `NSMenu`
+    // unconditionally and falls back to a built-in stub when no model is set — so
+    // withholding the model does not suppress the native bar, it only makes it
+    // show GTK's placeholder next to our in-window one. There the model is
+    // exported and no in-window bar is built at all; `platform::mac::menubar`
+    // carries the full account. Subscribes to `notify::active-window`, so like
+    // the fullscreen tracker above it must run before the first window is built.
+    #[cfg(target_os = "macos")]
+    crate::platform::mac::menubar::track_active_window(app);
 }
 
 /// Register the bundled-icon GResource (compiled by build.rs from
@@ -227,17 +241,36 @@ fn connect_theme_change(app: &Application) {
 /// (`codeview::card`); re-listing the tables there would be a second copy of exactly the
 /// thing every one of these tables exists to prevent (POLICY, "Keyboard accelerators are
 /// part of the single-source-of-truth contract").
-pub(crate) fn accelerator_bindings() -> Vec<(String, &'static str)> {
-    let mut out: Vec<(String, &'static str)> = Vec::new();
+pub(crate) fn accelerator_bindings() -> Vec<(String, String)> {
+    accelerator_bindings_for(crate::accel::host())
+}
+
+/// [`accelerator_bindings`] for an explicitly named platform.
+///
+/// The platform is a parameter rather than a `cfg!` read so the whole binding
+/// set can be enumerated for *both* platforms from either one — which is what
+/// lets `accel::tests::bindings_are_unique_on_every_platform` prove that the
+/// macOS re-spelling introduces no collision without a macOS host, and what
+/// keeps that check a plain `cargo test` unit test rather than a `#[cfg]`'d
+/// (i.e. deleted, POLICY § Unit tests) one.
+pub(crate) fn accelerator_bindings_for(platform: crate::accel::Platform) -> Vec<(String, String)> {
+    // Every accelerator leaves this function already in the host's spelling, so
+    // no consumer downstream has to know a platform difference exists — the
+    // single transform point POLICY's accelerator-SSOT rule requires.
+    let spell = |accel: &str| crate::accel::map(accel, platform).into_owned();
+    let mut out: Vec<(String, String)> = Vec::new();
     for cmd in FILE_CMDS.iter().chain(EDIT_CMDS.iter()) {
         if !cmd.accel.is_empty() {
-            out.push((cmd.action.to_string(), cmd.accel));
+            out.push((cmd.action.to_string(), spell(cmd.accel)));
         }
     }
     // View-mode accelerators use the detailed action name syntax so GTK
     // activates the correct string-variant target (D2, VIEW_CMDS descriptor).
     for cmd in VIEW_CMDS.iter().filter(|c| !c.accel.is_empty()) {
-        out.push((format!("win.view-mode::{}", cmd.action_target), cmd.accel));
+        out.push((
+            format!("win.view-mode::{}", cmd.action_target),
+            spell(cmd.accel),
+        ));
     }
     // Every command with no Cmd-table row — tab/window navigation, zoom, the
     // outline toggle, Go To Line, and the F1/Ctrl+? shortcuts-help overlay — is
@@ -247,24 +280,23 @@ pub(crate) fn accelerator_bindings() -> Vec<(String, &'static str)> {
     // These `win.*` actions route to whichever window is focused.
     for cmd in crate::app::INLINE_ACCEL_CMDS {
         for accel in cmd.accels {
-            out.push((cmd.action.to_string(), accel));
+            out.push((cmd.action.to_string(), spell(accel)));
         }
     }
     // Format accelerators — detailed win.format::<target> syntax, same as
     // view-mode.  Headings bind to Shift+F1..F6 (chosen to avoid the existing
     // Alt+Shift+2 "Side by Side" accelerator — used by formatters).
     for cmd in FORMAT_CMDS.iter().filter(|c| !c.accel.is_empty()) {
-        out.push((format!("win.format::{}", cmd.target), cmd.accel));
+        out.push((format!("win.format::{}", cmd.target), spell(cmd.accel)));
     }
     for (n, accel) in HEADING_ACCELS.iter().enumerate() {
-        out.push((format!("win.format::h{}", n + 1), accel));
+        out.push((format!("win.format::h{}", n + 1), spell(accel)));
     }
     out
 }
 
 /// The six heading accelerators, in `h1..h6` order. A `const` rather than a formatted
-/// `<Shift>F{n}` because [`accelerator_bindings`] must hand out `&'static str`s, and
-/// because the set is closed: there are exactly six heading levels.
+/// `<Shift>F{n}` because the set is closed: there are exactly six heading levels.
 const HEADING_ACCELS: [&str; 6] = [
     "<Shift>F1",
     "<Shift>F2",
@@ -283,7 +315,7 @@ pub(crate) fn register_accelerators(app: &Application) {
     // the call REPLACES an action's accel list rather than adding to it, so an
     // action with two bindings (Ctrl++ and Ctrl+= — see `INLINE_ACCEL_CMDS`) must
     // be registered in a single call or the second silently unbinds the first.
-    let mut by_action: Vec<(String, Vec<&'static str>)> = Vec::new();
+    let mut by_action: Vec<(String, Vec<String>)> = Vec::new();
     for (action, accel) in accelerator_bindings() {
         match by_action.iter_mut().find(|(name, _)| *name == action) {
             Some((_, accels)) => accels.push(accel),
@@ -291,7 +323,8 @@ pub(crate) fn register_accelerators(app: &Application) {
         }
     }
     for (action, accels) in &by_action {
-        app.set_accels_for_action(action, accels);
+        let accels: Vec<&str> = accels.iter().map(String::as_str).collect();
+        app.set_accels_for_action(action, &accels);
     }
 }
 

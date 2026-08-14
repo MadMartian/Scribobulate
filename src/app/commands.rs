@@ -25,11 +25,18 @@ scribobulate path/to/document.md
 /// toolbar tooltips, and the keyboard-shortcuts window all share, so a
 /// shortcut hint is always rendered the same, platform-correct way (single
 /// source of truth, ScrAP-9).
+///
+/// Takes the **declared** string and re-spells it for the host first
+/// ([`crate::accel::for_host`]), exactly as `register_accelerators` does — so the
+/// hint a surface shows and the key the app binds are derived from one string by
+/// one transform, and cannot disagree about which modifier this platform uses.
 pub(crate) fn accel_hint(accel: &str) -> Option<String> {
     if accel.is_empty() {
         return None;
     }
-    gtk::accelerator_parse(accel).map(|(k, m)| gtk::accelerator_get_label(k, m).to_string())
+    let accel = crate::accel::for_host(accel);
+    gtk::accelerator_parse(accel.as_ref())
+        .map(|(k, m)| gtk::accelerator_get_label(k, m).to_string())
 }
 
 /// A toolbar/tooltip string joining a command label with its accelerator hint in
@@ -46,14 +53,23 @@ pub(crate) fn tooltip_with_accel(label: &str, accel: &str) -> String {
 pub(crate) struct Cmd {
     pub(crate) action: &'static str,
     pub(crate) label: &'static str,
-    /// GTK accelerator format used by set_accels_for_action and the menu "accel"
-    /// display attribute.  Empty string = no keyboard shortcut.
-    /// The context-menu accel hint is derived at runtime via accelerator_get_label
-    /// so it is always platform-correct (here, "Ctrl+C"). Deliberately no example
-    /// for a platform this tree does not build for: the previous one asserted a
-    /// Command glyph for macOS and was simply wrong — GTK4 dropped GTK3's Quartz
-    /// `<Primary>`→Command mapping, so `<Primary>` is Control there too. A port
-    /// that needs the other spelling carries it on its own branch.
+    /// The command's accelerator, **as declared** — the one place it is written
+    /// down, in GTK's accelerator format. Empty string = no keyboard shortcut.
+    ///
+    /// Every consumer re-spells this for the host through [`crate::accel`] before
+    /// using it: `set_accels_for_action`, the menu item's `accel` display
+    /// attribute, the context-menu hint, the toolbar tooltip and the shortcuts
+    /// window. So the declared string is not necessarily the keystroke a given
+    /// platform ends up with, and no surface may read this field raw.
+    ///
+    /// The transform exists because GTK4 dropped GTK3's Quartz `<Primary>`→Command
+    /// mapping, leaving `<Primary>` as *Control* on macOS while the platform's own
+    /// command modifier is Command (which GTK spells `<Meta>` there). That is a
+    /// difference in spelling only — `accel` stays the single source of truth, and
+    /// `accel::tests::bindings_are_unique_on_every_platform` proves the
+    /// re-spelling introduces no collision. Write the Linux/Windows spelling here;
+    /// a keystroke macOS reserves for itself is handled in `accel::MAC_RESERVED`,
+    /// not by a second field and never by a per-surface special case.
     pub(crate) accel: &'static str,
     /// The toolbar/menu icon for this command (all symbolic — ScrAP-169).
     pub(crate) icon: Icon,
@@ -741,16 +757,21 @@ mod tests {
 mod gtk_integration_tests {
     use super::*;
 
-    // GTK4's Quartz accelerator label spells the Primary modifier with the
-    // Control glyph U+2303 (⌃), never the word "Ctrl" and never a Command glyph
-    // — GTK4 dropped GTK3's Quartz `<Primary>`→⌘ map (GTK4Rs/AP-160;
-    // measured here on GTK 4.22.4/macOS, 2026-07-30: `accel_hint("<Primary>o")`
-    // == `"⌃O"`). Every other platform this tree targets renders the word
-    // "Ctrl". Per ScrAP-181, pin the expected substring as a `#[cfg]`'d constant
-    // rather than deriving it from the function under test — deriving it that
-    // way would just make the test agree with itself.
+    // GTK4 dropped GTK3's Quartz `<Primary>`→⌘ map, so a *declared* `<Primary>`
+    // labels as the Control glyph U+2303 (⌃) on that backend (GTK4Rs/AP-160;
+    // measured on GTK 4.22.4/macOS, 2026-07-30). That is precisely why
+    // `accel_hint` re-spells the declared string through `accel::for_host`
+    // first: on macOS `<Primary>o` becomes `<Meta>o`, which GTK labels with the
+    // Command glyph U+2318 (⌘) — the platform's actual command modifier, and the
+    // same key `register_accelerators` binds. Asserting ⌘ here is therefore the
+    // load-bearing half of the Cmd-not-Ctrl fix: revert the transform and this
+    // fails, because the label would fall back to ⌃.
+    //
+    // Per ScrAP-181, the expected glyph is a `#[cfg]`'d *constant*, never derived
+    // by calling the function under test — deriving it would make the test agree
+    // with itself.
     #[cfg(target_os = "macos")]
-    const PRIMARY_MOD_LABEL: &str = "\u{2303}"; // ⌃ CONTROL — not "Ctrl", not ⌘
+    const PRIMARY_MOD_LABEL: &str = "\u{2318}"; // ⌘ COMMAND — never ⌃, never "Ctrl"
     #[cfg(not(target_os = "macos"))]
     const PRIMARY_MOD_LABEL: &str = "Ctrl";
 

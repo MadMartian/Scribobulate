@@ -427,7 +427,12 @@ fn dismiss_stray_menubar_popovers(window: &ApplicationWindow) {
     let Some(chrome) = winstate::chrome(window) else {
         return;
     };
-    let menubar = chrome.menubar.clone();
+    // No in-window bar (macOS renders the menus as a native `NSMenu`) means no
+    // GtkPopoverMenuBar popover can be left stray — the workaround's whole
+    // subject is absent, so there is nothing to walk.
+    let Some(menubar) = chrome.menubar.clone() else {
+        return;
+    };
     glib::idle_add_local_once(move || {
         let mut item = menubar.first_child();
         while let Some(it) = item {
