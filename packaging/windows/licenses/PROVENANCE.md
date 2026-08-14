@@ -257,6 +257,29 @@ Microsoft's own redistributable when the machine lacks it, and Microsoft's terms
 travel with Microsoft's code. Operator's ruling, 2026-08-14, with the elevation
 cost accepted knowingly.
 
+**The permission to redistribute the package itself, read rather than assumed:**
+
+> Redistribution of the unmodified Visual C++ Redistributable package
+> (`vc_redist.x64.exe`) by a licensed Visual Studio user is authorized under the
+> Visual Studio Distributable Code terms and REDIST list
+> (`https://aka.ms/vs/17/redistribution`; Learn: *"Redistribute Visual C++
+> Files"*), which expressly permit distribution of the Redistributable package
+> and recommend running it as an application prerequisite; Microsoft's own
+> deployment walkthrough packages `vc_redist.*.exe` inside a third-party
+> installer. Scribobulate therefore no longer ships `vcruntime140.dll` /
+> `vcruntime140_1.dll` app-local and invokes the embedded package when the
+> runtime is absent, rather than binding end users to a separate Microsoft EULA
+> of our own for those DLLs.
+
+**And the caveat that the comfortable version of that sentence hides.**
+`scribobulate.iss` runs the package with `/install /passive /norestart`, and
+**under `/passive` Microsoft's installer presents no click-through either.** So
+*"Microsoft's own UI collects the agreement"* is true of an interactive run and
+ours is not one. The flags are correct and stay — `/passive` is the documented
+invocation for a prerequisite — but the discharge rests on the **authorised
+deployment model**, not on a dialogue any user sees. Written down because it is
+the sort of thing that gets assumed by whoever next reads the paragraph above it.
+
 The row is **deleted rather than closed**, because there is now nothing to
 attribute — and the gate makes the half-done version of that change impossible in
 both directions: dropping the row while still staging the DLLs fails condition 1,
