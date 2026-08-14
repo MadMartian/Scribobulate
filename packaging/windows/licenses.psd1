@@ -535,23 +535,26 @@
             Expect    = 'Provenance of the vendored licence texts'
             Evidence  = 'M'
             Basis     = 'Staged by stage.ps1 directly from the Source field of every row in this file; the directory name under share\licenses is the row Id.'
-        },
-
-        # -- the Microsoft runtime -------------------------------------------
-
-        @{
-            # No text ships with the redist directory; the terms are in the Visual
-            # Studio licence, which permits app-local distribution of these files.
-            # Vendored so that what we relied on is written down at the version we
-            # relied on it.
-            Id        = 'msvc-runtime'
-            Component = 'Microsoft Visual C++ Runtime (app-local redistributable)'
-            Match     = '^bin\\vcruntime140(_1)?\.dll$'
-            License   = 'LicenseRef-Microsoft-Visual-Studio-Redistributable'
-            Source    = 'repo:packaging\windows\licenses\msvc-runtime\REDIST-TERMS.txt'
-            Expect    = 'Distributable Code'
-            Evidence  = 'M'
-            Basis     = 'VersionInfo ProductName reads "Microsoft(R) Visual Studio(R)"; staged from the VC\Redist directory, not System32.'
         }
+
+        # -- the Microsoft runtime: NO ROW, AND THAT IS THE ANSWER -------------
+        #
+        # There was an msvc-runtime row here for vcruntime140.dll and
+        # vcruntime140_1.dll, staged app-local out of the Visual Studio redist
+        # directory. It was the last red row in this table, and it was never
+        # closable by finding a better document: the applicable terms require the
+        # DISTRIBUTOR to make end users agree to protective terms, which no file
+        # on disk satisfies.
+        #
+        # So the files stopped shipping. scribobulate.iss installs Microsoft's own
+        # redistributable when the machine lacks it, and Microsoft's terms travel
+        # with Microsoft's code. The row is deleted rather than closed, because
+        # there is nothing left to attribute.
+        #
+        # THE TWO-WAY GATE MAKES THIS SELF-CONSISTENT AND NEITHER HALF CAN BE
+        # FORGOTTEN. Deleting the row while still staging the DLLs fails condition
+        # 1 (a staged file no row claims); dropping the DLLs while keeping the row
+        # fails condition 2 (a row matching no staged file). The direction people
+        # leave out is the one that catches the half-done version of this change.
     )
 }

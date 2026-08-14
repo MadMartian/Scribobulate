@@ -30,10 +30,9 @@ cargo build --release
 # 3. Stage the redistributable tree
 .\packaging\windows\stage.ps1
 
-# 4. Compile the installer
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" `
-    /DStageDir="$PWD\build\stage\Scribobulate" `
-    packaging\windows\scribobulate.iss
+# 4. Compile the installer — use package.ps1 rather than calling ISCC by hand,
+#    because it discovers vc_redist.x64.exe and passes /DRedistFile
+.\packaging\windows\package.ps1
 ```
 
 **Two of those four are easy to omit and neither failure names them.** Setting only
@@ -48,6 +47,48 @@ listed only two until it was measured against a bare shell.
 runs and generates it before anything is linked. So the file's presence does NOT imply the
 build succeeded — what protects staging is `stage.ps1`'s precondition on
 `target\release\scribobulate.exe`, not the notices file existing.
+
+## The MSVC runtime, and why this machine cannot verify it
+
+The staged tree contains **no C runtime**. `vcruntime140.dll` and `vcruntime140_1.dll` used
+to be copied app-local out of the Visual Studio redistributable directory; that made us a
+redistributor of Microsoft's Distributable Code, whose terms require the *distributor* to
+make end users **agree** to protective terms — a click-through, not a file on disk. The
+installer now runs Microsoft's own `vc_redist.x64.exe` when the machine lacks the runtime,
+so Microsoft's terms travel with Microsoft's code.
+
+**A DEVELOPMENT OR CI MACHINE CANNOT TELL YOU WHETHER THIS WORKS, AND IT WILL LOOK LIKE IT
+CAN.** Every machine capable of building this software already has the MSVC runtime
+installed. Remove the DLLs, rebuild, install, launch — **it starts**, because it loads
+`C:\Windows\System32\vcruntime140.dll` and would have done so whether or not the
+bootstrapper functions. The condition under test is satisfied by the environment rather
+than by the change, so the green result carries no information.
+
+The observation that means something is the **pair**:
+
+- runtime absent, bootstrapper disabled → the app **fails to start**
+- runtime absent, bootstrapper runs → the app starts
+
+Without the failing half you have measured the test machine, not the installer. **That
+requires a clean Windows image — a VM, or Windows Sandbox where it is available.** Neither
+is present on the seat that wrote this, so the end-to-end claim is recorded here as
+**unverified** rather than inferred from a box that was always going to pass.
+
+**What HAS been verified on a machine that has the runtime**, and what each check is worth:
+
+| Verified | How | What it does not cover |
+|---|---|---|
+| Nothing else needs a CRT DLL | `dumpbin /dependents` over all 38 staged binaries: 37 import `vcruntime140.dll`, `vcruntime140_1.dll` is imported by `cairo-2.dll` alone, and no `msvcp140`/`concrt140`/`mfc`/`vcomp`/`vccorlib` appears anywhere | — |
+| The detector's *negative* branch | Registry read returns `Installed=1`, version 14.44.35211; the prerequisite is skipped and Setup raises no prompt | that it correctly says **yes** on a machine without the runtime |
+| The redistributable is extracted before it is run | detector forced True in a throwaway build; the probe found the file present in `{tmp}` | that `vc_redist.x64.exe` then installs successfully |
+| **Refusal leaves the machine untouched** | detector forced True with the exec target absent → Setup exit code **7**, install directory never created, zero files written | that the same happens specifically on a dismissed UAC prompt |
+
+The third row is there because the first attempt got it wrong: the redistributable was
+declared as a `{tmp}` entry in `[Files]`, and `[Files]` is processed **after**
+`PrepareToInstall` runs — so the prerequisite would have targeted a file that did not exist
+yet, and reported it as a refused elevation prompt. `dontcopy` plus an explicit
+`ExtractTemporaryFile` is the fix. **That bug was invisible on this machine until the
+detector was forced**, which is the same lesson as the table above.
 
 Output: `build\installer\Scribobulate-<version>-x64-setup.exe`. The version is read
 out of `Cargo.toml` by the `.iss` itself, so nothing here restates it.

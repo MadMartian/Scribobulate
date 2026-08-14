@@ -72,85 +72,30 @@ if ($missing.Count -gt 0) {
 Copy-Item $exeSrc "$OutDir\bin\"
 
 # ---------------------------------------------------------------------------
-# The MSVC runtime, app-local, so the installer is TURN-KEY.
+# THE MSVC RUNTIME IS NOT STAGED, AND THAT IS THE POINT.
 #
-# WITHOUT THIS THE INSTALLER IS NOT SELF-CONTAINED and fails on a clean machine.
-# Every binary staged above imports `vcruntime140.dll`, and it resolves on a
-# developer box only because the VC++ redistributable is already installed there
-# -- MEASURED: a launched staged build loads both files out of System32. A box
-# that can BUILD this software is structurally incapable of noticing their
-# absence, which is why nothing caught it until the import table was read.
+# This script used to copy vcruntime140.dll and vcruntime140_1.dll app-local out
+# of the Visual Studio redistributable directory. Doing that made us a
+# redistributor of Microsoft's Distributable Code, which carries a term an
+# Apache-2.0 LICENSE file does not satisfy: the distributor must require end
+# users to AGREE to protective terms, which is a click-through, not a file on
+# disk. Not shipping the files removes the obligation instead of documenting it.
 #
-# EXACTLY TWO FILES, and the second is the reason to take the whole import
-# CLOSURE rather than a sample: `vcruntime140_1.dll` (the C++ exception-handling
-# runtime) is pulled by **cairo-2.dll alone** -- not by scribobulate.exe. Staging
-# only what our own executable imports yields an installer that starts and then
-# dies the moment cairo loads. MEASURED over all 36 staged binaries: those two,
-# and no msvcp140/concrt140/mfc/vcomp import anywhere in the tree.
+# The dependency has NOT gone away -- it moved to the machine's own copy.
+# MEASURED with dumpbin /dependents over all 38 staged binaries: 37 import
+# vcruntime140.dll (everything except the CRT DLL that imports the other one),
+# vcruntime140_1.dll is imported by cairo-2.dll ALONE, and no msvcp140,
+# concrt140, mfc, vcomp or vccorlib is imported anywhere in the tree. So removing
+# exactly these two files is sufficient; nothing else drags a CRT DLL in.
 #
-# THE UCRT IS NOT STAGED, DELIBERATELY. The `api-ms-win-crt-*` names in the
-# import tables are API SET CONTRACTS, not files: the loader resolves them
-# through the API set schema, so a file-existence check on them answers "missing"
-# while the dependency resolves perfectly. MEASURED at runtime -- not one
-# `api-ms-win-crt-*.dll` is loaded; every contract collapses to `ucrtbase.dll`,
-# an OS component since Windows 10 RTM.
+# scribobulate.iss now installs Microsoft's own redistributable when the machine
+# does not already carry it, so Microsoft's terms travel with Microsoft's code.
 #
-# TAKEN FROM THE REDIST DIRECTORY, NOT System32. System32's copy is the
-# operating system's; app-local deployment is licensed from the Visual Studio
-# redistributable directory, and copying the OS's file is a different act with
-# different terms.
-#
-# The path is DISCOVERED, never hardcoded: the version directory differs per
-# machine and per VS update. `vswhere.exe` is at a fixed location on every
-# machine with VS 2017 or later.
+# A DEVELOPER BOX CANNOT NOTICE IF THIS IS WRONG. Every machine that can build
+# this software already has the runtime, so the app starts either way and the
+# green tells you nothing -- see packaging/windows/README.md for what an honest
+# verification of this requires.
 # ---------------------------------------------------------------------------
-$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-if (-not (Test-Path $vswhere)) {
-    throw "vswhere.exe not found at $vswhere -- cannot locate the MSVC redistributable. " +
-          "Visual Studio 2017 or later (or Build Tools) is required to stage a turn-key installer."
-}
-$vsRoot = & $vswhere -latest -products * -property installationPath
-if (-not $vsRoot) { throw "vswhere reported no Visual Studio installation." }
-
-# The redist package version, read from the file the VC toolset maintains for it.
-# NOTE: this is the PACKAGE version and does NOT equal the DLLs' own FileVersion
-# (observed 14.44.35112 for the directory against 14.44.35211.0 in the files).
-# Do not derive one from the other, and do not assert they match.
-$redistVerFile = Join-Path $vsRoot 'VC\Auxiliary\Build\Microsoft.VCRedistVersion.default.txt'
-if (-not (Test-Path $redistVerFile)) { throw "VC redist version file not found at $redistVerFile" }
-$redistVer = (Get-Content $redistVerFile -Raw).Trim()
-$redistX64 = Join-Path $vsRoot "VC\Redist\MSVC\$redistVer\x64"
-if (-not (Test-Path $redistX64)) { throw "MSVC redistributable not found at $redistX64" }
-
-# THE TOOLSET DIRECTORY IS DISCOVERED TOO, and this is the half I got wrong first.
-# Having correctly refused to hardcode the VERSION directory, I then hardcoded
-# `Microsoft.VC143.CRT` -- the v143 toolset, which is Visual Studio 2022's. CI runs
-# VS 18 Enterprise with redist 14.51.36231 and a different toolset directory, so
-# staging threw on the runner while working perfectly on a 2022 box. Discovering
-# one path component and pinning its sibling is not "mostly discovered"; the
-# hardcoded half decides whether it works.
-#
-# Selected by CONTENT rather than by name: the directory that actually holds the
-# runtime is the one we want, whatever Microsoft calls the toolset this year.
-$crtDir = Get-ChildItem -Path $redistX64 -Directory -Filter 'Microsoft.VC*.CRT' |
-          Where-Object { Test-Path (Join-Path $_.FullName 'vcruntime140.dll') } |
-          Sort-Object Name -Descending |
-          Select-Object -First 1 -ExpandProperty FullName
-if (-not $crtDir) {
-    $saw = (Get-ChildItem -Path $redistX64 -Directory | Select-Object -ExpandProperty Name) -join ', '
-    throw "No Microsoft.VC*.CRT directory containing vcruntime140.dll under $redistX64 (saw: $saw)"
-}
-
-# Announced, because the resolved directory and the file versions are the two
-# facts a future reader will want and neither is guessable from this source.
-Write-Host "MSVC runtime from $crtDir"
-foreach ($crt in @('vcruntime140.dll', 'vcruntime140_1.dll')) {
-    $src = Join-Path $crtDir $crt
-    if (-not (Test-Path $src)) { throw "Missing $crt in $crtDir" }
-    Copy-Item $src "$OutDir\bin\"
-    $v = (Get-Item $src).VersionInfo.FileVersion
-    Write-Host "  $crt  $v"
-}
 
 # GLib's helper executables. These are NOT optional tooling -- gdbus.exe is a
 # load-bearing part of single-instance behaviour on Windows, and omitting it
@@ -324,11 +269,12 @@ foreach ($n in $notices) {
 # reader knowing that GLib's text happens to be called LGPL-2.1-or-later.txt.
 #
 # ROWS WITH NO TEXT ARE REPORTED, NOT SKIPPED SILENTLY, and deliberately do NOT
-# throw: msvc-runtime has no terms file anywhere by design (they live online, in
-# the Visual Studio licence), and that row is pending deletion under the operator's
-# bootstrap ruling. Throwing here would make this script fail on a condition the
-# gate already reports precisely, and would block staging on a decision that has
-# nothing to do with staging. The gate's condition 3 stays the hard failure.
+# throw. No row is in that state today -- msvc-runtime was the last one, and it
+# was deleted rather than closed when the runtime stopped shipping -- so this path
+# is dormant rather than dead: the next component whose terms exist only online
+# lands here. Throwing would make this script fail on a condition the gate already
+# reports precisely, and would block staging on a decision that has nothing to do
+# with staging. The gate's condition 3 stays the hard failure.
 # ---------------------------------------------------------------------------
 $manifest = Import-PowerShellDataFile -LiteralPath "$PSScriptRoot\licenses.psd1"
 $noText   = @()

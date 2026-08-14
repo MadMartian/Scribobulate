@@ -241,17 +241,26 @@ reading:
   the prefix's file would not under-attribute, it would state that a component
   we ship is under GPL-3.0 when it is not.
 
-## Still missing, deliberately
+## Nothing is missing any more, and the last gap closed by deletion
 
-- **`msvc-runtime`** — the redistributable directory contains no terms file at
-  all (measured: only `vc_redist.x64.exe` and `vc_redist.x86.exe`), because the
-  terms live in the Visual Studio licence. **This row may be deleted rather than
-  filled**: not shipping `vcruntime140*.dll` at all, and having the installer
-  invoke Microsoft's own redistributable, removes the obligation instead of
-  documenting it. That is not a packaging call — `scribobulate.iss` sets
-  `PrivilegesRequired=lowest`, so the alternative costs either an admin prompt or
-  the no-admin property itself. Left red pending that decision, not pending
-  effort.
+**`msvc-runtime` was the final red row and it was never closable by finding a
+better document.** The redistributable directory contains no terms file at all
+(measured: only `vc_redist.x64.exe` and `vc_redist.x86.exe`), because the terms
+live in the Visual Studio licence — and that licence requires the *distributor*
+to make end users **agree** to protective terms. That is a click-through, not a
+file on disk, so no text vendored here could ever have satisfied it. A row
+waiting for the right document was waiting for a document that does not exist.
+
+**So the files stopped shipping.** `stage.ps1` no longer copies
+`vcruntime140.dll` or `vcruntime140_1.dll`; `scribobulate.iss` installs
+Microsoft's own redistributable when the machine lacks it, and Microsoft's terms
+travel with Microsoft's code. Operator's ruling, 2026-08-14, with the elevation
+cost accepted knowingly.
+
+The row is **deleted rather than closed**, because there is now nothing to
+attribute — and the gate makes the half-done version of that change impossible in
+both directions: dropping the row while still staging the DLLs fails condition 1,
+dropping the DLLs while keeping the row fails condition 2.
 
 ## Two of these were fetched from the build tree, not downloaded
 

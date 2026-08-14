@@ -78,6 +78,34 @@ function Find-Iscc {
     return $null
 }
 
+# Locate Microsoft's C++ redistributable installer. MOVED HERE FROM stage.ps1, which
+# used to copy vcruntime140.dll app-local out of this same directory -- doing that made
+# us a redistributor of Microsoft's Distributable Code. The installer now ships
+# Microsoft's own redistributable instead, so the discovery belongs to the packaging
+# step rather than the staging step, and the staged tree contains no CRT at all.
+#
+# Every path component is DISCOVERED. The version directory differs per machine and per
+# VS update, and the toolset directory differs per Visual Studio generation -- CI runs
+# VS 18 Enterprise, a developer box runs VS 2022 Community. stage.ps1 records what
+# hardcoding one component while discovering another already cost once.
+function Find-VCRedist {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path $vswhere)) {
+        throw "vswhere.exe not found at $vswhere -- cannot locate the MSVC redistributable. " +
+              "Visual Studio 2017 or later (or Build Tools) is required to build the installer."
+    }
+    $vsRoot = & $vswhere -latest -products * -property installationPath
+    if (-not $vsRoot) { throw "vswhere reported no Visual Studio installation." }
+
+    $verFile = Join-Path $vsRoot 'VC\Auxiliary\Build\Microsoft.VCRedistVersion.default.txt'
+    if (-not (Test-Path $verFile)) { throw "VC redist version file not found at $verFile" }
+    $ver = (Get-Content $verFile -Raw).Trim()
+
+    $exe = Join-Path $vsRoot "VC\Redist\MSVC\$ver\vc_redist.x64.exe"
+    if (-not (Test-Path $exe)) { throw "vc_redist.x64.exe not found at $exe" }
+    return $exe
+}
+
 Push-Location $repo
 try {
     Write-Host "staging to $StageDir" -ForegroundColor Cyan
@@ -120,7 +148,14 @@ The staged tree at $StageDir is complete; only the installer step is missing.
     # `#ifndef StageDir / #error`, so an ISCC invocation without it builds NO installer
     # rather than a wrong one. Do not "helpfully" default it -- that property is the whole
     # protection against shipping an installer assembled from somewhere unintended.
-    & $iscc "/DStageDir=$StageDir" "$PSScriptRoot\scribobulate.iss"
+    # Announced for the same reason stage.ps1 announced the toolset directory: the
+    # resolved path and the file version are the two facts a future reader wants, and
+    # neither is guessable from this source.
+    $redist = Find-VCRedist
+    Write-Host "MSVC redistributable: $redist" -ForegroundColor DarkGray
+    Write-Host ("  vc_redist.x64.exe  {0}" -f (Get-Item $redist).VersionInfo.FileVersion) -ForegroundColor DarkGray
+
+    & $iscc "/DStageDir=$StageDir" "/DRedistFile=$redist" "$PSScriptRoot\scribobulate.iss"
     if ($LASTEXITCODE -ne 0) { throw "FAILED: build the installer (exit $LASTEXITCODE)" }
 
     Write-Host 'installer built.' -ForegroundColor Green
