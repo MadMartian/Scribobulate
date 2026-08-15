@@ -181,12 +181,36 @@
             # icon-theme-cache both claim share\icons\Adwaita\icon-theme.cache, and
             # the file is then attributed twice under two different licences, with
             # which one a reader believes decided by table order. The gate caught it.
+            # ELECTED CC-BY-SA-3.0. Upstream's own COPYING offers this artwork under
+            # "either the GNU LGPL v3 or Creative Commons Attribution-Share Alike 3.0".
+            # CC-BY-SA is elected: it is the licence written for artwork, and it carries
+            # NO source-code obligation, where LGPL-3.0 would drag a source-publication
+            # duty onto a set of SVGs. The prefix installs only COPYING_CCBYSA3, so the
+            # election was already being made BY ACCIDENT -- which is precisely what the
+            # FreeType ruling forbids. It is now made on purpose and recorded.
+            #
+            # SECOND SOURCE IS THE §4(c) CREDIT, and upstream supplies the wording:
+            # its COPYING says "When attributing the artwork, using 'GNOME Project' is
+            # enough. Please link to http://www.gnome.org where available." That is the
+            # rights-holder's own statement of what satisfies attribution, so CREDITS.txt
+            # quotes it rather than inventing a credit line the way the GtkSourceView
+            # icon row had to (no such statement exists upstream for those).
+            #
+            # §4(a) is satisfied by the URI: CC-BY-SA-3.0 requires "a copy of, or the
+            # Uniform Resource Identifier for, this License", and COPYING_CCBYSA3 carries
+            # the URI. The full text ships anyway under the gtksourceview-icons row.
             Match     = '^share\\icons\\Adwaita\\(?!icon-theme\.cache$)'
-            License   = 'CC-BY-SA-3.0 OR LGPL-3.0-or-later'
-            Source    = 'prefix:share\doc\adwaita-icon-theme\COPYING_CCBYSA3'
-            Expect    = 'Attribution-Share Alike 3.0'
+            License   = 'CC-BY-SA-3.0'
+            Source    = @(
+                'prefix:share\doc\adwaita-icon-theme\COPYING_CCBYSA3',
+                'repo:packaging\windows\licenses\adwaita-icon-theme\CREDITS.txt'
+            )
+            Expect    = @(
+                'Attribution-Share Alike 3.0',
+                'GNOME Project'
+            )
             Evidence  = 'M'
-            Basis     = 'Staged from share\icons\Adwaita of the prefix that also ships this COPYING_CCBYSA3.'
+            Basis     = 'Staged from share\icons\Adwaita of the prefix that also ships this COPYING_CCBYSA3. Licence ELECTED from the dual offer in the adwaita-icon-theme 50.0 source tree''s COPYING, read there rather than inferred from which text the prefix happened to install.'
         },
         @{
             Id        = 'hicolor-icon-theme'
@@ -244,7 +268,7 @@
             # the tree and are covered by nothing else here.
             Id        = 'librsvg-rust'
             Component = 'librsvg (statically linked Rust crates)'
-            Match     = '^share\\licenses\\librsvg\\THIRD-PARTY-RUST-NOTICES\.txt$'
+            Match     = '^share\\licenses\\librsvg-rust\\THIRD-PARTY-RUST-NOTICES\.txt$'
             License   = 'MIT AND Apache-2.0 AND MPL-2.0 AND Unicode-3.0 AND BSD-3-Clause'
             Source    = 'repo:packaging\windows\licenses\librsvg\THIRD-PARTY-RUST-NOTICES.txt'
             Expect    = 'THIRD-PARTY RUST NOTICES for librsvg'
@@ -255,26 +279,34 @@
         # -- the rendering and text stack ------------------------------------
 
         @{
-            # THREE Sources and three Expects. The prefix's COPYING is cairo's own
-            # summary of its dual licensing and names two texts the prefix does not
-            # contain; vendoring the summary alone would ship a document that points
-            # at nothing. Both texts ship, so no election is made on cairo's behalf.
+            # ELECTED LGPL-2.1-only. Upstream's COPYING offers every file in src/ --
+            # which is the whole of what cairo-2.dll is built from, stated there in
+            # those words -- under EITHER LGPL-2.1 OR MPL-1.1, so the choice is the
+            # redistributor's and not making it is the failure mode (the FreeType
+            # ruling). LGPL-2.1 is elected because every other copyleft component in
+            # this installer is LGPL-2.0/2.1: one regime, one §6(b) DLL-replaceability
+            # argument, one §4 source-publication process. Electing MPL-1.1 would add
+            # a second compliance mechanism for exactly one DLL and buy nothing.
+            #
+            # COPYING-MPL-1.1 IS DELIBERATELY NO LONGER VENDORED. Shipping both texts
+            # states we redistribute under either, which is the ambiguity the election
+            # exists to remove. Upstream's COPYING still ships and still describes the
+            # dual offer -- that is a true statement about cairo, and our election is
+            # recorded beside it in PROVENANCE.md.
             Id        = 'cairo'
             Component = 'cairo'
             Match     = '^bin\\cairo(-gobject-2|-script-interpreter-2|-2)\.dll$'
-            License   = 'LGPL-2.1-only OR MPL-1.1'
+            License   = 'LGPL-2.1-only'
             Source    = @(
                 'repo:packaging\windows\licenses\cairo\COPYING',
-                'repo:packaging\windows\licenses\cairo\COPYING-LGPL-2.1',
-                'repo:packaging\windows\licenses\cairo\COPYING-MPL-1.1'
+                'repo:packaging\windows\licenses\cairo\COPYING-LGPL-2.1'
             )
             Expect    = @(
                 'Cairo is free software',
-                'GNU LESSER GENERAL PUBLIC LICENSE',
-                'Mozilla Public License Version 1.1'
+                'GNU LESSER GENERAL PUBLIC LICENSE'
             )
             Evidence  = 'I'
-            Basis     = 'Mapped by the cairo pkg-config module, version 1.18.4. See packaging\windows\licenses\PROVENANCE.md.'
+            Basis     = 'Mapped by the cairo pkg-config module, version 1.18.4. Licence ELECTED from upstream COPYING''s dual offer, not read off a single vendored text. See packaging\windows\licenses\PROVENANCE.md.'
         },
         @{
             Id        = 'freetype'
@@ -454,6 +486,28 @@
             Expect    = 'GNU LESSER GENERAL PUBLIC LICENSE'
             Evidence  = 'M'
             Basis     = 'VersionInfo ProductName reads "GNU libintl: accessing NLS message catalogs"; the prefix''s gettext COPYING is GPL-3.0, measured from its first two lines.'
+        },
+
+        # -- the licence texts themselves ------------------------------------
+
+        @{
+            # The staged licence texts are staged files too, so the two-way gate
+            # demands a row for them. ONE row, not thirty: they are covered by the
+            # rows they are the text FOR, and a per-component row here would be a
+            # second table of the same thirty components, drifting independently.
+            #
+            # librsvg-rust is carved out because it already has its own row -- its
+            # notice is the only staged file that row can claim, there being no
+            # binary of its own to match. Two rows matching one file fails the
+            # gate's "no staged file may match two rows" rule.
+            Id        = 'licence-texts'
+            Component = 'Licence texts for the components above'
+            Match     = '^share\\licenses\\(?!librsvg-rust\\)'
+            License   = 'NOASSERTION'
+            Source    = 'repo:packaging\windows\licenses\PROVENANCE.md'
+            Expect    = 'Provenance of the vendored licence texts'
+            Evidence  = 'M'
+            Basis     = 'Staged by stage.ps1 directly from the Source field of every row in this file; the directory name under share\licenses is the row Id.'
         },
 
         # -- the Microsoft runtime -------------------------------------------

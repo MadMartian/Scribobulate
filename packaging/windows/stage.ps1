@@ -286,20 +286,82 @@ Copy-Item "$RepoRoot\data\themes.toml" "$OutDir\share\scribobulate\"
 # short tree makes a downstream gate the only thing standing between us and
 # shipping it, which is one process change away from nothing at all.
 # ---------------------------------------------------------------------------
-New-Item -ItemType Directory -Force -Path "$OutDir\share\licenses\librsvg" | Out-Null
-
+# The librsvg Rust notice USED TO BE COPIED HERE BY HAND. It no longer is: it is
+# an ordinary row in licenses.psd1, so the manifest-driven block below stages it
+# like every other licence text, to share\licenses\librsvg-rust\. Copying it here
+# as well would put 219 KB of identical bytes in two directories and give the
+# reader two places to believe are authoritative.
 $notices = @(
     @{ From = "$RepoRoot\LICENSE"
        To   = "$OutDir\LICENSE" }
     @{ From = "$RepoRoot\THIRD-PARTY-LICENSES.md"
        To   = "$OutDir\THIRD-PARTY-LICENSES.md" }
-    @{ From = "$RepoRoot\packaging\windows\licenses\librsvg\THIRD-PARTY-RUST-NOTICES.txt"
-       To   = "$OutDir\share\licenses\librsvg\THIRD-PARTY-RUST-NOTICES.txt" }
 )
 foreach ($n in $notices) {
     if (-not (Test-Path $n.From)) { throw "Licence text not found at $($n.From)" }
     Copy-Item $n.From $n.To
 }
+
+# ---------------------------------------------------------------------------
+# EVERY COMPONENT'S LICENCE TEXT, staged from the manifest.
+#
+# THIS IS THE HALF THAT WAS MISSING, and licenses.psd1 said so in its own opening
+# line: "the installer currently ships not one line of their licence text". The
+# table names, for all 34 components, where each licence text COMES FROM -- and
+# nothing ever copied them anywhere. verify-licenses.ps1 reads those Sources off
+# the BUILD MACHINE, from the repo and the GTK prefix, so all four of its
+# conditions could pass while the installed product carried no LGPL text at all.
+# Exactly the defect recorded above for LICENSE and THIRD-PARTY-LICENSES.md --
+# an obligation that reads as discharged because a gate is green -- one layer out.
+#
+# DRIVEN BY THE MANIFEST, NOT BY A SECOND LIST. A hand-kept list of files to copy
+# would be a fourth restatement of the table and would drift from it on the first
+# dependency change, silently, because both would still read plausibly. The rows
+# are the single source of truth: add a component there and its text ships here.
+#
+# One text per component directory, named by row Id rather than by upstream
+# filename, so `share\licenses\glib\` answers "what covers GLib" without the
+# reader knowing that GLib's text happens to be called LGPL-2.1-or-later.txt.
+#
+# ROWS WITH NO TEXT ARE REPORTED, NOT SKIPPED SILENTLY, and deliberately do NOT
+# throw: msvc-runtime has no terms file anywhere by design (they live online, in
+# the Visual Studio licence), and that row is pending deletion under the operator's
+# bootstrap ruling. Throwing here would make this script fail on a condition the
+# gate already reports precisely, and would block staging on a decision that has
+# nothing to do with staging. The gate's condition 3 stays the hard failure.
+# ---------------------------------------------------------------------------
+$manifest = Import-PowerShellDataFile -LiteralPath "$PSScriptRoot\licenses.psd1"
+$noText   = @()
+$staged   = 0
+
+foreach ($row in $manifest.Rows) {
+    if (-not $row.Source) { continue }
+    foreach ($src in @($row.Source)) {
+        # Same resolution as verify-licenses.ps1's New-SourceReader. A scheme it
+        # would reject is a typo in the table, so it throws here too rather than
+        # quietly staging nothing.
+        if ($src -like 'prefix:*') {
+            $from = Join-Path $GtkPrefix $src.Substring(7)
+        } elseif ($src -like 'repo:*') {
+            $from = Join-Path $RepoRoot  $src.Substring(5)
+        } else {
+            throw "Row '$($row.Id)' Source must start with 'prefix:' or 'repo:', got: $src"
+        }
+
+        if (-not (Test-Path -LiteralPath $from -PathType Leaf)) {
+            $noText += "$($row.Id) -> $src"
+            continue
+        }
+
+        $destDir = Join-Path "$OutDir\share\licenses" $row.Id
+        New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+        Copy-Item -LiteralPath $from -Destination (Join-Path $destDir (Split-Path $from -Leaf))
+        $staged++
+    }
+}
+
+Write-Host "Staged $staged licence texts for $($manifest.Rows.Count) components"
+foreach ($m in $noText) { Write-Warning "no licence text on disk: $m" }
 
 $files = Get-ChildItem $OutDir -Recurse -File
 $size  = ($files | Measure-Object Length -Sum).Sum

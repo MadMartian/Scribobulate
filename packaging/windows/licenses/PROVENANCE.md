@@ -18,6 +18,13 @@ that name; the source tree is the bytes the shipped DLL was built from. Both wer
 checked to agree — `bin/freetype-6.dll` reports FileVersion **2.14.3** and
 `include/freetype/freetype.h` in that tree defines MAJOR 2, MINOR 14, PATCH 3.
 
+**This file records the licence *texts* we ship. It does not record the *source*
+some of those licences additionally oblige us to publish** — that is
+`SOURCE-AVAILABILITY.md`, beside this one, and it is a release-process duty no
+staging step and no condition of `verify-licenses.ps1` can discharge or observe.
+Two dual-licence elections it raises, cairo's and adwaita-icon-theme's, are
+unmade and belong here once ruled, the way FreeType's was.
+
 ## Why this file exists at all
 
 Four of the first nine fetches returned **HTTP 200 with a body that was not the
@@ -37,9 +44,8 @@ once.
 
 | File | SHA-256 | Bytes | Source |
 |---|---|---|---|
-| `cairo/COPYING` | `67228A9F…55ABDF` | 1,576 | Copied from the staged GTK prefix, `share/doc/cairo/COPYING`, cairo 1.18.4. This is cairo's own summary of its dual licensing; it is **not** a licence, which is why the two texts below ship with it. |
+| `cairo/COPYING` | `67228A9F…55ABDF` | 1,576 | Copied from the staged GTK prefix, `share/doc/cairo/COPYING`, cairo 1.18.4. This is cairo's own summary of its dual licensing; it is **not** a licence, which is why the elected text below ships with it. |
 | `cairo/COPYING-LGPL-2.1` | `5749785C…EF81D2` | 26,001 | SPDX license-list-data, `text/LGPL-2.1-only.txt`. |
-| `cairo/COPYING-MPL-1.1` | `6214F8B1…4A8795` | 23,669 | SPDX license-list-data, `text/MPL-1.1.txt`. |
 | `freetype/FTL.TXT` | `5A5EE54C…02967F` | 6,743 | `docs/FTL.TXT` from the FreeType **source tree gvsbuild built**, `C:\gtk-build\build\x64\release\freetype`. Not fetched — see below. |
 | `freetype/LICENSE.TXT` | `BD36C8B4…FD2D3B` | 2,149 | Root `LICENSE.TXT` from the same source tree. Discloses the sub-licences; not a duplicate of the FTL. |
 | `gettext/COPYING.LIB` | `5749785C…EF81D2` | 26,001 | SPDX license-list-data, `text/LGPL-2.1-only.txt` — the same document as cairo's, hence the same hash. |
@@ -50,8 +56,173 @@ once.
 | `libxml2/Copyright` | `5D487388…217626` | 1,314 | `github.com/GNOME/libxml2` (the mirror), tag `v2.15.3`. `gitlab.gnome.org` answered 406 to a plain request. |
 | `pcre2/LICENCE.md` | `197D8A73…10D811` | 4,011 | `github.com/PCRE2Project/pcre2`, tag `pcre2-10.47`. |
 
-`gtksourceview-icons/CREDITS.txt` is authored here, not fetched: CC BY-SA 3.0
-§4(c) wants an attribution, and there is no upstream file to copy one from.
+Two `CREDITS.txt` files are authored here, not fetched, because CC BY-SA 3.0 §4(c)
+wants an attribution and a licence text is not one. **They rest on different
+footing, and the difference is worth keeping:**
+`gtksourceview-icons/CREDITS.txt` had to be **reconstructed** — author and title
+were recovered from git history, upstream saying nothing about how it wants to be
+credited. `adwaita-icon-theme/CREDITS.txt` is **quoted** — upstream's own `COPYING`
+states *"When attributing the artwork, using 'GNOME Project' is enough. Please link
+to http://www.gnome.org where available."* A credit the rights-holder specifies
+beats one we compose, so that file quotes rather than paraphrases it.
+
+## The two licence ELECTIONS, ruled and recorded
+
+Both were dual offers sitting in exactly the state the FreeType row was ruled out
+of — where **whichever text happens to be present decides the question by
+accident**. Each is now a choice, made here rather than implied by the tree.
+
+| Component | Offer, read from upstream's own file | **Elected** | Why |
+|---|---|---|---|
+| **cairo 1.18.4** | `COPYING`: every file in `src/` — the whole of what `cairo-2.dll` is built from — under **either** LGPL-2.1 **or** MPL-1.1 | **`LGPL-2.1-only`** | Every other copyleft component in this installer is LGPL-2.0/2.1. One regime: one §6(b) DLL-replaceability argument, one §4 source-publication process. MPL-1.1 would add a second compliance mechanism for exactly one DLL and buy nothing. |
+| **adwaita-icon-theme 50.0** | `COPYING`: *"either the GNU LGPL v3 or Creative Commons Attribution-Share Alike 3.0"* | **`CC-BY-SA-3.0`** | The licence written for artwork, and it carries **no source-code obligation** where LGPL-3.0 would drag a source-publication duty onto a set of SVGs. Icons ship unmodified, so no Adaptation is created and ShareAlike §4(b) is not engaged. |
+
+**`cairo/COPYING-MPL-1.1` was deliberately REMOVED**, not merely unused: shipping
+both texts states we redistribute under either, which is the ambiguity the election
+exists to remove. Upstream's `COPYING` still ships and still describes the dual
+offer — a true statement about cairo — with our election recorded here beside it.
+
+**The adwaita election was already being made, by accident, and that is why it
+needed ruling.** The GTK prefix installs only `COPYING_CCBYSA3` (measured: the sole
+file in `share/doc/adwaita-icon-theme/`), so the row cited it and that was the only
+text that shipped. The outcome happens to be the one we would have chosen; it was
+still not chosen. Read from the 50.0 source tree's `COPYING`, not from which file
+the prefix happened to install.
+
+## These texts now SHIP — they did not before
+
+`licenses.psd1` opens by observing that *"the installer currently ships not one line
+of their licence text"*, and that stayed true through all the vendoring recorded
+above. This file's `Source` column says where each text **comes from**; nothing
+copied it anywhere. `verify-licenses.ps1` reads those paths off the **build
+machine**, so every condition could pass while the installed product carried no LGPL
+text at all — a gate green about the build tree and silent about the artefact.
+
+`stage.ps1` now stages every row's text to `share\licenses\<row Id>\`, driven by
+this manifest rather than by a second list, so adding a component here ships its
+text with no separate step to forget. **Measured after the change: 902 staged files,
+35 rows, 38 licence texts across 34 component directories, gate down to its one
+deliberate red row (`msvc-runtime`).**
+
+**The premise above is MEASURED, not argued — and the control is the valuable half.**
+The `windows` seat ran the gate on the commit *before* this change and got the
+identical verdict:
+
+| | staged files | rows | gate verdict |
+|---|---|---|---|
+| before (`26ea7d9`) | 865 | 34 | 1 problem — `msvc-runtime`, conditions 1/2/4 clean |
+| after | 902 | 35 | 1 problem — `msvc-runtime`, conditions 1/2/4 clean |
+
+**Adding 37 licence texts to the artefact did not move the gate's answer by one
+character.** That is the proof that it never read the staged tree for them: had it
+been checking what shipped, the before-run could not have been clean. So
+`licenses.psd1`'s opening claim is no longer an assertion anyone has to take on
+trust — it is a measurement taken from both sides of the change, on two boxes. An
+asserted premise and a measured one carry different weight with a lawyer.
+
+### A GREEN GATE ON A DEVELOPER BOX DOES NOT CERTIFY THE SHIPPED INSTALLER
+
+**Read this before quoting a gate result as evidence about the product.** The gate
+resolves every `prefix:` Source against the **local** GTK prefix. A developer box
+runs gvsbuild **2026.6.0**; CI pins **2026.8.0** and downloads the prebuilt zip. So
+a pass here is evidence about *2026.6.0's licence texts*, not about the ones the
+installer carries.
+
+That is not hypothetical for these rows. Three components differ across those
+recipes — **GLib 2.88.1 → 2.88.3**, gdk-pixbuf 2.44.6 → 2.44.7, Pango 1.57.1 →
+1.58.0 — and **GLib and gettext are LGPL rows**, precisely the ones the §4 source
+duty in `SOURCE-AVAILABILITY.md` turns on.
+
+**CLOSED — the gate has now been run against the shipped artefact.**
+`GTK4_Gvsbuild_2026.8.0_x64.zip` (300,885,620 bytes) was downloaded from the URL
+`pipeline.yml` uses, unpacked to its own prefix, staged from with
+`stage.ps1 -GtkPrefix`, and gated with `verify-licenses.ps1 -GtkPrefix`:
+
+| | staged files | rows | verdict |
+|---|---|---|---|
+| dev prefix, 2026.6.0 | 902 | 35 | 1 problem — `msvc-runtime` |
+| **shipped prefix, 2026.8.0** | **903** | **35** | **1 problem — `msvc-runtime`** |
+
+Conditions 1, 2 and 4 clean **against the GTK that actually ships**. The table
+covers the shipped tree, not merely a same-named lookalike.
+
+**The one-file difference is real and was chased rather than rounded off.**
+2026.8.0 stages one extra file — `share\icons\Adwaita\symbolic\places\folder-drag-accept-symbolic.svg`
+— an icon upstream added. It matched the `adwaita-icon-theme` row's pattern and so
+raised no condition-1 row, which is the exhaustive table doing exactly what it is
+for: a new upstream file was attributed automatically, and had it landed somewhere
+unclaimed the gate would have said so.
+
+### The shipped binaries are much larger than the dev box's — CAUSE OPEN, and an earlier version of this section wrongly called it settled
+
+> **RETRACTION, and the reasoning is the useful part.** This section first concluded
+> *"a release build that retains debug information, not `debugoptimized`"*. That
+> conclusion was **not supported by the evidence given for it**, and the `windows`
+> seat took it apart on three grounds, all of which hold:
+>
+> 1. **`VCRUNTIME140.dll` vs `...140D.dll` is the CRT axis, not the meson buildtype
+>    axis.** meson `debugoptimized` is `-O2 -g` against the **release** CRT, so both
+>    configurations import `VCRUNTIME140.dll`. The test ruled out a debug-CRT build,
+>    which nobody had proposed.
+> 2. **The `\release\` in the embedded PDB path is the exact string ScrAP-279 warns is
+>    not evidence** — gvsbuild rewrites the config string to `release` for install
+>    pathing, so both configurations land there. It is the trap, not the discriminator.
+> 3. **"A release build that retains debug info" is the definition of
+>    `debugoptimized`** (`-O2 -g`). The sentence described the thing it claimed to
+>    rule out.
+>
+> Two non-discriminating observations were read as a settled negative. **The
+> buildtype question is OPEN**, and a wrong settled answer in this file costs more
+> than an honest open one, because this file is read by people deciding what to trust.
+
+**Measured**: staged 43.0 MB → 79.0 MB; `rsvg-2-2.dll` **5,277,184 → 32,069,120
+bytes, a factor of six**, with `harfbuzz-subset`, `fontconfig-1`, `harfbuzz`,
+`gio-2.0-0`, `gtk-4-1`, `cairo-2` and `gtksourceview-5-0` all larger. **Cause not
+established.**
+
+#### What WAS settled, by the test that actually discriminates
+
+The reason this mattered beyond provenance is that `debugoptimized` vs `release`
+can change **assertion enforcement**, and if the shipped GTK enforced `g_assert`
+differently from the one we test against, every assertion-backed contract in GTK
+would behave differently for users than for whoever tested it. That is ScrAP-279's
+originating symptom. So it was tested, on both prefixes, by the paired-literal
+probe (`assertion failed: (` plus the stringified expression sitting beside its
+`G_STRFUNC` name in the string table):
+
+| `gtk-4-1.dll`, GTK **4.22.4 in both** (control) | `assertion` | `priv->is_realized` | `g_return_if_fail` | `should not be reached` |
+|---|---|---|---|---|
+| dev prefix, 2026.6.0 | 7 | 1 | 1 | 1 |
+| shipped prefix, 2026.8.0 | 8 | 2 | 1 | 1 |
+
+**Assertions are compiled IN on both.** Neither build is `-DG_DISABLE_ASSERT`, so
+the divergence that would have been serious is **not present** — measured on both
+sides, not inferred from one. That retires the correctness worry; it does **not**
+retire the buildtype question.
+
+**One residual, recorded rather than explained away:** at *identical* GTK 4.22.4 the
+shipped binary carries one assertion literal the dev one does not
+(`gsk_renderer_real_render` / `!priv->is_realized`). Same source, different surviving
+literals — consistent with different optimisation or inlining, and **not** evidence of
+a different assertion policy. Do not read one literal as a wholesale difference.
+
+**Still open, and needing the one test neither seat has run:** what buildtype
+gvsbuild's published zip is actually produced with. Nothing on disk answers it —
+that is ScrAP-279's whole point. The runtime oracle if it is ever worth settling:
+realize a `gsk::CairoRenderer`, `render_texture`, then drop it **still realized**;
+an assertion-enforcing build aborts at `gskrenderer.c:130`.
+
+**Licensing is unaffected either way** — version, licence and crate graph are
+unchanged, and the gate is clean on conditions 1/2/4 against the shipped tree. **But
+a size or hash taken from a locally built DLL is not a fact about the shipped one.**
+
+**Both of this section's corrections came from the `windows` seat**, and the second
+was a correction of the first correction's author. **Raised by the `windows` seat,
+against this document's own finding.** The version
+drift was recorded here first and its consequence for the gate was not — the note
+said the *versions* were measured on the wrong build and stopped there, without
+asking what else read from that prefix. A finding is not finished when it is
+written down; it is finished when everything it implicates has been re-read.
 
 ## Three of these replace a text the GTK prefix already ships
 

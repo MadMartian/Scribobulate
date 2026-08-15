@@ -309,9 +309,20 @@ if ($SelfTest) {
                 Write-Host "   FAIL: row '$($r.Id)' has Evidence '$($r.Evidence)', expected M or I" -ForegroundColor Red
                 $bad++
             }
-            if ($r.Source -notlike 'prefix:*' -and $r.Source -notlike 'repo:*') {
-                Write-Host "   FAIL: row '$($r.Id)' Source '$($r.Source)' has no prefix:/repo: scheme" -ForegroundColor Red
-                $bad++
+            # PER ELEMENT, and the -and form this replaced was wrong on any row
+            # mixing the two schemes. `-like` against an ARRAY is a filter, not a
+            # predicate: it returns the matching elements, and a non-empty result
+            # is truthy. For a uniform array one side came back empty and the -and
+            # was false, so cairo and freetype passed by arithmetic rather than by
+            # being checked. The first row to carry BOTH a prefix: and a repo:
+            # Source made each side non-empty and failed a correct table, naming
+            # the whole array joined by spaces as though it were one malformed
+            # value. Iterating is what the check meant in the first place.
+            foreach ($s in @($r.Source)) {
+                if ($s -notlike 'prefix:*' -and $s -notlike 'repo:*') {
+                    Write-Host "   FAIL: row '$($r.Id)' Source '$s' has no prefix:/repo: scheme" -ForegroundColor Red
+                    $bad++
+                }
             }
             try { [void][regex]::new($r.Match) } catch {
                 Write-Host "   FAIL: row '$($r.Id)' Match is not a valid regex: $($r.Match)" -ForegroundColor Red
@@ -337,7 +348,29 @@ if (-not (Test-Path -LiteralPath $StageDir)) {
 }
 
 $rows   = Import-LicenseTable -Path (Join-Path $PSScriptRoot 'licenses.psd1')
-$root   = (Resolve-Path -LiteralPath $StageDir).Path
+
+# BOTH SIDES OF THE Substring MUST COME FROM THE SAME API. This was
+# `(Resolve-Path).Path`, and `Resolve-Path` PRESERVES an 8.3 short name where
+# `Get-ChildItem`'s FullName EXPANDS it. Measured, on two boxes and two paths:
+# Resolve-Path 'C:\PROGRA~2' -> 'C:\PROGRA~2' (11), Get-Item -> 'C:\Program
+# Files (x86)' (22). The lengths then disagree, Substring($root.Length + 1) eats
+# that many characters into every relative path, and the gate reports every
+# staged file as belonging to no row.
+#
+# IT FAILS IN THE EXPENSIVE DIRECTION: not a throw, not a false PASS, but a
+# self-consistent wrong answer that INDICTS A CORRECT TABLE -- 865 fabricated
+# condition-1 rows sending the reader to hunt in licenses.psd1. Reproduced on the
+# Windows seat via a %TEMP% StageDir, which is short-form by default on any
+# profile whose user name contains a space; a CI runner or an operator passing
+# $env:TEMP hits it. INVISIBLE TO THE LINUX AND MAC SEATS -- 8.3 aliasing is
+# Win32-only, so green over there is not evidence about this.
+#
+# SECOND INSTANCE OF A FAMILY THIS FILE ALREADY DOCUMENTS ABOUT ITSELF: the note
+# at the top of this script warns that $PSScriptRoot under -File "is not a
+# missing variable; it is a path that still looks like a path". Same failure,
+# same file, a different pair of APIs -- one member was caught and the other
+# shipped. Prefer one API for any two paths that will be compared or sliced.
+$root   = (Get-Item -LiteralPath $StageDir).FullName
 $staged = @(Get-ChildItem -LiteralPath $root -Recurse -File |
             ForEach-Object { $_.FullName.Substring($root.Length + 1) })
 

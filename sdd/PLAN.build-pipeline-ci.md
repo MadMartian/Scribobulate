@@ -193,9 +193,27 @@ CI and durability only. All were told to `git fetch && git reset --hard origin/c
 pull, because the squash left no common recent ancestor.
 
 **Register allocation is by conversation, not by reading the tail** — see POLICY § SDD register
-writes. `master` currently holds `ScrAP-283`, `ISSUES S` and `ISSUES T`; `ci` holds up to
-`ScrAP-282` and `ISSUES R`. **`master`'s registers look complete and are behind**; that misread
-happened three times this session.
+writes. `master` currently holds `ScrAP-283`, **`ScrAP-284`**, `ISSUES S` and `ISSUES T`; `ci`
+holds up to `ScrAP-282` and `ISSUES R`. **`master`'s registers look complete and are behind**;
+that misread happened three times this session.
+
+> **2026-08-14, later — `ScrAP-284` is TAKEN on `master`; do not allocate it from `ci`.** The
+> `linux-master` seat allocated it (drag-and-drop: per-platform advertise sets) and also extended
+> `ScrAP-283` and rescoped the drag-and-drop `ISSUES` entry. Now committed at `master ebcfdd4`,
+> with `sdd/scrap-numbers.manifest` ending `…283, 284` — verified from `ci`, not taken on report.
+> `ci`'s own manifest still ends at `282` and is correct for `ci`. The next `ScrAP` free for a
+> `ci` allocation is therefore **285**, and it must still be claimed by conversation, not by
+> reading either tail. Note `ebcfdd4` is **local to the master clone and unpushed**, so it is
+> reachable from this repository but not from `github`.
+>
+> **Why this note was written before that commit existed, which is the part worth keeping:** for
+> about forty minutes the allocation lived *only* in an uncommitted worktree and in a chat message
+> with a ~660s TTL. Every artefact reachable from `ci` — `git log master`, `master`'s manifest —
+> still said `283` was the high-water mark, so a `ci` seat doing the diligent thing would have
+> been handed `284` as free. **An allocation held only in a working tree is invisible to every
+> other seat until it commits**, so POLICY's "allocation is by conversation" is load-bearing for
+> longer than it looks, and the conversation can expire. That is the general hazard; the specific
+> `284` window is closed.
 
 ### Open, and none of it is blocked on a seat
 
@@ -452,6 +470,39 @@ That last point is a **release-process obligation, not a packaging one** — it 
 discharged by anything `stage.ps1` does, and it is the reason this section blocks a
 published release rather than merely a build.
 
+**The component list and versions are now measured, at
+`packaging/windows/licenses/SOURCE-AVAILABILITY.md`.** Nine components owe source under §4;
+`hicolor-icon-theme` owes none (already ruled — plain text is its own source, §1 not §3);
+`adwaita-icon-theme` depends on an unmade election. What remains is the mechanism.
+
+**THE DEV BOX IS TWO GVSBUILD RELEASES BEHIND WHAT SHIPS, AND THREE COMPONENT VERSIONS
+DIFFER.** CI pins gvsbuild **2026.8.0** and downloads the prebuilt zip; the operator's box
+has **2026.6.0** installed and a prefix built by it. Measured against both recipes' own
+`projects/*.py`: **GLib 2.88.1 → 2.88.3, gdk-pixbuf 2.44.6 → 2.44.7, Pango 1.57.1 → 1.58.0.**
+The other seven agree.
+
+**BOTH HALVES ARE NOW MEASURED IN THE SHIPPED ZIP, not inferred.**
+`GTK4_Gvsbuild_2026.8.0_x64.zip` was downloaded from the URL `pipeline.yml` uses, unpacked,
+and both staged from and gated against. Its `.pc` files confirm every version including the
+three that differ, and **the gate comes back clean on conditions 1, 2 and 4 against the GTK
+that actually ships** — 903 staged files, 35 rows, `msvc-runtime` the only red row. So the
+licence table is certified against the artefact rather than against the dev box, which is
+the check `packaging/windows/licenses/PROVENANCE.md` records as previously impossible for
+either seat to make. Two further findings live there: the one extra Adwaita icon 2026.8.0
+adds (attributed automatically, which is the exhaustive table earning its keep), and the
+shipped binaries being far larger — `rsvg-2-2.dll` by a factor of six — which is **not** a
+debug build, tested rather than assumed.
+
+This is the plan's own recurring failure mode caught before it shipped, and the near miss is
+worth more than the correction. **Three independent readings on the dev box — the prefix's
+`.pc` files, the tarball filenames in `C:\gtk-build\src\`, and gvsbuild 2026.6.0's pins —
+agree with each other perfectly and all describe a build that is not the product.** Worse,
+the one component anyone had previously checked across that boundary is `librsvg-2.0.pc`,
+and librsvg is one of the seven that match, so the single check on record returned a falsely
+reassuring answer about the whole set. **Any measurement taken on the dev box about what the
+installer contains is answering the narrower question**, and that now extends past licensing
+to anything read out of the local prefix.
+
 ### The gate as built — four conditions, not three, and not inside `stage.ps1`
 
 **Built and LANDED on `ci`**: `packaging/windows/licenses.psd1` (34 rows covering all 863
@@ -527,8 +578,23 @@ we ship is LGPL-2.1 `intl.dll`** — staging it would attach a GPL-3 claim to a 
 under it, which is worse than shipping nothing. All three files exist, so all three pass a
 presence check.
 
-**Current state: 2 open problems, measured by running the gate from a fresh stage** — 865
-files, 34 rows. Conditions 1, 2 and 4 clean.
+**Current state: 1 open problem, RE-MEASURED by running the gate from a fresh stage** —
+**902 files, 35 rows**. Conditions 1, 2 and 4 clean; condition 3 red on `msvc-runtime`
+alone. The previous figure was 2 against 865 files and 34 rows, and it was stale in both
+directions: `hicolor-icon-theme` had closed, and the licence texts had not yet been staged.
+Obtained by running the gate, not by arithmetic on the old number.
+
+**THE LICENCE TEXTS NOW ACTUALLY SHIP, and until this change none of them did.**
+`licenses.psd1` opened by saying *"the installer currently ships not one line of their
+licence text"*, and that stayed true through all the vendoring work: the table records where
+each text **comes from**, and `verify-licenses.ps1` reads those `Source` paths off the
+**build machine** — the repo and the GTK prefix — so all four conditions could pass while the
+installed product carried no LGPL text at all. That is the same shape as the defect this
+section already records for `LICENSE` and `THIRD-PARTY-LICENSES.md`, one layer further out:
+the gate was green about the build tree and silent about the artefact. `stage.ps1` now stages
+every row's text to `share\licenses\<row Id>\`, **driven by the manifest rather than by a
+second list**, so a component added to the table ships its text without anyone remembering to
+copy it. 37 files, +4 MB.
 
 - **Condition 3 (1)** — `msvc-runtime` alone, and it is a decision rather than work: the row may
   be **deleted rather than filled** (see below). `hicolor-icon-theme` is **CLOSED** — its GPL-2
@@ -543,6 +609,13 @@ files, 34 rows. Conditions 1, 2 and 4 clean.
   statement"* is evidence about what upstream ships, not about what the terms are.
 
 ### `hicolor-icon-theme` — researched, and a source obligation I raised does NOT exist
+
+**LANDED — this section's remaining instruction is already carried out, and the section is
+kept for the reasoning, not the task.** The re-basing demanded below is done: measured at
+`packaging/windows/licenses.psd1:192-199`, the row now cites the 0.18 source tree's own
+`COPYING` and the `index.theme` SHA-256 agreement, carries `Evidence = 'M'`, and states the
+`-or-later` caveat inline. Do not act on the "must be re-based" wording further down; read
+it as the argument that produced the current row.
 
 **I was wrong, and the record should say so.** I flagged that shipping `share\icons\hicolor\index.theme`
 under `GPL-2.0-or-later` triggers §3's source-availability duty. It does not. **§3 governs
