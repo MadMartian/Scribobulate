@@ -281,10 +281,25 @@ pub(crate) fn attach_file_backing(
             FileMonitorEvent::Changed
             | FileMonitorEvent::ChangesDoneHint
             | FileMonitorEvent::Created => {
-                // Some monitor backends coalesce a rename-over into
-                // Changed/Created without a separate Deleted — don't leave a
-                // stale self-delete guard armed to swallow a later,
+                // Don't leave a stale self-delete guard armed to swallow a later,
                 // genuinely external deletion (GTK4Rs/AP-62).
+                //
+                // This used to justify itself with "some monitor backends coalesce a
+                // rename-over into Changed/Created without a separate Deleted". That
+                // is **false, and inverted** (researcher, 2026-08-15): no backend
+                // reports Changed/Created without a Deleted, and macOS is the one that
+                // reports `DELETED` and *nothing else* (kqueue cannot recover the new
+                // name — `gkqueuefilemonitor.c`). What Linux and Windows actually
+                // deliver for a rename of the watched file is all THREE —
+                // `DELETED`(old), `CREATED`(new), `CHANGES_DONE_HINT`(new) — because
+                // `glocalfilemonitor.c:419-450` expands a `RENAMED` into a delete plus
+                // a synthetic created when `WATCH_MOVES` is off.
+                //
+                // The disarm stays, and is if anything better justified: those extra
+                // two events are exactly what would otherwise leave the guard armed
+                // after a save whose `Deleted` never arrived in the shape expected.
+                // The app's own Rename does not rely on any of this — it cancels the
+                // monitor before renaming (`window/rename.rs`).
                 tab.expect_self_delete.disarm();
                 // The file exists again (recreated / rewritten externally). If a
                 // prior Deleted had flipped the "backing missing" savable

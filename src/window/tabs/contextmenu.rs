@@ -207,6 +207,30 @@ fn show_tab_context_menu(
     ));
     box_.append(&reload_btn);
 
+    // Rename — the third per-tab command, and it follows the same two rules as the
+    // two above rather than `move_btn`'s: `win.rename` acts on the ACTIVE tab, so
+    // its sensitivity is read from the CLICKED tab's own predicate (not
+    // `action.is_enabled()`, which answers for whichever tab is active now), and
+    // activation focuses the clicked tab first so the dialog names the document the
+    // reader pointed at (TDD 24.6/24.11). `C`/`O`/`M`/`F`/`R` are taken in this
+    // menu, so the access key is `n`.
+    let rename_btn = make_btn("Re_name…");
+    add_key(&rename_btn, "Re_name…");
+    rename_btn.set_sensitive(rename_enabled_for(tab));
+    rename_btn.connect_clicked(glib::clone!(
+        #[weak(rename_to = po)]
+        popover,
+        #[weak(rename_to = w)]
+        window,
+        #[strong]
+        tab,
+        move |_| {
+            dismiss_context_popover(&po);
+            rename_for_tab(&w, &tab);
+        }
+    ));
+    box_.append(&rename_btn);
+
     popover.set_child(Some(&box_));
     popover.add_controller(key_controller);
     popover.connect_closed(|p| p.unparent());

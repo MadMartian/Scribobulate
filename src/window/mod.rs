@@ -37,6 +37,7 @@ mod editor_annotate;
 mod find;
 mod outline_nav;
 mod reload;
+mod rename;
 mod save;
 mod scrollsync;
 mod zoom;
@@ -45,6 +46,7 @@ use actions::*;
 use editbar::*;
 use find::*;
 use reload::*;
+use rename::*;
 use save::*;
 use scrollsync::*;
 use zoom::*;
@@ -69,6 +71,7 @@ use annotate::{register_annotate_action, register_annotation_step_actions};
 pub(crate) use annotations_nav::{reconcile_sidebar_visibility, refresh_annotations};
 pub(crate) use chrome::render_and_wire_preview;
 pub(crate) use contextmenu::attach_context_menu;
+pub(crate) use rename::update_rename_action_state;
 // The two find types `TabState` stores. The module itself stays private — the engine is
 // window-internal; only the shapes the per-tab state has to *hold* are named crate-wide.
 pub(crate) use find::{FindCursor, PreviewFindCache};

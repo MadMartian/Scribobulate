@@ -374,6 +374,21 @@ pub(super) fn register_editor_actions(window: &ApplicationWindow, heading_btn: &
     ));
     window.add_action(&save_as_action);
 
+    // Rename — change the filename of the backing file, in place. Disabled
+    // initially and re-gated by `update_save_action_state`, which owns every trigger
+    // rename shares with Save (TDD 24.6). Enabled in every view mode, like Save: it
+    // is a file-side operation, not a buffer mutation.
+    let rename_action = SimpleAction::new("rename", None);
+    rename_action.set_enabled(false);
+    rename_action.connect_activate(glib::clone!(
+        #[weak(rename_to = window)]
+        window,
+        move |_, _| {
+            rename_document_command(&window);
+        }
+    ));
+    window.add_action(&rename_action);
+
     // Save All — every dirty / deleted-backing tab in this window (TDD 4.12).
     // Sensitivity tracks "any tab needs saving", not only the active one.
     let save_all_action = SimpleAction::new("save-all", None);

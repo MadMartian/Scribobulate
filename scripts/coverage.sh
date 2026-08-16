@@ -124,7 +124,14 @@ cd "$(dirname "$0")/.."
 # wide enough to look like a plausible ratchet step.
 #
 # The aspiration is still 80%.
-FLOOR=77.01
+#
+# 2026-08-15: 77.01 → 77.42, banked by the document-rename work. The gain is where
+# the scope rule says it should be — `docio/rename.rs` (the filename rules and the
+# rename primitive) and `winstate/decisions.rs` (the enablement predicate) are pure
+# decision cores carrying the feature's real judgement, so the GTK half in
+# `window/rename.rs` could stay thin. Read from the LINES column, per the warning
+# above: the same run printed 78.29% for regions.
+FLOOR=77.42
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

@@ -560,6 +560,18 @@ pub(crate) const INLINE_ACCEL_CMDS: &[InlineCmd] = &[
         label: "Close Tab",
         accels: &["<Primary>w"],
     },
+    // Rename the open document — F2, the Explorer/Nautilus convention. A bare
+    // F-key is layout-stable and `accel::map` returns it unchanged on every
+    // platform (it rewrites only `<Primary>`/`<Meta>` and the MAC_RESERVED pairs),
+    // so it needs no per-platform spelling; `MAC_RESERVED` does not claim it, and
+    // `accel::tests::bindings_are_unique_on_every_platform` is what proves it
+    // collides with nothing. F1/F8/F9 were the only F-keys bound before it.
+    InlineCmd {
+        action: "win.rename",
+        group: "File",
+        label: "Rename Document",
+        accels: &["F2"],
+    },
     // Back / Forward through the window's document-visit history (TDD §23). The
     // browser bindings, deliberately: Alt+Left/Alt+Right canonical, plus the
     // dedicated Back/Forward keys a keyboard may carry as aliases. Both are

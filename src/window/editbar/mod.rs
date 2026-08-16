@@ -36,6 +36,11 @@ mod relabel;
 //   edit   → selection_range_and_text, splice_markup
 //   dialog → input_form, BrowseSpec
 use dialog::*;
+// Re-exported to the whole `window` module: `window::rename` runs the same modal
+// form, with a live validator gating its confirm control (TDD 24.9). Extending the
+// shared form was preferred over a second dialog helper (POLICY: prefer extending an
+// existing code path) — the two would have drifted on focus, Escape and leak-safety.
+pub(in crate::window) use dialog::{input_form, FieldExtras, LiveValidate};
 use edit::*;
 
 // The window-facing surface (brought into `window` scope by `window/mod.rs`'s

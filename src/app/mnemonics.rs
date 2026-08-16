@@ -23,6 +23,8 @@ const MENU_MNEMONICS: &[(&str, &str)] = &[
     ("Copy Full Path", "Copy Full _Path"), ("Auto-Reload", "A_uto-Reload"),
     ("Load Unsafe Linked Documents", "_Load Unsafe Linked Documents"),
     ("Close Tab", "_Close Tab"), ("Exit", "E_xit"),
+    // File menu: R/e/n are taken (Reload, …, New Document), so Rename takes `m`.
+    ("Rename…", "Rena_me…"),
     // Edit
     ("Undo", "_Undo"), ("Redo", "_Redo"), ("Copy", "_Copy"), ("Cut", "Cu_t"),
     ("Copy Document", "Copy Docu_ment"),

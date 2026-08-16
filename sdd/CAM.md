@@ -35,7 +35,8 @@ themselves.
 | 6 | Document-Reference CAM | State that points INTO the document and must survive the document changing |
 | 7 | Deferred-operation CAM | Work whose completion lands later (every document read and write), and everything that can change while it is out |
 | 8 | Status-notice CAM | Transient status-bar notices, whose retraction must survive the holder being destroyed or moved |
-| 9 | Granted CAM exceptions | Operator-approved deviations, recorded so they are not re-litigated |
+| 9 | Document-Identity CAM | State keyed on a document's PATH, and the events that change it |
+| 10 | Granted CAM exceptions | Operator-approved deviations, recorded so they are not re-litigated |
 
 ---
 
@@ -697,6 +698,94 @@ returned handle anywhere other than a local variable popped in the same function
 yes, this matrix applies — write down, at the push site, what pops it on each of A, B and
 C before writing the pop.
 
+## Document-Identity CAM — state keyed on a document's path
+
+A document's **path is load-bearing state, not a label**. Several things in this
+tree are keyed on it, and the failure when one is missed is uniformly silent: the
+identity change succeeds, the title updates, everything *looks* finished, and
+something that reads the path is now reading the wrong one.
+
+**The category is not "rename".** It is *a document's identity changing while the
+document is open*, and it had three members before Rename existed: the first save of
+an untitled buffer, Save As adopting a path, and Save As re-pointing one.
+
+**Why the six matrices above do not cover it.** [Derived-view](#derived-view-cam--surfaces-that-mirror-document-state)
+row 4 covers the *display* of a document's name, and its column B already includes
+Save As — so the name surfaces are governed. [Document-Reference](#document-reference-cam--state-that-points-into-the-document)
+governs references pointing *into* a document (offsets, ranges, indices); a path is
+not one. [Deferred-operation](#deferred-operation-cam--work-whose-completion-lands-later)
+column E is literally "the document's identity changes", but governs it from the
+*in-flight operation's* side. **Nothing governed the non-visual, not-in-flight
+machinery keyed on the path**, which is where every latent gap in this category lives.
+
+The identity events (matrix columns):
+
+- **A — adopt**: a document that had no path acquires one (first save of untitled;
+  Save As from untitled).
+- **B — re-point**: a document with a path acquires a different one (Save As to
+  another path; **Rename**).
+- **C — lose**: the backing file goes away (external delete; a tab discarded).
+
+| # | Path-keyed state | A | B | C | Choke point / anchor |
+|---|---|:-:|:-:|:-:|---|
+| 1 | `TabState.path` — the truth every other row derives from | ✓ | ✓ | ✓ | `app::attach_file_backing` |
+| 2 | The live-reload `gio::FileMonitor`, the `expect_self_delete` guard and `backing_missing` — **one mechanism, not three** | ✓ | ✓ | ✓ | `attach_file_backing`; `window::rename` for the cancel-first path; ScrAP-54 |
+| 3 | The crash-recovery swap file's **stem** and its header `path` | ✓ | ✓ | ✓ | `swapfile::swap_path`; `window::swap::delete_snapshot`; `swaprecovery::retire_source_snapshot` |
+| 4 | Name surfaces — window title, tab label + tooltip, View ▸ Documents (menu **and** combo) | ✓ | ✓ | ✓ | *reference row* → [Derived-view CAM row 4](#derived-view-cam--surfaces-that-mirror-document-state) |
+| 5 | The relative-resource base `TabState::doc_dir()` — images, local link navigation, Insert Link/Image relativisation | ✓ | ✓ | — | `links::resolve_contained_image`; `links::relativize_for_insert` |
+| 6 | Same-file identity: the open-tab dedup lookup and the per-path write gate | ✓ | ✓ | ✓ | `app::find_open_tab_for_path`; `winstate::WriteGate` |
+| 7 | Operations already in flight over the old path | ✓ | ✓ | ✓ | *reference row* → [Deferred-operation CAM column E](#deferred-operation-cam--work-whose-completion-lands-later) |
+| 8 | The persisted session record and the last-visited dialog directory | ✓ | ✓ | ✓ | `session.rs`; `app::remember_dialog_dir` |
+
+Rules that give the matrix its teeth:
+
+- **A path change is not a content change.** It must not touch the saved baseline,
+  the dirty flag, the buffer, the undo stack, the reading position or the rendered
+  preview, and must not re-read the file. Stating this is what keeps an identity
+  change *out* of the Reading-Position and Document-Reference matrices instead of
+  quietly acquiring cells in both (TDD 24.2).
+- **One choke point re-points the backing, and the monitor and its self-delete guard
+  travel with it.** They are one mechanism; a path change that re-points the monitor
+  without settling the guard has half-changed the identity (ScrAP-116/ScrAP-134 shape).
+- **Refusal is expressed against the filesystem's own notion of identity, never a
+  string compare.** Case-insensitive filesystems and symlinks both make `old != new`
+  a wrong answer.
+- **A move is not a rename**, because only one of them invalidates row 5. Any
+  operation that can change the *directory* owes row 5 an answer; one that cannot may
+  state that it cannot and stop. Rename holds the directory fixed by construction —
+  the primitive it uses cannot express a move — which is what makes row 5 a provable
+  no-op for it rather than an obligation nobody would think to write.
+- **Row 3 is a no-op for Rename by POSITION IN THE LIFECYCLE, not by exemption.** The
+  dirty↔swap invariant means a clean document has no snapshot to orphan, and Rename
+  is gated on clean. That ends the moment Rename is permitted on a dirty document —
+  recorded here rather than left implicit, exactly like Reading-Position CAM row 10's.
+- **A `tests/MANUAL-TEST.md` check per applicable ✓** — the cross-CAM rule.
+
+### The back-sweep this matrix obliges
+
+The cross-CAM new-row rule requires sweeping what already shipped in the category.
+The category's three prior members all live in `save.rs` / `open.rs`, so the sweep is
+affordable and was **not** skipped. Drafting these rows produced **two candidate
+defects in Save As**, both **INFERRED from source and neither yet measured** — they
+are hypotheses, not findings, and are recorded here so the sweep's extent is honest
+rather than implied:
+
+1. **Save As from an untitled dirty buffer may orphan its swap file.** Opening the
+   native chooser deactivates the window, so the focus-flush files a snapshot as
+   `untitled-<docid>.swap`. `adopt_and_save` then sets `st.path` **before** the write,
+   so when the document goes clean `delete_snapshot` computes `<newstem>-<docid>.swap`
+   and removes nothing — `NotFound` is swallowed by design. The next launch would then
+   offer a spurious recovered untitled tab holding pre-save content. Distinct from the
+   Deferred-operation 4/B–5/B open cell (that is a delete racing an in-flight write to
+   the *same* name; this one can never succeed, because it computes a different name).
+2. **Save As to a different directory may leave the preview's images resolved against
+   the old `doc_dir()`** until something else re-renders. Row 5, from the one existing
+   member that can change directory.
+
+**Neither is fixed under this matrix, and neither is confirmed.** Both are cheap to
+settle (`save.rs` already has a `drive_save_as` test helper) and both belong to Save
+As rather than to Rename.
+
 ## Granted CAM exceptions
 
 A deviation from any matrix above must be requested and explicitly green-lit by
@@ -704,19 +793,35 @@ the operator. Each approved deviation is recorded here so it is not re-litigated
 This list records only the approved deviations; the matrices themselves are the
 rule.
 
-- **Next / Previous Annotation** (`win.next-annotation` / `win.prev-annotation`,
-  group `Edit`) — **PENDING operator green-light, recorded here so it is visible
-  rather than silently deviating.** Both have their `GAction`, their Edit-menu item,
-  their accelerator surfaced everywhere the SSOT table reaches (menu hint, Keyboard
-  Shortcuts window), and one consistent enabled state. Neither has a **toolbar
-  button**, which the Action CAM's "Other action" column requires. The argument for
-  the deviation is that they are *reading-position* commands with no state a button
-  could usefully show, in a toolbar that is already at its width budget — the same
-  shape as Go To Line, which has also never had one. `win.next-annotation` has
-  carried this deviation unrecorded since it landed; adding its counterpart is what
-  surfaced it. If the operator declines, both get buttons in the `edit` section
-  together — never one of them, since a pair that appears half in a surface is worse
-  than a pair that appears in none.
+- **No toolbar button for the "no state to show" command family** — **GRANTED
+  (operator, 2026-08-15).** The Action CAMs' "Other action" column requires a toolbar
+  button. These four commands do not have one, and will not:
+
+  | Command | Group | Surfaces it *does* have |
+  |---|---|---|
+  | `win.rename` | File | File menu, tab-strip context menu, `F2`, Keyboard Shortcuts window |
+  | `win.close-tab` | File | File menu, tab-strip context menu, `Ctrl+W`, Keyboard Shortcuts window |
+  | `win.go-to-line` | View | View menu, `Ctrl+G`, Keyboard Shortcuts window |
+  | `win.next-annotation` / `win.prev-annotation` | Edit | Edit menu, accelerators, Keyboard Shortcuts window |
+
+  **The argument, once, for all of them:** each is a command with **no state a button
+  could usefully show**, in a toolbar already at its width budget. A toolbar button
+  earns its place by being either a frequent target or a *status display*; these are
+  neither — nothing about "Rename" or "Go To Line" is worth a persistent pixel, and
+  their enabled state is already legible from the menu, which greys visibly (unlike a
+  toolbar chevron, which is pixel-identical enabled and disabled — ScrAP-136).
+
+  **Every other cell of the Action CAM is satisfied** for all four: one `GAction`, one
+  enabled-state source of truth, and the accelerator surfaced everywhere the SSOT
+  table reaches.
+
+  **Three of these were deviating *unrecorded* before this entry.** `win.close-tab`,
+  `win.go-to-line` and `win.next-annotation` each shipped without a toolbar button and
+  without an exception; the sweep that added Rename is what surfaced them. That is the
+  cross-CAM back-sweep rule working — and worth noting as the reason exceptions are
+  recorded as a *family* rather than one at a time: a per-command entry would have let
+  the other three stay invisible. If this is ever revisited, all four change together;
+  a family that appears half in a surface is worse than one that appears in none.
 
 - **Annotate** (`win.annotate`, group `Edit`) — the approved deviation from the
   Action CAM is the command's presence in the **caret formatting overlay**, a

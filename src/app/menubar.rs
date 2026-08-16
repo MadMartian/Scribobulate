@@ -462,6 +462,12 @@ fn build_format_menu() -> (Menu, Menu) {
 fn build_file_menu() -> Menu {
     let file_menu = build_command_menu(&FILE_CMDS);
     let close_tab_section = Menu::new();
+    // Rename sits with Close Tab and, like it, is built ad-hoc rather than as a
+    // `FILE_CMDS` row: a row auto-generates a toolbar button, and Rename has none
+    // (a granted CAM deviation — see CAM.md § Granted CAM exceptions).
+    let rename_item = MenuItem::new(Some(&mnem("Rename…")), Some("win.rename"));
+    set_inline_accel(&rename_item, "win.rename");
+    close_tab_section.append_item(&rename_item);
     let close_tab_item = MenuItem::new(Some(&mnem("Close Tab")), Some("win.close-tab"));
     set_inline_accel(&close_tab_item, "win.close-tab");
     close_tab_section.append_item(&close_tab_item);

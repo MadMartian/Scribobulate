@@ -67,6 +67,13 @@
 //! state files not**.
 
 mod pool;
+mod rename;
+
+// `NameChange`/`NameRefusal`/`FsRules` are deliberately NOT re-exported: they appear
+// in `validate_new_name`'s signature but no caller outside this module names them
+// (the dialog maps them straight to `()` and a string), and re-exporting a type
+// nobody spells is an unused import under `-D warnings`.
+pub(crate) use rename::{host_rules, rename_document, validate_new_name, RenameError};
 
 // Gated to the same cfg as its only callers (the gtk-integration-tests modules in
 // `window::save`), not the broader `cfg(test)`: under a bare `cargo test` the callers

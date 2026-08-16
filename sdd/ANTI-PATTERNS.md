@@ -408,6 +408,7 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 266 | A focused `set_parent`ed popover is its own `GtkNative`, so every application accelerator silently stops working for as long as it is open | A |
 | 267 | `GtkSingleSelection`'s builder property ORDER decides whether a list opens with a phantom selection | A |
 | 268 | A GLib **fatal** log message dies of `SIGTRAP`, not `abort()` — a crash handler that enumerates the classic four signals reports nothing for the whole `g_error` class | A |
+| 269 | Two sufficient monitor-cancel mechanisms made the rename guard pass with its own fix deleted — and a freshly attached `GFileMonitor` is not yet watching | A |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -3771,3 +3772,68 @@ correct-looking mechanism whose *other* path nobody enumerated); TDD 23.12; MANU
 **Taking `SIGTRAP` costs no debugging session** (MEASURED, gdb 12.1): a debugger intercepts the trap through ptrace and reports `SIGTRAP … Pass to program: No`, so it still stops at the faulting frame and the handler never runs under it. The obvious objection — "you have just stolen the debugger's signal" — is false, and worth measuring rather than arguing, since it is the reason not to do this.
 **The transferable half**: (1) *"fatal" is a word in a library's vocabulary, not a statement about how the process dies* — before enumerating the signals a crash handler takes, measure how each dependency's fatal path actually exits, because the plausible enumeration (the hardware faults plus `abort`) is complete only for the deaths you thought of; (2) an enumeration copied into both a rubric and its implementation is one decision wearing two hats, so a gap in it is certified rather than caught, and closing it is always two edits — TDD 21.4's **Given** listed the same four signals the `const` did, and *widening* the claim later repeated the miss exactly once more: the re-measurement swept the code, this entry, POLICY and the manual check, and left the rubric still saying "any warning `fatal-warnings` promotes"; (3) the diagnosis costs minutes when the question is put to the machine (`gcc` + `g_error` + `echo $?`) and hours when it is put to memory.
 **See**: routed to the `gtk4-rs` skill (app-lifecycle-and-env) as a GTK/GLib-stack lesson — any GTK4 application that installs a fatal-signal handler has this hole.
+
+
+## 269. Two sufficient monitor-cancel mechanisms made the rename guard pass with its own fix deleted — and a freshly attached `GFileMonitor` is not yet watching
+
+**Symptom**: two false results in one sitting, in opposite directions, both from the
+same feature's tests. (a) The regression guard for "renaming a document must not look
+like a deletion" **passed with the fix deleted** — remove the `cancel_monitor()` call
+the whole choreography is built on and the suite stays green. (b) A sibling test
+asserting the failure path's re-attached monitor still works **failed against correct
+code**, and failed in a way that read as "the monitor only half works": a *write* to
+the watched file was missed while a *delete* issued twenty seconds later was caught.
+
+**Root cause — (a), the false PASS.** The rename path cancels the tab's monitor before
+renaming. But `app::attach_file_backing` *also* cancels whatever monitor the tab was
+holding when it installs the new one, so the invariant has **two** sufficient
+mechanisms and the ScrAP-254 shape applies: mutating either alone leaves the suite
+green. What made it hide rather than merely be redundant is a timing accident — in the
+test the rename completes so fast that the completion callback runs before GLib's
+inotify worker has dispatched the rename's events, so the second mechanism suppresses
+them and the reader sees no difference. In production it is the other way round (the
+researcher MEASURED the three events arriving *before* the completion, using a 60 ms
+stand-in for the async round trip), so the pre-rename cancel is genuinely load-bearing
+and merely **invisible to a fast test**. A behavioural guard cannot discriminate here
+at all; the fix is a guard on the **state** — hold the filesystem call open with the
+existing `docio::slow_io` injection, and assert that while the rename provably has not
+happened yet (the old filename still exists) the old monitor is already cancelled.
+That one fails on the mutation and nothing else does.
+
+**Root cause — (b), the false FAILURE.** A `GFileMonitor` object exists the instant it
+is constructed, but GLib establishes the underlying inotify watch on its **private
+worker thread** (`inotify-kernel.c` attaches its source to `g_get_worker_context()`),
+so a change made in the same main-loop turn as the attach races that setup and is
+simply never seen. "The tab's monitor slot is populated" is not "the watch is live".
+The delete appeared to work only because it happened after a 20-second `settle`
+timeout had already elapsed. The kin is GTK4Rs/AP-261 — turns are not time — reaching a
+new mechanism: here the wait is for a *worker thread's* setup, so no number of
+main-loop iterations substitutes for wall clock.
+
+**What was tried**: asserting the reader-facing symptom (no deleted-backing state after
+a rename) — passes with the fix deleted, and is the guard the plan originally specified.
+Injecting `slow_io` to separate the events from the completion — does not work in this
+direction, because the injected delay sleeps on the pool thread *before* the blocking
+call, so it delays the rename itself rather than the gap between the rename and its
+completion.
+
+**Scribobulate**: `window/rename.rs` cancels the monitor before the rename and
+re-attaches on **every** path including failure;
+`the_old_monitor_is_cancelled_before_the_rename_touches_the_filesystem` is the state
+guard (mutation-checked: removing the cancel fails it and only it), and
+`a_rename_does_not_look_like_a_deletion` keeps the behavioural contract with its
+non-optional in-test control (delete the renamed file, assert the notice *does*
+appear — without it the test passes against a dead monitor, ScrAP-209's shape). The
+second mutation is the positive half: neutering `expect_self_delete` must **not** break
+either test, which is what proves the cancel rather than the save path's flag is
+carrying the invariant. Every integration test that writes to a watched file pumps for
+~300 ms after attaching first. Contract: TDD §24; checks: `tests/MANUAL-TEST.md` §24.
+
+**See**: the GIO-side mechanisms this rests on (cancel is a barrier at *emission*, not
+a queue drain; the per-backend event sets; path-vs-inode) are researcher-established
+and routed to the `gtk4-rs` skill — findings doc
+`~/Documents/Projects/AI/Research/Gtk4Rust/researcher-findings-gio-rename-refusal-and-filemonitor-cancel-barrier.md`
+(Linux/GLib 2.72.4 MEASURED; macOS/Windows SOURCE-TRACED). Kin: ScrAP-254 (the two-mechanism
+mutation trap this is an instance of), ScrAP-209 (a guard whose setup prevents the thing
+it guards from existing), ScrAP-54 (the self-delete guard, still load-bearing on the save
+path and deliberately not reused here).
