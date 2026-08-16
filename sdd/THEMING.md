@@ -102,12 +102,22 @@ selected: a rule stating only `background-color` leaves selected text on the des
 theme's `theme_selected_fg_color`, which is the one ink on a themed page the reading
 theme does not own. Measured under Bedtime with the fill themed and the foreground
 left alone: every selected glyph — body, heading and code alike — painted `#000000`
-at 2.1:1 on the fill. `palette.selection_fg` supplies it, derived rather than stated
-as a key: it takes whichever of the page ink or the page itself reads better on the
-fill, walking toward white or black only if both fail AA. That derivation is what
-keeps it right per theme rather than per author — the page ink would strand Sepia
-(brown on brown, 1.5:1), the page would strand Bedtime. Both the body buffer and the
+at 2.1:1 on the fill. `palette.selection_fg` supplies it: derived by default — whichever
+of the page ink or the page itself reads better on the fill, walking toward white or
+black only if both fail AA — and overridable by a `selection_fg` key. The derivation is
+what keeps it right per theme rather than per author (the page ink would strand Sepia,
+brown on brown at 1.5:1; the page would strand Bedtime). Both the body buffer and the
 table cells' own `selection` node take it, by the ScrAP-36 parity rule above.
+
+**Why a key on top of a working derivation** — the same question applies to `mark_fg`,
+and the answer is the same for both: **the derivation optimises for contrast, and
+contrast is not taste.** Bedtime's sand ink clears 5.3:1 on its violet selection band
+and still looks wrong there, warm ink on a cool fill; no ratio expresses that, so the
+answer has to be statable, not only computable. The reverse case is `mark_fg`: Bedtime's
+green band deliberately breaks the fill ceiling, so the body ink would read 3.58:1 on
+it and the band states its own ink instead. A key that only ever restates the derived
+answer would be noise; these two exist because the derived answer is sometimes right
+and unusable.
 
 ## Zoom, and why the theme owns SCALE but never SIZE
 

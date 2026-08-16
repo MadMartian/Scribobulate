@@ -267,9 +267,19 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // (Document Rendering CAM row 12). Unlike AnnotationHighlight it is NOT raised to
     // top priority: a mark is content the user typed, an annotation is a review overlay
     // that must never be buried — so an annotation still wins on overlap (GTK4Rs/AP-84).
+    //
+    // A theme may also give the marked text its OWN ink (`mark_fg`). Omitted — the case
+    // for every theme whose band is a translucent wash — the text keeps the body
+    // foreground and only the background changes, which is how a highlighter behaves on
+    // paper. Stated, the band is carrying its own colour scheme and the body ink is not
+    // part of it. Set through the same closure so the two cannot be applied separately.
     let mark_bg = theme.mark_bg.rgba();
+    let mark_fg = theme.mark_fg;
     add(TagName::Mark.name(), &move |t| {
         t.set_background_rgba(Some(&mark_bg));
+        if let Some(fg) = mark_fg {
+            t.set_foreground_rgba(Some(&fg));
+        }
     });
     let supsub_scale = typo.supsub_scale;
     // The theme states rises in points; Pango wants its own units.

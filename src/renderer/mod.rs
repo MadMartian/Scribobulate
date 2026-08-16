@@ -81,9 +81,18 @@ pub(crate) const ANN_HL_CLOSE: &str = "</span>";
 /// (Document Rendering CAM row 12 / TDD 18.6). Separate `bgalpha` (not 8-digit hex)
 /// for Pango robustness, exactly as [`ann_hl_open`].
 pub(crate) fn mark_open() -> String {
-    let c = crate::theme::active().mark_bg;
+    let theme = crate::theme::active();
+    let c = theme.mark_bg;
+    // `mark_fg` rides the SAME generated span as the fill, for the same reason the fill
+    // is generated here at all: a cell is a GtkLabel outside the buffer, so the body
+    // tag's foreground cannot reach it. Emitted only when the theme states one, so a
+    // theme without the key produces the byte-identical span it always did.
+    let fg = theme
+        .mark_fg
+        .map(|f| format!(" foreground=\"{}\"", crate::palette::to_hex(f)))
+        .unwrap_or_default();
     format!(
-        "<span background=\"{}\" bgalpha=\"{}\">",
+        "<span background=\"{}\" bgalpha=\"{}\"{fg}>",
         c.hex(),
         c.alpha_pct()
     )

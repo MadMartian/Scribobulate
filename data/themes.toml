@@ -342,8 +342,13 @@ selection_bg   = "#4A3F63"   # COOL violet — the one place this theme leaves i
                              # it reads as a stain rather than as a band. Violet is a hue no other
                              # overlay claims — the four are olive, steel blue, gold and amber — so
                              # a selection can never be mistaken for a find match or an annotation.
-                             # Selected text 5.3:1 on it; the band itself 1.33:1 against the page,
-                             # enough to see without shouting
+                             # Selected text 7.6:1 on it (see selection_fg); the band itself 1.33:1
+                             # against the page, enough to see without shouting
+selection_fg   = "#E6E4E9"   # near-white, a hair cool. This is the ONE place the sand ink is set
+                             # aside, and deliberately: warm tan on a cool violet band is the one
+                             # pairing on this page that looks wrong while measuring fine (the
+                             # derived answer would be the sand at a perfectly legal 5.3:1). A key
+                             # exists for exactly this — contrast is not taste. 7.6:1
 
 # The two code surfaces move in OPPOSITE directions from the page, so an inline span
 # can never look like a stray fragment of a fenced block.
@@ -361,9 +366,20 @@ find_hl_all     = "#2B3F55"   # steel blue — the one COOL hue on the page, so 
                               # never be mistaken for an annotation (ink 6.0:1)
 find_hl_current = "#E0A040"   # bright amber, undiluted: the current match is a transient pointer,
                               # and every shipped theme treats it as one (5.7:1 on the page)
-mark_bg         = "#55490F"   # deep gold — the ==highlight== marker. A shaded gold is the classic
-                              # highlighter read, and it is the overlay that must never be confused
-                              # with the other three (ink 4.9:1, the closest to the ceiling)
+mark_bg         = "#51634A"   # muted GREEN band for ==highlight== — the only overlay carrying a
+                              # hue from outside the page's warm/steel families, chosen because a
+                              # mark must not be mistaken for the violet selection band or the grey
+                              # inline-code fill it commonly sits beside. It is also the only band
+                              # here that breaks the L<=0.0786 fill ceiling (L 0.1117), which is
+                              # exactly why it states its own ink below rather than relying on the
+                              # body's: the sand ink reads only 3.58:1 on it
+mark_fg         = "#A9CE99"   # light green ink for marked text — 3.70:1 on the band.
+                              # ⚠ This is the one colour on the page BELOW the 4.5:1 floor every
+                              # other overlay clears; it passes only the 3:1 large-text floor.
+                              # Chosen knowingly by the operator over a brighter band that would
+                              # have measured 7.31:1, because the two-green pairing is the look
+                              # wanted. Recorded here so a future reader does not "fix" it by
+                              # accident, and does not copy it as this file's standard
 
 # Geometry: a little airier than the default, which is most of what makes a page feel
 # unhurried. Everything else — typography scales, table padding, list step — is

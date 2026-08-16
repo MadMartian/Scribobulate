@@ -294,6 +294,12 @@ pub(crate) struct ThemeSpec {
     pub code_block_bg: Option<String>,
     pub blockquote_bar: Option<String>,
     pub selection_bg: Option<String>,
+    /// The ink SELECTED text is drawn in, over `selection_bg`. Omit ⇒ derived from the
+    /// page and its ink (see `palette::Palette::from_base`), which is right often enough
+    /// that no shipped theme but Bedtime states it. State it when the derived answer is
+    /// merely *legible* rather than *good*: Bedtime's sand ink clears 5.3:1 on its violet
+    /// selection and still looks wrong there, which is a judgement no contrast ratio makes.
+    pub selection_fg: Option<String>,
     pub table_border: Option<String>,
     pub table_head_bg: Option<String>,
     pub rule: Option<String>,
@@ -302,6 +308,13 @@ pub(crate) struct ThemeSpec {
     /// MARKER ONLY; the item's text keeps the body foreground. Omit ⇒ markers inherit
     /// the widget foreground (the pre-theming default). One key for all three kinds.
     pub list_marker: Option<String>,
+
+    /// Ink for `==marked==` text. Omit ⇒ the marked text keeps the body foreground and
+    /// only its background changes, which is how a highlighter behaves on paper and is
+    /// right for every theme whose `mark_bg` is a wash. State it when the band is opaque
+    /// enough to need its own ink — it reaches BOTH the body tag and the table-cell
+    /// Pango path, like `mark_bg` itself.
+    pub mark_fg: Option<String>,
 
     // Overlay colours. Each of these reaches BOTH the body path and the
     // table-cell path (TDD 18.6) — the representations differ, the source is one key.
@@ -471,10 +484,12 @@ impl ThemeSpec {
             code_block_bg,
             blockquote_bar,
             selection_bg,
+            selection_fg,
             table_border,
             table_head_bg,
             rule,
             list_marker,
+            mark_fg,
             annotation_hl,
             find_hl_all,
             find_hl_current,
@@ -592,12 +607,17 @@ pub(crate) struct Theme {
     pub code_block_bg: Option<gdk::RGBA>,
     pub blockquote_bar: Option<gdk::RGBA>,
     pub selection_bg: Option<gdk::RGBA>,
+    /// Selected-text ink; `None` ⇒ `palette` derives it from the page and its ink.
+    pub selection_fg: Option<gdk::RGBA>,
     pub table_border: Option<gdk::RGBA>,
     pub table_head_bg: Option<gdk::RGBA>,
     pub rule: Option<gdk::RGBA>,
     /// List-marker glyph colour (bullet/numeral/checkbox); `None` ⇒ inherit the widget
     /// foreground. Marker glyph only — never the item text.
     pub list_marker: Option<gdk::RGBA>,
+    /// Ink for `==marked==` text, over `mark_bg`; `None` ⇒ the marked text keeps the
+    /// body foreground, which is what every theme did before this key existed.
+    pub mark_fg: Option<gdk::RGBA>,
     pub annotation_hl: ThemeColor,
     pub find_hl_all: ThemeColor,
     pub find_hl_current: ThemeColor,
@@ -671,10 +691,12 @@ impl Theme {
             code_block_bg: color(&selected.code_block_bg, &system.code_block_bg),
             blockquote_bar: color(&selected.blockquote_bar, &system.blockquote_bar),
             selection_bg: color(&selected.selection_bg, &system.selection_bg),
+            selection_fg: color(&selected.selection_fg, &system.selection_fg),
             table_border: color(&selected.table_border, &system.table_border),
             table_head_bg: color(&selected.table_head_bg, &system.table_head_bg),
             rule: color(&selected.rule, &system.rule),
             list_marker: color(&selected.list_marker, &system.list_marker),
+            mark_fg: color(&selected.mark_fg, &system.mark_fg),
             annotation_hl: overlay(&selected.annotation_hl, &system.annotation_hl, "#FFD133_61"),
             find_hl_all: overlay(&selected.find_hl_all, &system.find_hl_all, "#f6d32d"),
             find_hl_current: overlay(
@@ -1110,6 +1132,55 @@ mod tests {
         assert_eq!(t.name, "Sepia");
         assert_eq!(crate::palette::to_hex(t.foreground.unwrap()), "#5b4636");
         assert_eq!(t.syntect_theme.as_deref(), Some("Solarized (light)"));
+    }
+
+    /// TDD 18.17 — `selection_fg` is opt-in: stated, it wins; omitted, it stays `None`
+    /// so `palette` derives the selected-text ink from the page and its own ink.
+    ///
+    /// The merge half is asserted here on purpose. A new colour key has to be added in
+    /// FOUR places (the spec, the resolved struct, `overlay`'s `take!` list, and
+    /// `resolve`), and missing the `take!` list is invisible for built-in themes —
+    /// `resolve()`'s per-key path masks it — while silently dropping every user
+    /// override. That is exactly what happened to `list_marker` (test below).
+    #[test]
+    fn selection_fg_is_opt_in_and_merges() {
+        assert!(Themes::builtin().resolve(SYSTEM_ID).selection_fg.is_none());
+        assert!(Themes::builtin().resolve("sepia").selection_fg.is_none());
+        let bed = Themes::builtin().resolve("bedtime");
+        assert_eq!(
+            crate::palette::to_hex(bed.selection_fg.expect("bedtime states it")),
+            "#e6e4e9"
+        );
+
+        // The `take!`-list guard: a user override of a theme that ships no value.
+        let mut themes = Themes::builtin();
+        themes.merge_over(Themes::parse("[themes.sepia]\nselection_fg = \"#abcdef\"\n").unwrap());
+        assert_eq!(
+            crate::palette::to_hex(themes.resolve("sepia").selection_fg.expect("merged")),
+            "#abcdef"
+        );
+    }
+
+    /// TDD 10.17 — `mark_fg` is opt-in, and merges. Omitted, marked text keeps the body
+    /// foreground (every theme's behaviour before the key existed); stated, it reaches
+    /// both the body tag and the cell span. Same four-place / `take!`-list guard as
+    /// [`selection_fg_is_opt_in_and_merges`].
+    #[test]
+    fn mark_fg_is_opt_in_and_merges() {
+        assert!(Themes::builtin().resolve(SYSTEM_ID).mark_fg.is_none());
+        assert!(Themes::builtin().resolve("synthwave").mark_fg.is_none());
+        let bed = Themes::builtin().resolve("bedtime");
+        assert_eq!(
+            crate::palette::to_hex(bed.mark_fg.expect("bedtime states it")),
+            "#a9ce99"
+        );
+
+        let mut themes = Themes::builtin();
+        themes.merge_over(Themes::parse("[themes.sepia]\nmark_fg = \"#123456\"\n").unwrap());
+        assert_eq!(
+            crate::palette::to_hex(themes.resolve("sepia").mark_fg.expect("merged")),
+            "#123456"
+        );
     }
 
     /// Regression: `list_marker` must merge through a user-file override like every

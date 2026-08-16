@@ -271,11 +271,14 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `code_inline_bg` | colour | derived | Inline code-span background. |
 | `code_block_bg` | colour | derived | Fenced code-block background. |
 | `blockquote_bar` | colour | derived | Blockquote indicator bar. |
-| `selection_bg` | colour | derived | Selection background. The selected *text* colour is not a key — it derives from this plus the page and its ink (whichever reads better on the fill), so a theme cannot state a fill that strands its own selected text. |
+| `selection_bg` | colour | derived | Selection background. |
+| `selection_fg` | colour | derived | Ink for *selected* text. Omitted, it derives from `selection_bg` plus the page and its ink — whichever of the two reads better on the fill — so a theme cannot strand its own selected text by accident. State it when the derived answer is legible but wrong: contrast is not taste. |
 | `table_border` | colour | derived | Table border. |
 | `table_head_bg` | colour | derived | Table header background. |
 | `rule` | colour | derived | Horizontal-rule colour. |
 | `list_marker` | colour | widget foreground | Bullet, numeral and task-checkbox colour. Marker only; item text keeps the body foreground. |
+| `mark_bg` | colour | `#fff59d_88` | Background band behind `==marked==` text. |
+| `mark_fg` | colour | body foreground | Ink for `==marked==` text. Omitted, marked text keeps the body foreground and only its background changes — how a highlighter behaves on paper, and right for any `mark_bg` that is a translucent wash. State it when the band is opaque enough to need its own ink. Reaches the body tag and the table-cell span alike. |
 | `annotation_hl` | colour | `#FFD133_61` | Annotation highlight overlay. |
 | `find_hl_all` | colour | `#f6d32d` | Highlight for all find matches. |
 | `find_hl_current` | colour | derived | Highlight for the current find match. |

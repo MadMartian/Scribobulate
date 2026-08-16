@@ -209,15 +209,22 @@ impl Palette {
             }
         });
 
-        // Selected text's own ink. The page ink and the page itself are the two
-        // colours already proven to belong to this theme, so the selection takes
-        // whichever of them reads better on the fill rather than inventing a third:
-        // on a dark fill that is usually the ink (Bedtime keeps its sand), on a
-        // bright one usually the page (Terminal's cyan selection takes black,
-        // Synthwave's magenta takes the indigo page). Only if BOTH fail AA does it
-        // walk toward white or black, the same escape the link colour above uses.
+        // Selected text's own ink — stated by the theme if it cares, else derived.
+        //
+        // The derivation: the page ink and the page itself are the two colours already
+        // proven to belong to this theme, so the selection takes whichever reads better
+        // on the fill rather than inventing a third — on a dark fill usually the ink, on
+        // a bright one usually the page (Terminal's cyan selection takes black,
+        // Synthwave's magenta takes the indigo page). Only if BOTH fail AA does it walk
+        // toward white or black, the same escape the link colour above uses.
+        //
+        // Why the key exists on top of that: the derivation optimises for CONTRAST, and
+        // contrast is not taste. Bedtime's sand ink clears 5.3:1 on its violet selection
+        // and still looks wrong on it — warm ink on a cool band — so Bedtime states a
+        // near-white instead. No ratio would have caught that, which is precisely why
+        // the answer has to be statable rather than only computed.
         let selection_bg = theme.selection_bg.unwrap_or(accent);
-        let selection_fg = {
+        let selection_fg = theme.selection_fg.unwrap_or_else(|| {
             let mut best = if contrast(fg, selection_bg) >= contrast(bg, selection_bg) {
                 fg
             } else {
@@ -235,7 +242,7 @@ impl Palette {
                 best = mix_rgba(best, target, 0.1);
             }
             best
-        };
+        });
 
         Palette {
             page_bg: bg,

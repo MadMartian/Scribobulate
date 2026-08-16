@@ -1255,7 +1255,8 @@
 
 ### 10.17 The highlight colour is sourced per reading theme- **Given** a document with `==marked==` text shown in the preview
 - **When** the active reading theme changes
-- **Then** the wash colour comes entirely from that theme's `mark_bg` key — never a literal — resolving to pale yellow (System), warm tan-rose (Sepia), deep gold (Bedtime), radioactive toxic-green (Synthwave), amber phosphor (Terminal), and vivid lime (Candy)
+- **Then** the wash colour comes entirely from that theme's `mark_bg` key — never a literal — resolving to pale yellow (System), warm tan-rose (Sepia), muted green (Bedtime), radioactive toxic-green (Synthwave), amber phosphor (Terminal), and vivid lime (Candy)
+- **And** where a theme also states `mark_fg`, the marked text takes that ink on both the body and the in-cell path; where it does not, the marked text keeps the body foreground and only its background changes
 - **And** switching the reading theme at runtime recolours every marked span, in every open window, without a restart
 
 ### 10.18 Highlight holds inside containers, including table cells- **Given** `==marked==` text inside a list item, a blockquote, and a table cell
@@ -2187,6 +2188,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** any reading theme that states its own page, and a selection covering body text, a heading, and text inside a table cell
 - **When** it is rendered
 - **Then** the selected text is drawn in a colour the THEME owns — never the desktop's selected-text ink — and its contrast against that theme's selection fill clears the same legibility floor as body text (18.8), on both the body and the in-cell path
+- **And** a theme may state that ink outright (`selection_fg`); omitted, it is derived from the page and its own ink, so a theme that states only a fill still cannot strand its selected text
 - **And** under System, where no page is stated, both paths keep the desktop's own selection colours together, exactly as before themes existed (18.2)
 
 ## 19. Local document-link navigation
