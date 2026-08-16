@@ -2183,6 +2183,12 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** they are rendered
 - **Then** the cell's selection highlight is the theme's selection colour — the same colour as the body's selection — not the desktop default; and under System, where the body selection stays the desktop default, the cell selection matches it (both fall back together, never one themed and the other not)
 
+### 18.17 Selected text stays the theme's, and stays legible
+- **Given** any reading theme that states its own page, and a selection covering body text, a heading, and text inside a table cell
+- **When** it is rendered
+- **Then** the selected text is drawn in a colour the THEME owns — never the desktop's selected-text ink — and its contrast against that theme's selection fill clears the same legibility floor as body text (18.8), on both the body and the in-cell path
+- **And** under System, where no page is stated, both paths keep the desktop's own selection colours together, exactly as before themes existed (18.2)
+
 ## 19. Local document-link navigation
 
 ### 19.1 A relative link to a Markdown sibling opens as a new tab

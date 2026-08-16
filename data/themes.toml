@@ -336,8 +336,14 @@ blockquote_bar = "#D9B87C"   # the same sand-gold: bar and markers read as one "
 rule           = "#565656"   # grey section rule
 table_border   = "#4A4A4A"   # dimmer than the rule, so a grid reads as an outline, not a cage
 table_head_bg  = "#3D3D3D"   # a neutral LIFT above the page; heading text 7.4:1, body ink 6.0:1
-selection_bg   = "#4A4230"   # the one warm-leaning fill: a sand-tinted grey, so a selection is
-                             # visibly a selection and not just a lighter patch (ink 5.5:1)
+selection_bg   = "#4A3F63"   # COOL violet — the one place this theme leaves its warm family, and
+                             # deliberately. A warm brown here (the first attempt, #4A4230) is the
+                             # page and the ink averaged, which is exactly how you arrive at mud:
+                             # it reads as a stain rather than as a band. Violet is a hue no other
+                             # overlay claims — the four are olive, steel blue, gold and amber — so
+                             # a selection can never be mistaken for a find match or an annotation.
+                             # Selected text 5.3:1 on it; the band itself 1.33:1 against the page,
+                             # enough to see without shouting
 
 # The two code surfaces move in OPPOSITE directions from the page, so an inline span
 # can never look like a stray fragment of a fenced block.

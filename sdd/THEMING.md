@@ -96,6 +96,19 @@ Default theme but is silently overpainted by an opaque system theme like
 Breeze-Dark (ScrAP-126). The `text` fill spans `MAX(screen, layout)`, covering the
 non-node margins, so no white frame remains once `> text` is styled.
 
+The **`selection` node needs both properties for the same reason**, and it is the
+easier one to miss because the half that goes wrong is invisible until something is
+selected: a rule stating only `background-color` leaves selected text on the desktop
+theme's `theme_selected_fg_color`, which is the one ink on a themed page the reading
+theme does not own. Measured under Bedtime with the fill themed and the foreground
+left alone: every selected glyph — body, heading and code alike — painted `#000000`
+at 2.1:1 on the fill. `palette.selection_fg` supplies it, derived rather than stated
+as a key: it takes whichever of the page ink or the page itself reads better on the
+fill, walking toward white or black only if both fail AA. That derivation is what
+keeps it right per theme rather than per author — the page ink would strand Sepia
+(brown on brown, 1.5:1), the page would strand Bedtime. Both the body buffer and the
+table cells' own `selection` node take it, by the ScrAP-36 parity rule above.
+
 ## Zoom, and why the theme owns SCALE but never SIZE
 
 This is the load-bearing distinction of the design.

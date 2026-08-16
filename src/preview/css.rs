@@ -207,10 +207,18 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
             to_hex(bg)
         ));
         // The selection follows the theme too, so a selection on a sepia page is not
-        // the desktop's blue. Foreground stays the page's own ink.
+        // the desktop's blue.
+        //
+        // BOTH properties, and the foreground is the half that is easy to miss: with
+        // only the fill stated, selected text keeps the DESKTOP theme's
+        // `theme_selected_fg_color`, which is the one ink on a themed page the reading
+        // theme does not own. Measured under Bedtime before this line existed — every
+        // selected glyph, body and heading alike, painted `#000000` at 2.1:1 on the
+        // fill. `palette.selection_fg` derives it from colours the theme already owns.
         out.push_str(&format!(
-            "textview.scrib-preview > text selection {{ background-color: {}; }}\n",
-            to_hex(palette.selection_bg)
+            "textview.scrib-preview > text selection {{ background-color: {}; color: {}; }}\n",
+            to_hex(palette.selection_bg),
+            to_hex(palette.selection_fg)
         ));
         // Table cells are separate `GtkLabel`s outside the buffer (ScrAP-36/ScrAP-110), so
         // the `> text selection` rule above cannot reach them — each cell label draws
@@ -220,11 +228,14 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
         // Gated on `theme.background` in lockstep with the body rule above: on a themed
         // page both follow the theme; under System both emit nothing and share GTK's
         // default — never one colour in the body and another in the cells. Scoped to
-        // `.cell` so it can't leak onto unrelated labels; foreground stays the cell's
-        // own ink.
+        // `.cell` so it can't leak onto unrelated labels; the foreground comes from the
+        // same derived key as the body's, for the same reason and by the same parity
+        // argument — a cell whose selected text stayed the desktop's ink while the
+        // paragraph above it took the theme's would be ScrAP-36 all over again.
         out.push_str(&format!(
-            "scribtable .cell selection {{ background-color: {}; }}\n",
-            to_hex(palette.selection_bg)
+            "scribtable .cell selection {{ background-color: {}; color: {}; }}\n",
+            to_hex(palette.selection_bg),
+            to_hex(palette.selection_fg)
         ));
     }
 
@@ -452,16 +463,26 @@ mod tests {
     /// from the same `selection_bg` key and gate identically to the body's: on a themed
     /// page both are emitted and equal; under System neither is, so both fall back to
     /// GTK's default together rather than one tinting while the other doesn't.
+    ///
+    /// **Both properties, not just the fill.** A rule stating only `background-color`
+    /// leaves selected text on the DESKTOP theme's `theme_selected_fg_color`; measured
+    /// under Bedtime, that painted every selected glyph `#000000` on the themed fill.
+    /// So the foreground is asserted here beside the background, and for the same
+    /// parity reason: the two paths must agree on it too.
     #[test]
     fn cell_selection_matches_the_body_selection_and_gates_with_it() {
-        let bg_of = |line: &str| {
-            line.split("background-color:")
+        let prop_of = |line: &str, prop: &str| {
+            line.split(&format!("{prop}:"))
                 .nth(1)
+                .unwrap_or_else(|| panic!("no `{prop}` in rule: {line}"))
+                .split(';')
+                .next()
                 .unwrap()
                 .trim()
-                .trim_end_matches("; }")
                 .to_string()
         };
+        let bg_of = |line: &str| prop_of(line, "background-color");
+        let fg_of = |line: &str| prop_of(line, " color");
 
         // Themed page: both selection rules present, and the SAME colour.
         let c = css_for("sepia");
@@ -477,6 +498,16 @@ mod tests {
             bg_of(body),
             bg_of(cell),
             "cell and body selection colours diverged:\n{body}\n{cell}"
+        );
+        assert_eq!(
+            fg_of(body),
+            fg_of(cell),
+            "cell and body SELECTED-TEXT colours diverged:\n{body}\n{cell}"
+        );
+        assert_ne!(
+            fg_of(body),
+            bg_of(body),
+            "selected text must not be drawn in the selection fill's own colour:\n{body}"
         );
 
         // System states no page, so the whole selection block is skipped — the cell

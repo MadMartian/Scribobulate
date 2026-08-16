@@ -271,7 +271,7 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `code_inline_bg` | colour | derived | Inline code-span background. |
 | `code_block_bg` | colour | derived | Fenced code-block background. |
 | `blockquote_bar` | colour | derived | Blockquote indicator bar. |
-| `selection_bg` | colour | derived | Selection background. |
+| `selection_bg` | colour | derived | Selection background. The selected *text* colour is not a key — it derives from this plus the page and its ink (whichever reads better on the fill), so a theme cannot state a fill that strands its own selected text. |
 | `table_border` | colour | derived | Table border. |
 | `table_head_bg` | colour | derived | Table header background. |
 | `rule` | colour | derived | Horizontal-rule colour. |
