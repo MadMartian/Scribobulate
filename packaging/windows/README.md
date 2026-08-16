@@ -305,6 +305,7 @@ Scribobulate\
   share\glib-2.0\schemas\      gschemas.compiled
   share\icons\                 Adwaita, hicolor
   share\gtksourceview-5\       RNG/DTD schemas only
+  share\scribobulate\          themes.toml
 ```
 
 GTK derives its prefix on Windows by taking the path of the loaded GLib DLL and
@@ -324,6 +325,15 @@ Notes on the contents:
 - **`loaders.cache` is copied verbatim, never regenerated.** gvsbuild writes it with
   a relative loader path, so it relocates cleanly; regenerating it on the build
   machine would bake in absolute paths.
+- **`themes.toml` ships as a reference copy, not as a requirement.** The same file is
+  compiled into the binary (`include_str!`), so every shipped theme resolves whether
+  or not this copy exists — deleting it from an install changes nothing on screen. It
+  is here for discoverability, matching what the Linux packages install to
+  `/usr/share/scribobulate/`: without it a Windows user has no installed file to read
+  before writing their own `%APPDATA%\scribobulate\themes.toml`. It resolves as search
+  path row 3 (`$XDG_DATA_DIRS`), so a user override still wins over it. Verified on a
+  staged tree by perturbing this copy and watching the perturbation reach the screen —
+  the only check that distinguishes "shipped" from "actually read".
 
 ## Installer behaviour
 
