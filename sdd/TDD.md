@@ -1255,7 +1255,7 @@
 
 ### 10.17 The highlight colour is sourced per reading theme- **Given** a document with `==marked==` text shown in the preview
 - **When** the active reading theme changes
-- **Then** the wash colour comes entirely from that theme's `mark_bg` key — never a literal — resolving to pale yellow (System), warm tan-rose (Sepia), radioactive toxic-green (Synthwave), amber phosphor (Terminal), and vivid lime (Candy)
+- **Then** the wash colour comes entirely from that theme's `mark_bg` key — never a literal — resolving to pale yellow (System), warm tan-rose (Sepia), deep gold (Bedtime), radioactive toxic-green (Synthwave), amber phosphor (Terminal), and vivid lime (Candy)
 - **And** switching the reading theme at runtime recolours every marked span, in every open window, without a restart
 
 ### 10.18 Highlight holds inside containers, including table cells- **Given** `==marked==` text inside a list item, a blockquote, and a table cell
