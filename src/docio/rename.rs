@@ -291,6 +291,9 @@ fn is_rename_orphan_of(entry: &str, document: &str) -> bool {
 
 /// Put back a document that a crash stranded midway through a case-only rename.
 ///
+/// ScrAP-272: naming the debris `recognisably` is a property of a string, and the
+/// obligation is the verb — this is the recogniser that was missing.
+///
 /// The two-step case-only rename is atomic in each step and **not** across the pair,
 /// so a crash between them leaves the document under `<name>.rename-<pid>-<seq>` and
 /// *nothing at all* under either the old name or the new one. Without this the file
@@ -381,9 +384,13 @@ pub(super) fn recover_rename_orphan(path: &Path) -> Option<PathBuf> {
 ///
 /// A `FileEnumerator` is the authority here and `query_info` is not: `standard::name`
 /// from a `query_info` is derived from the `GFile`'s own path, so it echoes the
-/// question back. Identity is matched on `id::file` rather than by comparing
-/// spellings, which keeps this free of any Unicode-normalisation logic of our own —
-/// the filesystem is asked which entry *is* this file, not which entry looks like it.
+/// question back (ScrAP-270 — MEASURED: a `query_info` that *follows* a symlink
+/// returns the link's own name beside the target's `id::file`). Identity is matched
+/// on `id::file` rather than by comparing spellings, which keeps this free of any
+/// Unicode-normalisation logic of our own — the filesystem is asked which entry *is*
+/// this file, not which entry looks like it. That identity is **not unique among
+/// directory entries**, though: hard links share it, which is ScrAP-271 and why the
+/// scan below finishes before it answers.
 ///
 /// Best-effort by construction: every failure yields `None` and the caller keeps the
 /// requested spelling, which is what it would have used anyway. **A rename that
@@ -408,17 +415,28 @@ fn stored_spelling(renamed: &gtk::gio::File, requested: &str) -> Option<String> 
             gtk::gio::Cancellable::NONE,
         )
         .ok()?;
+    // An identity match is only the answer once the WHOLE directory has failed to
+    // produce the requested spelling — not the moment one is seen. A hard link is a
+    // second name for the same file and so carries the same `id::file`, and `readdir`
+    // order is unspecified, so answering from the first match would substitute an
+    // alias's name for a name the directory holds perfectly well, on some orderings
+    // and not others. Returning early on `requested` is still correct and still the
+    // fast path: that one is decisive on sight.
+    let mut identity: Option<String> = None;
     for info in children.flatten() {
         let entry = info.name();
-        let Some(entry) = entry.to_str() else { continue };
+        let Some(entry) = entry.to_str() else {
+            continue;
+        };
         if entry == requested {
             return None;
         }
-        if info.attribute_string("id::file").as_deref() == Some(want.as_str()) {
-            return Some(entry.to_owned());
+        if identity.is_none() && info.attribute_string("id::file").as_deref() == Some(want.as_str())
+        {
+            identity = Some(entry.to_owned());
         }
     }
-    None
+    identity
 }
 
 /// Rename `path`'s file to `new_name`, in the same directory. The blocking half —
@@ -779,8 +797,9 @@ mod tests {
         let shouted = dir.path().join("NOTES.MD");
         if !shouted.exists() {
             eprintln!(
-                "SKIPPED: {} is case-sensitive, so no spelling mismatch can be staged \
-                 on it — this branch is unproven here",
+                "SKIPPED [TDD 24.13 stored spelling]: {} is case-sensitive, so no spelling \
+                 mismatch can be staged on it — the identity branch of `stored_spelling` is \
+                 NOT verified here",
                 dir.path().display()
             );
             return;
@@ -811,6 +830,34 @@ mod tests {
             stored_spelling(&gtk::gio::File::for_path(&doc), "notes.md"),
             None,
             "the requested spelling is the authoritative one when the directory holds it"
+        );
+    }
+
+    /// A hard link is a *second name for the same file*, so it carries the same
+    /// `id::file` as the document — and identity is the only thing the scan above
+    /// matches on. The requested spelling must still win, whichever of the two the
+    /// directory happens to hand back first.
+    ///
+    /// `readdir` order is unspecified (ext4 hashes it, so it is neither creation nor
+    /// alphabetical order), which is precisely why this cannot be left to whichever
+    /// entry is seen first: the aliases below are enough that some ordering puts one
+    /// of them ahead of `notes.md`, and a scan that answered from the first identity
+    /// match would then rename the tab onto the alias's name. Deciding only after the
+    /// whole directory has been read makes the answer independent of that order.
+    #[test]
+    fn a_hard_link_beside_the_document_does_not_steal_its_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("notes.md");
+        std::fs::write(&doc, "# body\n").unwrap();
+        for alias in ["alias.md", "bnotes.md", "znotes.md", "0notes.md"] {
+            std::fs::hard_link(&doc, dir.path().join(alias)).unwrap();
+        }
+
+        assert_eq!(
+            stored_spelling(&gtk::gio::File::for_path(&doc), "notes.md"),
+            None,
+            "the directory holds `notes.md`, so that is the name — an alias sharing \
+             its inode is not a spelling correction"
         );
     }
 

@@ -25,7 +25,7 @@
 | 21 | Crash forensics | 21.1 – 21.12 |
 | 22 | Crash recovery (swap files) | 22.1 – 22.16 |
 | 23 | Back / Forward navigation history | 23.1 – 23.14 |
-| 24 | Renaming an open document | 24.1 – 24.12 |
+| 24 | Renaming an open document | 24.1 – 24.14 |
 
 ---
 
@@ -2720,3 +2720,16 @@ images and local links) and is not this feature.
 - **Given** the rename dialog is open for one document
 - **When** the reader switches tabs, or another operation on that document completes, while the dialog is open
 - **Then** the rename still applies to the document it was invoked for — the subject is resolved once, when the reader acts, and carried across the dialog and the filesystem call rather than re-asked afterwards
+
+### 24.13 The new name is a name the directory actually holds
+- **Given** a completed rename on a filesystem that stores a spelling other than the one it was given
+- **Then** the tab, the title and the re-attached file monitor all use the **stored** spelling — not the requested one, which names no directory entry
+- **And** where the directory does hold the requested spelling it is used unchanged; another name for the same file, such as a hard link beside it, is not a spelling correction
+- **And** a rename that succeeded is never reported as failed because this follow-up read failed
+
+### 24.14 A document stranded by a crash mid-rename comes back
+- **Given** a case-only rename, which is two steps, interrupted between them — the document is under neither its old name nor its new one
+- **When** the old path is next opened
+- **Then** the document is found with its content intact, rather than reported missing with an offer to create a blank one over it
+- **And** the rename is not replayed, and nothing is moved when the document is present, when more than one candidate matches, or for a file that is not this app's own debris
+- **And** the recovery is silent — the reader is left in exactly the pre-rename state, so there is nothing to announce, accept or discard (ratified; the reasoning is ANTI-PATTERNS #272)

@@ -120,6 +120,9 @@ editor with the resource footprint of a native desktop application.
    them — following a table-of-contents link, or an outline entry, is a step you
    can take back, returning to the position you followed it from. The same keys
    and mouse buttons a web browser uses, plus the View menu and the toolbar.
+   A tab's file can also be **renamed** where it sits (F2, File ▸ Rename, or the
+   tab's context menu) — within its own folder and by name only, so the links and
+   images it resolves relative to itself keep working.
 7. Quit and come back later: every window reopens with its own tabs, view
    mode, split arrangement, and zoom level exactly as they were left.
 

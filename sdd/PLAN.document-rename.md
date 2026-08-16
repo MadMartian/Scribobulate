@@ -11,9 +11,10 @@ pipeline passes and the behaviour was driven against the running app under Xvfb.
 distributed: the contract to TDD §24, the checks to MANUAL-TEST §24, the identity
 matrix and the toolbar exception to [`CAM.md`](CAM.md), the action to
 [`SCHEMA.md`](SCHEMA.md), the two module rows to [`TECH.md`](TECH.md), the mechanism
-prose to the two modules' own doc comments, and the testing lessons to **ScrAP-269**.
-**What is NOT yet distributed, and is the reason it still exists:** the four
-platform claims still SOURCE-TRACED/INFERRED for want of a macOS or Windows seat
+prose to the two modules' own doc comments, and the testing lessons to **ScrAP-269**,
+**ScrAP-270**, **ScrAP-271** and **ScrAP-272**.
+**What is NOT yet distributed, and is the reason it still exists:** the platform
+claims still SOURCE-TRACED/INFERRED for want of a macOS seat
 (see "Remaining gaps" below), and the back-sweep's two **unverified** Save As
 hypotheses, which belong to Save As rather than to Rename and are recorded in
 `CAM.md`'s Document-Identity back-sweep section. Retire this file once those have a
@@ -598,11 +599,22 @@ Four claims are SOURCE-TRACED or INFERRED rather than measured, all because this
 no access to the platform in question. They are **not** blockers for the Linux
 implementation and must not be silently upgraded when it goes green:
 
-1. **Case-only rename on APFS/NTFS** — decisive from source, platform behaviour inferred.
-   `probe_rename.c` row 10. *(Requested from `windows`; no macOS seat is in the room.)*
-2. **macOS and Windows monitor event sequences** — `probe_monitor.c` cases A/B/D/E. *(Same.)*
+1. ~~**Case-only rename on APFS/NTFS**~~ — **CLOSED 2026-08-16**, MEASURED by the
+   `windows` seat on Win10 19045 / NTFS / GTK 4.22.4.
+2. **macOS monitor event sequences** — `probe_monitor.c` cases A/B/D/E. Windows' half was
+   measured 2026-08-16; the kqueue half, and whether the watch follows the inode or the
+   path, remain the mac seat's to measure. *(Also out with the researcher for a source
+   trace, 2026-08-16.)*
 3. **`renamex_np` / `MoveFileExW(…, 0)` atomicity** — only matters if the TOCTOU is ever closed.
-4. **HFS+ NFD round-tripping** of a renamed name — macOS only.
+4. **HFS+ NFD round-tripping** of a renamed name — macOS only. **Sharpened 2026-08-16:**
+   the code comment naming HFS+ may name the wrong filesystem — APFS is *believed* to be
+   normalization-**preserving**, which would make the NFD branch an HFS+-volume concern
+   rather than a current-Mac one. Unverified in either direction; out with the researcher.
+5. **NEW 2026-08-16 — `g_local_file_set_display_name`'s returned `GFile`**: that it is
+   built from the `display_name` argument rather than re-read from the directory is
+   INFERRED (from a measured `query_info` probe plus the NTFS end-to-end result), not
+   source-read. `src/docio/rename.rs`'s `stored_spelling` rests on it. Out with the
+   researcher for a `glocalfile.c` trace.
 
 ## Technical details preserved
 

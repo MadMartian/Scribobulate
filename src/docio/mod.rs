@@ -472,7 +472,10 @@ mod tests {
 
         match read(&doc) {
             DocRead::Loaded(content) => assert_eq!(content, "# survived\n"),
-            other => panic!("expected the stranded document, got {:?}", DebugRead(&other)),
+            other => panic!(
+                "expected the stranded document, got {:?}",
+                DebugRead(&other)
+            ),
         }
     }
 

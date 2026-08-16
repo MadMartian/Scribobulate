@@ -131,7 +131,7 @@ cd "$(dirname "$0")/.."
 # decision cores carrying the feature's real judgement, so the GTK half in
 # `window/rename.rs` could stay thin. Read from the LINES column, per the warning
 # above: the same run printed 78.29% for regions.
-FLOOR=77.42
+FLOOR=77.51
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:
