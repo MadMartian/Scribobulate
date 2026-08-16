@@ -267,6 +267,160 @@ fn temp_name_for(current: &str) -> String {
     )
 }
 
+/// Is `entry` the debris [`temp_name_for`] would have produced for `document`?
+///
+/// Matched against the full shape — `<document>.rename-<digits>-<digits>` — rather
+/// than on the `.rename-` infix alone, because the infix is a substring a user's own
+/// file may legitimately contain (`notes.md.rename-plan.md` is a document, not
+/// debris) and the recovery below *moves* whatever this admits.
+fn is_rename_orphan_of(entry: &str, document: &str) -> bool {
+    let Some(tail) = entry.strip_prefix(document) else {
+        return false;
+    };
+    let Some(tail) = tail.strip_prefix(".rename-") else {
+        return false;
+    };
+    let Some((pid, seq)) = tail.split_once('-') else {
+        return false;
+    };
+    !pid.is_empty()
+        && !seq.is_empty()
+        && pid.bytes().all(|b| b.is_ascii_digit())
+        && seq.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Put back a document that a crash stranded midway through a case-only rename.
+///
+/// The two-step case-only rename is atomic in each step and **not** across the pair,
+/// so a crash between them leaves the document under `<name>.rename-<pid>-<seq>` and
+/// *nothing at all* under either the old name or the new one. Without this the file
+/// is not damaged, but it is invisible: the app reports the document missing and
+/// offers to create a new empty one over it, and the user's text survives only under
+/// a name nothing points at.
+///
+/// Recovery is deliberately narrow, because it moves a file the user did not ask it
+/// to move:
+///
+/// * **Only when `path` itself is absent.** A present document is the document; a
+///   stray orphan beside it is debris this must not touch.
+/// * **Only when exactly one orphan matches.** Two mean either a second crash or a
+///   stale one from an earlier run, and which of them is the document is not knowable
+///   from the names — so neither is moved and both are left where a user can see them.
+/// * **Only back to the name the orphan encodes.** The target is `<document>`, which
+///   is the *pre*-rename name recorded in the orphan's own spelling; the rename the
+///   user asked for is not replayed, since a crash is no evidence they still want it.
+///
+/// Returns the restored path, or `None` when nothing was recovered — which is the
+/// overwhelmingly common case and is not an error.
+pub(super) fn recover_rename_orphan(path: &Path) -> Option<PathBuf> {
+    // The "only when `path` is absent" rule lives HERE, not only at the call site
+    // that already checks it. A guard that a caller has to remember is one refactor
+    // away from being a silent overwrite of a document that was never missing.
+    if path.exists() {
+        return None;
+    }
+    let document = path.file_name()?.to_str()?;
+    let dir = path.parent()?;
+
+    let mut found: Option<PathBuf> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !is_rename_orphan_of(name, document) {
+            continue;
+        }
+        if let Some(first) = &found {
+            log::warn!(
+                "rename recovery: {} has more than one orphan ({} and {}) — recovering neither",
+                path.display(),
+                first.display(),
+                entry.path().display()
+            );
+            return None;
+        }
+        found = Some(entry.path());
+    }
+
+    let orphan = found?;
+    // `std::fs::rename` replaces an existing destination silently, which is the very
+    // hazard this module exists to narrow — but the destination here was just observed
+    // absent by the caller, and re-creating it in the window between is the same
+    // residual TOCTOU the module header already documents rather than claims away.
+    match std::fs::rename(&orphan, path) {
+        Ok(()) => {
+            log::info!(
+                "rename recovery: restored {} from the orphan {}",
+                path.display(),
+                orphan.display()
+            );
+            Some(path.to_path_buf())
+        }
+        Err(e) => {
+            log::warn!(
+                "rename recovery: could not restore {} from {}: {e}",
+                path.display(),
+                orphan.display()
+            );
+            None
+        }
+    }
+}
+
+/// The byte-exact name the filesystem actually stored for `renamed`, when that is
+/// not the name it was asked for. `None` means the requested spelling is the
+/// authoritative one — which is every rename on ext4 and NTFS, and most of them on
+/// APFS.
+///
+/// **`set_display_name` never re-reads what landed on disk**; it reports back the
+/// name it was given, and so does the `GFile` it returns. On a normalising
+/// filesystem those differ: HFS+ decomposes to NFD, so a name typed as NFC is
+/// stored decomposed. Every consumer of the new path — the tab, the window title,
+/// the Documents list, and above all the file monitor the caller is about to
+/// re-attach — would then be keyed on a spelling no directory entry matches, which
+/// is the "re-verify on re-attach" obligation failing at its first step.
+///
+/// A `FileEnumerator` is the authority here and `query_info` is not: `standard::name`
+/// from a `query_info` is derived from the `GFile`'s own path, so it echoes the
+/// question back. Identity is matched on `id::file` rather than by comparing
+/// spellings, which keeps this free of any Unicode-normalisation logic of our own —
+/// the filesystem is asked which entry *is* this file, not which entry looks like it.
+///
+/// Best-effort by construction: every failure yields `None` and the caller keeps the
+/// requested spelling, which is what it would have used anyway. **A rename that
+/// succeeded must never be reported as failed because a follow-up read did.**
+fn stored_spelling(renamed: &gtk::gio::File, requested: &str) -> Option<String> {
+    use gtk::gio::prelude::*;
+
+    let parent = renamed.parent()?;
+    let want = renamed
+        .query_info(
+            "id::file",
+            gtk::gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            gtk::gio::Cancellable::NONE,
+        )
+        .ok()?
+        .attribute_string("id::file")?;
+
+    let children = parent
+        .enumerate_children(
+            "standard::name,id::file",
+            gtk::gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            gtk::gio::Cancellable::NONE,
+        )
+        .ok()?;
+    for info in children.flatten() {
+        let entry = info.name();
+        let Some(entry) = entry.to_str() else { continue };
+        if entry == requested {
+            return None;
+        }
+        if info.attribute_string("id::file").as_deref() == Some(want.as_str()) {
+            return Some(entry.to_owned());
+        }
+    }
+    None
+}
+
 /// Rename `path`'s file to `new_name`, in the same directory. The blocking half —
 /// runs on GLib's I/O pool, never the main thread.
 fn rename_blocking(path: &Path, new_name: &str, rules: FsRules) -> Result<PathBuf, RenameError> {
@@ -279,35 +433,46 @@ fn rename_blocking(path: &Path, new_name: &str, rules: FsRules) -> Result<PathBu
     let change = validate_new_name(&current, new_name, rules).map_err(RenameError::Invalid)?;
 
     let file = gtk::gio::File::for_path(path);
-    let target = path.with_file_name(new_name);
 
-    match change {
-        NameChange::Plain => {
-            file.set_display_name(new_name, gtk::gio::Cancellable::NONE)
-                .map_err(|e| classify(&e))?;
-        }
+    // The `GFile` each call returns is the renamed file — kept, not discarded, because
+    // it is what `stored_spelling` interrogates below.
+    let renamed = match change {
+        NameChange::Plain => file
+            .set_display_name(new_name, gtk::gio::Cancellable::NONE)
+            .map_err(|e| classify(&e))?,
         NameChange::CaseOnly => {
             // Two steps, because the refusal being stepped around is GIO's own and
             // cannot be disabled. Each step is individually atomic with respect to
             // readers; **the pair is not**, so a crash between them leaves the temp
-            // name behind — which is why it is recognisably `<name>.rename-*`.
+            // name behind — which is why it is recognisably `<name>.rename-*`, and
+            // why `recover_rename_orphan` exists to put it back.
             let temp = temp_name_for(&current);
             let midway = file
                 .set_display_name(&temp, gtk::gio::Cancellable::NONE)
                 .map_err(|e| classify(&e))?;
-            if let Err(e) = midway.set_display_name(new_name, gtk::gio::Cancellable::NONE) {
-                // Roll the first step back so a failed case-only rename leaves the
-                // document under the name it started with, rather than under the
-                // temp name — where the tab would be pointing at a file the reader
-                // cannot recognise. Best-effort: if the rollback itself fails there
-                // is nothing further to try, and the original error is the one worth
-                // reporting.
-                let _ = midway.set_display_name(&current, gtk::gio::Cancellable::NONE);
-                return Err(classify(&e));
+            match midway.set_display_name(new_name, gtk::gio::Cancellable::NONE) {
+                Ok(renamed) => renamed,
+                Err(e) => {
+                    // Roll the first step back so a failed case-only rename leaves the
+                    // document under the name it started with, rather than under the
+                    // temp name — where the tab would be pointing at a file the reader
+                    // cannot recognise. Best-effort: if the rollback itself fails there
+                    // is nothing further to try, and the original error is the one worth
+                    // reporting.
+                    let _ = midway.set_display_name(&current, gtk::gio::Cancellable::NONE);
+                    return Err(classify(&e));
+                }
             }
         }
-    }
-    Ok(target)
+    };
+
+    Ok(match stored_spelling(&renamed, new_name) {
+        Some(stored) => {
+            log::info!("rename: filesystem stored {stored:?} for the requested {new_name:?}");
+            path.with_file_name(stored)
+        }
+        None => path.with_file_name(new_name),
+    })
 }
 
 /// Rename the document at `path` to `new_name`, off the main thread.
@@ -482,6 +647,171 @@ mod tests {
         let b = temp_name_for("notes.md");
         assert!(a.starts_with("notes.md.rename-"), "{a}");
         assert_ne!(a, b, "two renames in one directory must not collide");
+    }
+
+    /// The orphan matcher admits exactly what `temp_name_for` emits and nothing that
+    /// merely resembles it. The false-positive half is the load-bearing one: recovery
+    /// *moves* what this admits, so a user's own file that happens to contain
+    /// `.rename-` must not qualify.
+    #[test]
+    fn only_this_apps_rename_debris_is_recognised_as_an_orphan() {
+        // Round-trip against the real producer, so the two cannot drift apart.
+        assert!(is_rename_orphan_of(&temp_name_for("notes.md"), "notes.md"));
+
+        assert!(is_rename_orphan_of("notes.md.rename-1234-0", "notes.md"));
+        assert!(
+            !is_rename_orphan_of("notes.md.rename-1234-0", "other.md"),
+            "debris belongs to the document whose name it carries"
+        );
+        for not_debris in [
+            "notes.md.rename-plan.md", // a document a user could plausibly have
+            "notes.md.rename-",        // no pid, no seq
+            "notes.md.rename-1234",    // no seq
+            "notes.md.rename-a-0",     // pid is not digits
+            "notes.md.rename-1234-x",  // seq is not digits
+            "notes.md",                // the document itself
+        ] {
+            assert!(
+                !is_rename_orphan_of(not_debris, "notes.md"),
+                "{not_debris:?} must not be treated as debris"
+            );
+        }
+    }
+
+    /// The crash this recovers from: the first step of a case-only rename landed, the
+    /// second never ran, and the document exists under neither name the user knows.
+    #[test]
+    fn a_document_stranded_by_a_crash_mid_rename_is_put_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("notes.md");
+        let orphan = dir.path().join(temp_name_for("notes.md"));
+        std::fs::write(&orphan, "# survived\n").unwrap();
+
+        let restored = recover_rename_orphan(&doc).expect("the orphan is recovered");
+
+        assert_eq!(restored, doc);
+        assert_eq!(std::fs::read_to_string(&doc).unwrap(), "# survived\n");
+        assert!(!orphan.exists(), "the orphan is consumed, not copied");
+    }
+
+    /// Recovery must never overwrite a document that is simply there — the orphan
+    /// beside it is debris, and the file on disk is the truth.
+    #[test]
+    fn an_orphan_beside_a_present_document_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("notes.md");
+        let orphan = dir.path().join(temp_name_for("notes.md"));
+        std::fs::write(&doc, "# the real one\n").unwrap();
+        std::fs::write(&orphan, "# debris\n").unwrap();
+
+        assert!(recover_rename_orphan(&doc).is_none());
+        assert_eq!(
+            std::fs::read_to_string(&doc).unwrap(),
+            "# the real one\n",
+            "the present document must survive untouched"
+        );
+    }
+
+    /// Two orphans mean two crashes, and nothing in the names says which one is the
+    /// document. Recovering the wrong one would silently resurrect stale content over
+    /// the newer, so neither is moved.
+    #[test]
+    fn an_ambiguous_pair_of_orphans_recovers_neither() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("notes.md");
+        let first = dir.path().join("notes.md.rename-100-0");
+        let second = dir.path().join("notes.md.rename-200-0");
+        std::fs::write(&first, "one\n").unwrap();
+        std::fs::write(&second, "two\n").unwrap();
+
+        assert!(recover_rename_orphan(&doc).is_none());
+        assert!(!doc.exists(), "nothing is put back");
+        assert!(first.exists() && second.exists(), "both are left in place");
+    }
+
+    /// The path a rename reports must be the path a directory listing agrees with.
+    /// On ext4/NTFS that is the requested spelling by construction; on a normalising
+    /// filesystem it is `stored_spelling`'s answer instead. Asserting it against the
+    /// directory rather than against the input is what makes the same test meaningful
+    /// on all three platforms (TDD 24.10's shape).
+    #[test]
+    fn the_reported_path_is_the_one_the_directory_actually_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("before.md");
+        std::fs::write(&old, "# body\n").unwrap();
+
+        let new = rename_blocking(&old, "after.md", FsRules::Posix).expect("the rename succeeds");
+
+        let listed: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        let reported = new.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            listed.contains(&reported),
+            "the rename reported {reported:?}, which the directory does not hold: {listed:?}"
+        );
+    }
+
+    /// `stored_spelling`'s identity branch — the half that only runs when the name
+    /// asked for and the name on disk differ.
+    ///
+    /// The cause we actually care about is HFS+ decomposing to NFD, which no seat can
+    /// stage on ext4 or NTFS. But the *mechanism* is "a lookup that succeeds under a
+    /// spelling the directory does not hold", and a case-insensitive filesystem
+    /// reproduces that exactly: on NTFS and APFS, `NOTES.MD` opens the file stored as
+    /// `notes.md`. So this drives the identical code path through the identical GIO
+    /// calls, and pins the branch that would otherwise be reachable on no CI machine
+    /// at all.
+    ///
+    /// Case-sensitivity is probed at runtime rather than assumed from the platform:
+    /// APFS can be formatted either way and so can ext4's `casefold`, so `cfg!` would
+    /// be answering a different question than the one that matters. Skipping is
+    /// announced, never silent — a vacuous pass that reads as coverage is worse than
+    /// an absence anyone can look up.
+    #[test]
+    fn a_name_the_directory_does_not_hold_resolves_to_the_one_it_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let stored = dir.path().join("notes.md");
+        std::fs::write(&stored, "# body\n").unwrap();
+
+        let shouted = dir.path().join("NOTES.MD");
+        if !shouted.exists() {
+            eprintln!(
+                "SKIPPED: {} is case-sensitive, so no spelling mismatch can be staged \
+                 on it — this branch is unproven here",
+                dir.path().display()
+            );
+            return;
+        }
+
+        let spelling = stored_spelling(&gtk::gio::File::for_path(&shouted), "NOTES.MD");
+        assert_eq!(
+            spelling.as_deref(),
+            Some("notes.md"),
+            "a lookup under a spelling the directory does not hold must resolve to the \
+             spelling it does — this is the NFD case's mechanism"
+        );
+    }
+
+    /// The fast path, asserted as its own fact: when the directory *does* hold the
+    /// requested spelling, nothing is substituted for it. Without this, a bug that
+    /// returned some other entry's name would still satisfy the test above.
+    #[test]
+    fn a_name_the_directory_does_hold_is_left_exactly_as_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("notes.md");
+        std::fs::write(&doc, "# body\n").unwrap();
+        // A second entry, so "returns None" cannot be an artefact of there being
+        // nothing else the identity branch could have picked.
+        std::fs::write(dir.path().join("other.md"), "# other\n").unwrap();
+
+        assert_eq!(
+            stored_spelling(&gtk::gio::File::for_path(&doc), "notes.md"),
+            None,
+            "the requested spelling is the authoritative one when the directory holds it"
+        );
     }
 
     /// Every refusal renders a sentence a reader can act on — no `Debug` output and
