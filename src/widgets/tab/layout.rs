@@ -139,6 +139,37 @@ pub(super) fn scroll_target(pos: f64, w: f64, value: f64, viewport: f64) -> Opti
     }
 }
 
+/// Every tab's resting slot, left to right: handle `widths` laid end to end
+/// with [`TAB_SPACING`](super::TAB_SPACING) between them. The strip's whole
+/// position model derives from this one function — a tab is *at* `x` only
+/// because the handles to its left measure what they measure, so a handle whose
+/// natural width changes (a label relabelled, a busy spinner shown or hidden)
+/// moves every tab after it and the slots must be re-derived from the new
+/// widths (see [`super::TabBar::handle_width_changed`]).
+pub(super) fn target_positions(widths: &[f64]) -> Vec<f64> {
+    let mut x = 0.0;
+    widths
+        .iter()
+        .map(|w| {
+            let start = x;
+            x += w + super::TAB_SPACING;
+            start
+        })
+        .collect()
+}
+
+/// Whether any tab is away from its resting slot by more than [`SETTLE_EPS`] —
+/// i.e. whether the sibling-slide animation has anything to do. Pairs are read
+/// positionally (`currents[i]` against `targets[i]`); a length mismatch is
+/// answered over the shorter of the two, which the caller never produces (both
+/// come from one walk of the same `Vec`).
+pub(super) fn any_unsettled(currents: &[f64], targets: &[f64]) -> bool {
+    currents
+        .iter()
+        .zip(targets)
+        .any(|(current, target)| !is_settled(*current, *target))
+}
+
 /// The per-frame exponential-ease factor `k = 1 - e^(-dt/tau)` for a frame
 /// delta `dt` (seconds) and time constant `tau`.
 pub(super) fn ease_factor(dt: f64, tau: f64) -> f64 {
@@ -177,6 +208,7 @@ pub(super) fn neighbor_after_remove(removed: usize, remaining: usize) -> Option<
 
 #[cfg(test)]
 mod tests {
+    use super::super::TAB_SPACING;
     use super::*;
 
     fn span(start: f64, width: f64) -> Span {
@@ -347,6 +379,39 @@ mod tests {
     #[test]
     fn scroll_target_clamps_non_negative() {
         assert_eq!(scroll_target(-10.0, 40.0, 100.0, 200.0), Some(0.0));
+    }
+
+    // ── target_positions / any_unsettled ────────────────────────────────────
+
+    #[test]
+    fn target_positions_lay_handles_end_to_end_with_spacing() {
+        assert_eq!(target_positions(&[]), Vec::<f64>::new());
+        assert_eq!(
+            target_positions(&[100.0, 50.0, 80.0]),
+            vec![0.0, 100.0 + TAB_SPACING, 150.0 + 2.0 * TAB_SPACING]
+        );
+    }
+
+    #[test]
+    fn target_positions_shift_everything_after_a_changed_width() {
+        // The whole point of re-deriving: a handle that loses its busy spinner
+        // (here 20px narrower) pulls every tab to its RIGHT back by that much,
+        // and leaves the tabs to its left alone. A strip that keeps the old
+        // slots draws the next tab 20px into its neighbour.
+        let before = target_positions(&[100.0, 70.0, 80.0]);
+        let after = target_positions(&[100.0, 50.0, 80.0]);
+        assert_eq!(after[0], before[0]);
+        assert_eq!(after[1], before[1]);
+        assert_eq!(after[2], before[2] - 20.0);
+    }
+
+    #[test]
+    fn any_unsettled_is_true_only_while_something_is_off_its_slot() {
+        assert!(!any_unsettled(&[0.0, 100.0], &[0.0, 100.0]));
+        // within the settle epsilon ⇒ nothing to animate
+        assert!(!any_unsettled(&[0.0, 100.3], &[0.0, 100.0]));
+        assert!(any_unsettled(&[0.0, 120.0], &[0.0, 100.0]));
+        assert!(!any_unsettled(&[], &[]));
     }
 
     // ── easing ──────────────────────────────────────────────────────────────

@@ -96,6 +96,7 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > |-------|---------|-------|
 > | 176–179 | Windows port — **holder gone; see below** | 176 was reported authored, 177–179 claimed. Neither landed. |
 > | 186 | `feat/spelling` | authored, platform-neutral, inbound |
+> | 276–289 | unmerged branches (`ci`, `feat/spelling`, `windows/*`, and seats' own clones) | **allocated and written, invisible from `master`.** Measured 2026-08-16: every one of 276–289 already carries a `## N.` heading somewhere in reachable history, and the `gtk4-rs` skill's mirror notes name three numbers in this range. Nothing in it is free. (Numbers deliberately un-sigilled, as in the 176–179 note below — a citable form here is the dangling register-to-register reference check 3 exists to catch.) |
 >
 > The Windows port's 165–168 and 175 rows are gone for the same reason the macOS
 > rows below are: those entries **landed** in this file when `feat/windows-port`
@@ -120,10 +121,10 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > the row is noise that will eventually be read as a live claim. Clear a row in the
 > same commit that merges the entries it was holding.
 >
-> **The next free number is 269.** (266, 267 and 268 have all landed below; this line said
-> 264 while 264 was already in the file, which is the drift the "do not derive it"
-> instruction is aimed at — the line is only useful if the commit that mints a number
-> also advances it.) Do not derive it from the highest entry below —
+> **The next free number is 292.** (269–275 landed below; 276–289 are held by unmerged
+> branches — see the row above, which is what the previous "next free is 269" would have
+> collided with had anyone derived a number from this file's own tail; 290 and 291 were
+> claimed on 2026-08-16 for the tab-strip layout pair.) Do not derive it from the highest entry below —
 > unmerged branches hold ranges that are invisible from this file, which is exactly
 > how a collision happens. Check the table, **announce the range you are claiming**,
 > and never fill a reserved gap.
@@ -415,6 +416,8 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 273 | A runtime skip announcement shredded by libtest's own progress output — and one shred read `SKIPPED [rubric]: ok` | B |
 | 274 | A provenance tally that counts measurements instead of outcomes, and so reports the opposite of its evidence | B |
 | 275 | A `GFileMonitor` created while its parent DIRECTORY is absent is permanently dead on Windows, and self-heals everywhere else | A |
+| 290 | A custom widget that CACHES child positions derived from child sizes re-derives them on nothing — `queue_resize` re-runs the layout against the stale cache | A |
+| 291 | Every `GtkAdjustment` write is clamped to `upper − page_size`, so revealing a child added in the same turn scrolls short by exactly that child's width | A |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -3957,9 +3960,20 @@ SKIPPED [TDD 24.13 stored spelling]: test copymap::tests::within_heading_exclude
 **And the thing that licenses the caution without borrowing confidence.** The tempting argument is asymmetric cost — over-trusting ships a bug, under-trusting sends someone to measure, so round toward caution. That treats a provenance label as a lever for producing behaviour rather than as a claim about what is known, and a register whose labels drift toward whatever produces good behaviour has labels that mean nothing when the stakes are real. **Asymmetric cost licenses naming the specific thing to go and measure — which costs nothing in accuracy — and nothing more.**
 
 **Scribobulate**: ScrAP-269's macOS paragraph now splits the correction from the confirmation explicitly and states the semantics/multiplicity distinction; `PLAN.document-rename.md`'s gap 2 was reopened for Windows after being closed wholesale on the strength of a *macOS* measurement — macOS closing is not evidence about Windows, and the two rows only looked like one row because they had been traced together.
+**A fifth instance, from outside this project, sharpens what the check has to be aimed at.** Reviewing the ScrAP-290 weave, the `gtk4-rs` maintainer wrote that the tab strip's ~240 px drift was invisible because *every child is wrong by the same amount*. It is not: the displacement accumulates left to right (measured deltas 0, 0, 20, 40 … 240), because a slot is a running total over the children to its left — the very mechanism stated two sentences above it. Their own post-mortem is the reusable part and is better than the original framing here: the error was not inferring a quantity from a mechanism, which is often all that is available, but inferring the WRONG quantity from the RIGHT one, because the sentence was checked against whether it explained the SYMPTOM (why nobody reports it) rather than whether it followed from the CAUSE. **A plausible explanation of the symptom is not evidence about the mechanism**, and it is more dangerous than a bare unsupported number because it recruits the reader's agreement on the way past. Two corroborations landed with it: the sentence was catchable only because it was LABELLED inferred (they could see it was unsupported while still not seeing it was inconsistent), and in the very edit correcting it they typed "unreported for months", a duration nobody measured, caught before commit. The discipline is the check, not the care — care is what produced the sentence.
 **See**: project-specific provenance discipline; no external home. Kin: ScrAP-269 and ScrAP-270 (whose provenance this governs), GTK4Rs/AP-141 (source-read vs inferred, the labels this miscounts).
 
 ## 275. A `GFileMonitor` created while its parent DIRECTORY is absent is permanently dead on Windows, and self-heals everywhere else
 **Symptom**: live reload never works for one document, on Windows only, with no error, no warning, and a perfectly valid non-null `GFileMonitor` to inspect — while the same code on Linux and macOS starts working within seconds, so it is invisible to every developer not sitting at a Windows box.
 **Scribobulate**: not reachable today — every site that attaches a monitor (`app::attach_file_backing`, the rename re-attach, crash-orphan recovery) does so for a document whose directory exists. Recorded because the reachable version is one ordinary feature away: a monitor armed on a not-yet-created path, or a document on a removable volume. If that is ever built, Windows needs its own rescan; GIO will neither provide one nor say so.
 **See**: gtk4-rs skill → app-lifecycle-and-env (GTK4Rs/AP-275), which holds the three-layer source trace, the per-backend self-heal behaviour, and the two transferable halves (a well-formed question aimed at the wrong level; an API that cannot report failure is not one that does not fail).
+
+## 290. A custom widget that caches child positions derived from child sizes, and re-derives them on nothing
+**Symptom**: a tab opened into an already-overflowing tab strip is drawn on top of its left-hand neighbour, two labels superimposed, and stays there through a switch away and back and two window resizes — while every other tab looks evenly spaced.
+**Scribobulate**: `widgets/tab/bar.rs`'s `with_entry_width_change` funnel (both width-changing setters fused to a retarget), `widgets/tab/ops.rs`'s `handle_width_changed` + `add_tab`'s re-derive-and-settle backstop, `widgets/tab/layout.rs`'s pure `target_positions`/`any_unsettled`; guarded by three per-mechanism `#[gtktest::test]`s in `widgets::tab::bar` (each mutation-tested, singly and paired) and MANUAL-TEST 7.20 / TDD 7.20.
+**See**: gtk4-rs skill → controllers-and-bindings (GTK4Rs/AP-290), which holds the measurement, the accumulating-displacement mechanism, the repaint-bug misdiagnosis signature and the GTK4Rs/AP-254 two-sufficient-mechanisms note. Canonical text is there, not in this file's git history — it was stubbed at mint time.
+
+## 291. Every `GtkAdjustment` write is clamped, so revealing something added in the same turn scrolls short by exactly its own width
+**Symptom**: a tab appended to an overflowing strip is made active but never becomes visible — it sits clipped just past the right-hand edge for good, while every other way of scrolling reveals it perfectly.
+**Scribobulate**: `widgets/tab/ops.rs`'s `scroll_into_view` republishes the range (`scrollpos::reconfigure` over `layout::scroll_extent(content_extent(), viewport)`) before writing a position, with `content_extent()` the single definition `size_allocate` also reads; guarded by `switching_to_a_just_added_tab_scrolls_it_fully_into_view` (mutation-tested) and MANUAL-TEST 7.20 / TDD 7.20.
+**See**: gtk4-rs skill → textview-scrolling-and-adjustments (GTK4Rs/AP-291), which holds the measurement and reframes that module's clamp family — lazy validation is the family's trigger, not the clamp's precondition. Canonical text is there, not in this file's git history — it was stubbed at mint time.

@@ -10,7 +10,6 @@
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
 | Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
-| R | A tab added to an already-overflowing strip is laid out on top of its left-hand neighbour, and stays there | Low |
 
 ## A. Tables are selection islands
 
@@ -743,62 +742,3 @@ is the only variant that is not a timing test at all and is the one worth pricin
 this issue; a genuine return of the quadratic walk reads ~16x and does not come and go.
 
 ---
-
-## R. A tab added to an already-overflowing strip overlaps its neighbour
-
-**Severity**: Low (cosmetic; the document model is correct throughout — the tooltip,
-the window title and the Documents combo all name the right file, and only the strip's
-drawn geometry is wrong)
-
-When a document is opened into a window whose tab strip is **already overflowing**, the
-newly appended tab is drawn *on top of* the tab to its left instead of after it. The two
-labels are superimposed and both are unreadable.
-
-**Reproduced on this seat** (Xvfb + kwin, release build, 2026-08-16), matching the
-operator's report:
-
-1. `scribobulate -n sdd/*.md` — 14 documents, enough that the strip overflows and
-   shows its scroll chevron.
-2. **File ▸ Open** a document that is not already open.
-3. The new tab appears flush against the strip's right edge, overlapping its
-   left-hand neighbour. Operator's independent sighting: same shape, in an unrelated
-   project's `sdd/` directory (so the filenames involved are not this project's, and
-   are deliberately not spelled out here — they would read as pointers to documents
-   that do not exist in this tree).
-
-**What the reproduction settled**, and it rules out the obvious first guesses:
-
-- **It is not a stale-pixel/damage artefact.** It does not clear on its own (still
-  present after 6 s), and it survives two full window resizes — so the overlap is the
-  *computed* layout, not a region someone forgot to invalidate.
-- **It is not the scrolling.** Cycling through all 14 tabs with `Ctrl+Page_Down`,
-  which drives the same `scroll_into_view`, renders cleanly every time. The trigger is
-  **insertion into an overflowing strip**, not scrolling one.
-- **It does not clear by switching away and back**, so there is no user-facing
-  workaround short of resizing the window enough to stop the strip overflowing, or
-  reopening the window.
-- **Only the newly added tab is affected**; every other tab is evenly spaced.
-- The busy spinner in the operator's screenshot is incidental — in this reproduction
-  the tab had already materialised and the overlap was identical.
-
-**Where to look.** `src/widgets/tab/` — `TabBar` is this project's own `GtkScrollable`
-implementation with self-drawn tabs (`layout.rs`, `ops.rs`), so this is ours rather than
-a GTK or Adwaita behaviour. The symptom's shape — the new tab clamped against the right
-edge rather than placed after its predecessor — is consistent with the strip's scroll
-`upper` (content width) not yet including the tab being inserted at the moment it is
-scrolled into view, so the strip cannot scroll far enough and the last tab is drawn
-short by roughly one tab width. **That is a hypothesis from the symptom, not a
-diagnosis** — nothing in the layout code was read to confirm it, and the fact that it
-survives a resize is not obviously consistent with it, which is the first thing to
-reconcile.
-
-**Mitigation options**:
-- Fix the insertion path so the new tab is measured into the strip's content width
-  *before* it is scrolled into view, then re-check that a resize recomputes it. Cheapest
-  if the hypothesis above holds.
-- Failing that, reproduce under `GTK_DEBUG=interactive` and read the last tab's
-  allocation directly, which distinguishes "allocated overlapping" from "allocated
-  correctly and drawn at the wrong offset" — the two have different fixes and the
-  screenshot cannot tell them apart.
-- Accept it. It is cosmetic, it needs an overflowing strip, and the tooltip still
-  identifies the document.

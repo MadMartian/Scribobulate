@@ -192,7 +192,7 @@ Every module below runs on the GTK main thread; see [Concurrency model](#concurr
 | `window/outline_nav.rs` | Owns the outline sidebar's data side: rebuilding the heading tree and navigating from it. |
 | `window/annotations_nav.rs` | Owns the annotations viewer's data side, and the one mode-aware annotation navigator the viewer's rows and the Next/Previous Annotation commands both route through — so a view mode cannot be served by one and not the other. |
 | `winstate/` | Owns the typed per-window and per-tab state registry, and the pure decision cores that read it. |
-| `widgets/tab/` | Owns the tab-strip widget: `TabBar`, its rows, and their drag, close and context-menu mechanics. |
+| `widgets/tab/` | Owns the tab-strip widget: `TabBar`, its rows, and their drag, close and context-menu mechanics. Positions are *cached* (a resting slot plus an animated position) and derived from the running total of the handle widths to a tab's left, so it also owns the one funnel every width-changing mutation goes through to re-derive them — GTK's `queue_resize` re-runs the layout against the stale cache (ScrAP-290). |
 | `widgets/table/` | Owns `ScribTableWidget`, the custom widget rendering Markdown tables inside the preview. |
 | `widgets/table/linkcell.rs` | Owns a link in a table cell across **both widget shapes one renders in** — the pure-link cell's button and the read-back of its caption, the link markup a mixed cell's label carries, and the single activation both delegate to. Owning both is the point: the shapes are indistinguishable to a reader, so nothing may reach one without reaching the other. |
 | `preview/` | Owns construction of the read-only preview widget and its interaction, scroll and CSS wiring. |

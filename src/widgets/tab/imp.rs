@@ -232,10 +232,7 @@ impl WidgetImpl for TabBar {
         // place — see the module doc. `layout::resolve_gutter` turns it,
         // the width, and the chevrons' true natural width into the gutter
         // reservation and the resulting tab viewport, self-consistently.
-        let full_content_w = tabs
-            .last()
-            .map(|t| t.target_x.get() + natural_width(&t.handle))
-            .unwrap_or(0.0);
+        let full_content_w = self.obj().content_extent();
         self.content_width.set(full_content_w);
 
         // The chevrons' TRUE natural width — computed unconditionally

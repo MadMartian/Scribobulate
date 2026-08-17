@@ -750,6 +750,13 @@
 - **And** when it closes, the document window is showing its content again — fully painted, never a black or blank rectangle where the document was
 - **And** the document window is still full-screen afterwards, and the green button still takes an ordinary window into full-screen as before
 
+### 7.20 A tab opened into a full tab strip lands after the others and is visible
+- **Given** a window whose tab strip already overflows — more open documents than fit, so the strip shows its scroll chevrons — and whose tabs have been through the states a real session puts them in (a background tab shows, then loses, its loading spinner; tabs are re-titled as documents open and save)
+- **When** the user opens another document into that window, or creates a new one
+- **Then** its tab is drawn **after** the last existing tab, evenly spaced with the rest — never on top of its left-hand neighbour, and never leaving two labels superimposed
+- **And** the strip scrolls far enough to show the new tab **in full**: it is the active tab, so it must be visible, not clipped past the right-hand edge
+- **And** the tabs that were already there stay evenly spaced, whatever changed their widths earlier in the session
+
 ---
 
 ## 8. Single-instance lifecycle

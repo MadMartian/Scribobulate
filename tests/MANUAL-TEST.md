@@ -207,6 +207,31 @@ shell's own argv, so a multi-line call whose later lines mention the pattern kil
 itself (GTK4-Rs skill, "self-kill hazard"). In a shared single-instance session with
 multiple test windows, close and recount one at a time.
 
+**And bare `pkill <name>` is not the escape from that** — it is worse for the
+failure that actually happens. The self-match argument above is about your own
+shell, and it makes the short form look safe; but **neither form has any notion
+of your display**, so a private `DISPLAY` protects nothing, and a bare name match
+reaches the operator's copy of that program *more* reliably, not less. The
+process a harness starts inside a test display is by construction one the
+operator is likely also running, because that is why the harness picked it (a
+window manager most of all). Kill the PID you captured at launch, never a
+pattern of any width.
+
+**If you do it anyway, the two harness mistakes fail differently, and knowing
+which you made stops a second hunt.** Killing the host's WM by pattern is
+*loud* and cheap: on X11 the clients survive and `DISPLAY=:0 <wm> --replace`
+adopts them back, windows and geometry intact (measured, KDE/X11 — and the
+shortcut daemon is untouched, because a WM is a *client* of it, not its owner;
+registrations were verified still held afterwards, though key delivery was
+not, which would mean pressing a global shortcut on a live session). Starting
+the host's own WM *inside* the test display is the silent one: it can reach
+the real session and cost the operator their global shortcuts, with nothing
+logged and no reason for them to connect it to your test run. So after a
+teardown mistake, restore the WM and stop looking; do not go hunting a
+shortcut fault you did not cause. **On Wayland the first half does not apply
+at all** — the compositor is the display server, so killing it takes the
+session and every client with it, and there is no `--replace` to come back.
+
 ### 1.7 Is a defect a regression? (also: the positive control for a fix)
 
 ```bash
@@ -453,14 +478,29 @@ faithful focus/grab semantics without touching their screen:
 
 ```bash
 Xvfb :99 -screen 0 6400x1440x24 & sleep 2
-DISPLAY=:99 kwin_x11 & sleep 4          # the operator's real WM, headless
+DISPLAY=:99 openbox --sm-disable & sleep 2   # a WM, and ONLY a WM
 DISPLAY=:99 cargo run --release -- -n /path/to/file.md &
 # NOTE: with a WM there is now a title bar — get the client-area origin from
 # `xwininfo -id $WID | grep 'Absolute upper-left'`, not the windowmove target.
 ```
 
+**Run a minimal WM on the test display, never the host desktop's own.** A
+private display is not a sandbox, and this instruction used to say the
+opposite. A desktop-session WM brings its session-management and D-Bus stack
+with it, so it can reach the host's real display and contend for
+process-global resources there; the recorded case is a desktop WM started
+inside Xvfb costing the host session its global shortcuts (a shortcut daemon's
+passive key grabs are first-come, and the loser gets `BadAccess` with nothing
+logged) — see the `gtk4-rs` skill. The second failure is the harness's own:
+sharing a binary name with the host's WM makes a pattern-matched kill
+(`pkill -f`) unable to tell your process from theirs, and one such cleanup
+step in this project killed the host's session WM. So: **`openbox
+--sm-disable`**, which gives the mapping, sizing, focus and grab semantics
+these checks depend on and shares nothing with the host session; and **kill
+only the PID you launched**, never by pattern.
+
 Any annotation-overlay item (§17.5-17.6, §17.13-17.21) MUST be run under a WM
-(kwin-on-Xvfb or the real session); a WM-less pass will falsely green them.
+(openbox-on-Xvfb or the real session); a WM-less pass will falsely green them.
 
 **Multi-window items (§3 §7.6-§7.10, §4.3) need a second window positioned
 apart from the first, and bare `Xvfb` starts with no window manager at all** —
@@ -667,6 +707,8 @@ gtk4-rs skill's dev-loop doc on why geometry/rendering bugs leave no warning.
 - [ ] **7.17** **Installed app carries its own icon (TDD 7.17).** Install for the platform first (platform procedure: §A, *Install*) — the rubric does not apply to an uninstalled run. Then check the app's own icon wherever the platform shows one (title bar, taskbar/Dock, task switcher) (an **absolute** path — a bundle does not inherit the shell's working directory, and a relative one silently opens a blank document) and check the Dock and Cmd-Tab. Each surface shows the robot icon, never a generic placeholder ("exec" on macOS). Also open **Help ▸ About** → the dialog's logo is the app icon, not a broken-image placeholder; that surface comes from the GResource rather than the OS packaging, so it is the half that must hold even uninstalled. Machine-checkable half on macOS: `lsappinfo info -only bundleid,name -app "$(pgrep -f Scribobulate.app | head -1)"` reports `com.extollit.scribobulate` / `Scribobulate` rather than a null identifier and a lowercase name
 
 - [ ] **7.19m** **A dialog raised over a natively full-screen window stays inside it (TDD 7.19).** *macOS only, and `m`-suffixed for the reason the rule gives: the mechanism is macOS's own — a full-screen window gets its own **Space**, and `-[NSWindow addChildWindow:]` against a parent already in one runs a real enter-full-screen transition on the **child**; `src/platform/mac/fullscreen.rs` carries the full trace.* **Run this from the `.app` bundle** (platform procedure: §A.2, *Install*), never `target/release/scribobulate` — the fault does not reproduce from a bare binary at all, so a bare run is a guaranteed false PASS. Put the window into full screen with the OS's own control (the green button, or `set value of attribute "AXFullScreen" of window 1 to true`), then, **for each of the two dialogs in turn** — **Help ▸ About**, and the unsaved-changes prompt (edit the document, then Ctrl+W): (a) the dialog opens **small, over the document**, and the display does **not** flip to another Space — machine-checkable as `value of attribute "AXFullScreen"` reading `false` for the dialog and `true` for the document window, both listed at once; (b) **Escape dismisses it** (About closes; the prompt cancels); (c) after it closes the document window shows its **content**, not a black rectangle, and is still full screen; (d) on the prompt, **Cancel, Discard and Save each act** (Cancel leaves the tab open and still dirty; Discard closes it with the file unchanged on disk; Save writes it). The pre-fix signature, worth recognising: the dialog itself became full screen in a Space of its own (`styleMask` gaining `0x4000`), and coming back left the parent black. **Driving note — the Escape half is the one the harness lies about:** `cliclick kp:esc` posts an event this app never receives, so Escape reads as broken on a build where it works; send it as `osascript -e 'tell application "System Events" to key code 53'` and prove the primitive on a known-good target (Ctrl+F opens the find bar, Escape closes it) before believing any Escape result.
+
+- [ ] **7.20** **A tab opened into an already-overflowing strip lands after its neighbour, and is visible (TDD 7.20).** Launch with enough documents that the strip overflows and shows its chevrons — `scribobulate -n sdd/*.md` (14) is the reproduction on record — and let every background tab finish rendering (each drops its loading spinner, which **narrows its handle**: that width change is the whole mechanism, so do not skip the wait). Then open one more document that is not already open (File ▸ Open, or `app.new`, or Ctrl+N). Read the strip: the new tab is drawn **after** the last one, evenly spaced, and it is the active tab, **fully visible** at the right-hand edge — not clipped past it, and above all not superimposed on its left-hand neighbour with both labels unreadable. The failure this guards is *computed layout*, not a stale-pixel artefact — it survives a window resize and a switch away and back, which is how to tell the two apart. Then cycle every tab (Ctrl+PageDown ×N) → each is revealed in turn, still evenly spaced. Machine-drivable end to end: launch, then `gdbus call --session --dest <the app's unique bus name for YOUR pid, per §1.2> --object-path /com/extollit/scribobulate --method org.gtk.Actions.Activate "new" "[]" "{}"`, and capture the strip. (ScrAP-290/ScrAP-291; the strip's slot arithmetic and the reveal are both automated in `widgets::tab::bar`, this covers the real strip under a real session.)
 
 ### §8 Single-instance lifecycle
 - [ ] **8.1** App running, launch again (no `-n`) with a different file → opens in a new window of the SAME process — one PID (platform procedure: §A, *Launch & instance identity*)
