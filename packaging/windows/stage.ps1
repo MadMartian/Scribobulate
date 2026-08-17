@@ -124,6 +124,25 @@ if (Test-Path "$GtkPrefix\share\gtksourceview-5") {
     Copy-Item "$GtkPrefix\share\gtksourceview-5" "$OutDir\share\" -Recurse
 }
 
+# The reading themes, as the Linux packages already install them
+# (packaging/linux/payload.sh -> /usr/share/scribobulate/themes.toml). The same
+# file is compiled into the binary as the last-resort fallback, so this copy is
+# never REQUIRED -- omitting it costs nothing at startup and every shipped theme
+# still resolves. What it costs is discoverability: a Windows user who wants to
+# add or tweak a theme otherwise has no installed copy to read, and the search
+# path's first row (%APPDATA%\scribobulate\themes.toml) is a file they must
+# invent from scratch. Linux users have had the reference copy since the feature
+# shipped; this closes that gap rather than adding a mechanism.
+#
+# It lands under <root>\share because that is search-path row 3
+# ($XDG_DATA_DIRS -> .../scribobulate/themes.toml), and GLib derives <root>\share
+# on Windows from the loaded module's prefix -- the SAME prefix rule stated at the
+# top of this script for icons and schemas, so it costs no new assumption. Being
+# row 3, it sits BELOW a user override (row 1), which is what makes an override
+# still win against it.
+New-Item -ItemType Directory -Force -Path "$OutDir\share\scribobulate" | Out-Null
+Copy-Item "$RepoRoot\data\themes.toml" "$OutDir\share\scribobulate\"
+
 $files = Get-ChildItem $OutDir -Recurse -File
 $size  = ($files | Measure-Object Length -Sum).Sum
 Write-Host ("Staged {0} files, {1:N1} MB -> {2}" -f $files.Count, ($size / 1MB), (Resolve-Path $OutDir))

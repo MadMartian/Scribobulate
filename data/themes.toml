@@ -291,3 +291,98 @@ mark_bg         = "#ffb000_4d"   # amber-phosphor wash — the ==highlight== mar
 rule          = "#555555"   # grey horizontal rule
 table_border  = "#555555"   # ANSI 8 grey grid
 table_head_bg = "#0000aa"   # ANSI 4 blue header fill (yellow header text on it)
+
+# ── Bedtime ────────────────────────────────────────────────────────────────────
+# A night-reading theme, in a sans face: warm sand ink on a neutral dark-grey page.
+# Sepia's mood with its luminance inverted — but NOT its hue, because the page here
+# is deliberately neutral (operator-supplied #323232 / #CEBF9F) and the warmth lives
+# entirely in the ink. That split decides every other colour in the block:
+#
+#   * PAGE FURNITURE (rule, table grid, code surfaces) is NEUTRAL GREY — it belongs
+#     to the page, and tinting it warm would leave the sand ink with no hue of its own.
+#   * CONTENT ACCENTS (headings, links, list markers, quote bar, overlays) are WARM,
+#     drawn from the ink's own sand/amber family, so every coloured thing on the page
+#     reads as one voice against a grey ground.
+#
+# Body contrast is 7.07:1 — WCAG AAA, and within a whisker of Sepia's 7.51:1, which
+# is the point: the same reading comfort with the lights off.
+[themes.bedtime]
+name       = "Bedtime"
+symbol     = "🛌"
+background = "#323232"   # neutral dark grey page
+foreground = "#CEBF9F"   # warm sand ink — 7.07:1 (AAA)
+accent     = "#D9B87C"   # lighter sand-gold — 6.78:1; the family the furniture accents follow
+
+# Sans, as the theme's defining face. Segoe UI leads because it is the one grotesque
+# guaranteed present on Windows; Inter and Source Sans 3 are the good Linux/macOS
+# faces; Cantarell/Noto/Liberation carry a bare box. Generic-terminated, as every
+# stack here must be.
+#   ⚠ Install a STATIC Inter if you install one at all. Google Fonts ships it as a
+#   VARIABLE font (`Inter[opsz,wght].ttf`), which GTK 4.6's Pango does not render —
+#   and a variable font placed first SHADOWS the working faces behind it, the exact
+#   trap that put Exo 2 after Jura in Synthwave above.
+font_family   = '"Segoe UI", Inter, "Source Sans 3", Cantarell, "Noto Sans", "Liberation Sans", Arial, sans-serif'
+syntect_theme = "base16-eighties.dark"   # its warm orange/gold token set suits the sand ink
+
+# Content accents — all warm, all from the ink's family.
+heading_color  = "#E8D9B4"   # a lighter TINT of the body ink — 9.17:1. Headings lift by value
+                             # rather than by hue, so the page never gains a second colour
+link           = "#E5A855"   # amber — 6.14:1. Far enough round from the sand ink to be seen as
+                             # a link at a glance, without introducing a foreign hue
+list_marker    = "#D9B87C"   # sand-gold bullets/numerals/checkboxes (marker glyph only)
+blockquote_bar = "#D9B87C"   # the same sand-gold: bar and markers read as one "furniture" family
+
+# Page furniture — NEUTRAL, because it belongs to the grey page, not to the warm ink.
+rule           = "#565656"   # grey section rule
+table_border   = "#4A4A4A"   # dimmer than the rule, so a grid reads as an outline, not a cage
+table_head_bg  = "#3D3D3D"   # a neutral LIFT above the page; heading text 7.4:1, body ink 6.0:1
+selection_bg   = "#4A3F63"   # COOL violet — the one place this theme leaves its warm family, and
+                             # deliberately. A warm brown here (the first attempt, #4A4230) is the
+                             # page and the ink averaged, which is exactly how you arrive at mud:
+                             # it reads as a stain rather than as a band. Violet is a hue no other
+                             # overlay claims — the four are olive, steel blue, gold and amber — so
+                             # a selection can never be mistaken for a find match or an annotation.
+                             # Selected text 7.6:1 on it (see selection_fg); the band itself 1.33:1
+                             # against the page, enough to see without shouting
+selection_fg   = "#E6E4E9"   # near-white, a hair cool. This is the ONE place the sand ink is set
+                             # aside, and deliberately: warm tan on a cool violet band is the one
+                             # pairing on this page that looks wrong while measuring fine (the
+                             # derived answer would be the sand at a perfectly legal 5.3:1). A key
+                             # exists for exactly this — contrast is not taste. 7.6:1
+
+# The two code surfaces move in OPPOSITE directions from the page, so an inline span
+# can never look like a stray fragment of a fenced block.
+code_block_bg  = "#262626"   # recessed below the page (ink 8.3:1)
+code_inline_bg = "#3F3F3F"   # lifted above it (ink 5.8:1)
+
+# Overlays are SHADES, not translucent washes — the dark-page rule Candy records
+# above: a wash composites toward the page and loses the chroma that made the hue
+# worth choosing. The ceiling here is tight, because the ink is a mid-value sand
+# rather than a near-white: a fill must sit at L <= 0.0786 for the body text to hold
+# 4.5:1 on it, and the page itself is already L 0.0319. So all four live in a narrow
+# value band and are told apart by HUE, not by lightness.
+annotation_hl   = "#4F4420"   # olive-amber — the annotated-claim overlay (ink 5.3:1)
+find_hl_all     = "#2B3F55"   # steel blue — the one COOL hue on the page, so a find match can
+                              # never be mistaken for an annotation (ink 6.0:1)
+find_hl_current = "#E0A040"   # bright amber, undiluted: the current match is a transient pointer,
+                              # and every shipped theme treats it as one (5.7:1 on the page)
+mark_bg         = "#51634A"   # muted GREEN band for ==highlight== — the only overlay carrying a
+                              # hue from outside the page's warm/steel families, chosen because a
+                              # mark must not be mistaken for the violet selection band or the grey
+                              # inline-code fill it commonly sits beside. It is also the only band
+                              # here that breaks the L<=0.0786 fill ceiling (L 0.1117), which is
+                              # exactly why it states its own ink below rather than relying on the
+                              # body's: the sand ink reads only 3.58:1 on it
+mark_fg         = "#A9CE99"   # light green ink for marked text — 3.70:1 on the band.
+                              # ⚠ This is the one colour on the page BELOW the 4.5:1 floor every
+                              # other overlay clears; it passes only the 3:1 large-text floor.
+                              # Chosen knowingly by the operator over a brighter band that would
+                              # have measured 7.31:1, because the two-green pairing is the look
+                              # wanted. Recorded here so a future reader does not "fix" it by
+                              # accident, and does not copy it as this file's standard
+
+# Geometry: a little airier than the default, which is most of what makes a page feel
+# unhurried. Everything else — typography scales, table padding, list step — is
+# omitted and therefore inherited from [themes.system].
+list_item_gap = 10
+rule_space    = 6

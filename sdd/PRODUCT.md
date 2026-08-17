@@ -96,7 +96,7 @@ editor with the resource footprint of a native desktop application.
    matters because the margin markers are drawn rather than built from widgets and a
    screen reader cannot reach them directly. Choose a **reading theme** for the preview — the default follows the desktop, or
    pick a book-like page (View ▸ Reading Theme, or the toolbar). Scribobulate ships
-   **System** (desktop-matching), **Sepia**, **Synthwave**, **Terminal**, and **Candy**; the
+   **System** (desktop-matching), **Sepia**, **Bedtime**, **Synthwave**, **Terminal**, and **Candy**; the
    choice is remembered, and themes are plain data a reader can add to or adjust.
 4. Leave Scribobulate open while an AI agent (or any other program) edits the
    file — the view reloads automatically as the file changes.

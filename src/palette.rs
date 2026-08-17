@@ -71,6 +71,17 @@ pub(crate) struct Palette {
     pub(crate) blockquote_bar: gdk::RGBA,
     /// The selection / accent tint the preview's floating chrome derives from.
     pub(crate) selection_bg: gdk::RGBA,
+    /// The ink SELECTED text is drawn in, over [`Self::selection_bg`].
+    ///
+    /// This is derived, not stated: styling the selection's background alone leaves
+    /// its foreground to the desktop GTK theme, which is the one ink on the page that
+    /// the reading theme does not own. Measured on Bedtime (sand ink on a neutral
+    /// grey page): selecting text painted every glyph — body, headings, code alike —
+    /// pure `#000000` at 2.1:1 on the selection fill, because the desktop's
+    /// `theme_selected_fg_color` won. A themed page therefore has to state this
+    /// colour as well as the fill, or the theme ends at the moment a reader drags
+    /// across a paragraph.
+    pub(crate) selection_fg: gdk::RGBA,
     pub(crate) table_border: gdk::RGBA,
     pub(crate) table_head_bg: gdk::RGBA,
     /// The horizontal rule's line colour (an anchored `GtkSeparator`, so it is
@@ -198,6 +209,41 @@ impl Palette {
             }
         });
 
+        // Selected text's own ink — stated by the theme if it cares, else derived.
+        //
+        // The derivation: the page ink and the page itself are the two colours already
+        // proven to belong to this theme, so the selection takes whichever reads better
+        // on the fill rather than inventing a third — on a dark fill usually the ink, on
+        // a bright one usually the page (Terminal's cyan selection takes black,
+        // Synthwave's magenta takes the indigo page). Only if BOTH fail AA does it walk
+        // toward white or black, the same escape the link colour above uses.
+        //
+        // Why the key exists on top of that: the derivation optimises for CONTRAST, and
+        // contrast is not taste. Bedtime's sand ink clears 5.3:1 on its violet selection
+        // and still looks wrong on it — warm ink on a cool band — so Bedtime states a
+        // near-white instead. No ratio would have caught that, which is precisely why
+        // the answer has to be statable rather than only computed.
+        let selection_bg = theme.selection_bg.unwrap_or(accent);
+        let selection_fg = theme.selection_fg.unwrap_or_else(|| {
+            let mut best = if contrast(fg, selection_bg) >= contrast(bg, selection_bg) {
+                fg
+            } else {
+                bg
+            };
+            let target = if luminance(selection_bg) < 0.5 {
+                gdk::RGBA::new(1.0, 1.0, 1.0, 1.0)
+            } else {
+                gdk::RGBA::new(0.0, 0.0, 0.0, 1.0)
+            };
+            for _ in 0..20 {
+                if contrast(best, selection_bg) >= 4.5 {
+                    break;
+                }
+                best = mix_rgba(best, target, 0.1);
+            }
+            best
+        });
+
         Palette {
             page_bg: bg,
             body_fg: fg,
@@ -205,7 +251,8 @@ impl Palette {
             code_block_bg,
             link_fg: theme.link.unwrap_or(link_fg),
             blockquote_bar: theme.blockquote_bar.unwrap_or(accent),
-            selection_bg: theme.selection_bg.unwrap_or(accent),
+            selection_bg,
+            selection_fg,
             // The table chrome's CSS used alpha(@theme_fg_color, 0.25 / 0.08) — the
             // CHROME ink, not the body ink. The alpha()/mix() are computed HERE now,
             // so the generated rules carry concrete colours and the derivation stays
@@ -282,7 +329,7 @@ impl Palette {
 
 #[cfg(test)]
 mod tests {
-    use super::{contrast, luminance, mix_rgba, syntect_color_to_rgba, to_hex};
+    use super::{contrast, luminance, mix_rgba, syntect_color_to_rgba, to_hex, Palette};
     use gtk::gdk;
 
     const BLACK: gdk::RGBA = gdk::RGBA::BLACK;
@@ -339,5 +386,39 @@ mod tests {
         assert_eq!(to_hex(mix_rgba(BLACK, WHITE, 1.0)), "#ffffff");
         // Midpoint of black→white is mid-grey (0.5*255 = 127.5 → 128 = 0x80).
         assert_eq!(to_hex(mix_rgba(BLACK, WHITE, 0.5)), "#808080");
+    }
+
+    /// Selected text stays legible on every shipped theme's selection fill.
+    ///
+    /// The bug this pins: styling the selection's background alone left its
+    /// foreground to the desktop GTK theme, which painted selected text `#000000`
+    /// at 2.1:1 on Bedtime's fill — measured on screen, not theorised. The
+    /// derivation picks between the page ink and the page itself, so the assertion
+    /// is on the RATIO rather than on a literal: a future theme is free to choose
+    /// any fill, and this fails if that choice would strand its selected text.
+    #[test]
+    fn selected_text_clears_the_legibility_floor_on_every_theme() {
+        let themes = crate::theme::Themes::builtin();
+        for (id, _name, _sym) in themes.chooser_list() {
+            let t = themes.resolve(&id);
+            // Only a theme that states its own page emits a selection rule at all;
+            // System defers the whole block to the desktop (TDD 18.2).
+            let (Some(bg), Some(fg)) = (t.background, t.foreground) else {
+                continue;
+            };
+            let p = Palette::from_base(bg, fg, fg, t.accent.unwrap_or(fg), &t);
+            let c = contrast(p.selection_fg, p.selection_bg);
+            assert!(
+                c >= 4.5,
+                "{id}: selected text {} on selection fill {} is {c:.2}:1",
+                to_hex(p.selection_fg),
+                to_hex(p.selection_bg)
+            );
+            assert_ne!(
+                to_hex(p.selection_fg),
+                to_hex(p.selection_bg),
+                "{id}: selected text drawn in the fill's own colour"
+            );
+        }
     }
 }

@@ -77,8 +77,8 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
   - Replace in edit and split modes (Ctrl+H)
   - Outline sidebar jumps to any heading (F9)
 - **Comfortable reading**
-  - Reading themes: **Sepia**, **Synthwave**, **Terminal**, **Candy**, or
-    match your desktop (**System**)
+  - Reading themes: **Sepia**, **Bedtime**, **Synthwave**, **Terminal**,
+    **Candy**, or match your desktop (**System**)
   - Zoom the preview from 50% to 300% — remembered across sessions
   - Arrange the split any way you like (left/right or top/bottom)
 - **Tabs and windows that stay out of the way**
