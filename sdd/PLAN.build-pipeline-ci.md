@@ -178,7 +178,15 @@ Three rules carry over from the work already done and are not optional:
   project-level change that takes effect for everyone on merge, which is why the existing
   workflow's triggers are documented in its own header rather than treated as a job detail.
 
-## SESSION HANDOFF — 2026-08-14, read this first
+## SESSION HANDOFF — 2026-08-14, updated 2026-08-16 after the rebase landed
+
+> **2026-08-16 — `ci` IS NOW REBASED ONTO `master` (`9f16250`), and the register numbers in
+> the rest of this section are stale by design; the corrections are inline below.** The
+> pre-rebase tip is tagged `pre-renumber-ci-20260816`. Every other seat needs
+> `git fetch && git reset --hard origin/ci`, because the rebase rewrote all three commits
+> and a pull will not do. **Commit or stash your work first** — that reset is destructive,
+> and an unlanded branch of your own wants rebasing onto the new tip rather than resetting
+> over. If you hold a citation into `ScrAP-269`–`282` in work that has not landed, add 7.
 
 **Branch state.** `ci` was **squashed from 22 commits to one** (`8e45913`) so it rebases onto
 `master` in a single conflict pass rather than twenty-two; the two branches overlap on thirteen
@@ -193,27 +201,30 @@ CI and durability only. All were told to `git fetch && git reset --hard origin/c
 pull, because the squash left no common recent ancestor.
 
 **Register allocation is by conversation, not by reading the tail** — see POLICY § SDD register
-writes. `master` currently holds `ScrAP-283`, **`ScrAP-284`**, `ISSUES S` and `ISSUES T`; `ci`
-holds up to `ScrAP-282` and `ISSUES R`. **`master`'s registers look complete and are behind**;
-that misread happened three times this session.
+writes.
 
-> **2026-08-14, later — `ScrAP-284` is TAKEN on `master`; do not allocate it from `ci`.** The
-> `linux-master` seat allocated it (drag-and-drop: per-platform advertise sets) and also extended
-> `ScrAP-283` and rescoped the drag-and-drop `ISSUES` entry. Now committed at `master ebcfdd4`,
-> with `sdd/scrap-numbers.manifest` ending `…283, 284` — verified from `ci`, not taken on report.
-> `ci`'s own manifest still ends at `282` and is correct for `ci`. The next `ScrAP` free for a
-> `ci` allocation is therefore **285**, and it must still be claimed by conversation, not by
-> reading either tail. Note `ebcfdd4` is **local to the master clone and unpushed**, so it is
-> reachable from this repository but not from `github`.
+> **2026-08-16, SETTLED BY THE REBASE — the numbers below are what actually happened, and they
+> are not what this section predicted.** `ci` held `ScrAP-269`–`282` and `ISSUES R`. `master`
+> held `ScrAP-269`–`275` (from `feat/spelling` and `feature/rename`, both merged) and
+> `ISSUES R`. **Those are the same numbers, twice**, so the rebase renumbered every `ci` entry
+> by +7: **`269`–`282` became `276`–`289`**, and `ci`'s `ISSUES R` became **`ISSUES S`**.
+> `master`'s numbers were not touched — it is the merge target, its entries are cited from
+> shipped code, and the branch that has not landed is the one that pays. The next free `ScrAP`
+> is **290**; the next free `ISSUES` letter is **T**.
 >
-> **Why this note was written before that commit existed, which is the part worth keeping:** for
-> about forty minutes the allocation lived *only* in an uncommitted worktree and in a chat message
-> with a ~660s TTL. Every artefact reachable from `ci` — `git log master`, `master`'s manifest —
-> still said `283` was the high-water mark, so a `ci` seat doing the diligent thing would have
-> been handed `284` as free. **An allocation held only in a working tree is invisible to every
-> other seat until it commits**, so POLICY's "allocation is by conversation" is load-bearing for
-> longer than it looks, and the conversation can expire. That is the general hazard; the specific
-> `284` window is closed.
+> Two other predictions in this note were wrong and are corrected here rather than deleted,
+> because the *shape* of the error is the lesson. **`ScrAP-283`/`284` are not `master`'s.** They
+> were allocated on `master ebcfdd4`, which never reached `master` — that lineage was rewritten
+> and its entries are not in the register. **`ISSUES S`/`T` are not `master`'s either**, for the
+> same reason. Both claims were verified from `ci` at the time and were true when read; they
+> stopped being true without anything in either tree recording that they had.
+>
+> **The forty-minute window this note originally described is still the transferable half:** an
+> allocation held only in an uncommitted worktree, or only in a chat message with a ~660s TTL, is
+> invisible to every other seat. What the rebase adds is the other end of the same hazard — an
+> allocation *committed on a branch that is later rewritten* becomes invisible again, and this
+> time it leaves a stale confirmation behind. Announce the range, and re-confirm it against the
+> merge target before you rely on it.
 
 ### Open, and none of it is blocked on a seat
 
@@ -223,11 +234,16 @@ that misread happened three times this session.
    already has the MSVC runtime, so removing the DLLs and launching proves nothing), and
    whether **+23.7 MB** of embedded redistributable is acceptable versus downloading it and
    requiring a network.
-2. **The coverage floor is a two-branch standoff and needs one decision, not two.** `ci`
-   requires whole-number floors (POLICY step 6) and sits at a stale `76` against a measured
-   77.83; `master` has no such rule and shipped `77.37`. **No single value is correct under
-   both rule-sets** — under `master`'s rule, 77 is a forbidden lowering. Both seats froze
-   deliberately rather than each moving toward the other. Do not let one seat resolve it alone.
+2. ~~**The coverage floor is a two-branch standoff and needs one decision, not two.**~~
+   **RESOLVED 2026-08-16 by re-measuring the merged tree, and it needs the operator's
+   ratification rather than a further decision.** `ci` sat at `76` under the whole-number rule
+   (POLICY step 6); `master` shipped `77.53` under no such rule, so no single value was legal
+   under both. Neither survived: the merged tree measures **77.60% LINES** (16529 lines, 3702
+   missed; regions 78.50%), which clears 77 by 0.60pt against a measured residual
+   host-dependence of ~0.02pt — "with room to spare", which is what the rule asks for.
+   **`FLOOR=77`**, and `scripts/coverage.sh` carries the full derivation. It is not a lowering
+   of 77.53: that figure was quoted in a precision POLICY has retired, and 77.60 measured now
+   is above the 77.42 its note banked.
 3. **`GApplication::startup` CRITICAL** — root-caused to a missing `app.register()` in one test
    fixture, fix proven and landed on `master`. The transferable half (GTK's guard tests
    `is_registered` while its message names `startup`) went to the `gtk4-rs` skill, not here.
@@ -236,7 +252,8 @@ that misread happened three times this session.
 
 **An artefact answering a narrower question than the one asked of it** — six instances, four
 seats, one day. Two remotes sharing the name `origin`. A ScrAP manifest ending at 268 because a
-branch was behind rather than because 269 was free. Non-contiguous ISSUES letters where
+branch was behind rather than because 269 was free — **that one was not caught, and the rebase
+on 2026-08-16 renumbered fourteen entries to pay for it**. Non-contiguous ISSUES letters where
 "highest present" was never next-free. A `grep` scoped to one checkout, twice. A licence gate
 whose string anchor discriminates documents but not *revisions* of one. And
 `.claude/settings.json` answering "what does the project configure" when the question was "what
