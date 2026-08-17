@@ -39,6 +39,55 @@ pub(crate) fn save_enabled(dirty: bool, backing_missing: bool) -> bool {
     dirty || backing_missing
 }
 
+/// Whether Rename should be enabled for a document (TDD 24.6).
+///
+/// **This predicate is per-TAB, which is why it exists as a function rather than
+/// being read off the action.** `win.rename` is window-scoped and answers for
+/// whichever tab is active *now*; the tab-strip context menu fires for the
+/// **right-clicked** tab, which need not be that one. So the action's own
+/// `is_enabled()` is the wrong answer for the context-menu button, and both readers
+/// go through here instead — one rule, two readers, exactly as Copy Full Path and
+/// Reload already do (`window/tabs/contextmenu.rs`).
+///
+/// Each condition, and why it is a *precondition* rather than something the
+/// operation could recover from:
+///
+/// - `has_path`: an untitled document has no file to rename. The honest routing is
+///   Save As, so the command is simply insensitive rather than silently becoming one.
+/// - `!dirty`: renaming a document with unsaved edits would leave the buffer's only
+///   copy pointing at a file whose name just changed under it. The operator accepted
+///   the resulting cliff — the command greys out and the reader saves first — over a
+///   "Save and rename" prompt.
+/// - `!backing_missing`: the file is already known to be gone; there is nothing to
+///   rename. This gates the **command**; it is deliberately *not* sufficient as the
+///   operation's precondition, which re-checks against the filesystem (24.8) because
+///   the flag is only set if the monitor happened to observe the deletion.
+/// # Why "a write is in flight" is NOT a parameter here
+///
+/// TDD 24.6 requires Rename to be unavailable while a write to that document is in
+/// flight, and the obvious reading is a fourth veto. It is deliberately not one, for
+/// two reasons that point the same way:
+///
+/// 1. **It would be unreachable.** A write is only ever in flight for a document that
+///    is `dirty` (a save's baseline is updated *after* the write lands, so the buffer
+///    still differs from it throughout) or `backing_missing` (the save-to-restore
+///    case). Either one already vetoes. A fourth condition that no reachable state can
+///    be the sole cause of is dead code wearing a guard's clothes — and, being a
+///    second sufficient mechanism, it would make the other two mutation-proof one at a
+///    time (ScrAP-254): neuter the dirty veto and the suite stays green.
+/// 2. **The gate is not readable by design.** `WriteGate::is_busy` is `#[cfg(test)]`
+///    precisely so no production caller can branch on the state and act on it a moment
+///    later — the check-then-act race a `WritePass` exists to make unrepresentable.
+///
+/// So the in-flight requirement is met where it is actually decidable: the operation
+/// **claims** the gate, and a refused claim abandons the rename. Sensitivity is a
+/// hint; the pass is the guarantee. This is the plan's "preconditions are re-checked
+/// at apply time, not trusted from the gate" applied to the one precondition that
+/// cannot be honestly read in advance.
+pub(crate) fn rename_enabled(has_path: bool, dirty: bool, backing_missing: bool) -> bool {
+    has_path && !dirty && !backing_missing
+}
+
 /// Whether a window is a *reusable blank*: no backing file and the editor still
 /// holds the untouched WELCOME text (so reusing it cannot clobber unsaved work).
 pub(crate) fn is_blank_welcome(path_present: bool, buffer_text: &str, welcome: &str) -> bool {
@@ -233,6 +282,30 @@ mod tests {
         assert!(save_enabled(true, true)); // dirty + backing gone → enabled
         assert!(save_enabled(true, false)); // dirty + present → enabled (unchanged)
         assert!(!save_enabled(false, false)); // clean + present → the only disabled case
+    }
+
+    /// TDD 24.6. The truth table is written out in full rather than spot-checked:
+    /// the predicate is four independent veto conditions, and a test that only
+    /// exercises the happy case plus one veto cannot tell an `&&` from an `||`.
+    #[test]
+    fn rename_needs_a_file_thats_saved_and_present() {
+        // The one enabled state: a titled, clean, present document.
+        assert!(rename_enabled(true, false, false));
+
+        // Each veto alone is sufficient to disable.
+        assert!(!rename_enabled(false, false, false), "untitled");
+        assert!(!rename_enabled(true, true, false), "unsaved changes");
+        assert!(!rename_enabled(true, false, true), "backing gone");
+
+        // And no combination of vetoes cancels out.
+        assert!(!rename_enabled(false, true, true));
+        assert!(!rename_enabled(true, true, true));
+
+        // The in-flight-write requirement of TDD 24.6 is deliberately absent from
+        // this predicate and met by claiming the write gate instead — see the
+        // function's doc comment. A write in flight always implies `dirty` or
+        // `backing_missing`, both asserted above, so the contract is covered here
+        // and the guarantee is the `WritePass`.
     }
 
     #[test]

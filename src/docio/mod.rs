@@ -67,6 +67,13 @@
 //! state files not**.
 
 mod pool;
+mod rename;
+
+// `NameChange`/`NameRefusal`/`FsRules` are deliberately NOT re-exported: they appear
+// in `validate_new_name`'s signature but no caller outside this module names them
+// (the dialog maps them straight to `()` and a string), and re-exporting a type
+// nobody spells is an unused import under `-D warnings`.
+pub(crate) use rename::{host_rules, rename_document, validate_new_name, RenameError};
 
 // Gated to the same cfg as its only callers (the gtk-integration-tests modules in
 // `window::save`), not the broader `cfg(test)`: under a bare `cargo test` the callers
@@ -164,6 +171,21 @@ fn without_bom_bytes(mut bytes: Vec<u8>) -> Vec<u8> {
 
 /// The blocking half of [`read_document`]: stat, admit, read. Runs on the pool.
 fn read_document_blocking(path: &Path) -> DocRead {
+    // Before anything else: a crash between the two steps of a case-only rename
+    // leaves the document under `<name>.rename-<pid>-<seq>` and nothing at `path`,
+    // so an absence here is not always the intended-new-document it looks like
+    // (`rename::recover_rename_orphan`). Recovering at the module's own door rather
+    // than at one call site is what makes it cover Open, session restore, link
+    // navigation and crash recovery alike — the blocking halves are private, so this
+    // is the only route to a document.
+    //
+    // Ordered ahead of the admission check on purpose: a recovered file must be
+    // stat'd and size-capped like any other, not admitted because it was absent when
+    // the check ran. Costs one `read_dir` of the parent, and only on a path that is
+    // missing — never on an ordinary open.
+    if !path.exists() {
+        rename::recover_rename_orphan(path);
+    }
     // Admission check BEFORE the read (QA round 3, D-4). `read_to_string` on an
     // unbounded input is an unbounded allocation, and the content is then held in
     // three copies (this `String`, the `GtkTextBuffer`, the render products) — so
@@ -433,6 +455,54 @@ mod tests {
     /// rather than only in the GTK suite.
     fn drive<F: std::future::Future>(fut: F) -> F::Output {
         gtk::glib::MainContext::new().block_on(fut)
+    }
+
+    /// A document stranded by a crash mid-rename comes back through the module's own
+    /// door, rather than presenting as the blank new document TDD 1.3 describes.
+    ///
+    /// Asserted here, at the door, and not only against `recover_rename_orphan`: the
+    /// recovery is worth nothing if the reader concludes `Missing` before reaching it,
+    /// and the ordering between the two is exactly what a later edit could invert
+    /// without any unit test of the recovery itself noticing.
+    #[test]
+    fn a_document_stranded_mid_rename_is_recovered_by_the_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("notes.md");
+        std::fs::write(dir.path().join("notes.md.rename-4242-0"), "# survived\n").unwrap();
+
+        match read(&doc) {
+            DocRead::Loaded(content) => assert_eq!(content, "# survived\n"),
+            other => panic!(
+                "expected the stranded document, got {:?}",
+                DebugRead(&other)
+            ),
+        }
+    }
+
+    /// An absence with no orphan beside it is still an intended new document — the
+    /// recovery must not have turned every missing file into an error or a scan that
+    /// changes the answer.
+    #[test]
+    fn an_absence_with_no_orphan_is_still_a_new_document() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            read(&dir.path().join("never-existed.md")),
+            DocRead::Missing
+        ));
+    }
+
+    /// `DocRead` carries an `io::Error` and so cannot derive `Debug`; this names the
+    /// variant for a panic message without widening the type's own surface.
+    struct DebugRead<'a>(&'a DocRead);
+    impl std::fmt::Debug for DebugRead<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(match self.0 {
+                DocRead::Refused(_) => "Refused",
+                DocRead::Loaded(_) => "Loaded",
+                DocRead::Missing => "Missing",
+                DocRead::Failed(_) => "Failed",
+            })
+        }
     }
 
     /// The read really does go to the pool and really does come back — proved with no

@@ -45,6 +45,7 @@ member. For a stateful action the work is driven by `change-state`, not
 | `win.save` | — | — | Write the document to its current path. |
 | `win.save-all` | — | — | Write every tab in this window that needs saving (dirty, or clean over a deleted backing file). Untitled tabs get Save As one at a time. |
 | `win.save-as` | — | — | Choose a new path and write the document there. |
+| `win.rename` | — | — | Change the filename of the document's backing file, within its own directory (never a move). Enabled only for a titled, clean document whose file is present; an in-flight write is refused by the write gate at apply time rather than by the enabled state. |
 | `win.reload` | — | — | Discard in-memory changes and re-read the file from disk. |
 | `win.auto-reload` | — | `b` | Whether external file changes are picked up automatically. |
 | `win.copy-path` | — | — | Copy the document's filesystem path to the clipboard. |

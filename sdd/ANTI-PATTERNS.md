@@ -408,6 +408,13 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 266 | A focused `set_parent`ed popover is its own `GtkNative`, so every application accelerator silently stops working for as long as it is open | A |
 | 267 | `GtkSingleSelection`'s builder property ORDER decides whether a list opens with a phantom selection | A |
 | 268 | A GLib **fatal** log message dies of `SIGTRAP`, not `abort()` — a crash handler that enumerates the classic four signals reports nothing for the whole `g_error` class | A |
+| 269 | Two sufficient monitor-cancel mechanisms made the rename guard pass with its own fix deleted — and a freshly attached `GFileMonitor` is not yet watching | A |
+| 270 | Asking GIO what a file is called after you renamed it, and being told what you asked for | A |
+| 271 | Matching a directory entry by `id::file`, which identifies the FILE and not the entry | A |
+| 272 | A plan obligation written as a property of an artefact, which reads as done once the artefact exists | B |
+| 273 | A runtime skip announcement shredded by libtest's own progress output — and one shred read `SKIPPED [rubric]: ok` | B |
+| 274 | A provenance tally that counts measurements instead of outcomes, and so reports the opposite of its evidence | B |
+| 275 | A `GFileMonitor` created while its parent DIRECTORY is absent is permanently dead on Windows, and self-heals everywhere else | A |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -3771,3 +3778,188 @@ correct-looking mechanism whose *other* path nobody enumerated); TDD 23.12; MANU
 **Taking `SIGTRAP` costs no debugging session** (MEASURED, gdb 12.1): a debugger intercepts the trap through ptrace and reports `SIGTRAP … Pass to program: No`, so it still stops at the faulting frame and the handler never runs under it. The obvious objection — "you have just stolen the debugger's signal" — is false, and worth measuring rather than arguing, since it is the reason not to do this.
 **The transferable half**: (1) *"fatal" is a word in a library's vocabulary, not a statement about how the process dies* — before enumerating the signals a crash handler takes, measure how each dependency's fatal path actually exits, because the plausible enumeration (the hardware faults plus `abort`) is complete only for the deaths you thought of; (2) an enumeration copied into both a rubric and its implementation is one decision wearing two hats, so a gap in it is certified rather than caught, and closing it is always two edits — TDD 21.4's **Given** listed the same four signals the `const` did, and *widening* the claim later repeated the miss exactly once more: the re-measurement swept the code, this entry, POLICY and the manual check, and left the rubric still saying "any warning `fatal-warnings` promotes"; (3) the diagnosis costs minutes when the question is put to the machine (`gcc` + `g_error` + `echo $?`) and hours when it is put to memory.
 **See**: routed to the `gtk4-rs` skill (app-lifecycle-and-env) as a GTK/GLib-stack lesson — any GTK4 application that installs a fatal-signal handler has this hole.
+
+
+## 269. Two sufficient monitor-cancel mechanisms made the rename guard pass with its own fix deleted — and a freshly attached `GFileMonitor` is not yet watching
+
+**Symptom**: two false results in one sitting, in opposite directions, both from the
+same feature's tests. (a) The regression guard for "renaming a document must not look
+like a deletion" **passed with the fix deleted** — remove the `cancel_monitor()` call
+the whole choreography is built on and the suite stays green. (b) A sibling test
+asserting the failure path's re-attached monitor still works **failed against correct
+code**, and failed in a way that read as "the monitor only half works": a *write* to
+the watched file was missed while a *delete* issued twenty seconds later was caught.
+
+**Root cause — (a), the false PASS.** The rename path cancels the tab's monitor before
+renaming. But `app::attach_file_backing` *also* cancels whatever monitor the tab was
+holding when it installs the new one, so the invariant has **two** sufficient
+mechanisms and the ScrAP-254 shape applies: mutating either alone leaves the suite
+green. What made it hide rather than merely be redundant is a timing accident — in the
+test the rename completes so fast that the completion callback runs before GLib's
+inotify worker has dispatched the rename's events, so the second mechanism suppresses
+them and the reader sees no difference. In production it is the other way round (the
+researcher MEASURED the three events arriving *before* the completion, using a 60 ms
+stand-in for the async round trip), so the pre-rename cancel is genuinely load-bearing
+and merely **invisible to a fast test**. A behavioural guard cannot discriminate here
+at all; the fix is a guard on the **state** — hold the filesystem call open with the
+existing `docio::slow_io` injection, and assert that while the rename provably has not
+happened yet (the old filename still exists) the old monitor is already cancelled.
+That one fails on the mutation and nothing else does.
+
+**Root cause — (b), the false FAILURE.** A `GFileMonitor` object exists the instant it
+is constructed, but GLib establishes the underlying inotify watch on its **private
+worker thread** (`inotify-kernel.c` attaches its source to `g_get_worker_context()`),
+so a change made in the same main-loop turn as the attach races that setup and is
+simply never seen. "The tab's monitor slot is populated" is not "the watch is live".
+The delete appeared to work only because it happened after a 20-second `settle`
+timeout had already elapsed. The kin is GTK4Rs/AP-261 — turns are not time — reaching a
+new mechanism: here the wait is for a *worker thread's* setup, so no number of
+main-loop iterations substitutes for wall clock.
+
+**What was tried**: asserting the reader-facing symptom (no deleted-backing state after
+a rename) — passes with the fix deleted, and is the guard the plan originally specified.
+Injecting `slow_io` to separate the events from the completion — does not work in this
+direction, because the injected delay sleeps on the pool thread *before* the blocking
+call, so it delays the rename itself rather than the gap between the rename and its
+completion.
+
+**Scribobulate**: `window/rename.rs` cancels the monitor before the rename and
+re-attaches on **every** path including failure;
+`the_old_monitor_is_cancelled_before_the_rename_touches_the_filesystem` is the state
+guard (mutation-checked: removing the cancel fails it and only it), and
+`a_rename_does_not_look_like_a_deletion` keeps the behavioural contract with its
+non-optional in-test control (delete the renamed file, assert the notice *does*
+appear — without it the test passes against a dead monitor, ScrAP-209's shape). The
+second mutation is the positive half: neutering `expect_self_delete` must **not** break
+either test, which is what proves the cancel rather than the save path's flag is
+carrying the invariant. Every integration test that writes to a watched file pumps for
+~300 ms after attaching first. Contract: TDD §24; checks: `tests/MANUAL-TEST.md` §24.
+
+**The macOS half is now MEASURED — one correction and one confirmation, and the split
+between them is the useful part** (mac seat, macOS 26.6.1 / GTK 4.22.4 / GLib 2.88.2,
+raw probe, three identical runs). **Corrected:** a rename of a watched file emits
+`DELETED` **twice**, not the single `DELETED` that was recorded — reproducible, not
+noise. **Confirmed:** the inode-following claim was right, and is no longer an
+inference — an uncancelled monitor reported a post-rename write to `Notes.md` as
+`CHANGED` **under the old `notes.md` path**. That is this entry's choreography being
+vindicated from the other side — it is precisely what a stale monitor does when nobody
+cancels it, and it is *actively wrong* rather than merely inert, which is what Linux and
+Windows path-watching would give you.
+
+**What to trust in a source-traced event claim — SOURCE-READ, and it replaces a rule of
+mine that was over-fitted.** From one correction I generalised "source-tracing gets
+event *semantics* right and *counts* wrong". The researcher refuted it with a
+counter-example from the same investigation: they predicted **exactly three** inotify
+events for a rename from source, before running anything, and it measured exactly three.
+Counts are not structurally unreadable. Every event that reaches you is queued by one of
+exactly **nine** `queue_event()` sites in `glocalfilemonitor.c` (@2.72.4 lines 266, 289,
+291, 307, 319, 327, 328, 551, 560) and the amplifiers are all visible there. Two things,
+and only two, are genuinely unreadable:
+1. **`CHANGED`/`CHANGES_DONE_HINT` counts are rate-limit coalesced** — `DEFAULT_RATE_LIMIT`
+   is **800 ms** (`glocalfilemonitor.c:33`) — so they are timing-dependent *by design*.
+   Lifecycle events (CREATED/DELETED/the RENAMED expansion) bypass the limiter.
+2. **Multiplicity that crosses the kernel boundary**, which is outside GLib entirely.
+⇒ **Assert on the event SET and on lifecycle counts; assert `CHANGED` only as `>= 1`;
+treat any count crossing the kernel boundary as a range until measured on that platform.**
+**Worked example, and the researcher applied it against their own claim:** the Win32
+three-event expansion is conditional on `NextEntryOffset != 0`
+(`gwin32fsmonitorutils.c:70-88`) — i.e. on both records landing in **one**
+`ReadDirectoryChangesW` buffer, which is the OS's batching and therefore unreadable
+from GLib. Split across two callbacks, the `else` branch runs instead and reaches the
+same **set** by a different path. So the Windows row is **set-verified,
+count-unverified** — `{DELETED, CREATED, CHANGES_DONE_HINT}` holds; "exactly three"
+does not, and a busier directory could still split it even after one measurement says
+three.
+**The `DELETED` ×2 is now MEASURED to the kernel, and the answer moves it out of case 2.**
+A raw kqueue probe (mac seat, `EVFILT_VNODE`, GIO bypassed entirely, three identical
+runs) reports the rename as **one** kevent: `fflags=0x21` = `NOTE_DELETE|NOTE_RENAME`,
+with nothing left queued behind it. So the kernel emits **once**; the doubling is
+entirely GLib's — `gkqueuefilemonitor.c` maps that single struct through a deliberately
+**non-exclusive `if`-cascade** (its own comment: *"since kqueue can return multiple
+events in a single kevent struct, we must use 'if' instead of 'else if'"*, @2.88.0
+:377-380) and **two** arms emit `DELETED`, `NOTE_DELETE` (:381) and `NOTE_RENAME`
+(:426). Both fire off the one struct. The version-skew rival was separately *disproved*
+by reading the file at five tags (identical, 621 lines).
+**Which sharpens the rule rather than breaking it.** The doubling was inside the
+readable nine-site envelope all along — what was unreadable was never the record
+*count* but **which flag bits the OS sets in one record**, and one `if`-cascade turns
+that unknown into a multiplier. Keep the distinction: *how many notifications* and
+*how many bits per notification* are both kernel-side unknowns, and only the second was
+in play here.
+
+**See**: the GIO-side mechanisms this rests on (cancel is a barrier at *emission*, not
+a queue drain; the per-backend event sets; path-vs-inode) are researcher-established
+and routed to the `gtk4-rs` skill — findings doc
+`~/Documents/Projects/AI/Research/Gtk4Rust/researcher-findings-gio-rename-refusal-and-filemonitor-cancel-barrier.md`
+(Linux/GLib 2.72.4 MEASURED; macOS/Windows SOURCE-TRACED). Kin: ScrAP-254 (the two-mechanism
+mutation trap this is an instance of), ScrAP-209 (a guard whose setup prevents the thing
+it guards from existing), ScrAP-54 (the self-delete guard, still load-bearing on the save
+path and deliberately not reused here).
+
+## 270. Asking GIO what a file is called after you renamed it, and being told what you asked for
+**Symptom**: a rename succeeds, and then everything keyed on the new path — tab, title, and above all the `GFileMonitor` being re-attached — addresses a name no directory entry holds, on any volume that stores a spelling other than the one it was handed; the monitor watches nothing and reports no error, so the only visible symptom is that live reload quietly stopped.
+**Scribobulate**: `docio::rename::stored_spelling` enumerates the parent and matches on `id::file` — which entry *is* this file, not which looks like it — and is best-effort throughout, every failure keeping the requested spelling, because a rename that SUCCEEDED must never be reported as failed because a follow-up READ did. Guards: `the_reported_path_is_the_one_the_directory_actually_holds` (asserts against a real `read_dir`, so it is meaningful on all three platforms), `a_name_the_directory_does_not_hold_resolves_to_the_one_it_does`, `a_name_the_directory_does_hold_is_left_exactly_as_asked`. Contract: TDD §24.13. The NFD cause is MEASURED end-to-end on a purpose-built HFS+ volume including the live-reload leg — but the branch is *routinely* executed by a case-insensitive filesystem standing in for the unreachable cause, which is the coverage that costs nobody a special volume and survives that seat going away.
+**See**: gtk4-rs skill → app-lifecycle-and-env (GTK4Rs/AP-270), which holds the mechanism, the nine-tag source trace, the Windows backslash/typed-case riders and the cause-vs-mechanism testing lesson. Kin: ScrAP-271, ScrAP-269.
+
+## 271. Matching a directory entry by `id::file`, which identifies the FILE and not the entry
+**Symptom**: a rename onto an ordinary, unambiguous name silently renames the tab onto some *other* filename in the same directory — and only sometimes, because it depends on `readdir` order, which ext4 hashes rather than sorts.
+**Scribobulate**: `docio::rename::stored_spelling` decides only after the whole enumeration — the requested spelling returns `None` on sight, an identity match is held and answered with only if that spelling never appears. Guard: `a_hard_link_beside_the_document_does_not_steal_its_name`, which links four aliases so no single `readdir` ordering can make it pass by luck; it failed against the pre-fix code with `Some("0notes.md")`.
+**See**: gtk4-rs skill → app-lifecycle-and-env (GTK4Rs/AP-271). Kin: ScrAP-270 (the fix this was found inside).
+
+## 272. A plan obligation written as a property of an artefact, which reads as done once the artefact exists
+**Symptom**: a feature ships having satisfied its plan line by line, and the gap is found later by a different seat reading the same plan. Nothing was forgotten and nothing was disputed — the sentence was implemented, and the sentence was not the obligation.
+
+**The instance.** The two-step case-only rename mints its intermediate name as `<document>.rename-<pid>-<seq>` so that a crash between the two steps leaves debris that can be told apart from a user's own files. The plan said, and the implementation's own comment repeated, *"a crash between them leaves the temp name behind — which is why it is recognisably `<name>.rename-*`"*. That is a true statement about a **string**, it was fully implemented, and **nothing anywhere recognised it**. The consequence is not a damaged file but an invisible one: the reader reports the document missing and offers to create a blank one over it, while the user's text survives under a name nothing in the app points at.
+
+**Root cause.** The obligation was phrased as a property the artefact *has* (`recognisable`) rather than as a thing some code *does* (`recognise`). An adjective has no caller, no test and no reviewer question attached to it, so once the name is minted every reading of the plan checks out — including a careful one, including the author's, including a CAM sweep, because there is no row for "the counterpart of a thing we named". The word `recognisably` is doing the work of a whole feature and is grammatically indistinguishable from a comment about formatting.
+
+**Why the usual gates cannot see it.** Coverage is full (every line of the minting code runs), the mutation tests pass (deleting the naming scheme breaks tests, so the naming *is* load-bearing), clippy and the reference lint are silent, and TDD §24 was complete against the plan as written. The only artefact that could have caught it is a rubric for the recogniser, and the rubric set was derived from the same plan.
+
+**The corrective, which is a reading habit rather than a check.** When a plan or a comment asserts that something is *recognisable*, *recoverable*, *resumable*, *reversible*, *detectable*, *auditable* — any `-able` about a state the system can be left in — treat the adjective as naming a **second deliverable** and ask who its reader is. If the answer is "a human with a file manager", say so explicitly and ratify it; if there is no answer, the obligation is unfinished. Same test for the passive voice around a leftover: *"leaves the temp name behind"* has no subject picking it up. Note the shape of the near-miss that makes this worth writing down: the plan was unusually good — it anticipated the crash window, it specified the debris format, it used the right word — and being *nearly* complete is what made the remainder invisible.
+
+**Scribobulate**: `docio::rename::recover_rename_orphan` is the missing recogniser, called from `docio::read_document_blocking` — the module's only door, so one placement covers Open, session restore, link navigation and crash recovery, and ordered *ahead* of the admission check so a recovered file is stat'd and size-capped like any other rather than admitted for having been absent when the check ran. Deliberately narrow, because it moves a file the user did not ask it to move: only when the path is absent (guarded inside the function, not only at the call site that already checks — a guard a caller has to remember is one refactor from a silent overwrite), only on exactly one match against the full `<document>.rename-<digits>-<digits>` shape rather than the `.rename-` infix a real document could carry, and only back to the pre-rename name the orphan encodes — the rename is not replayed, since a crash is no evidence the reader still wants it. Guards: `only_this_apps_rename_debris_is_recognised_as_an_orphan` (round-trips against the real producer so matcher and minter cannot drift), `a_document_stranded_by_a_crash_mid_rename_is_put_back`, `an_orphan_beside_a_present_document_is_left_alone`, `an_ambiguous_pair_of_orphans_recovers_neither`, and — separately, at the door rather than at the function — `a_document_stranded_mid_rename_is_recovered_by_the_reader` paired with `an_absence_with_no_orphan_is_still_a_new_document`, because the recovery is worth nothing if the reader concludes `Missing` before reaching it and that ordering is exactly what a later edit could invert without any unit test of the recovery noticing. Contract: TDD §24.14; checks: `tests/MANUAL-TEST.md` §24.
+
+**Ratified: the recovery is silent to the reader** (logged only), which TDD §24.14 states and this records the reasoning for. The app is completing its own abandoned two-step transaction on its own marked debris, and the reader's world afterwards is exactly the pre-rename one — the document under the name they know — so there is nothing to accept and nothing to discard, and a notice would describe an internal mechanism rather than anything about their document. It differs from crash-recovery of *unsaved changes* (TDD §22) precisely there: that restores a buffer which disagrees with the disk, and so must be both announced and refusable. Revisit the moment recovery can hand back a document the reader did not last see. The one residue accepted with it: two orphans recover neither and log a warning, so a second crash leaves the content only under names the app does not show — visible in a file manager, not in the app.
+
+
+## 273. A runtime skip announcement shredded by libtest's own progress output — and one shred read `SKIPPED [rubric]: ok`
+**Symptom**: the pipeline's skip report prints a line that is a *different* test's name welded to half of a skip reason, or — twice in four measured runs of the real command — a line whose reason has been replaced outright:
+
+```text
+test copymap::tests::within_link_caption_excludes_brackets_and_url ... SKIPPED [TDD 24.13 stored spelling]: ok
+SKIPPED [TDD 24.13 stored spelling]: test copymap::tests::within_heading_excludes_the_hash ... ok/tmp/.tmpVUbh7F
+```
+
+**Root cause, MEASURED** (this machine, `cargo test -- --nocapture`, the pipeline's own step-4b command): `--nocapture` makes libtest write its progress as `test <name> ... ` before a test runs and `ok\n` after, on the same stderr the test itself writes to, from as many threads as it runs tests on. A **formatted** `eprintln!` reaches stderr as one write *per format fragment* — `"SKIPPED [{limb}]: {why}…"` is prefix, arg, arg, suffix — so another thread's `ok` lands inside the announcement. A **literal-only** `eprintln!` is a single write and was never affected, which is exactly why this survived: every site whose skip had a *reason worth interpolating* was the vulnerable kind, and every site that had been safe all along was safe by accident of having nothing to say.
+
+**Why it is worse than a garbled line.** The consequence is not noise, it is inversion. POLICY mandates this announcement precisely so a test that quietly did not run cannot be mistaken for one that passed — a runtime skip is the remedy for `#[cfg(platform)]` deleting a test (ScrAP-212). A reader greps `SKIPPED [`, and the mechanism hands them **`SKIPPED [TDD 24.13 stored spelling]: ok`**. The one line in the build whose entire job is to say *this rubric went unverified* renders as a pass, in the report a human reads to find out what went unverified. Note also that it is **intermittent and load-dependent** — it needs enough concurrent tests to hit the window, so it does not reproduce on a focused `--lib` run (6/6 clean) and does reproduce on the full one (2/4 corrupt), which is the shape that reads as "a flake in the output" rather than as a defect.
+
+**Scribobulate**: `testsymlink::skipped` builds the whole line — newline included — and emits it with a single `std::io::stderr().lock().write_all()`; a sub-`PIPE_BUF` write is atomic on the pipe the pipeline reads through. Verified 6/6 clean on the same command that produced 2/4 corrupt. Every skip site routes through that helper rather than its own `eprintln!`.
+**The residual, stated because the fix's limit is not where you would guess.** libtest's `test <name> ... ` prefix can still *share* the line — an atomic write cannot un-write what another thread emitted a moment earlier, and a post-fix run shows exactly that. What it can no longer do is get *inside* the announcement, so the rubric and the reason always arrive whole and the grep always matches. The distinction is the whole point of the fix: a line with a foreign prefix is untidy, a line whose reason has been replaced by `ok` is a lie. Do not "finish the job" by trying to suppress the prefix — that would mean fighting libtest for the stream, and the property that matters is already held.
+
+**The second lesson, which is the same lesson the helper's own module header already taught and I re-learned anyway.** `skipped()` is documented there as "the general primitive… hoisted, because a remedy only reachable from the symlink helper is one the next `#[cfg(unix)]`-shaped test will not find" — and I wrote a fresh local `eprintln!` for a case-sensitivity skip without ever finding it, because the module is called `testsymlink` and my test had nothing to do with symlinks. **A shared remedy is discoverable by the name of the module it lives in, not by the doc comment inside it**, and a name that describes the *first* consumer quietly re-privatises it for every later one. That the module predicted this failure in prose and still suffered it is the point: prose inside a file cannot be read by someone who has no reason to open the file. The standing candidate is renaming the module for what `skipped` is rather than for what `symlink_or_skip` is; not done unilaterally, because it touches `lib.rs`, `gtk_suite.rs` and eight call sites.
+
+**See**: project-specific tooling; the fix + rationale live in a code comment at `src/testsymlink.rs::skipped`. Kin: ScrAP-212 (the runtime-skip remedy this protects), ScrAP-270 (whose skip line was the one observed shredded).
+
+## 274. A provenance tally that counts measurements instead of outcomes, and so reports the opposite of its evidence
+**Symptom**: a summary line says measurement "corrected the source-traced record twice", a peer register builds a confidence policy on it, and the underlying evidence is one correction and two confirmations — i.e. the source-traced record has a *winning* record and the tally said it was losing.
+
+**Root cause.** Upgrading a claim from SOURCE-TRACED to MEASURED is one event with two possible outcomes — the measurement **overturned** the claim, or it **confirmed** it — and the label `MEASURED` records only that the upgrade happened. Counting upgrades therefore counts *occasions on which source-tracing was checked*, while reading like *occasions on which source-tracing failed*. Here three claims were measured across two seats (kqueue event count: **corrected**; kqueue inode-following: **confirmed**; NTFS case-only rename: **confirmed**), and compressing them into "twice" inverted the conclusion a reader would draw. It survived because both descriptions were true in isolation — "no longer inferred" and "corrects the record" can each be said of the same upgrade, and only the tally makes them incompatible.
+
+**Why it propagates rather than sits still.** A tally is the one part of a provenance record that other people *reason from* rather than look up. The skill maintainer marked a remaining source-only row **provisional** on the strength of this one — sound reasoning from a wrong premise — and the error would have shipped into a second register as a confidence policy. Provenance labels are load-bearing precisely because they are trusted without re-derivation; a wrong tally is therefore worse than a wrong claim, because a claim is checked by whoever uses it and a tally is not.
+
+**The corrective.** Tally **outcomes, not events**: say "one correction, two confirmations", never "measured three times". And when a correction does land, characterise *what kind* of thing was wrong rather than lowering confidence uniformly — a blanket "provisional" predicts nothing and gives a reader nothing to do.
+
+**Then this entry did the same thing again, one level up, which is the part worth keeping.** Having corrected the tally, I replaced it with a *characterisation* — "source-tracing gets every semantic right and gets counts wrong" — and shipped that to the skill maintainer, who wove it in. It is **also over-fitted**, and the researcher refuted it from the same investigation: they had predicted **exactly three** inotify events from source before running anything, and measured exactly three. A count, read off the source, right first time. So the second attempt was a nicer-sounding rule built on the same one data point as the first, and it propagated *further* than the tally did because it read as insight rather than as arithmetic. The replacement (ScrAP-269, SOURCE-READ) is narrower and names a mechanism rather than a tendency: counts are readable up to the **kernel boundary**; `CHANGED`/`CHANGES_DONE_HINT` are rate-limit coalesced at 800 ms *by design*; multiplicity the OS produces is what GLib cannot tell you. **And then a third time, which is what identifies the actual failure mode.** Writing this feature up I claimed the mechanism-substitute test "kept the branch executed for **months** before any HFS+ volume existed" — and sent that to the skill maintainer, who carried it. One `git log` falsifies it: the substitute landed at 12:27 and the HFS+ measurement ran the same evening. **Eight hours.** So the three are a set — a tally, a count, and a duration — and the common factor is not bad luck but *writing a quantity that was never measured*, each time in a sentence whose surrounding argument was sound. A number inherited from the shape of an argument rather than from a source is the thing to catch, and it is catchable: every one of the three took under a minute to check, and none of them was checked because none of them felt like a claim.
+**Which is the second property, and it makes this a REVIEW blind spot and not only an authoring one** (skill maintainer's framing, and better than mine): *a number reads as an observation even when it is an estimate.* "Corrects the record twice", "`DELETED` once", "months" — none of them *look* like assertions needing support the way "source-tracing is unreliable here" does. They look like readings. That is why all three cleared two careful readers rather than one, with the reviewer holding the means to check two of them.
+⇒ **The corrective is structural, not vigilance: quantities need provenance labels as much as mechanisms do.** This register is fastidious about MEASURED / SOURCE-READ / INFERRED for behaviours and was entirely silent about them for numbers, which is precisely the gap all three fell through. Label a count the way you would label a claim, or do not write the count. **The lesson is that a small sample does not stop being a small sample because you drew a more sophisticated conclusion from it** — and the tell is the same both times: a rule whose evidence is one event, phrased as a property of a whole practice. Ask for the counter-example before shipping it; the researcher's took one sentence to produce.
+
+**And the thing that licenses the caution without borrowing confidence.** The tempting argument is asymmetric cost — over-trusting ships a bug, under-trusting sends someone to measure, so round toward caution. That treats a provenance label as a lever for producing behaviour rather than as a claim about what is known, and a register whose labels drift toward whatever produces good behaviour has labels that mean nothing when the stakes are real. **Asymmetric cost licenses naming the specific thing to go and measure — which costs nothing in accuracy — and nothing more.**
+
+**Scribobulate**: ScrAP-269's macOS paragraph now splits the correction from the confirmation explicitly and states the semantics/multiplicity distinction; `PLAN.document-rename.md`'s gap 2 was reopened for Windows after being closed wholesale on the strength of a *macOS* measurement — macOS closing is not evidence about Windows, and the two rows only looked like one row because they had been traced together.
+**See**: project-specific provenance discipline; no external home. Kin: ScrAP-269 and ScrAP-270 (whose provenance this governs), GTK4Rs/AP-141 (source-read vs inferred, the labels this miscounts).
+
+## 275. A `GFileMonitor` created while its parent DIRECTORY is absent is permanently dead on Windows, and self-heals everywhere else
+**Symptom**: live reload never works for one document, on Windows only, with no error, no warning, and a perfectly valid non-null `GFileMonitor` to inspect — while the same code on Linux and macOS starts working within seconds, so it is invisible to every developer not sitting at a Windows box.
+**Scribobulate**: not reachable today — every site that attaches a monitor (`app::attach_file_backing`, the rename re-attach, crash-orphan recovery) does so for a document whose directory exists. Recorded because the reachable version is one ordinary feature away: a monitor armed on a not-yet-created path, or a document on a removable volume. If that is ever built, Windows needs its own rescan; GIO will neither provide one nor say so.
+**See**: gtk4-rs skill → app-lifecycle-and-env (GTK4Rs/AP-275), which holds the three-layer source trace, the per-backend self-heal behaviour, and the two transferable halves (a well-formed question aimed at the wrong level; an API that cannot report failure is not one that does not fail).

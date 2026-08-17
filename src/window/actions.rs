@@ -581,6 +581,12 @@ pub(crate) fn update_save_action_state(window: &ApplicationWindow) {
         .iter()
         .any(|t| t.needs_close_prompt());
     set_action_enabled(window, "save-all", any_to_save);
+    // Rename is refreshed HERE rather than from its own set of call sites, because
+    // its triggers are exactly this function's: the active tab changed, the buffer
+    // went dirty or clean, or the backing file appeared or vanished. A second list of
+    // call sites is how one action gets refreshed and its neighbour forgotten — the
+    // ScrAP-38 shape. TDD 24.6.
+    crate::window::update_rename_action_state(window);
 }
 /// Recompute `win.undo` / `win.redo` enabled state: enabled iff the editor buffer
 /// actually has something to undo / redo, in EVERY view mode. Undo/redo are NOT

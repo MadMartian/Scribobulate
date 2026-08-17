@@ -6,15 +6,49 @@ use super::super::*;
 /// A "Browse…" affordance for one field of an [`input_form`] (the Insert Link / Image
 /// URL): a button (mnemonic Alt+R) that opens a file chooser rooted at `start_dir` and
 /// writes the chosen path into that field.
-pub(super) struct BrowseSpec {
+pub(in crate::window) struct BrowseSpec {
     /// Index of the field whose row gets the Browse button.
-    pub(super) field: usize,
+    pub(in crate::window) field: usize,
     /// Folder the chooser opens in (the loaded document's directory), or None for the
     /// chooser default.
-    pub(super) start_dir: Option<std::path::PathBuf>,
+    pub(in crate::window) start_dir: Option<std::path::PathBuf>,
     /// Restrict the chooser to image files (Insert Image); false offers any file
     /// (Insert Link).
-    pub(super) image_filter: bool,
+    pub(in crate::window) image_filter: bool,
+}
+
+/// Live validation for one field: the confirm control is insensitive, and the
+/// reason visible, whenever the field's current text cannot be accepted.
+///
+/// Shaped exactly like [`BrowseSpec`] — an optional per-field capability — because
+/// it is the same kind of thing, and because the alternative was a second dialog
+/// helper. A form that refuses *after* the user commits is a different (worse)
+/// interaction from one whose confirm control is simply not available yet, and only
+/// the second is what Rename's contract asks for (TDD 24.9).
+pub(in crate::window) struct LiveValidate {
+    /// Index of the field re-checked on every keystroke.
+    pub(in crate::window) field: usize,
+    /// `Err(reason)` when the current text cannot be confirmed. The reason is shown
+    /// verbatim, so it is a sentence for a reader, not a debug string.
+    pub(in crate::window) check: FieldCheck,
+}
+
+/// A field's live-validation rule. Named rather than written inline so the struct
+/// above reads as a pair of intentions instead of a type signature.
+pub(in crate::window) type FieldCheck = Box<dyn Fn(&str) -> Result<(), String>>;
+
+/// The optional per-field capabilities an [`input_form`] can carry.
+///
+/// One parameter rather than two because they are the same kind of thing — a
+/// capability attached to one field by index — and because a form helper with eight
+/// positional arguments is a call site nobody can read (or get right) without
+/// counting `None`s.
+#[derive(Default)]
+pub(in crate::window) struct FieldExtras {
+    /// A "Browse…" button on one field (Insert Link / Image).
+    pub(in crate::window) browse: Option<BrowseSpec>,
+    /// Live validation gating the confirm control (Rename — TDD 24.9).
+    pub(in crate::window) validate: Option<LiveValidate>,
 }
 
 /// Run a small modal input form: one labelled `GtkEntry` per field, plus Cancel /
@@ -32,11 +66,11 @@ pub(super) struct BrowseSpec {
 /// should land the caret on the field the user still has work to do in, not make
 /// them Tab past a field that is already correct. An out-of-range index falls back
 /// to the first field.
-pub(super) fn input_form(
+pub(in crate::window) fn input_form(
     window: &ApplicationWindow,
     title: &str,
     fields: &[(&str, String)],
-    browse: Option<BrowseSpec>,
+    extras: FieldExtras,
     confirm_label: &str,
     focus_field: usize,
     on_ok: impl Fn(&ApplicationWindow, Vec<String>) + 'static,
@@ -55,6 +89,7 @@ pub(super) fn input_form(
     vbox.set_margin_start(12);
     vbox.set_margin_end(12);
 
+    let FieldExtras { browse, validate } = extras;
     let entries: Vec<gtk::Entry> = fields
         .iter()
         .enumerate()
@@ -97,6 +132,16 @@ pub(super) fn input_form(
         })
         .collect();
 
+    // The refusal line, between the fields and the buttons. Built unconditionally
+    // but only ever populated by a `LiveValidate`, so an unvalidated form is
+    // pixel-identical to what it was before this parameter existed.
+    let reason = gtk::Label::new(None);
+    reason.set_xalign(0.0);
+    reason.set_wrap(true);
+    reason.set_visible(false);
+    reason.add_css_class("dim-label");
+    vbox.append(&reason);
+
     let btn_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     btn_row.set_halign(gtk::Align::End);
     btn_row.set_margin_top(8);
@@ -109,6 +154,33 @@ pub(super) fn input_form(
 
     dialog.set_child(Some(&vbox));
     dialog.set_default_widget(Some(&ok));
+
+    // Gate the confirm control on the field's current text, and run it ONCE before
+    // the dialog is shown as well as on every keystroke. The initial run is the
+    // load-bearing half: a Rename dialog opens pre-filled with the document's
+    // CURRENT name, which is itself a refusal (`Unchanged`), so a form that only
+    // validated on change would open offering a confirm that cannot succeed.
+    if let Some(LiveValidate { field, check }) = validate {
+        if let Some(entry) = entries.get(field).cloned() {
+            let ok_btn = ok.clone();
+            let reason_lbl = reason.clone();
+            let apply = move |text: &str| match check(text) {
+                Ok(()) => {
+                    ok_btn.set_sensitive(true);
+                    reason_lbl.set_visible(false);
+                }
+                Err(why) => {
+                    ok_btn.set_sensitive(false);
+                    reason_lbl.set_text(&why);
+                    reason_lbl.set_visible(true);
+                }
+            };
+            apply(&entry.text());
+            // The entry owns this handler, so the closure must not hold the entry
+            // strongly — the handler's own emitter argument is the entry (ScrAP-60).
+            entry.connect_changed(move |e| apply(&e.text()));
+        }
+    }
 
     // Weak self-refs throughout: a strong `dialog.clone()` captured in a handler
     // the dialog itself owns (as a descendant widget's signal) forms a reference

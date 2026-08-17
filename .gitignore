@@ -14,3 +14,4 @@ docs
 
 # macOS Finder metadata (created by any Finder visit to the tree)
 .DS_Store
+git.commit.txt

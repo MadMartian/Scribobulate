@@ -41,11 +41,32 @@ use std::path::Path;
 /// vanish from the run.
 ///
 /// `limb` is the rubric, not the test's name — same rule as [`symlink_or_skip`].
+///
+/// # One write, deliberately — not `eprintln!`
+///
+/// The pipeline runs `cargo test -- --nocapture`, under which libtest interleaves its
+/// own `test <name> ... ` / `ok` progress writes with anything a test prints. A
+/// *formatted* `eprintln!` reaches stderr as one write **per format fragment**, so
+/// another thread's `ok` can land between `SKIPPED [rubric]: ` and the reason.
+/// MEASURED on the real command, twice in four runs; one line came out
+///
+/// ```text
+/// test copymap::tests::within_link_caption_excludes_brackets_and_url ... SKIPPED [TDD 24.13 stored spelling]: ok
+/// ```
+///
+/// — the announcement that a rubric went **unverified**, rendered as a pass, in the
+/// one mechanism the project has for saying otherwise (ScrAP-273). Building the line
+/// first and emitting it with a single `write_all` closes it: a sub-`PIPE_BUF` write
+/// is atomic on the pipe the pipeline reads through. A literal-only `eprintln!` is
+/// already one write and was never affected, which is why this went unnoticed — every
+/// site that had a reason worth interpolating was the vulnerable kind.
 pub(crate) fn skipped(limb: &str, why: &str) {
-    eprintln!(
+    use std::io::Write;
+    let line = format!(
         "SKIPPED [{limb}]: {why}. The behaviour this test verifies is NOT verified by \
-         this run."
+         this run.\n"
     );
+    let _ = std::io::stderr().lock().write_all(line.as_bytes());
 }
 
 /// Create a file symlink, or return why the platform refused.

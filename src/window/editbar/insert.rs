@@ -29,11 +29,14 @@ pub(crate) fn insert_link(window: &ApplicationWindow) {
         window,
         dlg_title,
         &[("Text", text0), ("URL", url0)],
-        Some(BrowseSpec {
-            field: 1,
-            start_dir,
-            image_filter: false,
-        }),
+        FieldExtras {
+            browse: Some(BrowseSpec {
+                field: 1,
+                start_dir,
+                image_filter: false,
+            }),
+            ..Default::default()
+        },
         "Insert",
         focus_field,
         move |w, vals| {
@@ -66,11 +69,14 @@ pub(crate) fn insert_image(window: &ApplicationWindow) {
         window,
         dlg_title,
         &[("Alt text", alt0), ("URL", url0), ("Title", ttl0)],
-        Some(BrowseSpec {
-            field: 1,
-            start_dir,
-            image_filter: true,
-        }),
+        FieldExtras {
+            browse: Some(BrowseSpec {
+                field: 1,
+                start_dir,
+                image_filter: true,
+            }),
+            ..Default::default()
+        },
         "Insert",
         focus_field,
         move |w, vals| {
@@ -98,7 +104,7 @@ pub(crate) fn insert_table(window: &ApplicationWindow) {
             ("Rows", "2".to_string()),
             ("First cell", sel),
         ],
-        None,
+        FieldExtras::default(),
         "Insert",
         0,
         move |w, vals| {
@@ -130,7 +136,7 @@ pub(crate) fn go_to_line(window: &ApplicationWindow) {
         window,
         "Go To Line",
         &[("Line #", current_line.to_string())],
-        None,
+        FieldExtras::default(),
         "Go",
         0,
         move |w, vals| {

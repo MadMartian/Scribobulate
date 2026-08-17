@@ -52,6 +52,9 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
   - **Crash recovery** — unsaved edits come back after a crash, still marked
     unsaved, with the choice to keep or discard. Your file is never written
     without an explicit save.
+  - **Rename in place** — F2, or right-click the tab, renames the file a tab is
+    reading without leaving the app. Same folder, name only; every surface
+    follows at once and nothing is re-read.
 - **Full-fidelity Markdown**
   - Tables, syntax-highlighted code, images, and task-list checkboxes
   - Clickable links with a hover preview of the destination

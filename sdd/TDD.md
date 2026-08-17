@@ -24,6 +24,8 @@
 | 20 | Annotations viewer | 20.1 – 20.18 |
 | 21 | Crash forensics | 21.1 – 21.12 |
 | 22 | Crash recovery (swap files) | 22.1 – 22.16 |
+| 23 | Back / Forward navigation history | 23.1 – 23.14 |
+| 24 | Renaming an open document | 24.1 – 24.14 |
 
 ---
 
@@ -2645,3 +2647,89 @@ created by an act of navigation, and traversing history is not one of them.**
 - **Then** an entry whose heading is gone falls back to naming *just that document*: the traversal still activates it and leaves its viewport exactly where the reader left it — the same silent outcome §19.12 gives a link whose fragment matches nothing, never a jump to the top, which would destroy a reading position the reader never offered up
 - **And** an entry that falls back to the document the reader is *already* on is not a stop at all — the traversal continues to the next place, and Back reports itself insensitive rather than remaining available with nothing perceptible behind it
 - **And** the commands' sensitivity always agrees with what a traversal will actually do: Back is never reported available on the strength of an entry that has already gone stale, whichever way the document was rebuilt — an in-place re-render or a wholesale one (23.5)
+
+## 24. Renaming an open document
+
+Changing the *name* of the file a tab is reading, in place. The category is not
+"rename" but **a document's identity changing while the document is open** — the
+same category as the first save of an untitled buffer and as Save As — and the
+rule underlying every rubric below is that **a path change is not a content
+change**: it must not touch the buffer, the baseline, the dirty flag, the undo
+stack, the reading position or the rendered preview, and must not re-read the
+file.
+
+Scope is deliberately narrow: the filename only, within the document's own
+directory. Moving a document to another directory is a different command with a
+different answer (it would invalidate the relative-resource base that resolves
+images and local links) and is not this feature.
+
+### 24.1 A clean, titled document can be renamed in place
+- **Given** a saved document with no unsaved changes
+- **When** the reader chooses Rename and supplies a new filename
+- **Then** the file on disk carries the new name **in the same directory**, the old name is gone, and the bytes are unchanged
+
+### 24.2 The rename is not an edit
+- **Given** a document that has just been renamed
+- **Then** the document stays clean, and the buffer, the reading position, the undo history and the rendered preview are all exactly as they were — no re-read of the file occurs, and no re-render is triggered
+- **And** no crash-recovery snapshot is created or orphaned by the rename. A clean document has no snapshot, so this is a no-op *by position in the lifecycle* rather than by exemption — recorded because it is the kind of premise a later change silently invalidates, and it ends the moment rename is permitted on a dirty document
+
+### 24.3 Every surface that names the document follows
+- **Given** a renamed document
+- **Then** the window title, the tab label, the tab tooltip, the View ▸ Documents menu item and the toolbar Documents combo all show the new name — immediately, and without the reader taking any other action
+
+### 24.4 Live reload follows the file
+- **Given** a renamed document
+- **When** something else writes to the **new** path
+- **Then** the change is picked up exactly as it was before the rename
+- **And** re-creating a file at the **old** path changes nothing about this document — it is not reloaded from it, and its tab is not badged on account of it
+
+### 24.5 A rename does not look like a deletion
+- **Given** a clean document being renamed
+- **Then** no "File deleted on disk" notice appears, the tab gets no ⚠ deleted-backing badge, and Save does not become enabled — the rename removes the old name from the directory, and none of that may surface as though the reader's file had been lost
+
+### 24.6 Rename is unavailable when it cannot be correct
+- **Given** a document that is untitled, or has unsaved changes, or whose backing file is known to be gone, or has a write in flight
+- **Then** the Rename command is insensitive — in every view mode and on every surface at once, so no surface offers a rename the others refuse
+
+### 24.7 An existing file is never overwritten
+- **Given** a directory already containing a file of the chosen name
+- **When** the reader confirms the rename
+- **Then** the rename is refused, the reason is reported, and **both** files are untouched — the document keeps its old name and the other file keeps its contents
+
+### 24.8 A vanished source is reported, not papered over
+- **Given** the document's file has been deleted since the command was enabled
+- **When** the rename is attempted
+- **Then** it is refused and reported, the document is marked as having lost its backing file, and Save becomes available so the reader can re-create it — the same state the file monitor's own deletion handling produces, reached by the same code
+
+### 24.9 A name that cannot be a filename is refused before anything happens
+- **Given** the rename dialog
+- **When** the reader types a name that is empty, `.`, `..`, contains a path separator, or is otherwise not a legal filename on this platform
+- **Then** the confirm control is insensitive and the reason is visible in the dialog — the refusal happens *before* the filesystem is touched, never as an error afterwards
+
+### 24.10 Changing only the letter case is a rename, not a collision
+- **Given** a document named `notes.md`
+- **When** the reader renames it to `Notes.md`
+- **Then** the rename succeeds and the file carries the new capitalisation — on a case-insensitive filesystem exactly as on a case-sensitive one, the destination being the source rather than a different file
+
+### 24.11 Renaming from the tab strip acts on the tab that was right-clicked
+- **Given** a window with several tabs
+- **When** the reader right-clicks a tab that is **not** active and chooses Rename
+- **Then** that tab's document is the one renamed, and the reader is shown it — never whichever document happened to be active
+
+### 24.12 The rename cannot be aimed at the wrong document
+- **Given** the rename dialog is open for one document
+- **When** the reader switches tabs, or another operation on that document completes, while the dialog is open
+- **Then** the rename still applies to the document it was invoked for — the subject is resolved once, when the reader acts, and carried across the dialog and the filesystem call rather than re-asked afterwards
+
+### 24.13 The new name is a name the directory actually holds
+- **Given** a completed rename on a filesystem that stores a spelling other than the one it was given
+- **Then** the tab, the title and the re-attached file monitor all use the **stored** spelling — not the requested one, which names no directory entry
+- **And** where the directory does hold the requested spelling it is used unchanged; another name for the same file, such as a hard link beside it, is not a spelling correction
+- **And** a rename that succeeded is never reported as failed because this follow-up read failed
+
+### 24.14 A document stranded by a crash mid-rename comes back
+- **Given** a case-only rename, which is two steps, interrupted between them — the document is under neither its old name nor its new one
+- **When** the old path is next opened
+- **Then** the document is found with its content intact, rather than reported missing with an offer to create a blank one over it
+- **And** the rename is not replayed, and nothing is moved when the document is present, when more than one candidate matches, or for a file that is not this app's own debris
+- **And** the recovery is silent — the reader is left in exactly the pre-rename state, so there is nothing to announce, accept or discard (ratified; the reasoning is ANTI-PATTERNS #272)
