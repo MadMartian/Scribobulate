@@ -131,7 +131,21 @@ cd "$(dirname "$0")/.."
 # decision cores carrying the feature's real judgement, so the GTK half in
 # `window/rename.rs` could stay thin. Read from the LINES column, per the warning
 # above: the same run printed 78.29% for regions.
-FLOOR=77.53
+# 2026-08-17: 77.53 → 77.72, banked by the remote-image HTTP fetch (ScrAP-292). The run
+# PRINTS 77.73 and a floor of 77.73 FAILS it — the printed figure is rounded up from
+# something a hair under, so the rule above ("round down") is not a style preference, it
+# is the difference between a gate that passes and one that fails on the very run that
+# set it. Worth
+# recording because the change first pushed the number DOWN, to 77.49, and failed this
+# gate: replacing a one-line GIO call with a module the unit run could not reach added
+# uncovered lines in both `imagefetch.rs` and the renderer's loader. What recovered it —
+# and then some — was making the fetch testable OFFLINE rather than declaring it
+# untestable: the cap became a parameter so a refusal could be driven over a real
+# response, and the tests serve their own canned HTTP from a loopback socket. The rule
+# to carry: "needs the network" is usually "needs A network", and a loopback server is
+# one, so reach for that before writing the exclusion. Read from the LINES column, per
+# the warning above: the same run printed 78.63% for regions.
+FLOOR=77.72
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

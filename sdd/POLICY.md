@@ -680,6 +680,19 @@ full account is ScrAP-225; the rule above is what stops it recurring.
   resolve its subject **once** and carry it (ScrAP-244), and concurrent operations on
   one document must be serialised by the caller, because GIO orders neither the
   renames nor the completions (ScrAP-243).
+- **Network access goes through `imagefetch`, and never through a `GFile`.** The
+  application makes exactly one kind of outbound connection — a remote image on the
+  opt-in "Show Unsafe Images" path — and it is the app's own HTTP client, bounded by
+  the timeouts and byte cap declared there. Two rules follow, and neither is a
+  preference. A URI handed to GIO (`gio::File::for_uri("https://…")`) resolves only
+  where some backend claims the scheme, which is a property of the *host's desktop
+  stack* and not of anything this project depends on: a daemon on Linux, an in-DLL VFS
+  on Windows, nothing at all on macOS — so that route is a feature that silently does
+  not exist on a platform (ScrAP-292). And a second network path would be a second set
+  of timeouts, a second trust-store decision and a second proxy rule, of which the
+  parts nobody reproduces fail only on machines nobody here runs. If a future feature
+  needs the network, extend that module; if it needs it *not* to block the main thread,
+  that is the same module's problem to solve once.
 - **All GTK access on the main thread.** GTK is single-threaded. File watching uses
   `gio::FileMonitor`, whose `changed` signal is delivered on the main context (main
   thread); the app currently spawns no worker threads *of its own* — the one write that

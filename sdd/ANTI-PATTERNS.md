@@ -418,6 +418,7 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 275 | A `GFileMonitor` created while its parent DIRECTORY is absent is permanently dead on Windows, and self-heals everywhere else | A |
 | 290 | A custom widget that CACHES child positions derived from child sizes re-derives them on nothing — `queue_resize` re-runs the layout against the stale cache | A |
 | 291 | Every `GtkAdjustment` write is clamped to `upper − page_size`, so revealing a child added in the same turn scrolls short by exactly that child's width | A |
+| 292 | GIO resolves an `https://` URI only where a GVfs backend claims the scheme, so a `GFile`-based remote fetch is dead on every platform without the Linux desktop stack | A |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -2619,7 +2620,19 @@ Start-Sleep -Milliseconds 900
 ```
 
 `AppActivate` returns a boolean, and treating it as fire-and-forget is what lets both the
-keystroke path *and* the capture path silently address the wrong window. Capture the
+keystroke path *and* the capture path silently address the wrong window.
+
+**A second measured instance says the boolean is necessary and not sufficient** (Windows
+seat again, during the ScrAP-292 verification): the activation succeeded, and the
+operator's own Git client came forward **during the 900 ms settle**, so the capture
+photographed that instead — same well-formed, confidently-wrong artefact, from a harness
+already obeying the rule above. A check at activation time answers *did I bring it
+forward*, which stops being true the moment anything else asks for focus; the capture
+needs *is it forward NOW*. So re-assert it at the capture itself — `GetForegroundWindow()`
+must equal the process's `MainWindowHandle`, else refuse to capture — and note the tell
+that caught it: the log evidence and the screenshot disagreed. On a shared, live desktop,
+**verify a precondition at the moment it is depended on, not at the moment it is
+established** — every gap between the two belongs to whoever else is using the machine. Capture the
 **window rect only**, never the full desktop: on a real operator's machine a full-screen
 grab also photographs their unrelated applications, so this is a privacy property as well
 as a correctness one.
@@ -3977,3 +3990,8 @@ SKIPPED [TDD 24.13 stored spelling]: test copymap::tests::within_heading_exclude
 **Symptom**: a tab appended to an overflowing strip is made active but never becomes visible — it sits clipped just past the right-hand edge for good, while every other way of scrolling reveals it perfectly.
 **Scribobulate**: `widgets/tab/ops.rs`'s `scroll_into_view` republishes the range (`scrollpos::reconfigure` over `layout::scroll_extent(content_extent(), viewport)`) before writing a position, with `content_extent()` the single definition `size_allocate` also reads; guarded by `switching_to_a_just_added_tab_scrolls_it_fully_into_view` (mutation-tested) and MANUAL-TEST 7.20 / TDD 7.20.
 **See**: gtk4-rs skill → textview-scrolling-and-adjustments (GTK4Rs/AP-291), which holds the measurement and reframes that module's clamp family — lazy validation is the family's trigger, not the clamp's precondition. Canonical text is there, not in this file's git history — it was stubbed at mint time.
+
+## 292. A `GFile` built from an `https://` URI resolves only where a GVfs backend claims the scheme
+**Symptom**: every remote image in a document stays a broken-image placeholder on macOS with the safety toggle ON — while the identical document renders them on Linux *and* on Windows (three platforms, three different answers: `gvfsd-http`, GLib's in-process `GWinHttpVfs`, and nothing at all) — and the placeholder's tooltip says the bytes would not decode, because the error that says no request was ever attempted is swallowed by an `Option`.
+**Scribobulate**: `imagefetch.rs` owns the fetch (an explicit HTTP GET, bounded by connect/global timeouts and `limits::MAX_REMOTE_IMAGE_BYTES`) and `renderer::start::load_remote_texture` decodes it with `GdkTexture::from_bytes`, logging fetch and decode failures separately at `warn`; the transport is replaced for **every** platform rather than behind a `platform/mac/` seam, since the substitute is portable — which makes it a *replacement of working behaviour* on the two platforms that had a backend, so the client verifies against the machine's trust store and honours the Windows proxy settings (the replaced routes both did), or the macOS fix would have landed as a corporate-desktop regression elsewhere. Guarded by `imagefetch`'s cap/scheme unit tests and MANUAL-TEST 14.2a / TDD 14.2, which drives it with GVfs disabled (`GIO_USE_VFS=local`) so the platform gap is reproduced on Linux rather than assumed.
+**See**: gtk4-rs skill → app-lifecycle-and-env (GTK4Rs/AP-292), which holds the measurement, the daemon-not-library mechanism, and the general lesson about a toolkit API whose capability is supplied by a separate desktop component. Canonical text is there, not in this file's git history — it was stubbed at mint time.

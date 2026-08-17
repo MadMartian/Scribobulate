@@ -1558,6 +1558,8 @@
 - **Given** a document containing a remote http/https image URL
 - **When** "Show Unsafe Images" is toggled **on** (View menu checkbox or toolbar button)
 - **Then** the image is fetched from the network and displayed inline in the preview
+- **And** this holds on **every supported platform**, and on a host with no desktop VFS layer installed at all — the fetch is the application's own HTTP client, never a URI handed to GIO, whose `http`/`https` support is a separate Linux-desktop daemon (ScrAP-292)
+- **And** a fetch that does not produce an image — no network, a non-success status, or a response past the remote-image size limit — leaves the "Could not load image" placeholder **and** records the reason at `warn` naming the URL, so the failure is diagnosable from the log rather than only from a tooltip
 
 ### 14.3 Out-of-folder local images are blocked by default
 - **Given** a document containing an image whose local path resolves outside the document's folder (absolute path or `..` traversal)

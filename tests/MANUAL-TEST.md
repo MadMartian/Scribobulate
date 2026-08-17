@@ -113,6 +113,18 @@ applies on **both** platforms — over D-Bus on Linux, over `src/platform/mac/si
 on macOS — so a habit built on "macOS always starts its own process" is now wrong
 and will quietly hand your test to yesterday's build.
 
+⚠️ **A live GUI run gets its own `XDG_STATE_HOME` — never one an automated test run has
+touched.** `.cargo/config.toml`'s `[env]` scratch directory covers only *cargo-invoked*
+processes (`cargo test`, `cargo run`); a manually launched `./target/release/scribobulate`
+inherits nothing, so pointing a live run at the directory an integration pass wrote to
+resurrects that pass's fixture tabs and swap files as a **"Recovered unsaved changes"**
+prompt. Measured on macOS during the ScrAP-292 verification, and it cost twenty minutes:
+the application is behaving perfectly and reporting state you did not set, which is the
+same shape as a screenshot of the wrong window (ScrAP-236) — a plausible artefact of the
+wrong subject, and strictly worse than an error, because it gets believed. Give every live
+run a directory nothing else has written (a fresh `mktemp -d`). This is platform-neutral;
+it is stated here rather than in a platform procedure for that reason.
+
 Find the **actual** GTK process PID (not `cargo`'s, since `cargo run` spawns a
 child):
 ```bash
@@ -833,6 +845,7 @@ gtk4-rs skill's dev-loop doc on why geometry/rendering bugs leave no warning.
 ### §14 Show Unsafe Images
 - [ ] **14.1** Open `remote-image.md` with toggle OFF (default) → broken-image placeholder, no alt text shown
 - [ ] **14.2** Toggle ON → remote image fetches over the network and displays
+- [ ] **14.2a** **The fetch does not depend on the host's VFS layer** (TDD 14.2; ScrAP-292 — the defect was that remote images rendered on Linux and *never* on macOS, because `gio::File::for_uri` needs the `gvfsd-http` GVfs backend and Homebrew ships no GVfs at all). Drive `remote-image.md` with the toggle ON in an environment with GVfs disabled, so the platform gap is reproduced rather than assumed: on **Linux** launch with `GIO_USE_VFS=local` (verify the substitution first — `GIO_USE_VFS=local gio info https://picsum.photos/id/237/240/180.jpg` must answer `Operation not supported`, which is byte-for-byte what macOS answers with GVfs simply absent); on **macOS/Windows** no variable is needed, since neither has the backend. The image must render in all three cases. Run it with `RUST_LOG=warn` and read the log: a silent absence is the old failure mode, so **an image that fails must name its reason** (`remote image not fetched: <url> (…)`) and one that succeeds must log nothing. Note that a *badge* URL (shields.io, GitHub Actions) is an **SVG** — if a JPEG/PNG renders and a badge does not, that is the pixbuf loader registration issue (ScrAP-146), a different defect; use the fixture's raster URL to decide this check. **This check is also the only coverage TLS has**: `imagefetch`'s unit tests serve plain HTTP from a loopback socket, so certificate verification (the system trust store, via the platform verifier) is exercised nowhere but here — a trust-store misconfiguration passes the entire automated suite and fails against every real host. Run it on a machine behind a TLS-inspecting proxy if one is available, since that is the configuration bundled roots would break. Two rigs make this checkable without touching any machine's security configuration, and both must be **proved to discriminate before the app is pointed at them**: (i) serve the *same bytes* on a plain-HTTP port and on an HTTPS port with a self-signed certificate — the HTTP one must render and the HTTPS one must not, which is what distinguishes "verification is live" from "the server was unreachable"; (ii) a loopback CONNECT proxy plus `HTTPS_PROXY`/`ALL_PROXY` in the app's own environment — expect a `CONNECT` line in the proxy log. On **Windows** (ii) is a deliberate behaviour *change*: measured, the WinHTTP route it replaces ignored those variables entirely, so zero log entries before the change and at least one after is the correct before/after, not a regression. **Rig (i) also answers *which* verifier ran, and that is most of what looked unverifiable**: the rejection is logged by the verifying module itself (measured on Windows: `rustls_platform_verifier::verification::windows] failed to verify TLS certificate: … UnknownIssuer`), so a silent reversion to the bundled Mozilla roots would refuse under a different module name and be visible here. Only the *accept* side — a chain the OS store trusts and the bundled roots do not — needs a private root installed on a real machine, and that is an operator decision, not a check to run
 - [ ] **14.3** Open `unsafe-local-image.md`, toggle OFF → placeholder shown
 - [ ] **14.4** Toggle ON → loads from absolute path, displays inline
 - [ ] **14.5** With unsafe images showing, toggle OFF → immediate re-render, all unsafe images become placeholders
@@ -1240,6 +1253,15 @@ and this file is just the run-sheet.
   **succeed by design**: the opt-in remote-image path applies no private-IP/SSRF
   filtering (README "Show Unsafe Images" security note). This is the accepted
   design — the control is user trust/due-diligence — not a bug to report
+- [ ] Remote image toggle ON, a document referencing many images on a host that
+  accepts the connection and then never answers → each fetch gives up after the
+  global timeout and the document finishes rendering with placeholders. The
+  freeze is **bounded per image, not per document** (ScrAP-34a: the fetch is
+  synchronous on the main thread), so a document with N such images is N × that
+  timeout of unresponsive window. Accepted for the opt-in path, and a strict
+  improvement on the GVfs route it replaced, which had no timeout at all
+  (ScrAP-292) — but it is the shape to re-price if remote images ever stop being
+  opt-in
 - [ ] A Markdown file crafted with thousands of nested list items or a huge
   single table (stress/DoS-style) → app stays responsive or fails predictably,
   doesn't hard-hang the main loop

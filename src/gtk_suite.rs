@@ -58,6 +58,7 @@ mod farscroll;
 mod forensics;
 mod format;
 mod icons;
+mod imagefetch;
 mod keynav;
 mod limits;
 mod links;
