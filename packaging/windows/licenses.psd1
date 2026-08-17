@@ -53,6 +53,33 @@
             Basis     = 'VersionInfo ProductName on the staged executable reads "Scribobulate".'
         },
         @{
+            # Our own data file, staged to share\scribobulate\ because that is GTK's
+            # derived prefix on Windows and search-path row 3, matching what the Linux
+            # packages install to /usr/share/scribobulate/. Same licence as the
+            # executable, so the same Source.
+            #
+            # THIS ROW EXISTS BECAUSE THE GATE REPORTED ITS ABSENCE, and the absence was
+            # created by a MERGE rather than by packaging work: `master` added the
+            # themes.toml staging while `ci` added this gate, so neither branch could
+            # fail on its own and the defect was born at the conflict resolution that
+            # brought them together. Worth knowing before trusting a green run: step 10
+            # is opt-in (--package), so no default pipeline run exercises this table at
+            # all, and any future change that stages a file is equally invisible to
+            # everyone who does not pass the flag.
+            #
+            # Deliberately matches the ONE file rather than the directory. A prefix
+            # match would silently attribute whatever lands there next, which is the
+            # failure this row is a fix for.
+            Id        = 'scribobulate-themes'
+            Component = 'Scribobulate (reading themes)'
+            Match     = '^share\\scribobulate\\themes\.toml$'
+            License   = 'Apache-2.0'
+            Source    = 'repo:LICENSE'
+            Expect    = 'Apache License'
+            Evidence  = 'I'
+            Basis     = 'Inferred from the SOURCE TREE, not the artefact, because the seat that added this row cannot stage on Windows: data\themes.toml is versioned here, carries no third-party content, and stage.ps1 copies it verbatim. Promote to M on the first -Package run that sees it.'
+        },
+        @{
             # NOT STAGED TODAY. The About dialog tells the user this file is "in the
             # distribution"; the distribution does not contain it. Kept in the table
             # so the gate says so on every run rather than waiting to be noticed.
