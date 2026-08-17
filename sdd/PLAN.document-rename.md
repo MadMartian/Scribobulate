@@ -281,8 +281,21 @@ as `MOVED`/`RENAMED` or coalesces it into `CHANGED`, the guard never fires.~~ Th
 defect is the opposite of that worry: the guard consumes **only** `DELETED`, and
 Linux and Windows deliver **`CREATED` + `CHANGES_DONE_HINT` as well** (Root cause 2's
 sharpening). Those two are not swallowed, reach the `Changed|ChangesDoneHint|Created`
-arm, and drive a reload. (a) happens to work on **macOS by accident** — kqueue emits
-`DELETED` and nothing else — and leaks on the *other two* platforms. MEASURED (Linux,
+arm, and drive a reload. ~~(a) happens to work on **macOS by accident** — kqueue emits
+`DELETED` and nothing else — and leaks on the *other two* platforms.~~
+
+> **CORRECTED 2026-08-16 (mac seat, MEASURED, three identical runs).** kqueue emits
+> **`DELETED` twice**, not once. The self-delete guard arms and consumes exactly **one**
+> event, so the second would leak straight through to the deletion handling and raise a
+> false "File deleted on disk" on the very platform this paragraph called safe. **(a)
+> was broken on all three platforms, not two** — its single "accidental" success was an
+> artefact of a source-traced event count that was one short. Nothing shipped depends on
+> this: (b) cancels the monitor before the rename and no event reaches anything. Left
+> here, struck rather than deleted, because the *reason* to reject (a) is now stronger
+> than the reason recorded, and a future reader tempted back to it should meet the
+> corrected version.
+
+MEASURED (Linux,
 GLib 2.72.4): with a
 60 ms stand-in for an async round trip, all three events were delivered **before** the
 completion callback ran, so the old monitor fires before `attach_file_backing` could
@@ -575,7 +588,7 @@ reasoning by reading only that far.
 | Q1 — does the primitive enforce "same directory"? | **Not on Windows.** One-character `strchr` guard on `\`; `/`, `..` and drive-absolute paths escape | Approach 2's box; Recommendation (we validate) |
 | Q1 — error taxonomy | `Exists` / `NotFound` / `PermissionDenied` / `InvalidArgument`; **`""`, `.`, `..` all report `Exists`** | Recommendation (discriminate on `kind`, validate first) |
 | Q2 — is `cancel()` a barrier against a queued event? | **Yes, MEASURED** — queue is left intact, entries discarded at *emission* (`gfilemonitor.c:281-295`) | Choreography (b); its mechanism box |
-| Q2 — per-backend events for a rename of the watched file | Linux **DELETED+CREATED+CHANGES_DONE_HINT** (MEASURED); Windows the same (SOURCE-TRACED); macOS/kqueue **DELETED only** (SOURCE-TRACED) | Root cause 2 (sharpening); (a) rejected |
+| Q2 — per-backend events for a rename of the watched file | Linux **DELETED+CREATED+CHANGES_DONE_HINT** (MEASURED); Windows the same (SOURCE-TRACED); macOS/kqueue **DELETED ×2** (MEASURED 2026-08-16 — the source-traced "DELETED only" was one event short) | Root cause 2 (sharpening); (a) rejected |
 | Q2 — does a stale monitor follow the path or the inode? | **Backends disagree**: Linux/Windows path (inert); **macOS inode — actively wrong**, reporting later writes to the new name under the *old* basename | below |
 
 **Two consequences that belong nowhere else:**
@@ -601,15 +614,22 @@ implementation and must not be silently upgraded when it goes green:
 
 1. ~~**Case-only rename on APFS/NTFS**~~ — **CLOSED 2026-08-16**, MEASURED by the
    `windows` seat on Win10 19045 / NTFS / GTK 4.22.4.
-2. **macOS monitor event sequences** — `probe_monitor.c` cases A/B/D/E. Windows' half was
-   measured 2026-08-16; the kqueue half, and whether the watch follows the inode or the
-   path, remain the mac seat's to measure. *(Also out with the researcher for a source
-   trace, 2026-08-16.)*
+2. **macOS monitor event sequences — CLOSED**; **the Windows event COUNT is not, and is
+   now specifically suspect.** MEASURED on macOS by the mac seat (26.6.1 / GTK 4.22.4 /
+   GLib 2.88.2, three identical runs): kqueue emits **`DELETED` twice**, not once
+   (a correction), and the inode-following claim was right and is now measured rather
+   than inferred (a confirmation). Source-tracing therefore got the *semantics* right
+   and the *multiplicity* wrong — so the Windows row's **`DELETED+CREATED+CHANGES_DONE_HINT`
+   is sound as a set and unverified as a count**, on exactly the dimension that just
+   failed for kqueue. Do not read this gap as closed for Windows; it wants a probe on
+   that seat, not another source trace. Recorded in ScrAP-269.
 3. **`renamex_np` / `MoveFileExW(…, 0)` atomicity** — only matters if the TOCTOU is ever closed.
-4. **HFS+ NFD round-tripping** of a renamed name — macOS only. **Sharpened 2026-08-16:**
-   the code comment naming HFS+ may name the wrong filesystem — APFS is *believed* to be
-   normalization-**preserving**, which would make the NFD branch an HFS+-volume concern
-   rather than a current-Mac one. Unverified in either direction; out with the researcher.
+4. ~~**HFS+ NFD round-tripping**~~ — **CLOSED 2026-08-16**, MEASURED both directions by
+   the mac seat with `od -c` on the stored entry: **APFS is normalization-preserving**
+   (`café.md` → `c a f 303 251`, untouched), a purpose-built HFS+ image **decomposes**
+   the same input (`c a f e 314 201`). The suspicion was right — the code comment's
+   "HFS+" is correct *for HFS+* and was doing duty for "macOS", which is wrong. Comment
+   corrected; scope narrowed in ScrAP-270.
 5. **NEW 2026-08-16 — `g_local_file_set_display_name`'s returned `GFile`**: that it is
    built from the `display_name` argument rather than re-read from the directory is
    INFERRED (from a measured `query_info` probe plus the NTFS end-to-end result), not

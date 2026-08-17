@@ -371,13 +371,22 @@ pub(super) fn recover_rename_orphan(path: &Path) -> Option<PathBuf> {
 
 /// The byte-exact name the filesystem actually stored for `renamed`, when that is
 /// not the name it was asked for. `None` means the requested spelling is the
-/// authoritative one — which is every rename on ext4 and NTFS, and most of them on
-/// APFS.
+/// authoritative one — which is every rename on ext4, on NTFS, and on APFS.
 ///
 /// **`set_display_name` never re-reads what landed on disk**; it reports back the
 /// name it was given, and so does the `GFile` it returns. On a normalising
-/// filesystem those differ: HFS+ decomposes to NFD, so a name typed as NFC is
-/// stored decomposed. Every consumer of the new path — the tab, the window title,
+/// filesystem those differ: **HFS+** decomposes to NFD, so a name typed as NFC is
+/// stored decomposed. Be precise about which filesystem that is — an earlier
+/// version of this comment let "macOS" stand in for HFS+, and it is **APFS** that
+/// current Macs run. Both halves are now MEASURED (mac seat, macOS 26.6.1,
+/// `od -c` on the stored entry, NFC written deliberately rather than typed):
+/// APFS is normalization-**preserving** and hands back `c a f 303 251` untouched,
+/// while a purpose-built HFS+ image decomposes the same input to
+/// `c a f e 314 201`. So this function's normalising audience is HFS+ volumes —
+/// external disks, Time Machine targets, older systems — and not the Mac in front
+/// of you. It stays because "the volume is HFS+" is not something a rename may
+/// assume either way, and because the cost is one enumeration on a path that just
+/// changed. Every consumer of the new path — the tab, the window title,
 /// the Documents list, and above all the file monitor the caller is about to
 /// re-attach — would then be keyed on a spelling no directory entry matches, which
 /// is the "re-verify on re-attach" obligation failing at its first step.
@@ -783,6 +792,12 @@ mod tests {
     /// calls, and pins the branch that would otherwise be reachable on no CI machine
     /// at all.
     ///
+    /// **That worked, and it is worth recording that it worked rather than that it
+    /// was clever.** On the mac seat's default case-insensitive APFS this test does
+    /// not skip — it runs, and passes. So the branch is unexecuted on ext4 and
+    /// executed on macOS, which is exactly what substituting the mechanism for the
+    /// unreachable cause was for.
+    ///
     /// Case-sensitivity is probed at runtime rather than assumed from the platform:
     /// APFS can be formatted either way and so can ext4's `casefold`, so `cfg!` would
     /// be answering a different question than the one that matters. Skipping is
@@ -796,11 +811,15 @@ mod tests {
 
         let shouted = dir.path().join("NOTES.MD");
         if !shouted.exists() {
-            eprintln!(
-                "SKIPPED [TDD 24.13 stored spelling]: {} is case-sensitive, so no spelling \
-                 mismatch can be staged on it — the identity branch of `stored_spelling` is \
-                 NOT verified here",
-                dir.path().display()
+            // Through the shared helper, not a local `eprintln!` — the helper is the
+            // only thing that emits the line atomically (ScrAP-273), and reaching for
+            // `eprintln!` here is exactly the miss its own module header predicts: a
+            // remedy that lives behind a symlink-shaped name is one the next
+            // differently-shaped test will not find.
+            crate::testsymlink::skipped(
+                "TDD 24.13 stored spelling",
+                "the temp filesystem is case-sensitive, so no spelling mismatch can be \
+                 staged on it — `stored_spelling`'s identity branch is unproven here",
             );
             return;
         }
