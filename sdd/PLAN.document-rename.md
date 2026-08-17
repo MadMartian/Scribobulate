@@ -1,43 +1,41 @@
 # Plan: Renaming an open document
 
-**Status**: **IMPLEMENTED, 2026-08-15 — awaiting retirement.** Both mechanism
-questions were answered (researcher, 2026-08-15; see "Mechanism questions —
-resolved" below, which supersedes the "Open questions" this plan carried), the
-rubrics landed as **TDD §24** with their **`tests/MANUAL-TEST.md` §24** checks, and
-the feature ships in `src/window/rename.rs` + `src/docio/rename.rs`. The full
-pipeline passes and the behaviour was driven against the running app under Xvfb.
+**Status**: **IMPLEMENTED AND TESTED** on all three platforms (Linux, macOS, Windows;
+operator-confirmed 2026-08-16). **FULLY DISTILLED. RETIREMENT DEFERRED — the operator
+will delete this file in a future commit.**
 
-**This file is now a retirement candidate.** Its durable content has been
-distributed: the contract to TDD §24, the checks to MANUAL-TEST §24, the identity
-matrix and the toolbar exception to [`CAM.md`](CAM.md), the action to
-[`SCHEMA.md`](SCHEMA.md), the two module rows to [`TECH.md`](TECH.md), the mechanism
-prose to the two modules' own doc comments, and the testing lessons to **ScrAP-269**,
-**ScrAP-270**, **ScrAP-271** and **ScrAP-272**.
-**What is NOT yet distributed, and is the reason it still exists:** the platform
-claims still SOURCE-TRACED/INFERRED for want of a macOS seat
-(see "Remaining gaps" below), and the back-sweep's two **unverified** Save As
-hypotheses, which belong to Save As rather than to Rename and are recorded in
-`CAM.md`'s Document-Identity back-sweep section. Retire this file once those have a
-home — not before, or the gaps become invisible.
+No further work is owed to this plan and nothing should be added to it. Every durable
+fact it carried already has a home elsewhere; it survives only until that deletion
+lands:
 
-**The answers changed this plan's reasoning, not only its blanks.** One of the two
-premises the Root cause rests on was **wrong**, and it was wrong in the direction
-that produces a false safety claim — so the correction is recorded inline where the
-premise was stated, not only in the resolution section. Read Root cause 1 with its
-correction before writing the seam's rustdoc.
+| What it held | Where it now lives |
+|---|---|
+| The behavioural contract | TDD §24 (24.1 – 24.14) |
+| The manual checks | `tests/MANUAL-TEST.md` §24 |
+| The Document-Identity matrix, the toolbar exception, the back-sweep | [`CAM.md`](CAM.md) |
+| The `win.rename` action | [`SCHEMA.md`](SCHEMA.md) |
+| The two module rows and the recovery seam | [`TECH.md`](TECH.md) |
+| The GIO mechanisms, source-traced with line numbers | `src/docio/rename.rs` module header |
+| The testing and provenance lessons | ScrAP-269, ScrAP-270, ScrAP-271, ScrAP-272, ScrAP-274 |
+| The two **unverified** Save As hypotheses | [`CAM.md`](CAM.md) back-sweep — in full, and still marked unverified |
+| The decision narrative, phase log, item numbers | git history; deliberately nowhere else |
 
-**Operator decisions already taken** (2026-08-15, recorded so they are not
-re-litigated):
+**Every original platform gap is closed, and so is the one added later** — 1 and 4
+measured on the Windows and mac seats, 2 measured on macOS, and 5 answered
+**SOURCE-READ** across nine GLib tags (ScrAP-270). The real NFD cause has now been
+driven end-to-end on a purpose-built HFS+ volume, live reload included, so nothing
+about this feature rests on a substitute any more. Exactly two things remain open, both
+recorded where they will be read rather than here: the Windows monitor **event count**
+(ScrAP-269 — set-verified, count-unverified, and the researcher has since shown *why*
+it may be unknowable from source at all: the three-event expansion sits behind
+`NextEntryOffset != 0`, i.e. behind `ReadDirectoryChangesW`'s batching) and
+`renamex_np`/`MoveFileExW(…, 0)`, which are **DOC-ASSERTED** and matter only if the
+TOCTOU is ever closed (`src/docio/rename.rs` header).
 
-- **Same-directory, name-only.** A rename changes the filename; it never moves the
-  file to another directory. "Move" is a different command with a different answer
-  and is out of scope.
-- **Accelerator is `F2`** — the Explorer/Nautilus convention, layout-stable, and
-  free in this tree (`F1`, `F8`, `F9` are the only F-keys bound today).
-- **The right-clicked tab is focused before the rename**, matching the two
-  commands beside it in the same context menu.
-- **The disabled-when-dirty cliff is accepted.** The command greys out with no
-  stated reason and the reader has to save first. No "Save and rename" prompt.
+**Read the rest of this file as history, not as instruction.** The corrections struck
+inline below are the reason it is worth a last read before deletion: two of its
+load-bearing premises were wrong, and one of its *rejected* alternatives was wronger
+than it recorded.
 
 ## Problem
 

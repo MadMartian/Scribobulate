@@ -18,7 +18,9 @@
 //!
 //! An atomic no-replace rename does exist on all three platforms —
 //! `renameat2(RENAME_NOREPLACE)` (MEASURED refusing over an existing destination on
-//! ext4 and tmpfs, Linux/glibc 2.35), `renamex_np(RENAME_EXCL)`, `MoveFileExW(…, 0)`
+//! ext4 and tmpfs, Linux/glibc 2.35), `renamex_np(RENAME_EXCL)` and
+//! `MoveFileExW(…, 0)` (both **DOC-ASSERTED only**: taken from the platform
+//! documentation, never measured, and nobody should quote them as tested)
 //! — and GLib uses none of them. Taking that path means three-platform unsafe FFI
 //! for a command that renames inside the user's own directory, which is
 //! disproportionate; [`rename_blocking`] is the single place that would change if
@@ -374,7 +376,15 @@ pub(super) fn recover_rename_orphan(path: &Path) -> Option<PathBuf> {
 /// authoritative one — which is every rename on ext4, on NTFS, and on APFS.
 ///
 /// **`set_display_name` never re-reads what landed on disk**; it reports back the
-/// name it was given, and so does the `GFile` it returns. On a normalising
+/// name it was given, and so does the `GFile` it returns. SOURCE-READ, not inferred:
+/// `g_local_file_set_display_name` builds its result with
+/// `g_file_get_child_for_display_name(parent, display_name, …)` *before* the `lstat`
+/// and *before* the `g_rename`, and returns it unmodified — a scan for any
+/// post-rename re-read inside that function finds nothing at any tag from 2.72.4 to
+/// 2.88.0. The returned path is exactly `parent.join(display_name)`, canonicalised.
+/// On Windows it additionally comes back **backslash-separated** and carrying the
+/// case the user typed, so do not compare it against a `/`-separated string and do
+/// not read its case as verified. On a normalising
 /// filesystem those differ: **HFS+** decomposes to NFD, so a name typed as NFC is
 /// stored decomposed. Be precise about which filesystem that is — an earlier
 /// version of this comment let "macOS" stand in for HFS+, and it is **APFS** that
