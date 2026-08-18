@@ -11,7 +11,6 @@
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
 | Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
 | R | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
-| S | Windows only: the GTK integration suite dies `STATUS_HEAP_CORRUPTION` at the end of the run, on both harnesses, after every test has passed | Medium |
 
 ## A. Tables are selection islands
 
@@ -842,33 +841,3 @@ built**: the seed increments on `screencapture -C` itself, measured by running t
 sampling loop over blank space with no hover target and seeing the same climb. An instrument
 inside its own measurement, and the artefact it produced happened to match the hypothesis
 under test.
-
-## S. Windows: the integration suite dies of heap corruption at the end of the run
-
-**Severity**: Medium (every test *passes* — the process dies after the last one, so a
-verdict is still readable from the output, but build-pipeline step 5 exits non-zero and
-cannot gate on that platform. No effect on the shipped application: this is the test
-process, and no equivalent death is seen running the app.)
-
-MEASURED on Windows by the windows seat, deterministic 3/3 runs, on **both** harnesses
-(`--lib` and `--test gtk_suite`): the process exits `0xC0000374`
-(`STATUS_HEAP_CORRUPTION`) at the last test to run, which is
-`window::rename::gtk_integration_tests::the_old_monitor_is_cancelled_before_the_rename_touches_the_filesystem`.
-
-**That test is not the culprit and the evidence says so.** It passes alone (1/1), and its
-whole module passes alone (7/7). It is simply last. So this is accumulated corruption
-surfacing at teardown, and the named test is where the process happens to be standing when
-the heap is finally walked — attributing it to that test is the mistake this paragraph
-exists to prevent.
-
-**Pre-existing, and attributed by measurement rather than assumed.** The parent commit
-(`33e990d`) fails identically, in a separate worktree with its own target directory. It is
-not the code-block copy button, and not anything in that change.
-
-Incidental datum, not a diagnosis: the test process was at ~786 MB RSS shortly before the
-death.
-
-**Nothing is known about the cause.** No candidate has been identified, no allocation site
-implicated, and no relationship to the two GTK-4.6/4.22 differences the Windows build
-carries has been shown. Recorded to stop the next seat re-discovering the symptom and
-mis-attributing it to whichever test sorts last that day.

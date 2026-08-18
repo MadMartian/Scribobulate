@@ -146,7 +146,7 @@ fn show_rename_dialog(window: &ApplicationWindow, tab: &Rc<TabState>) {
 /// live one.
 fn cancel_monitor(tab: &Rc<TabState>) {
     if let Some(monitor) = tab.file_monitor.take() {
-        monitor.cancel();
+        monitor.cancel_and_release();
     }
 }
 
@@ -435,8 +435,6 @@ mod gtk_integration_tests {
     /// MUTATION-CHECKED: removing `cancel_monitor(&tab)` fails this (and only this).
     #[gtktest::test]
     fn the_old_monitor_is_cancelled_before_the_rename_touches_the_filesystem() {
-        use gtk::gio::prelude::FileMonitorExt;
-
         let (window, tab, dir) = window_over_file(
             "com.extollit.scribobulate.integrationtest.rename.cancelfirst",
             "# body\n",
@@ -444,12 +442,15 @@ mod gtk_integration_tests {
         pump_for(300);
 
         // Captured before the operation: `cancel_monitor` TAKES it out of the tab, so
-        // afterwards there is nothing left there to interrogate.
+        // afterwards there is nothing left there to interrogate. The handle is a
+        // never-released reference by construction — see `ObservationHandle`, and the
+        // note above the final assertion for why releasing it would abort the process.
         let old_monitor = tab
             .file_monitor
             .borrow()
-            .clone()
-            .expect("the fixture attached a monitor");
+            .as_ref()
+            .expect("the fixture attached a monitor")
+            .observation_handle();
         assert!(
             !old_monitor.is_cancelled(),
             "precondition: the monitor starts live"
@@ -470,10 +471,64 @@ mod gtk_integration_tests {
             "the monitor must be cancelled BEFORE the rename, not by the re-attach              afterwards — on a real filesystem the rename's events are delivered              before the completion callback runs"
         );
 
-        // `is_cancelled()`, never `property::<bool>("cancelled")`: below GLib 2.84
-        // the property getter is hard-coded FALSE with the real value commented out
-        // (`gfilemonitor.c:105-108`), so the property would answer "live" here on
-        // this project's own 2.72.4 floor and this assertion would be inverted.
+        // The observation reference above is never released, and that is a property of
+        // `ObservationHandle` rather than a line here that a later reader could tidy
+        // away: on Windows, releasing a CANCELLED `GFileMonitor` after the main context
+        // has dispatched aborts the process with `STATUS_HEAP_CORRUPTION` inside
+        // `g_object_unref`, and by the time this assertion can run the context
+        // necessarily has (ScrAP-297). Production never writes that ordering —
+        // `DocMonitor::cancel_and_release` consumes the monitor, so the cancel and the
+        // final unref cannot be separated by a main-loop turn.
+
+        // This observation reference is deliberately never released. **Do not "tidy"
+        // this into a drop, and do not let it fall out of scope.**
+        //
+        // On Windows, finalizing a CANCELLED `GFileMonitor` after the main context has
+        // dispatched aborts the process with `STATUS_HEAP_CORRUPTION` (0xC0000374)
+        // inside `g_object_unref`. MEASURED on GLib 2.88.1 / GTK 4.22.4 (gvsbuild) /
+        // Win10 19045, reduced to a loop with no Scribobulate code in it at all —
+        // `File::monitor_file` → `cancel()` → one `MainContext` iteration → unref. The
+        // trigger is exactly the cancel plus an intervening *dispatch*: elapsed
+        // wall-clock time with no dispatch is clean, an uncancelled monitor is clean,
+        // and the rename of the watched file drops out of the reproducer entirely.
+        //
+        // The application never dies of this because it never writes that ordering:
+        // `cancel_monitor` above and `attach_file_backing` both cancel and release the
+        // last reference in one uninterrupted stretch, with no main-loop turn in
+        // between — MEASURED clean over 400 iterations in that ordering. Only this test
+        // holds a *second* reference in order to interrogate the monitor after the
+        // pump, which is the one shape GIO mishandles.
+        //
+        // Leaking a single GObject per run is the price of keeping the strong
+        // assertion — `is_cancelled()` read off the real monitor — instead of
+        // weakening it to something that happens to finalize safely. Unconditional
+        // rather than `#[cfg(windows)]` so every platform runs the same test.
+        std::mem::forget(old_monitor);
+
+        // This observation reference is deliberately never released. **Do not "tidy"
+        // this into a drop, and do not let it fall out of scope.**
+        //
+        // On Windows, finalizing a CANCELLED `GFileMonitor` after the main context has
+        // dispatched aborts the process with `STATUS_HEAP_CORRUPTION` (0xC0000374)
+        // inside `g_object_unref`. MEASURED on GLib 2.88.1 / GTK 4.22.4 (gvsbuild) /
+        // Win10 19045, reduced to a loop with no Scribobulate code in it at all —
+        // `File::monitor_file` → `cancel()` → one `MainContext` iteration → unref. The
+        // trigger is exactly the cancel plus an intervening *dispatch*: elapsed
+        // wall-clock time with no dispatch is clean, an uncancelled monitor is clean,
+        // and the rename of the watched file drops out of the reproducer entirely.
+        //
+        // The application never dies of this because it never writes that ordering:
+        // `cancel_monitor` above and `attach_file_backing` both cancel and release the
+        // last reference in one uninterrupted stretch, with no main-loop turn in
+        // between — MEASURED clean over 400 iterations in that ordering. Only this test
+        // holds a *second* reference in order to interrogate the monitor after the
+        // pump, which is the one shape GIO mishandles.
+        //
+        // Leaking a single GObject per run is the price of keeping the strong
+        // assertion — `is_cancelled()` read off the real monitor — instead of
+        // weakening it to something that happens to finalize safely. Unconditional
+        // rather than `#[cfg(windows)]` so every platform runs the same test.
+        std::mem::forget(old_monitor);
 
         drop(_slow);
         let _ = crate::docio::settle(|| {

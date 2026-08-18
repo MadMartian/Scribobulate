@@ -161,7 +161,13 @@ cd "$(dirname "$0")/.."
 # precisely the failure ScrAP-294 records. So the ratchet takes the gain and leaves a
 # margin: it still only ever moves up, and it still fails a real regression, but it does not
 # manufacture one. Do not "tidy" this up to the measured value.
-FLOOR=77.78
+#
+# ratchet 2026-08-18b (77.78 -> 77.85), measurement 77.88, same deliberate margin. The
+# gain is the DocMonitor seam (ScrAP-297) arriving with its own unit tests rather than
+# with an IGNORE entry: the seam is thin GIO wiring and would have been excludable on
+# the scope rule, which is exactly the reasoning ScrAP-294 warns produces a number that
+# measures less code every time it moves.
+FLOOR=77.85
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

@@ -226,7 +226,12 @@ pub(crate) struct TabState {
     /// untitled. Stored here (not just kept alive by a destroy closure) so a later
     /// Save As to a different path can cancel and replace it cleanly — and so it
     /// stops when this state is dropped on window destroy.
-    pub(crate) file_monitor: RefCell<Option<gtk::gio::FileMonitor>>,
+    ///
+    /// Held as a [`DocMonitor`](crate::saferizer::DocMonitor) rather than a raw
+    /// `gio::FileMonitor` so that cancelling one necessarily consumes it: a
+    /// cancelled monitor released after a main-loop dispatch aborts the process on
+    /// Windows (ScrAP-297).
+    pub(crate) file_monitor: RefCell<Option<crate::saferizer::DocMonitor>>,
     /// Whether "Show Unsafe Images" is on for this window. When true, remote
     /// (http/https) image URLs and local images outside the document folder are
     /// loaded. Initialised from the session, written back on window close.

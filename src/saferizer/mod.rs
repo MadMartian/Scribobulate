@@ -42,3 +42,6 @@ pub(crate) use persistent_popover::PersistentPopover;
 
 pub(crate) mod popover_anchor;
 pub(crate) use popover_anchor::{on_viewport, pin_above, pointing_to, Viewport, ViewportRect};
+
+pub(crate) mod file_monitor;
+pub(crate) use file_monitor::DocMonitor;
