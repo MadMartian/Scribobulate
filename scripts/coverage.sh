@@ -153,7 +153,15 @@ cd "$(dirname "$0")/.."
 # to carry: "needs the network" is usually "needs A network", and a loopback server is
 # one, so reach for that before writing the exclusion. Read from the LINES column, per
 # the warning above: the same run printed 78.63% for regions.
-FLOOR=77.75
+# ratchet 2026-08-18 (77.75 -> 77.78), and DELIBERATELY SHORT OF THE MEASUREMENT (77.81).
+# The previous bump set the floor to the exact figure the run produced, which left zero
+# headroom -- and the very next change, two lines of GTK signal wiring in an in-scope file,
+# failed the gate by 0.01pt while adding no untested logic at all. A gate that fails on
+# arithmetic noise is a gate that pressures the next author into widening IGNORE, which is
+# precisely the failure ScrAP-294 records. So the ratchet takes the gain and leaves a
+# margin: it still only ever moves up, and it still fails a real regression, but it does not
+# manufacture one. Do not "tidy" this up to the measured value.
+FLOOR=77.78
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

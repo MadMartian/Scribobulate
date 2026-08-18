@@ -79,6 +79,117 @@ pub(crate) fn hit_rects(rects: &[(graphene::Rect, usize)], x: f32, y: f32) -> Op
     })
 }
 
+/// Which of the preview's drawn affordances the pointer is on, all three answered
+/// together.
+///
+/// The three are resolved as a unit because two call sites need the same answer — the
+/// motion handler, and the re-derivation that runs when the DOCUMENT moves under a
+/// stationary pointer — and each was otherwise making the same three hit tests in the
+/// same order and combining them by hand. One of those sequences drifting from the other
+/// would be invisible: both would still "work", and only one of scrolling or moving would
+/// agree with the paint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct Hover {
+    /// Index into the view's list markers, for a task checkbox.
+    pub checkbox: Option<usize>,
+    /// Index into the view's code blocks — the block whose copy button is revealed.
+    pub block: Option<usize>,
+    /// The copy button the pointer is directly on: always a subset of `block`, and what
+    /// earns the accent border rather than merely the reveal.
+    pub copy_button: Option<usize>,
+}
+
+/// Resolve all three at `(x, y)` in the buffer coordinates the hit-boxes are recorded in.
+///
+/// Each list is what the last paint recorded; `hit_rects` decides membership. No
+/// precedence between them is applied or needed — the three regions do not overlap (a
+/// checkbox is in the left gutter, a copy button is inside a card), so this is three
+/// independent questions asked at one point rather than an ordered pick.
+pub(crate) fn hover_at(
+    checkboxes: &[(graphene::Rect, usize)],
+    blocks: &[(graphene::Rect, usize)],
+    buttons: &[(graphene::Rect, usize)],
+    x: f32,
+    y: f32,
+) -> Hover {
+    Hover {
+        checkbox: hit_rects(checkboxes, x, y),
+        block: hit_rects(blocks, x, y),
+        copy_button: hit_rects(buttons, x, y),
+    }
+}
+
+#[cfg(test)]
+mod hover_tests {
+    use super::{hover_at, Hover};
+    use gtk::graphene::Rect;
+
+    fn card() -> Vec<(Rect, usize)> {
+        vec![(Rect::new(20.0, 100.0, 500.0, 90.0), 2)]
+    }
+    fn button() -> Vec<(Rect, usize)> {
+        vec![(Rect::new(484.0, 106.0, 30.0, 30.0), 2)]
+    }
+    fn checkbox() -> Vec<(Rect, usize)> {
+        vec![(Rect::new(0.0, 400.0, 28.0, 20.0), 5)]
+    }
+
+    /// Inside a block but away from its corner: the button is revealed, and the pointer
+    /// is not on it. Those are the two different questions the split exists for.
+    #[test]
+    fn inside_a_block_reveals_without_pointing_at_the_button() {
+        let h = hover_at(&checkbox(), &card(), &button(), 200.0, 150.0);
+        assert_eq!(
+            h,
+            Hover {
+                checkbox: None,
+                block: Some(2),
+                copy_button: None
+            }
+        );
+    }
+
+    /// On the button: still inside the block, so a reader moving onto it never sees the
+    /// reveal flicker off on the way.
+    #[test]
+    fn on_the_button_is_also_inside_its_block() {
+        let h = hover_at(&checkbox(), &card(), &button(), 500.0, 120.0);
+        assert_eq!(h.block, Some(2));
+        assert_eq!(h.copy_button, Some(2));
+    }
+
+    /// The gutter checkbox is answered independently of the code-block cells.
+    #[test]
+    fn a_checkbox_is_resolved_on_its_own() {
+        let h = hover_at(&checkbox(), &card(), &button(), 10.0, 410.0);
+        assert_eq!(
+            h,
+            Hover {
+                checkbox: Some(5),
+                block: None,
+                copy_button: None
+            }
+        );
+    }
+
+    /// Ordinary prose: nothing hovered, which is the state every other one must be able
+    /// to fall back to.
+    #[test]
+    fn plain_text_hovers_nothing() {
+        assert_eq!(
+            hover_at(&checkbox(), &card(), &button(), 200.0, 300.0),
+            Hover::default()
+        );
+    }
+
+    /// Empty lists — the state between a render and the paint that repopulates the
+    /// hit-boxes — answer "nothing", never a stale index.
+    #[test]
+    fn empty_hit_box_lists_hover_nothing() {
+        assert_eq!(hover_at(&[], &[], &[], 200.0, 150.0), Hover::default());
+    }
+}
+
 #[cfg(test)]
 mod copy_button_tests {
     use super::copy_button_rect;

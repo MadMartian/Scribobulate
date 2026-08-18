@@ -217,6 +217,7 @@
 - **And** the button shows a checkmark in place of the copy glyph for about a second, then returns to the copy glyph, leaving no selection and no caret movement behind
 - **And** this holds at **top level and inside every container** — a list item, a blockquote, a nested list — and for a **one-line** block, whose card is too short for the button's full corner inset (the button centres in what there is rather than vanishing)
 - **And** in a block **taller than the pane** the button rides the top of the visible portion, so a long block is copyable without scrolling back to its first line
+- **And** the reveal follows the **document**, not only the pointer: with the pointer resting still and the content scrolled underneath it, the block that is now under the pointer shows the button and the block that has moved away loses it — the reader who scrolls a long block and reaches for the button finds it there, without having to move the mouse first
 - **And** it survives **zoom** at every level (it is sized from one text row plus the block's own inner padding, both already zoom-scaled) and every installed **reading theme** (drawn in the theme's own page ink on the theme's code-block fill — no literal colour)
 
 ### 2.4 Task lists

@@ -225,23 +225,22 @@ pub(super) fn wire_link_gestures(view: &CodePreviewView, render_data: &Rc<RefCel
             // pointer cursor + an accent hover border. `set_hovered_checkbox` repaints the
             // border only when the hovered identity changes, so this doesn't thrash
             // queue_draw on every motion event.
-            let over_checkbox = v.is_over_checkbox(x as f32, y as f32);
-            v.set_hovered_checkbox(over_checkbox);
-            // A fenced code block reveals its copy button while the pointer is
-            // anywhere over the block — the way GitHub's rendered Markdown and most
-            // IDEs present one. Two identities, not one: the block whose button is
-            // shown, and (a subset) the button actually under the pointer, which is
-            // what takes the accent border and the pointer cursor.
-            let over_copy = v.is_over_copy_button(x as f32, y as f32);
-            v.set_hovered_code_block(v.code_block_at(x as f32, y as f32), over_copy);
+            // A gutter task checkbox and a fenced code block's copy button are both
+            // hover affordances — the block reveals its button while the pointer is
+            // anywhere over it, the way GitHub's rendered Markdown and most IDEs present
+            // one. All three verdicts come from the one resolver, which the scroll
+            // re-derivation also uses, so moving the pointer and moving the document
+            // cannot disagree about what is hovered.
+            let hover = v.hover_at_point(x as f32, y as f32);
+            v.apply_hover(hover);
+            // Remember where the pointer is, so the hover can be re-derived when the
+            // DOCUMENT moves instead of the pointer — GTK emits no motion event for a
+            // scroll (`CodePreviewView::refresh_hover_for_scroll`).
+            v.set_pointer_position(Some((x as f32, y as f32)));
             let over_link = link_at(&v, &rd_m.borrow(), x, y).is_some();
-            v.set_cursor_from_name(Some(
-                if over_link || over_marker || over_checkbox.is_some() || over_copy.is_some() {
-                    "pointer"
-                } else {
-                    "text"
-                },
-            ));
+            let clickable =
+                over_link || over_marker || hover.checkbox.is_some() || hover.copy_button.is_some();
+            v.set_cursor_from_name(Some(if clickable { "pointer" } else { "text" }));
         }
     ));
     // Clear any hover state when the pointer leaves the view entirely (no motion
@@ -253,6 +252,7 @@ pub(super) fn wire_link_gestures(view: &CodePreviewView, render_data: &Rc<RefCel
         move |_| {
             v.set_hovered_checkbox(None);
             v.set_hovered_code_block(None, None);
+            v.set_pointer_position(None);
         }
     ));
     view.add_controller(motion);

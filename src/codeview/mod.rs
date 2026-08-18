@@ -221,6 +221,17 @@ mod imp {
         /// see `flash_copied` for the source-lifetime rules it obeys.
         pub(crate) copied_block: Cell<Option<usize>>,
         pub(crate) copied_reset: RefCell<Option<glib::SourceId>>,
+        /// The pointer's last known position in WIDGET coordinates, or `None` once it
+        /// has left the view. Recorded so the hover state can be re-derived when the
+        /// document moves under a stationary pointer: GTK emits no motion event for a
+        /// scroll, so without this the block under the pointer keeps whatever hover
+        /// verdict it was given before the scroll — a revealed copy button rides away
+        /// with the block that earned it, and the block that arrives gets none.
+        pub(crate) last_pointer: Cell<Option<(f32, f32)>>,
+        /// Replaceable idle for that re-derivation, kept separate from `scroll_idle`
+        /// on purpose: sharing the slot would let a hover refresh cancel a pending
+        /// programmatic scroll, which is a different operation with a different owner.
+        pub(crate) hover_idle: RefCell<Option<glib::SourceId>>,
         /// The window-installed sink that performs an annotation mutation on the
         /// document source; `None` until the window wires it (then Edit/Remove show).
         pub(crate) annotation_sink: RefCell<Option<super::AnnotationSink>>,
@@ -293,6 +304,8 @@ mod imp {
                 copy_button_hitboxes: RefCell::new(Vec::new()),
                 copied_block: Cell::new(None),
                 copied_reset: RefCell::new(None),
+                last_pointer: Cell::new(None),
+                hover_idle: RefCell::new(None),
                 marker_hitboxes: RefCell::new(Vec::new()),
                 pending_marker_open: RefCell::new(None),
                 nav_generation: Cell::new(0),
@@ -458,6 +471,9 @@ mod imp {
             // Taking it is what makes the `.remove()` safe — a fired one-shot's id must
             // never be removed, and the closure clears this slot before anything else.
             if let Some(id) = self.copied_reset.borrow_mut().take() {
+                id.remove();
+            }
+            if let Some(id) = self.hover_idle.borrow_mut().take() {
                 id.remove();
             }
             self.parent_unrealize();
@@ -1148,6 +1164,11 @@ impl CodePreviewView {
                     let (it, _) = o.line_at_y(adj.value() as i32);
                     o.imp().restore_target_line.set(Some(it.line()));
                 }
+                // The document moved under the pointer; the hover state is derived from
+                // where the pointer is relative to the CONTENT, so it has to be re-derived
+                // whoever caused the movement (wheel, scrollbar, keyboard, or a
+                // programmatic scroll — all of them move content under a resting pointer).
+                o.refresh_hover_for_scroll();
             }
         ));
         // Scrollbar thumb-drag / trough-click: a press on the vertical scrollbar
@@ -1265,14 +1286,6 @@ impl CodePreviewView {
         self.queue_draw();
     }
 
-    /// The `blocks` index of the code block whose card contains widget-coordinate
-    /// `(x, y)`, or `None` — "which block's copy button should be revealed".
-    pub(crate) fn code_block_at(&self, x: f32, y: f32) -> Option<usize> {
-        use gtk::subclass::prelude::*;
-        let (bx, by) = self.buffer_point(x, y);
-        crate::affordance::hit_rects(&self.imp().code_block_rects.borrow(), bx, by)
-    }
-
     /// The `blocks` index of the copy button whose DRAWN rectangle contains
     /// widget-coordinate `(x, y)`, or `None`. Recorded by the paint from the same
     /// rectangle it drew, so the clickable area is the visible one.
@@ -1304,6 +1317,91 @@ impl CodePreviewView {
             imp.pointer_on_copy_button.set(on_button);
             self.queue_draw();
         }
+    }
+
+    /// The hover verdict at widget-coordinate `(x, y)` — all three affordances at once,
+    /// through the one display-free resolver. The two callers that need it (the motion
+    /// handler, and the scroll re-derivation) go through here rather than each making the
+    /// same three hit tests in the same order, so they cannot drift into disagreeing about
+    /// what the pointer is on. The per-affordance readers this replaced are gone with it
+    /// (`code_block_at`), so "which block is the pointer over" has exactly one answer and
+    /// no second route to a different one.
+    pub(crate) fn hover_at_point(&self, x: f32, y: f32) -> crate::affordance::Hover {
+        use gtk::subclass::prelude::*;
+        let (bx, by) = self.buffer_point(x, y);
+        let imp = self.imp();
+        crate::affordance::hover_at(
+            &imp.checkbox_hitboxes.borrow(),
+            &imp.code_block_rects.borrow(),
+            &imp.copy_button_hitboxes.borrow(),
+            bx,
+            by,
+        )
+    }
+
+    /// Apply a hover verdict. Each setter already no-ops when its identity is unchanged,
+    /// so an ordinary pointer sweep across the pane queues no redraw.
+    pub(crate) fn apply_hover(&self, h: crate::affordance::Hover) {
+        self.set_hovered_checkbox(h.checkbox);
+        self.set_hovered_code_block(h.block, h.copy_button);
+    }
+
+    /// Record where the pointer is (widget coordinates), or `None` when it leaves the
+    /// view. The motion handler is the only writer; [`Self::refresh_hover_for_scroll`]
+    /// is the only reader.
+    pub(crate) fn set_pointer_position(&self, pos: Option<(f32, f32)>) {
+        use gtk::subclass::prelude::*;
+        self.imp().last_pointer.set(pos);
+    }
+
+    /// Re-derive the hover state at the pointer's last known position, because the
+    /// DOCUMENT moved rather than the pointer.
+    ///
+    /// GTK emits no motion event for a scroll, so every hover verdict in this view is
+    /// stale the moment the content slides underneath a stationary pointer. Measured by
+    /// the windows seat: rest the pointer inside a code block, scroll, and the block now
+    /// under it draws no copy button (0 ink px) until the pointer is nudged 2 px (287 ink
+    /// px). That bites hardest on a block taller than the pane — which is precisely the
+    /// case the button's sticky-top behaviour exists to serve, so the gap is worst on the
+    /// feature's best case.
+    ///
+    /// **Deferred to a DEFAULT_IDLE, and that is the whole correctness argument.** Every
+    /// rectangle this reads is written by the paint (ScrAP-125), so running it inline on
+    /// `value-changed` would hit-test against the frame BEFORE the scroll — right for a
+    /// block that was already visible (the rects are buffer-space and the widget→buffer
+    /// conversion uses the live offset) and wrong for one that has just scrolled in,
+    /// which has no rect yet. GDK's frame clock redraws at priority 120 and this runs at
+    /// 200, so the paint has happened and the rects describe what is on screen now.
+    /// Coalesced, weak-captured, slot cleared before the body, and cancelled in
+    /// `unrealize` — the four rules `schedule_scroll_idle` documents at length.
+    ///
+    /// The cursor is deliberately NOT refreshed here: it needs the render data this
+    /// module does not hold, and it is wrong only while the pointer sits exactly where a
+    /// button has just arrived — which the next motion event corrects, unlike the button,
+    /// which stays absent until the reader thinks to jiggle the mouse.
+    pub(crate) fn refresh_hover_for_scroll(&self) {
+        use gtk::subclass::prelude::*;
+        if self.imp().last_pointer.get().is_none() {
+            return;
+        }
+        if let Some(id) = self.imp().hover_idle.borrow_mut().take() {
+            id.remove();
+        }
+        let id = glib::idle_add_local_once(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            move || {
+                view.imp().hover_idle.replace(None);
+                if !view.is_realized() {
+                    return;
+                }
+                let Some((x, y)) = view.imp().last_pointer.get() else {
+                    return;
+                };
+                view.apply_hover(view.hover_at_point(x, y));
+            }
+        ));
+        self.imp().hover_idle.replace(Some(id));
     }
 
     /// The code block at `idx`'s text, exactly as it is rendered: the code, without
