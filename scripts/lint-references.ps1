@@ -199,6 +199,26 @@ $issuePattern = '\bISSUES(\.md)?([ .:_-]*([a-z]+ )?[A-Z]\b|[ .:_-]*#[A-Z]+\b)'
 # .NET takes leftmost-first, and only this ordering makes them agree.
 $pathPattern = '((sdd|tests|packaging|gtktest|scripts|data|src)/[A-Za-z0-9._/-]+\.md|\bPLAN\.[A-Za-z0-9._-]+\.md|\bPLAN\.[A-Za-z0-9_-]+)'
 
+# The ONE place check 6a's path extraction happens, flags included -- so the self-test can
+# drive the check's own invocation instead of re-implementing it. `-CaseSensitive` is
+# LOAD-BEARING and lives HERE, not at the call site: `Select-String` and `-match` are
+# case-INSENSITIVE by default in PowerShell and `grep -E` is not, so without it this gate is
+# strictly stricter than its bash twin over identical source -- measured, the bare-PLAN arm
+# matched the Rust field accesses `plan.switch_to` and `plan.spot` in
+# `window/navhistory/traverse.rs`, failing check 6 here and passing on Linux. That is the
+# gate-parity divergence POLICY step 9 says no automated test can catch.
+#
+# It went unseen because the self-test used to validate `$pathPattern` through
+# `[regex]::Match`, which IS case-sensitive -- a corpus over a re-implementation is evidence
+# about a pattern, never about the check. Mutation-tested by the windows seat: with the
+# corpus fixed but the flag still at the call site, removing the flag left the self-test
+# GREEN. Check 8's corpus comment already said this ("it exercises the predicate the check
+# itself calls, not the two patterns in isolation"); 6a is the one that had not followed it.
+function Get-PathHits {
+    param([string]$File)
+    Select-String -LiteralPath $File -Pattern $pathPattern -AllMatches -CaseSensitive -ErrorAction SilentlyContinue
+}
+
 # Check 8's two patterns, byte-identical to the bash gate's BARE_AP_RX and LEGAL_AP_RX.
 # A BARE `AP-N` is illegal anywhere in the tree: two registers are in play with unrelated
 # numbering (`ScrAP-N` here, `GTK4Rs/AP-N` for the gtk4-rs skill), and the bare form is
@@ -593,7 +613,8 @@ if ($SelfTest) {
     $pathMustNotMatch = @(
         'see POLICY.md for the rule',
         'a PLAN.<topic>.md is deleted by design once implemented',
-        'doc_link_fragment("./sub/PLAN.md#caf%C3%A9")'
+        'doc_link_fragment("./sub/PLAN.md#caf%C3%A9")',
+        'let done = plan.switch_to.is_some() && plan.spot.as_ref();'
     )
     # Check 8's corpus, kept string-for-string with the bash gate's. It exercises
     # `Test-BareAp` -- the predicate the check itself calls -- not the two patterns in
@@ -648,15 +669,24 @@ if ($SelfTest) {
             Write-Host "   WRONG EXTRACT: want '$want', got '$got' from: $subject" -ForegroundColor Red; $bad++
         }
     }
-    foreach ($s in $pathMustNotMatch) {
-        $m = [regex]::Match($s, $pathPattern)
-        $got = if ($m.Success) { $m.Value } else { '' }
-        # `PLAN.md` may be MATCHED; check 6a skips it by name. Anything else is a
-        # false positive.
-        if ($got -cne '' -and $got -cne 'PLAN.md') {
-            Write-Host "   FALSE POSITIVE: '$got' from: $s" -ForegroundColor Red; $bad++
+    # Driven through `Get-PathHits` -- the function check 6a itself calls -- over a real
+    # temp file, NOT through a `[regex]::Match` or a bare `Select-String` here. The two
+    # differ by the check's flags, and a corpus run through a re-implementation cannot fail
+    # when a flag is dropped from the real one. Mutation-verified: remove `-CaseSensitive`
+    # from `Get-PathHits` and this loop goes red.
+    $stTmp = [System.IO.Path]::GetTempFileName()
+    Set-Content -LiteralPath $stTmp -Value $pathMustNotMatch -Encoding UTF8
+    foreach ($h in (Get-PathHits $stTmp)) {
+        foreach ($m in $h.Matches) {
+            $got = $m.Value
+            # `PLAN.md` may be MATCHED; check 6a skips it by name. Anything else is a
+            # false positive.
+            if ($got -cne 'PLAN.md') {
+                Write-Host "   FALSE POSITIVE: '$got' from: $($h.Line)" -ForegroundColor Red; $bad++
+            }
         }
     }
+    Remove-Item -LiteralPath $stTmp -Force -ErrorAction SilentlyContinue
 
     # Symlink-exclusion canary -- two independent assertions, both required (see
     # scripts/lint-references.scan, "SYMLINKS ARE EXCLUDED"). Kept behaviourally
@@ -1103,7 +1133,7 @@ $missingPaths = @()
 # but a live document may still point AT one, which is filtered target-side below.
 $scan6a = Get-ScanSubset -Not '^scripts/lint-references\.(sh|ps1)$'
 foreach ($rel in $scan6a) {
-    foreach ($h in (Select-String -LiteralPath $rel -Pattern $pathPattern -AllMatches -ErrorAction SilentlyContinue)) {
+    foreach ($h in (Get-PathHits $rel)) {
         foreach ($m in $h.Matches) {
             $target = $m.Value
             # Excluded as a TARGET, not merely as a scanned file: MANUAL-TEST.md points

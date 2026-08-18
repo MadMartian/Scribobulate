@@ -78,6 +78,18 @@ ISSUES_RX='\bISSUES(\.md)?([ .:_-]*([a-z]+ )?[A-Z]\b|[ .:_-]*#[A-Z]+\b)'
 # what keeps the twin honest.
 PATH_RX='((sdd|tests|packaging|gtktest|scripts|data|src)/[A-Za-z0-9._/-]+\.md|\bPLAN\.[A-Za-z0-9._-]+\.md|\bPLAN\.[A-Za-z0-9_-]+)'
 
+# The ONE place check 6a's path extraction happens, flags included — so the self-test can
+# drive the check's own invocation instead of re-implementing it. This exists because a
+# corpus over `$PATH_RX` alone is evidence about a PATTERN, not about the CHECK: the
+# windows seat mutation-tested the previous arrangement and found that removing the
+# PowerShell twin's `-CaseSensitive` left its self-test GREEN while the gate failed on the
+# tree, i.e. the guard did not guard. Check 8 already had the right idiom written down
+# ("it exercises the predicate the check itself calls, not the two patterns in isolation")
+# and 6a was the one that had not followed it. Add a flag here, not at the call site.
+path_hits() {
+    grep -HnoE "$PATH_RX" "$@" 2>/dev/null | grep -v 'tests/reports/' || true
+}
+
 # Check 8's two patterns. A citation's correctness is not a property of its syntax, so
 # this pair does not try to check one — it makes the ONE form that cannot be checked at
 # all illegal. `ScrAP-N` resolves in this tree (checks 2 and 3 prove the entry exists);
@@ -439,6 +451,14 @@ PLAN.typed-gtk-seams.md|see PLAN.typed-gtk-seams.md for the seam list
 sdd/PLAN.help.md|retired: sdd/PLAN.help.md
 sdd/TECH.md|the module map in sdd/TECH.md
 tests/MANUAL-TEST.md|the plan lives in tests/MANUAL-TEST.md'
+    # The LOWERCASE Rust field access (`plan.switch_to`, `plan.spot`) is here for the
+    # PowerShell twin's benefit and is a no-op on this side: `grep -E` is case-sensitive,
+    # so this gate never matched it, while `Select-String`/`-match` are case-INSENSITIVE
+    # by default and the ps1 did -- failing check 6 on Windows and passing on Linux over
+    # identical source (`window/navhistory/traverse.rs`, reported by the windows seat).
+    # A shared corpus is the only mechanism that can carry a case like this to the port
+    # that needs it, which is why an entry that looks redundant here is not: the corpus
+    # is shared string-for-string, so the platform that is WRONG is the one it tests.
     # Prose mentions that resolve against nothing, and the one fixture form that made
     # the extension look unsafe. `PLAN.md` is not a plan filename under SDD naming.
     # NOTE a directory-qualified path that EXISTS (`sdd/ISSUES.md`) is not a false
@@ -448,7 +468,8 @@ tests/MANUAL-TEST.md|the plan lives in tests/MANUAL-TEST.md'
     # the link-parser fixture.
     path_must_not_match='see POLICY.md for the rule
 a PLAN.<topic>.md is deleted by design once implemented
-doc_link_fragment("./sub/PLAN.md#caf%C3%A9")'
+doc_link_fragment("./sub/PLAN.md#caf%C3%A9")
+let done = plan.switch_to.is_some() && plan.spot.as_ref();'
     # `|| true` on every extraction: under `set -euo pipefail` a no-match `grep` exits
     # 1, `pipefail` propagates it through `| head`, and the assignment kills the script
     # SILENTLY — self-test exits 1 having printed nothing, which reads exactly like a
@@ -459,12 +480,21 @@ doc_link_fragment("./sub/PLAN.md#caf%C3%A9")'
         got=$(grep -oE "$PATH_RX" <<<"$subject" | head -1 || true)
         [ "$got" = "$want" ] || { echo "  WRONG EXTRACT: want '$want', got '$got' from: $subject"; st_fail=1; }
     done <<<"$path_must_match"
-    while IFS= read -r line; do
-        got=$(grep -oE "$PATH_RX" <<<"$line" | head -1 || true)
+    # Driven through `path_hits` — the function check 6a itself calls — over a real temp
+    # file, NOT through a bare `grep -oE "$PATH_RX"` here. The two differ by the check's
+    # flags, and a corpus run through a re-implementation cannot fail when a flag is
+    # dropped from the real one: mutation-tested, and that is precisely how the twin's
+    # missing `-CaseSensitive` stayed invisible to its own self-test.
+    st_tmp=$(mktemp) || { echo "  self-test: mktemp failed"; st_fail=1; }
+    printf '%s\n' "$path_must_not_match" >"$st_tmp"
+    while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        got=${hit##*:}
         # `PLAN.md` may be MATCHED; check 6a skips it by name. Anything else is a
         # false positive.
-        case "$got" in ""|PLAN.md) ;; *) echo "  FALSE POSITIVE: $got from: $line"; st_fail=1 ;; esac
-    done <<<"$path_must_not_match"
+        case "$got" in ""|PLAN.md) ;; *) echo "  FALSE POSITIVE: $got from: $hit"; st_fail=1 ;; esac
+    done <<<"$(path_hits "$st_tmp")"
+    rm -f "$st_tmp"
 
     # Check 8's corpus. It exercises `is_bare_ap`, the predicate the check itself calls,
     # not the two regexes in isolation: the rule is a strip-then-match COMPOSITE, and a
@@ -1031,8 +1061,7 @@ if [ -n "$scan6a" ]; then
     # The remaining `tests/reports/` filter is TARGET-side: the contract already keeps
     # those generated artifacts out of the scanned files, but a live document may still
     # point AT one, and it is absent on a fresh clone.
-    hits6a=$(grep -HnoE "$PATH_RX" $scan6a 2>/dev/null \
-               | grep -v 'tests/reports/' | LC_ALL=C sort -u || true)
+    hits6a=$(path_hits $scan6a | LC_ALL=C sort -u)
 fi
 for hit in $hits6a; do
     path=${hit##*:}

@@ -368,16 +368,31 @@ kill $APP_PID $XVFB_PID   # kill both when the chunk/run ends
 ```
 
 **Before an unattended live `DISPLAY=:0` run, INHIBIT the screen locker, screensaver,
-and DPMS blanking for the batch's duration — this is the single most common way an
-overnight live run breaks.** On an idle KDE/X11 session the locker/DPMS will engage
-while the operator sleeps; a locked screen grabs input (so `xdotool` clicks/keys land
-nowhere) and `import -window` then captures a black surface — the run stalls or, worse,
-silently *mis-verifies* against blank pixels. Inhibit at run start and release at
-teardown, e.g. hold a `systemd-inhibit --what=idle:sleep:handle-lid-switch` for the run,
-and/or `xset s off -dpms` (restore with `xset s on +dpms` when done); on KDE also
-consider suppressing the locker via its D-Bus inhibit. Verify the inhibit took (the
-screen is still awake after the idle timeout) before trusting any capture. Never
-"solve" a black screenshot by retrying the capture — first prove the display is awake.
+and DPMS blanking — and hold that inhibit FOR AS LONG AS THIS SEAT CAN BE ASKED TO DRIVE
+ANYTHING, not for the run. This is the single most common way an overnight live run
+breaks.** On an idle KDE/X11 session the locker/DPMS will engage while the operator
+sleeps; a locked screen grabs input (so `xdotool` clicks/keys land nowhere) and
+`import -window` then captures a black surface — the run stalls or, worse, silently
+*mis-verifies* against blank pixels.
+
+**The lifetime is the load-bearing part, and "for the run" is the wrong one.** A run
+ending is not this seat ending: a follow-up question can arrive against a seat that has
+already torn down correctly, and it will drive a locked screen. The macOS seat lost a
+completed test to exactly this — it released its inhibit at the end of a verification
+round, took a follow-up minutes later, and could not recover, because re-arming prevents
+a *future* lock and does not undo the present one and an agent seat holds no credential
+to unlock. So hold `systemd-inhibit --what=idle:sleep:handle-lid-switch` (and/or `xset s
+off -dpms`, restored with `xset s on +dpms`) until the seat is genuinely done being
+addressable, and release it there — never at a task boundary. On KDE also consider
+suppressing the locker via its D-Bus inhibit.
+
+**Check the lock as a precondition, at the START of the work — not as an error check when
+a capture starts failing.** Everything before that point is silent, and the data collected
+meanwhile looks ordinary: the macOS seat's discarded run had produced a result with exactly
+the shape its hypothesis predicted, and only the lock check stopped a corroborating number
+from a locked screen being reported as a finding. Verify the inhibit took (the screen is
+still awake after the idle timeout) before trusting any capture. Never "solve" a black
+screenshot by retrying the capture — first prove the display is awake.
 
 **Escalate to the operator's real X11 session only** when the item under test
 could plausibly depend on compositing (real alpha transparency, a theme's
@@ -1855,19 +1870,41 @@ public struct RECT { public int L, T, R, B; }
 $r = New-Object 'P.W+RECT'; [void][P.W]::GetWindowRect($p.MainWindowHandle, [ref]$r)
 $bmp = New-Object System.Drawing.Bitmap ($r.R-$r.L), ($r.B-$r.T)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size)
+$hdc = $g.GetHdc()
+# PW_RENDERFULLCONTENT = 2. Reads the WINDOW'S OWN pixels, so ScrAP-236's failure class
+# -- photographing whatever happens to be in front of those coordinates -- cannot occur
+# by construction rather than by remembering to activate first.
+[void][P.W]::PrintWindow($p.MainWindowHandle, $hdc, 2)
+$g.ReleaseHdc($hdc)
 $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose()
 ```
+
+Add `[DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint f);`
+to the `P.W` member definition above.
+
+**Still activate first** — focus changes what is DRAWN (an accent border, a caret), just
+not what is captured. And note the one thing `PrintWindow` cannot see: **a GTK4 menu or
+popover is its own `GdkSurface`, not part of the toplevel**, so it is absent from a
+`PrintWindow` of the main window. Capture those with `CopyFromScreen` (accepting
+ScrAP-236's hazard for that one shot), or avoid the need — drive through the toolbar or
+the keyboard and assert on the result instead of the menu.
 
 *Cleanup:* see step 4.
 
 **Three traps, each of which has cost a cycle here:**
 
 - **`CopyFromScreen` reads the SCREEN at those coordinates, not the window's pixels**
-  (**ScrAP-236**). Capture an unfocused window and you get a valid, correctly-sized
-  screenshot of whatever is in front of it. Always activate and settle first, and
-  capture the **window rect only** — a full-desktop grab also photographs the
-  operator's unrelated applications.
+  (**ScrAP-236**) — which is why the recipe above uses `PrintWindow` instead, and why
+  activating first is no longer the whole defence. Measured on this platform: a dead
+  earlier launch left a *"gtk-4-1.dll not found"* system dialog whose pixels persisted on
+  the desktop with **no corresponding window** — `EnumWindows` found it once and then
+  found nothing while the pixels stayed. `CopyFromScreen` photographed that phantom into
+  three consecutive captures; `PrintWindow` was clean immediately. So the hazard is not
+  only "something is stacked in front of you", it is "something that no longer exists is
+  in front of you", and no amount of window enumeration or activation can see that one.
+  Where you must fall back to `CopyFromScreen` (a menu or popover surface), capture the
+  **window rect only** — a full-desktop grab also photographs the operator's unrelated
+  applications.
 - **The app opens in PREVIEW, where keystrokes go nowhere.** Send `%+e`
   (Alt+Shift+E, `win.view-mode::edit`) first. You are in the editor when you see the
   line-number gutter and a `Ln n, Col n` status. Skipping this produces "keys sent,
@@ -1922,10 +1959,12 @@ document, including after a crash.
 
 **7. Reading the GTK log.** As Linux — `Gtk-WARNING **:` on stderr; capture it by
 redirecting from a console build. The app's own log under
-`<XDG_STATE_HOME>\scribobulate\scribobulate.log` is usually the better source: it
-carries the build SHA, the resolved GTK version and the renderer at every run start,
-which is what tells you whether the binary you are looking at is the one you meant to
-launch.
+`<XDG_STATE_HOME>\scribobulate\scribobulate.log` is usually the better source: the
+identity stamp at every run start carries the version, profile, executable path/size/mtime,
+the resolved GTK **runtime** version, the renderer and the pid, which is what tells you
+whether the binary you are looking at is the one you meant to launch. **It does not carry a
+commit SHA** — this section claimed one for a while and no such record exists in the tree;
+use the executable's mtime and size, which do distinguish a rebuild.
 - [ ] **23.11** **A link to a section of the same document is a navigation.** Open a document with a table of contents linking its own headings (`sdd/TDD.md` and `sdd/CAM.md` both have one; `punkie-joe-farms.md` is the report this came from). Scroll to the TOC and click one entry → the preview jumps to that section, the **tab strip selection does not move**, and **View ▸ Back is no longer greyed**. Repeat with an **outline sidebar** row (F9) → same result. Then switch to pure-**edit** mode and activate an outline row → the caret moves and Back is *unchanged*, because nothing moved the preview (TDD 23.11)
 - [ ] **23.12** **Back returns to where you clicked from.** Continuing from 23.11: invoke **Back** → the viewport returns to the TOC, at the position it was at when you clicked — **not** the top of the document. **Forward** → back to the section. Nothing re-renders and the active tab never changes. Now click the *same* TOC entry twice in a row → the second click adds no stop: one Back press leaves the section (TDD 23.12)
 - [ ] **23.12a** **Back works when you clicked from the very top.** The 23.12 case above starts with a deliberate scroll, which hides this one. Open a document whose table of contents is the **first thing in the file** (`sdd/TDD.md`), do **not** scroll at all, and click a TOC entry from the top of the document → the preview jumps to that section. Now **Back** → the preview scrolls **back up to the top**; it must not sit still on the section. **Forward** → the section again. Before the fix the departure was recorded as line 0 and the restore treated that as "already at the top, nothing to do", so *both* directions did nothing and the feature looked entirely broken for TOC links while working for every other navigation (ScrAP-262, TDD 23.12)
