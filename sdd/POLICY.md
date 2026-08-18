@@ -17,8 +17,13 @@
   `cargo test --features gtk-integration-tests --lib` SIGABRTs after ~95 non-GTK
   tests). Run `cargo test --features gtk-integration-tests --test gtk_suite` plus
   the three standalone targets instead — see "Verifying a change on macOS" below,
-  now measured rather than only designed: 147/147 suite cases pass, and all three
-  standalone targets pass.
+  now measured rather than only designed: the suite passes clean on that platform,
+  as do all three standalone targets. **Deliberately not a case count.** The number
+  written here (147, when this was first measured) is the one thing about a suite
+  guaranteed to be wrong by the next commit, and a stale one reads as a *deficit*
+  to the next reader — the seat that measured 259 passing had to establish that the
+  figure it was being compared against was merely old. The verdict is the claim;
+  the count belongs to the run that produced it.
   **Build it ON a Mac — cross-compiling from Linux is a closed dead end.** The native
   build is routine and produces the `.app` and `.dmg`. The *cross* build is not:
   installing the `x86_64-apple-darwin` target and running `cargo check --target` fails

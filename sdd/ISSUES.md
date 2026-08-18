@@ -10,6 +10,8 @@
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
 | Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
+| R | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
+| S | Windows only: the GTK integration suite dies `STATUS_HEAP_CORRUPTION` at the end of the run, on both harnesses, after every test has passed | Medium |
 
 ## A. Tables are selection islands
 
@@ -594,8 +596,9 @@ the next one works; no data at risk)
 
 With text selected in the preview, a primary click whose press lands **inside** that
 selection does not activate the affordance under it: a link does not open, a margin
-comment marker does not open its card, a gutter checkbox does not toggle. The click
-clears the selection instead, and a second click behaves normally.
+comment marker does not open its card, a gutter checkbox does not toggle, a code block's
+copy button does not copy. The click clears the selection instead, and a second click
+behaves normally.
 
 **Measured, and pre-existing.** Reproduced identically on the binary from before the
 complete-click fix (ScrAP-238) and on the one after, under Xvfb: press+release on a
@@ -742,3 +745,130 @@ is the only variant that is not a timing test at all and is the one worth pricin
 this issue; a genuine return of the quadratic walk reads ~16x and does not come and go.
 
 ---
+
+## R. macOS: the preview's hover cursor sometimes does not take over body text or a link
+
+**Severity**: Low (nothing is unreachable — links still activate on click and the copy
+button still copies; what is lost is the *affordance*, i.e. every link on the page looks
+un-clickable to a macOS reader until they try it)
+
+**READ THIS FIRST: it is INTERMITTENT, and that was established late.** The table below is
+what was measured, and every cell of it is real — but a later cold launch, same fixture,
+same point, same procedure, produced the *correct* text-beam where two earlier independent
+cold launches had produced the arrow. So the macOS column is not reliably reproducible, and
+any theory built only on the table (including the two this entry has already discarded)
+will over-explain it. Whatever gates this is not captured by "cold versus warm", and is not
+named here because it is not known.
+
+MEASURED on macOS (GTK 4.22.4/Quartz/Homebrew) against the identical build on Linux
+(GTK 4.6.9/X11), same fixtures, cursor identity read by name rather than judged from a
+screenshot — `XFixesGetCursorImage` on X11, screenshots on Quartz:
+
+| pointer over | asks for | Linux/X11 | Windows/GDK-Win32 | macOS/Quartz |
+|---|---|---|---|---|
+| plain body text | `text` | `text` | IBEAM | **arrow** |
+| a body link | `pointer` | `pointer` | HAND | **arrow** |
+| a task checkbox | `pointer` | `pointer` | HAND | hand |
+| a code-block copy button | `pointer` | `pointer` | HAND | hand |
+
+**Three platforms, and macOS is the outlier** — Windows read via `GetCursorInfo().hCursor`
+against `LoadCursorW(NULL, IDC_*)` handles after a settle, with the copy-button cell
+corroborated by accent-pixel count so the pointer was provably on the button when the
+handle was sampled.
+
+**All four go through one `set_cursor_from_name` call in one motion handler**
+(`preview::interactions::wire_link_gestures`); only the string differs. So this is not
+about links, and not about any hit-test: two of the four cells take effect on Quartz and
+two do not.
+
+**Ruled out, measured, not assumed.** The first hypothesis was that GTK's tooltip resets
+the cursor — a link is the only one of the four that makes `query-tooltip` return true and
+put a window on screen. Sampled at ~200 ms (pre-tooltip) and ~2000 ms (tooltip visibly up),
+same pointer position, no re-entry: **arrow both times**. The tooltip is innocent; the
+cursor never takes at all on those two cells.
+
+**Standing hypothesis, NOT confirmed, and now bounded to one backend.** The only
+structural difference between the working and failing cells is that the checkbox and
+copy-button branches also `queue_draw()` when the hovered identity changes, while the link
+and plain-text branches draw nothing — suggesting a cursor set via `gtk_widget_set_cursor`
+does not take effect until something invalidates the surface. **The Windows result refutes
+the general form**: there the two "draw nothing" cells get their cursors, and get two
+*different* ones (IBEAM and HAND), so this is not a property of GDK backends at large. If
+it holds anywhere it holds on Quartz alone.
+
+**TWO HYPOTHESES HAVE BEEN TRIED AND NEITHER SURVIVED. Do not re-derive them.**
+
+1. *The tooltip resets the cursor* — a link is the only cell that makes `query-tooltip`
+   return true. Refuted by sampling at ~200 ms (pre-tooltip) and ~2000 ms (tooltip visibly
+   up): arrow both times.
+2. *The cursor does not take until the surface is repainted, so only the cells whose hover
+   fires a `queue_draw` work* — which fitted every observation at the time, including the
+   original three-way result (run with a fresh instance per target, so the "working" cells
+   are exactly the ones that repaint themselves). Refuted twice over: on Windows the two
+   "draw nothing" cells get their cursors and get two *different* ones, so it is not a GDK
+   property; and the motion-only test that would have confirmed it on Quartz — approach one
+   spot of plain text from other plain text versus straight off the copy button — returned
+   the correct text-beam **both** ways, on an instance where plain text had already started
+   behaving before the test began.
+
+**What is left is the intermittency itself, and it is not yet characterised.** A cold
+launch has produced the arrow twice (independently, same instance) and the correct
+text-beam once (a different instance), with no known difference in procedure. Until that
+reproduces on demand there is nothing to hand a researcher: a mechanism proposed against an
+observation this unstable will fit and still be wrong, which is how both hypotheses above
+were reached. **The next useful step is a reproduction rate, not a theory** — the same cold
+launch and single hover, repeated enough times to say how often it bites, which turns an
+anecdote into something a mechanism can be tested against.
+
+**Pre-existing, and older than the affordance that exposed it.** Nothing here was
+introduced by the code-block copy button; that button is one of the two cells that *works*,
+and the pattern only became visible once an affordance existed that happens to repaint on
+hover. Do not file it against that change.
+
+**Dead end, so it is not re-attempted.** Forcing a repaint through the macOS menu bar
+failed three ways: keyboard-only menu navigation quit the application partway through;
+`System Events` `click menu item` on the theme's leaf entry failed `-1728` reproducibly
+with and without its emoji prefix, on a fresh instance, *while querying that same item's
+name succeeded*; and a raw-coordinate fallback both moved the pointer (which the test
+forbids) and missed. A theme switch would also have been ambiguous even if it had landed —
+it re-renders the whole preview, so an arrow afterwards could mean either "the repaint did
+not help" or "the re-render reset the cursor".
+
+**Harness note for whoever picks this up.** "Did the cursor change" is not a question a
+screenshot answers reliably on either platform. On X11 read the cursor's *name* directly
+(`XFixesGetCursorImage` via ctypes — it returns `b'pointer'` / `b'text'`). On macOS,
+`CGSCurrentCursorSeed` was tried as a corroborating signal and is **unusable the way it was
+built**: the seed increments on `screencapture -C` itself, measured by running the identical
+sampling loop over blank space with no hover target and seeing the same climb. An instrument
+inside its own measurement, and the artefact it produced happened to match the hypothesis
+under test.
+
+## S. Windows: the integration suite dies of heap corruption at the end of the run
+
+**Severity**: Medium (every test *passes* — the process dies after the last one, so a
+verdict is still readable from the output, but build-pipeline step 5 exits non-zero and
+cannot gate on that platform. No effect on the shipped application: this is the test
+process, and no equivalent death is seen running the app.)
+
+MEASURED on Windows by the windows seat, deterministic 3/3 runs, on **both** harnesses
+(`--lib` and `--test gtk_suite`): the process exits `0xC0000374`
+(`STATUS_HEAP_CORRUPTION`) at the last test to run, which is
+`window::rename::gtk_integration_tests::the_old_monitor_is_cancelled_before_the_rename_touches_the_filesystem`.
+
+**That test is not the culprit and the evidence says so.** It passes alone (1/1), and its
+whole module passes alone (7/7). It is simply last. So this is accumulated corruption
+surfacing at teardown, and the named test is where the process happens to be standing when
+the heap is finally walked — attributing it to that test is the mistake this paragraph
+exists to prevent.
+
+**Pre-existing, and attributed by measurement rather than assumed.** The parent commit
+(`33e990d`) fails identically, in a separate worktree with its own target directory. It is
+not the code-block copy button, and not anything in that change.
+
+Incidental datum, not a diagnosis: the test process was at ~786 MB RSS shortly before the
+death.
+
+**Nothing is known about the cause.** No candidate has been identified, no allocation site
+implicated, and no relationship to the two GTK-4.6/4.22 differences the Windows build
+carries has been shown. Recorded to stop the next seat re-discovering the symptom and
+mis-attributing it to whichever test sorts last that day.

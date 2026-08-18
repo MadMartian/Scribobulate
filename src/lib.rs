@@ -33,6 +33,7 @@
 
 pub(crate) mod a11y;
 pub(crate) mod accel;
+pub(crate) mod affordance;
 pub(crate) mod annotate;
 pub(crate) mod annotations;
 pub(crate) mod annotations_view;

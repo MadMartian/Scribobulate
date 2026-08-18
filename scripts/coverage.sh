@@ -137,6 +137,14 @@ cd "$(dirname "$0")/.."
 # is the difference between a gate that passes and one that fails on the very run that
 # set it. Worth
 # recording because the change first pushed the number DOWN, to 77.49, and failed this
+# ratchet 2026-08-18 (77.72 -> 77.75): the code-block copy button's placement and the
+# one hit test every drawn affordance shares were extracted out of the excluded
+# `codeview/` tree into the gated `affordance.rs` and unit-tested there, which is the
+# floor-raising direction POLICY's scope rule names. Worth recording WHY the extraction
+# happened: the button's GTK wiring landed in the in-scope `preview/interactions.rs`
+# (0% covered, like every preview wiring file) and pushed the total 0.08pt UNDER the
+# floor. Widening IGNORE to cover those files would have "fixed" it by hiding them;
+# moving the decidable half into scope fixed it by testing more code.
 # gate: replacing a one-line GIO call with a module the unit run could not reach added
 # uncovered lines in both `imagefetch.rs` and the renderer's loader. What recovered it —
 # and then some — was making the fetch testable OFFLINE rather than declaring it
@@ -145,7 +153,15 @@ cd "$(dirname "$0")/.."
 # to carry: "needs the network" is usually "needs A network", and a loopback server is
 # one, so reach for that before writing the exclusion. Read from the LINES column, per
 # the warning above: the same run printed 78.63% for regions.
-FLOOR=77.72
+# ratchet 2026-08-18 (77.75 -> 77.78), and DELIBERATELY SHORT OF THE MEASUREMENT (77.81).
+# The previous bump set the floor to the exact figure the run produced, which left zero
+# headroom -- and the very next change, two lines of GTK signal wiring in an in-scope file,
+# failed the gate by 0.01pt while adding no untested logic at all. A gate that fails on
+# arithmetic noise is a gate that pressures the next author into widening IGNORE, which is
+# precisely the failure ScrAP-294 records. So the ratchet takes the gain and leaves a
+# margin: it still only ever moves up, and it still fails a real regression, but it does not
+# manufacture one. Do not "tidy" this up to the measured value.
+FLOOR=77.78
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

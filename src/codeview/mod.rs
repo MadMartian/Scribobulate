@@ -43,6 +43,7 @@ use gtk::{gdk, glib, graphene};
 const ANCHORED_LINE_END_SLACK: i32 = 1;
 
 mod card;
+mod copybutton;
 mod geometry;
 mod gutter;
 mod markers;
@@ -192,6 +193,45 @@ mod imp {
         /// only repaints (`queue_draw`) when this identity actually changes, so ordinary
         /// pointer movement doesn't thrash the paint.
         pub(crate) hovered_checkbox: Cell<Option<usize>>,
+        /// Each VISIBLE code block's card rectangle, `(rect, index into `blocks`)`, in
+        /// the BUFFER coordinates the card was painted in — the same convention
+        /// `checkbox_hitboxes` uses, and read back through GTK's own
+        /// `window_to_buffer_coords` so no hand-rolled scroll/margin math can drift
+        /// (ScrAP-91's lesson). Cleared and repopulated on every
+        /// `snapshot_layer(BelowText)` paint. It exists so the pointer can be mapped to
+        /// the block it is over, which is what reveals that block's copy button.
+        pub(crate) code_block_rects: RefCell<Vec<(graphene::Rect, usize)>>,
+        /// The `blocks` index of the code block the pointer is currently over, or
+        /// `None` — the block whose copy button is revealed. Same repaint-on-change
+        /// discipline as `hovered_checkbox`.
+        pub(crate) hovered_code_block: Cell<Option<usize>>,
+        /// The block whose copy button the pointer is directly ON (a subset of
+        /// `hovered_code_block`), which is what earns the accent border. Split from the
+        /// reveal because they answer different questions: one is "show the button",
+        /// the other is "the button is the thing under your pointer".
+        pub(crate) pointer_on_copy_button: Cell<Option<usize>>,
+        /// Hit-boxes for the copy buttons actually DRAWN this paint, `(rect, block
+        /// index)`, in buffer coordinates. Recorded by the same code that draws them,
+        /// from the same rectangle, so a button can never be clickable where it is not
+        /// visible — nor visible where it is not clickable (GTK4Rs/AP-78).
+        pub(crate) copy_button_hitboxes: RefCell<Vec<(graphene::Rect, usize)>>,
+        /// The block whose copy button is showing its post-copy checkmark, and the
+        /// timeout that will clear it. `None` at rest. The confirmation is drawn rather
+        /// than announced because the button is the surface the reader is looking at;
+        /// see `flash_copied` for the source-lifetime rules it obeys.
+        pub(crate) copied_block: Cell<Option<usize>>,
+        pub(crate) copied_reset: RefCell<Option<glib::SourceId>>,
+        /// The pointer's last known position in WIDGET coordinates, or `None` once it
+        /// has left the view. Recorded so the hover state can be re-derived when the
+        /// document moves under a stationary pointer: GTK emits no motion event for a
+        /// scroll, so without this the block under the pointer keeps whatever hover
+        /// verdict it was given before the scroll — a revealed copy button rides away
+        /// with the block that earned it, and the block that arrives gets none.
+        pub(crate) last_pointer: Cell<Option<(f32, f32)>>,
+        /// Replaceable idle for that re-derivation, kept separate from `scroll_idle`
+        /// on purpose: sharing the slot would let a hover refresh cancel a pending
+        /// programmatic scroll, which is a different operation with a different owner.
+        pub(crate) hover_idle: RefCell<Option<glib::SourceId>>,
         /// The window-installed sink that performs an annotation mutation on the
         /// document source; `None` until the window wires it (then Edit/Remove show).
         pub(crate) annotation_sink: RefCell<Option<super::AnnotationSink>>,
@@ -258,6 +298,14 @@ mod imp {
                 markers: RefCell::new(Vec::new()),
                 list_markers: RefCell::new(Vec::new()),
                 gutter_zoom: Cell::new(1.0),
+                code_block_rects: RefCell::new(Vec::new()),
+                hovered_code_block: Cell::new(None),
+                pointer_on_copy_button: Cell::new(None),
+                copy_button_hitboxes: RefCell::new(Vec::new()),
+                copied_block: Cell::new(None),
+                copied_reset: RefCell::new(None),
+                last_pointer: Cell::new(None),
+                hover_idle: RefCell::new(None),
                 marker_hitboxes: RefCell::new(Vec::new()),
                 pending_marker_open: RefCell::new(None),
                 nav_generation: Cell::new(0),
@@ -418,6 +466,16 @@ mod imp {
             if let Some(id) = self.scroll_idle.borrow_mut().take() {
                 id.remove();
             }
+            // Same rule for the copy button's confirmation timeout: a pending source
+            // outliving the view would fire against an unrooted zombie (GTK4Rs/AP-128).
+            // Taking it is what makes the `.remove()` safe — a fired one-shot's id must
+            // never be removed, and the closure clears this slot before anything else.
+            if let Some(id) = self.copied_reset.borrow_mut().take() {
+                id.remove();
+            }
+            if let Some(id) = self.hover_idle.borrow_mut().take() {
+                id.remove();
+            }
             self.parent_unrealize();
         }
     }
@@ -528,7 +586,13 @@ mod imp {
             let card_w = (view.width() as f32 - lm - rm).max(0.0);
 
             if layer == gtk::TextViewLayer::BelowText {
-                for &block in blocks.iter() {
+                // Rebuild the visible blocks' card rectangles this paint (the same
+                // clear+repopulate discipline the marker and checkbox hit-boxes use).
+                // The pointer is mapped to a block through these, which is what reveals
+                // that block's copy button; the button itself is drawn in the ABOVE-TEXT
+                // pass, which therefore reads a rectangle THIS pass computed.
+                let mut card_rects: Vec<(graphene::Rect, usize)> = Vec::new();
+                for (bi, &block) in blocks.iter().enumerate() {
                     if block.is_empty() {
                         continue;
                     }
@@ -554,8 +618,17 @@ mod imp {
                     if bottom > top {
                         let rect = graphene::Rect::new(lm, top, card_w, bottom - top);
                         snapshot.append_color(&bg, &rect);
+                        // The rectangle is already clamped to the viewport, which is
+                        // exactly what makes the copy button STICKY: in a block taller
+                        // than the pane the button rides the top of the visible portion
+                        // rather than disappearing with the block's real first line, so
+                        // the long blocks — the ones nobody wants to select by hand —
+                        // keep their one-gesture copy. (Gating this on the first line
+                        // being on screen was tried and reverted for that reason.)
+                        card_rects.push((rect, bi));
                     }
                 }
+                *self.code_block_rects.borrow_mut() = card_rects;
 
                 // Blockquote accent bars — same visible-only, viewport-clamped Y-extent
                 // logic as the code-block backgrounds (so we never read an off-screen,
@@ -788,6 +861,60 @@ mod imp {
                     }
                 }
                 *self.marker_hitboxes.borrow_mut() = hitboxes;
+
+                // The code-block copy button, drawn ABOVE the text because it sits in
+                // the card's top-right corner and a long first line runs underneath it
+                // (its fill is the card's own, so it masks what it covers). Revealed for
+                // the block under the pointer, and kept for a moment after a copy so the
+                // checkmark is seen — the two states the reader can be in.
+                let mut copy_hits: Vec<(graphene::Rect, usize)> = Vec::new();
+                let hovered_block = self.hovered_code_block.get();
+                let copied_block = self.copied_block.get();
+                if hovered_block.is_some() || copied_block.is_some() {
+                    let zoom = self.gutter_zoom.get();
+                    // The block's own inner padding, through the same `px()` the
+                    // `code-block` tag's margins take — one value, so the button's inset
+                    // and the text's inset cannot drift apart.
+                    let pad =
+                        crate::theme::px(crate::config::config().code.block_padding, zoom) as f32;
+                    // One text row in the view's own CSS-zoomed font: a fresh Pango
+                    // layout, which validates nothing (GTK4Rs/AP-22), exactly as the
+                    // gutter's soft-wrap clamp measures it.
+                    let row_h = view.create_pango_layout(Some("0")).pixel_size().1 as f32;
+                    let fg = view.style_context().color();
+                    let accent = view
+                        .style_context()
+                        .lookup_color("theme_selected_bg_color")
+                        .or_else(|| view.style_context().lookup_color("accent_bg_color"))
+                        .unwrap_or(fg);
+                    for &(card, bi) in self.code_block_rects.borrow().iter() {
+                        let show = hovered_block == Some(bi) || copied_block == Some(bi);
+                        if !show {
+                            continue;
+                        }
+                        let Some(rect) = crate::affordance::copy_button_rect(&card, pad, row_h)
+                        else {
+                            continue;
+                        };
+                        copybutton::draw_copy_button(
+                            &snapshot,
+                            &rect,
+                            zoom,
+                            &copybutton::CopyButtonPaint {
+                                fill: &bg,
+                                fg: &fg,
+                                // Only the button the pointer is actually ON adopts the
+                                // accent border; a revealed-but-not-pointed-at button
+                                // stays at rest, the same split the checkbox draws.
+                                hover: (self.pointer_on_copy_button.get() == Some(bi))
+                                    .then_some(&accent),
+                                copied: copied_block == Some(bi),
+                            },
+                        );
+                        copy_hits.push((rect, bi));
+                    }
+                }
+                *self.copy_button_hitboxes.borrow_mut() = copy_hits;
 
                 // Fire an armed open-request now that the hit-boxes are live.
                 // THIS is the completion event a programmatic navigation was waiting for —
@@ -1037,6 +1164,11 @@ impl CodePreviewView {
                     let (it, _) = o.line_at_y(adj.value() as i32);
                     o.imp().restore_target_line.set(Some(it.line()));
                 }
+                // The document moved under the pointer; the hover state is derived from
+                // where the pointer is relative to the CONTENT, so it has to be re-derived
+                // whoever caused the movement (wheel, scrollbar, keyboard, or a
+                // programmatic scroll — all of them move content under a resting pointer).
+                o.refresh_hover_for_scroll();
             }
         ));
         // Scrollbar thumb-drag / trough-click: a press on the vertical scrollbar
@@ -1138,7 +1270,197 @@ impl CodePreviewView {
         let imp = self.imp();
         imp.blocks.replace(blocks);
         imp.bg.replace(bg);
+        // A new block set invalidates every index derived from the old one — the card
+        // rects, the copy-button hit-boxes, the hover identity and any copy
+        // confirmation still showing. Clear them all rather than let a stale index
+        // point at a different block's code (the same rule `set_list_markers`
+        // follows); the next paint repopulates what is visible.
+        imp.code_block_rects.borrow_mut().clear();
+        imp.copy_button_hitboxes.borrow_mut().clear();
+        imp.hovered_code_block.set(None);
+        imp.pointer_on_copy_button.set(None);
+        imp.copied_block.set(None);
+        if let Some(id) = imp.copied_reset.borrow_mut().take() {
+            id.remove();
+        }
         self.queue_draw();
+    }
+
+    /// The `blocks` index of the copy button whose DRAWN rectangle contains
+    /// widget-coordinate `(x, y)`, or `None`. Recorded by the paint from the same
+    /// rectangle it drew, so the clickable area is the visible one.
+    pub(crate) fn is_over_copy_button(&self, x: f32, y: f32) -> Option<usize> {
+        use gtk::subclass::prelude::*;
+        let (bx, by) = self.buffer_point(x, y);
+        crate::affordance::hit_rects(&self.imp().copy_button_hitboxes.borrow(), bx, by)
+    }
+
+    /// A widget-space pointer position in the BUFFER coordinates every hit-box above
+    /// is recorded in. GTK's own inverse transform, so no hand-rolled scroll/margin
+    /// math can drift from the draw — the earlier `- vtop` spelling silently displaced
+    /// the task-checkbox zone by the top margin on real compositors, invisibly under
+    /// Xvfb. Pure arithmetic, no line-display validation (GTK4Rs/AP-80-safe).
+    fn buffer_point(&self, x: f32, y: f32) -> (f32, f32) {
+        let (bx, by) =
+            self.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+        (bx as f32, by as f32)
+    }
+
+    /// Set which code block's copy button is revealed, and whether the pointer is on
+    /// the button itself — repainting only when either identity actually changes, so
+    /// ordinary pointer movement across the pane doesn't thrash `queue_draw`.
+    pub(crate) fn set_hovered_code_block(&self, block: Option<usize>, on_button: Option<usize>) {
+        use gtk::subclass::prelude::*;
+        let imp = self.imp();
+        if imp.hovered_code_block.get() != block || imp.pointer_on_copy_button.get() != on_button {
+            imp.hovered_code_block.set(block);
+            imp.pointer_on_copy_button.set(on_button);
+            self.queue_draw();
+        }
+    }
+
+    /// The hover verdict at widget-coordinate `(x, y)` — all three affordances at once,
+    /// through the one display-free resolver. The two callers that need it (the motion
+    /// handler, and the scroll re-derivation) go through here rather than each making the
+    /// same three hit tests in the same order, so they cannot drift into disagreeing about
+    /// what the pointer is on. The per-affordance readers this replaced are gone with it
+    /// (`code_block_at`), so "which block is the pointer over" has exactly one answer and
+    /// no second route to a different one.
+    pub(crate) fn hover_at_point(&self, x: f32, y: f32) -> crate::affordance::Hover {
+        use gtk::subclass::prelude::*;
+        let (bx, by) = self.buffer_point(x, y);
+        let imp = self.imp();
+        crate::affordance::hover_at(
+            &imp.checkbox_hitboxes.borrow(),
+            &imp.code_block_rects.borrow(),
+            &imp.copy_button_hitboxes.borrow(),
+            bx,
+            by,
+        )
+    }
+
+    /// Apply a hover verdict. Each setter already no-ops when its identity is unchanged,
+    /// so an ordinary pointer sweep across the pane queues no redraw.
+    pub(crate) fn apply_hover(&self, h: crate::affordance::Hover) {
+        self.set_hovered_checkbox(h.checkbox);
+        self.set_hovered_code_block(h.block, h.copy_button);
+    }
+
+    /// Record where the pointer is (widget coordinates), or `None` when it leaves the
+    /// view. The motion handler is the only writer; [`Self::refresh_hover_for_scroll`]
+    /// is the only reader.
+    pub(crate) fn set_pointer_position(&self, pos: Option<(f32, f32)>) {
+        use gtk::subclass::prelude::*;
+        self.imp().last_pointer.set(pos);
+    }
+
+    /// Re-derive the hover state at the pointer's last known position, because the
+    /// DOCUMENT moved rather than the pointer.
+    ///
+    /// GTK emits no motion event for a scroll, so every hover verdict in this view is
+    /// stale the moment the content slides underneath a stationary pointer. Measured by
+    /// the windows seat: rest the pointer inside a code block, scroll, and the block now
+    /// under it draws no copy button (0 ink px) until the pointer is nudged 2 px (287 ink
+    /// px). That bites hardest on a block taller than the pane — which is precisely the
+    /// case the button's sticky-top behaviour exists to serve, so the gap is worst on the
+    /// feature's best case.
+    ///
+    /// **Deferred to a DEFAULT_IDLE, and that is the whole correctness argument.** Every
+    /// rectangle this reads is written by the paint (ScrAP-125), so running it inline on
+    /// `value-changed` would hit-test against the frame BEFORE the scroll — right for a
+    /// block that was already visible (the rects are buffer-space and the widget→buffer
+    /// conversion uses the live offset) and wrong for one that has just scrolled in,
+    /// which has no rect yet. GDK's frame clock redraws at priority 120 and this runs at
+    /// 200, so the paint has happened and the rects describe what is on screen now.
+    /// Coalesced, weak-captured, slot cleared before the body, and cancelled in
+    /// `unrealize` — the four rules `schedule_scroll_idle` documents at length.
+    ///
+    /// The cursor is deliberately NOT refreshed here: it needs the render data this
+    /// module does not hold, and it is wrong only while the pointer sits exactly where a
+    /// button has just arrived — which the next motion event corrects, unlike the button,
+    /// which stays absent until the reader thinks to jiggle the mouse.
+    pub(crate) fn refresh_hover_for_scroll(&self) {
+        use gtk::subclass::prelude::*;
+        if self.imp().last_pointer.get().is_none() {
+            return;
+        }
+        if let Some(id) = self.imp().hover_idle.borrow_mut().take() {
+            id.remove();
+        }
+        let id = glib::idle_add_local_once(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            move || {
+                view.imp().hover_idle.replace(None);
+                if !view.is_realized() {
+                    return;
+                }
+                let Some((x, y)) = view.imp().last_pointer.get() else {
+                    return;
+                };
+                view.apply_hover(view.hover_at_point(x, y));
+            }
+        ));
+        self.imp().hover_idle.replace(Some(id));
+    }
+
+    /// The code block at `idx`'s text, exactly as it is rendered: the code, without
+    /// the fence lines and without a trailing blank line.
+    ///
+    /// Deliberately NOT routed through `copymap`. A preview *selection* inside a code
+    /// block copies the whole fenced construct, delimiters included, because a
+    /// selection is being mapped back to Markdown source (ScrAP-255). This affordance
+    /// answers the other question a reader has — "give me the code to run" — so it
+    /// yields the block's own text, which is what every renderer's copy button
+    /// copies. The extraction is [`crate::saferizer::BufferText`], whose `slice` keeps
+    /// char offsets aligned with the buffer's (ScrAP-74); a code block anchors no
+    /// children, so the two agree here regardless, and using the seam keeps that true
+    /// if one ever does.
+    pub(crate) fn code_block_text(&self, idx: usize) -> Option<String> {
+        use gtk::subclass::prelude::*;
+        let span = *self.imp().blocks.borrow().get(idx)?;
+        let buffer = self.buffer();
+        let start = buffer.iter_at_offset(span.start);
+        let end = buffer.iter_at_offset(span.end);
+        let text = crate::saferizer::BufferText::of_range(&buffer, &start, &end).into_string();
+        // The renderer inserts one '\n' per line INCLUDING the last, so the span ends
+        // with a newline the source did not necessarily have; the reader pasting this
+        // wants the code, not a blank line after it.
+        Some(text.trim_end_matches('\n').to_string())
+    }
+
+    /// Show the copy button's checkmark on block `idx` for a moment, then restore the
+    /// copy glyph.
+    ///
+    /// Four rules, the same ones `schedule_scroll_idle` documents at length: coalesce
+    /// (a second copy replaces the pending reset rather than stacking one), capture
+    /// the view WEAKLY (a strong capture pins an unrooted zombie after
+    /// `window.destroy()` — GTK4Rs/AP-128), clear the slot FIRST on fire (a fired
+    /// one-shot's `SourceId` must never be `.remove()`d, and ids are recycled), and
+    /// cancel in `unrealize`.
+    pub(crate) fn flash_copied(&self, idx: usize) {
+        use gtk::subclass::prelude::*;
+        /// How long the confirmation stays up: long enough to be read after the eye
+        /// returns to the button, short enough to be gone before the next copy.
+        const COPIED_FLASH: std::time::Duration = std::time::Duration::from_millis(1200);
+        if let Some(id) = self.imp().copied_reset.borrow_mut().take() {
+            id.remove();
+        }
+        self.imp().copied_block.set(Some(idx));
+        self.queue_draw();
+        let id = glib::timeout_add_local_once(
+            COPIED_FLASH,
+            glib::clone!(
+                #[weak(rename_to = view)]
+                self,
+                move || {
+                    view.imp().copied_reset.replace(None);
+                    view.imp().copied_block.set(None);
+                    view.queue_draw();
+                }
+            ),
+        );
+        self.imp().copied_reset.replace(Some(id));
     }
 
     /// Set the blockquote ranges and accent-bar colour (called after a (re-)render).
@@ -1178,20 +1500,10 @@ impl CodePreviewView {
     pub(crate) fn is_over_checkbox(&self, x: f32, y: f32) -> Option<usize> {
         use gtk::subclass::prelude::*;
         // The click arrives in WIDGET coords; the hit-boxes are stored in BUFFER coords
-        // (where the markers are drawn). Convert with GTK's own inverse transform so no
-        // hand-rolled scroll/margin math can drift (GTK4Rs/AP-80-safe — pure arithmetic, no
-        // line-display validation, unlike `iter_at_location`).
-        let (bx, by) =
-            self.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
-        let (bx, by) = (bx as f32, by as f32);
-        self.imp()
-            .checkbox_hitboxes
-            .borrow()
-            .iter()
-            .find_map(|(r, idx)| {
-                (bx >= r.x() && bx <= r.x() + r.width() && by >= r.y() && by <= r.y() + r.height())
-                    .then_some(*idx)
-            })
+        // (where the markers are drawn) — see [`Self::buffer_point`] for why the
+        // conversion is GTK's rather than arithmetic of our own.
+        let (bx, by) = self.buffer_point(x, y);
+        crate::affordance::hit_rects(&self.imp().checkbox_hitboxes.borrow(), bx, by)
     }
 
     /// The CLEANED-source byte span of the `[ ]`/`[x]` marker for the task item at

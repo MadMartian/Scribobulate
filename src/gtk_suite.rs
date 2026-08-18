@@ -43,6 +43,7 @@
 // "tidy" the duplication away without replacing that gate.
 mod a11y;
 mod accel;
+mod affordance;
 mod annotate;
 mod annotations;
 mod annotations_view;

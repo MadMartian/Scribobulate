@@ -368,16 +368,31 @@ kill $APP_PID $XVFB_PID   # kill both when the chunk/run ends
 ```
 
 **Before an unattended live `DISPLAY=:0` run, INHIBIT the screen locker, screensaver,
-and DPMS blanking for the batch's duration — this is the single most common way an
-overnight live run breaks.** On an idle KDE/X11 session the locker/DPMS will engage
-while the operator sleeps; a locked screen grabs input (so `xdotool` clicks/keys land
-nowhere) and `import -window` then captures a black surface — the run stalls or, worse,
-silently *mis-verifies* against blank pixels. Inhibit at run start and release at
-teardown, e.g. hold a `systemd-inhibit --what=idle:sleep:handle-lid-switch` for the run,
-and/or `xset s off -dpms` (restore with `xset s on +dpms` when done); on KDE also
-consider suppressing the locker via its D-Bus inhibit. Verify the inhibit took (the
-screen is still awake after the idle timeout) before trusting any capture. Never
-"solve" a black screenshot by retrying the capture — first prove the display is awake.
+and DPMS blanking — and hold that inhibit FOR AS LONG AS THIS SEAT CAN BE ASKED TO DRIVE
+ANYTHING, not for the run. This is the single most common way an overnight live run
+breaks.** On an idle KDE/X11 session the locker/DPMS will engage while the operator
+sleeps; a locked screen grabs input (so `xdotool` clicks/keys land nowhere) and
+`import -window` then captures a black surface — the run stalls or, worse, silently
+*mis-verifies* against blank pixels.
+
+**The lifetime is the load-bearing part, and "for the run" is the wrong one.** A run
+ending is not this seat ending: a follow-up question can arrive against a seat that has
+already torn down correctly, and it will drive a locked screen. The macOS seat lost a
+completed test to exactly this — it released its inhibit at the end of a verification
+round, took a follow-up minutes later, and could not recover, because re-arming prevents
+a *future* lock and does not undo the present one and an agent seat holds no credential
+to unlock. So hold `systemd-inhibit --what=idle:sleep:handle-lid-switch` (and/or `xset s
+off -dpms`, restored with `xset s on +dpms`) until the seat is genuinely done being
+addressable, and release it there — never at a task boundary. On KDE also consider
+suppressing the locker via its D-Bus inhibit.
+
+**Check the lock as a precondition, at the START of the work — not as an error check when
+a capture starts failing.** Everything before that point is silent, and the data collected
+meanwhile looks ordinary: the macOS seat's discarded run had produced a result with exactly
+the shape its hypothesis predicted, and only the lock check stopped a corroborating number
+from a locked screen being reported as a finding. Verify the inhibit took (the screen is
+still awake after the idle timeout) before trusting any capture. Never "solve" a black
+screenshot by retrying the capture — first prove the display is awake.
 
 **Escalate to the operator's real X11 session only** when the item under test
 could plausibly depend on compositing (real alpha transparency, a theme's
@@ -623,6 +638,8 @@ gtk4-rs skill's dev-loop doc on why geometry/rendering bugs leave no warning.
 - [ ] **2.10** Table immediately followed by a heading → heading starts on its own line
 - [ ] **2.3** Fenced ` ```rust ` block → monospace + syntax highlighting
 - [ ] **2.3a** Fenced ` ```typescript ` block (also try `tsx` and `toml`) → monospace **and multi-colour** syntax highlighting — keywords/strings/comments render in distinct inks, NOT a single flat ("all-gray") colour like an unlanguaged fence. (Regression guard for ScrAP-160 — syntect's default set omits TypeScript/TSX/TOML and silently falls back to plain text; `two-face` closes the gap. Pure-render, reproduces on bare Xvfb.)
+- [ ] **2.3b** **Code-block copy button** (TDD 2.3b; **Document Rendering CAM rows 1, 2, 9, 11, 13**). Open `code-blocks.md` in Preview. **Hover** the `rust` block anywhere → a small copy button appears in its **top-right corner**, inside the card and clear of the code's right edge; move the pointer onto the button → **accent border + pointer cursor**; move off the block → it disappears. **Click** it → paste into a plain-text editor: **exactly the block's five code lines**, no ```` ``` ````, no trailing blank line (contrast 2.8h, where a *selection* reconstructs fences — the two answer different questions and both must hold). While you look at it the glyph is a **checkmark** for about a second, then reverts; nothing in the block is selected afterwards. Repeat for each **container** shape in the file — the **blockquoted** block (paste has no `> `), the **list-item** block (no continuation indent), the **indented** block, and the **one-line** block near the end, whose card is too short for the full inset and must still show a (vertically centred) button. Then the **long block**: scroll until its first line is off the top of the pane, hover it → the button rides the **top of the visible portion**; click → the paste holds **all 60 lines**, `let line_1` through `let line_60`. Then the **scroll** case, which is the one a reader hits and no pointer-driven test reaches: rest the pointer inside the long block, **scroll the wheel without moving the mouse at all**, and the button must still be there on the block now under the pointer — GTK emits no motion event for a scroll, so before this was fixed the button simply vanished until the mouse was nudged. Scroll on past the end of that block with the pointer still still: the button goes away with it. Finally Ctrl++ twice → the button grows with the type and stays in the corner; View ▸ Theme ▸ Sepia → it is drawn in the theme's own ink on the theme's card, never a desktop blue or a black-on-black box.
+  ⚠️ **Drive it with a settle between the move and the press, and confirm the pointer is on the button before clicking** — the hit-box is recorded by the paint that reveals the button (ScrAP-125), so a warp-and-click in one `xdotool` call can land before the button exists, and a press a few pixels low reads as "the button is broken" (ScrAP-252). The accent border in a screenshot is the cheap proof that the pointer is on it.
 - [ ] **2.4** `- [ ]` / `- [x]` list → checkboxes reflect state; a task item shows **only** the checkbox (no redundant `•`/number before it), at every nesting depth
 - [ ] **2.4a** Open `lists.md` → for unordered, ordered, and task lists the marker sits alone in a left **gutter** (drawn, not buffer text) and every wrapped / multi-source-line / loose-blank-line-paragraph line aligns under the item **text** at the uniform content margin (never left of it, incl. loose items — the old cell-marker pairing outdent is gone); an ~8px gap separates items; nesting indents further. Numbers right-align (`9.`/`10.` line up).
 - [ ] **2.4a-wrap** Open `lists.md` in **Preview** (or Split), then **narrow the window** until the long items soft-wrap onto two or more visual lines (zooming in a couple steps first, Ctrl++, makes the wrap happen at a wider width). For every kind — the long unordered item, the wrapping ordered item (`11.`), and the wrapping task (`- [x]`) — the marker (bullet dot, number, checkbox) must stay **top-aligned on the item's FIRST visual line**, level with the first line of its text, NOT drift down toward the vertical middle of the wrapped block. A single-line item is unaffected. (Regression guard for GTK4Rs/AP-145 — `line_yrange` returns the whole logical line, so centering on its full height floated the marker to the middle row; reproduces on bare Xvfb, no compositor needed.)
@@ -633,7 +650,7 @@ gtk4-rs skill's dev-loop doc on why geometry/rendering bugs leave no warning.
 - [ ] **2.12** Link inside a blockquote → opens in browser (not inert styled text)
 - [ ] **2.6** Click an external link in body text → opens in system browser, preview pane doesn't navigate away. **With the browser ALREADY RUNNING and Scribobulate focused**, its window must **raise to the front** — a tab opening silently *behind* Scribobulate is a FAIL (tokenless launch, GTK4Rs/AP-99) and is indistinguishable from "the link did nothing"
 - [ ] **2.24** Open `anchors.md` in Preview → put the pointer on the blank area to the RIGHT of "Jump to Deep", press and hold, drag LEFT across that link's text, release **on the link**. The text selects and the view must **stay where it is** — any scroll to the "Deep" heading is a FAIL (the drag's release activating a link it never clicked, GTK4Rs/AP-169). Repeat three ways, all of which must leave the view put: (a) press on "Jump to first Section", release on "Jump to Deep" (two different links); (b) press and release **inside one link's caption**, having dragged across it (selecting a caption to copy it must not navigate); (c) drag from body text upward, ending on a link. Then confirm the affordance still works: with nothing selected, a plain click (no drag) on "Jump to Deep" **does** scroll to the heading. (A click landing *inside* an existing selection is a known no-op that predates this rule — GtkTextView holds that press for a possible drag-and-drop and the app's gesture never sees the release; clear the selection first, or click twice.) Same-line drags avoid the autoscroll margins that make a synthetic drag scroll the view on its own (GTK4Rs/AP-142's aside / GTK4Rs/AP-144); reproduces on bare Xvfb. (TDD 2.24)
-- [ ] **2.24-affordances** With `checkbox-test.md`: drag-select body text and release the drag over a **task checkbox** → it must NOT toggle (no dirty flag). With `annotations.md` in Preview: drag-select a line and release over a right-margin **comment marker** → the comment card must NOT open. Plain clicks on both still work (2.4b, 17.x). (TDD 2.24)
+- [ ] **2.24-affordances** With `checkbox-test.md`: drag-select body text and release the drag over a **task checkbox** → it must NOT toggle (no dirty flag). With `annotations.md` in Preview: drag-select a line and release over a right-margin **comment marker** → the comment card must NOT open. With `code-blocks.md` in Preview: put something known on the clipboard, then press inside the `rust` block's **code text**, drag right, and release **on its copy button** → the clipboard is **unchanged** (the drag selected; it did not copy). Plain clicks on all three still work (2.4b, 2.3b, 17.x) — and prove that here rather than assuming it: a release that missed the affordance passes this check while testing nothing (ScrAP-252), so follow each negative with the plain click that must succeed. (TDD 2.24)
 - [ ] **2.22** Hover a link whose caption differs from its URL → tooltip shows the **URL**; hover ordinary body text → no tooltip; hover a broken/blocked image placeholder → its own tooltip still appears (the view-level link tooltip must not suppress child tooltips)
 - [ ] **2.17** Open `anchors.md`, click a same-doc fragment link → scrolls to heading (including one far below the current viewport, e.g. "Jump to Deep"); verify duplicate-slug disambiguation (`slug-1`, `slug-2`)
 - [ ] **2.7** Open `unsafe-local-image.md` and `html-injection.md` → out-of-folder image blocked (`image-missing`), embedded HTML/script does not execute or read outside the doc folder
@@ -1853,19 +1870,41 @@ public struct RECT { public int L, T, R, B; }
 $r = New-Object 'P.W+RECT'; [void][P.W]::GetWindowRect($p.MainWindowHandle, [ref]$r)
 $bmp = New-Object System.Drawing.Bitmap ($r.R-$r.L), ($r.B-$r.T)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size)
+$hdc = $g.GetHdc()
+# PW_RENDERFULLCONTENT = 2. Reads the WINDOW'S OWN pixels, so ScrAP-236's failure class
+# -- photographing whatever happens to be in front of those coordinates -- cannot occur
+# by construction rather than by remembering to activate first.
+[void][P.W]::PrintWindow($p.MainWindowHandle, $hdc, 2)
+$g.ReleaseHdc($hdc)
 $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose()
 ```
+
+Add `[DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint f);`
+to the `P.W` member definition above.
+
+**Still activate first** — focus changes what is DRAWN (an accent border, a caret), just
+not what is captured. And note the one thing `PrintWindow` cannot see: **a GTK4 menu or
+popover is its own `GdkSurface`, not part of the toplevel**, so it is absent from a
+`PrintWindow` of the main window. Capture those with `CopyFromScreen` (accepting
+ScrAP-236's hazard for that one shot), or avoid the need — drive through the toolbar or
+the keyboard and assert on the result instead of the menu.
 
 *Cleanup:* see step 4.
 
 **Three traps, each of which has cost a cycle here:**
 
 - **`CopyFromScreen` reads the SCREEN at those coordinates, not the window's pixels**
-  (**ScrAP-236**). Capture an unfocused window and you get a valid, correctly-sized
-  screenshot of whatever is in front of it. Always activate and settle first, and
-  capture the **window rect only** — a full-desktop grab also photographs the
-  operator's unrelated applications.
+  (**ScrAP-236**) — which is why the recipe above uses `PrintWindow` instead, and why
+  activating first is no longer the whole defence. Measured on this platform: a dead
+  earlier launch left a *"gtk-4-1.dll not found"* system dialog whose pixels persisted on
+  the desktop with **no corresponding window** — `EnumWindows` found it once and then
+  found nothing while the pixels stayed. `CopyFromScreen` photographed that phantom into
+  three consecutive captures; `PrintWindow` was clean immediately. So the hazard is not
+  only "something is stacked in front of you", it is "something that no longer exists is
+  in front of you", and no amount of window enumeration or activation can see that one.
+  Where you must fall back to `CopyFromScreen` (a menu or popover surface), capture the
+  **window rect only** — a full-desktop grab also photographs the operator's unrelated
+  applications.
 - **The app opens in PREVIEW, where keystrokes go nowhere.** Send `%+e`
   (Alt+Shift+E, `win.view-mode::edit`) first. You are in the editor when you see the
   line-number gutter and a `Ln n, Col n` status. Skipping this produces "keys sent,
@@ -1920,10 +1959,12 @@ document, including after a crash.
 
 **7. Reading the GTK log.** As Linux — `Gtk-WARNING **:` on stderr; capture it by
 redirecting from a console build. The app's own log under
-`<XDG_STATE_HOME>\scribobulate\scribobulate.log` is usually the better source: it
-carries the build SHA, the resolved GTK version and the renderer at every run start,
-which is what tells you whether the binary you are looking at is the one you meant to
-launch.
+`<XDG_STATE_HOME>\scribobulate\scribobulate.log` is usually the better source: the
+identity stamp at every run start carries the version, profile, executable path/size/mtime,
+the resolved GTK **runtime** version, the renderer and the pid, which is what tells you
+whether the binary you are looking at is the one you meant to launch. **It does not carry a
+commit SHA** — this section claimed one for a while and no such record exists in the tree;
+use the executable's mtime and size, which do distinguish a rebuild.
 - [ ] **23.11** **A link to a section of the same document is a navigation.** Open a document with a table of contents linking its own headings (`sdd/TDD.md` and `sdd/CAM.md` both have one; `punkie-joe-farms.md` is the report this came from). Scroll to the TOC and click one entry → the preview jumps to that section, the **tab strip selection does not move**, and **View ▸ Back is no longer greyed**. Repeat with an **outline sidebar** row (F9) → same result. Then switch to pure-**edit** mode and activate an outline row → the caret moves and Back is *unchanged*, because nothing moved the preview (TDD 23.11)
 - [ ] **23.12** **Back returns to where you clicked from.** Continuing from 23.11: invoke **Back** → the viewport returns to the TOC, at the position it was at when you clicked — **not** the top of the document. **Forward** → back to the section. Nothing re-renders and the active tab never changes. Now click the *same* TOC entry twice in a row → the second click adds no stop: one Back press leaves the section (TDD 23.12)
 - [ ] **23.12a** **Back works when you clicked from the very top.** The 23.12 case above starts with a deliberate scroll, which hides this one. Open a document whose table of contents is the **first thing in the file** (`sdd/TDD.md`), do **not** scroll at all, and click a TOC entry from the top of the document → the preview jumps to that section. Now **Back** → the preview scrolls **back up to the top**; it must not sit still on the section. **Forward** → the section again. Before the fix the departure was recorded as line 0 and the restore treated that as "already at the top, nothing to do", so *both* directions did nothing and the feature looked entirely broken for TOC links while working for every other navigation (ScrAP-262, TDD 23.12)
