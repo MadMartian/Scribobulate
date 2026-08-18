@@ -594,8 +594,9 @@ the next one works; no data at risk)
 
 With text selected in the preview, a primary click whose press lands **inside** that
 selection does not activate the affordance under it: a link does not open, a margin
-comment marker does not open its card, a gutter checkbox does not toggle. The click
-clears the selection instead, and a second click behaves normally.
+comment marker does not open its card, a gutter checkbox does not toggle, a code block's
+copy button does not copy. The click clears the selection instead, and a second click
+behaves normally.
 
 **Measured, and pre-existing.** Reproduced identically on the binary from before the
 complete-click fix (ScrAP-238) and on the one after, under Xvfb: press+release on a

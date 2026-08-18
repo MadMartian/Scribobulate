@@ -222,17 +222,25 @@ pub(crate) fn draw_list_marker(
                 cr.set_line_width((2.0 * z).max(1.2) as f64);
                 cr.set_line_cap(cairo::LineCap::Round);
                 cr.set_line_join(cairo::LineJoin::Round);
-                let (bxf, byf, sf) = (bx as f64, by as f64, s as f64);
-                cr.move_to(bxf + sf * 0.24, byf + sf * 0.52);
-                cr.line_to(bxf + sf * 0.42, byf + sf * 0.70);
-                cr.line_to(bxf + sf * 0.76, byf + sf * 0.30);
+                checkmark_path(&cr, bx as f64, by as f64, s as f64);
                 let _ = cr.stroke();
             }
         }
     }
 }
 
-fn set_source(cr: &cairo::Context, fg: &gdk::RGBA) {
+/// Trace the checkmark inside a `size`-square box at `(x, y)`. Shared by the task
+/// checkbox's checked state and the code-block copy button's post-copy confirmation
+/// ([`super::copybutton`]) so the two cannot draw different ticks; the caller sets the
+/// source colour, line width and caps, because those differ per affordance while the
+/// path does not.
+pub(super) fn checkmark_path(cr: &cairo::Context, x: f64, y: f64, size: f64) {
+    cr.move_to(x + size * 0.24, y + size * 0.52);
+    cr.line_to(x + size * 0.42, y + size * 0.70);
+    cr.line_to(x + size * 0.76, y + size * 0.30);
+}
+
+pub(super) fn set_source(cr: &cairo::Context, fg: &gdk::RGBA) {
     cr.set_source_rgba(
         fg.red() as f64,
         fg.green() as f64,
@@ -242,7 +250,7 @@ fn set_source(cr: &cairo::Context, fg: &gdk::RGBA) {
 }
 
 /// Trace a rounded-rectangle path (four quarter-circle corners) on `cr`.
-fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+pub(super) fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     use std::f64::consts::{FRAC_PI_2, PI};
     let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
     cr.new_sub_path();

@@ -208,6 +208,17 @@
 - **When** it is rendered
 - **Then** the code block's coloured card wraps only its own lines (its uniform inner padding above and below the code) and does **not** paint over the following line's text — the abutting paragraph reads on its own clear line below the card (regression guard for the self-drawn decoration re-adding the tag-supplied line padding, ScrAP-150)
 
+### 2.3b A code block offers a one-gesture copy button
+- **Given** a rendered fenced (or indented) code block
+- **When** the pointer rests anywhere over the block
+- **Then** a small copy button is revealed in the block's top-right corner, inside the card and clear of the code's right edge; it takes an accent border and the pointer cursor when the pointer is on the button itself, and it disappears again when the pointer leaves the block
+- **And when** the button is clicked
+- **Then** the clipboard holds **exactly that block's code** — every line of it, including any scrolled off screen, with **no** ```` ``` ```` fences, no container `> `/indent markers, and no trailing blank line (deliberately *not* 2.8h's selection→source mapping: a selection is mapped back to Markdown, whereas this answers "give me the code")
+- **And** the button shows a checkmark in place of the copy glyph for about a second, then returns to the copy glyph, leaving no selection and no caret movement behind
+- **And** this holds at **top level and inside every container** — a list item, a blockquote, a nested list — and for a **one-line** block, whose card is too short for the button's full corner inset (the button centres in what there is rather than vanishing)
+- **And** in a block **taller than the pane** the button rides the top of the visible portion, so a long block is copyable without scrolling back to its first line
+- **And** it survives **zoom** at every level (it is sized from one text row plus the block's own inner padding, both already zoom-scaled) and every installed **reading theme** (drawn in the theme's own page ink on the theme's code-block fill — no literal colour)
+
 ### 2.4 Task lists
 - **Given** a list using `- [ ]` and `- [x]` items
 - **When** it is rendered
@@ -271,7 +282,7 @@
 - **Then** that link does **not** activate: no browser launch, no tab opened, no scroll to a fragment; the selection the drag made is the only outcome
 - **And** a swipe that begins *and* ends inside one link's caption (selecting the caption to copy it) likewise does not activate it — travelling further than the desktop's drag threshold makes it a drag, not a click
 - **And** an ordinary click — press and release on the same link without dragging — activates it exactly as before (2.6, 2.17, §19)
-- **And** the same rule holds for every pointer affordance the panes draw themselves: a gutter task checkbox (2.4) and a right-margin comment marker (§17) each require their press and release to land on the same one, so a selection drag that happens to end over either leaves it alone
+- **And** the same rule holds for every pointer affordance the panes draw themselves: a gutter task checkbox (2.4), a right-margin comment marker (§17) and a code block's copy button (2.3b) each require their press and release to land on the same one, so a selection drag that happens to end over any of them leaves it alone
 
 ### 2.22 Hovering a link reveals its target
 - **Given** a rendered document containing a hyperlink whose caption differs from its URL

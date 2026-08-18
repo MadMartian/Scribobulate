@@ -10,8 +10,8 @@ use super::build::{
 };
 use super::cells::{attach_cell_marker_widgets, collect_cell_labels, collect_table_anchors};
 use super::interactions::{
-    connect_image_tints, wire_checkbox_toggle_gesture, wire_copy_clipboard, wire_link_gestures,
-    wire_table_click_gesture,
+    connect_image_tints, wire_checkbox_toggle_gesture, wire_copy_button_gesture,
+    wire_copy_clipboard, wire_link_gestures, wire_table_click_gesture,
 };
 use super::qdata::{
     scrib_anchor_widgets, scrib_labels, scrib_render_data, set_scrib_render_state, RenderData,
@@ -143,6 +143,8 @@ pub(crate) fn render(
     wire_link_gestures(&view, &render_data);
     // Left-gutter task checkbox → undoable `[ ]`↔`[x]` source toggle (Phase 3b).
     wire_checkbox_toggle_gesture(&view, &render_data);
+    // Code-block copy button → that block's code on the clipboard.
+    wire_copy_button_gesture(&view);
     wire_copy_clipboard(&view, &table_labels, &render_data);
 
     // Pin the vertical scrollbar visible. The preview hosts width-dependent

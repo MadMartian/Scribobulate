@@ -57,6 +57,8 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
     follows at once and nothing is re-read.
 - **Full-fidelity Markdown**
   - Tables, syntax-highlighted code, images, and task-list checkboxes
+  - Hover a code block for a copy button — one click puts the code on the
+    clipboard, fences and all container markers left behind
   - Clickable links with a hover preview of the destination
   - Follow a link to another Markdown file and it opens as a tab — read a
     whole document set without hunting files by hand
