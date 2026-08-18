@@ -10,7 +10,7 @@
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
 | Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
-| R | macOS only: the preview's hover cursor never changes over body text or a link — both show the default arrow, while the drawn affordances that repaint on hover do get the hand | Low |
+| R | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | S | Windows only: the GTK integration suite dies `STATUS_HEAP_CORRUPTION` at the end of the run, on both harnesses, after every test has passed | Medium |
 
 ## A. Tables are selection islands
@@ -746,11 +746,19 @@ this issue; a genuine return of the quadratic walk reads ~16x and does not come 
 
 ---
 
-## R. macOS: the preview's hover cursor never changes over body text or a link
+## R. macOS: the preview's hover cursor sometimes does not take over body text or a link
 
 **Severity**: Low (nothing is unreachable — links still activate on click and the copy
 button still copies; what is lost is the *affordance*, i.e. every link on the page looks
 un-clickable to a macOS reader until they try it)
+
+**READ THIS FIRST: it is INTERMITTENT, and that was established late.** The table below is
+what was measured, and every cell of it is real — but a later cold launch, same fixture,
+same point, same procedure, produced the *correct* text-beam where two earlier independent
+cold launches had produced the arrow. So the macOS column is not reliably reproducible, and
+any theory built only on the table (including the two this entry has already discarded)
+will over-explain it. Whatever gates this is not captured by "cold versus warm", and is not
+named here because it is not known.
 
 MEASURED on macOS (GTK 4.22.4/Quartz/Homebrew) against the identical build on Linux
 (GTK 4.6.9/X11), same fixtures, cursor identity read by name rather than judged from a
@@ -788,23 +796,29 @@ the general form**: there the two "draw nothing" cells get their cursors, and ge
 *different* ones (IBEAM and HAND), so this is not a property of GDK backends at large. If
 it holds anywhere it holds on Quartz alone.
 
-**The condition is not per-cell — it is per-RUN, and that reframes the whole entry.** The
-motion-only test above was run and both approaches gave the correct text-beam, which reads
-as a null result until the tester's own caveat is read: *earlier in that same instance,
-before the test began, plain text was already resolving correctly everywhere* — while a
-cold-launch baseline on a fresh instance had given the wrong arrow twice, independently.
-So the two cells are not permanently broken; something between a cold launch and several
-motions in **arms** the cursor, after which every cell behaves. That also explains the
-original three-way result, which used a fresh instance per target: the cells that appeared
-to work are the ones whose own hover fires a repaint, i.e. they arm the mechanism and then
-immediately benefit from it, while a link or plain text alone never arms anything.
+**TWO HYPOTHESES HAVE BEEN TRIED AND NEITHER SURVIVED. Do not re-derive them.**
 
-**Refined hypothesis, still unconfirmed**: the cursor does not take on Quartz until the
-surface has been repainted at least once after realization, and works normally thereafter —
-a one-time arming rather than a per-event coupling. The remaining test is cheap and needs
-no menu: cold launch, hover plain text (expect arrow), **scroll** (which repaints and needs
-nothing but the wheel), hover the same spot again. An earlier attempt to force a repaint via
-the menu is recorded as a dead end below.
+1. *The tooltip resets the cursor* — a link is the only cell that makes `query-tooltip`
+   return true. Refuted by sampling at ~200 ms (pre-tooltip) and ~2000 ms (tooltip visibly
+   up): arrow both times.
+2. *The cursor does not take until the surface is repainted, so only the cells whose hover
+   fires a `queue_draw` work* — which fitted every observation at the time, including the
+   original three-way result (run with a fresh instance per target, so the "working" cells
+   are exactly the ones that repaint themselves). Refuted twice over: on Windows the two
+   "draw nothing" cells get their cursors and get two *different* ones, so it is not a GDK
+   property; and the motion-only test that would have confirmed it on Quartz — approach one
+   spot of plain text from other plain text versus straight off the copy button — returned
+   the correct text-beam **both** ways, on an instance where plain text had already started
+   behaving before the test began.
+
+**What is left is the intermittency itself, and it is not yet characterised.** A cold
+launch has produced the arrow twice (independently, same instance) and the correct
+text-beam once (a different instance), with no known difference in procedure. Until that
+reproduces on demand there is nothing to hand a researcher: a mechanism proposed against an
+observation this unstable will fit and still be wrong, which is how both hypotheses above
+were reached. **The next useful step is a reproduction rate, not a theory** — the same cold
+launch and single hover, repeated enough times to say how often it bites, which turns an
+anecdote into something a mechanism can be tested against.
 
 **Pre-existing, and older than the affordance that exposed it.** Nothing here was
 introduced by the code-block copy button; that button is one of the two cells that *works*,
