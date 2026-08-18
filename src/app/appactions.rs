@@ -195,6 +195,22 @@ pub(super) fn add_about_action(app: &Application) {
                 ],
             );
 
+            // Development-assistance attribution. Unlike the section above this is
+            // NOT a licence obligation and no regulation compels it: the EU AI Act
+            // (Reg. 2024/1689) Art. 50(2) machine-readable marking duty binds the
+            // *provider* of the generating AI system, not a downstream project that
+            // ships the resulting source, and its Art. 50(4) text-disclosure duty is
+            // limited to deepfakes and public-interest publication (and exempts
+            // content under human editorial responsibility, which this is). Reg.
+            // 2026/1744 (Digital Omnibus on AI, applicable 27 Jul 2026) only relaxes
+            // that regime. This section is a voluntary acknowledgement. Plain text
+            // only — a `<...>` here would be mis-parsed as a mailto: link
+            // (GTK4Rs/AP-50).
+            dialog.add_credit_section(
+                "Developed with AI assistance",
+                &["Claude (Anthropic) — AI pair programming"],
+            );
+
             // Enable horizontal scroll on the System (and License) text panes.
             // GtkAboutDialog wraps system_information in a GtkTextView inside a
             // GtkScrolledWindow.  By default the TextView uses WrapMode::Word,

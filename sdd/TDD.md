@@ -940,6 +940,8 @@
 - **And** the description names no platform — the same copy ships on every platform, so a platform list there would go stale as platforms are added (it once read "Linux-first … also compatible with macOS" while a Windows build shipped)
 - **And** the dialog shows a License button that displays the Apache License, Version 2.0 text
 - **And** the System tab shows the GTK runtime version and the versions of the gtk4, sourceview5, and pulldown-cmark crates
+- **And** the Credits tab carries two attribution sections: the bundled open-source components (the syntect/two-face grammars, whose upstream licences require their notice to travel with a binary distribution) and the AI assistance the project was developed with. The first is a licence obligation and the second is a voluntary acknowledgement — no regulation compels it, and the difference is worth knowing before either is edited away
+- **And** every credit entry renders as plain text, never as a clickable `mailto:` link — GTK routes an `<…>` fragment in a credit or author line through its mail-address parser whatever scheme it carries (GTK4Rs/AP-50)
 
 ### 9.17 The View menu toggles the toolbar and status bar, and remembers the choice
 - **Given** a document window
