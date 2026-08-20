@@ -580,6 +580,18 @@ pub(crate) const INLINE_ACCEL_CMDS: &[InlineCmd] = &[
     // ~/.config/kglobalshortcutsrc WM binding (KDE claims Meta+Alt+Left/Right for
     // "Switch Window Left/Right" — a different combination).
     //
+    // On macOS this declared spelling is overridden — not by this table, which
+    // stays the same on every platform per the accelerator SSOT rule, but by
+    // `accel::MAC_RESERVED`, to Cmd+[ / Cmd+] (Safari/Finder's own Back/Forward).
+    // Option+Left/Right is reserved there for word navigation in the editor
+    // instead (`macwordnav`). Measured: this action was never actually reachable
+    // from the editor on that key to begin with — `GtkSourceView`'s own
+    // `move-words` class binding (also default-bound to Alt+Left/Right, and a
+    // *word-transposition* edit, not navigation) fires first and wins. But every
+    // native macOS text field still binds Option+Left/Right to word movement, and
+    // this action has no more business contesting that key than `move-words`
+    // does, so it moves regardless of which of the two used to win.
+    //
     // The two mouse thumb buttons drive the same actions but cannot appear in this
     // table: it is the accelerator SSOT, and buttons 8/9 are not expressible as an
     // accelerator string. They are gestures in `window/navhistory.rs`, and their

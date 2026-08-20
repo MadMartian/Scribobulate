@@ -65,6 +65,8 @@ mod keynav;
 mod limits;
 mod links;
 mod logging;
+#[cfg(target_os = "macos")]
+mod macwordnav;
 mod outline;
 mod outline_view;
 mod palette;

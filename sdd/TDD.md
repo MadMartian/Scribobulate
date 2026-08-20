@@ -484,6 +484,16 @@
 - **And given** the document is clean but its backing file has been **deleted** on disk (a genuine external deletion, not the app's own crash-safe self-rename), **then** the file monitor makes Save **enabled** while the "File deleted on disk — save to restore it" notice is shown, and activating Save re-creates the file with the buffer's content; once the file exists again (a successful save, a reload, or an external re-create) Save sensitivity returns to tracking the dirty flag. Pure predicate: `save_enabled(dirty, backing_missing) == dirty || backing_missing` (unit-tested in `winstate::decisions`).
 - **And** Save As remains available in every mode regardless of dirty state (it can write a copy of even a clean document to a new path)
 
+### 4.13 Option+Left/Right moves the caret by a word in the editor, on macOS
+<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-20 in response to a reported defect: Option+Left/Right in the editor silently ran GtkSourceView's own `move-words` binding — a word-TRANSPOSITION edit, not navigation — instead of moving the caret, because macOS has no other claim on that key and, ON QUARTZ, GtkSourceView's own class binding wins over the app's Back/Forward accelerator (§23.6) declared on the same keystroke — an ordering measured to be REVERSED on Win32 and X11 (ScrAP-311), so this rubric is macOS-scoped by mechanism and not merely by convention. See accel.rs MAC_RESERVED and macwordnav.rs for the full mechanism, sourced to `gtksourceview.c:953`. -->
+- **Given** the editor pane has focus, on macOS
+- **When** the reader presses Option+Left or Option+Right
+- **Then** the caret moves one word back or forward, exactly as Ctrl+Left/Ctrl+Right already do on every platform (Linux/Windows convention) — Option is the macOS spelling of the same movement, not a second, different one
+- **And** the buffer's content and word order are completely unchanged — this is caret movement only, never the word-transposition edit `GtkSourceView` itself would otherwise perform on this key (that edit is what wins the key on Quartz with no interceptor; on Win32 and X11 the accelerator wins instead and this rubric has nothing to guard — ScrAP-311)
+- **And** Option+Shift+Left/Right extends the selection by a word instead of moving the caret, matching Ctrl+Shift+Left/Right
+- **And** this does **not** invoke Back/Forward (23.6) — on macOS that command no longer shares this key (Cmd+[ / Cmd+] instead), so the two can never race
+- **And** Ctrl+Left/Ctrl+Right keep working unchanged (GTK's own binding) — this adds a second spelling, it does not replace the first
+
 ### 4.12 Save All writes every tab that needs saving
 - **Given** a window with several tabs, of which more than one is dirty (or clean over a deleted backing file)
 - **When** the user invokes Save All (File ▸ Save All, the toolbar control, or its accelerator)
@@ -2625,10 +2635,12 @@ created by an act of navigation, and traversing history is not one of them.**
 - **And** their sensitivity is correct immediately after every event that can change it — a navigation, a traversal, a tab closing, a tab moving to another window — never only after some later unrelated interaction
 
 ### 23.6 The browser's own inputs work
+<!-- HUMAN-AUTHOR CONFIRM: macOS spelling added by agent 2026-08-20, in response to a reported defect — see TDD §4.13. -->
 - **Given** a window with history in both directions
-- **When** the reader presses Alt+Left / Alt+Right, or the dedicated Back / Forward keys a keyboard may carry (`XF86Back` / `XF86Forward`), or the two thumb buttons a mouse may carry (buttons 8 and 9)
+- **When** the reader presses Alt+Left / Alt+Right (Cmd+[ / Cmd+] on macOS — see below), or the dedicated Back / Forward keys a keyboard may carry (`XF86Back` / `XF86Forward`), or the two thumb buttons a mouse may carry (buttons 8 and 9)
 - **Then** each drives the same navigation as the menu item — one action, several inputs, no per-input behaviour
 - **And** the keyboard bindings appear in the Keyboard Shortcuts window; the mouse buttons deliberately do not, that window describing keys
+- **And** on macOS, Back/Forward's keyboard binding is Cmd+[ / Cmd+] — Safari and Finder's own spelling — rather than Alt+Left/Right: measured **on Quartz**, that keystroke was never actually reachable for Back/Forward from a focused editor to begin with there (`GtkSourceView`'s own `move-words` word-transposition binding wins the same key first — TDD §4.13; the opposite is measured on Win32 and X11, where this accelerator wins and `move-words` never fires, so the ordering is a property of the backend and not of the toolkit — ScrAP-311), but every native macOS text field still binds Option+Left/Option+Right to word navigation, and Back/Forward has no more business contesting that key than `move-words` does. `XF86Back`/`XF86Forward` and the two thumb buttons are unaffected — the same input on every platform
 
 ### 23.7 History is per window and never crosses between them
 - **Given** two windows, each with its own history

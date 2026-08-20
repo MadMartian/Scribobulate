@@ -155,6 +155,14 @@ pub(crate) fn build_tab_editor(md: &str) -> (sourceview::Buffer, sourceview::Vie
     // one place every editor view is built.
     crate::farscroll::wire_buffer_ends_scroll(sv_view.upcast_ref());
 
+    // Option+Left/Option+Right word navigation — the macOS convention GTK itself
+    // does not implement on any backend, and which the window's own Back/Forward
+    // accelerator used to swallow before `accel::MAC_RESERVED` moved off this key
+    // (see `macwordnav`'s module doc comment). Wired here for the same reason as
+    // the two calls above: this is the one place every editor view is built.
+    #[cfg(target_os = "macos")]
+    crate::macwordnav::wire_word_navigation(&sv_view);
+
     sv_view.set_editable(true);
     sv_view.set_wrap_mode(gtk::WrapMode::Word);
     sv_view.set_show_line_numbers(true);

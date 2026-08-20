@@ -60,6 +60,14 @@ pub(crate) mod keynav;
 pub(crate) mod limits;
 pub(crate) mod links;
 pub(crate) mod logging;
+// Option+Left/Right word navigation in the editor — a macOS-only convention GTK
+// itself does not bind on any backend (see the module doc comment). Top-level and
+// cfg-gated at this declaration, not under `platform/mac/`: that directory's
+// contract (below) is narrow plumbing, whereas this is a keybinding-semantics
+// difference — the same kind of cross-platform behavioural divergence `accel.rs`
+// already centralizes at the top level, not under `platform/`.
+#[cfg(target_os = "macos")]
+pub(crate) mod macwordnav;
 pub(crate) mod outline;
 pub(crate) mod outline_view;
 pub(crate) mod palette;
