@@ -427,6 +427,16 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 298 | A TIGHT list item's content arrives as bare inline events with no `Tag::Paragraph` — a consumer that paragraphs per event splits the item into one block per token, and a single-token fixture cannot see it | C |
 | 299 | A suite-ordering defect that is deterministic on one platform and INVISIBLE in the canonical platform's full suite — the gate platform's green is the reassurance that hides it, and the seats that declare a step not-applicable stop being witnesses to it | B |
 | 300 | A driven UI step that misses its target does not fail, it acts somewhere ELSE — and a loop that does nothing produces a perfectly stable measurement, so the false pass hardens under repetition and is biased toward whatever you expected | B |
+| 301 | A save chooser returns a FOREIGN extension unchanged, so an export default derived from the document's filename overwrites the reader's source — and the safe platform is the one most reviewers test on | A |
+| 302 | Both of `GtkPrintOperation`'s completion signals misreport, in BOTH directions — success never reports finished, and finished means aborted | A |
+| 303 | On the preview route `render_page` ENDS the page — also calling `show_page` emits a blank page after every rendered one | A |
+| 304 | cairo's Windows colour-glyph path wraps colour glyphs in a Type3 `d0` font; ONE 2017 extractor's layout analysis mishandles it, and the produced file is not degraded | B |
+| 305 | A `#[gtk::test]` body and a plain `#[test]` calling `gtk::init()` cannot share a binary — and the panic surfaces in the plain test, inviting a non-existent platform restriction | B |
+| 306 | A chooser's `set_current_folder` is best-effort and its failure is UNOBSERVABLE — `current_folder()` reads back `None` whether or not it was honoured | C |
+| 307 | macOS embeds a colour emoji as a bare Image + SMask XObject, so its text is absent BY CONSTRUCTION — no text run exists to carry a `/ToUnicode` | B |
+| 308 | A font's Unicode flag does not predict whether its text extracts — `uni=yes` reads identically for text that round-trips and text that does not | B |
+| 309 | A CANCELLED export destroys the destination, and the wreckage is a valid file — cancel is a normal-completion path, and the truncation is the operation's first act | A |
+| 310 | An extraction failure is not evidence about APPEARANCE — the inversion of #308's family, and it would condemn a surface that is correct | B |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -4100,5 +4110,102 @@ cargo test --features gtk-integration-tests --lib saferizer:: -- --skip gtk_inte
 **Relations**: ScrAP-296 — instance A is "a derived coordinate is only as trustworthy as its derivation" by a **new route**, the derivation being correct when taken and invalidated by the subject moving, so the coordinate *rotted* rather than being wrong. GTK4Rs/AP-252 — both instances, with the silently-failed step being the *whole loop* rather than one setup step. GTK4Rs/AP-245 — a drive tool's exit code is a claim about the tool's execution, never about delivery. ScrAP-217 — a negative result needs a positive control; the per-cycle assertion **is** that control.
 
 **Scribobulate**: none — harness discipline, with no implementation in this tree. (Stated rather than omitted: an absent field and a dropped one look identical.)
+**See**: the general form is carried in the `general-engineering-principles` skill as **GEP-61** (experiment-design), which also holds two tells this entry does not: the ANSI-marshalling instance, and *when every cell of a matrix fails identically, suspect the observation layer*. This entry is the project instance; that one is the transferable statement.
 
 **Measured**: Windows 10 19045, GTK 4.22.4 gvsbuild, MSVC, during the Windows verification of the export plan, 2026-08-20. Both instances reproduced deliberately after diagnosis: A re-ran clean at **40 of 40** verified cycles once coordinates were re-derived per iteration; B re-ran clean once every keystroke went through a throwing foreground gate.
+
+## 301. A save chooser returns a foreign extension unchanged, so an export default derived from the document's filename overwrites the reader's source
+> *Core GTK4, in the gtk4-rs skill as GTK4Rs/AP-298 (printing-and-export). Distributed from the export plan at its retirement, 2026-08-20.*
+
+**Symptom**: on Windows the native save chooser appends the filter's extension **only when the name carries no dot-suffix at all**, and does not enforce the filter's type — so a default derived from the source document's filename round-trips intact and the writer overwrites the source. `notes.md` in, `notes.md` out, PDF bytes over the reader's Markdown. Silent and unrecoverable.
+**Root cause**: two platform behaviours that differ, and **the safe one hides the dangerous one** — macOS *replaces* the extension. So the dangerous derivation is silently correct on a Mac and destructive on Windows: the worst possible distribution, because it survives review by anyone testing on the platform most reviewers use.
+**Resolution**: derive an export default as `file_stem` + the target extension, never the document's filename; a guarantee asserted on every platform, not a convention. Validate the name **proposed**, never the name **returned** — gating the return would reject a name the platform already accepted and rewrote.
+**Scribobulate**: `export::default_export_name` (`src/export/mod.rs`) is the sole producer, with the guarantee pinned by unit test on every platform (TDD 25.10/25.11).
+**See**: gtk4-rs skill → printing-and-export (GTK4Rs/AP-298).
+
+## 302. Both of `GtkPrintOperation`'s completion signals misreport, in both directions
+> *Core GTK4, in the gtk4-rs skill as GTK4Rs/AP-294 (printing-and-export). Distributed from the export plan at its retirement, 2026-08-20.*
+
+**Symptom**: on the Export route `status()` and `is_finished()` are **inverted**. A run that **succeeded** reads `GENERATING_DATA` / **false**, permanently — surviving a main context pumped to exhaustion plus a 500 ms wait. A run that **failed or was cancelled** reads `FinishedAborted` / **true**. So `is_finished() == true` means *aborted*, and success never reports finished: a gate on `status() == Finished` reports failure on success, and a gate on `is_finished()` waits forever on success.
+**The discriminator that makes it actionable**: reporting **is** honest exactly when the application calls `op.cancel()`. The toolkit is not unreliable in general — it is unreliable specifically when you decline to tell it what happened.
+**Resolution**: conclude success from the operation's return value **and** the application's own count of pages drawn against pages expected, and route every early stop through `op.cancel()` so the reported outcome is not a lie. The second half is free, and skipping it produces a silently-wrong success.
+**Scribobulate**: `export::pdf::finish(result, drawn, expected)` — a pure function inside the coverage gate, so it is settled by unit test on every platform rather than by a driven run (TDD 25.20).
+**See**: gtk4-rs skill → printing-and-export (GTK4Rs/AP-294).
+
+## 303. On the preview route `render_page` ends the page — do not also call `show_page`
+> *Core GTK4, in the gtk4-rs skill as GTK4Rs/AP-296 (printing-and-export). Distributed from the export plan at its retirement, 2026-08-20.*
+
+**Symptom**: driving `render_page` *and* calling cairo's `show_page` emits a blank page after every rendered one — 3 pages became 6.
+**Root cause**: `render_page` ends the page itself; the two are not complementary.
+**Resolution**: never call `show_page` on this route. Three riders, each a one-liner once known: **size the surface from `::got-page-size` per page** rather than assuming a paper size (hardcoding A4 against a Letter setup produced *correct layout inside a wrong media box* — silent, and it looks right until someone prints it); treat `op.cancel()` as **advisory**, since the application owns the loop; and **never infer completion from the return value** — `run(Preview)` reports whether `op.cancel()` was called, not whether the loop finished.
+**Scribobulate**: not on the shipped path — the PDF sink uses `run(Export)`, and this was measured while evaluating the preview route as an alternative. Retained because "we already draw this, just draw it somewhere else" is the first idea everyone has.
+**See**: gtk4-rs skill → printing-and-export (GTK4Rs/AP-296).
+
+## 304. cairo's Windows colour-glyph path wraps colour glyphs in a Type3 `d0` font, and one 2017 extractor mishandles it
+> *Core GTK4/cairo, in the gtk4-rs skill as GTK4Rs/AP-297 (printing-and-export). Distributed from the export plan at its retirement, 2026-08-20. Pairs with #307 — read both or neither.*
+
+**Symptom**: a colour emoji in an exported PDF is misplaced by a layout-reconstructing text extractor, while rendering perfectly on the page.
+**Root cause**: pangocairo's win32 font map reaches cairo's **DWrite** colour-glyph path, which rasterises the glyph and wraps it in a **Type3 font whose CharProcs are `d0`** — the coloured-glyph operator, which unlike `d1` carries **no glyph bounding box** — painting an image XObject. A layout analyser is left with no per-glyph extent under three stacked y-flips. The in-file control is sharp: a *colour* glyph goes to the Type3 font and is misplaced while *monochrome* glyphs on the same line go to an ordinary Type0 and are placed correctly. **Colour versus monochrome, not emoji versus not.**
+**⚠ The produced file is not degraded, and the title must not be read wide.** poppler orders the identical structure correctly in every mode — **five extractors correct, one wrong**, the one being the layout modes of Xpdf 4.00 (2017). The accurate statement is *"Xpdf 4.00's layout analysis mishandles bbox-less Type3 `d0` glyphs"*. A reader who takes this wide goes and fixes a file that is fine.
+**Refuted, and recorded as a refutation**: the hypothesis that Windows stacks an extra y-flip Linux lacks. Three discriminators named in advance — `FontMatrix` sign, `d0` vs `d1`, Image vs Form XObject — all **match** across platforms.
+**Rejected corrective**: `PANGOCAIRO_BACKEND=fc` buys correct extraction order at the cost of **colour emoji everywhere, screen included**. Monochrome emoji are drawn differently, not desaturated, so it changes what the reader sees. Not a fix; a different product.
+**Scribobulate**: accepted as an out-of-scope limit by operator ruling, on a hands-on Acrobat test (TDD 25.19).
+**See**: gtk4-rs skill → printing-and-export (GTK4Rs/AP-297).
+
+## 305. A `#[gtk::test]` body and a plain `#[test]` calling `gtk::init()` cannot share a binary
+> *Core GTK4, in the gtk4-rs skill as GTK4Rs/AP-295 (threading-async-and-memory), beside GTK4Rs/AP-293. Distributed from the export plan at its retirement, 2026-08-20.*
+
+**Symptom**: a test binary containing both shapes panics with "Attempted to initialize GTK from two different threads".
+**Root cause**: the attribute macro's body runs on a glib `ThreadPool` worker and the plain test on its libtest thread; GTK permits only one.
+**Why it earns an entry**: the panic surfaces in the **plain** test, which invites the reading "a plain `#[test]` cannot init GTK on this platform". That is false — isolated, it passes cleanly. The failure is **contamination between the two shapes**, and the misreading would have written a non-existent platform restriction into a plan. Shares a framing with GTK4Rs/AP-293: *if it passes in isolation and fails in the suite, suspect the binary, not the test.*
+**Resolution**: pick one shape per test binary.
+**Scribobulate**: not hit on the shipped tree — this project writes `#[gtktest::test]` everywhere and `lint-references.sh` check 5 enforces it. Measured while evaluating whether the export path was reachable from a test.
+**See**: gtk4-rs skill → threading-async-and-memory (GTK4Rs/AP-295).
+
+## 306. A chooser's `set_current_folder` is best-effort and its failure is unobservable
+> *Core GTK4, in the gtk4-rs skill as GTK4Rs/AP-299 (printing-and-export). Distributed from the export plan at its retirement, 2026-08-20.*
+
+**Symptom**: on Windows `set_current_folder` returns `Ok(())` and `current_folder()` reads back `None` **whether or not** the folder was honoured.
+**Root cause**: the setter cannot report what the native dialog did with it, and the getter is not the check it looks like — it is **non-discriminating**, returning the same answer in both cases. Worse than an API with no check at all, because one appears to exist.
+**Resolution**: nothing downstream may assume the dialog opened where it was asked. Treat the initial folder as a courtesy, never as state.
+**Scribobulate**: `window::export::choose_destination` sets it through a discarded `let _ =` with the reason in a comment beside the call.
+**See**: gtk4-rs skill → printing-and-export (GTK4Rs/AP-299).
+
+## 307. macOS embeds a colour emoji as a bare Image XObject, so its text is absent by construction
+> *Distributed from the export plan at its retirement, 2026-08-20. **Pairs with #304** — the two are one lesson in two mechanisms and either alone reads as the general case.*
+
+**Symptom**: an astral colour emoji that **renders correctly** on an exported page extracts as if it were never there — no CESU-8 surrogate pair, no U+FFFD, no `/ToUnicode` entry, on macOS/Quartz. Neighbouring prose on the same line extracts correctly, so the file is not broken and the extractor is not failing.
+**Root cause**: `pdfimages -list` shows the glyph rasterised as its own **Image + SMask XObject pair**, not wrapped in a font. An Image XObject carries no text-showing operator, so there is nothing for a text extractor to find — **by construction**, not by a reader-side heuristic failing.
+**The pairing, and the reason neither entry stands alone**: **both platforms rasterise the colour glyph to an image; the difference is whether that image is wrapped in a font.** Windows wraps it in a Type3 font that **carries a `/ToUnicode`**, so a text run exists and the codepoints are recoverable (#304). macOS emits the image bare, so there is nothing to attach one to. Same rasterisation, opposite extractability, and **the wrapper is the entire difference**. Read either alone and you take one platform's mechanism for the general story — and, worse, rank the platforms backwards: Windows is the one that *keeps* a recoverable text layer.
+**Resolution**: do not describe the macOS limit as "the `/ToUnicode` is missing". That phrasing implies a text run with a defective map and invites a fix — a hand-rolled `/ActualText`, a font substitution — aimed at a structure that is not present. State it as **the glyph is not text on this platform**.
+**Scribobulate**: accepted as the stricter of the two platform limits (TDD 25.18b), asserted as measured behaviour to catch a *change*, not as an aspiration.
+**See**: #304 for the Windows mechanism; gtk4-rs skill → printing-and-export (GTK4Rs/AP-297).
+
+## 308. A font's Unicode flag does not predict whether its text extracts
+> *Distributed from the export plan at its retirement, 2026-08-20. False-PASS family — GTK4Rs/AP-168's shape.*
+
+**Symptom**: a PDF-text-extractability check gated on font metadata **passes while the feature is broken**.
+**Root cause**: `pdffonts` reports `uni=yes` for *every* font in the file — including Type 3 fallbacks whose text extracts as nothing — so the column reads **identically** for text that round-trips and text that does not. The instrument answers a real question fluently; it is simply not the question being asked.
+**Resolution**: assert a **byte-exact round-trip of the string** through the extractor. Never inspect font metadata as a proxy for extractability.
+**Scribobulate**: TDD 25.18's method note forbids gating on font metadata, and the §25 checks assert the round-trip per line.
+**See**: #310 for the inversion (an extraction failure is not evidence about appearance).
+
+## 309. A cancelled export destroys the destination, and the wreckage is a valid file
+> *Distributed from the export plan at its retirement, 2026-08-20. GTK4Rs/AP-167's family, but a **distinct** entry: GTK4Rs/AP-167's trigger is a **failure**; this one's is ordinary user intent.*
+
+**Symptom**: cancelling a `GtkPrintOperation` export leaves a valid, readable, **partial** PDF at the destination, having already replaced whatever was there. It extracts cleanly and the extractor exits 0, so **nothing signals that the previous file is gone**.
+**Root cause**: `set_export_filename` gives cairo the destination directly — no temp-and-rename — and cancel is a **normal-completion path**, not an error path. Worse than it first appears: **GTK opens, and therefore truncates, the destination before the first page is drawn**, so the destruction is the operation's first act. Measured with zero `draw-page` calls when the open fails.
+**Why it is worse than an ordinary half-write**: the wreckage is a **valid PDF** — the user gets a plausible shorter document where the old one was — and **it is reached by pressing Cancel**, which is normal use rather than a fault.
+**Resolution**: never point an export sink at a user-visible destination. Render to a temp file or to memory and publish atomically **on success only**, with the gate on the application's own page count rather than on the toolkit's return value (#302).
+**Scribobulate**: `atomic_io::AtomicPublish` holds the create-private-temp → write → publish sequence; `export_pdf` stages into it and promotes only on `Ok(Apply)` with `drawn == expected` (TDD 25.21).
+**Measured**: Windows 4.22.4 gvsbuild / Win10 19045 — a 43,973-byte destination replaced by a 171,327-byte 51-page partial that the extractor reads without error.
+
+## 310. An extraction failure is not evidence about appearance
+> *Distributed from the export plan at its retirement, 2026-08-20. The **inversion** of #308's family, and the entry should be read as such.*
+
+**Symptom**: colour emoji in a cairo-generated PDF **render correctly** — glyphs, colours, positions, left-to-right order — but **extract** badly. A text-extraction assertion therefore reports "export is broken" about an artefact that is, to every reader who looks at it, correct.
+**Root cause**: the glyph run's extraction metadata, not the drawing operators. The two genuinely disagree, so an extraction-only suite condemns the surface that works.
+**Why it is the inversion**: GTK4Rs/AP-168's lesson is that a suite is evidence only about the surfaces its assertions name. Here the assertion is aimed at a surface that genuinely **is** broken — and would have condemned an adjacent one that is not.
+**Resolution**: assert PDF text round-trips **per line**, and **never treat an extraction failure as evidence about appearance without looking at the rendered page**. Pair every extraction assertion with a render check (TDD 25.11a).
+**Scribobulate**: TDD 25.11a makes the pairing a rubric rather than a habit.
+**Measured**: Windows, cairo 1.18.4, Segoe UI Emoji at 14 pt *and* 36 pt (so not a size or crowding artefact); visual confirmed against a cairo `ImageSurface` raster control, with the capture gated on the target being the foreground window.

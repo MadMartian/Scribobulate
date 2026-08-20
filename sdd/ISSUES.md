@@ -12,6 +12,7 @@
 | Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
 | R | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | S | macOS only: every `GtkFileChooserNative` invocation (Open, Save, Export) grows RSS by ~1 MB and does not give it back; no plateau over 20 cycles. NOT a native-dialog property — Windows uses a native panel too and plateaus | Medium |
+| T | Two File-menu mnemonics collide on `l` (`Save A_ll` vs `_Load Unsafe Linked Documents`), and the uniqueness test that exists to catch exactly this never sees eight of the table's entries | Low |
 
 ## A. Tables are selection islands
 
@@ -925,3 +926,53 @@ chooser, and the per-process GPU counters read a flat 0 B throughout. It remains
 cannot be separated from the chooser's while every measurement cycle opens one. The GPU
 half of that rubric *is* verified: the process never appears as a GPU client, before or
 after 30 export cycles, at either document size.
+
+## T. Two File-menu mnemonics collide, and the guard that exists to catch it cannot see them
+
+**Severity**: Low (a colliding access key makes one of the two items unreachable by
+`Alt`+letter and is a nuisance, not a defect in any command's behaviour. Both items
+remain reachable by pointer and by their accelerators.)
+
+**The collision, MEASURED.** In the File popover, `Save All` is marked `Save A_ll` and
+`Load Unsafe Linked Documents` is marked `_Load Unsafe Linked Documents`. **Both take
+`l`.** Both are live `FILE_CMDS` entries (`src/app/commands.rs`) and both appear in the
+File menu today.
+
+**Why nothing catches it.** `menu_mnemonics_unique_per_popover`
+(`src/app/mnemonics.rs`) exists for precisely this property, and it passes — because
+its per-popover label lists are **not derived from the menu**, they are a second,
+hand-maintained copy, and **eight entries of `MENU_MNEMONICS` appear in no list at
+all**:
+
+`Save All` · `Rename…` · `Export` · `PDF` · `HTML` · `Edit Link…` · `Edit Image…` ·
+`Reading Theme`
+
+`Save All` is one of them, so the colliding pair is never compared. Adding the missing
+File entries to the test makes it fail immediately and by name:
+
+```
+File popover: access key 'l' collides — "Save All" vs "Load Unsafe Linked Documents"
+```
+
+**The guard is green because its input set is incomplete, not because the property
+holds** — the same shape as the false-PASS family in the anti-pattern register, arriving
+through a hand-maintained list rather than through a wrong assertion.
+
+**Two things to fix, and the second matters more than the first.**
+
+1. **Resolve the collision.** `Load Unsafe Linked Documents` has `U`, `n`, `k` and `d`
+   free; `Save All` has little room, and `Save A_ll` pairs visually with `Save _As…`,
+   which is what a reader scans for. So moving the *Load* item is the lower-cost change.
+   This is user-visible, so it ships with its `tests/MANUAL-TEST.md` check
+   (build-pipeline step 7).
+2. **Close the guard's input gap**, and prefer *deriving* the popover lists from the
+   menu model over extending the hand-maintained copy — a second copy is how this one
+   silently stopped matching, and extending it fixes today's eight while leaving the
+   mechanism intact. The `Export` submenu needs to appear as **its own popover**, since
+   `_PDF` and `_HTML` are only claimed to be safe *because* the submenu is a separate
+   popover from the File menu one level up, and that claim is currently made in a code
+   comment with nothing holding it.
+
+**Not introduced by the export feature.** `_Export`, `_PDF` and `_HTML` are correct and
+do not collide with anything; they are simply three of the eight entries the guard never
+checks. Found while confirming the export items had mnemonics at all.

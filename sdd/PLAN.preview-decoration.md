@@ -9,8 +9,9 @@ the theme model go?", and it stops at one decision only the operator can make
 graphics, background colours, shapes on headings and other Markdown-rendered
 elements.
 
-**⚠️ Rescoped 2026-08-20 by the delivery of export** ([`PLAN.export.md`](PLAN.export.md),
-landed on Linux and verified on macOS). Nothing in the scope table below is wrong, but
+**⚠️ Rescoped 2026-08-20 by the delivery of export**, implemented on Linux and verified on
+macOS and Windows (its plan is retired; see [`TECH.md`](TECH.md)'s `export/` entry and
+[`TDD.md`](TDD.md) §25). Nothing in the scope table below is wrong, but
 its **cost model is**: a themed value no longer has three application paths, it has
 **five** — the buffer tag, the table cell, the generated CSS, **the export HTML sink,
 and the export PDF sink**. Both sinks already resolve real theme values today
@@ -198,9 +199,10 @@ a construct the preview decorates and it cannot.
    **Export adds a third escape context, and it is the strict one.** The same glyph
    would reach `export/html.rs`, where the correct escape is **HTML**, not Pango
    markup — a value that is safe in a Pango layout is not thereby safe in a file
-   opened by a browser. `PLAN.export.md`'s untrusted-content constraint governs:
-   what leaves the application is opened by software this project neither controls
-   nor sandboxes, so the obligation there is *stricter, never looser*. A single
+   opened by a browser. The export path's untrusted-content constraint governs
+   ([`TDD.md`](TDD.md) §25's preamble): what leaves the application is opened by software
+   this project neither controls nor sandboxes, so the obligation there is *stricter,
+   never looser*. A single
    `markup_escape_text` funnel is therefore **not sufficient** once a glyph key
    exists; each sink escapes for its own grammar, and the theme file is
    attacker-influenced input read from `$XDG_CONFIG_HOME`. Note this makes a glyph
@@ -253,9 +255,8 @@ artefact**. Two sinks, both display-free, neither of which runs any of mechanism
    `snapshot_layer` — that is the whole reason it works on a never-rendered tab. So a
    heading band, a code-card border, a blockquote panel or a checkbox glyph added only
    to the B path **appears in the preview and is silently absent from both exports**.
-   That is exactly the failure [`PLAN.export.md`](PLAN.export.md) § Risks names first
-   — "two renderings of one document drift" — and its stated mitigation is structural,
-   not vigilance: both sinks consume one `ExportDoc`, and the Document Rendering CAM
+   That is the drift the export design was built to prevent — two renderings of one
+   document diverging — and its mitigation is structural, not vigilance: both sinks consume one `ExportDoc`, and the Document Rendering CAM
    carries an **export cell** so a new construct cannot land without one. **A K+D
    decoration is therefore a K+D+2 decoration**, and the CAM will say so at review
    time whether or not this plan does.
@@ -266,7 +267,7 @@ artefact**. Two sinks, both display-free, neither of which runs any of mechanism
    designing a decoration that is cheap in the artefact and unaffordable on screen, and it
    means "we already do this in the export" is never evidence that the preview can.
 3. **The PDF resolves against the System theme's light resolution by default**
-   ([`PLAN.export.md`](PLAN.export.md) O1), not the active reading theme. So a decoration's
+   ([`TDD.md`](TDD.md) 25.9), not the active reading theme. So a decoration's
    dark-theme appearance has no PDF expression today, and any key whose *point* is a dark
    treatment needs to say what paper does with it. That is a resolution request, not a
    licence for a literal — TDD 25.9 makes a literal styling value in either sink a defect,
@@ -419,8 +420,7 @@ Route to the researcher; each changes a design decision, not an estimate.
    renderer** — a decorative glyph key invites emoji, and the software renderer's
    colour-glyph path has not been exercised anywhere in this tree.
    **Still open for the preview, but no longer unexercised in the project, and the
-   adjacent evidence cuts both ways** (*MEASURED*, [`PLAN.export.md`](PLAN.export.md)
-   O9 and P-17). Export drives pangocairo directly and colour emoji **render correctly
+   adjacent evidence cuts both ways** (*MEASURED*; ScrAP-304 and ScrAP-307). Export drives pangocairo directly and colour emoji **render correctly
    on all three platforms** — full colour, correct glyphs, positions and order, verified
    against raster controls. That materially de-risks "will it paint". What it does *not*
    answer is the GSK Cairo renderer's own path, which is a different consumer. And it

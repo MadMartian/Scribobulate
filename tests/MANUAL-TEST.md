@@ -2020,7 +2020,9 @@ use the executable's mtime and size, which do distinguish a rebuild.
 > the document, an image *outside* its folder, a remote image, a `{==claim==}{>>comment<<}`
 > annotation, bullet/ordered/task lists with nesting, a block quote containing a list,
 > a GFM table, a fenced code block, a horizontal rule, and raw `<script>`, `<div>` and
-> `<picture>` blocks. `sdd/PLAN.export.md`'s own sample is a reasonable starting point.
+> `<picture>` blocks. Any of this repository's own
+> `sdd/*.md` documents is a reasonable starting point — they exercise every construct above
+> in one file, which is how the tight-list-item defect (ScrAP-298) was found.
 >
 > **Driving it headlessly**: `win.export` takes a string target, so the whole command
 > is reachable over `org.gtk.Actions` without the pointer — `gdbus call --session
