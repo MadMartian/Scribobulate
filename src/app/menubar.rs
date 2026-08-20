@@ -11,6 +11,7 @@ use super::commands::{
     inline_accel, Cmd, EDIT_CMDS, FILE_CMDS, FORMAT_CMDS, TBTN_SECTION_IDS, VIEW_CMDS,
 };
 use super::mnemonics::mnem;
+use crate::export::ExportTarget;
 use crate::winstate::FmtInsertKind;
 use gtk::gio::{Menu, MenuItem};
 use gtk::prelude::*;
@@ -461,6 +462,23 @@ fn build_format_menu() -> (Menu, Menu) {
 /// (which would also generate an unwanted toolbar button).
 fn build_file_menu() -> Menu {
     let file_menu = build_command_menu(&FILE_CMDS);
+    // File ▸ Export ▸ { PDF, HTML }. Built ad-hoc rather than as a `FILE_CMDS` row for
+    // the same reason Rename is: a row auto-generates a toolbar button, and Export has
+    // none. That is a decision, not an omission — the file toolbar's button section is
+    // already crowded, and export is peripheral to this application's primary audience,
+    // developers who review agent-written prose here and act on it in their own tools.
+    // One `win.export` action drives both items, so adding a surface later is a
+    // menu-model change rather than new plumbing.
+    let export_menu = Menu::new();
+    for target in [ExportTarget::Pdf, ExportTarget::Html] {
+        let item = MenuItem::new(Some(&mnem(target.label())), None);
+        item.set_action_and_target_value(Some("win.export"), Some(&target.target().to_variant()));
+        export_menu.append_item(&item);
+    }
+    let export_section = Menu::new();
+    export_section.append_submenu(Some(&mnem("Export")), &export_menu);
+    // Before the trailing Exit section, beside Rename and Close Tab.
+    file_menu.insert_section((file_menu.n_items() - 1).max(0), None, &export_section);
     let close_tab_section = Menu::new();
     // Rename sits with Close Tab and, like it, is built ad-hoc rather than as a
     // `FILE_CMDS` row: a row auto-generates a toolbar button, and Rename has none

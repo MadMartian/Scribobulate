@@ -480,56 +480,6 @@ mod gtk_integration_tests {
         // `DocMonitor::cancel_and_release` consumes the monitor, so the cancel and the
         // final unref cannot be separated by a main-loop turn.
 
-        // This observation reference is deliberately never released. **Do not "tidy"
-        // this into a drop, and do not let it fall out of scope.**
-        //
-        // On Windows, finalizing a CANCELLED `GFileMonitor` after the main context has
-        // dispatched aborts the process with `STATUS_HEAP_CORRUPTION` (0xC0000374)
-        // inside `g_object_unref`. MEASURED on GLib 2.88.1 / GTK 4.22.4 (gvsbuild) /
-        // Win10 19045, reduced to a loop with no Scribobulate code in it at all —
-        // `File::monitor_file` → `cancel()` → one `MainContext` iteration → unref. The
-        // trigger is exactly the cancel plus an intervening *dispatch*: elapsed
-        // wall-clock time with no dispatch is clean, an uncancelled monitor is clean,
-        // and the rename of the watched file drops out of the reproducer entirely.
-        //
-        // The application never dies of this because it never writes that ordering:
-        // `cancel_monitor` above and `attach_file_backing` both cancel and release the
-        // last reference in one uninterrupted stretch, with no main-loop turn in
-        // between — MEASURED clean over 400 iterations in that ordering. Only this test
-        // holds a *second* reference in order to interrogate the monitor after the
-        // pump, which is the one shape GIO mishandles.
-        //
-        // Leaking a single GObject per run is the price of keeping the strong
-        // assertion — `is_cancelled()` read off the real monitor — instead of
-        // weakening it to something that happens to finalize safely. Unconditional
-        // rather than `#[cfg(windows)]` so every platform runs the same test.
-        std::mem::forget(old_monitor);
-
-        // This observation reference is deliberately never released. **Do not "tidy"
-        // this into a drop, and do not let it fall out of scope.**
-        //
-        // On Windows, finalizing a CANCELLED `GFileMonitor` after the main context has
-        // dispatched aborts the process with `STATUS_HEAP_CORRUPTION` (0xC0000374)
-        // inside `g_object_unref`. MEASURED on GLib 2.88.1 / GTK 4.22.4 (gvsbuild) /
-        // Win10 19045, reduced to a loop with no Scribobulate code in it at all —
-        // `File::monitor_file` → `cancel()` → one `MainContext` iteration → unref. The
-        // trigger is exactly the cancel plus an intervening *dispatch*: elapsed
-        // wall-clock time with no dispatch is clean, an uncancelled monitor is clean,
-        // and the rename of the watched file drops out of the reproducer entirely.
-        //
-        // The application never dies of this because it never writes that ordering:
-        // `cancel_monitor` above and `attach_file_backing` both cancel and release the
-        // last reference in one uninterrupted stretch, with no main-loop turn in
-        // between — MEASURED clean over 400 iterations in that ordering. Only this test
-        // holds a *second* reference in order to interrogate the monitor after the
-        // pump, which is the one shape GIO mishandles.
-        //
-        // Leaking a single GObject per run is the price of keeping the strong
-        // assertion — `is_cancelled()` read off the real monitor — instead of
-        // weakening it to something that happens to finalize safely. Unconditional
-        // rather than `#[cfg(windows)]` so every platform runs the same test.
-        std::mem::forget(old_monitor);
-
         drop(_slow);
         let _ = crate::docio::settle(|| {
             tab.path.borrow().as_deref() == Some(&*dir.path().join("after.md"))

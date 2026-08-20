@@ -186,6 +186,14 @@ part of row 1 is about *showing* the markup, not editing it.
 | 14 | **Switches theme at runtime** without restart, in every open window | `re_render_all_windows` |
 | 15 | **Legibility floor** asserted per theme (body contrast gate, headless) | `palette::contrast` |
 | 16 | **Keyboard parity in container contexts** — a rendering choice that puts a **focusable** widget in the document must not disable the pane's own keyboard behaviour: with focus on that widget, every document-navigation key (←, →, ↑, ↓, Home, End, PageUp, PageDown and their Ctrl forms) still moves the *document*, exactly as with the pane focused, while a selection-extending (Shift) key still acts on the widget's own text. A focused child with key bindings of its own consumes them in its target phase and they never reach the view — silently, with no warning and no log line. **Swept** when written (2026-08-09): the renderer anchors four child kinds — the table widget, a rule `GtkSeparator`, an image `GtkPicture` and a missing-image `GtkImage` — and only the table's cells take focus; the repair is sited on the pane rather than per child, so it covers those and any future one | `keynav`; `codeview::navkeys`; ScrAP-264 |
+| 17 | **Exports as it renders** — the construct reaches an exported artefact as the preview shows it, in every container context of row 2. A rendering feature has **two** consumers: the preview widget and `export`'s display-free pipeline, which walks the same normalised event stream. They agree by construction only for constructs both were taught; a construct added to the renderer alone is silently *absent* from every export, and absence is exactly what nobody notices — the artefact still opens, still looks finished, and is simply missing something. Cheap to satisfy and invisible to omit, which is what earns it a cell. **Swept** when written (2026-08-19): the export pipeline was built against the full construct list and every construct in it is covered by `export::doc`'s tests | `export::doc`; `export::html`; `export::pdf`; TDD 25.3 |
+
+Row 17 is the export twin of row 1: row 1 governs a construct's appearance on
+screen, row 17 governs its appearance in an artefact the reader hands to someone
+else. It exists because the two renderings are the standing risk the export was
+designed around — one `ExportDoc` feeds both sinks so they cannot drift from *each
+other*, and this cell is what keeps either from drifting from the **preview**.
+Vigilance is not a mitigation; a cell is.
 
 Rows 9–10 and 13 are **reference rows**: they defer to gates that already own
 those concerns ([`THEMING.md`](THEMING.md) and the "No hard-coded styling" rule in

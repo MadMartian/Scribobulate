@@ -9,6 +9,21 @@ the theme model go?", and it stops at one decision only the operator can make
 graphics, background colours, shapes on headings and other Markdown-rendered
 elements.
 
+**⚠️ Rescoped 2026-08-20 by the delivery of export**, implemented on Linux and verified on
+macOS and Windows (its plan is retired; see [`TECH.md`](TECH.md)'s `export/` entry and
+[`TDD.md`](TDD.md) §25). Nothing in the scope table below is wrong, but
+its **cost model is**: a themed value no longer has three application paths, it has
+**five** — the buffer tag, the table cell, the generated CSS, **the export HTML sink,
+and the export PDF sink**. Both sinks already resolve real theme values today
+(`export/html.rs` builds a stylesheet from the resolved `Palette` + `Theme`;
+`export/pdf.rs` reads `heading_scale`, `heading_weight`, `bold_weight`, `rule_space`,
+`blockquote_bar`, `blockquote_bar_width`, `rule`, `font_family`; `export/markup.rs`
+reads `mark_bg`, `annotation_hl` and the link colour). Every tier below gets more
+expensive, tier K+D gets a new failure mode that did not exist when this was scoped,
+and the glyph-sanitisation seam gains a third escape context. The affected sections
+each carry the correction inline; § "Export is two more application paths" is the
+summary.
+
 **Evidence labels used below**: *READ* = taken from the source at the cited
 `file:line`. *MEASURED* = read out of the installed crate sources
 (`gtk4 0.10.3`, `gsk4 0.10.3`, feature `v4_6` — this project's floor). *INFERRED*
@@ -127,6 +142,12 @@ const → `theme.rs:77-85` clamp range → `ThemeSpec` field (`theme.rs:264-349`
 ⚠️ The `take!` step is the silent one: omitting it compiles, and built-in themes
 still work while **every user-file override of that key is dropped** — the shipped
 `list_marker` bug, pinned at `theme.rs:1190-1199`.
+⚠️ **Since export landed, eleven steps are thirteen**: the key must also reach
+`export/html.rs`'s stylesheet and, where it is a value the page sink draws or measures,
+`export/pdf.rs` / `export/markup.rs`. This has the same silent-failure shape as `take!`
+— omitting it compiles, the preview is correct, and the key simply does not exist in
+the exported artefact. It is *worse* than `take!` in one respect: the drop is invisible
+until somebody opens an exported file, which is not something the suite does for you.
 
 **K+P — key + an unused tag property.** K, plus a setter in `tags.rs`. The
 constraint is not the setter, it is § "Body/cell parity" below.
@@ -139,13 +160,19 @@ install choke point), a scan producing the spans, **and the new vector added to
 the early-return gate at `codeview/mod.rs:473-479`**. Miss the gate and the
 decoration silently never paints, with no warning. The draw loop itself can reuse
 `span_card_y_extent` verbatim.
+**Plus the two export sinks** (§ "Export is two more application paths"): a decoration
+that exists only in the B path is absent from both artefacts, so a K+D item now carries
+an HTML expression and a cairo draw in `export/pdf.rs` as part of *being done*, not as a
+follow-up. Call it **seven coordinated edits**, and treat the honest tier name as K+D+2.
 
 **K+R** — K+D plus a new field on the renderer's products, and a decision about
-what the parser hands forward.
+what the parser hands forward. The export walk (`export/walk.rs`) consumes the same
+event stream, so a K+R item's new data must be carried there too or the artefact sees
+a construct the preview decorates and it cannot.
 
 ## Cross-cutting constraints
 
-1. **Body/cell parity is a tax on every inline key.** [`POLICY.md`](POLICY.md)
+1. **Body / cell / export parity is a tax on every inline key.** [`POLICY.md`](POLICY.md)
    requires one key to feed every path. Table cells are Pango markup and today use
    shorthand `<b>`, `<i>`, `<s>`, `<sup>`, `<sub>`, `<tt>` (`renderer/start.rs:152-188`),
    which **cannot express** `bold_weight: 600` or `supsub_scale`. So those keys
@@ -153,6 +180,15 @@ what the parser hands forward.
    the drift. The fix is contained — move the cell path to `<span weight=… size=…
    letter_spacing=…>` fed from the same theme values — but it is a **prerequisite**,
    not a follow-up.
+   **And it is now a three-way parity, with a reuse opportunity that did not exist
+   before.** `export/markup.rs` is already a second producer of Pango markup from
+   themed values, and it already emits long-form `<span>` attributes rather than the
+   shorthand. So the cell-path fix should **converge on that emitter rather than
+   hand-rolling a third copy** — three independent Pango-markup producers reading the
+   same theme is the drift this constraint exists to prevent, arriving by a different
+   door. Check before writing: whichever way it lands, one inline key must reach the
+   body tag, the cell markup, the HTML sink and the PDF sink, or it is themed in some
+   renderings of the document and not others.
 2. **Glyph strings are a new class of untrusted theme input.** Today the only
    free-form string is `font_family`, behind a type-enforced sanitiser
    (`CssSafeFontStack`, `theme.rs:177-257`). A glyph reaches a Pango *layout* in
@@ -160,6 +196,18 @@ what the parser hands forward.
    a table cell — ScrAP-163 exactly, where an unescaped `&` renders the label
    **empty**. Any glyph key needs `glib::markup_escape_text` at the one funnel plus
    a grapheme-count clamp (a "glyph" of 500 characters is a layout blow-up).
+   **Export adds a third escape context, and it is the strict one.** The same glyph
+   would reach `export/html.rs`, where the correct escape is **HTML**, not Pango
+   markup — a value that is safe in a Pango layout is not thereby safe in a file
+   opened by a browser. The export path's untrusted-content constraint governs
+   ([`TDD.md`](TDD.md) §25's preamble): what leaves the application is opened by software
+   this project neither controls nor sandboxes, so the obligation there is *stricter,
+   never looser*. A single
+   `markup_escape_text` funnel is therefore **not sufficient** once a glyph key
+   exists; each sink escapes for its own grammar, and the theme file is
+   attacker-influenced input read from `$XDG_CONFIG_HOME`. Note this makes a glyph
+   key the first path by which theme-supplied text reaches an exported artefact at
+   all.
    **Never** let a theme name an icon (GTK4Rs/AP-48, GTK4Rs/AP-102, GTK4Rs/AP-174:
    host themes override bundled names, and the project's compile-checked `icons.rs`
    enum exists precisely to keep icon names out of data) and **never** a file path
@@ -187,6 +235,50 @@ what the parser hands forward.
    from `pixels_above_lines` plus a single-row Pango height (ScrAP-159). And nothing
    added to `snapshot_layer` may force layout validation (ScrAP-22).
 
+## Export is two more application paths
+
+*READ*, 2026-08-20, from the landed `src/export/`.
+
+The mechanism table above answers "how does a themed value reach **the screen**". Since
+export landed there is a second question with a different answer: **how does it reach the
+artefact**. Two sinks, both display-free, neither of which runs any of mechanisms A, B or C:
+
+| Sink | Reaches it by | Decorative ceiling |
+|---|---|---|
+| **D — `export/html.rs`** | a generated inline stylesheet over emitted HTML, from the resolved `Palette` + `Theme` | Full CSS, and **unlike mechanism C it reaches every construct** — headings, paragraphs, lists, quotes and inline code included, because the sink emits the elements itself rather than inheriting a `GtkTextView`. Structurally the *richest* surface in the project. |
+| **E — `export/pdf.rs` + `markup.rs`** | Pango measurement and cairo ink onto a page; inlines via Pango markup | Whatever cairo can draw, same as mechanism B in kind. Already draws the blockquote bar and the horizontal rule from themed values. |
+
+**Three consequences, in descending order of how much they change a design:**
+
+1. **A mechanism-B decoration has no export representation at all, by construction.**
+   The export pipeline is a function of the document *source* and never runs
+   `snapshot_layer` — that is the whole reason it works on a never-rendered tab. So a
+   heading band, a code-card border, a blockquote panel or a checkbox glyph added only
+   to the B path **appears in the preview and is silently absent from both exports**.
+   That is the drift the export design was built to prevent — two renderings of one
+   document diverging — and its mitigation is structural, not vigilance: both sinks consume one `ExportDoc`, and the Document Rendering CAM
+   carries an **export cell** so a new construct cannot land without one. **A K+D
+   decoration is therefore a K+D+2 decoration**, and the CAM will say so at review
+   time whether or not this plan does.
+2. **CSS finally reaches the body — but only in the artefact.** Mechanism C's ten-widget
+   limit, which shapes this entire plan's cost table, does **not** apply to sink D. A
+   decoration that is expensive on screen (rounded heading band, gradient, border) may be
+   nearly free in exported HTML. That asymmetry is a trap in both directions: it invites
+   designing a decoration that is cheap in the artefact and unaffordable on screen, and it
+   means "we already do this in the export" is never evidence that the preview can.
+3. **The PDF resolves against the System theme's light resolution by default**
+   ([`TDD.md`](TDD.md) 25.9), not the active reading theme. So a decoration's
+   dark-theme appearance has no PDF expression today, and any key whose *point* is a dark
+   treatment needs to say what paper does with it. That is a resolution request, not a
+   licence for a literal — TDD 25.9 makes a literal styling value in either sink a defect,
+   which is the same rule as this plan's, now enforced on a third and fourth path.
+
+**The gate that catches all of it**: TDD 25.9 requires every colour, typeface and
+decoration metric in an artefact to resolve through the theme engine. A new theme key
+that never reaches the sinks does not fail that rubric — nothing asserts a key is
+*used* — so this is a completeness obligation on the author, and the CAM's export cell
+is where it is checked.
+
 ## Defects surfaced by the scoping
 
 Real today, independent of whether this feature is built. Register entries are
@@ -197,7 +289,11 @@ registers one writer.
   `RGBA(0.90, 0.62, 0.10, 0.95)`, white ink, and unzoomed literal geometry
   (`codeview/mod.rs:756-757`, `codeview/geometry.rs:187-193`). A direct deviation
   from "No hard-coded styling", and it is *not* covered by `annotation_hl`, which
-  themes the text wash only.
+  themes the text wash only. **Export widened this one**: TDD 25.13 puts annotations
+  in both artefacts — the claim highlight plus an aside in HTML and a margin note in
+  PDF — so the chip's appearance is now a question in three renderings, and the wash
+  it does *not* cover already resolves from `annotation_hl` in `export/markup.rs`.
+  Whoever themes the chip should settle what the artefacts draw at the same time.
 - **The broken-image placeholder carries no theme class** — unreachable by the
   generated sheet, so it stays on desktop colours on every theme (TDD 18.4's
   "no grey island" claim has a hole here).
@@ -281,14 +377,28 @@ if option 1 is chosen instead.**
 they exercise both K+D shapes and prove the vocabulary before it grows:
 1. **List-marker glyph strings** — the smallest possible K+D (the gutter already
    draws text; it is a match-arm swap plus a sanitised key), and it lands the glyph
-   sanitisation seam that every later glyph key reuses.
+   sanitisation seam that every later glyph key reuses. **Now also the case that lands
+   the per-sink escaping seam** — this is the first theme-supplied *text* to reach an
+   exported artefact, so it must escape for HTML in `export/html.rs` as well as for
+   Pango markup, and a single funnel will not do it (constraint 2).
 2. **Heading decoration band** — the marquee case, and the one that proves the
    drawn-decoration path end to end: new span collection, install choke point, the
-   empty gate, gradient/rounded-clip drawing, zoom-scaled metrics.
+   empty gate, gradient/rounded-clip drawing, zoom-scaled metrics. **Add both sinks to
+   that end-to-end**: a CSS rule in the HTML sink and a cairo draw in `export/pdf.rs`,
+   or the band is a preview-only decoration and the two renderings have drifted on the
+   feature's flagship case. Note the asymmetry — the band is *cheap* in the HTML sink
+   (real CSS, reaching a real `<h1>`) and dear on screen, which is the reverse of the
+   intuition the mechanism table builds.
 
 Everything else (code-card chrome, blockquote panel, checkbox glyph, table
 striping) follows the same two shapes and can be prioritised by taste once those
 two exist.
+
+**One sequencing consequence worth stating plainly**: export has raised the floor cost
+of this feature across the board, and it did so *after* the scoping that produced the
+tier table. If the operator ratifies option 2, the honest estimate is higher than this
+plan carried on 2026-08-18 — not because anything here was wrong, but because the
+number of places a themed value must land went from three to five.
 
 ## Open questions — do not design past these without proof
 
@@ -309,6 +419,20 @@ Route to the researcher; each changes a design decision, not an estimate.
 4. **Colour-font / emoji glyphs through `append_layout` under the GSK Cairo
    renderer** — a decorative glyph key invites emoji, and the software renderer's
    colour-glyph path has not been exercised anywhere in this tree.
+   **Still open for the preview, but no longer unexercised in the project, and the
+   adjacent evidence cuts both ways** (*MEASURED*; ScrAP-304 and ScrAP-307). Export drives pangocairo directly and colour emoji **render correctly
+   on all three platforms** — full colour, correct glyphs, positions and order, verified
+   against raster controls. That materially de-risks "will it paint". What it does *not*
+   answer is the GSK Cairo renderer's own path, which is a different consumer. And it
+   surfaces a consequence a glyph key must be designed against rather than discover: an
+   astral colour emoji is **rasterised into the PDF and is absent from its text layer
+   entirely on macOS** (embedded as an Image + SMask XObject, so there is no text-showing
+   operator at all), and on Windows it becomes a Type3 `d0` font that one 2017 extractor
+   mis-orders. So a decorative emoji glyph is a **picture** in the artefact, not text —
+   fine for a bullet or a heading ornament, wrong for anything a reader would search for.
+   Prefer a monochrome text glyph where the decoration carries meaning; note the
+   operator has separately ruled that monochrome emoji may **not** be substituted for
+   colour ones, since they are drawn differently rather than desaturated.
 
 ## Heading bands: what a paragraph background actually does
 
@@ -351,6 +475,14 @@ debrief. The existing §18 rubrics already constrain the shape of them: 18.2
 (System byte-identical), 18.4 (nothing left on desktop colours), 18.8/18.17
 (contrast floors), 18.10 (verify themed geometry by resolved on-screen position,
 never by the key having been read), 18.14 (a new theme needs no code change).
+
+**§25 now constrains them too**, and adds a predicate §18 has no equivalent of:
+25.9 (every value in either artefact resolves through the theme engine; a literal in
+either sink is a defect, and the PDF resolves against System-light by default) and 25.3
+(every construct appears in the export as the preview shows it). So a decoration rubric
+that asserts only an on-screen result is **half a rubric** — 18.10's "verify by resolved
+on-screen position" needs a sibling that verifies the artefact, or a decoration can pass
+its whole rubric set while being absent from both exported files.
 
 ## Register and skill follow-up (open)
 

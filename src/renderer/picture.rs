@@ -27,9 +27,78 @@
 //! extracted `src` still passes through `links::resolve_image`, so this widens what
 //! is *rendered*, never what is *trusted*.
 
+/// One raw-HTML element this application renders rather than drops.
+///
+/// **This enum IS the allowlist**, and it is the whole of it. Sanitize-by-omission
+/// means the permitted set is the only thing standing between an untrusted document's
+/// markup and the surfaces that display it, so it is named data with one owner rather
+/// than control flow — a second consumer (the export sink) must reproduce the set
+/// *exactly*, and a set that exists only as branches inside one scanner can only be
+/// reproduced by copying it, which is how the two silently drift apart.
+///
+/// Adding a variant widens what is **rendered**. It never widens what is **trusted**:
+/// only `srcset`/`src` are ever read off a permitted tag, no other attribute has any
+/// effect (an `onerror=` is inert — there is no HTML/JS engine), and every extracted
+/// `src` still passes `links::resolve_image`'s containment gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RawHtmlElement {
+    /// `<picture>` — opens a fallback group.
+    PictureOpen,
+    /// `</picture>` — closes the current fallback group.
+    PictureClose,
+    /// `<source>` — a candidate carrying `srcset`.
+    Source,
+    /// `<img>` — a candidate carrying `src`.
+    Img,
+}
+
+impl RawHtmlElement {
+    /// The lowercase tag text this element is matched by, **including** the opening
+    /// `<` (and the `/` of a close tag). The prefix travels with the element because
+    /// the boundary rule below is stated in terms of it.
+    const fn tag_prefix(self) -> &'static str {
+        match self {
+            Self::PictureOpen => "<picture",
+            Self::PictureClose => "</picture",
+            Self::Source => "<source",
+            Self::Img => "<img",
+        }
+    }
+}
+
+/// Every raw-HTML element the renderer recognises, in match order. Anything absent
+/// from this array is dropped wholesale — `<script>`, `<iframe>`, `<div>` and the
+/// rest — neither executed nor shown as literal text.
+pub(crate) const RENDERED_HTML_ELEMENTS: [RawHtmlElement; 4] = [
+    RawHtmlElement::PictureOpen,
+    RawHtmlElement::PictureClose,
+    RawHtmlElement::Source,
+    RawHtmlElement::Img,
+];
+
+/// Which permitted element, if any, the tag beginning at `tag_lower` is.
+///
+/// **The tag-name-boundary rule lives here, with the set**, because it is part of the
+/// set's meaning rather than an implementation detail of one scanner: a prefix match
+/// alone would admit `<sourcex>` as a `<source>` and SVG's `<image>` as an `<img>`,
+/// silently widening the allowlist past what it says. The byte after the name must end
+/// it — whitespace, `>`, or the `/` of a self-closing tag.
+///
+/// `tag_lower` is one whole tag, already lowercased, from its `<` through its `>`.
+pub(crate) fn recognise_html_element(tag_lower: &str) -> Option<RawHtmlElement> {
+    RENDERED_HTML_ELEMENTS.into_iter().find(|el| {
+        let name = el.tag_prefix();
+        tag_lower.starts_with(name)
+            && tag_lower
+                .as_bytes()
+                .get(name.len())
+                .is_none_or(|&b| b == b' ' || b == b'>' || b == b'/' || b == b'\t')
+    })
+}
+
 /// One image-relevant tag from a raw-HTML fragment, in document order.
 #[derive(Debug, PartialEq)]
-pub(super) enum ImgTag {
+pub(crate) enum ImgTag {
     /// `<picture>` — opens a fallback group.
     PictureOpen,
     /// `</picture>` — closes the current fallback group.
@@ -42,9 +111,12 @@ pub(super) enum ImgTag {
 
 /// Scan a raw-HTML fragment for the ordered image tag stream (see the module docs).
 /// The `<picture>` grouping itself is applied by the caller across events.
-pub(super) fn scan_image_tags(html: &str) -> Vec<ImgTag> {
+///
+/// Every consumer of raw HTML calls **this**, never its own tag walk: the preview's
+/// renderer and the export sink alike, so the permitted set cannot be reproduced
+/// approximately anywhere.
+pub(crate) fn scan_image_tags(html: &str) -> Vec<ImgTag> {
     let lower = html.to_ascii_lowercase();
-    let bytes = lower.as_bytes();
     let mut tags = Vec::new();
 
     let mut i = 0usize;
@@ -56,29 +128,23 @@ pub(super) fn scan_image_tags(html: &str) -> Vec<ImgTag> {
         let end = start + rel_end; // index of '>'
         let tag_lower = &lower[start..=end];
         let tag_orig = &html[start..=end];
-        // Match a tag NAME on a boundary (next byte is space/tab, '>' or '/'), so
-        // `<source>` ≠ `<sourcex>` and `<img>` ≠ `<image>` (SVG).
-        let is = |name: &str| {
-            tag_lower.starts_with(name)
-                && bytes
-                    .get(start + name.len())
-                    .is_none_or(|&b| b == b' ' || b == b'>' || b == b'/' || b == b'\t')
-        };
-        if is("<picture") {
-            tags.push(ImgTag::PictureOpen);
-        } else if is("</picture") {
-            tags.push(ImgTag::PictureClose);
-        } else if is("<source") {
-            if let Some(url) = attr(tag_orig, "srcset")
-                .as_deref()
-                .and_then(first_srcset_url)
-            {
-                tags.push(ImgTag::Candidate(url));
+        match recognise_html_element(tag_lower) {
+            Some(RawHtmlElement::PictureOpen) => tags.push(ImgTag::PictureOpen),
+            Some(RawHtmlElement::PictureClose) => tags.push(ImgTag::PictureClose),
+            Some(RawHtmlElement::Source) => {
+                if let Some(url) = attr(tag_orig, "srcset")
+                    .as_deref()
+                    .and_then(first_srcset_url)
+                {
+                    tags.push(ImgTag::Candidate(url));
+                }
             }
-        } else if is("<img") {
-            if let Some(src) = attr(tag_orig, "src") {
-                tags.push(ImgTag::Candidate(src));
+            Some(RawHtmlElement::Img) => {
+                if let Some(src) = attr(tag_orig, "src") {
+                    tags.push(ImgTag::Candidate(src));
+                }
             }
+            None => {}
         }
         i = end + 1;
     }
@@ -139,7 +205,9 @@ fn attr_value(after_eq: &str) -> String {
 
 #[cfg(test)]
 mod picture_tests {
-    use super::{scan_image_tags, ImgTag};
+    use super::{
+        recognise_html_element, scan_image_tags, ImgTag, RawHtmlElement, RENDERED_HTML_ELEMENTS,
+    };
 
     fn cand(s: &str) -> ImgTag {
         ImgTag::Candidate(s.to_string())
@@ -277,5 +345,79 @@ mod picture_tests {
     fn img_tag_is_not_confused_with_svg_image_element() {
         // `<image>` (SVG) is not `<img>`; it yields no candidate.
         assert!(scan_image_tags("<image href=\"x.png\"/>").is_empty());
+    }
+
+    // ── the allowlist as data (TDD 25.4) ───────────────────────────────────────
+
+    #[test]
+    fn the_allowlist_is_exactly_the_four_image_grouping_elements() {
+        // Pinned as a SET, not as scanner behaviour: a second consumer (the export
+        // sink) reproduces this set, and a silent addition here would widen what
+        // both of them render without either one saying so.
+        assert_eq!(
+            RENDERED_HTML_ELEMENTS,
+            [
+                RawHtmlElement::PictureOpen,
+                RawHtmlElement::PictureClose,
+                RawHtmlElement::Source,
+                RawHtmlElement::Img,
+            ]
+        );
+    }
+
+    #[test]
+    fn recognise_admits_every_allowlisted_element_and_nothing_else() {
+        for el in RENDERED_HTML_ELEMENTS {
+            let tag = format!("{}>", el.tag_prefix());
+            assert_eq!(
+                recognise_html_element(&tag),
+                Some(el),
+                "{tag} should be recognised"
+            );
+        }
+        // Everything else is dropped wholesale — sanitize-by-omission (TDD 2.23).
+        for tag in [
+            "<script>",
+            "<script src=\"x.js\">",
+            "</script>",
+            "<iframe>",
+            "<div>",
+            "<style>",
+            "<object>",
+            "<embed>",
+            "<svg>",
+            "<a href=\"x\">",
+        ] {
+            assert_eq!(recognise_html_element(tag), None, "{tag} must be dropped");
+        }
+    }
+
+    #[test]
+    fn recognise_matches_a_tag_name_on_its_boundary_not_as_a_prefix() {
+        // The boundary rule is part of the SET's meaning: without it the allowlist
+        // silently admits elements it does not name.
+        for tag in ["<sourcex>", "<imgx>", "<picturex>", "<images>"] {
+            assert_eq!(
+                recognise_html_element(tag),
+                None,
+                "{tag} is not an allowlisted element"
+            );
+        }
+        // …while every real boundary byte still ends the name.
+        assert_eq!(
+            recognise_html_element("<img "),
+            Some(RawHtmlElement::Img),
+            "whitespace ends the name"
+        );
+        assert_eq!(
+            recognise_html_element("<img/>"),
+            Some(RawHtmlElement::Img),
+            "a self-closing slash ends the name"
+        );
+        assert_eq!(
+            recognise_html_element("<img\tsrc=x>"),
+            Some(RawHtmlElement::Img),
+            "a tab ends the name"
+        );
     }
 }

@@ -167,7 +167,29 @@ cd "$(dirname "$0")/.."
 # with an IGNORE entry: the seam is thin GIO wiring and would have been excludable on
 # the scope rule, which is exactly the reasoning ScrAP-294 warns produces a number that
 # measures less code every time it moves.
-FLOOR=77.85
+#
+# ratchet 2026-08-19 (77.85 -> 79.50), measurement 79.57, same deliberate margin. The
+# gain is the export feature (TDD §25) landing display-free: the model, both sinks and
+# the paginator are pure, and the two decision cores that would otherwise have hidden
+# behind the `src/window/` exclusion — the default-name guarantee and the PDF promote
+# gate — were moved into `src/export/` rather than left there. The largest single jump
+# is `export/pdf.rs`, 12.57% -> 94.77%, from testing the Pango layout and the cairo draw
+# against a font-map context and an `ImageSurface`: a sink that touches the toolkit is
+# still reachable headlessly, and "it needs GTK" is not on its own a reason to exclude
+# a file — the question is whether a DISPLAY is needed, and here it is not.
+#
+# ratchet DOWN 2026-08-20 (79.50 -> 79.00), operator's decision. The line above records a
+# measurement of 79.57 behind the 79.50 ratchet; that figure does not reproduce. Measured
+# on this canonical platform at `1a19546` and at every commit since: **79.31%**. So the
+# ratchet was set roughly 0.2pt ABOVE what the tree achieves, and step 6 was red on the
+# only platform that runs it from the moment the export feature landed — macOS and Windows
+# both contract-declare the step not-applicable, so neither seat was a witness to it.
+# A ratchet no tree state can satisfy is not a ratchet, it is a permanently red gate, and a
+# permanently red gate teaches people to skip the step. Corrected to 79.00, which restores
+# the deliberate margin below the real measurement rather than pretending to a number that
+# was never met. This is NOT the prohibited move of lowering the Linux floor to make
+# another platform pass: it is bringing a mis-set value back to the evidence.
+FLOOR=79.00
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

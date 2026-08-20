@@ -26,6 +26,7 @@
 | 22 | Crash recovery (swap files) | 22.1 – 22.16 |
 | 23 | Back / Forward navigation history | 23.1 – 23.14 |
 | 24 | Renaming an open document | 24.1 – 24.14 |
+| 25 | Exporting a document | 25.1 – 25.24 |
 
 ---
 
@@ -2764,3 +2765,169 @@ images and local links) and is not this feature.
 - **Then** the document is found with its content intact, rather than reported missing with an offer to create a blank one over it
 - **And** the rename is not replayed, and nothing is moved when the document is present, when more than one candidate matches, or for a file that is not this app's own debris
 - **And** the recovery is silent — the reader is left in exactly the pre-rename state, so there is nothing to announce, accept or discard (ratified; the reasoning is ANTI-PATTERNS #272)
+
+## 25. Exporting a document
+
+Producing a presentation artefact — **HTML** to share, **PDF** to record — from the
+document the reader has open. The category is a **second consumer of the same
+document**, not a second renderer: an export is a function of the document *source*
+and the same normalised event stream the preview is built from, never of the preview
+widget. That is what makes it hold on a tab that was never rendered, in any view
+mode, on an unsaved buffer, with no display.
+
+Two constraints underlie every rubric below. **What leaves the application is opened
+by software this project neither controls nor sandboxes**, so every containment
+decision the preview makes is inherited and never relaxed — an export widens what is
+*rendered elsewhere*, never what is *trusted*. And **one pipeline feeds both sinks**,
+so a rubric that names one construct names it for HTML and PDF alike; where the two
+genuinely differ, the rubric says so.
+
+Rubrics 25.16 – 25.24 are the PDF sink (phase 2). They are authored here rather than
+at phase 2's start so they describe what the sink must do rather than what it ended
+up doing.
+
+### 25.1 An exported HTML file exists and opens
+- **Given** a document open in any view mode
+- **When** the reader chooses File ▸ Export ▸ HTML and confirms a destination
+- **Then** one self-contained HTML file is written at that destination, and it opens in a browser showing the document as the preview shows it
+
+### 25.2 A never-rendered tab exports identically
+- **Given** a deferred tab that has never built a preview — restored but not activated, or a window in edit-only mode
+- **When** the reader exports it
+- **Then** the output is identical to the same document exported after it has been rendered — the export never depends on what the reader did beforehand, and never builds a preview in order to succeed
+
+### 25.3 Every construct exports as the preview shows it
+- **Given** a document exercising every construct in the Document Rendering CAM's construct list, in each of its contexts — top level, table cell, block quote, ordered / unordered / task-list item, and nested lists
+- **Then** each appears in the export with the content and structure the preview gives it — none silently omitted, none doubled
+- **And** a construct that renders through more than one widget shape in the preview (a table cell is a link button when its whole content is a link and a label otherwise) exports the same either way — the shapes are indistinguishable to a reader, so they must be indistinguishable in the artefact
+- **And** a **list item's content stays one paragraph**: an item holding several inline runs — text, inline code, a link, a soft break — is one block, not one block per run. A *tight* item's content reaches the exporter as bare inline events with no paragraph around it, unlike a loose item's, so the two arrive differently and must leave identically. **The fixture must give an item two or more inline runs**: with a single run the broken and correct paths produce the same output, which is why this went unnoticed until a real document was exported
+
+### 25.4 Raw HTML is dropped exactly as the preview drops it
+- **Given** a document containing `<script>`, `<iframe>` and `<div>`, and a `<picture>` / `<source>` / `<img>` group
+- **When** it is exported
+- **Then** the export contains no `<script>`, `<iframe>` or `<div>` — neither executable nor escaped into visible text, since escaping would put text on the page the preview never showed
+- **And** the `<picture>` group yields exactly one image, its `src` having passed the same containment gate the preview applies
+- **And** the permitted element set is read from the single place the preview's scanner reads it from; a second copy of that set on the export path is a defect, not an implementation detail
+
+### 25.5 The export is of the buffer, not the file
+- **Given** a document with unsaved changes, or an untitled buffer never written to disk
+- **Then** the Export command is enabled, and the artefact carries the buffer's current text — not the bytes on disk, and not nothing
+
+### 25.6 Cancelling the destination chooser is a clean no-op
+- **Given** the destination chooser open
+- **When** the reader cancels it
+- **Then** no file is created or modified anywhere, and no notice is raised
+
+### 25.7 A failed write reports and leaves nothing behind
+- **Given** a destination in a read-only directory, or a filesystem with no space
+- **When** the export is attempted
+- **Then** the failure is reported to the reader, and no partial, empty or temporary file is left at or beside the destination
+
+### 25.8 The export survives its host going away
+- **Given** an export write in flight
+- **When** the tab is closed, the document is reloaded, or the window is closed
+- **Then** the artefact is written completely and correctly to the destination the reader chose, nothing is lost or corrupted, and no tab is resurrected by the completion
+- **And** the outcome notice is reported against the status stack the export was started from, never one re-resolved when the write lands
+
+### 25.9 The export is themed, never literal
+- **Given** any installed reading theme
+- **When** a document is exported to HTML
+- **Then** every colour, typeface and decoration metric in the artefact resolves through the theme engine from the **active reading theme** — a literal styling value anywhere in either sink is a defect
+- **And** the PDF resolves through the same engine against the **System theme's light resolution** by default, paper having no dark mode; "default to System-light" is a resolution request, not a licence for a literal
+
+### 25.10 The default filename cannot destroy the source
+- **Given** a document named `notes.md`
+- **When** the destination chooser opens for either target
+- **Then** the name it proposes is `notes.html` or `notes.pdf` — the document's **stem** plus the target extension, never the document's filename
+- **And** this is asserted on every platform rather than assumed, because a chooser that appends the filter's extension only to a name carrying no suffix returns `notes.md` unchanged and the export writes over the reader's source
+
+### 25.11 The name proposed is validated; the name returned is not
+- **Given** any open document
+- **Then** the name the chooser is seeded with satisfies the application's own filename rules, checked before the dialog opens
+- **And** the name the chooser returns is taken as given — once the chooser is open, naming the file is the reader's responsibility and the platform's, and gating the return would reject a name the platform has already accepted and rewritten
+
+### 25.12 Images travel with the export
+- **Given** a document with a local image admitted by the containment gate
+- **When** it is exported to HTML
+- **Then** the image's bytes are embedded, so the artefact still renders correctly after being moved, renamed or sent to someone else
+- **And** the **PDF carries the image as a real image object**, decoded and drawn onto the page — not a text placeholder describing it. Checkable from outside the application: `pdfimages -list` on the artefact lists it. Contained to the column and the page and never upscaled, the preview's `max-width: 100%` rule in a page's units
+- **And** an image whose bytes cannot be decoded falls back to a **visible note** rather than a silent gap, in both sinks — a reader must be able to tell an image was expected
+- **And** a remote image is referenced by URL and **not fetched at export time**, unless *that document's* Show Unsafe Images gate is on, in which case it is embedded — enabling that option is the reader ratifying those images
+- **And** the gate is read per document; it is never taken from a global preference and never inferred from another tab
+- **And** a PDF exported from a document with remote images and the gate off has gaps where those images are, and this is stated to the reader rather than left to be discovered
+
+### 25.13 Annotations appear in the export
+- **Given** a document carrying CriticMarkup annotations
+- **Then** the export shows each claim highlighted and its comment beside it — an aside in HTML, a margin note in PDF, matching what the preview shows
+- **And** the highlight covers exactly the annotated characters, even where the rendered text is shorter than its source because construct markers were stripped
+
+### 25.14 An export announces itself, either way
+- **Given** a completed export
+- **Then** a transient status notice reports the outcome — on success *and* on failure — because a silent export is indistinguishable from a broken one and the file it wrote is somewhere the reader was not watching
+
+### 25.15 An export does not move the footprint
+- **Given** a release build with a representative document open
+- **When** the document is exported
+- **Then** the VRAM and RSS figures §6 gates are unchanged — an export is a new rendering path and therefore a significant change by §6's own definition
+
+### 25.16 A page break never splits a line of text
+- **Given** a document long enough to paginate
+- **When** it is exported to PDF
+- **Then** no line of text is divided across a page boundary — a line falls wholly on one page or wholly on the next
+
+### 25.17 A table too wide for the page is scaled, not clipped
+- **Given** a table wider than the printable width of the page
+- **When** the document is exported to PDF
+- **Then** the table is scaled to fit — never clipped at the margin, never reflowed into a different table
+- *(The bound on how far scaling may go before the result is unreadable is authored at phase 2 kickoff.)*
+
+### 25.18 Text round-trips out of the PDF byte-exact
+- **Given** an exported PDF containing ASCII, precomposed and combining accents, em and en dashes, curly quotes, ellipses, CJK, arrows, typographic symbols and box drawing
+- **Then** every one of those categories extracts **byte-exact, per line, over the whole line**, on every platform — no platform carve-out and no caveat in the predicate
+- **And** decomposed sequences survive uncomposed; `U+0065 U+0301` does not silently become `U+00E9`
+- *(Method constraints are not predicates: extract with `pdftotext -enc UTF-8 -raw` — **`-raw`, not `-layout`**, because 25.18b forbids asserting against a layout-reconstructing extractor and `-layout` IS one, so the two clauses contradict each other if this says `-layout`. Decode the output as CESU-8 before concluding anything about characters, never gate on font metadata, and record which extractor build produced the measurement. A seat may have only a layout-reconstructing build available — Xpdf 4.00 ships inside Git for Windows — in which case `-raw` is not a preference but the only admissible mode on that box.)*
+
+### 25.18a An extraction result is never evidence about appearance
+- **Given** any assertion about text extracted from an exported PDF
+- **Then** it is paired with a check of the **rendered page**, and a round-trip failure is never reported as a rendering defect
+- **And** the two genuinely disagree for colour glyphs, so an extraction-only suite would condemn a surface that is correct
+
+### 25.18b The emoji limit is asserted per platform, as measured behaviour
+- **Given** an exported PDF containing an emoji **above the BMP**
+- **Then** each platform's measured behaviour is asserted as that platform's contract — its purpose is to catch a **change**, not to demand a fix for behaviour this project cannot reach
+- **And** the emoji is astral rather than BMP, because a BMP emoji round-trips cleanly on Windows and a rubric written against one passes while the limit it documents goes unmeasured
+- **And** the assertion is not made against a layout-reconstructing extractor's output, which is a reader-side weakness this project accepts explicitly
+
+### 25.19 Emoji in an exported PDF survive a reader's clipboard
+- **Given** an exported PDF opened in a mainstream reader
+- **When** the reader selects a line containing emoji and copies it
+- **Then** the pasted text is correct — this is the acceptance criterion the emoji question was closed on, and a different path from command-line extraction
+- **And** monochrome emoji are never substituted for colour ones to obtain it: they are drawn differently rather than desaturated, so the substitution changes what the reader sees
+
+### 25.20 A PDF export's success is asserted from what it drew
+- **Given** a completed PDF export
+- **Then** success is concluded from the operation's return value **and** the count of pages drawn against pages expected
+- **And** never from `is_finished()` or `status()`, which are inverted in both directions — success never reports finished, and finished means aborted
+
+### 25.21 A cancelled or failed export leaves the destination untouched
+- **Given** a destination that already holds a PDF
+- **When** an export over it is cancelled part-way, or fails part-way
+- **Then** the destination is **byte-identical** to what it was before the export began
+- **And** the assertion is against the previous file's bytes, because the partial an export leaves behind is itself a structurally valid, cleanly-extracting PDF that no integrity check can distinguish from a complete one
+- **And** the check seeds a real previous PDF and drives a real cancel part-way through a real render, and records structurally why it is green, so a mutation sweep cannot delete it as vacuous
+
+### 25.22 Export cost asserts its shape, not a duration
+- **Given** documents of increasing length at a fixed content weight
+- **Then** per-page cost does not grow with document length
+- **And** the assertion is never a wall-clock number, which a slower machine or a denser page would fail while the contract held — the same page count is some forty times apart in cost between dense and sparse content
+
+### 25.23 A long export reports progress and can be cancelled
+- **Given** a document long enough that the export crosses the responsiveness threshold
+- **Then** an indicator appears in the **status bar** — not a dialog — driven by pages completed and triggered by **elapsed time**, never by a page count
+- **And** the reader can cancel it, which stops after the current page and leaves the destination as 25.21 requires
+
+### 25.24 A destination another process holds open fails by name
+- **Given** an export destination that another process holds open — the ordinary case being a PDF still open in a viewer
+- **When** the export is published on Windows
+- **Then** it reports a **named** failure telling the reader to close the file, never a generic write error, since the remedy is the reader's and a generic message describes neither the cause nor it
+- **And** the same export on Linux and macOS succeeds — the check targets **local disk**, the stricter case, a network destination succeeding where local NTFS does not

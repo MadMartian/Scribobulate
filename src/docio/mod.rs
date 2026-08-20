@@ -67,7 +67,7 @@
 //! state files not**.
 
 mod pool;
-mod rename;
+pub(crate) mod rename;
 
 // `NameChange`/`NameRefusal`/`FsRules` are deliberately NOT re-exported: they appear
 // in `validate_new_name`'s signature but no caller outside this module names them

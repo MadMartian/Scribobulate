@@ -43,11 +43,13 @@ mod end;
 mod events;
 mod image;
 mod normalize;
-mod picture;
+pub(crate) mod picture;
 mod scan;
 mod start;
 
+pub(crate) use image::image_placeholder_tooltip;
 pub(crate) use normalize::{md_options, normalize_inline_tabs};
+pub(crate) use picture::{scan_image_tags, ImgTag};
 pub(crate) use scan::{scan_script_spans, scan_scripts, Script, ScriptSpan};
 
 // ── table-cell annotation markup (table-cell annotation display path) ───────────────────────

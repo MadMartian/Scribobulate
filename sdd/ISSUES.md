@@ -11,6 +11,8 @@
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
 | Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
 | R | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
+| S | macOS only: every `GtkFileChooserNative` invocation (Open, Save, Export) grows RSS by ~1 MB and does not give it back; no plateau over 20 cycles. NOT a native-dialog property — Windows uses a native panel too and plateaus | Medium |
+| T | Two File-menu mnemonics collide on `l` (`Save A_ll` vs `_Load Unsafe Linked Documents`), and the uniqueness test that exists to catch exactly this never sees eight of the table's entries | Low |
 
 ## A. Tables are selection islands
 
@@ -841,3 +843,136 @@ built**: the seed increments on `screencapture -C` itself, measured by running t
 sampling loop over blank space with no hover target and seeing the same climb. An instrument
 inside its own measurement, and the artefact it produced happened to match the hypothesis
 under test.
+
+## S. Every native file chooser invocation grows RSS on macOS
+
+**Severity**: Medium (unbounded within everything measured — no plateau over 20
+cycles — and it affects every file dialog in the application, not one feature. Not a
+crash, not data loss, and slow enough that an ordinary session will not notice it.)
+
+**macOS only, MEASURED.** Opening a `GtkFileChooserNative` and **cancelling it** —
+never completing an operation — grows the process's RSS by roughly **0.9–1.4 MB per
+invocation**, steadily, with no plateau across 20 cycles. A large one-time jump
+(~24–28 MB) accompanies the *first* construction in a process and is separate: that
+is the native-panel machinery warming up and it does not recur.
+
+Measured on macOS 4.22.4/Quartz, release build, window fixed, RSS via `ps -o rss=`:
+
+| probe | cycles | growth | per cycle |
+|---|---|---|---|
+| Export chooser, opened and **cancelled** | 19 | 170528 → 192592 KB | ~1160 KB |
+| File ▸ Open chooser, opened and **cancelled**, fresh instance | 19 | 169776 → 186304 KB | ~870 KB |
+| Full export cycle (chooser + real export, PDF) | 20 | 175648 → 198784 KB | ~1150 KB |
+| Full export cycle (chooser + real export, HTML) | 10 | 197440 → 209504 KB | ~1206 KB |
+
+**It is not the export path**, and the numbers above are what establish that: a
+cancelled chooser that runs no export at all grows at the same rate as a completed
+export, and the plain **Open** dialog — which has nothing to do with exporting —
+grows the same way. Export is simply a new place that opens a chooser repeatedly,
+which is how this surfaced. Do not file it against the export feature.
+
+**It is not a classic leak.** `leaks <pid>` against a live instance after 30 combined
+cycles reported **472 leaks / ~103 KB**, against an RSS climb of ~34 MB over the same
+run — two orders of magnitude apart. A second instance measured 353 leaks / ~96 KB
+against a comparable climb. Whatever is accumulating is still **reachable**, so it
+reads as fragmentation or a growing cache (font map, panel construction/teardown, some
+platform-side pool) rather than unreachable memory.
+
+**The application's own reference discipline is not the suspect.** Both call sites —
+`window/export.rs`'s `choose_destination` and `app/appactions.rs`'s open action — go
+through `saferizer::native_dialog::NativeDialogHolder`, which takes exactly one
+external strong reference and drops it once when `response` fires, and both call
+`destroy()` on the dialog in the response handler. That is the shape ScrAP-41
+prescribes, and it is the same code on every platform.
+
+**Linux does not reproduce it — with an important caveat about what was measured.**
+An in-process probe constructing, showing, cancelling and dropping 40 `FileChooserNative`
+dialogs under Xvfb (GTK 4.6, release, RSS via `/proc/self/statm`) ended **+2612 KB over
+40 cycles, ~65 KB/cycle, and non-monotonic** — the reading fell twice (+2936 KB at cycle
+10, +664 at 20, +700 at 30, +2612 at 40), which is noise around a flat baseline rather
+than growth. **But the caveat is the whole value of the result:** with no portal present,
+GTK on Linux backs `FileChooserNative` with its own in-process `GtkFileChooserDialog`
+widget (the run emits "GtkDialog mapped without a transient parent"), whereas macOS backs
+it with a real `NSOpenPanel`/`NSSavePanel`. So this is a negative about **a different
+implementation**, not about the same code path behaving differently. It narrows the
+suspect to the platform panel; it does not exonerate anything portable.
+
+**Windows does not reproduce it either — and that negative is the informative one.** The
+Linux non-reproduction came with a caveat: GTK backs `FileChooserNative` with its own
+in-process widget there, so it measured a different implementation. **Windows closes that
+gap.** It uses a genuine native panel — the Win32 common dialog, a separate shell-owned
+window, gated per cycle by reading its title — and over **40 open-and-cancel invocations**
+grew **+5.9 MB total, decelerating** (+2.9 MB in the first five cycles, +1.6 MB across
+cycles 20→40): lazy one-time initialisation of the shell dialog machinery, not a
+per-invocation cost. macOS's sustained ~1 MB/invocation would have been ≈ +40 MB over the
+same run.
+
+So **"a native panel implies the climb" is refuted**: two native-panel platforms, opposite
+behaviour. Whatever this is, it is specific to macOS's `NSOpenPanel`/`NSSavePanel` path
+rather than a property of `GtkFileChooserNative`'s native-dialog architecture. That is a
+real narrowing of the search and it should be the starting point for whoever attributes it.
+
+**Next step**, when someone picks this up: attribute the growth before proposing a fix.
+`leaks` has already answered "not unreachable", so the useful instruments are
+`heap <pid>` / `malloc_history` with `MallocStackLogging=1`, or `vmmap` diffed across
+cycles to see *which* region grows. A fix aimed at the Rust reference handling would be
+aimed at the wrong layer on the evidence so far.
+
+**Consequence for the export rubrics**: TDD 25.15 ("an export does not move the
+footprint") **passes on Windows** — 15 verified exports cost +4.3 MB against 40 chooser-only
+cycles costing +5.9 MB, so the export contributes nothing distinguishable from opening the
+chooser, and the per-process GPU counters read a flat 0 B throughout. It remains
+**unverified on macOS**, not failing — export's own contribution to RSS
+cannot be separated from the chooser's while every measurement cycle opens one. The GPU
+half of that rubric *is* verified: the process never appears as a GPU client, before or
+after 30 export cycles, at either document size.
+
+## T. Two File-menu mnemonics collide, and the guard that exists to catch it cannot see them
+
+**Severity**: Low (a colliding access key makes one of the two items unreachable by
+`Alt`+letter and is a nuisance, not a defect in any command's behaviour. Both items
+remain reachable by pointer and by their accelerators.)
+
+**The collision, MEASURED.** In the File popover, `Save All` is marked `Save A_ll` and
+`Load Unsafe Linked Documents` is marked `_Load Unsafe Linked Documents`. **Both take
+`l`.** Both are live `FILE_CMDS` entries (`src/app/commands.rs`) and both appear in the
+File menu today.
+
+**Why nothing catches it.** `menu_mnemonics_unique_per_popover`
+(`src/app/mnemonics.rs`) exists for precisely this property, and it passes — because
+its per-popover label lists are **not derived from the menu**, they are a second,
+hand-maintained copy, and **eight entries of `MENU_MNEMONICS` appear in no list at
+all**:
+
+`Save All` · `Rename…` · `Export` · `PDF` · `HTML` · `Edit Link…` · `Edit Image…` ·
+`Reading Theme`
+
+`Save All` is one of them, so the colliding pair is never compared. Adding the missing
+File entries to the test makes it fail immediately and by name:
+
+```
+File popover: access key 'l' collides — "Save All" vs "Load Unsafe Linked Documents"
+```
+
+**The guard is green because its input set is incomplete, not because the property
+holds** — the same shape as the false-PASS family in the anti-pattern register, arriving
+through a hand-maintained list rather than through a wrong assertion.
+
+**Two things to fix, and the second matters more than the first.**
+
+1. **Resolve the collision.** `Load Unsafe Linked Documents` has `U`, `n`, `k` and `d`
+   free; `Save All` has little room, and `Save A_ll` pairs visually with `Save _As…`,
+   which is what a reader scans for. So moving the *Load* item is the lower-cost change.
+   This is user-visible, so it ships with its `tests/MANUAL-TEST.md` check
+   (build-pipeline step 7).
+2. **Close the guard's input gap**, and prefer *deriving* the popover lists from the
+   menu model over extending the hand-maintained copy — a second copy is how this one
+   silently stopped matching, and extending it fixes today's eight while leaving the
+   mechanism intact. The `Export` submenu needs to appear as **its own popover**, since
+   `_PDF` and `_HTML` are only claimed to be safe *because* the submenu is a separate
+   popover from the File menu one level up, and that claim is currently made in a code
+   comment with nothing holding it.
+
+**Not introduced by the export feature.** `_Export`, `_PDF` and `_HTML` are correct and
+do not collide with anything; they are simply three of the eight entries the guard never
+checks. Found while confirming the export items had mnemonics at all.

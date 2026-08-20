@@ -26,6 +26,15 @@ sourceview = { package = "sourceview5", version = "0.10" }
 # glib is re-exported by gtk4; depended on directly only to enable its `log`
 # feature, which compiles the glib→`log` bridge used by src/logging.rs.
 glib = { version = "0.21", features = ["log"] }
+# The ONLY sanctioned way to draw a Pango layout onto a cairo surface, which is what
+# the PDF export sink does (`pango_cairo_show_layout` — never a per-run
+# `show_glyph_string` loop, which hands cairo positioned glyphs with no UTF-8 or
+# clusters and silently destroys the text layer). libpangocairo is already linked
+# into the process by GTK, so this adds bindings and no system dependency, no
+# runtime, and nothing to the footprint. Pinned to 0.21 to match the pango and
+# cairo-rs the gtk4 0.10 crate already brings in — a mismatched train would hand
+# cairo a `Context` from a different binding generation.
+pangocairo = "0.21"
 pulldown-cmark = "0.13"
 serde = { version = "1", features = ["derive"] }
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
