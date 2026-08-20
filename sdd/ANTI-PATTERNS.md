@@ -426,6 +426,7 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 297 | Finalizing a CANCELLED `GFileMonitor` after the main context has dispatched corrupts the process heap on Windows — the application is safe by construction, not by a gate | A |
 | 298 | A TIGHT list item's content arrives as bare inline events with no `Tag::Paragraph` — a consumer that paragraphs per event splits the item into one block per token, and a single-token fixture cannot see it | C |
 | 299 | A suite-ordering defect that is deterministic on one platform and INVISIBLE in the canonical platform's full suite — the gate platform's green is the reassurance that hides it, and the seats that declare a step not-applicable stop being witnesses to it | B |
+| 300 | A driven UI step that misses its target does not fail, it acts somewhere ELSE — and a loop that does nothing produces a perfectly stable measurement, so the false pass hardens under repetition and is biased toward whatever you expected | B |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -4071,3 +4072,33 @@ cargo test --features gtk-integration-tests --lib saferizer:: -- --skip gtk_inte
 **The instrument trap, which cost two runs and nearly produced a false refutation.** `g_main_context_is_owner()` is the obvious probe and it is **useless here**: it answers *"does **this** thread own it"*, which is `false` in the working case and the broken case alike — a confident, well-formed, non-discriminating answer, the P-3 shape. `acquire()` is the discriminator. **And the experiment must be serialized**: under parallel libtest the probe ran *before* the polluting body and returned `Ok` both times, reading exactly like a refutation of the mechanism. The result only appears under `--test-threads=1`. Note the apparent contradiction, because a summary will flatten it — the thread pin is **not the cause** (refuted above) but **is required to observe the cause**.
 **Non-core (tooling/process remainder — which platform witnesses a defect, and what a green gate proves) — do NOT fold into the gtk4-rs core skill.**
 **See**: gtk4-rs skill → threading-async-and-memory (**GTK4Rs/AP-293**) for the mechanism, and its ui-testing-verification module for the transferable "green is a property of the invocation, not the platform" form beside GTK4Rs/AP-160. Note the numbers do not correspond — this register's spaces are unrelated to the skill's, as the header says and as ScrAP-88 ↔ GTK4Rs/AP-79 demonstrates.
+
+## 300. A driven UI step that misses its target does not fail — it acts somewhere else, and a loop that does nothing produces a perfectly stable measurement
+> *Tooling/testing concern, so it stays here in full per the routing rule. It sits beside material the `gtk4-rs` skill carries (GTK4Rs/AP-245, GTK4Rs/AP-252) but is not a gtk4-rs lesson. Authored by the Windows seat; allocated and formatted by the Linux seat, reasoning and MEASURED/INFERRED labels unchanged.*
+
+**Symptom**: a UI-driving loop returns a clean, self-consistent, **expected** result — and the application was never driven at all. Both instances below produced the answer that was being hoped for, in well-formed output, with no error anywhere.
+
+**Instance A — a stale derivation.** A 20-cycle "open the export chooser and cancel it" loop, run to discriminate a per-invocation RSS leak, reported RSS **dead flat at 95.2 MB across all 20 cycles** — exactly the "this platform does not reproduce it" answer being looked for. False: **0 of 20 cycles opened the chooser.** The click coordinates were pinned as screen constants derived once from a screenshot, and the window had *moved* between that screenshot and the loop. The flatness was a faithful measurement of an application doing nothing twenty times.
+
+**Instance B — a gate that existed and was not consulted.** A driven export against a destination held open by another process reported the destination's SHA-256 **unchanged** and no error, which reads as the failure path working. Vacuous: **no export had been attempted.** `WScript.Shell.AppActivate` returned without the application taking the foreground, its boolean return was discarded (`[void]$ws.AppActivate(...)`), and `SendKeys` was called regardless. **The keystrokes went into another application in the same session — a human's own agent-console window — and the typed string was submitted there as a message to a person.**
+
+**Root cause, shared**: a driven action was assumed to have happened because the call requesting it returned. Neither has a failure signal of its own — a mouse click at the wrong coordinates is a legal click, and `SendKeys` to an unfocused application is a legal keystroke delivered to whatever *is* focused. Both then let the *next* assertion grade the **previous** state (GTK4Rs/AP-252's shape), and in both cases that state was indistinguishable from the desired result.
+
+**Why it is worse than an ordinary false pass, and the part worth memorising**: **a loop that does nothing is maximally stable.** Twenty identical readings of an untouched process is the most repeatable measurement available, and repeatability is what a reader takes for rigour. So the failure mode is **biased toward confirming whatever you expected, and it hardens under repetition rather than degrading**. Real memory measurements are noisy; **perfect flatness in a memory series is a smell, not a result**.
+
+**What was tried and did not help**: screenshotting the application after the loop showed it in a normal state — because it *was* in a normal state. Re-running produced identical numbers, which read as confirmation. No call's exit status, no absence of error, and no consistency between runs could distinguish "the property holds" from "nothing happened".
+
+**Resolution**, in order of power:
+1. **Gate every driven action on an observable that proves it occurred, and make the gate throw rather than warn.** Read the foreground window title (`GetForegroundWindow` + `GetWindowTextW`, `CharSet.Unicode` — the ANSI-marshalling trap is real) and refuse the keystroke unless it matches the application or its dialog. A gate that warns and proceeds is not a gate.
+2. **Count verified iterations and report them as a number.** `"chooser opened in 0 of 20 cycles"` is what exposed instance A. A loop reporting only its measurement can be silent about having done nothing; one reporting `N of M` cannot.
+3. **Re-derive screen coordinates from `GetWindowRect` every iteration** — never pin them across a run. A window moves for reasons unrelated to the test, and a derivation is valid only for the geometry it was taken from.
+4. **Never discard a focus call's return value.** `AppActivate` returns a boolean because it can fail.
+5. **Treat an unnaturally stable series as a prompt to check the instrument**, not as a strong result.
+
+**Third-party consequence, stated rather than softened**: a driving harness that misses its target does not stop, it acts on whatever *is* focused — and on a shared desktop that can be another person's session. Instance B typed into a human's window and submitted text there. Focus discipline in a UI harness is not only about measurement validity.
+
+**Relations**: ScrAP-296 — instance A is "a derived coordinate is only as trustworthy as its derivation" by a **new route**, the derivation being correct when taken and invalidated by the subject moving, so the coordinate *rotted* rather than being wrong. GTK4Rs/AP-252 — both instances, with the silently-failed step being the *whole loop* rather than one setup step. GTK4Rs/AP-245 — a drive tool's exit code is a claim about the tool's execution, never about delivery. ScrAP-217 — a negative result needs a positive control; the per-cycle assertion **is** that control.
+
+**Scribobulate**: none — harness discipline, with no implementation in this tree. (Stated rather than omitted: an absent field and a dropped one look identical.)
+
+**Measured**: Windows 10 19045, GTK 4.22.4 gvsbuild, MSVC, during the Windows verification of the export plan, 2026-08-20. Both instances reproduced deliberately after diagnosis: A re-ran clean at **40 of 40** verified cycles once coordinates were re-derived per iteration; B re-ran clean once every keystroke went through a throwing foreground gate.

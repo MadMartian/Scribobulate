@@ -2885,7 +2885,7 @@ up doing.
 - **Given** an exported PDF containing ASCII, precomposed and combining accents, em and en dashes, curly quotes, ellipses, CJK, arrows, typographic symbols and box drawing
 - **Then** every one of those categories extracts **byte-exact, per line, over the whole line**, on every platform — no platform carve-out and no caveat in the predicate
 - **And** decomposed sequences survive uncomposed; `U+0065 U+0301` does not silently become `U+00E9`
-- *(Method constraints are not predicates: extract with `pdftotext -enc UTF-8 -layout`, decode its output as CESU-8 before concluding anything about characters, never gate on font metadata, and record which extractor build produced the measurement.)*
+- *(Method constraints are not predicates: extract with `pdftotext -enc UTF-8 -raw` — **`-raw`, not `-layout`**, because 25.18b forbids asserting against a layout-reconstructing extractor and `-layout` IS one, so the two clauses contradict each other if this says `-layout`. Decode the output as CESU-8 before concluding anything about characters, never gate on font metadata, and record which extractor build produced the measurement. A seat may have only a layout-reconstructing build available — Xpdf 4.00 ships inside Git for Windows — in which case `-raw` is not a preference but the only admissible mode on that box.)*
 
 ### 25.18a An extraction result is never evidence about appearance
 - **Given** any assertion about text extracted from an exported PDF

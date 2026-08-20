@@ -412,10 +412,37 @@ mod export_name_tests {
     #[test]
     fn a_stem_this_platform_would_refuse_falls_back_rather_than_being_proposed() {
         // Validate the name we PROPOSE, never the one the chooser returns (TDD 25.11).
+        // The expectation is a LITERAL per platform, never re-derived by calling
+        // `is_valid_filename` on this function's own output. That derivation passed
+        // whichever branch ran — reject `CON` → `untitled.pdf` → `is_valid_filename
+        // ("untitled")` is true; accept `CON` → `CON.pdf` → `is_valid_filename("CON")`
+        // is also true — so it was green on both platforms and pinned neither
+        // (GTK4Rs/AP-160's self-agreeing shape; found by the Windows seat). `cfg!`
+        // rather than `#[cfg]` so both arms compile everywhere and nothing is silently
+        // deleted from a platform's run, per POLICY's "never `#[cfg(platform)]` a test".
         let name = default_export_name(Some(Path::new("/docs/CON.md")), ExportTarget::Pdf);
-        assert!(
-            crate::docio::rename::is_valid_filename(name.trim_end_matches(".pdf")),
-            "{name} was proposed but this platform would refuse its stem"
+        let expected = if cfg!(windows) {
+            // A reserved device name: refused, so the stem must not survive.
+            "untitled.pdf"
+        } else {
+            // An ordinary name on POSIX: it must survive untouched.
+            "CON.pdf"
+        };
+        assert_eq!(
+            name, expected,
+            "the proposed name must fall back exactly when THIS platform refuses the stem"
+        );
+
+        // A stem every platform refuses, so the validation step is pinned on POSIX too.
+        // Mutation-checked: deleting the `is_valid_filename` guard above leaves the
+        // `CON` case green on Linux — `CON` is a perfectly ordinary POSIX name, so both
+        // behaviours agree there and no Linux assertion can see the guard go missing.
+        // A dot-entry stem is refused by BOTH rule sets, so this case fails on every
+        // platform if the guard is removed.
+        assert_eq!(
+            default_export_name(Some(Path::new("/docs/...")), ExportTarget::Pdf),
+            "untitled.pdf",
+            "a dot-entry stem is refused everywhere and must never be proposed"
         );
     }
 }

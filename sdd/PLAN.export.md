@@ -1,8 +1,19 @@
 # Plan: Exporting a document to HTML and PDF
 
-**Status**: **approved and implemented on Linux** (2026-08-19), **verified on macOS**
-(2026-08-20). TDD §25 is landed; `tests/MANUAL-TEST.md` §25 is written. **Windows has
-not started.**
+**Status**: **approved and implemented on Linux** (2026-08-19), **verified on macOS and on
+Windows** (2026-08-20). TDD §25 is landed; `tests/MANUAL-TEST.md` §25 is written.
+
+**Windows verification, as ratified by that seat**: every platform question closed. The
+named held-open-destination failure ([25.24](TDD.md#2524-a-destination-another-process-holds-open-fails-by-name))
+proven end to end on **local NTFS** — the strict case — with a lock positive control, the
+app's own log chain (`os error 5` → named message) and the reader-facing pixel on both the
+toast and the status bar; the stem-plus-extension guarantee driven through the real Win32
+chooser with the source file byte-identical afterwards; the emoji limit measured with the
+CESU-8 trap reproduced exactly; O9's three discriminators re-checked against the shipped
+sink and **unchanged**; the promote gate confirmed to consult neither `is_finished()` nor
+`status()`; and [25.15](TDD.md#2515-an-export-does-not-move-the-footprint) **passing on both
+halves**, which macOS could not reach. Measured on GTK **4.22.4** — not the 4.6 floor, so
+this seat can falsify a floor claim but never confirm one.
 
 **macOS verification, as ratified by that seat**: nine of the ten platform questions
 verified — the librsvg/`GdkTexture` decode, `pdfimages -list` showing real image objects,
@@ -10,11 +21,23 @@ the tight-list-item paragraph, the live `NSSavePanel` naming behaviour, the emoj
 (re-measured CESU-8-aware, see [P-13](#p-13-two-extractor-output-encoding-traps--the-second-manufactured-a-long-lived-false-finding)),
 the first clipboard round trip anyone has run on this platform, the open-destination
 promote, the absent always-ready source, and the promote gate. **One is unverified rather
-than passing: [25.15](TDD.md#2515-an-export-does-not-move-the-footprint)'s RSS half.** Its
+than passing on that platform: [25.15](TDD.md#2515-an-export-does-not-move-the-footprint)'s
+RSS half — it passes on Windows, where the confounding chooser growth does not occur.** Its
 GPU half is verified — the process never appears as a GPU client, before or after 30 export
 cycles, at either document size. The RSS half cannot be measured while every cycle opens a
 file chooser, because **the chooser itself grows RSS by ~1 MB per invocation on macOS,
-whether or not an export follows, and the plain Open dialog does the same**. That is an
+whether or not an export follows, and the plain Open dialog does the same**.
+
+**One macOS reading is INFERRED and its own report labelled it MEASURED — corrected here.**
+[TDD 6.4](TDD.md)'s document-size conjunct: the macOS seat's verdict line reads "GPU:
+MEASURED zero, both document sizes", but its narrative says the third check, on the
+large-document instance, was **not taken** — the operator's own session had come frontmost
+and the seat correctly stopped rather than click into their windows, then reasoned from
+mechanism that GTK does not switch renderers on document content. That reasoning is sound
+and the conclusion is very probably right, but it is an **inference, not a measurement**, and
+the summary line outran it. The equivalent leg **is** measured on Windows at a 200× document
+([P-19](#p-19-no-gpu-client-has-two-forms-on-windows-and-a-missing-counter-row-is-indistinguishable-from-a-broken-counter)).
+Re-taking it on macOS is cheap and wants only a free display. That is an
 application-wide defect export merely exposed, it is in the issue register, and **it is not
 export's to fix**. A Linux probe over 40 chooser cycles did not reproduce it — but with the
 caveat that GTK backs the dialog with its own widget there and with a real `NSSavePanel` on
@@ -247,6 +270,15 @@ renderer.
   is **always-ready, not high-frequency**: a 1 ms timeout is harmless on both platforms,
   while an idle returning `Continue` unconditionally **hung** the export on macOS and
   **livelocked** it on Windows (330 s of CPU on a half-second export).
+  **As built, the export path DOES install one source — do not conclude otherwise from a
+  grep of `src/export/` and `src/window/export*.rs`, which finds none.** `BusyNotice::arm`
+  (`winstate/busynotice.rs`) calls `timeout_add_local_once`, and both export entry points
+  arm it. It is safe on all three axes that matter: **one-shot** (`_once`, so it cannot
+  re-arm), **delayed 500 ms** rather than always-ready — strictly weaker than the 1 ms
+  timeout already cleared — and **removed on `Drop`**, so a fast export cancels it before it
+  fires. Recorded this way deliberately (Windows seat, 2026-08-20): a reader grepping only
+  the export files gets the right verdict from the wrong facts, and would not notice if
+  `BusyNotice` were later changed to a repeating source.
 - **Progress**: no progress bar exists today; when one is added it belongs in the **status
   bar**, not a dialog. Thresholds: under 250 ms needs no spinner, under 100 ms needs no
   backgrounding. Against the measured curves a document must exceed **~40 dense pages**
@@ -428,6 +460,16 @@ was only ever searchability**, and only in some tools:
 | **macOS** | colour | **no** — absent entirely, unrecoverable on two independent stacks | yes |
 | **Linux** (cairo 1.18.4) | colour | **yes** — byte-correct | yes |
 
+**Two axes, and they are separate — do not collapse them.** *Colour vs monochrome* is the
+**ordering** axis: a colour glyph takes the Type3 path and is mis-ordered by a layout
+extractor, a monochrome one does not. *BMP vs astral* is the **encoding** axis: an astral
+character emerges as CESU-8 surrogate halves ([P-13](#p-13-two-extractor-output-encoding-traps--the-second-manufactured-a-long-lived-false-finding)),
+a BMP one does not. U+2705 sits on the safe side of the first and the unsafe side of the
+second — it is **BMP *and* colour**, so it encodes cleanly and is *still* hoisted. Measured
+on Windows 2026-08-20, both characters on one line of the real sink's output. A fixture
+chosen to exercise one axis therefore says nothing about the other, and the sentence
+"U+2705 round-trips cleanly on Windows" is true only of encoding.
+
 **Cause on Windows.** pangocairo's win32 font map reaches cairo's **DWrite** colour-glyph path,
 which rasterises the colour glyph and wraps it in a **Type3 font whose CharProcs are `d0`** —
 the coloured-glyph operator, which unlike `d1` carries **no glyph bounding box** — painting an
@@ -452,7 +494,9 @@ keys on, and all three match:
 
 **There is no third y-flip on Windows that Linux lacks** — the hypothesis worth moving bytes
 for, and it lost. Both stack three flips at the same layers with the same signs. `/Encoding
-/Differences`, CharProc body shape, `%PDF-1.7`, one `BT`/`ET` and zero `/ActualText` all match;
+/Differences`, CharProc body shape, `%PDF-1.7`, one `BT`/`ET` and zero `/ActualText` all match; (**the `/ActualText` zero is a property of those probe
+fixtures, not of the sink** — an artefact containing a decomposed accent has one, and it
+is load-bearing: see [P-18](#p-18-cairos-actualtext-span-is-what-makes-nfd-survive-the-round-trip-not-the-font-encoding).)
 the only differences are font-metric magnitudes, which is what two different fonts at two sizes
 should differ by.
 
@@ -476,15 +520,22 @@ MEASURED: the differing XObject shape. INFERRED: that it is the *cause* of the m
 PDFs with fonts"** — on-point and unread, because gitlab.freedesktop.org blocks automated
 fetches. **Do not**
 hand-roll `/ActualText` spans: cairo already emits them and that emission is itself a
-run-splitter.
+run-splitter — **and a second, stronger reason has since been measured: one of the spans
+cairo emits is doing necessary work** ([P-18](#p-18-cairos-actualtext-span-is-what-makes-nfd-survive-the-round-trip-not-the-font-encoding)),
+so a hand-rolled span would be competing with it rather than filling a gap.
 
 **Caveat on the structural comparison, so a future spike is not over-read**: both files compared
 were **probe artefacts, not the feature**. Any PDF built to represent what this project would
 ship should be re-checked against those same three discriminators — a two-minute grep now that
-they are named. **Discharged on macOS** (2026-08-20): the re-check was run against the real
-`export::pdf` sink and found the macOS embedding to be an Image XObject rather than a Type3 font
-at all — see [P-17](#p-17-macos-embeds-a-colour-emoji-as-an-image-xobject-so-its-text-is-absent-by-construction).
-Still owed on Windows.
+they are named. **Discharged on both platforms** (2026-08-20). macOS: the re-check found the
+embedding to be an Image XObject rather than a Type3 font at all — see
+[P-17](#p-17-macos-embeds-a-colour-emoji-as-an-image-xobject-so-its-text-is-absent-by-construction).
+Windows: all three discriminators re-checked against the shipped sink and **unchanged** —
+`FontMatrix [1 0 0 -1 0 0]` including the `-1`, `d0` ×2 with `d1` ×0, and `/Image` DeviceRGB
+8bpc with an `/SMask`. The Type3 route is still the Windows route; it has not drifted toward
+the macOS shape. The y-flip audit was re-run too and still loses: three stacked flips plus a
+fourth inside the CharProc, no Windows-only extra, `BT`/`ET` 1/1. The **one** difference from
+the probe artefacts is `/ActualText`, and it is load-bearing — [P-18](#p-18-cairos-actualtext-span-is-what-makes-nfd-survive-the-round-trip-not-the-font-encoding).
 ### ✅ O10 — The default name and filename validation
 
 The two platforms behave differently and **only one is dangerous**:
@@ -614,7 +665,8 @@ A new §25 "Exporting a document", for the operator to author at kickoff.
 - **25.11** *(phase 2)* **The positive claim, universal**: every non-emoji category
   round-trips **byte-exact, per line, over the whole line**, on both platforms. No platform
   carve-out and no caveat in the predicate. Method constraints are not predicates and live in
-  parked P-1 and P-13: extract with `pdftotext -enc UTF-8 -layout`, never gate on font
+  parked P-1 and P-13: extract with `pdftotext -enc UTF-8 -raw` (never `-layout`, which is
+  the layout-reconstructing mode 25.18b forbids asserting against), never gate on font
   metadata, and record which build produced the measurement
 - **25.11a** *(phase 2)* The extraction assertion is **paired with a check of the rendered
   page**; a round-trip failure is never reported as a rendering defect. The two genuinely
@@ -953,7 +1005,8 @@ NOT-RUN with the reason, not a weaker instrument's number reported as if it answ
 
 ### P-12. A save panel's displayed name is not the name you will get
 
-**Destination**: the GTK4/macOS home, or the reusable UI-testing home.
+**Destination**: the reusable UI-testing home — **not** a macOS one. See the
+cross-platform note below.
 
 **Symptom**: clearing a macOS save panel's field and typing a bare name shows exactly that name
 with **no extension appended on screen** — yet the accepted `GFile` comes back with the target
@@ -967,7 +1020,17 @@ extension appended" for a case where one is.
 
 **Corrective**: assert on the returned `GFile`'s path and nothing else.
 
-**Measured**: macOS, `GtkFileChooserNative` over the real `NSSavePanel`.
+**REPRODUCED ON WINDOWS 2026-08-20 — this is not a macOS lesson.** The Windows seat
+drove the real Win32 chooser on the shipped `export::pdf` path with `notes.md` open:
+the File name field showed **`notes`**, with the extension carried by the "Save as
+type" filter and applied at **accept**, and the file that landed was `notes.pdf`.
+Same property, same corrective, a second toolkit backend. So the entry is about
+`GtkFileChooserNative`'s accept-time extension application generally, and any entry
+written from it must not be filed as platform-specific — a reader who takes it for a
+Quartz quirk will screenshot a Win32 field and draw the same wrong conclusion.
+
+**Measured**: macOS, `GtkFileChooserNative` over the real `NSSavePanel`; and Windows
+10 19045 / GTK 4.22.4 gvsbuild over the real Win32 save dialog.
 
 ### P-13. Two extractor-output encoding traps — the second manufactured a long-lived false finding
 
@@ -1167,3 +1230,112 @@ macOS mechanism taken through the shipped sink.
 
 **Measured**: macOS, GTK 4.22.4/Quartz, arm64, poppler 26.08.0, U+1F680 through
 `export::pdf`'s `GtkPrintOperation` Export path.
+
+### P-18. cairo's `/ActualText` span is what makes NFD survive the round trip, not the font encoding
+
+**Destination**: the reusable testing/measurement home, beside
+[P-13](#p-13-two-extractor-output-encoding-traps--the-second-manufactured-a-long-lived-false-finding)
+— it is about what an extractor is really reading, not about this project's code.
+
+**Authored by the Windows seat**; allocated and formatted by the Linux seat under POLICY's
+single-writer rule, reasoning and labels unchanged.
+
+**The finding**: an exported PDF containing a **decomposed** accent (`e` + U+0301) draws the
+**precomposed** glyph — Pango composes the pair for rendering — and cairo emits an
+`/ActualText` span so the *logical* text stays decomposed:
+
+```
+/Span << /ActualText <feff00650301> >> BDC
+  [()-38(\351)]TJ
+EMC
+```
+
+`<feff 0065 0301>` is BOM + `e` + combining acute, wrapped around a single `\351` (é) glyph.
+
+**Why it matters, and it is not trivia**: [TDD 25.18](TDD.md#2518-text-round-trips-out-of-the-pdf-byte-exact)'s
+"decomposed sequences survive uncomposed; `U+0065 U+0301` does not silently become `U+00E9`"
+is true on this platform **because of that span, not because of anything in this project and
+not because of the font encoding**. The drawn glyph *is* precomposed. If cairo ever stopped
+emitting the span, the rubric would start failing with **no code change here** — so a reader
+treating 25.18's NFD clause as a claim about our pipeline is reading it wrong. It is a claim
+about the artefact, and the mechanism sits in a dependency.
+
+**The transferable lesson, and it is the exact inverse of
+[P-8](#p-8-an-extraction-failure-is-not-evidence-about-appearance).** P-8 says an *extraction
+failure* is not evidence about appearance. This says an *extraction success* is not evidence
+about the glyph either. **"The text round-trips" and "the character drawn on the page is the
+one you asked for" are independent claims**, and a PDF can satisfy the first while drawing
+something else — legitimately, by design, through marked content. The drawn glyph and the
+declared text are different objects and the extractor reports the declared one. Anyone
+asserting a normalisation property from extraction alone is measuring the **producer's
+declaration**, which is the right thing for a searchability rubric and the wrong thing for a
+rendering one. Pair an NFD assertion with a rendered-page check for the same reason 25.11a
+pairs the emoji one.
+
+**Two halves, and the seam is marked deliberately.** The measurement above is P-13 family and
+belongs in the testing/measurement home. The second half — *a rubric's guarantee can live in a
+dependency's emission rather than in your pipeline* — is engineering discipline, which has no
+reusable home yet and so stays project-side. Kept in one entry so that the day such a home
+exists it splits cleanly instead of being rediscovered.
+
+**Corrective**: state 25.18's NFD clause as a property **of the artefact**, not of the
+pipeline. When it fails, look at `/ActualText` in the artefact before
+looking at `walk.rs` or `markup.rs`. And never hand-roll an `/ActualText` span —
+[O9](#o9--emoji-in-the-pdf-export) already says cairo's emission is a run-splitter; this is
+the stronger reason, that one of those spans is doing work the contract depends on.
+
+**Corrects a reading of [P-14](#p-14-cairos-windows-colour-glyph-path-wraps-colour-glyphs-in-a-type3-d0-font-breaking-layout-reconstructing-extraction)**:
+its recorded `/ActualText` count of **0** is a property of the probe fixtures it was measured
+on, which contained no decomposed input — not a property of the sink. An artefact from the
+shipped path with NFD in it has one.
+
+**And it sharpens the P-14 / P-17 pair.** Measured through the shipped sink on both platforms,
+the two are closer than "two backends, two mechanisms" suggests: **both rasterise the colour
+glyph to an image; the difference is whether that image is wrapped in a font.** Windows wraps
+it in a Type3 font that carries a `/ToUnicode`, so a text run exists and the codepoints are
+recoverable; macOS emits the image with no text run at all, so there is nothing to attach a
+`/ToUnicode` to. Same rasterisation, opposite extractability, and the wrapper is the entire
+difference. Say it that way when the two entries land together.
+
+**Measured**: Windows 10 19045 / GTK 4.22.4 gvsbuild / cairo 1.18.4, the real `export::pdf`
+sink at `02045f6` — 44,397 bytes, `%PDF-1.7`, 57 indirect objects, `/ActualText` ×1,
+`BT`/`ET` 1/1, `d0` ×2 and `d1` ×0.
+
+### P-19. "No GPU client" has two forms on Windows, and a missing counter row is indistinguishable from a broken counter
+
+**Destination**: the reusable testing/measurement home, beside
+[P-3](#p-3-a-silent-instrument-returns-a-confident-wrong-answer-that-looks-like-a-finding)
+— it is about reading an instrument, not about this project.
+
+**Authored by the Windows seat**; allocated and formatted by the Linux seat.
+
+**The distinction**: [POLICY](POLICY.md)'s Windows footprint criterion is *the absence of a
+process row*, not a byte count. Measured through the shipped export sink at two document
+sizes, **both forms occur**:
+
+* a `GPU Process Memory` instance **existing for our PID and reading 0 B** (the 3× window-area
+  run), and
+* **no instance for our PID at all** (the 200× document-size run).
+
+Both mean zero. **The absent row is the stronger reading** and the one POLICY's wording
+actually describes. Do not flatten them into "0" in a report — a future reader comparing two
+runs will otherwise see a difference where the record says there is none, or miss one where
+there is.
+
+**The trap, and the reason this is a finding rather than trivia**: *a missing row and a dead
+counter produce identical output.* "No instance for our PID" is exactly what a mistyped
+counter path, a permissions failure, or an unavailable counter set also returns. **A negative
+reading here needs a positive control**, and the one used was the right shape: the counter set
+returned **11 instances** at that same moment, one of them nonzero (pid 4, 0.01 MB). The
+instrument reads real values; our process simply is not in it.
+
+**Corrective**: when asserting an absence from a performance counter, assert in the same
+breath that the counter is live and populated. Record the control's numbers, not just its
+existence — "the control passed" is itself an unfalsifiable claim.
+
+**Measured**: Windows 10 19045 / GTK 4.22.4 gvsbuild / VMware SVGA 3D, `export::pdf` at
+`02045f6`. Fixtures of identical *shape* and 200× differing *size* (1,158 B / 57 lines vs
+231,760 B / 11,201 lines → a 201-page PDF), window held constant, so document size varies and
+content weight does not. **VRAM did not move with document size, because there is no VRAM.**
+RSS did (79.00 → 136.61 MB at rest) and that is not the gate — 6.5's ceiling is VRAM, and a
+200× document holding more text in system memory is the Cairo software renderer working.

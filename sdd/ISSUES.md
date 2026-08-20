@@ -11,7 +11,7 @@
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
 | Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
 | R | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
-| S | macOS only: every `GtkFileChooserNative` invocation (Open, Save, Export) grows RSS by ~1 MB and does not give it back; no plateau over 20 cycles | Medium |
+| S | macOS only: every `GtkFileChooserNative` invocation (Open, Save, Export) grows RSS by ~1 MB and does not give it back; no plateau over 20 cycles. NOT a native-dialog property — Windows uses a native panel too and plateaus | Medium |
 
 ## A. Tables are selection islands
 
@@ -896,6 +896,21 @@ it with a real `NSOpenPanel`/`NSSavePanel`. So this is a negative about **a diff
 implementation**, not about the same code path behaving differently. It narrows the
 suspect to the platform panel; it does not exonerate anything portable.
 
+**Windows does not reproduce it either — and that negative is the informative one.** The
+Linux non-reproduction came with a caveat: GTK backs `FileChooserNative` with its own
+in-process widget there, so it measured a different implementation. **Windows closes that
+gap.** It uses a genuine native panel — the Win32 common dialog, a separate shell-owned
+window, gated per cycle by reading its title — and over **40 open-and-cancel invocations**
+grew **+5.9 MB total, decelerating** (+2.9 MB in the first five cycles, +1.6 MB across
+cycles 20→40): lazy one-time initialisation of the shell dialog machinery, not a
+per-invocation cost. macOS's sustained ~1 MB/invocation would have been ≈ +40 MB over the
+same run.
+
+So **"a native panel implies the climb" is refuted**: two native-panel platforms, opposite
+behaviour. Whatever this is, it is specific to macOS's `NSOpenPanel`/`NSSavePanel` path
+rather than a property of `GtkFileChooserNative`'s native-dialog architecture. That is a
+real narrowing of the search and it should be the starting point for whoever attributes it.
+
 **Next step**, when someone picks this up: attribute the growth before proposing a fix.
 `leaks` has already answered "not unreachable", so the useful instruments are
 `heap <pid>` / `malloc_history` with `MallocStackLogging=1`, or `vmmap` diffed across
@@ -903,7 +918,10 @@ cycles to see *which* region grows. A fix aimed at the Rust reference handling w
 aimed at the wrong layer on the evidence so far.
 
 **Consequence for the export rubrics**: TDD 25.15 ("an export does not move the
-footprint") is **unverified on macOS**, not failing — export's own contribution to RSS
+footprint") **passes on Windows** — 15 verified exports cost +4.3 MB against 40 chooser-only
+cycles costing +5.9 MB, so the export contributes nothing distinguishable from opening the
+chooser, and the per-process GPU counters read a flat 0 B throughout. It remains
+**unverified on macOS**, not failing — export's own contribution to RSS
 cannot be separated from the chooser's while every measurement cycle opens one. The GPU
 half of that rubric *is* verified: the process never appears as a GPU client, before or
 after 30 export cycles, at either document size.

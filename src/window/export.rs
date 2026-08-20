@@ -232,3 +232,52 @@ pub(crate) fn describe_export_error(e: &std::io::Error) -> String {
         _ => e.to_string(),
     }
 }
+
+#[cfg(test)]
+mod export_error_tests {
+    use super::describe_export_error;
+    use std::io::{Error, ErrorKind};
+
+    /// TDD 25.24 turns on this string being NAMED rather than generic, and until this
+    /// existed the mapping was pinned by nothing automated — one production caller, no
+    /// test, so the rubric rested on a human having driven it once on one platform.
+    ///
+    /// POSIX cannot *produce* the held-open failure (only Windows refuses the rename),
+    /// but it can assert the mapping, so this puts 25.24's named-ness inside the gate
+    /// on every platform. The failure it guards is silent: a refactor that let
+    /// `PermissionDenied` fall through to `e.to_string()` would surface "Access is
+    /// denied. (os error 5)" — true, generic, and useless to a reader whose remedy is
+    /// to close the file.
+    #[test]
+    fn a_held_open_destination_is_named_not_generic() {
+        let msg = describe_export_error(&Error::from(ErrorKind::PermissionDenied));
+        assert!(
+            msg.contains("open in another program"),
+            "the reader must be told what to do about it, got: {msg}"
+        );
+        assert!(
+            msg.contains("Close the file and try again"),
+            "the remedy is the point of the message, got: {msg}"
+        );
+        // The generic form is what this exists to avoid; assert it is NOT that.
+        assert_ne!(msg, Error::from(ErrorKind::PermissionDenied).to_string());
+    }
+
+    #[test]
+    fn a_missing_folder_and_a_full_disk_each_get_their_own_cause() {
+        let gone = describe_export_error(&Error::from(ErrorKind::NotFound));
+        let full = describe_export_error(&Error::from(ErrorKind::StorageFull));
+        assert!(gone.contains("no longer exists"), "got: {gone}");
+        assert!(full.contains("no space left"), "got: {full}");
+        // Distinct causes must not collapse to one message.
+        assert_ne!(gone, full);
+    }
+
+    /// Anything unrecognised falls through to the OS text rather than to a wrong
+    /// guess — naming a cause we have not identified would be worse than generic.
+    #[test]
+    fn an_unrecognised_error_falls_through_to_the_os_text() {
+        let e = Error::other("some novel failure");
+        assert_eq!(describe_export_error(&e), e.to_string());
+    }
+}
