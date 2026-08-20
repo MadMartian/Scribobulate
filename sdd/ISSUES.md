@@ -11,6 +11,7 @@
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
 | Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
 | R | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
+| S | macOS only: every `GtkFileChooserNative` invocation (Open, Save, Export) grows RSS by ~1 MB and does not give it back; no plateau over 20 cycles | Medium |
 
 ## A. Tables are selection islands
 
@@ -841,3 +842,68 @@ built**: the seed increments on `screencapture -C` itself, measured by running t
 sampling loop over blank space with no hover target and seeing the same climb. An instrument
 inside its own measurement, and the artefact it produced happened to match the hypothesis
 under test.
+
+## S. Every native file chooser invocation grows RSS on macOS
+
+**Severity**: Medium (unbounded within everything measured — no plateau over 20
+cycles — and it affects every file dialog in the application, not one feature. Not a
+crash, not data loss, and slow enough that an ordinary session will not notice it.)
+
+**macOS only, MEASURED.** Opening a `GtkFileChooserNative` and **cancelling it** —
+never completing an operation — grows the process's RSS by roughly **0.9–1.4 MB per
+invocation**, steadily, with no plateau across 20 cycles. A large one-time jump
+(~24–28 MB) accompanies the *first* construction in a process and is separate: that
+is the native-panel machinery warming up and it does not recur.
+
+Measured on macOS 4.22.4/Quartz, release build, window fixed, RSS via `ps -o rss=`:
+
+| probe | cycles | growth | per cycle |
+|---|---|---|---|
+| Export chooser, opened and **cancelled** | 19 | 170528 → 192592 KB | ~1160 KB |
+| File ▸ Open chooser, opened and **cancelled**, fresh instance | 19 | 169776 → 186304 KB | ~870 KB |
+| Full export cycle (chooser + real export, PDF) | 20 | 175648 → 198784 KB | ~1150 KB |
+| Full export cycle (chooser + real export, HTML) | 10 | 197440 → 209504 KB | ~1206 KB |
+
+**It is not the export path**, and the numbers above are what establish that: a
+cancelled chooser that runs no export at all grows at the same rate as a completed
+export, and the plain **Open** dialog — which has nothing to do with exporting —
+grows the same way. Export is simply a new place that opens a chooser repeatedly,
+which is how this surfaced. Do not file it against the export feature.
+
+**It is not a classic leak.** `leaks <pid>` against a live instance after 30 combined
+cycles reported **472 leaks / ~103 KB**, against an RSS climb of ~34 MB over the same
+run — two orders of magnitude apart. A second instance measured 353 leaks / ~96 KB
+against a comparable climb. Whatever is accumulating is still **reachable**, so it
+reads as fragmentation or a growing cache (font map, panel construction/teardown, some
+platform-side pool) rather than unreachable memory.
+
+**The application's own reference discipline is not the suspect.** Both call sites —
+`window/export.rs`'s `choose_destination` and `app/appactions.rs`'s open action — go
+through `saferizer::native_dialog::NativeDialogHolder`, which takes exactly one
+external strong reference and drops it once when `response` fires, and both call
+`destroy()` on the dialog in the response handler. That is the shape ScrAP-41
+prescribes, and it is the same code on every platform.
+
+**Linux does not reproduce it — with an important caveat about what was measured.**
+An in-process probe constructing, showing, cancelling and dropping 40 `FileChooserNative`
+dialogs under Xvfb (GTK 4.6, release, RSS via `/proc/self/statm`) ended **+2612 KB over
+40 cycles, ~65 KB/cycle, and non-monotonic** — the reading fell twice (+2936 KB at cycle
+10, +664 at 20, +700 at 30, +2612 at 40), which is noise around a flat baseline rather
+than growth. **But the caveat is the whole value of the result:** with no portal present,
+GTK on Linux backs `FileChooserNative` with its own in-process `GtkFileChooserDialog`
+widget (the run emits "GtkDialog mapped without a transient parent"), whereas macOS backs
+it with a real `NSOpenPanel`/`NSSavePanel`. So this is a negative about **a different
+implementation**, not about the same code path behaving differently. It narrows the
+suspect to the platform panel; it does not exonerate anything portable.
+
+**Next step**, when someone picks this up: attribute the growth before proposing a fix.
+`leaks` has already answered "not unreachable", so the useful instruments are
+`heap <pid>` / `malloc_history` with `MallocStackLogging=1`, or `vmmap` diffed across
+cycles to see *which* region grows. A fix aimed at the Rust reference handling would be
+aimed at the wrong layer on the evidence so far.
+
+**Consequence for the export rubrics**: TDD 25.15 ("an export does not move the
+footprint") is **unverified on macOS**, not failing — export's own contribution to RSS
+cannot be separated from the chooser's while every measurement cycle opens one. The GPU
+half of that rubric *is* verified: the process never appears as a GPU client, before or
+after 30 export cycles, at either document size.

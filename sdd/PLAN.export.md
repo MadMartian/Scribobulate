@@ -1,7 +1,24 @@
 # Plan: Exporting a document to HTML and PDF
 
-**Status**: **approved and implemented on Linux** (2026-08-19). TDD §25 is landed;
-`tests/MANUAL-TEST.md` §25 is written. **macOS and Windows have not started.**
+**Status**: **approved and implemented on Linux** (2026-08-19), **verified on macOS**
+(2026-08-20). TDD §25 is landed; `tests/MANUAL-TEST.md` §25 is written. **Windows has
+not started.**
+
+**macOS verification, as ratified by that seat**: nine of the ten platform questions
+verified — the librsvg/`GdkTexture` decode, `pdfimages -list` showing real image objects,
+the tight-list-item paragraph, the live `NSSavePanel` naming behaviour, the emoji limit
+(re-measured CESU-8-aware, see [P-13](#p-13-two-extractor-output-encoding-traps--the-second-manufactured-a-long-lived-false-finding)),
+the first clipboard round trip anyone has run on this platform, the open-destination
+promote, the absent always-ready source, and the promote gate. **One is unverified rather
+than passing: [25.15](TDD.md#2515-an-export-does-not-move-the-footprint)'s RSS half.** Its
+GPU half is verified — the process never appears as a GPU client, before or after 30 export
+cycles, at either document size. The RSS half cannot be measured while every cycle opens a
+file chooser, because **the chooser itself grows RSS by ~1 MB per invocation on macOS,
+whether or not an export follows, and the plain Open dialog does the same**. That is an
+application-wide defect export merely exposed, it is in the issue register, and **it is not
+export's to fix**. A Linux probe over 40 chooser cycles did not reproduce it — but with the
+caveat that GTK backs the dialog with its own widget there and with a real `NSSavePanel` on
+macOS, so that negative is about a different implementation.
 
 **This plan stays until all three seats have implemented it**, then it is retired in
 one pass: the [parked findings](#parked-findings) are *moved* to the homes their
@@ -9,8 +26,8 @@ Destination lines name, and the file is deleted. Retiring it now would delete th
 document the other two seats implement from.
 
 **Sequencing, operator-set and binding: one seat at a time, no cross-seat chatter
-while an implementation is in flight.** Linux is done; macOS starts only when told,
-finishes completely, and only then does Windows begin. Overlapping seats on one
+while an implementation is in flight.** Linux is done; macOS is done (2026-08-20);
+Windows starts only when told and finishes completely. Overlapping seats on one
 feature is what forced a full revert once before.
 
 **What landed on Linux**: R1 (the `AtomicPublish` scaffold), R2 (the raw-HTML
@@ -443,16 +460,31 @@ should differ by.
 statement is *"Xpdf 4.00's layout analysis mishandles bbox-less Type3 `d0` glyphs"*, **not**
 "the exported PDF is degraded". Nothing this project would emit is malformed.
 
+**One of the two open items now has a candidate answer.** The macOS seat, measuring the real
+`export::pdf` sink rather than a spike (2026-08-20): macOS does not omit `/ToUnicode` from a
+text run — **there is no text run**. `pdfimages -list` shows the astral colour emoji rasterised
+as its own **Image + SMask XObject pair** (58×58 rgb + gray smask), where Windows/DWrite wraps
+the same glyph in a Type3 `d0` font ([P-14](#p-14-cairos-windows-colour-glyph-path-wraps-colour-glyphs-in-a-type3-d0-font-breaking-layout-reconstructing-extraction)).
+An Image XObject carries no text-showing operator, so nothing is extractable by construction —
+a different failure class from Windows', which is a reader-side reading-order bug over glyphs
+that *are* in the text model. Full entry at
+[P-17](#p-17-macos-embeds-a-colour-emoji-as-an-image-xobject-so-its-text-is-absent-by-construction).
+MEASURED: the differing XObject shape. INFERRED: that it is the *cause* of the missing
+`/ToUnicode`.
+
 **Open, and neither blocks**: read cairo issue **#870, "Cairo 1.18.2 regression when writing
 PDFs with fonts"** — on-point and unread, because gitlab.freedesktop.org blocks automated
-fetches; and trace *why* macOS emits no `/ToUnicode` for the substituted glyph. **Do not**
+fetches. **Do not**
 hand-roll `/ActualText` spans: cairo already emits them and that emission is itself a
 run-splitter.
 
 **Caveat on the structural comparison, so a future spike is not over-read**: both files compared
 were **probe artefacts, not the feature**. Any PDF built to represent what this project would
 ship should be re-checked against those same three discriminators — a two-minute grep now that
-they are named.
+they are named. **Discharged on macOS** (2026-08-20): the re-check was run against the real
+`export::pdf` sink and found the macOS embedding to be an Image XObject rather than a Type3 font
+at all — see [P-17](#p-17-macos-embeds-a-colour-emoji-as-an-image-xobject-so-its-text-is-absent-by-construction).
+Still owed on Windows.
 ### ✅ O10 — The default name and filename validation
 
 The two platforms behave differently and **only one is dangerous**:
@@ -1094,3 +1126,44 @@ rather than the library), or **someone else's falsifiable prediction**.
 - **When a result confirms what you hoped, add a discriminator** rather than reporting it.
 - **Report a non-reproduction as a non-reproduction**, and retract a tidy characterisation
   before it hardens in a register.
+
+### P-17. macOS embeds a colour emoji as an Image XObject, so its text is absent by construction
+
+**Destination**: `sdd/ANTI-PATTERNS.md`, alongside [P-14](#p-14-cairos-windows-colour-glyph-path-wraps-colour-glyphs-in-a-type3-d0-font-breaking-layout-reconstructing-extraction)
+— the two are one lesson in two mechanisms and should land as a pair, or the reader takes
+either for the general case.
+
+**Authored by the macOS seat**; allocated and formatted by the Linux seat under POLICY's
+single-writer rule. Its reasoning and its MEASURED/INFERRED labelling are unchanged.
+
+**Symptom**: an astral colour emoji that **renders correctly** on the exported page extracts as
+if it were never there — no CESU-8 surrogate pair, no U+FFFD, no `/ToUnicode` entry, on
+macOS/Quartz. Neighbouring prose on the same line extracts correctly, so the file is not
+broken and the extractor is not failing.
+
+**Root cause (MEASURED, against the real `export::pdf` sink rather than a spike)**:
+`pdfimages -list` on the artefact shows the glyph rasterised as its own **Image + SMask XObject
+pair** (58×58 rgb + gray smask). Windows/DWrite wraps the same glyph in a **Type3 `d0` font**
+(P-14). An Image XObject carries no text-showing operator at all, so there is nothing for a text
+extractor to find — **by construction**, not by a reader-side heuristic failing. That is a
+different failure class from P-14's, which is a reading-order bug over glyphs that genuinely
+are in the text model.
+
+**INFERRED**: that this is *why* macOS emits no `/ToUnicode` — cairo/Quartz took the
+image-XObject path instead of the Type3 one, so there is no text run to attach a `/ToUnicode`
+to. MEASURED is only that the XObject shape differs between the two platforms.
+
+**Corrective**: do not describe the macOS emoji limit as "the `/ToUnicode` is missing" — that
+phrasing implies a text run with a defective map, and invites a fix (hand-rolled `/ActualText`,
+a font substitution) aimed at a structure that is not present. State it as *the glyph is not
+text on this platform*. And do not generalise either platform's mechanism to "how cairo embeds
+colour glyphs": two backends, two mechanisms, one shared outcome only at the level of
+searchability.
+
+**Why it belongs in a register rather than a footnote**: it discharges the caveat
+[O9](#o9--emoji-in-the-pdf-export) attached to its own structural comparison — that both files
+compared were probe artefacts rather than the feature — and it is the first measurement of the
+macOS mechanism taken through the shipped sink.
+
+**Measured**: macOS, GTK 4.22.4/Quartz, arm64, poppler 26.08.0, U+1F680 through
+`export::pdf`'s `GtkPrintOperation` Export path.

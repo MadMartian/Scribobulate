@@ -137,26 +137,37 @@ mod tests {
         let path = dir.path().join("watched.md");
         std::fs::write(&path, "# body\n").unwrap();
 
-        let ctx = glib::MainContext::default();
-        let monitor = DocMonitor::attach(&gio::File::for_path(&path)).unwrap();
-        let seen = Rc::new(Cell::new(false));
-        let seen_c = Rc::clone(&seen);
-        monitor.connect_changed(move |_event| seen_c.set(true));
+        // A context this test OWNS, pushed as thread-default before the monitor is
+        // attached so the monitor's source lands on it. The default context is not
+        // usable here: a `#[gtktest::test]` body earlier in the same binary leaves it
+        // acquired by the harness's serializing thread, and `iteration` on a thread
+        // that does not own the context dispatches nothing at all — so the handler
+        // never runs and the 5 s deadline burns. That failure is invisible on Linux,
+        // where whole-suite ordering happens to leave the default context free, and
+        // deterministic on Windows.
+        let ctx = glib::MainContext::new();
+        ctx.with_thread_default(|| {
+            let monitor = DocMonitor::attach(&gio::File::for_path(&path)).unwrap();
+            let seen = Rc::new(Cell::new(false));
+            let seen_c = Rc::clone(&seen);
+            monitor.connect_changed(move |_event| seen_c.set(true));
 
-        // The watch is established on GLib's private worker thread, so a same-turn
-        // write is never seen — this needs WALL CLOCK, not a count of iterations
-        // (GTK4Rs/AP-261: turns are not time).
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline && !seen.get() {
-            std::fs::write(&path, format!("# body {:?}\n", Instant::now())).unwrap();
-            std::thread::sleep(Duration::from_millis(50));
-            while ctx.iteration(false) {}
-        }
-        assert!(
-            seen.get(),
-            "a write to the watched file reaches the handler"
-        );
+            // The watch is established on GLib's private worker thread, so a same-turn
+            // write is never seen — this needs WALL CLOCK, not a count of iterations
+            // (GTK4Rs/AP-261: turns are not time).
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline && !seen.get() {
+                std::fs::write(&path, format!("# body {:?}\n", Instant::now())).unwrap();
+                std::thread::sleep(Duration::from_millis(50));
+                while ctx.iteration(false) {}
+            }
+            assert!(
+                seen.get(),
+                "a write to the watched file reaches the handler"
+            );
 
-        monitor.cancel_and_release();
+            monitor.cancel_and_release();
+        })
+        .expect("this thread can take a fresh context as its thread-default");
     }
 }
