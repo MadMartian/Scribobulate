@@ -123,7 +123,13 @@ editor with the resource footprint of a native desktop application.
    A tab's file can also be **renamed** where it sits (F2, File ▸ Rename, or the
    tab's context menu) — within its own folder and by name only, so the links and
    images it resolves relative to itself keep working.
-7. Quit and come back later: every window reopens with its own tabs, view
+7. Hand the document to someone who does not have Scribobulate: File ▸ Export
+   writes it as a self-contained **HTML** file — the sharing format, which
+   re-flows to the reader's window and keeps its links and heading anchors — or
+   as a paginated **PDF**, the record format that prints and archives unchanged.
+   Local images are embedded rather than referenced, so the artefact survives
+   being moved or sent, and the review comments travel with it.
+8. Quit and come back later: every window reopens with its own tabs, view
    mode, split arrangement, and zoom level exactly as they were left.
 
 ## Vocabulary
@@ -144,4 +150,5 @@ editor with the resource footprint of a native desktop application.
 | **Highlight** | The span of text an annotation refers to, shown with a coloured background in the preview. |
 | **Comment marker** | The margin indicator in the preview that reveals an annotation's comment — and its Edit / Remove actions — when clicked, or when the reader walks onto that annotation from the keyboard. |
 | **Annotation card** | The small panel a comment marker opens, showing one annotation's claim and comment with its Edit / Remove actions. It stays attached to its marker: it moves as the document scrolls, steps aside when its marker scrolls out of view and returns with it, and closes on Escape, on a click anywhere else, or from the × in its corner. |
+| **Export** | Writing the document out in a presentation format — HTML or PDF — rather than as Markdown. Distinct from Copy Document and copy-as-Markdown, which are deliberately *round-trip* formats: an export is for a reader, not for another editor. |
 | **CriticMarkup** | The plain-text convention Scribobulate uses to store annotations in the file (`{==highlight==}{>>comment<<}`), readable in any editor. |

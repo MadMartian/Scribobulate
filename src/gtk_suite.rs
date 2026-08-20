@@ -55,6 +55,7 @@ mod colorscheme;
 mod config;
 mod copymap;
 mod docio;
+mod export;
 mod farscroll;
 mod forensics;
 mod format;

@@ -99,6 +99,19 @@ pub(crate) struct Palette {
 // desktop's lightness calls [`desktop_is_dark`]; inside `from_base`, the page's own
 // lightness is a local, used to pick the derivations tuned for it.
 
+/// The base an exported page resolves against when its theme states no page of its
+/// own — see [`Palette::for_paper`]. White page, near-black ink, and the same default
+/// accent the desktop probe falls back to, so an export on a machine with no theme
+/// colours at all looks like an export on one that has them.
+///
+/// These sit here rather than in an export sink deliberately: this module is where
+/// the light/dark resolution floor already lives (see `for_theme`'s fallbacks), and
+/// keeping them together is what lets POLICY's "no hard-coded styling" rule hold for
+/// every renderer — none of them names a colour, they ask this module for one.
+const PAPER_BG: gdk::RGBA = gdk::RGBA::new(1.0, 1.0, 1.0, 1.0);
+const PAPER_FG: gdk::RGBA = gdk::RGBA::new(0.067, 0.067, 0.067, 1.0);
+const PAPER_ACCENT: gdk::RGBA = gdk::RGBA::new(0.208, 0.518, 0.894, 1.0);
+
 /// Whether the DESKTOP theme is dark, independent of the active reading theme.
 /// The editor pane, the toolbar, the tab strip and the outline sidebar all stay on
 /// the desktop theme, so this — not `Palette::is_dark` — is what they follow.
@@ -279,6 +292,32 @@ impl Palette {
     #[allow(deprecated)] // style_context() deprecated in GTK ≥ 4.10; no stable alternative yet
     pub(crate) fn resolve() -> Self {
         Self::for_theme(&crate::theme::active())
+    }
+
+    /// The palette an **exported page** resolves to: the given theme's stated keys
+    /// over a paper base, with no desktop probe at all.
+    ///
+    /// **Paper has no dark mode.** Link 3 of the resolution order is "the desktop GTK
+    /// theme probe + derivation", and on a dark desktop that probe answers with a dark
+    /// page — which is right for a screen and wrong for a sheet of paper, where it
+    /// prints as a washed-out ghost of itself. So an export asks for a *light*
+    /// resolution instead of probing.
+    ///
+    /// That is a **resolution request, not a literal**: everything distinctive still
+    /// comes from the theme (overlays, typography, metrics) and everything derived
+    /// still comes from [`from_base`](Self::from_base)'s WCAG walk. The one thing that
+    /// changes is which base the derivation starts from, and the paper base lives here
+    /// — beside the light/dark floor this module already owns — rather than in an
+    /// export sink, so no rendering code outside this file names a colour.
+    pub(crate) fn for_paper(theme: &crate::theme::Theme) -> Self {
+        // A theme that states its own page is honoured: a reader who chose Sepia and
+        // exports gets Sepia's warm page, which is a light page already. Only the
+        // *fall-through* is forced light, because that is the branch the desktop
+        // would otherwise darken.
+        let bg = theme.background.unwrap_or(PAPER_BG);
+        let fg = theme.foreground.unwrap_or(PAPER_FG);
+        let accent = theme.accent.unwrap_or(PAPER_ACCENT);
+        Self::from_base(bg, fg, fg, accent, theme)
     }
 
     /// [`Palette::resolve`] for an explicit theme — the seam the theme switch and

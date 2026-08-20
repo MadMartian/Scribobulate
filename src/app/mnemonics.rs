@@ -25,6 +25,10 @@ const MENU_MNEMONICS: &[(&str, &str)] = &[
     ("Close Tab", "_Close Tab"), ("Exit", "E_xit"),
     // File menu: R/e/n are taken (Reload, …, New Document), so Rename takes `m`.
     ("Rename…", "Rena_me…"),
+    // File ▸ Export and its two sinks. `E` is free in the File popover (Exit took
+    // `x`); `P`/`H` are free inside the Export submenu, which is its own popover, so
+    // they do not collide with Copy Full _Path one level up.
+    ("Export", "_Export"), ("PDF", "_PDF"), ("HTML", "_HTML"),
     // Edit
     ("Undo", "_Undo"), ("Redo", "_Redo"), ("Copy", "_Copy"), ("Cut", "Cu_t"),
     ("Copy Document", "Copy Docu_ment"),

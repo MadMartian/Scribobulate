@@ -163,36 +163,7 @@ pub(crate) fn validate_new_name(
     proposed: &str,
     rules: FsRules,
 ) -> Result<NameChange, NameRefusal> {
-    if proposed.is_empty() {
-        return Err(NameRefusal::Empty);
-    }
-    if proposed == "." || proposed == ".." {
-        return Err(NameRefusal::DotEntry);
-    }
-    if proposed.contains('\0') {
-        return Err(NameRefusal::InteriorNul);
-    }
-    // `/` is a separator on BOTH platforms — GLib's own path code honours it on
-    // Windows even though `G_DIR_SEPARATOR` is `\` there, which is precisely the
-    // hole GIO's one-character guard leaves open.
-    if proposed.contains('/') || (rules == FsRules::Windows && proposed.contains('\\')) {
-        return Err(NameRefusal::Separator);
-    }
-    if rules == FsRules::Windows {
-        if let Some(c) = proposed.chars().find(|c| WINDOWS_FORBIDDEN.contains(c)) {
-            return Err(NameRefusal::ForbiddenCharacter(c));
-        }
-        if proposed.ends_with('.') || proposed.ends_with(' ') {
-            return Err(NameRefusal::TrailingDotOrSpace);
-        }
-        let stem = proposed.split('.').next().unwrap_or(proposed);
-        if WINDOWS_DEVICE_NAMES
-            .iter()
-            .any(|d| d.eq_ignore_ascii_case(stem))
-        {
-            return Err(NameRefusal::ReservedDeviceName);
-        }
-    }
+    check_filename(proposed, rules)?;
     if proposed == current {
         return Err(NameRefusal::Unchanged);
     }
@@ -200,6 +171,55 @@ pub(crate) fn validate_new_name(
         return Ok(NameChange::CaseOnly);
     }
     Ok(NameChange::Plain)
+}
+
+/// Whether `name` is a legal filename under `rules`, independent of what it is being
+/// renamed from.
+///
+/// Split out of [`validate_new_name`] because a **second** reader needs exactly this
+/// half and none of the rest: the export's destination chooser validates the name this
+/// application *proposes*, where there is no current name to compare against and
+/// "unchanged" is not a refusal (TDD 25.11). One rule, three readers — the rename
+/// dialog's per-keystroke gate, the rename operation, and the export seed — so a name
+/// one of them accepts cannot be one another refuses.
+pub(crate) fn check_filename(name: &str, rules: FsRules) -> Result<(), NameRefusal> {
+    if name.is_empty() {
+        return Err(NameRefusal::Empty);
+    }
+    if name == "." || name == ".." {
+        return Err(NameRefusal::DotEntry);
+    }
+    if name.contains('\0') {
+        return Err(NameRefusal::InteriorNul);
+    }
+    // `/` is a separator on BOTH platforms — GLib's own path code honours it on
+    // Windows even though `G_DIR_SEPARATOR` is `\` there, which is precisely the
+    // hole GIO's one-character guard leaves open.
+    if name.contains('/') || (rules == FsRules::Windows && name.contains('\\')) {
+        return Err(NameRefusal::Separator);
+    }
+    if rules == FsRules::Windows {
+        if let Some(c) = name.chars().find(|c| WINDOWS_FORBIDDEN.contains(c)) {
+            return Err(NameRefusal::ForbiddenCharacter(c));
+        }
+        if name.ends_with('.') || name.ends_with(' ') {
+            return Err(NameRefusal::TrailingDotOrSpace);
+        }
+        let stem = name.split('.').next().unwrap_or(name);
+        if WINDOWS_DEVICE_NAMES
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case(stem))
+        {
+            return Err(NameRefusal::ReservedDeviceName);
+        }
+    }
+    Ok(())
+}
+
+/// Whether `name` is a legal filename on **this** host — [`check_filename`] against
+/// [`host_rules`], for a caller that only needs the yes/no.
+pub(crate) fn is_valid_filename(name: &str) -> bool {
+    check_filename(name, host_rules()).is_ok()
 }
 
 /// Whether two names differ only by letter case.

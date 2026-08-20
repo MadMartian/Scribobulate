@@ -167,7 +167,17 @@ cd "$(dirname "$0")/.."
 # with an IGNORE entry: the seam is thin GIO wiring and would have been excludable on
 # the scope rule, which is exactly the reasoning ScrAP-294 warns produces a number that
 # measures less code every time it moves.
-FLOOR=77.85
+#
+# ratchet 2026-08-19 (77.85 -> 79.50), measurement 79.57, same deliberate margin. The
+# gain is the export feature (TDD §25) landing display-free: the model, both sinks and
+# the paginator are pure, and the two decision cores that would otherwise have hidden
+# behind the `src/window/` exclusion — the default-name guarantee and the PDF promote
+# gate — were moved into `src/export/` rather than left there. The largest single jump
+# is `export/pdf.rs`, 12.57% -> 94.77%, from testing the Pango layout and the cairo draw
+# against a font-map context and an `ImageSurface`: a sink that touches the toolkit is
+# still reachable headlessly, and "it needs GTK" is not on its own a reason to exclude
+# a file — the question is whether a DISPLAY is needed, and here it is not.
+FLOOR=79.50
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

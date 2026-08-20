@@ -356,6 +356,10 @@ pub(crate) fn apply_mode_action_state(window: &ApplicationWindow, mode: ViewMode
         set_action_enabled(window, "go-to-line", false);
     }
     update_edit_action_state(window);
+    // Export is enabled whenever the tab holds a document, INCLUDING an untitled or
+    // unsaved one — it reads the buffer, never the disk file (TDD 25.5). Driven from
+    // here so every surface greys together with the rest.
+    super::export::update_export_action_state(window);
     // Copy Link Location gates on the editor being visible AND a link under the
     // caret; a mode switch changes the first half and a tab switch (which routes
     // through here) changes both, and neither fires a buffer signal.
