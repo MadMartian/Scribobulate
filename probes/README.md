@@ -1,16 +1,27 @@
 # Probes
 
-Standalone C programs that measure a GTK/GtkSourceView runtime behaviour this
+Standalone programs that measure a GTK/GtkSourceView runtime behaviour this
 project depends on. They are **artefacts, not gates** — nothing in
 `scripts/pipeline.steps` runs them, and nothing should. They exist so a claim
 about the toolkit can be re-run by whoever doubts it, rather than believed
 because a message once said so.
 
-Seven are C on purpose: each has to be runnable against an arbitrary installed
+**Most are C on purpose**: each has to be runnable against an arbitrary installed
 GTK, by a seat that may not have this crate building, in order to compare two
-platforms' *toolkits* rather than two platforms' builds of us.
+platforms' *toolkits* rather than two platforms' builds of us. This section
+deliberately does not count them. It used to — "seven are C", "the eighth is
+Rust", "all eight were written" — and the count was wrong within two commits of
+being written, which is the same failure POLICY's build section calls out for test
+counts: the one property of a set guaranteed to be stale by the next addition.
+The *reasons* below are stable; the tally was not.
 
-The eighth is Rust, because its subject is the **gtk4-rs marshalling layer** and a
+**Some are Objective-C**, because their subject is what GTK's Quartz backend does
+with an `NSSavePanel` — a question no C probe can ask, since answering it means
+counting live `NSWindow`s, reading private AppKit ivars, and sending the panel the
+same `-cancel:` the user's Cancel button sends. They are macOS-only by
+construction and say so.
+
+**One is Rust**, because its subject is the **gtk4-rs marshalling layer** and a
 C probe cannot prove anything about a Rust trampoline. It is a standalone crate
 with its own `[workspace]`, deliberately outside the application's, so that it is
 never built, linted or gated with the app — it asserts a property of the binding,
@@ -21,14 +32,19 @@ would change the subject.
 
 ## Why these exist
 
-All eight were written on the macOS seat during the lone-carriage-return work,
-to supply the one leg no other seat could: **GTK 4.22.4 / GtkSourceView 5.20.0 /
+Most were written on the macOS seat during the lone-carriage-return work, to
+supply the one leg no other seat could: **GTK 4.22.4 / GtkSourceView 5.20.0 /
 Quartz**. The Linux seat measured 4.6.9 / 5.4.1 / X11 and the researcher read the
 C source; the open question was whether GtkSourceView's *tag geometry* had moved
 between 5.4.1 and 5.20.0, which is the one claim that cannot be settled by
 diffing GTK.
 
 It had not. Every one of them reproduces the Linux numbers.
+
+`native-chooser-rss.m` and its companions came later and from the opposite
+situation:
+a footprint climb that **only** this platform showed, where the job was not to
+compare seats but to find out what was accumulating.
 
 `iter-diagnostics.c` is here for a different reason, and it is the one worth
 reading first: it exists because this seat drew a **wrong conclusion** from a
@@ -48,6 +64,9 @@ cc probes/iter-diagnostics.c -o /tmp/iter-diagnostics \
    $(pkg-config --cflags --libs gtk4)
 cc probes/binding-shape.c -o /tmp/binding-shape \
    $(pkg-config --cflags --libs gtk4)
+
+clang -ObjC -O1 -g -Wno-deprecated-declarations -o /tmp/native-chooser-rss \
+   probes/native-chooser-rss.m $(pkg-config --cflags --libs gtk4) -framework AppKit
 
 # the Rust one builds and runs itself
 cargo run --manifest-path probes/binding-shape-rs/Cargo.toml
@@ -500,3 +519,123 @@ present — the toggle sits inside the final CRLF, the paste arrives as two
 emissions, and run 1 ends `0d` with run 2 supplying the `0a`. It is clean solely
 because nothing mutates the payload. Attach any payload-mutating handler to those
 buffers and it corrupts here exactly as it does on X11.
+
+---
+
+## `native-chooser-rss.m` — where a native chooser's memory goes
+
+**macOS only.** Every `GtkFileChooserNative` invocation grew the process's RSS by
+roughly a megabyte, with no plateau across twenty cycles, and `leaks(1)` reported
+about a hundred kilobytes against a thirty-megabyte climb — so whatever was
+accumulating was still *reachable*, and the useful question was not "what leaked"
+but "what is still holding it".
+
+RSS read from outside the process cannot answer that, so this probe reads the
+process from inside it:
+
+- **A `vmmap`-equivalent, self-administered.** It walks its own VM map with
+  `mach_vm_region_recurse` and sums dirty pages per user tag, which is the same
+  accounting `vmmap -summary` prints — and needs no `task_for_pid`, so it works
+  with no developer-tools authorisation and no `sudo`.
+- **Every malloc zone's in-use bytes**, which separates *live heap that is still
+  referenced* from *pages the allocator has not returned*. Those two have the same
+  RSS signature and completely different causes, and this is the fork the whole
+  investigation turns on.
+- **Live GObject counts** (`GOBJECT_DEBUG=instance-count`) for the chooser's
+  object graph, so "is the widget tree freed?" is answered by counting it rather
+  than by inferring it from bytes.
+- **Live `NSSavePanel`/`NSOpenPanel` counts** from `[NSApp windows]`, which is the
+  AppKit half of the same question.
+
+Two things about the *method* are worth carrying to the next probe of this kind.
+
+**Dismiss it the way the user dismisses it.** `gtk_native_dialog_hide()` and the
+Cancel button take different paths through the Quartz backend, and only the second
+is the one the application takes. A probe that used `hide()` because it is the API
+in reach would have measured — and did, for one wrong afternoon — a leak the
+application never triggers. `--cancel` sends `-[NSSavePanel cancel:]` to the live
+panel instead, which is exactly what Cancel does, needs no synthetic key events,
+and therefore also works with the screen locked, where a keystroke-driven probe
+silently sends its Escape to whatever app is frontmost.
+
+**A window-list count is not a liveness count, and mine read as success while
+being blind.** The probe originally reported "0 live `NSSavePanel`s" after closing
+them and I took that as the panel being freed. `-close` removes a panel from
+`[NSApp windows]` *without* deallocating it, so the counter had simply stopped
+being able to see its subject — the shape of a check that passes because it went
+blind rather than because the condition holds. `--track-dealloc` attaches a
+`DeallocSpy` (an associated object whose `-dealloc` increments a counter) and
+answers the question the window list cannot. It reports zero deallocations in
+every mode tried, including closing the panel *and* explicitly balancing GTK's
+retain — which is how the probe established that something beyond GTK holds the
+panel.
+
+**Measure every cell more than once.** The first run of the mode matrix produced
+a clean, plausible story in which closing spent panels recovered half the growth.
+Repeating each cell three times, interleaved, that difference vanished into noise
+(948.5 KB/cycle against 920-937, spreads of 6-15). One run per cell is exactly
+the shape that reads as a result and isn't one, and the interleaving matters as
+much as the repetition: run all of mode A then all of mode B and any drift over
+wall-clock lands entirely on B.
+
+**Do not count instances inside a signal handler.** `g_signal_emit` holds a
+reference on the emitting instance for the duration of the emission, so an
+instance count taken from a `response` handler reports one dialog still live that
+is in fact about to finalize. The checkpoint runs from the main loop for this
+reason, and the comment at that site says so.
+
+### Modes
+
+| flag | what it isolates |
+|---|---|
+| *(default)* | dismissal via `gtk_native_dialog_hide()` |
+| `--cancel` | dismissal via `-[NSSavePanel cancel:]` — the user's path |
+| `--reap` | close spent panels after each response — tests a candidate remedy |
+| `--widget-only` | the internal `GtkFileChooserDialog` alone, no native panel |
+| `--no-filter` | no `GtkFileFilter`, so no accessory view on the panel |
+| `--open` | `NSOpenPanel` rather than `NSSavePanel` |
+| `--no-show` / `--folder` / `--instances` / `--linger` | construction only; folder to enumerate; instance counts; stay alive for `heap(1)` |
+
+The design rule behind the flag list: each one removes exactly one thing, so the
+difference between two runs names a cause instead of suggesting one.
+
+---
+
+## `empty-filter-crash.c` and `allowed-file-types-empty.m` — a claim that did not survive
+
+These two exist to record a **falsification**, which is the rarer and more useful
+kind of artefact: a crash report was one message away from being filed against
+GNOME, and these are the runs that stopped it.
+
+The prediction was that a `GtkFileFilter` carrying a name and no rules would abort
+the Quartz chooser at open, with no user interaction. Its chain was verified from
+source at every step: GTK builds a non-nil, zero-element `NSArray` for a ruleless
+filter, the `NULL` guard in `file_filter_to_quartz` lets an empty array through,
+the handler's `containsObject:@""` test is `NO` for it, and GTK primes the initial
+filter selection itself at launch — so the empty array reaches
+`-[NSSavePanel setAllowedFileTypes:]` unattended. Apple's SDK header for that
+property states that a non-nil empty array raises an exception.
+
+It does not. `empty-filter-crash.c` runs the whole path end to end and exits 0.
+
+**The second probe is the one that matters, and the reason there are two.** A
+clean pass from the first says only "my repro didn't crash", which is a statement
+about the probe. `allowed-file-types-empty.m` tests the *premise* in isolation,
+against a bare `NSSavePanel` with no GTK in the process, and shows that
+`setAllowedFileTypes:` raises nothing on macOS 26.6.1 for `@[]`, for `nil`, or for
+`@[@""]`. That is a statement about the platform, and it is what turned a negative
+result into a retraction rather than a shrug. Interrogate a negative as hard as a
+positive: a failed reproduction is evidence about your setup until you have
+falsified the mechanism itself.
+
+The transferable rule, which cost a nearly-filed bug report to learn: **an SDK
+header is primary evidence for API *surface*** — that a class is not a singleton,
+that a property is `copy`, that a symbol is deprecated — **and not for runtime
+*behaviour***. Exceptions raised, objects freed, handlers invoked: those need an
+observation. And a deprecated symbol's documented contract should be assumed stale
+until someone watches it, since deprecation is precisely when an implementation
+gets rewritten underneath its documentation.
+
+What survives the falsification is the version-independent half: a zero-rule
+filter should not produce a filter entry at all. That argument cannot be refuted
+by a maintainer's OS version, which is exactly why it is the one worth making.
