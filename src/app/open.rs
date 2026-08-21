@@ -248,11 +248,16 @@ pub(crate) fn attach_file_backing(
         // `WATCH_MOVES`) reports that as this same `Deleted` event — so
         // *every* save fired the "File deleted on disk" notice, not just a
         // real external deletion. `expect_self_delete` is armed right before
-        // our own rename and consumed (never left armed) here, so exactly one
-        // `Deleted` per save is swallowed and a genuine external delete —
-        // which never armed the flag — still surfaces normally.
+        // our own rename and consumed (never left armed) here; a genuine
+        // external delete — which never armed the flag — still surfaces normally.
+        //
+        // ONE SAVE IS NOT ONE `Deleted`, which this comment used to assume. The Win32
+        // backend delivers TWO for a single `MoveFileEx` replace-existing where Linux
+        // delivers one (MEASURED, 25 us apart), so the write-in-flight fallback in
+        // `swallows` covers the surplus. See `SelfDeleteGuard::swallows` for why the
+        // short-circuit order is load-bearing to macOS.
         if matches!(event, FileMonitorEvent::Deleted) {
-            if tab.expect_self_delete.consume() {
+            if tab.expect_self_delete.swallows(tab.write_gate.is_busy()) {
                 return;
             }
             // The backing file is genuinely gone. Mark the document savable even

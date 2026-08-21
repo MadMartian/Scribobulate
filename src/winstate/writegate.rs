@@ -64,12 +64,22 @@ impl WriteGate {
 
     /// Whether a write is currently outstanding, without trying to take it.
     ///
-    /// Test-only: the application never needs to ask, because every production
-    /// caller either holds a [`WritePass`] or was refused one, and both of those
-    /// answers are already the outcome. Exposing it unconditionally would invite a
-    /// caller to branch on the state and then act on it a moment later, which is
-    /// the check-then-act race the pass exists to make unrepresentable.
-    #[cfg(test)]
+    /// **Was test-only, and the reason it was is still the rule**: the application
+    /// never needs to ask in order to *write*, because every such caller either holds
+    /// a [`WritePass`] or was refused one, and both of those answers are already the
+    /// outcome. Branching on this and then acting a moment later is the check-then-act
+    /// race the pass exists to make unrepresentable. **Do not use it to decide whether
+    /// to write.**
+    ///
+    /// **ONE SANCTIONED CALLER**, declared here rather than at the call site so the
+    /// exception lives with the rule: `app::open`'s file-monitor closure, classifying a
+    /// `Deleted` event that has *already happened* as ours or external
+    /// (`SelfDeleteGuard::swallows`). That is not the hazard above and cannot become it
+    /// — it decides nothing about a future write, there is no `await` between the read
+    /// and the decision, and the monitor closure runs on the same single-threaded main
+    /// context as the pass it is asking about, so the answer cannot change underneath
+    /// it. A new caller that does not meet all three of those conditions wants
+    /// [`claim`](Self::claim), not this.
     pub(crate) fn is_busy(&self) -> bool {
         self.busy.get()
     }

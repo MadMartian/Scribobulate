@@ -36,6 +36,39 @@ impl SelfDeleteGuard {
     pub(crate) fn consume(&self) -> bool {
         self.0.replace(false)
     }
+
+    /// Does this `Deleted` event belong to our own save's rename?
+    ///
+    /// **The one-shot flag is not enough, because one save is not one `Deleted`.**
+    /// MEASURED on the same `write_atomic` rename: Linux delivers `Deleted, Created,
+    /// ChangesDoneHint`, while the **Win32 backend delivers TWO `Deleted`s**, 25 µs
+    /// apart, for a single `MoveFileEx` replace-existing. With [`consume`](Self::consume)
+    /// alone the second one found the guard already disarmed, took the
+    /// genuine-external-deletion branch in full, and left the user staring at
+    /// "File deleted on disk — save to restore it" over a file that was present and
+    /// correct. The count is a property of the platform's monitor backend, so no fixed
+    /// number is safe to assume.
+    ///
+    /// `write_in_flight` is the fallback: while this tab holds its own `WritePass`, a
+    /// `Deleted` for its own file is ours by construction, whatever its ordinal.
+    ///
+    /// **The short-circuit order is load-bearing and must not be flipped.** `consume()`
+    /// runs FIRST so today's semantics are preserved everywhere — in particular on
+    /// **macOS, which reports `DELETED` and nothing else** (kqueue cannot recover the new
+    /// name), where the lone event *must* consume the flag or it stays armed and swallows
+    /// the next genuine external delete (GTK4Rs/AP-62). The `write_in_flight` clause can
+    /// therefore only ever catch a SECOND-or-later `Deleted` arriving during our own
+    /// in-flight write, which is exactly the Windows case and nothing else. Swallowing a
+    /// genuinely external delete inside that window is harmless: our own write re-creates
+    /// the file microseconds later.
+    ///
+    /// **Known limitation, stated rather than discovered:** this covers only events that
+    /// arrive while the pass is held. Linux's arrive ~100 ms *after* the write completes,
+    /// so there the one-shot flag still does the work and this clause never fires — and a
+    /// backend that delivered two `Deleted`s after release would defeat both.
+    pub(crate) fn swallows(&self, write_in_flight: bool) -> bool {
+        self.consume() || write_in_flight
+    }
 }
 
 #[cfg(test)]
@@ -56,6 +89,45 @@ mod tests {
         // Consuming disarms — a second consume without re-arming is a
         // genuine external event, not a swallowed self-write.
         assert!(!g.consume());
+    }
+
+    /// The Windows sequence, MEASURED: one arm, then TWO `Deleted`s during the write.
+    /// Both must be swallowed. Mutation guard: drop the `|| write_in_flight` and the
+    /// second assertion fails, which is the shipped bug.
+    #[test]
+    fn both_deletes_of_a_two_event_rename_are_swallowed_while_the_write_is_in_flight() {
+        let g = SelfDeleteGuard::default();
+        g.arm();
+        assert!(
+            g.swallows(true),
+            "first Deleted: consumed by the one-shot flag"
+        );
+        assert!(
+            g.swallows(true),
+            "second Deleted of the SAME rename must not read as an external deletion"
+        );
+    }
+
+    /// The macOS path: a lone `DELETED` with no write in flight by the time it lands
+    /// must still consume the flag, or the guard stays armed and eats the next genuine
+    /// external delete.
+    #[test]
+    fn a_lone_delete_consumes_the_flag_even_with_no_write_in_flight() {
+        let g = SelfDeleteGuard::default();
+        g.arm();
+        assert!(g.swallows(false));
+        assert!(
+            !g.swallows(false),
+            "the flag must not survive the event it explained"
+        );
+    }
+
+    /// A genuine external deletion, with nothing armed and nothing being written, still
+    /// surfaces — the fallback must not become a blanket suppressor.
+    #[test]
+    fn an_unarmed_guard_with_no_write_in_flight_surfaces_the_deletion() {
+        let g = SelfDeleteGuard::default();
+        assert!(!g.swallows(false));
     }
 
     #[test]
