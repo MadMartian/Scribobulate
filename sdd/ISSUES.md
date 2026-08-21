@@ -1015,6 +1015,24 @@ freeing anything.** `setAccessoryView:` **retains its argument**, so releasing
 `orderOut:` → `setAccessoryView:nil` → release the popup button → release the panel. A patch
 that omits the `nil` looks right, passes review, and reclaims nothing.
 
+✅ **AND THE ORDER THAT INCLUDES IT DOES RECOVER — MEASURED, which upgrades part of the
+ownership fix from correctness to footprint.** A dealloc spy on the popup, emulating GTK's
+ownership exactly: releasing with `accessoryView` still set gives **0/20 deallocations at
+932.2 KB/cycle**; `setAccessoryView:nil` *then* release gives **19/20 at 542.3** — about
+**390 KB per invocation reclaimed**. Corroborated from inside GTK, interleaved and paired,
+n=5: with-filter 1156.7 vs without-filter 735.3, a per-rep delta of **421.4 KB**
+(range 344–492) bracketing the 390 measured in a process containing no GTK at all.
+
+**Read the two figures with their scopes, which differ**: 390 KB is the AppKit-only
+accessory component; GTK's 421 KB delta is filter-vs-no-filter and therefore also carries
+`GtkFileFilter` and the internal chooser's filter handling, so it **bounds the accessory
+component from above** rather than measuring it.
+
+**So "no ownership fix recovers a byte" was too pessimistic and is corrected.** It holds for
+the *panel* retain, which `_retainedSelf` pins regardless. It does **not** hold for the
+accessory view: that half is a real ~390 KB per invocation, and an upstream report may say
+so.
+
 **On this file, assume the obvious fix is wrong until the ownership graph is drawn.** Three
 independent "obvious" patches now: two crash, one silently no-ops.
 
@@ -1476,7 +1494,26 @@ that on the completion-handler path the panel *may still be onscreen* when the h
 and that `orderOut:` is the sanctioned way to dismiss it — and `orderOut:` does not consult
 `releasedWhenClosed`. GTK is following Apple's advice and then never releasing.
 
-**⚠️ IF THIS IS EVER FILED UPSTREAM, LEAD WITH THE `hide()` LEAK — NOT THE PANEL RETAIN.**
+### 📋 Upstream filing: REVIEWED AND READY — blocked on the owner's decision, not on quality
+
+The GNOME GitLab issue body is **written, reviewed and corrected**. The gate this entry set —
+no measurement-derived claim leaves here without an unlocked re-run — **has been passed**; what
+remains is an authority question. **Nobody here files it**: publishing on a third-party
+tracker under the operator's identity is an external, public and effectively irreversible act
+in his name, and no seat holds GNOME GitLab credentials in any case (checked, not assumed —
+no `glab`, no config, no `gitlab.gnome.org` entry in `.netrc` or `.git-credentials`).
+
+Body lives in the researcher's findings doc, §11 of
+`researcher-findings-quartz-filechooser-native-retain-leaks.md`. Two defects were found in
+review and fixed: a **stale commit pin** — the header claimed `main` re-verified unchanged
+while `main` had moved ten commits — now re-pinned as a **pair** (read at one SHA, confirmed
+current at another, with the ten commits' touched files listed so the "none of these files"
+claim is checkable without re-running the compare); and a function line-range that pointed at
+a comment rather than the declaration.
+
+**When it is filed, put the URL here** and this paragraph becomes a link.
+
+**⚠️ IF IT IS FILED UPSTREAM, LEAD WITH THE `hide()` LEAK — NOT THE PANEL RETAIN.**
 The panel retain is now the **weakest** of the three findings: it is arithmetically real but
 recovers **zero bytes**, because `_retainedSelf` pins the object regardless. A report that
 leads with it invites a maintainer to apply the fix, measure nothing, and discredit everything
