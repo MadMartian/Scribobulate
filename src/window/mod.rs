@@ -123,7 +123,7 @@ mod swaprecovery;
 mod tabs;
 mod toast;
 mod toolbar;
-mod undo;
+pub(crate) mod undo;
 mod viewactions;
 
 use chrome::*;

@@ -49,6 +49,7 @@ mod annotations;
 mod annotations_view;
 mod app;
 mod atomic_io;
+mod clipboard;
 mod codeview;
 #[cfg(any(windows, target_os = "macos"))]
 mod colorscheme;
@@ -63,6 +64,7 @@ mod icons;
 mod imagefetch;
 mod keynav;
 mod limits;
+mod lineendings;
 mod links;
 mod logging;
 #[cfg(target_os = "macos")]

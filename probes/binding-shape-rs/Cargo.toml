@@ -1,0 +1,23 @@
+# Its own workspace on purpose: this is a PROBE, not a member of the application.
+# Keeping it out of the parent workspace is what stops it being built, linted or
+# gated with the app -- it asserts a property of gtk4-rs, so it is expected to
+# start failing the day the binding is fixed upstream, and that must not read as
+# a regression in Scribobulate.
+[workspace]
+
+[package]
+name = "binding-shape-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "binding-shape-probe"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned to the versions the application ships against, because the whole point
+# is to measure THAT binding's marshalling. Bumping these changes the subject.
+gtk = { package = "gtk4", version = "0.10", features = ["v4_6"] }
+sourceview = { package = "sourceview5", version = "0.10" }
+glib = "0.21"

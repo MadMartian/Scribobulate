@@ -39,6 +39,7 @@ pub(crate) mod annotations;
 pub(crate) mod annotations_view;
 pub(crate) mod app;
 pub(crate) mod atomic_io;
+pub(crate) mod clipboard;
 pub(crate) mod codeview;
 // The write side of the desktop light/dark channel, shared by the two platform
 // modules that have to supply that channel's missing SOURCE (both under `platform/`).
@@ -58,6 +59,7 @@ pub(crate) mod icons;
 pub(crate) mod imagefetch;
 pub(crate) mod keynav;
 pub(crate) mod limits;
+pub(crate) mod lineendings;
 pub(crate) mod links;
 pub(crate) mod logging;
 // Option+Left/Right word navigation in the editor — a macOS-only convention GTK

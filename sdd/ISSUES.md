@@ -5,7 +5,6 @@
 | A | Tables are selection islands; cells are individually selectable but not part of the continuous buffer | Closed |
 | D | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
 | E | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
-| F | Split mode intermittently blanks the view on an edit — a `GtkOverlay` snapshotted without a current allocation; rare, first-time-only, recovers on a mode toggle | Medium |
 | G | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
@@ -14,6 +13,8 @@
 | S | macOS only: every `GtkFileChooserNative` invocation (Open, Save, Export) grows RSS by ~1 MB and does not give it back; no plateau over 20 cycles. NOT a native-dialog property — Windows uses a native panel too and plateaus | Medium |
 | T | Two File-menu mnemonics collide on `l` (`Save A_ll` vs `_Load Unsafe Linked Documents`), and the uniqueness test that exists to catch exactly this never sees eight of the table's entries | Low |
 | U | Option+Left/Right word navigation on macOS only reaches the main document editor; every other in-app text field is unchanged | Low |
+| V | The inline-tab pre-pass reaches two of the four parse sites, though its doc says "every parse site" — the outline and copy-as-Markdown parse the raw source | Low |
+| X | Undo replay fires a buffer-repair hook, so undo can restore different bytes than were deleted — and the two available remedies contradict each other | Low |
 
 ## A. Tables are selection islands
 
@@ -367,143 +368,6 @@ flipping the scheme):**
   two live checks above.
 - **Accept the limitation**: the scheme applies on the next launch, users seldom
   retheme mid-session, and nothing is broken — only slower to follow than native apps.
-
-## F. Split mode intermittently blanks the view on an edit (`GtkOverlay` snapshotted without an allocation)
-
-**Severity**: Medium (user-visible — the pane blanks / stops rendering — but rare,
-first-time-only per session, and recoverable by a mode toggle; not reliably reproducible)
-
-Observed twice (2026-07-22), **both in split mode, both on a brand-new (`New`) document**:
-1. Editing a new doc in a new window: selected some text and deleted it → the **entire view
-   blanked / stopped rendering**. Recovered by forcing a mode change and back (Edit↔Split),
-   with no code change.
-2. Editing a new doc (typing empty task-list entries): the view **blanked momentarily** and
-   recovered on its own.
-
-Each time GTK logged (WARN at default `RUST_LOG`):
-
-```
-Trying to snapshot GtkOverlay 0x… without a current allocation
-```
-
-It has **not recurred after the first occurrence** in a session, and there is no known way
-to reproduce it on demand.
-
-**Not the benign member of this warning family** (ScrAP-257). The harmless variant names
-`GtkGizmo` — GTK's own private leaf widget, in practice a scrollbar trough — and leaves the
-previous frame's render node in place, so it repaints stale rather than empty and shows
-nothing on screen. This one names a **`GtkOverlay`**, one of ours by composition, and the
-outcome is a **blank** (no paint at all), so that stale-node cushion is not operating here.
-Read the interpolated widget name before assuming which case you have.
-
-**Not caused by the empty-task-list-marker fix (ScrAP-158).** Occurrence 1 predates
-that change and involved no task lists (plain select-and-delete); the change only touches
-`renderer/end.rs` (dropping an empty item's gutter marker) — no `GtkOverlay`, allocation, or
-snapshot path. Occurrence 2 merely happened *while* exercising that fix.
-
-**Mechanism (researcher-confirmed against GTK 4.6.9 source + verified against our code;
-first-time-only reason and the remedy still PENDING a researcher follow-up).** The live-edit
-path in split mode is `preview::re_render`, which **reuses the persistent** preview
-`GtkOverlay → GtkScrolledWindow → CodePreviewView` and calls **`view.set_buffer(new_buf)`**
-every edit (`render.rs`) — it does **not** append a fresh overlay. (An earlier draft of this
-entry blamed a `set_preview` overlay *swap*; that swap only runs on mode-switch / external
-reload / initial mount, not on edits. The warned `GtkOverlay` is the **persistent** preview
-overlay.) The blank arises on that persistent overlay:
-1. `set_buffer` (a content change) runs `queue_draw`, which **clears the cached `render_node`
-   walking to the root** — so the persistent overlay's node goes NULL (gtkwidget.c:3541-3552).
-2. The new buffer's first onscreen validation at `size_allocate` (heights 0→real,
-   gtktextview.c:4771-4789) drives `changed_handler`, whose tail calls
-   `gtk_widget_queue_resize()` **from inside the allocate cascade** (gtktextview.c:4935, gated
-   on `old_height != new_height`). A `queue_resize` issued during `size_allocate` is **silently
-   deferred** (gtkwidget.c:3647-3650), so the overlay carries `alloc_needed` into the **same
-   frame's paint**.
-3. The snapshot guard early-returns **without building a node** when `alloc_needed` is set
-   (gtkwidget.c:11614-11617) and `snapshot_child` **appends nothing** for a NULL `render_node`
-   (gtkwidget.c:12045-12047) → the whole pane the overlay covers paints **blank** (not stale —
-   the node was cleared in step 1). This is the snapshot-without-allocation family
-   (ScrAP-22/ScrAP-23/ScrAP-29) and the same guard as B, but here it covers the *entire* pane.
-
-The **editor** pane is also `GtkOverlay`-wrapped yet never blanks — because its buffer is
-edited **in place** (incremental validation), never `set_buffer`-swapped. That contrast is
-the likely shape of the fix. Full sourced analysis:
-`~/Documents/Projects/AI/Research/Gtk4Rust/researcher-findings-split-preview-overlay-swap-snapshot-blank-issueN.md`.
-
-**Why first-time-only (researcher-resolved + source-verified).** A descendant's tail
-`queue_resize` firing *every* edit does **not** blank in steady state, because
-`gtk_widget_size_allocate` clears `alloc_needed`/`alloc_needed_on_child` at its **tail**,
-*after* the vfunc (gtkwidget.c:~4103-4105). The layout cascade is **top-down**, so when the
-`CodePreviewView`'s validation calls `queue_resize` walking UP to set `overlay.alloc_needed =
-TRUE`, control then unwinds through `scrolledwindow.size_allocate` → `overlay.size_allocate`,
-and **each ancestor's tail sets `alloc_needed = FALSE` again** — so a mid-cascade descendant
-resize never leaves the overlay flagged for *that* frame's paint; it only re-arms one harmless
-extra LAYOUT→PAINT. (`GTK_DEBUG=geometry` still *prints* — it reads `resize_needed` before the
-clear — but the paint is clean.) The blank needs the overlay painted with `alloc_needed` set
-**without** its own `size_allocate` clearing it that frame — which happens **only in the
-unsettled initial mount**: entering split on a fresh doc, the view takes its FIRST content with
-`first_validate_idle` pending, and `GtkTextView` validates *synchronously* at both the
-`size_allocate` tail (gtktextview.c:4771-4789) **and** at paint start (`while(first_validate_idle)
-flush_first_validate`, gtktextview.c:~5803), and can expose right after size-allocate without
-returning to the main loop. In that window a paint reaches the overlay with a just-set
-`alloc_needed` and no full overlay allocate to clear it → NULL node → blank. Same family as the
-first-show STUCK blank (recovers only on a relayout = the Edit↔Split toggle); occurrence 2's
-momentary self-heal is the borderline case.
-
-**Fix applied 2026-07-22 (mitigation landed; live confirmation still owed — entry stays open).**
-The researcher's Round-3 (source-verified, GTK 4.6.9) retired two of the earlier candidates and
-pinned the working shape:
-- **Idle-defer is a NO-OP** (retracted). The live re-render is *already* async (a 300 ms
-  `glib::timeout_add_local_once`, `livepreview.rs`), and the decoupling is intrinsic to
-  `set_buffer`'s own re-invalidation (`gtk_text_view_set_buffer` → `queue_draw` clears the overlay
-  node to root + `gtk_text_view_invalidate` resets `onscreen_validated=FALSE` and re-arms
-  `first_validate_idle`, gtktextview.c:2260-2264/4838-4846) — so *where* `set_buffer` is called
-  from does not matter.
-- **Pre-warm-while-hidden is a NO-OP** — `validate_onscreen` is gated `SCREEN_HEIGHT>0`
-  (gtktextview.c:4715); a `set_child_visible(false)` view never really validates, so revealing it
-  re-validates → same blank.
-- **Root asymmetry:** the editor is *constructed with content and mapped once*, so its first
-  content-validation rides the window build. The preview is mounted **empty**, shown, then filled
-  via `set_buffer` **while already visible** → its first REAL content-validation is a decoupled
-  on-screen pass that can be **terminal** (occurrence 1). A non-empty doc mounts with content and
-  never blanks (why it's new-empty-doc-specific).
-
-**What landed (option (ii), "guarantee a follow-up frame"):** `scrollsync::arm_first_content_repaint`
-— after the FIRST live re-render since a fresh preview mount (gated by
-`SplitView::preview_first_render_pending`, armed in `set_preview`), a one-shot
-`FrameClock::connect_after_paint` forces one `preview_overlay.queue_draw()`. By that follow-up
-frame the first-content validation has settled (`alloc_needed` cleared on the interim layout), so
-the repaint gives the overlay a real render node — converting a *terminal* blank into a self-healed
-one (occurrence 2 was already this borderline). Frame-clock-anchored (not wall-clock, ScrAP-134),
-self-disconnecting, weak overlay (ScrAP-152 / GTK4Rs/AP-128). Steady-state edits don't re-arm it. **Verified: all
-605 tests pass (no regression); the belt is inherently safe (a forced extra repaint cannot break
-anything).** Not applied: option (i) "mount with content" is already our status quo for non-empty
-docs and cannot apply to an empty doc (no content to mount); a synchronous allocate/validate is
-unsanctioned (`queue_allocate` only flags — gtkwidget.c:~4103-4105; no "relayout now").
-
-**Still owed:** a live confirmation the terminal blank is gone (a possible ≤1-frame flicker may
-remain by design — acceptable). If it recurs *terminally*, escalate to a structural fix (don't
-reveal the preview pane until its first content has validated during a relayout).
-
-**⚠ Every `GTK_DEBUG=geometry` instruction in this entry is unrunnable on the reference host,
-and reads as a clean result when it is dark.** Measured 2026-08-04: a distribution GTK is
-built without debug support, so that key — like every informational `GTK_DEBUG`/`GDK_DEBUG`/
-`GSK_DEBUG` key — reports `[unavailable]` and emits nothing at all (ScrAP-251). The reasoning
-below about *reading* its output remains correct and is retained for whoever obtains a
-debug-enabled GTK; it simply cannot be acted on as written here. `sdd/PLAN.profiling.md`
-records what that costs and what substitutes for it.
-
-**Live confirmation on the next occurrence** (belt-and-suspenders, since it isn't reproducible
-on demand): run once with **`GTK_DEBUG=geometry`** — it names the subtree that `queue_resize`d
-during `size_allocate` (gtkwidget.c:4085-4091). The symbol-free parent-walk trap on the warned
-pointer (message-scoped `g_log_set_writer_func` → resolve to `gtk::Widget` → walk
-`gtk_widget_get_parent`, no debug symbols — see B / GTK4Rs/AP-141) confirms it is the
-preview overlay. Full sourced Round-1+2 analysis in the findings doc cited above.
-
-**⚠ Reading the confirmation AFTER a fix (researcher note):** the `GTK_DEBUG=geometry` line is
-NOT itself the failure — the tail `queue_resize` fires on every fresh-content validation and a
-settled subtree absorbs it in a clean next-frame LAYOUT. So post-fix you may still see a
-geometry line with **no blank**, and that is expected and benign. **The BLANK is the tell, not
-the geometry warning** — judge the fix by the absence of the blank/`GtkOverlay` snapshot
-warning, not by the absence of the geometry line.
 
 ## G. A large document pegs a CPU core at ~100% while idle (GTK/Pango relayout loop that never converges)
 
@@ -999,3 +863,77 @@ display-free decision, kept reusable for exactly this) into a small wiring helpe
 `GtkText`/`GtkEditable`, and attach it at each field's construction site — there is no
 single choke point today the way `build_tab_editor` is for the main editor, so it would
 need one call per surface (or a shared builder wrapper, if one gets introduced first).
+
+## V. The inline-tab pre-pass reaches two of the four parse sites
+
+**Severity**: Low (it takes a hard TAB inside a GFM table to observe anything, the
+preview — the surface a reader actually looks at — is one of the two sites that IS
+covered, and the divergence has not been shown to produce a wrong result on either
+uncovered surface. Found by inspection during the lone-CR review, not from a report.)
+
+`renderer::normalize_inline_tabs` (ScrAP-75) documents itself as "Used at every parse
+site (preview render, outline, copymap)". It is called at exactly two: `preview/build.rs`
+and `export/doc.rs`. `outline.rs` and `copymap.rs` both build a `pulldown_cmark::Parser`
+over the raw source instead.
+
+**This is an instance of a class, not a one-off.** A doc comment that asserts a behaviour
+the code does not implement is worse than no comment, because it **terminates the audit it
+appears to serve**: a reader checking whether every parse site is covered finds the
+sentence saying they are and stops. A second instance of exactly this was found
+independently in `export/pdf.rs` during the same period — a `table()` rustdoc claiming
+conformance to two TDD rubrics that nothing in the file implemented. The general form is
+worth stating wherever it recurs: **a comment claiming a contract is satisfied is a claim
+that needs a TEST behind it, not prose.**
+
+**Why it might matter.** The preview and `copymap` are supposed to be two readings of the
+same document, and `copymap` is what turns a preview selection back into Markdown source.
+Feed them a document with a tab-delimited GFM table and they disagree about its
+*structure* — the preview sees a table, `copymap` sees a paragraph — so a copy spanning
+that region can resolve to the wrong span. Offsets themselves stay aligned, since the
+pre-pass is length-preserving by design, which is why this is a structural divergence and
+not a drift.
+
+**Not verified.** Nobody has produced a user-visible wrong result from it; the reasoning
+above is inference from the call sites. Establishing whether the defect is real is the
+first step, not the fix — and a check that a tab-delimited table copies correctly out of
+the preview is what would settle it either way.
+
+**Mitigation.** Either route the two uncovered parsers through the pre-pass, or correct
+the doc comment to say which sites it actually covers and why the others are exempt. The
+second is not a cop-out if the exemption is real: a comment that overstates its reach is
+what made this look settled for as long as it did.
+
+## X. Undo replay fires a buffer-repair hook, and both remedies cost something
+
+**Severity**: Low **while the precondition below holds** — it is not reachable today. It is
+logged rather than fixed because the choice between the two remedies is a real trade with
+no free option, and it must be made deliberately at the moment a repair hook exists, not
+fallen into.
+
+`gtk_text_buffer_history_insert` reaches the buffer through the **public**
+`gtk_text_buffer_insert`, so any handler that repairs inserted text fires during an undo
+replay and can put back something other than what was deleted. `GtkTextHistory` cannot
+notice: it sets `applying` for the whole replay and suppresses its own bookkeeping, and
+the `expected_text` its delete path is handed is ignored by GTK's implementation. The
+divergence is therefore silent — nothing warns, and the history's model still believes the
+original bytes were restored. Measured on GTK 4.22.4 / GtkSourceView 5.20.0 and matching
+4.6.9 byte for byte; `probes/undo-replay.c` is the rig.
+
+**Why it is not reachable today.** No buffer in this process ever holds a lone `\r`, so an
+undo has none to restore. That rests entirely on the ingress repairs running before
+anything populates a buffer — see the ordering note in `window::tabs::lifecycle`'s
+`build_tab_editor`. **The precondition breaks** if a buffer is ever filled before the
+repair is armed, which includes any future session-restore, template-insertion or
+duplicate-tab path, and is one line of reordering away.
+
+**The choice, when a repair hook exists.** Bracket the replay — a `connect` plus
+`connect_after` pair on `undo`/`redo`, which straddles the default handler exactly — and
+the original bytes are restored, which means a lone `\r` can re-enter a buffer and the
+no-lone-CR invariant no longer holds. Do not bracket, and undo silently restores something
+other than what it undid. A legacy document that legitimately contains a lone `\r` forces
+the choice; there is no option that costs nothing.
+
+**Not an invariant, despite appearances**: a repair that preserves character count is *not*
+required for undo to work. An early probe appeared to show it was; the control with no hook
+at all reproduced the same behaviour, which is `GtkTextHistory`'s action coalescing merging
+adjacent inserts when the text contains no newline. Do not add that constraint.

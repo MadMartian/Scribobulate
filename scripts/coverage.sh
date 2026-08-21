@@ -189,7 +189,7 @@ cd "$(dirname "$0")/.."
 # the deliberate margin below the real measurement rather than pretending to a number that
 # was never met. This is NOT the prohibited move of lowering the Linux floor to make
 # another platform pass: it is bringing a mis-set value back to the evidence.
-FLOOR=79.00
+FLOOR=79.40
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:
@@ -232,6 +232,18 @@ FLOOR=79.00
 #                   how the test must work, not untested code. Excluding it would
 #                   trade a small, explainable dent for a blind spot in the one
 #                   module whose failure mode is silence.
+#   clipboard.rs    a `GdkContentProvider` GObject subclass plus two signal handlers
+#                   (`copy-clipboard`, `cut-clipboard`) and a realize/unrealize
+#                   rebalance — GTK wiring end to end, with no decision core to
+#                   extract: its one branch is `selection_bounds().is_some()`, which
+#                   is a buffer read rather than logic. It is NOT untested — all four
+#                   of its behaviours are driven by `#[gtktest::test]` bodies in
+#                   pipeline step 5, including a mutation-checked assertion that a
+#                   same-application paste arrives as exactly ONE `insert-text`
+#                   emission (6 with the override removed). Those run under the
+#                   `gtk-integration-tests` feature, which this gate deliberately does
+#                   not enable, so counting the file here would report 0% for code the
+#                   suite exercises thoroughly.
 #   codeview/       mod (GObject subclass + snapshot chip painting), geometry
 #                   (line/cell buffer-Y reads), markers (popover UI) are all
 #                   view-bound → excluded. The one pure piece, group_by_line, keeps
@@ -255,6 +267,6 @@ FLOOR=79.00
 # gate compares the FLOOR against the UNSCOPED total (37.9% vs 71.7%) and fails every
 # run. That reads as "your change tanked coverage" rather than "the filter missed",
 # which is the worst way for a gate to break — keep the class if you edit this.
-IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app[/\\](appactions|menubar|openbatch|open|setup)|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|widgets[/\\](table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
+IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app[/\\](appactions|menubar|openbatch|open|setup)|clipboard|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|widgets[/\\](table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
 
 exec cargo llvm-cov --summary-only --fail-under-lines "$FLOOR" --ignore-filename-regex "$IGNORE" "$@"

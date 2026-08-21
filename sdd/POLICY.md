@@ -894,6 +894,16 @@ Content authored elsewhere keeps its author's reasoning and its
 MEASURED/INFERRED labelling; the allocating seat edits for the register's format,
 not for its argument, and says so in the entry.
 
+**A number a seat has been TOLD is not a number that seat can CITE.** The writing
+seat allocates an ID in its own clone, so until that clone's register reaches the
+other seat, an entry cited there resolves to nothing — and `lint-references` check
+2 fails, correctly, on a citation whose body is not in the tree. So an instruction
+to cite a freshly allocated `ScrAP-N` is implicitly an instruction to wait for it:
+the citing seat leaves a one-line note at the site and adds the citation once the
+register lands, rather than committing a forward reference that breaks its own
+gate. Measured, not anticipated — the macOS seat hit exactly this and the gate
+caught it, which is the gate working, not friction to route around.
+
 ## Prohibited actions
 
 - Do not use `sudo` in build, test, or run commands — the agent cannot enter a

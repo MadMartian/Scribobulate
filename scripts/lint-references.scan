@@ -175,6 +175,14 @@ root scripts
 root packaging
 root gtktest
 root data
+# `probes/` holds measurement rigs and their README — C sources, a nested Rust
+# workspace, and prose that cites the registers. It is enumerated for the same reason
+# every other root is: a gate is its pattern AND its file set, and a directory silently
+# outside the set is the exact drift this contract was written after. Depth 2 (the nested
+# crate's src/ costs a segment), well inside the maxdepth tripwire. Parity with the
+# PowerShell port proven by an identical ordinal-sorted list: 323 entries, 11 under
+# probes/, SHA256 F663...40ED on both platforms.
+root probes
 
 file AGENTS.md
 file README.md

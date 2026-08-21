@@ -116,6 +116,24 @@
 - **And** the mark's removal is invisible to every comparison the application makes about that file: saving it does not raise a spurious "changed on disk" prompt, and its crash-recovery snapshot does not report a spurious stale baseline
 - **And** the file on disk is untouched until the user saves it; an explicit save then writes the buffer, so the mark is not restored — the application holds no per-document encoding state and its own writes are BOM-less UTF-8
 
+### 1.10 A document containing lone carriage returns
+<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by the macOS agent 2026-08-20 for the lone-CR ingress repair. -->
+- **Given** text whose lines are separated by a bare `\r` with no `\n` — the classic Mac OS convention, which a keyboard/mouse sharing tool's clipboard bridge still converts to when the receiving machine is a Mac, and which macOS itself abandoned in 2001
+- **When** it arrives by ANY route — a file being opened, reloaded, restored from a session or recovered from a crash snapshot, or text pasted, dropped or middle-click-pasted into the editor
+- **Then** it renders exactly as the same document written with `\n`: headings are headings, blank lines separate blocks, and lists are lists — rather than the whole document collapsing into a single heading in the preview and a single entry in the outline while the editor pane beside it shows the lines laid out correctly
+- **And** that split between the two panes is the defining symptom, because GTK treats a bare `\r` as a line separator and the Markdown parser does not
+- **And** the repair is invisible to every comparison the application makes about the file: opening one does not mark it modified, saving it does not raise a spurious "changed on disk" prompt, and its crash-recovery snapshot does not report a spurious stale baseline
+- **And** the file on disk is untouched until the user saves it; an explicit save then writes the buffer, so the document gains the line endings the rest of the platform uses
+- **And** `\r\n` is **not** affected — a Windows-authored document parses correctly as it is, and this application does not rewrite it (the separate question of whether a save should preserve CRLF is deliberately left where it already sits, `tests/MANUAL-TEST.md` §4.2)
+
+### 1.11 What a copy puts on the clipboard
+- **Given** a selection in the editor, in a document with syntax highlighting active
+- **When** the reader copies or cuts it, by any route — the keybinding, the Edit menu, the context menu or the selection bubble
+- **Then** what lands on the clipboard is **plain text**, not a rich buffer: pasting it into another application yields the Markdown source, and pasting it back into this one inserts it as a single edit
+- **And** a cut removes the selection and is a **single** undo step — one Ctrl+Z restores the document exactly as it was, never half of it
+- **And** the same holds for the PRIMARY selection on the platforms that have one: selecting text publishes it, and clearing the selection **releases** PRIMARY rather than claiming it for an empty string, so other applications' middle-click paste is unaffected
+- **And** none of this depends on rich formatting surviving an in-application paste — a Markdown document cannot represent a syntax-highlight tag, so carrying one was never meaningful
+
 ---
 
 ## 2. Rendering fidelity
