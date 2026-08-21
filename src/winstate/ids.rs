@@ -88,6 +88,15 @@ mod gtk_integration_tests {
             Some("com.extollit.scribobulate.windowidtest"),
             gtk::gio::ApplicationFlags::NON_UNIQUE,
         );
+        // `register` is what emits `GApplication::startup`, and an `ApplicationWindow`
+        // built before that raises "New application windows must be added after the
+        // GApplication::startup signal has been emitted" — a `Gtk-CRITICAL` that this
+        // suite emitted for some time while still reporting `ok`, because nothing in
+        // the toolchain ran the `G_DEBUG=fatal-criticals` POLICY prescribes. It is not
+        // cosmetic: under that flag the process dies with `SIGTRAP`, so the gate could
+        // never be armed while this line stood.
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("registering a NON_UNIQUE application cannot contact a bus or fail");
         let window = ApplicationWindow::new(&app);
 
         let a = WindowId::of(&window);

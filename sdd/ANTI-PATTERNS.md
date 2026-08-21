@@ -444,6 +444,7 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 315 | Laying a table out with tab characters — a tab ladder cannot express a column, and the doc comment claiming otherwise terminated the audit that would have caught it | C |
 | 316 | A repair handler on `insert-text` is also a handler on the UNDO machinery — `GtkTextHistory` replays through the PUBLIC insert, ignores its own `expected_text`, and the substituted bytes go back with nothing warning | C |
 | 317 | A counter that stops being able to SEE its subject reports the intervention as a success | B |
+| 318 | Silencing a whole log DOMAIN to arm a gate also silences the defects that domain is the only signal for | A |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -4339,3 +4340,19 @@ D and E are the load-bearing arms. D is clean because `static_type()` registers 
 **Lesson**: when an intervention is supposed to *free* something, **verify the free, not a proxy for it** — a dealloc hook, an instance count, a weak reference — and confirm the metric can still see the object when the intervention does nothing. Ask what would move your number *other than* the thing you are testing, and prefer an instrument the operation under test cannot touch. Measure every cell of a comparison more than once and **interleave** the modes, so wall-clock drift lands on all cells rather than on whichever ran last. State which classes a census covers: an `NSSavePanel`-only count read a run that was also accumulating one `NSAccessoryViewWindow` per invocation as clean. And report byte figures as mean and spread over n runs, never as a single number — a perfectly stable series from an instrument that has gone blind is *more* convincing than a real one, not less.
 
 **See**: project-specific; the reproduction and its flags live in `probes/native-chooser-rss.m` and its README. Content authored by the macOS seat; landed here by the register's owning seat, edited for format and not for argument.
+
+
+## 318. Silencing a whole log DOMAIN to arm a gate also silences the defects that domain is the only signal for
+> *GTK4-core (GDK macOS backend) — full body pending a weave into the `gtk4-rs` skill; the gate-policy half is Scribobulate's and stays.*
+
+**Symptom**: a suite is clean under `G_DEBUG=fatal-criticals` on one platform and, on another, trips repeatedly on one benign assertion — `gdk_surface_thaw_updates: assertion 'surface->update_freeze_count > 0' failed`, nine occurrences across eight tests, every one opening or dismissing a popover. The obvious way to arm the gate there is to mask that message's domain.
+
+**Why the mask is wrong, and it is not the usual "you might hide a real one" hand-wave.** The benign assertion and a **latent, genuinely harmful defect live in the same file, at the version the platform ships**. GDK macOS takes one freeze per surface *construction* and one thaw per *map*, and `gdk_macos_surface_hide` never freezes — so a second map thaws at zero and the assertion fires harmlessly (`g_return_if_fail` returns before decrementing, and the state it wanted already holds). But in **4.22.4**, `_gdk_macos_surface_frame_presented` clears `awaiting_frame` **unconditionally** and thaws **only if the surface is mapped**: a frame presented while unmapped **leaks a freeze**, and a surface whose `update_freeze_count` never returns to zero **stops repainting, silently**. Fixed on `main`; 4.22.4 is what ships. Masking `Gdk-CRITICAL` removes the only signal anyone would ever get for that.
+
+**Neither is reachable from application code** — `gdk_surface_freeze_updates` / `thaw_updates` are private and absent from the `gdk4` bindings, so an empty grep for them is the expected result rather than evidence of anything.
+
+**Lesson**: a log domain is not a severity class. Silencing one to arm a gate trades a known-benign message for **every unknown message that domain would ever carry** — and the trade is worst exactly where it looks safest, because the benign instance is the one you can see and reason about while the harmful sibling is, by construction, the one nobody has hit yet. Prefer leaving the gate unarmed on that platform and **recording why**, over arming it on top of a blindfold: an unarmed gate is honestly weak, a masked one reports strength it does not have. If a message-level allowlist is built instead, it must delegate to `g_log_writer_default` for everything it does not allowlist (ScrAP-268 — a writer replaces the very check that makes criticals fatal) and be mutation-tested against a second, different critical before it is trusted.
+
+**Scribobulate**: `scripts/pipeline.steps` arms `G_DEBUG=fatal-criticals` on the **Linux** line only; POLICY § Logging records that macOS **cannot** carry it, that the mask is refused, and what the mask would have cost. **If a macOS surface is ever reported as having stopped repainting, start here.**
+
+**See**: candidate for the `gtk4-rs` skill (GDK macOS surface freeze/thaw accounting); sibling trap ScrAP-268 (a custom log writer silently disarms promoted fatality).

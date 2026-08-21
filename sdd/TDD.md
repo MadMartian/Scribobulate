@@ -1594,7 +1594,7 @@
 
 ---
 
-## §14 Show Unsafe Images
+## 14. Show Unsafe Images
 
 ### 14.1 Remote images are blocked by default
 - **Given** a document containing a remote image (e.g. `![badge](https://example.com/badge.png)`)

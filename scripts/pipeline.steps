@@ -221,12 +221,26 @@ cmd.windows skipreport  cargo test -- --nocapture
 # misreading cost a well-argued but wrong startup-stall hypothesis once already
 # (ScrAP-166), on Windows, which is where a wedging GTK suite is most likely. It is
 # scoped to the platform whose failure mode it serves rather than slowing the other two.
+#
+# LINUX CARRIES `G_DEBUG=fatal-criticals`; THE OTHER TWO DO NOT YET. POLICY § Logging has
+# always prescribed this flag for the test binary, so that a `Gtk-CRITICAL` becomes a hard
+# failure instead of a silent log line — and until 2026-08-21 NOTHING IN THE TOOLCHAIN SET
+# IT. A prescribed gate that is never armed cannot fail, and this one had not: the suite was
+# carrying three latent criticals while reporting `ok` (a window built before
+# `GApplication::startup`; a `compute_bounds` on a parentless popover; and a
+# `change_action_state` on a STATELESS action, which was silently no-opping a guard's setup
+# so it walked a smaller tree than it claimed to — ScrAP-209's own species, inside the test
+# that cites it). All three are fixed and both Linux harnesses are clean under the flag.
+# It is scoped to Linux because Linux is the canonical gate and because only Linux has been
+# verified under it; macOS and Windows must each confirm their own suite is clean before
+# their line gains it, since a platform-specific critical would turn a real gate into a
+# blocked pipeline on a platform nobody could green.
 # ---------------------------------------------------------------------------
 step   5  integration
 intent integration  The GTK integration suite passes against a real display, through Cargo so the [env] pins apply
 verdict integration  exit
 class  integration  required
-cmd.linux   integration  xvfb-run -a cargo test --features gtk-integration-tests
+cmd.linux   integration  G_DEBUG=fatal-criticals xvfb-run -a cargo test --features gtk-integration-tests
 cmd.macos   integration  cargo test --features gtk-integration-tests --test gtk_suite --test icon_resolution --test macos_dark_mode --test popover_deferred_focus
 cmd.windows integration  cargo test --features gtk-integration-tests -- --test-threads=1
 

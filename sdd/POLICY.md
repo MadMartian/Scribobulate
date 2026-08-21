@@ -1017,7 +1017,37 @@ RUST_LOG=warn,scribobulate::scroll=trace   # just the scroll hot path
 ```
 
 CI: run the test binary with `G_DEBUG=fatal-criticals` so any `Gtk-CRITICAL`
-becomes a hard failure instead of a silent log line. **The test binary, and only
+becomes a hard failure instead of a silent log line. **This is armed on Linux, in
+build-pipeline step 5's contract line — and it was a dead letter until 2026-08-21.**
+The prescription had stood for a long time with **nothing in the toolchain setting the
+flag**, which is the failure this document keeps recording in other people's code: a gate
+that is never armed cannot fail, and looks identical to one that passes. When it was
+finally run, the suite was carrying three latent criticals while reporting `ok` — the
+worst of them a `change_action_state` on a **stateless** action, silently no-opping a
+guard's setup so it walked a smaller tree than it claimed to, inside the very test that
+cites ScrAP-209 for that species. **Do not prescribe a flag without wiring it to a
+runner.** Windows does not carry it yet and must confirm its own suite first.
+
+**macOS CANNOT carry it, and this is settled rather than pending.** Its suite emits
+`gdk_surface_thaw_updates: assertion 'surface->update_freeze_count > 0' failed` — nine
+occurrences across eight tests, every one opening or dismissing a popover or annotation
+card. The cause is upstream in GDK's macOS backend (one freeze per surface *construction*,
+one thaw per *map*, and `gdk_macos_surface_hide` never freezes, so the second map thaws at
+zero), it is present from 4.22.4 through `main`, and `gdk_surface_freeze_updates` /
+`thaw_updates` are private and absent from the `gdk4` bindings, so **no application-side
+fix exists**.
+
+⛔ **Do NOT arm it there by masking `Gdk-CRITICAL`.** That mask would also silence a
+*latent* defect in the same file at the version macOS ships — a leaked surface
+update-freeze that stops a surface repainting, ScrAP-318 — which is the one signal anybody
+would get if that ever happened.
+⛔ **And do NOT reach for a `g_log_set_writer_func` allowlist without reading ScrAP-268
+first.** Installing a writer replaces `g_log_writer_default`, which is *where GLib
+consults `g_log_always_fatal`* for structured logs — so the naive allowlist **disarms the
+gate entirely and silently**, and a disarmed gate is indistinguishable from a passing one.
+Any such writer must delegate to `g_log_writer_default` for everything it does not
+allowlist, and must be **mutation-tested** by planting a second, different critical and
+confirming the suite still fails on it. **The test binary, and only
 it** — the flag is a no-op against the *running application*, MEASURED (GLib 2.72.4):
 for structured logs, which GTK's own diagnostics are, GLib consults
 `g_log_always_fatal` inside `g_log_writer_default`, and `logging::init` replaces that

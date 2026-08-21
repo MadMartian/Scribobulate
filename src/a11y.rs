@@ -218,7 +218,13 @@ mod gtk_integration_tests {
         // over an empty tree (ScrAP-209: a guard whose setup leaves nothing to inspect passes with the fix deleted).
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        window.change_action_state("find-replace", &true.to_variant());
+        // ACTIVATE, not change_action_state: `find-replace` is a stateless
+        // `SimpleAction` (window/findbar.rs), so changing its state is a silent no-op
+        // that only emits `g_action_change_state: assertion 'state_type != NULL'`. That
+        // is this comment's own ScrAP-209 in miniature — the setup step meant to reveal
+        // the replace row did nothing, so the walk never reached those controls and the
+        // guard passed on a smaller tree than it claimed to inspect.
+        gtk::prelude::ActionGroupExt::activate_action(&window, "find-replace", None);
         window.change_action_state("outline", &true.to_variant());
         window.change_action_state("annotations", &true.to_variant());
 
