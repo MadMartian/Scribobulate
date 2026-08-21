@@ -457,7 +457,18 @@ the physical machine for anything none of them can reach.
 
 **Linux remains the gate for GTK-level regressions.** A macOS-only defect is
 therefore discoverable only by the above, which is why the manual suite carries
-platform-specific items rather than assuming parity.
+platform-specific items rather than assuming parity. **And the converse now has a measured
+instance**: a Linux-era guard can be *inert* on the macOS GTK without being broken —
+ScrAP-157's collapse-all guard passes there with the fix it guards removed, because
+`GtkListView` 4.22.4 does not exhibit the 4.6 defect at all. So a green macOS suite is not
+evidence that a Linux-era fix is still required; the guard is live only where the defect is.
+
+**A locked macOS session makes that suite RED, and correctly so.** `codeview::markers`'s
+a11y focus test panics on its own precondition — "the stand-in can hold the focus (a mapped,
+active toplevel)" — rather than passing when no active toplevel exists. That is a positive
+control doing its job, not a defect: a locked screen has no active toplevel. Do not chase it,
+do not "fix" it by relaxing the precondition, and do not report the suite as passing on a
+locked machine. Unlock and re-run.
 
 **Before filing a defect as macOS-specific, have the Linux counterpart try to
 reproduce it.** Behaviour found here is not platform-specific until a peer fails
@@ -866,6 +877,31 @@ category must **account for every applicable cell** in
 that matrix, and derive its `tests/MANUAL-TEST.md` checks from the cells (build
 pipeline step 7). Operator-granted exceptions are recorded in `CAM.md` too.
 
+## Cross-machine seat branches
+
+The platform seats' `origin` **is the Linux seat's working clone**, not a neutral server. A
+seat's push therefore writes directly into the integration machine's repository, and that
+topology has one sharp edge worth stating before it is discovered.
+
+**Push a seat branch with an explicit refspec** — `git push origin
+mac/feature:refs/heads/mac/feature` — and set tracking deliberately afterwards. Do **not**
+rely on a bare `git push -u origin <branch>`.
+
+The reason is not style. A branch created with `git checkout -b <name> origin/<shared>` has its
+upstream set to the **shared** branch, and under `push.default = tracking` a bare push sends
+the current branch to *its upstream's name* — aiming a seat branch straight at the shared
+integration branch. **Measured, and it was one fast-forward away from succeeding silently**: the
+push was rejected only because the integration branch had moved on. Had it been fast-forwardable
+the seat's work would have been written onto the shared branch with no error, and nobody would
+have learned of it until something looked wrong downstream. This is a property of the topology,
+not of any seat's carelessness, and the failure mode is a **silent write to a shared branch
+rather than an error** — which is why it belongs here rather than in a seat's habits.
+
+Corollaries already paid for elsewhere in this document's registers: **verify integration by
+diffing the trees, not by trusting a record of what was picked** (`git diff HEAD <seat-branch>
+-- <paths>` before deleting a branch), because a seat that is still working moves the target
+under a confirmation that was accurate when it was sent.
+
 ## SDD register writes
 
 `sdd/ANTI-PATTERNS.md` and `sdd/ISSUES.md` have **one writer**. When work is split
@@ -893,6 +929,17 @@ the three-collision rate above is the only defence it will ever have.
 Content authored elsewhere keeps its author's reasoning and its
 MEASURED/INFERRED labelling; the allocating seat edits for the register's format,
 not for its argument, and says so in the entry.
+
+**Cite an entry by READING it, not from a remembered gloss of it.** `lint-references` check 2
+proves a cited `ScrAP-N` exists and never that it is the right one, so the whole weight of
+correctness sits on the author — and the way it fails in practice is specific enough to name:
+a seat cites a number it *does* hold, for a claim the entry does not make, because it is
+working from a note *about* the entry rather than from the entry. MEASURED: a seat cited
+`ScrAP-157` for "a guard that is inert on this platform", which is an observation recorded in
+that seat's own working memory *about* the entry; the entry itself is a `GtkTreeListModel`
+collapse defect and makes no such claim. The gate passed, as it must. This is the documentary
+twin of trusting an instrument's reading without checking what it measured — and it is one
+step past the rule below, which covers a number a seat has *not* been given.
 
 **A number a seat has been TOLD is not a number that seat can CITE.** The writing
 seat allocates an ID in its own clone, so until that clone's register reaches the
