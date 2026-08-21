@@ -189,7 +189,17 @@ cd "$(dirname "$0")/.."
 # the deliberate margin below the real measurement rather than pretending to a number that
 # was never met. This is NOT the prohibited move of lowering the Linux floor to make
 # another platform pass: it is bringing a mis-set value back to the evidence.
-FLOOR=79.40
+#
+# 2026-08-20, 79.40 -> 79.60. The PDF sink's table renderer moved its column-width
+# arithmetic into `export/pdftable.rs`, a display-free module the suite can execute, and
+# it lands at 99.51% (204 lines, 1 missed) — the extraction-raises-the-floor mechanism
+# POLICY's scope rule describes, doing exactly that. Measured total 79.93%; a
+# counterfactual with `pdftable.rs`'s lines removed is 79.73%, so the pre-change baseline
+# was at or below that and the gain is real rather than a reshuffle. Raised to 79.60 and
+# not to 79.93: the margin is what absorbs the ordinary drift of unrelated work, and a
+# ratchet pinned to the last measurement is the permanently-red gate the paragraph above
+# was written about.
+FLOOR=79.60
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

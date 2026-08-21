@@ -2905,11 +2905,14 @@ up doing.
 - **When** it is exported to PDF
 - **Then** no line of text is divided across a page boundary — a line falls wholly on one page or wholly on the next
 
-### 25.17 A table too wide for the page is scaled, not clipped
+### 25.17 A table too wide for the page wraps, then scales — never clips
 - **Given** a table wider than the printable width of the page
 - **When** the document is exported to PDF
-- **Then** the table is scaled to fit — never clipped at the margin, never reflowed into a different table
-- *(The bound on how far scaling may go before the result is unreadable is authored at phase 2 kickoff.)*
+- **Then** the table is contained within the printable width — **never clipped at the margin, never reflowed into a different table**
+- **And** *reflowed into a different table* means a change to the table's **structure**: a column dropped, merged, split, reordered, or degraded into prose or a list. **The column count is the invariant.** Wrapping a cell's text onto more lines *inside its own column* is not a reflow — the table a reader sees has the same columns in the same order, and every cell is still in the cell it belongs to
+- **And** the two remedies apply **in that order**: a table that cannot fit at its natural widths has its columns narrowed and its cells wrapped; **only** a table that still overflows once every column is at its own minimum content width (its longest unbreakable word) is uniformly scaled. Wrapping is preferred because it costs a reader nothing, where scaling costs legibility — so a table that could have wrapped must never be found scaled
+- **And** each row is one indivisible fragment, so 25.16's page-break rule holds for tables: a break falls **between** rows and never through one, however many lines a row's tallest cell wraps to
+- *(Ordering ratified by the operator 2026-08-20, replacing the unauthored "bound on how far scaling may go": the bound is no longer needed as a number, because scaling is now the last resort rather than the first response, and the regime that reaches it is one no wrapping could have saved. Automated in `export::pdftable`'s unit tests and `export::pdf`'s layout tests; driven end-to-end per MANUAL-TEST 25.17.)*
 
 ### 25.18 Text round-trips out of the PDF byte-exact
 - **Given** an exported PDF containing ASCII, precomposed and combining accents, em and en dashes, curly quotes, ellipses, CJK, arrows, typographic symbols and box drawing

@@ -63,6 +63,7 @@ pub(crate) mod html;
 pub(crate) mod markup;
 pub(crate) mod paginate;
 pub(crate) mod pdf;
+pub(crate) mod pdftable;
 pub(crate) mod walk;
 
 /// What the builder needs to know about the document beyond its text: where it sits
