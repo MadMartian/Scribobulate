@@ -8,7 +8,7 @@
 | 4 | Editing & saving | 4.1 – 4.9 |
 | 5 | Reconciliation (conflict handling) | 5.1 – 5.4 |
 | 6 | Resource footprint (viability gate) | 6.1 – 6.5 |
-| 7 | Window & layout | 7.0b – 7.20 |
+| 7 | Window & layout | 7.0b – 7.21 |
 | 8 | Single-instance lifecycle | 8.1 – 8.7 |
 | 9 | Menu bar, toolbar, and actions | 9.1 – 9.36 |
 | 10 | Markdown formatting commands | 10.1 – 10.20 |
@@ -26,6 +26,7 @@
 | 22 | Crash recovery (swap files) | 22.1 – 22.16 |
 | 23 | Back / Forward navigation history | 23.1 – 23.14 |
 | 24 | Renaming an open document | 24.1 – 24.14 |
+| 25 | Exporting a document | 25.1 – 25.24 |
 
 ---
 
@@ -115,6 +116,25 @@
 - **And** the mark's removal is invisible to every comparison the application makes about that file: saving it does not raise a spurious "changed on disk" prompt, and its crash-recovery snapshot does not report a spurious stale baseline
 - **And** the file on disk is untouched until the user saves it; an explicit save then writes the buffer, so the mark is not restored — the application holds no per-document encoding state and its own writes are BOM-less UTF-8
 
+### 1.10 A document containing lone carriage returns
+<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by the macOS agent 2026-08-20 for the lone-CR ingress repair. -->
+- **Given** text whose lines are separated by a bare `\r` with no `\n` — the classic Mac OS convention, which a keyboard/mouse sharing tool's clipboard bridge still converts to when the receiving machine is a Mac, and which macOS itself abandoned in 2001
+- **When** it arrives by ANY route — a file being opened, reloaded, restored from a session or recovered from a crash snapshot, or text pasted, dropped or middle-click-pasted into the editor
+- **Then** it renders exactly as the same document written with `\n`: headings are headings, blank lines separate blocks, and lists are lists — rather than the whole document collapsing into a single heading in the preview and a single entry in the outline while the editor pane beside it shows the lines laid out correctly
+- **And** that split between the two panes is the defining symptom, because GTK treats a bare `\r` as a line separator and the Markdown parser does not
+- **And** the repair is invisible to every comparison the application makes about the file: opening one does not mark it modified, saving it does not raise a spurious "changed on disk" prompt, and its crash-recovery snapshot does not report a spurious stale baseline
+- **And** the file on disk is untouched until the user saves it; an explicit save then writes the buffer, so the document gains the line endings the rest of the platform uses
+- **And** `\r\n` is **not** affected — a Windows-authored document parses correctly as it is, and this application does not rewrite it (the separate question of whether a save should preserve CRLF is deliberately left where it already sits, `tests/MANUAL-TEST.md` §4.2)
+- **And** an **undo never puts a lone `\r` back**. On every document reachable in normal use this costs nothing to observe — undo restores exactly the bytes the delete removed, `\r\n` pairs included — because no buffer holds a lone `\r` in the first place. Where the two would differ, the rule wins: a buffer that somehow held one has it repaired on the replay rather than restored verbatim, since byte-exact undo of a sequence no buffer may legally contain is worth less than the rule every derived surface depends on
+
+### 1.11 What a copy puts on the clipboard
+- **Given** a selection in the editor, in a document with syntax highlighting active
+- **When** the reader copies or cuts it, by any route — the keybinding, the Edit menu, the context menu or the selection bubble
+- **Then** what lands on the clipboard is **plain text**, not a rich buffer: pasting it into another application yields the Markdown source, and pasting it back into this one inserts it as a single edit
+- **And** a cut removes the selection and is a **single** undo step — one Ctrl+Z restores the document exactly as it was, never half of it
+- **And** the same holds for the PRIMARY selection on the platforms that have one: selecting text publishes it, and clearing the selection **releases** PRIMARY rather than claiming it for an empty string, so other applications' middle-click paste is unaffected
+- **And** none of this depends on rich formatting surviving an in-application paste — a Markdown document cannot represent a syntax-highlight tag, so carrying one was never meaningful
+
 ---
 
 ## 2. Rendering fidelity
@@ -161,6 +181,7 @@
 - **Given** a table whose cells and/or `---` delimiter row are separated by hard tabs (e.g. pasted from a spreadsheet), which GFM alone would reject as a table
 - **When** it is rendered
 - **Then** it appears as a real laid-out table, not a literal paragraph of pipes and em-dashes — inline hard tabs are normalised to spaces before parsing (length-preservingly, exempting leading indentation and verbatim code), so offsets/scroll-sync/copy are unaffected (ScrAP-75)
+- **And** every surface derived from the document reads that same normalised text, not only the rendered page: the **outline** lists exactly the headings the page shows (a tab-padded table never becomes a phantom heading, and a hard tab inside a heading reads as a space, as on the page), the **export** produces a table, and an **annotation** made over a cell's text in the editor wraps that cell's content and never a span crossing a cell boundary
 
 ### 2.9 Links within table cells
 - **Given** a table cell containing a Markdown hyperlink — **whether the link is the cell's entire content** (`[#1](https://github.com/…)`) **or sits beside other content** (`☑ [#1](…) filed`), which are the two shapes a reader cannot tell apart
@@ -207,6 +228,18 @@
 - **Given** a fenced code block immediately followed by text with no blank line between them — e.g. a hard-broken loose continuation paragraph wedged under a code block inside a nested list item
 - **When** it is rendered
 - **Then** the code block's coloured card wraps only its own lines (its uniform inner padding above and below the code) and does **not** paint over the following line's text — the abutting paragraph reads on its own clear line below the card (regression guard for the self-drawn decoration re-adding the tag-supplied line padding, ScrAP-150)
+
+### 2.3b A code block offers a one-gesture copy button
+- **Given** a rendered fenced (or indented) code block
+- **When** the pointer rests anywhere over the block
+- **Then** a small copy button is revealed in the block's top-right corner, inside the card and clear of the code's right edge; it takes an accent border and the pointer cursor when the pointer is on the button itself, and it disappears again when the pointer leaves the block
+- **And when** the button is clicked
+- **Then** the clipboard holds **exactly that block's code** — every line of it, including any scrolled off screen, with **no** ```` ``` ```` fences, no container `> `/indent markers, and no trailing blank line (deliberately *not* 2.8h's selection→source mapping: a selection is mapped back to Markdown, whereas this answers "give me the code")
+- **And** the button shows a checkmark in place of the copy glyph for about a second, then returns to the copy glyph, leaving no selection and no caret movement behind
+- **And** this holds at **top level and inside every container** — a list item, a blockquote, a nested list — and for a **one-line** block, whose card is too short for the button's full corner inset (the button centres in what there is rather than vanishing)
+- **And** in a block **taller than the pane** the button rides the top of the visible portion, so a long block is copyable without scrolling back to its first line
+- **And** the reveal follows the **document**, not only the pointer: with the pointer resting still and the content scrolled underneath it, the block that is now under the pointer shows the button and the block that has moved away loses it — the reader who scrolls a long block and reaches for the button finds it there, without having to move the mouse first
+- **And** it survives **zoom** at every level (it is sized from one text row plus the block's own inner padding, both already zoom-scaled) and every installed **reading theme** (drawn in the theme's own page ink on the theme's code-block fill — no literal colour)
 
 ### 2.4 Task lists
 - **Given** a list using `- [ ]` and `- [x]` items
@@ -271,7 +304,7 @@
 - **Then** that link does **not** activate: no browser launch, no tab opened, no scroll to a fragment; the selection the drag made is the only outcome
 - **And** a swipe that begins *and* ends inside one link's caption (selecting the caption to copy it) likewise does not activate it — travelling further than the desktop's drag threshold makes it a drag, not a click
 - **And** an ordinary click — press and release on the same link without dragging — activates it exactly as before (2.6, 2.17, §19)
-- **And** the same rule holds for every pointer affordance the panes draw themselves: a gutter task checkbox (2.4) and a right-margin comment marker (§17) each require their press and release to land on the same one, so a selection drag that happens to end over either leaves it alone
+- **And** the same rule holds for every pointer affordance the panes draw themselves: a gutter task checkbox (2.4), a right-margin comment marker (§17) and a code block's copy button (2.3b) each require their press and release to land on the same one, so a selection drag that happens to end over any of them leaves it alone
 
 ### 2.22 Hovering a link reveals its target
 - **Given** a rendered document containing a hyperlink whose caption differs from its URL
@@ -470,6 +503,18 @@
 - **And** Save is disabled in every mode when the document is clean (nothing to write), and enabled in every mode (edit / split / preview) when it is dirty — its sensitivity tracks the unsaved-changes state, not the view mode
 - **And given** the document is clean but its backing file has been **deleted** on disk (a genuine external deletion, not the app's own crash-safe self-rename), **then** the file monitor makes Save **enabled** while the "File deleted on disk — save to restore it" notice is shown, and activating Save re-creates the file with the buffer's content; once the file exists again (a successful save, a reload, or an external re-create) Save sensitivity returns to tracking the dirty flag. Pure predicate: `save_enabled(dirty, backing_missing) == dirty || backing_missing` (unit-tested in `winstate::decisions`).
 - **And** Save As remains available in every mode regardless of dirty state (it can write a copy of even a clean document to a new path)
+
+### 4.13 Option+Left/Right moves the caret by a word in every text surface, on macOS
+<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-20 in response to a reported defect: Option+Left/Right in the editor silently ran GtkSourceView's own `move-words` binding — a word-TRANSPOSITION edit, not navigation — instead of moving the caret, because macOS has no other claim on that key and, ON QUARTZ, GtkSourceView's own class binding wins over the app's Back/Forward accelerator (§23.6) declared on the same keystroke — an ordering measured to be REVERSED on Win32 and X11 (ScrAP-311), so this rubric is macOS-scoped by mechanism and not merely by convention. See accel.rs MAC_RESERVED and macwordnav.rs for the full mechanism, sourced to `gtksourceview.c:953`. -->
+- **Given** any of this application's text surfaces has focus, on macOS — the document editor, the find field, the replace field, the annotation comment entry, or the shared prompt field behind Go To Line and Insert Link/Image/Table
+- **When** the reader presses Option+Left or Option+Right
+- **Then** the caret moves one word back or forward, exactly as Ctrl+Left/Ctrl+Right already do on every platform (Linux/Windows convention) — Option is the macOS spelling of the same movement, not a second, different one
+- **And** the buffer's content and word order are completely unchanged — this is caret movement only, never the word-transposition edit `GtkSourceView` itself would otherwise perform on this key (that edit is what wins the key on Quartz with no interceptor; on Win32 and X11 the accelerator wins instead and this rubric has nothing to guard — ScrAP-311)
+- **And** Option+Shift+Left/Right extends the selection by a word instead of moving the caret, matching Ctrl+Shift+Left/Right
+- **And** this does **not** invoke Back/Forward (23.6) — on macOS that command no longer shares this key (Cmd+[ / Cmd+] instead), so the two can never race
+- **And** Ctrl+Left/Ctrl+Right keep working unchanged (GTK's own binding) — this adds a second spelling, it does not replace the first
+- **And** the surfaces that are not the document editor were never *destructive* on this key, they were **inert**: nothing outside the editor is a `GtkSourceView`, so no `move-words` binding exists there to run, and `GtkText` binds word movement to Ctrl+Left/Right only. Doing nothing at all is the milder face of the same gap between GTK's Ctrl-based bindings and the Option-based convention every native macOS text field honours, and the rule is one rule across all of them
+- **And** everything else those fields already answer for is untouched — Escape still closes the find bar, Enter still triggers a prompt form's default button, and a field's own Ctrl+Left/Right still moves by word
 
 ### 4.12 Save All writes every tab that needs saving
 - **Given** a window with several tabs, of which more than one is dirty (or clean over a deleted backing file)
@@ -750,7 +795,14 @@
 - **And** when it closes, the document window is showing its content again — fully painted, never a black or blank rectangle where the document was
 - **And** the document window is still full-screen afterwards, and the green button still takes an ordinary window into full-screen as before
 
-### 7.20 Every install route delivers the same payload, attribution included
+### 7.20 A tab opened into a full tab strip lands after the others and is visible
+- **Given** a window whose tab strip already overflows — more open documents than fit, so the strip shows its scroll chevrons — and whose tabs have been through the states a real session puts them in (a background tab shows, then loses, its loading spinner; tabs are re-titled as documents open and save)
+- **When** the user opens another document into that window, or creates a new one
+- **Then** its tab is drawn **after** the last existing tab, evenly spaced with the rest — never on top of its left-hand neighbour, and never leaving two labels superimposed
+- **And** the strip scrolls far enough to show the new tab **in full**: it is the active tab, so it must be visible, not clipped past the right-hand edge
+- **And** the tabs that were already there stay evenly spaced, whatever changed their widths earlier in the session
+
+### 7.21 Every install route delivers the same payload, attribution included
 - **Given** any of the three Linux install routes — the `.deb`, the `.rpm`, or the from-source install into `~/.local`
 - **When** the install completes
 - **Then** all six payload files are present: the binary, the desktop entry, the application icon, the reading-themes file, the man page, and `THIRD-PARTY-LICENSES.md`
@@ -943,6 +995,8 @@
 - **And** the description names no platform — the same copy ships on every platform, so a platform list there would go stale as platforms are added (it once read "Linux-first … also compatible with macOS" while a Windows build shipped)
 - **And** the dialog shows a License button that displays the Apache License, Version 2.0 text
 - **And** the System tab shows the GTK runtime version and the versions of the gtk4, sourceview5, and pulldown-cmark crates
+- **And** the Credits tab carries two attribution sections: the bundled open-source components (the syntect/two-face grammars, whose upstream licences require their notice to travel with a binary distribution) and the AI assistance the project was developed with. The first is a licence obligation and the second is a voluntary acknowledgement — no regulation compels it, and the difference is worth knowing before either is edited away
+- **And** every credit entry renders as plain text, never as a clickable `mailto:` link — GTK routes an `<…>` fragment in a credit or author line through its mail-address parser whatever scheme it carries (GTK4Rs/AP-50)
 
 ### 9.17 The View menu toggles the toolbar and status bar, and remembers the choice
 - **Given** a document window
@@ -1550,7 +1604,7 @@
 
 ---
 
-## §14 Show Unsafe Images
+## 14. Show Unsafe Images
 
 ### 14.1 Remote images are blocked by default
 - **Given** a document containing a remote image (e.g. `![badge](https://example.com/badge.png)`)
@@ -1561,6 +1615,8 @@
 - **Given** a document containing a remote http/https image URL
 - **When** "Show Unsafe Images" is toggled **on** (View menu checkbox or toolbar button)
 - **Then** the image is fetched from the network and displayed inline in the preview
+- **And** this holds on **every supported platform**, and on a host with no desktop VFS layer installed at all — the fetch is the application's own HTTP client, never a URI handed to GIO, whose `http`/`https` support is a separate Linux-desktop daemon (ScrAP-292)
+- **And** a fetch that does not produce an image — no network, a non-success status, or a response past the remote-image size limit — leaves the "Could not load image" placeholder **and** records the reason at `warn` naming the URL, so the failure is diagnosable from the log rather than only from a tooltip
 
 ### 14.3 Out-of-folder local images are blocked by default
 - **Given** a document containing an image whose local path resolves outside the document's folder (absolute path or `..` traversal)
@@ -2611,10 +2667,12 @@ created by an act of navigation, and traversing history is not one of them.**
 - **And** their sensitivity is correct immediately after every event that can change it — a navigation, a traversal, a tab closing, a tab moving to another window — never only after some later unrelated interaction
 
 ### 23.6 The browser's own inputs work
+<!-- HUMAN-AUTHOR CONFIRM: macOS spelling added by agent 2026-08-20, in response to a reported defect — see TDD §4.13. -->
 - **Given** a window with history in both directions
-- **When** the reader presses Alt+Left / Alt+Right, or the dedicated Back / Forward keys a keyboard may carry (`XF86Back` / `XF86Forward`), or the two thumb buttons a mouse may carry (buttons 8 and 9)
+- **When** the reader presses Alt+Left / Alt+Right (Cmd+[ / Cmd+] on macOS — see below), or the dedicated Back / Forward keys a keyboard may carry (`XF86Back` / `XF86Forward`), or the two thumb buttons a mouse may carry (buttons 8 and 9)
 - **Then** each drives the same navigation as the menu item — one action, several inputs, no per-input behaviour
 - **And** the keyboard bindings appear in the Keyboard Shortcuts window; the mouse buttons deliberately do not, that window describing keys
+- **And** on macOS, Back/Forward's keyboard binding is Cmd+[ / Cmd+] — Safari and Finder's own spelling — rather than Alt+Left/Right: measured **on Quartz**, that keystroke was never actually reachable for Back/Forward from a focused editor to begin with there (`GtkSourceView`'s own `move-words` word-transposition binding wins the same key first — TDD §4.13; the opposite is measured on Win32 and X11, where this accelerator wins and `move-words` never fires, so the ordering is a property of the backend and not of the toolkit — ScrAP-311), but every native macOS text field still binds Option+Left/Option+Right to word navigation, and Back/Forward has no more business contesting that key than `move-words` does. `XF86Back`/`XF86Forward` and the two thumb buttons are unaffected — the same input on every platform
 
 ### 23.7 History is per window and never crosses between them
 - **Given** two windows, each with its own history
@@ -2751,3 +2809,172 @@ images and local links) and is not this feature.
 - **Then** the document is found with its content intact, rather than reported missing with an offer to create a blank one over it
 - **And** the rename is not replayed, and nothing is moved when the document is present, when more than one candidate matches, or for a file that is not this app's own debris
 - **And** the recovery is silent — the reader is left in exactly the pre-rename state, so there is nothing to announce, accept or discard (ratified; the reasoning is ANTI-PATTERNS #272)
+
+## 25. Exporting a document
+
+Producing a presentation artefact — **HTML** to share, **PDF** to record — from the
+document the reader has open. The category is a **second consumer of the same
+document**, not a second renderer: an export is a function of the document *source*
+and the same normalised event stream the preview is built from, never of the preview
+widget. That is what makes it hold on a tab that was never rendered, in any view
+mode, on an unsaved buffer, with no display.
+
+Two constraints underlie every rubric below. **What leaves the application is opened
+by software this project neither controls nor sandboxes**, so every containment
+decision the preview makes is inherited and never relaxed — an export widens what is
+*rendered elsewhere*, never what is *trusted*. And **one pipeline feeds both sinks**,
+so a rubric that names one construct names it for HTML and PDF alike; where the two
+genuinely differ, the rubric says so.
+
+Rubrics 25.16 – 25.24 are the PDF sink (phase 2). They are authored here rather than
+at phase 2's start so they describe what the sink must do rather than what it ended
+up doing.
+
+### 25.1 An exported HTML file exists and opens
+- **Given** a document open in any view mode
+- **When** the reader chooses File ▸ Export ▸ HTML and confirms a destination
+- **Then** one self-contained HTML file is written at that destination, and it opens in a browser showing the document as the preview shows it
+
+### 25.2 A never-rendered tab exports identically
+- **Given** a deferred tab that has never built a preview — restored but not activated, or a window in edit-only mode
+- **When** the reader exports it
+- **Then** the output is identical to the same document exported after it has been rendered — the export never depends on what the reader did beforehand, and never builds a preview in order to succeed
+
+### 25.3 Every construct exports as the preview shows it
+- **Given** a document exercising every construct in the Document Rendering CAM's construct list, in each of its contexts — top level, table cell, block quote, ordered / unordered / task-list item, and nested lists
+- **Then** each appears in the export with the content and structure the preview gives it — none silently omitted, none doubled
+- **And** a construct that renders through more than one widget shape in the preview (a table cell is a link button when its whole content is a link and a label otherwise) exports the same either way — the shapes are indistinguishable to a reader, so they must be indistinguishable in the artefact
+- **And** a **list item's content stays one paragraph**: an item holding several inline runs — text, inline code, a link, a soft break — is one block, not one block per run. A *tight* item's content reaches the exporter as bare inline events with no paragraph around it, unlike a loose item's, so the two arrive differently and must leave identically. **The fixture must give an item two or more inline runs**: with a single run the broken and correct paths produce the same output, which is why this went unnoticed until a real document was exported
+
+### 25.4 Raw HTML is dropped exactly as the preview drops it
+- **Given** a document containing `<script>`, `<iframe>` and `<div>`, and a `<picture>` / `<source>` / `<img>` group
+- **When** it is exported
+- **Then** the export contains no `<script>`, `<iframe>` or `<div>` — neither executable nor escaped into visible text, since escaping would put text on the page the preview never showed
+- **And** the `<picture>` group yields exactly one image, its `src` having passed the same containment gate the preview applies
+- **And** the permitted element set is read from the single place the preview's scanner reads it from; a second copy of that set on the export path is a defect, not an implementation detail
+
+### 25.5 The export is of the buffer, not the file
+- **Given** a document with unsaved changes, or an untitled buffer never written to disk
+- **Then** the Export command is enabled, and the artefact carries the buffer's current text — not the bytes on disk, and not nothing
+
+### 25.6 Cancelling the destination chooser is a clean no-op
+- **Given** the destination chooser open
+- **When** the reader cancels it
+- **Then** no file is created or modified anywhere, and no notice is raised
+
+### 25.7 A failed write reports and leaves nothing behind
+- **Given** a destination in a read-only directory, or a filesystem with no space
+- **When** the export is attempted
+- **Then** the failure is reported to the reader, and no partial, empty or temporary file is left at or beside the destination
+
+### 25.8 The export survives its host going away
+- **Given** an export write in flight
+- **When** the tab is closed, the document is reloaded, or the window is closed
+- **Then** the artefact is written completely and correctly to the destination the reader chose, nothing is lost or corrupted, and no tab is resurrected by the completion
+- **And** the outcome notice is reported against the status stack the export was started from, never one re-resolved when the write lands
+
+### 25.9 The export is themed, never literal
+- **Given** any installed reading theme
+- **When** a document is exported to HTML
+- **Then** every colour, typeface and decoration metric in the artefact resolves through the theme engine from the **active reading theme** — a literal styling value anywhere in either sink is a defect
+- **And** the PDF resolves through the same engine against the **System theme's light resolution** by default, paper having no dark mode; "default to System-light" is a resolution request, not a licence for a literal
+
+### 25.10 The default filename cannot destroy the source
+- **Given** a document named `notes.md`
+- **When** the destination chooser opens for either target
+- **Then** the name it proposes is `notes.html` or `notes.pdf` — the document's **stem** plus the target extension, never the document's filename
+- **And** this is asserted on every platform rather than assumed, because a chooser that appends the filter's extension only to a name carrying no suffix returns `notes.md` unchanged and the export writes over the reader's source
+
+### 25.11 The name proposed is validated; the name returned is not
+- **Given** any open document
+- **Then** the name the chooser is seeded with satisfies the application's own filename rules, checked before the dialog opens
+- **And** the name the chooser returns is taken as given — once the chooser is open, naming the file is the reader's responsibility and the platform's, and gating the return would reject a name the platform has already accepted and rewritten
+
+### 25.12 Images travel with the export
+- **Given** a document with a local image admitted by the containment gate
+- **When** it is exported to HTML
+- **Then** the image's bytes are embedded, so the artefact still renders correctly after being moved, renamed or sent to someone else
+- **And** the **PDF carries the image as a real image object**, decoded and drawn onto the page — not a text placeholder describing it. Checkable from outside the application: `pdfimages -list` on the artefact lists it. Contained to the column and the page and never upscaled, the preview's `max-width: 100%` rule in a page's units
+- **And** an image whose bytes cannot be decoded falls back to a **visible note** rather than a silent gap, in both sinks — a reader must be able to tell an image was expected
+- **And** a remote image is referenced by URL and **not fetched at export time**, unless *that document's* Show Unsafe Images gate is on, in which case it is embedded — enabling that option is the reader ratifying those images
+- **And** the gate is read per document; it is never taken from a global preference and never inferred from another tab
+- **And** a PDF exported from a document with remote images and the gate off has gaps where those images are, and this is stated to the reader rather than left to be discovered
+
+### 25.13 Annotations appear in the export
+- **Given** a document carrying CriticMarkup annotations
+- **Then** the export shows each claim highlighted and its comment beside it — an aside in HTML, a margin note in PDF, matching what the preview shows
+- **And** the highlight covers exactly the annotated characters, even where the rendered text is shorter than its source because construct markers were stripped
+
+### 25.14 An export announces itself, either way
+- **Given** a completed export
+- **Then** a transient status notice reports the outcome — on success *and* on failure — because a silent export is indistinguishable from a broken one and the file it wrote is somewhere the reader was not watching
+
+### 25.15 An export does not move the footprint
+- **Given** a release build with a representative document open
+- **When** the document is exported
+- **Then** the VRAM and RSS figures §6 gates are unchanged — an export is a new rendering path and therefore a significant change by §6's own definition
+
+### 25.16 A page break never splits a line of text
+- **Given** a document long enough to paginate
+- **When** it is exported to PDF
+- **Then** no line of text is divided across a page boundary — a line falls wholly on one page or wholly on the next
+
+### 25.17 A table too wide for the page wraps, then scales — never clips
+- **Given** a table wider than the printable width of the page
+- **When** the document is exported to PDF
+- **Then** the table is contained within the printable width — **never clipped at the margin, never reflowed into a different table**
+- **And** *reflowed into a different table* means a change to the table's **structure**: a column dropped, merged, split, reordered, or degraded into prose or a list. **The column count is the invariant.** Wrapping a cell's text onto more lines *inside its own column* is not a reflow — the table a reader sees has the same columns in the same order, and every cell is still in the cell it belongs to
+- **And** the two remedies apply **in that order**: a table that cannot fit at its natural widths has its columns narrowed and its cells wrapped; **only** a table that still overflows once every column is at its own minimum content width (its longest unbreakable word) is uniformly scaled. Wrapping is preferred because it costs a reader nothing, where scaling costs legibility — so a table that could have wrapped must never be found scaled
+- **And** each row is one indivisible fragment, so 25.16's page-break rule holds for tables: a break falls **between** rows and never through one, however many lines a row's tallest cell wraps to
+- *(Ordering ratified by the operator 2026-08-20, replacing the unauthored "bound on how far scaling may go": the bound is no longer needed as a number, because scaling is now the last resort rather than the first response, and the regime that reaches it is one no wrapping could have saved. Automated in `export::pdftable`'s unit tests and `export::pdf`'s layout tests; driven end-to-end per MANUAL-TEST 25.17.)*
+
+### 25.18 Text round-trips out of the PDF byte-exact
+- **Given** an exported PDF containing ASCII, precomposed and combining accents, em and en dashes, curly quotes, ellipses, CJK, arrows, typographic symbols and box drawing
+- **Then** every one of those categories extracts **byte-exact, per line, over the whole line**, on every platform — no platform carve-out and no caveat in the predicate
+- **And** decomposed sequences survive uncomposed; `U+0065 U+0301` does not silently become `U+00E9`
+- *(Method constraints are not predicates: extract with `pdftotext -enc UTF-8 -raw` — **`-raw`, not `-layout`**, because 25.18b forbids asserting against a layout-reconstructing extractor and `-layout` IS one, so the two clauses contradict each other if this says `-layout`. Decode the output as CESU-8 before concluding anything about characters, never gate on font metadata, and record which extractor build produced the measurement. A seat may have only a layout-reconstructing build available — Xpdf 4.00 ships inside Git for Windows — in which case `-raw` is not a preference but the only admissible mode on that box.)*
+
+### 25.18a An extraction result is never evidence about appearance
+- **Given** any assertion about text extracted from an exported PDF
+- **Then** it is paired with a check of the **rendered page**, and a round-trip failure is never reported as a rendering defect
+- **And** the two genuinely disagree for colour glyphs, so an extraction-only suite would condemn a surface that is correct
+
+### 25.18b The emoji limit is asserted per platform, as measured behaviour
+- **Given** an exported PDF containing an emoji **above the BMP**
+- **Then** each platform's measured behaviour is asserted as that platform's contract — its purpose is to catch a **change**, not to demand a fix for behaviour this project cannot reach
+- **And** the emoji is astral rather than BMP, because a BMP emoji round-trips cleanly on Windows and a rubric written against one passes while the limit it documents goes unmeasured
+- **And** the assertion is not made against a layout-reconstructing extractor's output, which is a reader-side weakness this project accepts explicitly
+
+### 25.19 Emoji in an exported PDF survive a reader's clipboard
+- **Given** an exported PDF opened in a mainstream reader
+- **When** the reader selects a line containing emoji and copies it
+- **Then** the pasted text is correct — this is the acceptance criterion the emoji question was closed on, and a different path from command-line extraction
+- **And** monochrome emoji are never substituted for colour ones to obtain it: they are drawn differently rather than desaturated, so the substitution changes what the reader sees
+
+### 25.20 A PDF export's success is asserted from what it drew
+- **Given** a completed PDF export
+- **Then** success is concluded from the operation's return value **and** the count of pages drawn against pages expected
+- **And** never from `is_finished()` or `status()`, which are inverted in both directions — success never reports finished, and finished means aborted
+
+### 25.21 A cancelled or failed export leaves the destination untouched
+- **Given** a destination that already holds a PDF
+- **When** an export over it is cancelled part-way, or fails part-way
+- **Then** the destination is **byte-identical** to what it was before the export began
+- **And** the assertion is against the previous file's bytes, because the partial an export leaves behind is itself a structurally valid, cleanly-extracting PDF that no integrity check can distinguish from a complete one
+- **And** the check seeds a real previous PDF and drives a real cancel part-way through a real render, and records structurally why it is green, so a mutation sweep cannot delete it as vacuous
+
+### 25.22 Export cost asserts its shape, not a duration
+- **Given** documents of increasing length at a fixed content weight
+- **Then** per-page cost does not grow with document length
+- **And** the assertion is never a wall-clock number, which a slower machine or a denser page would fail while the contract held — the same page count is some forty times apart in cost between dense and sparse content
+
+### 25.23 A long export reports progress and can be cancelled
+- **Given** a document long enough that the export crosses the responsiveness threshold
+- **Then** an indicator appears in the **status bar** — not a dialog — driven by pages completed and triggered by **elapsed time**, never by a page count
+- **And** the reader can cancel it, which stops after the current page and leaves the destination as 25.21 requires
+
+### 25.24 A destination another process holds open fails by name
+- **Given** an export destination that another process holds open — the ordinary case being a PDF still open in a viewer
+- **When** the export is published on Windows
+- **Then** it reports a **named** failure telling the reader to close the file, never a generic write error, since the remedy is the reader's and a generic message describes neither the cause nor it
+- **And** the same export on Linux and macOS succeeds — the check targets **local disk**, the stricter case, a network destination succeeding where local NTFS does not

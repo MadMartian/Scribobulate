@@ -33,11 +33,13 @@
 
 pub(crate) mod a11y;
 pub(crate) mod accel;
+pub(crate) mod affordance;
 pub(crate) mod annotate;
 pub(crate) mod annotations;
 pub(crate) mod annotations_view;
 pub(crate) mod app;
 pub(crate) mod atomic_io;
+pub(crate) mod clipboard;
 pub(crate) mod codeview;
 // The write side of the desktop light/dark channel, shared by the two platform
 // modules that have to supply that channel's missing SOURCE (both under `platform/`).
@@ -49,14 +51,25 @@ pub(crate) mod colorscheme;
 pub(crate) mod config;
 pub(crate) mod copymap;
 pub(crate) mod docio;
+pub(crate) mod export;
 pub(crate) mod farscroll;
 pub(crate) mod forensics;
 pub(crate) mod format;
 pub(crate) mod icons;
+pub(crate) mod imagefetch;
 pub(crate) mod keynav;
 pub(crate) mod limits;
+pub(crate) mod lineendings;
 pub(crate) mod links;
 pub(crate) mod logging;
+// Option+Left/Right word navigation in the editor — a macOS-only convention GTK
+// itself does not bind on any backend (see the module doc comment). Top-level and
+// cfg-gated at this declaration, not under `platform/mac/`: that directory's
+// contract (below) is narrow plumbing, whereas this is a keybinding-semantics
+// difference — the same kind of cross-platform behavioural divergence `accel.rs`
+// already centralizes at the top level, not under `platform/`.
+#[cfg(target_os = "macos")]
+pub(crate) mod macwordnav;
 /// Test-only. Renders `THIRD-PARTY-LICENSES.md` from `notices/*.md` plus `two-face`'s
 /// acknowledgement listing, and gates the committed copy against it. Generator and gate
 /// are one code path so they cannot drift; `UPDATE_NOTICES=1 cargo test` rewrites the

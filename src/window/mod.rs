@@ -108,6 +108,8 @@ mod chrome;
 mod chrome_fit;
 mod copylink;
 mod editoractions;
+mod export;
+mod export_pdf;
 mod findbar;
 mod lifecycle;
 mod linknav;
@@ -121,7 +123,7 @@ mod swaprecovery;
 mod tabs;
 mod toast;
 mod toolbar;
-mod undo;
+pub(crate) mod undo;
 mod viewactions;
 
 use chrome::*;
@@ -436,6 +438,9 @@ fn build_window(
 
     // ── action registration ──────────────────────────────────────────────────
     register_editor_actions(&window, &heading_btn);
+    // File ▸ Export. One action for both sinks, sensitivity from one gate — the same
+    // single-source-of-truth shape every other command has (POLICY; ScrAP-9).
+    export::register_export_action(&window);
     register_annotate_action(&window);
     register_annotation_step_actions(&window);
     register_view_actions(

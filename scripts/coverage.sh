@@ -234,7 +234,101 @@ cd "$(dirname "$0")/.."
 # precisely because it tracked the host; 77 is the largest whole number the merged
 # measurement supports. Nothing that was covered has become uncovered -- 77.60 measured
 # now is ABOVE the 77.42 that note banked.
-FLOOR=77
+# 2026-08-17: 77.53 → 77.72, banked by the remote-image HTTP fetch (ScrAP-292). The run
+# PRINTS 77.73 and a floor of 77.73 FAILS it — the printed figure is rounded up from
+# something a hair under, so the rule above ("round down") is not a style preference, it
+# is the difference between a gate that passes and one that fails on the very run that
+# set it. Worth
+# recording because the change first pushed the number DOWN, to 77.49, and failed this
+# ratchet 2026-08-18 (77.72 -> 77.75): the code-block copy button's placement and the
+# one hit test every drawn affordance shares were extracted out of the excluded
+# `codeview/` tree into the gated `affordance.rs` and unit-tested there, which is the
+# floor-raising direction POLICY's scope rule names. Worth recording WHY the extraction
+# happened: the button's GTK wiring landed in the in-scope `preview/interactions.rs`
+# (0% covered, like every preview wiring file) and pushed the total 0.08pt UNDER the
+# floor. Widening IGNORE to cover those files would have "fixed" it by hiding them;
+# moving the decidable half into scope fixed it by testing more code.
+# gate: replacing a one-line GIO call with a module the unit run could not reach added
+# uncovered lines in both `imagefetch.rs` and the renderer's loader. What recovered it —
+# and then some — was making the fetch testable OFFLINE rather than declaring it
+# untestable: the cap became a parameter so a refusal could be driven over a real
+# response, and the tests serve their own canned HTTP from a loopback socket. The rule
+# to carry: "needs the network" is usually "needs A network", and a loopback server is
+# one, so reach for that before writing the exclusion. Read from the LINES column, per
+# the warning above: the same run printed 78.63% for regions.
+# ratchet 2026-08-18 (77.75 -> 77.78), and DELIBERATELY SHORT OF THE MEASUREMENT (77.81).
+# The previous bump set the floor to the exact figure the run produced, which left zero
+# headroom -- and the very next change, two lines of GTK signal wiring in an in-scope file,
+# failed the gate by 0.01pt while adding no untested logic at all. A gate that fails on
+# arithmetic noise is a gate that pressures the next author into widening IGNORE, which is
+# precisely the failure ScrAP-294 records. So the ratchet takes the gain and leaves a
+# margin: it still only ever moves up, and it still fails a real regression, but it does not
+# manufacture one. Do not "tidy" this up to the measured value.
+#
+# ratchet 2026-08-18b (77.78 -> 77.85), measurement 77.88, same deliberate margin. The
+# gain is the DocMonitor seam (ScrAP-297) arriving with its own unit tests rather than
+# with an IGNORE entry: the seam is thin GIO wiring and would have been excludable on
+# the scope rule, which is exactly the reasoning ScrAP-294 warns produces a number that
+# measures less code every time it moves.
+#
+# ratchet 2026-08-19 (77.85 -> 79.50), measurement 79.57, same deliberate margin. The
+# gain is the export feature (TDD §25) landing display-free: the model, both sinks and
+# the paginator are pure, and the two decision cores that would otherwise have hidden
+# behind the `src/window/` exclusion — the default-name guarantee and the PDF promote
+# gate — were moved into `src/export/` rather than left there. The largest single jump
+# is `export/pdf.rs`, 12.57% -> 94.77%, from testing the Pango layout and the cairo draw
+# against a font-map context and an `ImageSurface`: a sink that touches the toolkit is
+# still reachable headlessly, and "it needs GTK" is not on its own a reason to exclude
+# a file — the question is whether a DISPLAY is needed, and here it is not.
+#
+# ratchet DOWN 2026-08-20 (79.50 -> 79.00), operator's decision. The line above records a
+# measurement of 79.57 behind the 79.50 ratchet; that figure does not reproduce. Measured
+# on this canonical platform at `1a19546` and at every commit since: **79.31%**. So the
+# ratchet was set roughly 0.2pt ABOVE what the tree achieves, and step 6 was red on the
+# only platform that runs it from the moment the export feature landed — macOS and Windows
+# both contract-declare the step not-applicable, so neither seat was a witness to it.
+# A ratchet no tree state can satisfy is not a ratchet, it is a permanently red gate, and a
+# permanently red gate teaches people to skip the step. Corrected to 79.00, which restores
+# the deliberate margin below the real measurement rather than pretending to a number that
+# was never met. This is NOT the prohibited move of lowering the Linux floor to make
+# another platform pass: it is bringing a mis-set value back to the evidence.
+#
+# 2026-08-20, 79.40 -> 79.60. The PDF sink's table renderer moved its column-width
+# arithmetic into `export/pdftable.rs`, a display-free module the suite can execute, and
+# it lands at 99.51% (204 lines, 1 missed) — the extraction-raises-the-floor mechanism
+# POLICY's scope rule describes, doing exactly that. Measured total 79.93%; a
+# counterfactual with `pdftable.rs`'s lines removed is 79.73%, so the pre-change baseline
+# was at or below that and the gain is real rather than a reshuffle. Raised to 79.60 and
+# not to 79.93: the margin is what absorbs the ordinary drift of unrelated work, and a
+# ratchet pinned to the last measurement is the permanently-red gate the paragraph above
+# was written about.
+
+# -- 2026-08-21, THE MERGE OF `ci` INTO `master`, AND ONE RULE OVER TWO LEDGERS -------
+#
+# The two tails above are the two branches' ledgers and both are kept, because between
+# them they carry the whole scope-rule argument. They disagree on FORM, not on direction:
+# `ci` retired second-decimal floors and wrote the whole-number rule into POLICY step 6;
+# `master` never saw that rule and went on ratcheting in hundredths, 77.53 -> 79.60,
+# each step deliberately short of its own measurement for the same reason the whole-number
+# rule exists -- a floor pinned to the last run fails on arithmetic noise.
+#
+# THE MERGE SETTLES IT ON THE WRITTEN RULE. POLICY step 6 is the only place either
+# discipline is stated as a rule, it merged without conflict, and a script that
+# contradicts it is the second copy this file's own header warns about. So FLOOR is a
+# whole number here.
+#
+# THIS IS NOT A LOWERING of 79.60, and the test is whether any covered line became
+# uncovered: none did. 79.60 and 79 are not on the same scale -- one is a hundredth-
+# precision floor the rule retired, the other is the largest whole number the merged
+# measurement supports. The margin master's notes kept building by hand is what the
+# whole-number rule provides by construction.
+#
+# MEASURED on the merged tree, this host: 20092 lines, 4033 missed -> 79.93% LINES
+# (regions 80.54%, functions 82.14% -- third column, per the header's warning). Identical
+# to the figure master's last note banked, so the merge added no uncovered scoped code:
+# `ci`'s contribution is CI plumbing and registers, and `src/notices.rs` is test-only.
+# 79.93 clears 79 by 0.93pt against a measured residual host-dependence of ~0.02pt.
+FLOOR=79
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:
@@ -277,6 +371,18 @@ FLOOR=77
 #                   how the test must work, not untested code. Excluding it would
 #                   trade a small, explainable dent for a blind spot in the one
 #                   module whose failure mode is silence.
+#   clipboard.rs    a `GdkContentProvider` GObject subclass plus two signal handlers
+#                   (`copy-clipboard`, `cut-clipboard`) and a realize/unrealize
+#                   rebalance — GTK wiring end to end, with no decision core to
+#                   extract: its one branch is `selection_bounds().is_some()`, which
+#                   is a buffer read rather than logic. It is NOT untested — all four
+#                   of its behaviours are driven by `#[gtktest::test]` bodies in
+#                   pipeline step 5, including a mutation-checked assertion that a
+#                   same-application paste arrives as exactly ONE `insert-text`
+#                   emission (6 with the override removed). Those run under the
+#                   `gtk-integration-tests` feature, which this gate deliberately does
+#                   not enable, so counting the file here would report 0% for code the
+#                   suite exercises thoroughly.
 #   codeview/       mod (GObject subclass + snapshot chip painting), geometry
 #                   (line/cell buffer-Y reads), markers (popover UI) are all
 #                   view-bound → excluded. The one pure piece, group_by_line, keeps
@@ -300,6 +406,6 @@ FLOOR=77
 # gate compares the FLOOR against the UNSCOPED total (37.9% vs 71.7%) and fails every
 # run. That reads as "your change tanked coverage" rather than "the filter missed",
 # which is the worst way for a gate to break — keep the class if you edit this.
-IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app[/\\](appactions|menubar|openbatch|open|setup)|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|widgets[/\\](table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
+IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app[/\\](appactions|menubar|openbatch|open|setup)|clipboard|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|widgets[/\\](table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
 
 exec cargo llvm-cov --summary-only --fail-under-lines "$FLOOR" --ignore-filename-regex "$IGNORE" "$@"

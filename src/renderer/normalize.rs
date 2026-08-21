@@ -1,5 +1,10 @@
 //! Shared parser options and the inline-tab normalisation pre-pass — both pure and
-//! unit-tested. Used at every parse site (preview render, outline, copymap).
+//! unit-tested. The pre-pass runs at every parse site, and the sites are ENUMERATED
+//! rather than summarised: `preview/build.rs`, `export/doc.rs`, `outline.rs` and
+//! `copymap::balance_source_span`. The summary form ("used at every parse site") is
+//! what this comment used to say while reaching two of the four, and a claim like
+//! that terminates the audit it appears to serve — see
+//! `normalize_inline_tabs`'s own note on what holds it true now.
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
@@ -58,6 +63,15 @@ pub(crate) fn md_options() -> Options {
 /// single ASCII byte at the same offset), so every source byte offset the renderer /
 /// `copymap` / `source_map` capture emits still indexes the same logical position in
 /// the editor's text — no scroll-sync or copy-offset drift. See ScrAP-75.
+///
+/// **Every site that parses the document calls this first**, so all four read one
+/// document: `preview/build.rs`, `export/doc.rs`, `outline::extract_headings` and
+/// `copymap::balance_source_span`. Two of them did not, and the divergence was
+/// user-visible on both — the outline listed a phantom heading the page never showed,
+/// and an editor annotation wrapped a span across a table cell boundary. The
+/// enumeration above is backed by `every_parse_site_reads_one_document` (below)
+/// rather than by this sentence: a comment asserting a contract is a claim that needs
+/// a test behind it.
 pub(crate) fn normalize_inline_tabs(md: &str) -> std::borrow::Cow<'_, str> {
     if !md.contains('\t') {
         return std::borrow::Cow::Borrowed(md);
@@ -137,6 +151,71 @@ pub(crate) fn normalize_inline_tabs(md: &str) -> std::borrow::Cow<'_, str> {
 
 #[cfg(test)]
 mod normalize_inline_tabs_tests {
+
+    /// **Every parse site reads one document.** Checked by what each site CONCLUDES
+    /// about a tab-padded table, not by the doc comment above saying so — the comment
+    /// said it for as long as the pre-pass reached two sites of four, and a claim like
+    /// that terminates the audit it appears to serve.
+    ///
+    /// The two divergences this pins were MEASURED before the fix, and both were
+    /// user-visible: the outline listed a phantom H1 whose text was the entire table,
+    /// and `balance_source_span` swallowed an emphasis run across a table cell
+    /// boundary, so an editor annotation wrapped CriticMarkup over two cells.
+    ///
+    /// `export/doc.rs` stands in for the preview's own parse here — the preview is
+    /// GTK-bound, and the two enter through the same pre-pass and the same
+    /// `md_options` by construction (`export/doc.rs`'s module doc).
+    #[test]
+    fn every_parse_site_reads_one_document() {
+        // A GFM table padded with hard TABS — the construct the pre-pass exists for
+        // (ScrAP-75) — carrying an emphasis run that straddles a cell boundary, and
+        // trailed by a setext underline. A site that skips the pre-pass reads this
+        // whole block as one paragraph instead.
+        const TAB_TABLE: &str = "| Name\t| Value\t|\n|---\t|---\t|\n| **a\t| b** |\nCaption\n===\n";
+
+        let doc = crate::export::doc::build(
+            TAB_TABLE,
+            &crate::export::RenderOptions {
+                doc_dir: None,
+                allow_unsafe_images: false,
+            },
+        );
+        assert!(
+            matches!(doc.blocks.first(), Some(crate::export::Block::Table { .. })),
+            "export/doc.rs: expected a Table, got {:?}",
+            doc.blocks.first()
+        );
+
+        // outline.rs — the page shows a table and no heading, so the sidebar must not
+        // invent one. (Unnormalised, `===` underlines the paragraph the broken table
+        // collapsed into and this returned a phantom H1.)
+        assert_eq!(
+            crate::outline::extract_headings(TAB_TABLE),
+            vec![],
+            "outline.rs: a heading the rendered page does not have"
+        );
+
+        // copymap::balance_source_span — `**a` and `b**` sit in DIFFERENT cells, so
+        // there is no inline construct to widen to. Unnormalised the block was a
+        // paragraph, pulldown emitted one Strong over `**a\t| b**`, and the selection
+        // widened across the cell boundary.
+        let at = TAB_TABLE.find("**a").expect("fixture");
+        let sel = at..at + 3;
+        assert_eq!(
+            crate::copymap::balance_source_span(TAB_TABLE, sel.clone()),
+            sel,
+            "copymap: widened across a table cell boundary"
+        );
+
+        // And the pre-pass keeps a heading's own text in step with the rendered one.
+        assert_eq!(
+            crate::outline::extract_headings("# Chapter\tOne\n")
+                .first()
+                .map(|h| h.text.clone()),
+            Some("Chapter One".to_string())
+        );
+    }
+
     use super::{md_options, normalize_inline_tabs};
     use pulldown_cmark::{Event, Parser, Tag};
 

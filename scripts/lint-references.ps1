@@ -199,6 +199,26 @@ $issuePattern = '\bISSUES(\.md)?([ .:_-]*([a-z]+ )?[A-Z]\b|[ .:_-]*#[A-Z]+\b)'
 # .NET takes leftmost-first, and only this ordering makes them agree.
 $pathPattern = '((sdd|tests|packaging|gtktest|scripts|data|src)/[A-Za-z0-9._/-]+\.md|\bPLAN\.[A-Za-z0-9._-]+\.md|\bPLAN\.[A-Za-z0-9_-]+)'
 
+# The ONE place check 6a's path extraction happens, flags included -- so the self-test can
+# drive the check's own invocation instead of re-implementing it. `-CaseSensitive` is
+# LOAD-BEARING and lives HERE, not at the call site: `Select-String` and `-match` are
+# case-INSENSITIVE by default in PowerShell and `grep -E` is not, so without it this gate is
+# strictly stricter than its bash twin over identical source -- measured, the bare-PLAN arm
+# matched the Rust field accesses `plan.switch_to` and `plan.spot` in
+# `window/navhistory/traverse.rs`, failing check 6 here and passing on Linux. That is the
+# gate-parity divergence POLICY step 9 says no automated test can catch.
+#
+# It went unseen because the self-test used to validate `$pathPattern` through
+# `[regex]::Match`, which IS case-sensitive -- a corpus over a re-implementation is evidence
+# about a pattern, never about the check. Mutation-tested by the windows seat: with the
+# corpus fixed but the flag still at the call site, removing the flag left the self-test
+# GREEN. Check 8's corpus comment already said this ("it exercises the predicate the check
+# itself calls, not the two patterns in isolation"); 6a is the one that had not followed it.
+function Get-PathHits {
+    param([string]$File)
+    Select-String -LiteralPath $File -Pattern $pathPattern -AllMatches -CaseSensitive -ErrorAction SilentlyContinue
+}
+
 # Check 8's two patterns, byte-identical to the bash gate's BARE_AP_RX and LEGAL_AP_RX.
 # A BARE `AP-N` is illegal anywhere in the tree: two registers are in play with unrelated
 # numbering (`ScrAP-N` here, `GTK4Rs/AP-N` for the gtk4-rs skill), and the bare form is
@@ -544,7 +564,7 @@ function Get-ScanSubset {
     ,$out
 }
 
-# Check 12's predicate, factored out so the CHECK and its SELF-TEST run the SAME code
+# Check 13's predicate, factored out so the CHECK and its SELF-TEST run the SAME code
 # over the same bytes -- the twin of ps1_encoding_violation() in the bash port. Check 6's
 # port bug survived a fully populated corpus precisely because the corpus tested the
 # pattern directly instead of going through the call site, so a self-test that
@@ -626,7 +646,8 @@ if ($SelfTest) {
         'a PLAN.<topic>.md is deleted by design once implemented',
         'doc_link_fragment("./sub/PLAN.md#caf%C3%A9")',
         'if plan.switch_to.is_some() {',
-        'restore_place(&tab, plan.spot.as_ref());'
+        'restore_place(&tab, plan.spot.as_ref());',
+        'let done = plan.switch_to.is_some() && plan.spot.as_ref();'
     )
     # Check 8's corpus, kept string-for-string with the bash gate's. It exercises
     # `Test-BareAp` -- the predicate the check itself calls -- not the two patterns in
@@ -681,15 +702,24 @@ if ($SelfTest) {
             Write-Host "   WRONG EXTRACT: want '$want', got '$got' from: $subject" -ForegroundColor Red; $bad++
         }
     }
-    foreach ($s in $pathMustNotMatch) {
-        $m = [regex]::Match($s, $pathPattern)
-        $got = if ($m.Success) { $m.Value } else { '' }
-        # `PLAN.md` may be MATCHED; check 6a skips it by name. Anything else is a
-        # false positive.
-        if ($got -cne '' -and $got -cne 'PLAN.md') {
-            Write-Host "   FALSE POSITIVE: '$got' from: $s" -ForegroundColor Red; $bad++
+    # Driven through `Get-PathHits` -- the function check 6a itself calls -- over a real
+    # temp file, NOT through a `[regex]::Match` or a bare `Select-String` here. The two
+    # differ by the check's flags, and a corpus run through a re-implementation cannot fail
+    # when a flag is dropped from the real one. Mutation-verified: remove `-CaseSensitive`
+    # from `Get-PathHits` and this loop goes red.
+    $stTmp = [System.IO.Path]::GetTempFileName()
+    Set-Content -LiteralPath $stTmp -Value $pathMustNotMatch -Encoding UTF8
+    foreach ($h in (Get-PathHits $stTmp)) {
+        foreach ($m in $h.Matches) {
+            $got = $m.Value
+            # `PLAN.md` may be MATCHED; check 6a skips it by name. Anything else is a
+            # false positive.
+            if ($got -cne 'PLAN.md') {
+                Write-Host "   FALSE POSITIVE: '$got' from: $($h.Line)" -ForegroundColor Red; $bad++
+            }
         }
     }
+    Remove-Item -LiteralPath $stTmp -Force -ErrorAction SilentlyContinue
 
     # Symlink-exclusion canary -- two independent assertions, both required (see
     # scripts/lint-references.scan, "SYMLINKS ARE EXCLUDED"). Kept behaviourally
@@ -841,7 +871,7 @@ if ($SelfTest) {
         }
     }
 
-    # Check 12's two fixtures, run through check 12's OWN predicate
+    # Check 13's two fixtures, run through check 13's OWN predicate
     # (Test-Ps1EncodingViolation) rather than through a re-implementation, and kept
     # file-for-file with the bash port's own fixture assertions. Check 6's port bug
     # survived a fully populated corpus because the corpus matched the pattern DIRECTLY
@@ -852,20 +882,20 @@ if ($SelfTest) {
     # the BOM-less file only proves the check can say no; the invariant is a DISJUNCTION,
     # so a check that also flagged the BOM'd file would be banning the legitimate case and
     # would still pass a one-directional test.
-    $st12Bad = 'tests/fixtures/encoding/bomless-nonascii.ps1'
-    $st12Ok  = 'tests/fixtures/encoding/bom-nonascii.ps1'
-    if (-not (Test-Path -LiteralPath $st12Bad) -or -not (Test-Path -LiteralPath $st12Ok)) {
-        Write-Host '   FAIL: check 12 fixtures are missing, so the check is uncertified.' -ForegroundColor Red
-        Write-Host ("     expected {0} and {1}" -f $st12Bad, $st12Ok) -ForegroundColor Red
+    $st13Bad = 'tests/fixtures/encoding/bomless-nonascii.ps1'
+    $st13Ok  = 'tests/fixtures/encoding/bom-nonascii.ps1'
+    if (-not (Test-Path -LiteralPath $st13Bad) -or -not (Test-Path -LiteralPath $st13Ok)) {
+        Write-Host '   FAIL: check 13 fixtures are missing, so the check is uncertified.' -ForegroundColor Red
+        Write-Host ("     expected {0} and {1}" -f $st13Bad, $st13Ok) -ForegroundColor Red
         $bad++
     } else {
-        if (-not (Test-Ps1EncodingViolation (Resolve-Path -LiteralPath $st12Bad).Path)) {
-            Write-Host ("   FAIL: check 12 did NOT flag {0}" -f $st12Bad) -ForegroundColor Red
+        if (-not (Test-Ps1EncodingViolation (Resolve-Path -LiteralPath $st13Bad).Path)) {
+            Write-Host ("   FAIL: check 13 did NOT flag {0}" -f $st13Bad) -ForegroundColor Red
             Write-Host '     a BOM-less .ps1 carrying a byte above 0x7F must be refused.' -ForegroundColor Red
             $bad++
         }
-        if (Test-Ps1EncodingViolation (Resolve-Path -LiteralPath $st12Ok).Path) {
-            Write-Host ("   FAIL: check 12 flagged {0}" -f $st12Ok) -ForegroundColor Red
+        if (Test-Ps1EncodingViolation (Resolve-Path -LiteralPath $st13Ok).Path) {
+            Write-Host ("   FAIL: check 13 flagged {0}" -f $st13Ok) -ForegroundColor Red
             Write-Host '     a BOM makes non-ASCII legal; the invariant is BOM OR pure ASCII.' -ForegroundColor Red
             $bad++
         }
@@ -1213,15 +1243,7 @@ $missingPaths = @()
 # but a live document may still point AT one, which is filtered target-side below.
 $scan6a = Get-ScanSubset -Not '^scripts/lint-references\.(sh|ps1)$'
 foreach ($rel in $scan6a) {
-    # -CaseSensitive for the reason spelled out at checks 1 and 8, which this site did not
-    # inherit and should have: Select-String defaults the OTHER WAY from `grep -E`, and
-    # $pathPattern is byte-identical to the bash port's PATH_RX. Without it the `\bPLAN\.`
-    # alternative matches any lowercase `plan.<field>` -- a Rust field access on a local
-    # named `plan` -- which then has `.md` appended below and reported as a dangling
-    # document. MEASURED: the first hosted Windows execution failed here on
-    # `plan.switch_to` and `plan.spot` in window/navhistory/traverse.rs, while Linux passed
-    # the same tree. Two ports, one pattern string, opposite defaults.
-    foreach ($h in (Select-String -LiteralPath $rel -Pattern $pathPattern -CaseSensitive -AllMatches -ErrorAction SilentlyContinue)) {
+    foreach ($h in (Get-PathHits $rel)) {
         foreach ($m in $h.Matches) {
             $target = $m.Value
             # Excluded as a TARGET, not merely as a scanned file: MANUAL-TEST.md points
@@ -1516,7 +1538,7 @@ $bad11 = $false
 # the PowerShell location, so this is the one place the distinction bites. Measured with the
 # location on the repo, the process CWD elsewhere, and a decoy file planted in it: the bare
 # form read the decoy and reported 40 bytes, exit 0, GREEN -- a growth ratchet reporting that
-# the register had shrunk below every threshold. Check 12 already spells this out at the
+# the register had shrunk below every threshold. Check 13 already spells this out at the
 # Resolve-Path below; that comment was written about the only line in the file with the
 # problem, and this line briefly made it two.
 #
@@ -1562,10 +1584,62 @@ if ($bad11) { $failed = $true } elseif (-not $warn -and $regBytes -le $REG_WARN)
     Write-Host '   PASS' -ForegroundColor Green
 }
 
-
-# -- Check 12 -------------------------------------------------------------------
+# -- Check 12: paths Windows cannot check out -----------------------------------
+# Parity with lint-references.sh check 12. See that script for the measured
+# rationale; the input set is `git ls-files`, NOT lint-references.scan, because the
+# path that prompted this landed in the repository root, outside the curated scan.
+# This platform is the one that actually suffers the failure, so the check is here
+# as much to name the cause as to catch it.
 Write-Host ''
-Write-Host '-- Check 12: .ps1 files must carry a UTF-8 BOM or contain no byte above 0x7F --' -ForegroundColor Cyan
+Write-Host '-- Check 12: paths Windows cannot check out --'
+# ENUMERATION PARITY with the shell port, which POLICY requires alongside pattern parity:
+# both read `git ls-files -z`. Plain `ls-files` C-quotes any path containing a control
+# character or a `"`, which replaces the raw bytes with an escaped rendering -- so the
+# `[\x01-\x1f]` clause could never fire against it, and such a path was only ever caught
+# by ACCIDENT, matching on the `"` its own quoting wrapped it in. (That quoting is
+# unconditional, MEASURED: it still happens with `core.quotePath=false`, which governs
+# non-ASCII bytes, not control characters.) `-z` gives the true bytes and makes the catch
+# principled.
+#
+# BUT `-z` ALONE IS NOT ENOUGH IN POWERSHELL, and this is the part that does not port.
+# PowerShell splits a native command's stdout into lines BEFORE the pipeline sees it, so a
+# path containing \x0a is already torn in two by the time `-split "`0"` runs -- the split
+# operates on fragments, not on the stream. MEASURED against a planted `nl<LF>name.txt`:
+# the pipeline form yielded 350 elements including `nl` and `name.txt` as separate
+# entries, zero elements containing a raw LF, and check 12 reported the other seven
+# planted classes while silently missing that one. Reading the child's stdout as a STREAM
+# yields 349 elements, one of which is `6e 6c 0a 6e 61 6d 65 2e 74 78 74` -- intact.
+#
+# So the enumeration goes through ProcessStartInfo rather than the native-command
+# pipeline. The shell port had the same defect in different clothing (`tr '\0' '\n'`
+# converts the separator and keeps the newline, which is the same tear); it now reads on
+# the NUL boundary with `while IFS= read -r -d ''`.
+$psi12 = New-Object System.Diagnostics.ProcessStartInfo
+$psi12.FileName               = 'git'
+$psi12.Arguments              = 'ls-files -z'
+$psi12.WorkingDirectory       = (Get-Location).Path
+$psi12.RedirectStandardOutput = $true
+$psi12.UseShellExecute        = $false
+$psi12.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+$proc12 = [System.Diagnostics.Process]::Start($psi12)
+$out12  = $proc12.StandardOutput.ReadToEnd()
+$proc12.WaitForExit()
+$tracked12 = @($out12 -split "`0" | Where-Object { $_ })
+$bad12 = $tracked12 | Where-Object {
+    $_ -match '[<>:"|?*]' -or $_ -match '[\x01-\x1f]' -or $_ -match '[. ]$' -or
+    $_ -match '(?i)(^|/)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^/]*)?$'
+}
+if ($bad12) {
+    Write-Host '   FAIL - tracked path(s) illegal on Win32 (git checkout refuses the whole tree):' -ForegroundColor Red
+    $bad12 | ForEach-Object { Write-Host "     $_" }
+    $failed = $true
+} else {
+    Write-Host '   PASS' -ForegroundColor Green
+}
+
+# -- Check 13 -------------------------------------------------------------------
+Write-Host ''
+Write-Host '-- Check 13: .ps1 files must carry a UTF-8 BOM or contain no byte above 0x7F --' -ForegroundColor Cyan
 # WHY A DISJUNCTION RATHER THAN "KEEP THEM ASCII". Windows PowerShell 5.1 decodes a
 # BOM-less .ps1 as the ANSI codepage. A UTF-8 byte inside a STRING LITERAL then arrives
 # as a different character, and a curly quote is a string DELIMITER -- the literal ends
@@ -1590,21 +1664,22 @@ Write-Host '-- Check 12: .ps1 files must carry a UTF-8 BOM or contain no byte ab
 # which do honour the PowerShell location, so this line is the one place in the file where
 # that distinction bites -- a bare $rel would throw FileNotFound, or worse, silently read
 # a same-named file from wherever the process happened to start.
-$bad12 = @()
+$bad13 = @()
 foreach ($rel in (Get-ScanSubset '\.ps1$')) {
     if (Test-Ps1EncodingViolation (Resolve-Path -LiteralPath $rel).Path) {
-        $bad12 += ("  {0} -- non-ASCII byte in a BOM-less .ps1" -f $rel)
+        $bad13 += ("  {0} -- non-ASCII byte in a BOM-less .ps1" -f $rel)
     }
 }
-if ($bad12.Count) {
+if ($bad13.Count) {
     $failed = $true
     Write-Host '   FAIL' -ForegroundColor Red
-    foreach ($b in $bad12) { Write-Host $b }
+    foreach ($b in $bad13) { Write-Host $b }
     Write-Host '   -> add a UTF-8 BOM to the file, or keep it pure ASCII. A BOM is the stronger'
     Write-Host '      fix: it makes non-ASCII safe anywhere in the file, literals included.'
 } else {
     Write-Host '   PASS' -ForegroundColor Green
 }
+
 Pop-Location
 Write-Host ''
 if ($failed) {

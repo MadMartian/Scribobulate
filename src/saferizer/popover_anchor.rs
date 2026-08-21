@@ -388,17 +388,25 @@ mod gtk_integration_tests {
     /// out a rectangle that means nothing. Mutation guard: replace the body with
     /// `Some(rect)` and the unset assertion fails.
     ///
-    /// This popover is never `set_parent`'d, so the raw call also fires a `GTK_IS_WIDGET`
-    /// `CRITICAL` — expected, harmless log noise from the fallback path documented on
-    /// [`pointing_to`], not a defect in this test or in `pointing_to` itself.
+    /// The popover is deliberately **parented**, which makes the unset case STRONGER rather
+    /// than weaker: per [`pointing_to`]'s contract, a parentless popover's fallback is a
+    /// zeroed rect, while a parented one's is the parent's own bounds — so this asserts the
+    /// seam discards a *plausible-looking* rectangle, not an obviously-empty one.
+    ///
+    /// It is also what lets the suite run under `G_DEBUG=fatal-criticals` at all
+    /// (POLICY § Logging). The parentless variant fires a `GTK_IS_WIDGET` `CRITICAL` from
+    /// GTK's own fallback path — harmless log noise, documented on [`pointing_to`], and
+    /// fatal under that flag, which would make the gate unarmable for one line of noise.
     #[gtktest::test]
     fn an_unset_anchor_reads_as_none_and_a_set_one_round_trips() {
+        let parent = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let pop = gtk::Popover::new();
+        pop.set_parent(&parent);
         assert!(
             pointing_to(&pop).is_none(),
             "a popover that was never pointed anywhere has no anchor — the raw binding \
-             hands back a fallback rectangle here (zeroed, since this popover has no \
-             parent to fall back to), and that fallback must be discarded regardless"
+             hands back a fallback rectangle here (the PARENT's bounds, since this popover \
+             has one), and that fallback must be discarded regardless"
         );
 
         let rect = gdk::Rectangle::new(11, 22, 33, 44);
@@ -408,5 +416,7 @@ mod gtk_integration_tests {
             (got.x(), got.y(), got.width(), got.height()),
             (11, 22, 33, 44)
         );
+        // A parented popover must be unparented before it is dropped (ScrAP-128 family).
+        pop.unparent();
     }
 }

@@ -21,10 +21,16 @@ const MENU_MNEMONICS: &[(&str, &str)] = &[
     ("New Document", "_New Document"), ("Open", "_Open"), ("Save", "_Save"),
     ("Save All", "Save A_ll"), ("Save As…", "Save _As…"), ("Reload", "_Reload"),
     ("Copy Full Path", "Copy Full _Path"), ("Auto-Reload", "A_uto-Reload"),
-    ("Load Unsafe Linked Documents", "_Load Unsafe Linked Documents"),
+    // `L` belongs to Save A_ll (which pairs visually with Save _As…), so this item
+    // takes `D` — the whole-word key on "Documents", free in the File popover.
+    ("Load Unsafe Linked Documents", "Load Unsafe Linked _Documents"),
     ("Close Tab", "_Close Tab"), ("Exit", "E_xit"),
     // File menu: R/e/n are taken (Reload, …, New Document), so Rename takes `m`.
     ("Rename…", "Rena_me…"),
+    // File ▸ Export and its two sinks. `E` is free in the File popover (Exit took
+    // `x`); `P`/`H` are free inside the Export submenu, which is its own popover, so
+    // they do not collide with Copy Full _Path one level up.
+    ("Export", "_Export"), ("PDF", "_PDF"), ("HTML", "_HTML"),
     // Edit
     ("Undo", "_Undo"), ("Redo", "_Redo"), ("Copy", "_Copy"), ("Cut", "Cu_t"),
     ("Copy Document", "Copy Docu_ment"),
@@ -32,6 +38,10 @@ const MENU_MNEMONICS: &[(&str, &str)] = &[
     ("Select All", "Select _All"), ("Find", "_Find"),
     ("Find & Replace", "Find & Re_place"), ("Insert Emoji", "Insert _Emoji"),
     ("Annotate", "A_nnotate"), ("Change Case", "Chan_ge Case"),
+    // The annotation walk (INLINE_ACCEL_CMDS, not an EDIT_CMDS row). `x`/`v` mirror
+    // View's Ne_xt Tab / Pre_vious Tab, and N/P are taken here (Annotate, Replace).
+    ("Next Annotation", "Ne_xt Annotation"),
+    ("Previous Annotation", "Pre_vious Annotation"),
     ("UPPER CASE", "_UPPER CASE"), ("lower case", "_lower case"),
     ("Title Case", "_Title Case"), ("tOGGLE cASE", "tOGGLE _cASE"),
     // Format
@@ -195,137 +205,180 @@ mod tests {
         }
     }
 
-    /// The access letter of a marked label = the char right after the first `_`,
-    /// lowercased (GTK matches mnemonics case-insensitively).
-    fn access_key(plain: &str) -> char {
-        let marked = mnem(plain);
-        let after = marked.find('_').map(|i| &marked[i + 1..]);
-        after
-            .and_then(|s| s.chars().next())
-            .unwrap_or_else(|| panic!("no access key derivable for {plain:?} ({marked:?})"))
-            .to_ascii_lowercase()
+    /// Every popover the menubar can open, as `(path, marked labels)` pairs.
+    ///
+    /// A `GtkPopoverMenu` renders ONE menu model: its sections are drawn in the
+    /// SAME popover (so their items share one access-key namespace), while a
+    /// `submenu` link opens a NEW popover — the submenu's TITLE belongs to the
+    /// parent (that is where its key is pressed), its items to the child.
+    fn collect_popovers(
+        path: &str,
+        model: &gtk::gio::MenuModel,
+        out: &mut Vec<(String, Vec<String>)>,
+    ) {
+        let mut labels: Vec<String> = Vec::new();
+        // Sections are flattened into `labels`; submenus are queued as their own
+        // popovers and walked after this one, so `out` reads in menu order.
+        let mut nested: Vec<(String, gtk::gio::MenuModel)> = Vec::new();
+        let flatten = |model: &gtk::gio::MenuModel,
+                       labels: &mut Vec<String>,
+                       nested: &mut Vec<(String, gtk::gio::MenuModel)>| {
+            let mut stack = vec![model.clone()];
+            while let Some(m) = stack.pop() {
+                for i in 0..m.n_items() {
+                    let label = m
+                        .item_attribute_value(i, "label", None)
+                        .and_then(|v| v.str().map(str::to_string));
+                    if let Some(sec) = m.item_link(i, "section") {
+                        stack.push(sec);
+                    }
+                    if let Some(label) = label {
+                        if let Some(sub) = m.item_link(i, "submenu") {
+                            nested.push((format!("{path} ▸ {}", label.replace('_', "")), sub));
+                        }
+                        labels.push(label);
+                    }
+                }
+            }
+        };
+        flatten(model, &mut labels, &mut nested);
+        out.push((path.to_string(), labels));
+        for (child_path, child) in nested {
+            collect_popovers(&child_path, &child, out);
+        }
+    }
+
+    /// Every popover of the REAL menubar model, plus the menubar strip itself
+    /// (whose Alt+letter titles are their own namespace).
+    fn menubar_popovers() -> Vec<(String, Vec<String>)> {
+        let menus = crate::app::menubar::build_top_level_menus().menus;
+        let mut out = vec![(
+            "menubar".to_string(),
+            menus.iter().map(|(title, _)| title.to_string()).collect(),
+        )];
+        for (title, menu) in &menus {
+            collect_popovers(
+                &title.replace('_', ""),
+                menu.clone().upcast_ref::<gtk::gio::MenuModel>(),
+                &mut out,
+            );
+        }
+        out
+    }
+
+    /// The popovers whose items are DYNAMIC and therefore deliberately unmarked:
+    /// theme names come from `themes.toml` and the Documents list from the open
+    /// tabs, so no static table could carry an access key for them.
+    fn is_dynamic_popover(path: &str) -> bool {
+        path.ends_with("▸ Reading Theme") || path.ends_with("▸ Documents")
     }
 
     /// Access letters must be UNIQUE within each open popover — a duplicate makes
-    /// GTK cycle focus between the clashes instead of activating (a silent bug the
-    /// `wellformed` test above can't see, since it doesn't know popover grouping).
-    /// Each slice below mirrors one actual popover in `build_menubar`. Submenu
-    /// TITLES belong to their PARENT popover (that's where you press their key);
-    /// the submenu's own items are a separate popover. Heading 1–6 (digit keys,
-    /// trivially unique) and the dynamic Documents list are omitted.
+    /// GTK cycle focus between the clashes instead of activating.
+    ///
+    /// The popover grouping is DERIVED from the menu models `build_menubar` ships
+    /// (`build_top_level_menus`), never mirrored. The mirror this replaces had gone
+    /// eight entries out of date — `Save All`, `Rename…`, `Export`, `PDF`, `HTML`,
+    /// `Edit Link…`, `Edit Image…` and `Reading Theme` appeared in no list — and so
+    /// stayed green over a live collision (`Save A_ll` vs `_Load Unsafe Linked
+    /// Documents`, both in the File popover). A guard whose input set is a second
+    /// copy of the thing it checks reports on the copy.
     #[test]
-    fn menu_mnemonics_unique_per_popover() {
-        // (Insert/Edit Link… and Insert/Edit Image… are the same slot relabelled at
-        // runtime — list only the Insert form; both share the L / m key.)
-        let popovers: &[(&str, &[&str])] = &[
-            (
-                "File",
-                &[
-                    "New Document",
-                    "Open",
-                    "Save",
-                    "Save As…",
-                    "Reload",
-                    "Copy Full Path",
-                    "Auto-Reload",
-                    "Load Unsafe Linked Documents",
-                    "Close Tab",
-                    "Exit",
-                ],
-            ),
-            (
-                "Edit",
-                &[
-                    "Undo",
-                    "Redo",
-                    "Copy",
-                    "Cut",
-                    "Copy Document",
-                    "Copy Link Location",
-                    "Delete",
-                    "Select All",
-                    "Find",
-                    "Find & Replace",
-                    "Annotate",
-                    "Insert Emoji",
-                    "Change Case",
-                ],
-            ),
-            (
-                "Edit ▸ Change Case",
-                &["UPPER CASE", "lower case", "Title Case", "tOGGLE cASE"],
-            ),
-            (
-                "Format",
-                &[
-                    "Bold",
-                    "Italic",
-                    "Heading",
-                    "Strikethrough",
-                    "Highlight",
-                    "Code Span",
-                    "Superscript",
-                    "Subscript",
-                    "Code Block",
-                    "Quote",
-                    "Bulleted List",
-                    "Numbered List",
-                    "Task List",
-                    "Horizontal Bar",
-                    "Insert Link…",
-                    "Insert Image…",
-                    "Insert Table…",
-                ],
-            ),
-            (
-                "View",
-                &[
-                    "Back",
-                    "Forward",
-                    "Preview",
-                    "Edit",
-                    "Side by Side",
-                    "New Window",
-                    "Move Tab to New Window",
-                    "Previous Tab",
-                    "Next Tab",
-                    "Documents",
-                    "Outline",
-                    "Annotations",
-                    "Go To Line…",
-                    "Toolbar",
-                    "Status Bar",
-                    "Show Unsafe Images",
-                    "Zoom In",
-                    "Zoom Out",
-                    "Reset Zoom",
-                    "Swap Panes",
-                    "Vertical Split",
-                ],
-            ),
-            (
-                "View ▸ Toolbar",
-                &["Show", "File", "Edit", "Format", "View", "Split", "Zoom"],
-            ),
-            (
-                "Help",
-                &["Keyboard Shortcuts", "Markdown Reference", "About"],
-            ),
-        ];
-        for (menu, labels) in popovers {
+    fn menu_access_keys_unique_per_popover() {
+        let popovers = menubar_popovers();
+        // `File ▸ Export` is named explicitly because `_PDF`/`_HTML` are only free of
+        // Copy Full _Path one level up while Export is its OWN popover. That claim was
+        // made in a code comment with nothing holding it; this holds it.
+        for expected in ["File", "File ▸ Export"] {
+            assert!(
+                popovers.iter().any(|(path, _)| path == expected),
+                "expected the {expected:?} popover among {:?}",
+                popovers.iter().map(|(p, _)| p).collect::<Vec<_>>()
+            );
+        }
+        // ScrAP-132 guard-against-the-guard: a walker whose descent is wrong scans
+        // nothing and passes forever. Pin that the File popover really does reach
+        // through `build_command_menu`'s SECTIONS to the items this issue was about.
+        let file = &popovers
+            .iter()
+            .find(|(path, _)| path == "File")
+            .expect("File popover")
+            .1;
+        for label in ["Save A_ll", mnem("Load Unsafe Linked Documents").as_str()] {
+            assert!(
+                file.contains(&label.to_string()),
+                "File popover missing {label:?} — the section walk is not descending; got {file:?}"
+            );
+        }
+        // Collected, not panicked on at the first hit: this guard's whole purpose is
+        // to report the FULL set of gaps in one run, since the failure it exists for
+        // is an input set that quietly stopped covering the menu.
+        let mut problems: Vec<String> = Vec::new();
+        for (path, labels) in &popovers {
+            if is_dynamic_popover(path) {
+                // Pin the exemption rather than skipping silently: if one of these
+                // ever gains a static, markable item, this fails and the item joins
+                // the uniqueness check below instead of hiding behind the exemption.
+                for label in labels {
+                    if access_markup(label).0.is_some() {
+                        problems.push(format!(
+                            "{path}: {label:?} carries an access key, but this popover is \
+                             exempted as dynamic — drop the exemption or the marker"
+                        ));
+                    }
+                }
+                continue;
+            }
             let mut seen: Vec<(char, &str)> = Vec::new();
-            for label in *labels {
-                let key = access_key(label);
+            for label in labels {
+                let Some(key) = access_markup(label).0 else {
+                    problems.push(format!(
+                        "{path} popover: {label:?} has no access key — missing mnem()?"
+                    ));
+                    continue;
+                };
                 if let Some((_, other)) = seen.iter().find(|(k, _)| *k == key) {
-                    panic!("{menu} popover: access key {key:?} collides — {label:?} vs {other:?}");
+                    problems.push(format!(
+                        "{path} popover: access key {key:?} collides — {label:?} vs {other:?}"
+                    ));
                 }
                 seen.push((key, label));
             }
         }
+        assert!(problems.is_empty(), "\n{}", problems.join("\n"));
         // The pane context menu (`window/contextmenu.rs`) reuses `mnem()` for every
-        // row — its "main" page mirrors the Edit popover above and its Change Case
-        // page mirrors "Edit ▸ Change Case" — so it inherits both consistency and the
+        // row — its "main" page mirrors the Edit popover and its Change Case page
+        // mirrors "Edit ▸ Change Case" — so it inherits both consistency and the
         // uniqueness checked here; no separate group is needed.
+    }
+
+    /// QA M-3: exercise the REAL menu-model builders, so a submenu title that
+    /// forgets `mnem()` can no longer pass silently — `Format ▸ Heading` did
+    /// exactly that (it shipped the bare "Heading") while the old hand-maintained
+    /// mirror reserved `H` for it. These builders are pure `gio::Menu` models (no
+    /// widgets), so the test runs headlessly.
+    #[test]
+    fn every_runtime_submenu_title_carries_a_mnemonic() {
+        // A submenu's title is the popover path's last segment; its own popover is
+        // named after it, so the nested paths ARE the titles.
+        let popovers = menubar_popovers();
+        let titles: Vec<&str> = popovers
+            .iter()
+            .filter_map(|(path, _)| path.rsplit(" ▸ ").next().filter(|_| path.contains(" ▸ ")))
+            .collect();
+        assert!(!titles.is_empty(), "expected at least one nested submenu");
+        for title in &titles {
+            assert!(
+                popovers.iter().any(|(_, labels)| labels
+                    .iter()
+                    .any(|l| l.contains('_') && l.replace('_', "") == *title)),
+                "runtime submenu title {title:?} has no mnemonic marker — missing mnem()?"
+            );
+        }
+        assert!(
+            titles.contains(&"Heading"),
+            "Format ▸ Heading must be a submenu; got {titles:?}"
+        );
     }
 
     /// The tab context menu (`window/tabs/`) builds access keys from these

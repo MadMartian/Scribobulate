@@ -5,7 +5,6 @@
 use super::commands::WELCOME;
 use crate::window::refresh_dirty_status;
 use crate::winstate::{is_blank_welcome, state};
-use gtk::gio::FileMonitorFlags;
 use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow};
 use std::cell::RefCell;
@@ -178,16 +177,15 @@ pub(crate) fn attach_file_backing(
 
     // Live reload: watch the file with GIO's built-in monitor.
     let gio_file = gtk::gio::File::for_path(&path);
-    let Ok(monitor) = gio_file.monitor_file(FileMonitorFlags::NONE, gtk::gio::Cancellable::NONE)
-    else {
+    let Some(monitor) = crate::saferizer::DocMonitor::attach(&gio_file) else {
         return;
     };
 
     // Store the monitor on the tab (cancelling any prior one — a Save As to a
     // new path re-points it), so it is kept alive for the tab's lifetime and
     // stops when the tab's state is dropped.
-    if let Some(old) = tab.file_monitor.replace(Some(monitor.clone())) {
-        old.cancel();
+    if let Some(old) = tab.file_monitor.replace(Some(monitor)) {
+        old.cancel_and_release();
     }
     // QA M1 (round 1): a brand-new monitor can never have a legitimate
     // pending self-`Deleted` to swallow — reset the guard unconditionally
@@ -215,7 +213,11 @@ pub(crate) fn attach_file_backing(
     // on every fire avoids caching either — the same "don't cache a
     // reparent-able context" lesson as GTK4Rs/AP-52.
     let tab_weak = Rc::downgrade(tab);
-    monitor.connect_changed(move |_, _, _, event| {
+    let monitor_ref = tab.file_monitor.borrow();
+    let monitor = monitor_ref
+        .as_ref()
+        .expect("just stored on this tab, one statement above");
+    monitor.connect_changed(move |event| {
         use gtk::gio::FileMonitorEvent;
         let Some(tab) = tab_weak.upgrade() else {
             // Recorded before returning, not after: a monitor event delivered for a
@@ -246,11 +248,16 @@ pub(crate) fn attach_file_backing(
         // `WATCH_MOVES`) reports that as this same `Deleted` event — so
         // *every* save fired the "File deleted on disk" notice, not just a
         // real external deletion. `expect_self_delete` is armed right before
-        // our own rename and consumed (never left armed) here, so exactly one
-        // `Deleted` per save is swallowed and a genuine external delete —
-        // which never armed the flag — still surfaces normally.
+        // our own rename and consumed (never left armed) here; a genuine
+        // external delete — which never armed the flag — still surfaces normally.
+        //
+        // ONE SAVE IS NOT ONE `Deleted`, which this comment used to assume. The Win32
+        // backend delivers TWO for a single `MoveFileEx` replace-existing where Linux
+        // delivers one (MEASURED, 25 us apart), so the write-in-flight fallback in
+        // `swallows` covers the surplus. See `SelfDeleteGuard::swallows` for why the
+        // short-circuit order is load-bearing to macOS.
         if matches!(event, FileMonitorEvent::Deleted) {
-            if tab.expect_self_delete.consume() {
+            if tab.expect_self_delete.swallows(tab.write_gate.is_busy()) {
                 return;
             }
             // The backing file is genuinely gone. Mark the document savable even

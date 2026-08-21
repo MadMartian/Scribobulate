@@ -90,14 +90,21 @@ impl TabBar {
             current_x: Cell::new(0.0),
             target_x: Cell::new(0.0),
         });
-        // A brand-new tab always appends at the end, which never shifts any
-        // EXISTING tab's target_x — so there is nothing to animate; snap the
-        // new handle straight to its resting slot instead of sliding it in.
+        // Appending never REORDERS anything, so the new handle has no slide to
+        // make: snap it straight to its resting slot rather than easing it in
+        // from x=0. Its NEIGHBOURS are a different question — an existing tab
+        // may be parked away from the slot it now belongs in, because a handle
+        // that changed width since the strip last settled moved every slot
+        // after it. `settle_or_animate` is what closes that gap; the earlier
+        // "an append shifts nobody, so there is nothing to animate" reasoning
+        // held only for the widths, not for the positions those widths imply,
+        // and is exactly how a tab added to an already-open strip could land on
+        // top of its left-hand neighbour (`handle_width_changed`).
         self.recompute_targets();
         if let Some(last) = self.imp().tabs.borrow().last() {
             last.current_x.set(last.target_x.get());
         }
-        self.queue_allocate();
+        self.settle_or_animate();
     }
 
     pub(super) fn remove_at(&self, idx: usize) -> Option<gtk::Widget> {
@@ -267,17 +274,67 @@ impl TabBar {
 
     pub(super) fn recompute_targets(&self) {
         let tabs = self.imp().tabs.borrow();
-        let mut x = 0.0;
-        for tab in tabs.iter() {
-            let w = natural_width(&tab.handle);
-            tab.target_x.set(x);
-            x += w + TAB_SPACING;
+        let widths: Vec<f64> = tabs.iter().map(|t| natural_width(&t.handle)).collect();
+        for (tab, target) in tabs.iter().zip(layout::target_positions(&widths)) {
+            tab.target_x.set(target);
         }
     }
 
     pub(super) fn retarget_and_animate(&self) {
         self.recompute_targets();
         self.ensure_tick();
+    }
+
+    /// Re-derive every resting slot after a change to some handle's **natural
+    /// width**, and slide whatever that moved.
+    ///
+    /// A tab's x is a running total of the handles to its left, so a width
+    /// change is a POSITION change for every tab after it — but the only thing
+    /// a widget-level width change issues on its own is a `queue_resize`, which
+    /// re-runs `size_allocate` and re-reads the *same* stale `target_x`/
+    /// `current_x`. Nothing else in the strip re-derives them: the animation
+    /// tick eases `current_x` toward `target_x` and stops, `size_allocate` only
+    /// reads. So a relabel or a busy-spinner toggle used to leave the strip
+    /// parked on the widths it had when it last settled, and the next tab
+    /// appended got the CORRECT slot on a grid every other tab had left —
+    /// drawing it on top of its left-hand neighbour, permanently (nothing
+    /// recomputes on resize either).
+    ///
+    /// Every mutation that can change a handle's width therefore routes through
+    /// here — `TabBar::with_entry_width_change` is the single funnel — so the
+    /// strip's positions can never be stale with respect to its widths
+    /// (ScrAP-290).
+    ///
+    /// **Known residue:** a width change this widget is never told about — a
+    /// restyle altering the handles' font, say — leaves the strip stale until
+    /// the next tab operation, because [`Self::add_tab`] and
+    /// [`Self::retarget_and_animate`] are the only other re-derivation points.
+    /// That backstop is deliberate and separately guarded (see the restyle test
+    /// in `bar.rs`); closing the gap outright would mean re-deriving from inside
+    /// the style/layout pass, where the handles' own styles may not be updated
+    /// yet and the measurements would be the stale ones all over again.
+    pub(super) fn handle_width_changed(&self) {
+        self.recompute_targets();
+        self.settle_or_animate();
+    }
+
+    /// Start the sibling-slide if any tab is away from its resting slot, and
+    /// otherwise just re-allocate. Keeping the animation opt-in (rather than an
+    /// unconditional [`Self::ensure_tick`]) means the common no-op case — a
+    /// relabel that doesn't change a width, which `update_window_title` does for
+    /// every tab on every title update — costs one measure pass and no frames.
+    pub(super) fn settle_or_animate(&self) {
+        let unsettled = {
+            let tabs = self.imp().tabs.borrow();
+            let currents: Vec<f64> = tabs.iter().map(|t| t.current_x.get()).collect();
+            let targets: Vec<f64> = tabs.iter().map(|t| t.target_x.get()).collect();
+            layout::any_unsettled(&currents, &targets)
+        };
+        if unsettled {
+            self.ensure_tick();
+        } else {
+            self.queue_allocate();
+        }
     }
 
     pub(super) fn scroll_by(&self, delta: f64) {
@@ -287,6 +344,20 @@ impl TabBar {
         };
         let max = (adj.upper() - adj.page_size()).max(0.0);
         crate::saferizer::scrollpos::jump(&adj, (adj.value() + delta).clamp(0.0, max));
+    }
+
+    /// The strip's full logical content width: the last tab's resting slot plus
+    /// its own natural width. This is the extent `size_allocate` publishes as
+    /// the adjustment's `upper`, and [`Self::scroll_into_view`] republishes when
+    /// it must reveal a tab before the next layout pass — one definition, so the
+    /// two can't disagree about how wide the strip's content is.
+    pub(super) fn content_extent(&self) -> f64 {
+        self.imp()
+            .tabs
+            .borrow()
+            .last()
+            .map(|t| t.target_x.get() + natural_width(&t.handle))
+            .unwrap_or(0.0)
     }
 
     pub(super) fn scroll_into_view(&self, idx: usize) {
@@ -299,12 +370,44 @@ impl TabBar {
         let Some(adj) = imp.hadjustment.borrow().clone() else {
             return;
         };
-        // The viewport available to tab handles (post-gutter-reservation),
-        // as of the last `size_allocate` — NOT the adjustment's own
+        // Republish the scroll range BEFORE asking for a position. `upper` is
+        // written by `size_allocate` alone, which has not run yet for a tab
+        // appended in this same main-loop turn — and every adjustment write
+        // clamps into `[lower, upper - page_size]` (`saferizer::scrollpos::jump`
+        // documents it, and its own test pins it), so a reveal aimed at the
+        // just-appended last tab is silently cut short by that tab's own width.
+        // The tab then sits clipped past the strip's right edge with nothing to
+        // correct it: the next `size_allocate` publishes the true range but
+        // never re-reveals, and no later event does either — which is why
+        // "the document I just opened has no visible tab" survived a resize
+        // (ScrAP-291).
+        //
+        // `viewport` is the width available to tab handles (post-gutter
+        // reservation) as of the last `size_allocate` — NOT the adjustment's own
         // `page_size`, which can be one frame stale relative to a chevron
         // visibility change that hasn't reallocated yet. The reveal decision
-        // itself is the pure [`layout::scroll_target`].
+        // itself is the pure [`layout::scroll_target`], below.
         let viewport = imp.viewport_w.get();
+        if viewport > 0.0 {
+            let (upper, _max_off) = layout::scroll_extent(self.content_extent(), viewport);
+            // Only when the content GREW, which is the case that can truncate a
+            // reveal. A shrunk extent (a tab just closed) leaves the range
+            // merely permissive, so the reveal below is exact either way, and
+            // republishing it here would clamp the position down mid-flow —
+            // `size_allocate` owns that, one pass later.
+            if upper > adj.upper() {
+                let (step_inc, page_inc) = layout::page_steps(viewport);
+                crate::saferizer::scrollpos::reconfigure(
+                    &adj,
+                    adj.value(),
+                    0.0,
+                    upper,
+                    step_inc,
+                    page_inc,
+                    viewport,
+                );
+            }
+        }
         let value = adj.value();
         if let Some(new_value) = layout::scroll_target(pos, w, value, viewport) {
             crate::saferizer::scrollpos::jump(&adj, new_value);

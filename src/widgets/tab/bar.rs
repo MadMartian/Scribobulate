@@ -189,31 +189,63 @@ impl TabBar {
         self.imp().active_idx.get()
     }
 
-    pub(super) fn set_markup(&self, content: &gtk::Widget, markup: &str) {
+    /// Apply `mutate` to `content`'s tab entry, where the mutation may change
+    /// the handle's **natural width**, and re-derive the strip's resting slots
+    /// afterwards ([`TabBar::handle_width_changed`]).
+    ///
+    /// The two halves are fused into one call so the second cannot be forgotten
+    /// at a call site (the GTK4Rs/AP-156 shape). A tab's x is the running total
+    /// of the handles to its left, and GTK's own `queue_resize` re-runs the
+    /// layout against the SAME stale slots — so a width change with no retarget
+    /// leaves the strip drawing on a grid it no longer has, silently, until
+    /// something unrelated (a close, a drag-reorder) happens to retarget it. A
+    /// new width-changing setter added here inherits the fix by construction;
+    /// one that reaches into `imp().tabs` on its own does not.
+    ///
+    /// **Enforcement tier: convention-only, deliberately** (POLICY § Typed GTK
+    /// seams asks for this to be stated rather than left implicit). There is no
+    /// method to ban — `set_markup`/`set_visible` are legitimate on any widget,
+    /// so a `clippy.toml` entry would be all false positives — and the entry's
+    /// fields must stay `pub(super)` for `ops::add_tab` to build them, so the
+    /// bypass cannot be made non-compiling without restructuring the imp. What
+    /// is bought instead is that the whole surface is two functions long and
+    /// both are here: `set_markup` and `set_busy`, immediately below.
+    fn with_entry_width_change(&self, content: &gtk::Widget, mutate: impl FnOnce(&imp::TabEntry)) {
         // Funnel through `index_of` so the content→entry pointer-identity scan
         // lives in exactly one place (D2).
         let Some(idx) = self.index_of(content) else {
             return;
         };
-        if let Some(t) = self.imp().tabs.borrow().get(idx) {
-            // Markup, not plain text: the label carries the coloured "⚠"
-            // deleted-backing badge (the filename is escaped upstream).
-            t.label.set_markup(markup);
+        {
+            let tabs = self.imp().tabs.borrow();
+            let Some(entry) = tabs.get(idx) else { return };
+            mutate(entry);
         }
+        // The borrow above is released first: `handle_width_changed` measures
+        // every handle and can re-enter this `RefCell`.
+        self.handle_width_changed();
+    }
+
+    pub(super) fn set_markup(&self, content: &gtk::Widget, markup: &str) {
+        self.with_entry_width_change(content, |t| {
+            // Markup, not plain text: the label carries the coloured "⚠"
+            // deleted-backing badge (the filename is escaped upstream). A
+            // relabel resizes the handle — hence the width-change funnel.
+            t.label.set_markup(markup);
+        });
     }
 
     /// Show (and spin) or hide `content`'s tab's leading busy indicator — a
-    /// deferred tab awaiting its first preview render. Same `index_of`
-    /// content→entry funnel as [`set_markup`](Self::set_markup) (D2). Toggling
-    /// visibility changes the handle's natural width (a hidden GtkSpinner is
-    /// skipped in `measure`), so `queue_resize` re-runs the strip layout —
-    /// `GtkSpinner::start`/`stop` gate the frame-clock animation so a stopped,
-    /// hidden spinner costs nothing.
+    /// deferred tab awaiting its first preview render. Toggling visibility
+    /// changes the handle's natural width (a hidden GtkSpinner is skipped in
+    /// `measure`), which is a POSITION change for every tab to its right — so
+    /// this goes through the width-change funnel
+    /// ([`with_entry_width_change`](Self::with_entry_width_change)), which
+    /// re-derives the resting slots, and then `queue_resize` re-runs the strip
+    /// layout. `GtkSpinner::start`/`stop` gate the frame-clock animation so a
+    /// stopped, hidden spinner costs nothing.
     pub(super) fn set_busy(&self, content: &gtk::Widget, busy: bool) {
-        let Some(idx) = self.index_of(content) else {
-            return;
-        };
-        if let Some(t) = self.imp().tabs.borrow().get(idx) {
+        self.with_entry_width_change(content, |t| {
             if busy {
                 t.spinner.set_visible(true);
                 t.spinner.start();
@@ -221,7 +253,7 @@ impl TabBar {
                 t.spinner.stop();
                 t.spinner.set_visible(false);
             }
-        }
+        });
         self.queue_resize();
     }
 
@@ -453,6 +485,283 @@ mod gtk_integration_tests {
             glib::MainContext::default().iteration(true);
         }
         cond()
+    }
+
+    /// A `TabBar` in a presented window, pumped until it has a real allocation.
+    /// The strip's viewport and scroll geometry do not exist until a layout pass
+    /// has run, and every assertion below is about drawn positions.
+    fn presented_bar(width: i32) -> (gtk::Window, TabBar) {
+        let bar = TabBar::new();
+        bar.set_hexpand(true);
+        let win = gtk::Window::new();
+        win.set_default_size(width, 40);
+        win.set_child(Some(&bar));
+        win.present();
+        pump_strip(&bar);
+        (win, bar)
+    }
+
+    /// Add a tab the way the application does: the handle is created with an
+    /// EMPTY label and titled afterwards, and `update_window_title` re-labels
+    /// **every** tab in the strip on each open — so a handle's natural width is
+    /// routinely changed after the tab exists, which is the whole subject here.
+    fn add_titled_tab(bar: &TabBar, contents: &mut Vec<gtk::Widget>, title: &str) -> gtk::Widget {
+        let content: gtk::Widget = gtk::Label::new(Some("tab body")).upcast();
+        bar.add_tab(&content);
+        contents.push(content.clone());
+        let last = contents.len() - 1;
+        for (i, existing) in contents.iter().enumerate() {
+            let markup = if i == last {
+                title.to_string()
+            } else {
+                format!("doc-{i}.md")
+            };
+            bar.set_markup(existing, &markup);
+        }
+        content
+    }
+
+    /// Pump WALL CLOCK until the sibling-slide animation has settled (its tick
+    /// callback is gone). Turns are not time: the ease runs off the frame clock,
+    /// so a tight `iteration(false)` loop would never advance it — and the loop
+    /// is kept dispatchable on an idle display by a timeout SOURCE, never by a
+    /// wall-clock check between iterations (GTK4Rs/AP-79).
+    fn pump_strip(bar: &TabBar) {
+        let ticks = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let counter = ticks.clone();
+        let id = glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+            counter.set(counter.get() + 1);
+            glib::ControlFlow::Continue
+        });
+        while ticks.get() < 50 {
+            glib::MainContext::default().iteration(true);
+            // Settled once the animation has stopped — but only judged after a
+            // few frames, since `tick_id` is also empty before one starts.
+            if ticks.get() > 8 && bar.imp().tick_id.borrow().is_none() {
+                break;
+            }
+        }
+        id.remove();
+    }
+
+    /// Where each handle is actually drawn, in the strip's logical content
+    /// space: its animated position and its current natural width.
+    fn drawn_spans(bar: &TabBar) -> Vec<layout::Span> {
+        bar.imp()
+            .tabs
+            .borrow()
+            .iter()
+            .map(|t| layout::Span {
+                start: t.current_x.get(),
+                width: natural_width(&t.handle),
+            })
+            .collect()
+    }
+
+    /// Assert no handle is drawn over the one to its left. Shared by the guards
+    /// below so they state the same invariant the same way.
+    fn assert_no_overlap(bar: &TabBar, expected_tabs: usize) {
+        let spans = drawn_spans(bar);
+        assert_eq!(spans.len(), expected_tabs);
+        for pair in spans.windows(2) {
+            let (left, right) = (pair[0], pair[1]);
+            assert!(
+                left.start + left.width <= right.start + 0.5,
+                "tab handles overlap: {left:?} runs into {right:?} — all spans {spans:?}"
+            );
+        }
+    }
+
+    /// ISSUE-R regression (TDD 7.20, area-1 automated test): **a handle that
+    /// changes width must move every tab after it.**
+    ///
+    /// This is the guard aimed squarely at the width-change funnel
+    /// ([`TabBar::with_entry_width_change`]). A handle's width is not just its
+    /// own business: a tab's x is the running total of the handles to its left,
+    /// and the strip caches those slots (`target_x`) rather than deriving them
+    /// per frame. A width change issues only GTK's `queue_resize`, which re-runs
+    /// the layout against the SAME cached slots — so a handle that grows (here:
+    /// a tab gaining its deferred-render busy spinner) is drawn straight over
+    /// its right-hand neighbour until something else happens to retarget.
+    #[gtktest::test]
+    fn a_handle_that_grows_moves_the_tabs_after_it() {
+        let (win, bar) = presented_bar(420);
+        let mut contents = Vec::new();
+        for i in 0..4 {
+            add_titled_tab(&bar, &mut contents, &format!("doc-{i}.md"));
+        }
+        pump_strip(&bar);
+        assert_no_overlap(&bar, 4);
+
+        // The first tab is re-rendered in the background and gains its spinner:
+        // its handle grows, and the three tabs after it must give way.
+        bar.set_busy(&contents[0], true);
+        pump_strip(&bar);
+        assert_no_overlap(&bar, 4);
+        win.destroy();
+    }
+
+    /// ISSUE-R regression (TDD 7.20, area-1 automated test): **a tab added to a
+    /// strip whose handles changed width since it last settled must land clear
+    /// of its left-hand neighbour.**
+    ///
+    /// The strip caches each handle's resting slot (`target_x`) and its animated
+    /// position (`current_x`); a slot is the running total of the handles to its
+    /// left, so a handle that changes width moves every slot after it. GTK's own
+    /// `queue_resize` re-runs the layout against those SAME cached values, so a
+    /// width change that does not retarget leaves the strip drawing on a grid it
+    /// no longer has — and the next appended tab, whose slot IS re-derived, is
+    /// drawn on top of the neighbour that never moved.
+    ///
+    /// The sequence mirrors a multi-file open exactly: each tab is added while
+    /// the earlier ones show their deferred-render busy spinner, then they all
+    /// materialise (each handle narrowing by its spinner), then one more
+    /// document is opened into the settled strip.
+    ///
+    /// Asserted on the STATE (drawn spans), not on pixels: the overlap is
+    /// computed layout, and a pixel assertion would additionally depend on the
+    /// clip, the scroll offset and the theme.
+    #[gtktest::test]
+    fn a_tab_added_after_its_neighbours_changed_width_lands_clear_of_them() {
+        let (win, bar) = presented_bar(420);
+        let mut contents = Vec::new();
+        for i in 0..8 {
+            let content = add_titled_tab(&bar, &mut contents, &format!("doc-{i}.md"));
+            // Every background tab of a multi-file open is deferred, and shows
+            // its busy spinner from the moment it is added.
+            bar.set_busy(&content, true);
+        }
+        pump_strip(&bar);
+
+        // …and then they render, one after another, each handle losing its
+        // spinner. THIS is the width change the strip used to ignore.
+        for content in &contents {
+            bar.set_busy(content, false);
+        }
+        pump_strip(&bar);
+
+        add_titled_tab(&bar, &mut contents, "opened-later.md");
+        pump_strip(&bar);
+
+        assert_no_overlap(&bar, 9);
+        win.destroy();
+    }
+
+    /// A display-wide CSS provider, removed again when this value drops.
+    ///
+    /// A provider added to the display is PROCESS-global state, and libtest runs
+    /// the whole suite in one process — so it must be removed even if the test
+    /// panics, or every later test renders under a restyled theme and fails
+    /// somewhere unrelated (POLICY § Unit tests).
+    struct DisplayCss(gtk::CssProvider);
+
+    impl DisplayCss {
+        fn install(css: &str) -> Option<Self> {
+            let display = gdk::Display::default()?;
+            let provider = gtk::CssProvider::new();
+            provider.load_from_data(css);
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_USER,
+            );
+            Some(Self(provider))
+        }
+    }
+
+    impl Drop for DisplayCss {
+        fn drop(&mut self) {
+            if let Some(display) = gdk::Display::default() {
+                gtk::style_context_remove_provider_for_display(&display, &self.0);
+            }
+        }
+    }
+
+    /// ISSUE-R regression (TDD 7.20, area-1 automated test): **adding a tab
+    /// re-derives the strip from the widths its handles have NOW.**
+    ///
+    /// This is the guard aimed at the second, independent mechanism — the
+    /// retarget in `TabBar::add_tab` — and it exists because the width-change
+    /// funnel cannot be the whole answer: a restyle changes every handle's width
+    /// with no call into this widget at all (here a font-size change, which is
+    /// what a theme switch does to the strip). The strip is then stale until
+    /// *something* re-derives it, and adding a tab is the operation that must
+    /// not be the one to draw on top of the mess.
+    ///
+    /// Mutation-testing note (GTK4Rs/AP-254): the funnel and this retarget are
+    /// **independently sufficient** for the tab-added-after-a-width-change case,
+    /// so neutering either one alone leaves that guard green. This test and
+    /// `a_handle_that_grows_moves_the_tabs_after_it` are what separate them —
+    /// each fails for exactly one mechanism. Neither is dead code.
+    #[gtktest::test]
+    fn a_tab_added_after_a_restyle_lands_clear_of_its_neighbours() {
+        let (win, bar) = presented_bar(420);
+        let mut contents = Vec::new();
+        for i in 0..4 {
+            add_titled_tab(&bar, &mut contents, &format!("doc-{i}.md"));
+        }
+        pump_strip(&bar);
+        assert_no_overlap(&bar, 4);
+
+        let _css = DisplayCss::install("tabbar .tab-handle label { font-size: 32px; }")
+            .expect("a display is required for these tests");
+        pump_strip(&bar);
+        // The strip is legitimately stale HERE — nothing has told it the handles
+        // grew — so no assertion is made about this moment. What must hold is
+        // that the next tab operation re-derives the whole strip.
+
+        // Added the bare way, deliberately: the application titles a new tab
+        // immediately afterwards, and that relabel would route through the
+        // width-change funnel and heal the strip on the funnel's behalf — which
+        // would leave this test passing with `add_tab`'s own retarget deleted
+        // (GTK4Rs/AP-254). Adding without a title exercises only the mechanism
+        // this test is aimed at, and is a state the strip really does paint in
+        // (a handle is born label-less; `update_window_title` runs after).
+        let bare: gtk::Widget = gtk::Label::new(Some("tab body")).upcast();
+        bar.add_tab(&bare);
+        contents.push(bare);
+        pump_strip(&bar);
+        assert_no_overlap(&bar, 5);
+        win.destroy();
+    }
+
+    /// ISSUE-R regression, second half (TDD 7.20): **switching to a just-added
+    /// tab must actually reveal it**, even when the strip already overflows.
+    ///
+    /// `scroll_into_view` writes the adjustment, and every adjustment write is
+    /// clamped into `[lower, upper - page_size]`. `upper` is published by
+    /// `size_allocate`, which has not run yet for a tab appended in the same
+    /// main-loop turn — so without republishing the range first, the reveal is
+    /// silently cut short by exactly the new tab's own width and the tab stays
+    /// clipped past the right edge, permanently (the next layout pass publishes
+    /// the true range but never re-reveals).
+    #[gtktest::test]
+    fn switching_to_a_just_added_tab_scrolls_it_fully_into_view() {
+        let (win, bar) = presented_bar(420);
+        let mut contents = Vec::new();
+        for i in 0..8 {
+            add_titled_tab(&bar, &mut contents, &format!("doc-{i}.md"));
+        }
+        pump_strip(&bar);
+        assert!(
+            bar.imp().content_width.get() > bar.imp().viewport_w.get(),
+            "precondition: the strip must already overflow, or the reveal is trivial"
+        );
+
+        add_titled_tab(&bar, &mut contents, "opened-later.md");
+        bar.switch_to_index(contents.len() - 1);
+        pump_strip(&bar);
+
+        let spans = drawn_spans(&bar);
+        let fresh = *spans.last().expect("the tab just added");
+        let offset = bar.scroll_offset();
+        let viewport = bar.imp().viewport_w.get();
+        assert!(
+            fresh.start - offset >= -0.5 && fresh.start + fresh.width - offset <= viewport + 0.5,
+            "the newly added tab {fresh:?} is not fully inside the viewport \
+             (offset {offset}, viewport {viewport})"
+        );
+        win.destroy();
     }
 
     /// GTK4Rs/AP-156 regression: the drag-icon freeze must be taken BEFORE the handle

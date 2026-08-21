@@ -43,25 +43,32 @@
 // "tidy" the duplication away without replacing that gate.
 mod a11y;
 mod accel;
+mod affordance;
 mod annotate;
 mod annotations;
 mod annotations_view;
 mod app;
 mod atomic_io;
+mod clipboard;
 mod codeview;
 #[cfg(any(windows, target_os = "macos"))]
 mod colorscheme;
 mod config;
 mod copymap;
 mod docio;
+mod export;
 mod farscroll;
 mod forensics;
 mod format;
 mod icons;
+mod imagefetch;
 mod keynav;
 mod limits;
+mod lineendings;
 mod links;
 mod logging;
+#[cfg(target_os = "macos")]
+mod macwordnav;
 // Test-only in `lib.rs` (`#[cfg(test)]`); this root is always built `--cfg test`.
 mod notices;
 mod outline;

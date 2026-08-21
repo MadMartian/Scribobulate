@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 968" width="1000" height="968" role="img" aria-label="Scribobulate system overview">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1112" width="1000" height="1112" role="img" aria-label="Scribobulate system overview: one single-threaded process; document windows of tabs over a split source/preview view; Markdown flowing through CriticMarkup extraction, pulldown-cmark and the renderer into the preview; document I/O through docio on GLib's thread pool; and a second, display-free consumer of the same event stream that exports the document to HTML and PDF.">
   <title>Scribobulate system overview</title>
   <style>
     /* Light defaults. Every box is filled, so text always sits on a surface we
@@ -221,9 +221,22 @@
   <text class="lbl" x="36" y="874" font-size="9.5">Written by <tspan class="mono">replace_contents_async</tspan> (GLib's thread pool — no thread of ours; owner-only from the first byte). Each file carries a</text>
   <text class="lbl" x="36" y="887" font-size="9.5">frontmatter header naming its own document, so recovery reads the headers, never session.toml: <tspan font-style="italic">a non-empty swap/ IS the "unclean exit" signal.</tspan></text>
 
-  <!-- ── renderer note ──────────────────────────────────────────────────── -->
+  <!-- ── network egress ─────────────────────────────────────────────────── -->
   <rect class="note" x="26" y="900" width="948" height="52" rx="4" stroke-width="1"/>
-  <text class="t" x="36" y="917" font-size="10.5" font-weight="bold">GSK_RENDERER=cairo — set in main() before GTK initialises</text>
-  <text class="lbl" x="36" y="932" font-size="9.5">The application never creates a GL/GLES context and never appears as a GPU client: 0 MiB VRAM, ~80 MiB RAM for a full-fidelity document.</text>
-  <text class="lbl" x="36" y="945" font-size="9.5">This one line is why the whole stack is "GtkTextView + text tags + a few custom widgets" rather than an embedded web engine — measured, not assumed.</text>
+  <text class="t" x="36" y="917" font-size="10.5" font-weight="bold">Network — imagefetch.rs · the process's ONLY outbound connection, and only with "Show Unsafe Images" on</text>
+  <text class="lbl" x="36" y="932" font-size="9.5">An in-process HTTPS GET (system trust store, system proxy), <tspan font-style="italic">not</tspan> a URI handed to GIO: GIO resolves http/https only where a backend claims the scheme — a</text>
+  <text class="lbl" x="36" y="945" font-size="9.5">daemon on Linux, an in-DLL VFS on Windows, nothing on macOS. Bounded by connect/global timeouts and a byte cap; blocks the main thread for the fetch.</text>
+
+  <!-- ── renderer note ──────────────────────────────────────────────────── -->
+  <rect class="note" x="26" y="968" width="948" height="52" rx="4" stroke-width="1"/>
+  <text class="t" x="36" y="985" font-size="10.5" font-weight="bold">GSK_RENDERER=cairo — set in main() before GTK initialises</text>
+  <text class="lbl" x="36" y="1000" font-size="9.5">The application never creates a GL/GLES context and never appears as a GPU client: 0 MiB VRAM, ~80 MiB RAM for a full-fidelity document.</text>
+  <text class="lbl" x="36" y="1013" font-size="9.5">This one line is why the whole stack is "GtkTextView + text tags + a few custom widgets" rather than an embedded web engine — measured, not assumed.</text>
+
+  <!-- ── export ─────────────────────────────────────────────────────────── -->
+  <rect class="group" x="26" y="1036" width="948" height="66" rx="5" stroke-width="1.5"/>
+  <text class="t grp-t" x="36" y="1053" font-size="11">Export — the SECOND consumer of the same event stream (export/), never of the preview widget</text>
+  <text class="lbl" x="36" y="1067" font-size="9.5">Re-enters at <tspan font-family="monospace">annotate::extract</tspan> and walks the same pulldown events, so a tab that was never rendered, an edit-only window and an unsaved buffer all export identically —</text>
+  <text class="lbl" x="36" y="1079" font-size="9.5">and the whole pipeline is display-free, so it sits inside the coverage gate. <tspan font-weight="bold">One ExportDoc, two sinks</tspan>: html.rs serialises it; paginate.rs + pdf.rs measure with Pango and</text>
+  <text class="lbl" x="36" y="1091" font-size="9.5">draw through GtkPrintOperation to a staged temp, promoted only on success — GTK truncates a destination it is given before the first page is drawn.</text>
 </svg>

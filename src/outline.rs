@@ -151,6 +151,16 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
     // While inside a heading: (level, source-start offset, accumulated text).
     let mut current: Option<(u8, usize, String)> = None;
 
+    // Read the document the way the preview does: through the inline-tab pre-pass
+    // (ScrAP-75). Skipping it made the outline disagree with the rendered page about
+    // the document's block structure — MEASURED, a tab-padded GFM table followed by a
+    // setext underline: the preview showed a table and no heading, while the outline
+    // listed a phantom H1 whose text was the whole table. A tab inside a heading's own
+    // text diverged too (`# Chapter\tOne` → the sidebar showed the tab, the page a
+    // space). The substitution is length- and position-preserving, so `src_offset`
+    // still indexes the ORIGINAL source every caller navigates against.
+    let md = &*crate::renderer::normalize_inline_tabs(md);
+
     for (ev, range) in Parser::new_ext(md, crate::renderer::md_options()).into_offset_iter() {
         match ev {
             Event::Start(Tag::Heading { level, .. }) => {

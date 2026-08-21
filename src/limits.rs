@@ -101,6 +101,31 @@ pub(crate) const MAX_NEST_DEPTH: usize = 64;
 /// themselves.
 pub(crate) const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Maximum number of bytes [`crate::imagefetch`] will read from a remote image
+/// response before abandoning it.
+///
+/// **Why a cap exists at all.** A remote image is fetched only on the opt-in
+/// "Show Unsafe Images" path, but the URL still comes out of an untrusted
+/// document, and the fetch runs on the GTK main thread (ScrAP-34a). Without a
+/// cap, a `Content-Length`-less response that never ends is an unbounded
+/// allocation *and* an unbounded freeze — the network's version of the character
+/// device [`MAX_DOCUMENT_BYTES`] cannot see. The limit is enforced against the
+/// bytes actually read, never against the advertised `Content-Length`, because
+/// that header is written by the same party as the body.
+///
+/// **Why 16 MiB.** Measured against real inline document images rather than
+/// guessed: a 1280 px photographic JPEG from Wikimedia is 583 KiB, and the badge
+/// SVGs a README banner is usually made of are 0.8–5 KiB. 16 MiB is ~27× the
+/// photographic case, so no image a document legitimately embeds comes near it,
+/// while an endless response is cut off after a bounded allocation. Re-measure
+/// rather than re-reason if this ever needs raising.
+///
+/// **What it does not bound.** Decoding, not transfer, is where an image bomb
+/// pays off — a few MiB of PNG can decode to gigabytes of pixels, and that
+/// exposure is identical for a local file, so it is not this constant's job and
+/// is not addressed here (`GdkTexture` owns the decode either way).
+pub(crate) const MAX_REMOTE_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+
 /// Why a path was refused for loading. Distinct variants because the three
 /// cases need different words in front of a user: an oversized document is the
 /// user's document and they may reasonably be annoyed; a FIFO or device is

@@ -238,3 +238,18 @@ pub(super) fn show_saved_toast(window: &ApplicationWindow) {
         "File saved",
     );
 }
+
+/// Report an export's outcome — success **and** failure (TDD 25.14).
+///
+/// Takes the chrome rather than the window, because an export's completion lands
+/// later and the notice must be retracted from the stack that issued it. Re-resolving
+/// a stack through the tab at fire time answers "which window does this tab live in
+/// *now*", which is a different question from "which stack owns this handle", and the
+/// two diverge in exactly the cases the Status-notice CAM exists for (columns B/C).
+pub(super) fn show_export_toast(chrome: &std::rc::Rc<winstate::WindowChrome>, text: &str) {
+    super::chrome_fit::apply_visible_area_inset(chrome.info_toast.widget(), TOAST_MARGIN_END);
+    chrome
+        .info_toast
+        .show(Icon::DocumentSaveAs.name(), text, INFO_TOAST_TIME);
+    chrome.push_timed_notice(text, INFO_STATUS_TIME);
+}

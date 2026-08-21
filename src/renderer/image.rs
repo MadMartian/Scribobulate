@@ -18,7 +18,7 @@ use crate::links::ImageResolution;
 /// `has_texture` is whether a `GdkTexture` actually loaded: a `Local`/`Remote`
 /// resolution with no texture is a decode/read failure, distinct from a path
 /// that could not be resolved at all (`Missing`).
-pub(super) fn image_placeholder_tooltip(
+pub(crate) fn image_placeholder_tooltip(
     resolution: &ImageResolution,
     has_texture: bool,
     src: &str,

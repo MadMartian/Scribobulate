@@ -14,11 +14,27 @@ license = "Apache-2.0"
 publish = false
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.10" }
+# `v4_6` matches the project's documented GTK floor (POLICY § Build) — it does not
+# raise it. The binding gates each API behind the GTK version that introduced it, so
+# without this feature `GdkTexture::from_bytes` (gdk_texture_new_from_bytes, GTK 4.6)
+# is simply absent from the crate and reads as a type error rather than a version
+# one (GTK4Rs/AP-94). Remote images need it: their bytes arrive from `imagefetch`,
+# not from a `GFile` (ScrAP-292). Do NOT raise this past the floor in POLICY —
+# an above-floor wrapper compiles and then fails at link/runtime (GTK4Rs/AP-114).
+gtk = { package = "gtk4", version = "0.10", features = ["v4_6"] }
 sourceview = { package = "sourceview5", version = "0.10" }
 # glib is re-exported by gtk4; depended on directly only to enable its `log`
 # feature, which compiles the glib→`log` bridge used by src/logging.rs.
 glib = { version = "0.21", features = ["log"] }
+# The ONLY sanctioned way to draw a Pango layout onto a cairo surface, which is what
+# the PDF export sink does (`pango_cairo_show_layout` — never a per-run
+# `show_glyph_string` loop, which hands cairo positioned glyphs with no UTF-8 or
+# clusters and silently destroys the text layer). libpangocairo is already linked
+# into the process by GTK, so this adds bindings and no system dependency, no
+# runtime, and nothing to the footprint. Pinned to 0.21 to match the pango and
+# cairo-rs the gtk4 0.10 crate already brings in — a mismatched train would hand
+# cairo a `Context` from a different binding generation.
+pangocairo = "0.21"
 pulldown-cmark = "0.13"
 serde = { version = "1", features = ["derive"] }
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
@@ -37,6 +53,29 @@ env_logger = "0.11"
 # explicit dependency rather than relying on an incidental transitive one.
 libc = "0.2"
 two-face = { version = "0.5.1", default-features = false, features = ["syntect-fancy"] }
+# The HTTP(S) client behind remote images ("Show Unsafe Images"). Justified in
+# TECH.md § Rust crates and ScrAP-292: GIO resolves an https:// URI only where a
+# GVfs http backend is installed, which is the Linux desktop and nowhere else, so
+# the feature was silently dead on macOS. `default-features = false` drops
+# gzip/json/cookies; `rustls` pins the ring provider (no OpenSSL, and no build tool
+# beyond the C compiler every platform already has — ring ships pre-assembled objects
+# for MSVC).
+#
+# The other two features are NOT optional extras, they are what keeps this a repair
+# rather than a regression. Both Linux (glib-networking/GnuTLS) and Windows (GLib's
+# in-process `GWinHttpVfs`, measured by the Windows seat) fetched through the machine's
+# OWN trust store and proxy configuration, so bundled Mozilla roots and env-only proxy
+# detection would have broken remote images on exactly the corporate desktops where
+# they worked before — a Windows/Linux regression shipped by a macOS fix, with nothing
+# to connect the two. `platform-verifier` restores the system trust store on all three
+# (CryptoAPI / Security.framework / native certs) and `win-system-proxy` restores the
+# Windows per-user proxy settings. Note ureq still DEFAULTS to `RootCerts::WebPki` with
+# the feature enabled — `imagefetch` selects `PlatformVerifier` explicitly.
+ureq = { version = "3.4.0", default-features = false, features = [
+    "rustls",
+    "platform-verifier",
+    "win-system-proxy",
+] }
 # Both are TEST-ONLY and optional, pulled in by `gtk-integration-tests` alone, so a
 # default build and a release build link neither. They exist for `src/gtk_suite.rs`:
 # `gtktest` is the registration attribute, `inventory` the registry it submits into,

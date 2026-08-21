@@ -410,11 +410,50 @@ impl Renderer {
 /// ScrAP-146 / GTK4Rs/AP-66, not a `GdkTexture` limitation). `Refused`/
 /// `Missing` never load. Remote fetches block the main thread for the request
 /// (accepted for the opt-in "Show Unsafe Images" path, ScrAP-34a).
+///
+/// **A remote image is fetched by [`crate::imagefetch`], not by GIO** — a
+/// `gio::File::for_uri("https://…")` needs a GVfs backend that claims the scheme,
+/// which exists on the Linux desktop and nowhere else, so that route rendered
+/// nothing at all on macOS (ScrAP-292). The bytes then go through
+/// `Texture::from_bytes`, which reaches the same loader chain `from_file` would
+/// have, so decoding is unchanged.
 pub(super) fn load_texture(resolution: &ImageResolution) -> Option<gtk::gdk::Texture> {
-    let file = match resolution {
-        ImageResolution::Local(path) => gtk::gio::File::for_path(path),
-        ImageResolution::Remote(uri) => gtk::gio::File::for_uri(uri),
-        ImageResolution::Refused | ImageResolution::Missing => return None,
+    match resolution {
+        ImageResolution::Local(path) => {
+            let file = gtk::gio::File::for_path(path);
+            match gtk::gdk::Texture::from_file(&file) {
+                Ok(texture) => Some(texture),
+                Err(err) => {
+                    log::warn!("image not loaded: {} ({err})", path.display());
+                    None
+                }
+            }
+        }
+        ImageResolution::Remote(uri) => load_remote_texture(uri),
+        ImageResolution::Refused | ImageResolution::Missing => None,
+    }
+}
+
+/// Fetch and decode a remote image, logging why it did not appear.
+///
+/// Split from [`load_texture`] because it has two distinct failure stages — the
+/// fetch and the decode — and collapsing them into one `.ok()` is what made the
+/// GVfs gap above invisible for as long as it was: the placeholder tooltip said
+/// "Could not load image", which reads as *the bytes were not an image* when in
+/// fact no request had been made (ScrAP-292).
+fn load_remote_texture(uri: &str) -> Option<gtk::gdk::Texture> {
+    let bytes = match crate::imagefetch::fetch_image_bytes(uri) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            log::warn!("remote image not fetched: {uri} ({err})");
+            return None;
+        }
     };
-    gtk::gdk::Texture::from_file(&file).ok()
+    match gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(bytes)) {
+        Ok(texture) => Some(texture),
+        Err(err) => {
+            log::warn!("remote image fetched but not decoded: {uri} ({err})");
+            None
+        }
+    }
 }

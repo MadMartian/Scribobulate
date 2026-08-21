@@ -129,44 +129,134 @@ impl Drop for TempFileGuard {
     }
 }
 
+/// A private temp file staged beside a destination, to be renamed into place only
+/// once its content is complete.
+///
+/// **Why this is a scaffold rather than one function.** Everything an atomic write
+/// does apart from producing the bytes — canonicalize through a symlink, probe the
+/// target's mode and owner, create a unique private temp, arm the cleanup guard,
+/// preserve owner then relax mode, `sync_all`, close before renaming, rename, disarm,
+/// `fsync` the parent — is identical whoever writes the content. [`write_atomic`]
+/// writes it through the handle this hands back; an **export** hands the temp *path*
+/// to a library that opens and writes the file itself. Two content steps, one
+/// sequence, so the sequence lives here once and the content step varies.
+///
+/// The order matters and is not incidental: the temp is **created private (0600)
+/// before anything writes into it**, so an external writer's truncating open inherits
+/// that mode and the private-from-the-first-byte property survives. Handing out only
+/// a *name* — letting the writer create the file — would lose it silently.
+pub(crate) struct AtomicPublish {
+    /// The real destination, already resolved through any symlink.
+    target: PathBuf,
+    tmp_path: PathBuf,
+    target_mode: TargetMode,
+    cleanup: TempFileGuard,
+}
+
+impl AtomicPublish {
+    /// Stage a private temp beside `path`, returning it with the open handle.
+    ///
+    /// The handle is the content step for a caller that writes the bytes itself;
+    /// a caller that hands the *path* to an external writer drops it and uses
+    /// [`temp_path`](Self::temp_path) plus [`publish_external`](Self::publish_external).
+    fn stage(path: &Path) -> std::io::Result<(Self, std::fs::File)> {
+        // Write through an existing symlink to its real target rather than
+        // replacing the symlink with a plain file (N3). A target that doesn't
+        // exist yet (first save of a new document) has nothing to canonicalize —
+        // `path` itself is already the right place to write.
+        let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let target_mode = probe_target_mode(&target);
+        let (tmp_path, f) = create_unique_private_tmp_file(&target)?;
+        // Armed immediately: from here every early return, including each `?` in
+        // any caller, must take the temp file with it.
+        let cleanup = TempFileGuard {
+            path: Some(tmp_path.clone()),
+        };
+        Ok((
+            Self {
+                target,
+                tmp_path,
+                target_mode,
+                cleanup,
+            },
+            f,
+        ))
+    }
+
+    /// The staged temp's path, for a caller whose writer opens the file by name.
+    ///
+    /// The file already exists and is already private, so that writer's open must be
+    /// a **truncating** one (which preserves the mode), never a create-exclusive one.
+    pub(crate) fn temp_path(&self) -> &Path {
+        &self.tmp_path
+    }
+
+    /// Finish the write through `f` and rename the temp into place.
+    ///
+    /// Consumes the handle, because closing before the rename is required: on unix it
+    /// is immaterial, but Windows refuses to rename a file that is still open without
+    /// `FILE_SHARE_DELETE`, which `File` does not request — so leaving it open would
+    /// fail every save on the platform that cannot be tested from here.
+    fn publish(mut self, f: std::fs::File) -> std::io::Result<()> {
+        // R3-3: owner before mode (see module doc) — both fd-based.
+        preserve_owner_best_effort(&f, &self.target_mode);
+        // Relax from the private creation mode to the real target mode
+        // (R3-1) now that the content is safely inside a private file.
+        relax_mode_best_effort(&f, &self.target_mode);
+        f.sync_all()?;
+        drop(f);
+        let rename_result = std::fs::rename(&self.tmp_path, &self.target);
+        if rename_result.is_ok() {
+            // The temp file IS the target now; removing it would delete the write.
+            self.cleanup.disarm();
+            fsync_parent_dir(&self.target); // N5, best-effort
+        }
+        rename_result
+    }
+
+    /// Publish a temp whose content was written by something other than this process's
+    /// own handle — a library that was given [`temp_path`](Self::temp_path) and opened
+    /// the file itself.
+    ///
+    /// Re-opens the temp to run the same owner/mode/sync steps against it, so the
+    /// published file is indistinguishable from one [`publish`](Self::publish) produced.
+    /// Call it only once the external writer has **closed** the file: a rename with the
+    /// writer's handle still open fails on Windows for the reason above.
+    pub(crate) fn publish_external(self) -> std::io::Result<()> {
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&self.tmp_path)?;
+        self.publish(f)
+    }
+
+    /// Abandon the staged temp without publishing. The guard removes it on drop; this
+    /// is the explicit spelling for a caller that decided not to publish, so the intent
+    /// reads at the call site rather than resting on an implicit drop.
+    pub(crate) fn abandon(self) {}
+}
+
 /// Write `content` to `path` atomically (write-temp-then-rename). See the
 /// module doc for the mode/owner-preservation, symlink-following, unique
 /// temp-name, and parent-fsync behavior.
 pub(crate) fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
-    // Write through an existing symlink to its real target rather than
-    // replacing the symlink with a plain file (N3). A target that doesn't
-    // exist yet (first save of a new document) has nothing to canonicalize —
-    // `path` itself is already the right place to write.
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let target_mode = probe_target_mode(&target);
+    let (publish, mut f) = AtomicPublish::stage(path)?;
+    f.write_all(content.as_bytes())?;
+    publish.publish(f)
+}
 
-    let (tmp_path, mut f) = create_unique_private_tmp_file(&target)?;
-    // Armed immediately: from here every early return, including each `?` below,
-    // must take the temp file with it.
-    let mut cleanup = TempFileGuard {
-        path: Some(tmp_path.clone()),
-    };
-    {
-        f.write_all(content.as_bytes())?;
-        // R3-3: owner before mode (see module doc) — both fd-based.
-        preserve_owner_best_effort(&f, &target_mode);
-        // Relax from the private creation mode to the real target mode
-        // (R3-1) now that the content is safely inside a private file.
-        relax_mode_best_effort(&f, &target_mode);
-        f.sync_all()?;
-    }
-    // Close before renaming. On unix this is immaterial, but Windows refuses to
-    // rename a file that is still open without FILE_SHARE_DELETE, which `File` does
-    // not request — so leaving it open would fail every save on the platform that
-    // cannot be tested from here.
+/// Stage an atomic publish at `path` for a writer that opens the temp file itself.
+///
+/// The export's PDF sink is the caller: GTK and cairo open and write the destination
+/// themselves, so this project never holds the bytes — but it must still never let
+/// them near the user's chosen path, which GTK opens *and therefore truncates* before
+/// the first page is drawn. Staging here and promoting only on success keeps that
+/// destruction structurally impossible rather than merely unlikely.
+pub(crate) fn stage_publish(path: &Path) -> std::io::Result<AtomicPublish> {
+    let (publish, f) = AtomicPublish::stage(path)?;
+    // The external writer opens the path itself; this handle would only keep the file
+    // open across the rename, which Windows refuses.
     drop(f);
-    let rename_result = std::fs::rename(&tmp_path, &target);
-    if rename_result.is_ok() {
-        // The temp file IS the target now; removing it would delete the save.
-        cleanup.disarm();
-        fsync_parent_dir(&target); // N5, best-effort
-    }
-    rename_result
+    Ok(publish)
 }
 
 /// Create a fresh, private ([`create_private_tmp_file`], R3-1) temp file next

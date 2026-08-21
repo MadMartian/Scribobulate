@@ -50,6 +50,7 @@ member. For a stateful action the work is driven by `change-state`, not
 | `win.auto-reload` | — | `b` | Whether external file changes are picked up automatically. |
 | `win.copy-path` | — | — | Copy the document's filesystem path to the clipboard. |
 | `win.copy-document` | — | — | Copy the whole document source to the clipboard. |
+| `win.export` | `s` | — | Write the document to a presentation format at a chosen path. Targets below. Enabled whenever the tab holds a document, **including untitled and unsaved ones** — an export reads the buffer, never the disk file. |
 | `win.copy-link-location` | — | — | Copy a link's destination URL: the link a context menu was opened on, else the Markdown link (or image) under the editor caret. Enabled while a right-clicked link is armed, or the editor is visible with a link under the caret. |
 | `win.undo` | — | — | Undo the last editor-buffer change. |
 | `win.redo` | — | — | Redo the last undone editor-buffer change. |
@@ -128,6 +129,14 @@ rejected and the action does nothing.
 | `lower` | lower case. |
 | `title` | Title Case. |
 | `toggle` | Invert each character's case. |
+
+**`win.export`** — writes the document to a presentation format. Both targets go
+through one pipeline and differ only in their final sink.
+
+| Target | Effect |
+|--------|--------|
+| `html` | One self-contained HTML file: local images embedded as data URIs, styling from the active reading theme, heading anchors preserved. The sharing format. |
+| `pdf` | A paginated PDF, resolved against the System theme's light resolution. The record format. |
 
 **`win.select-tab`** and **`app.preview-theme`** take a free-form string: a tab id
 and a reading-theme id respectively. Neither has a fixed value set — the valid

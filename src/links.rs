@@ -368,7 +368,9 @@ pub(crate) enum ImageResolution {
     /// is true and the path canonicalized successfully.
     Local(PathBuf),
     /// A remote http/https URI. Only produced when `allow_unsafe_images` is true.
-    /// Load via `gdk::Texture::from_file(&gio::File::for_uri(uri))`.
+    /// Fetched by `crate::imagefetch` and decoded with `gdk::Texture::from_bytes`
+    /// — *not* through `gio::File::for_uri`, which needs a GVfs http backend that
+    /// only the Linux desktop has (ScrAP-292).
     Remote(String),
     /// Blocked by the safety policy: a remote URL with `allow_unsafe_images`
     /// false, or a local path that **exists** and escapes the document folder. The
@@ -410,8 +412,8 @@ pub(crate) enum ImageResolution {
 /// When `allow_unsafe_images` is **true**, the containment gate is lifted for
 /// local paths (still canonicalized so symlinks resolve to their real target)
 /// and remote http/https URLs are returned as `Remote` for the renderer to fetch
-/// via `gio::File::for_uri`. All other URL schemes remain `Refused` regardless
-/// of the flag (no ftp://, file://, smb://, etc.).
+/// over HTTP (`crate::imagefetch`). All other URL schemes remain `Refused`
+/// regardless of the flag (no ftp://, file://, smb://, etc.).
 pub(crate) fn resolve_image(
     src: &str,
     doc_dir: Option<&Path>,

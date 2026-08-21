@@ -225,25 +225,34 @@ pub(super) fn wire_link_gestures(view: &CodePreviewView, render_data: &Rc<RefCel
             // pointer cursor + an accent hover border. `set_hovered_checkbox` repaints the
             // border only when the hovered identity changes, so this doesn't thrash
             // queue_draw on every motion event.
-            let over_checkbox = v.is_over_checkbox(x as f32, y as f32);
-            v.set_hovered_checkbox(over_checkbox);
+            // A gutter task checkbox and a fenced code block's copy button are both
+            // hover affordances — the block reveals its button while the pointer is
+            // anywhere over it, the way GitHub's rendered Markdown and most IDEs present
+            // one. All three verdicts come from the one resolver, which the scroll
+            // re-derivation also uses, so moving the pointer and moving the document
+            // cannot disagree about what is hovered.
+            let hover = v.hover_at_point(x as f32, y as f32);
+            v.apply_hover(hover);
+            // Remember where the pointer is, so the hover can be re-derived when the
+            // DOCUMENT moves instead of the pointer — GTK emits no motion event for a
+            // scroll (`CodePreviewView::refresh_hover_for_scroll`).
+            v.set_pointer_position(Some((x as f32, y as f32)));
             let over_link = link_at(&v, &rd_m.borrow(), x, y).is_some();
-            v.set_cursor_from_name(Some(
-                if over_link || over_marker || over_checkbox.is_some() {
-                    "pointer"
-                } else {
-                    "text"
-                },
-            ));
+            let clickable =
+                over_link || over_marker || hover.checkbox.is_some() || hover.copy_button.is_some();
+            v.set_cursor_from_name(Some(if clickable { "pointer" } else { "text" }));
         }
     ));
-    // Clear any hover border when the pointer leaves the view entirely (no motion
-    // event fires there, so the last-hovered checkbox would otherwise stay lit).
+    // Clear any hover state when the pointer leaves the view entirely (no motion
+    // event fires there, so the last-hovered checkbox would otherwise stay lit and the
+    // last-hovered code block would keep its copy button revealed).
     motion.connect_leave(glib::clone!(
         #[weak(rename_to = v)]
         view,
         move |_| {
             v.set_hovered_checkbox(None);
+            v.set_hovered_code_block(None, None);
+            v.set_pointer_position(None);
         }
     ));
     view.add_controller(motion);
@@ -359,6 +368,54 @@ pub(super) fn wire_checkbox_toggle_gesture(
                     glib::idle_add_local_once(move || {
                         sink(crate::codeview::AnnotationEdit::ToggleTask { span });
                     });
+                }
+            ),
+        );
+    view.add_controller(gesture);
+}
+
+/// Primary-click on a fenced code block's revealed copy button puts that block's code
+/// on the clipboard, and flashes a checkmark in place of the copy glyph so the reader
+/// sees that it took.
+///
+/// It shares the checkbox gesture's two load-bearing choices for the same reasons —
+/// **capture phase + claim-on-hit**, so a press on the button never starts a text
+/// selection in the block underneath, and the **complete-click rule** from
+/// `saferizer::ClickActivation`, so the release that ends a swipe-selection across a
+/// code block is not mistaken for a click on the button it happens to end over
+/// (ScrAP-238). No release slop: the button is a full text row plus its padding
+/// square, far larger than the checkbox the slop exists for, so a release that drifted
+/// off it genuinely left it.
+///
+/// What it does NOT do is route through `copymap`: this copies the code, not the
+/// Markdown construct that produced it — see `CodePreviewView::code_block_text`.
+///
+/// Wired unconditionally per render (it reads the live view at fire time), so
+/// `re_render` never needs to rewire it.
+pub(super) fn wire_copy_button_gesture(view: &CodePreviewView) {
+    let gesture = GestureClick::new();
+    gesture.set_button(1);
+    gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+    crate::saferizer::ClickActivation::new()
+        .claim_on_press()
+        .wire(
+            &gesture,
+            glib::clone!(
+                #[weak(rename_to = v)]
+                view,
+                #[upgrade_or]
+                None,
+                move |x, y| v.is_over_copy_button(x as f32, y as f32)
+            ),
+            glib::clone!(
+                #[weak(rename_to = v)]
+                view,
+                move |_: &GestureClick, block: usize, _, _| {
+                    let Some(code) = v.code_block_text(block) else {
+                        return;
+                    };
+                    v.clipboard().set_text(&code);
+                    v.flash_copied(block);
                 }
             ),
         );

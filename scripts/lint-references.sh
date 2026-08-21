@@ -78,6 +78,18 @@ ISSUES_RX='\bISSUES(\.md)?([ .:_-]*([a-z]+ )?[A-Z]\b|[ .:_-]*#[A-Z]+\b)'
 # what keeps the twin honest.
 PATH_RX='((sdd|tests|packaging|gtktest|scripts|data|src)/[A-Za-z0-9._/-]+\.md|\bPLAN\.[A-Za-z0-9._-]+\.md|\bPLAN\.[A-Za-z0-9_-]+)'
 
+# The ONE place check 6a's path extraction happens, flags included — so the self-test can
+# drive the check's own invocation instead of re-implementing it. This exists because a
+# corpus over `$PATH_RX` alone is evidence about a PATTERN, not about the CHECK: the
+# windows seat mutation-tested the previous arrangement and found that removing the
+# PowerShell twin's `-CaseSensitive` left its self-test GREEN while the gate failed on the
+# tree, i.e. the guard did not guard. Check 8 already had the right idiom written down
+# ("it exercises the predicate the check itself calls, not the two patterns in isolation")
+# and 6a was the one that had not followed it. Add a flag here, not at the call site.
+path_hits() {
+    grep -HnoE "$PATH_RX" "$@" 2>/dev/null | grep -v 'tests/reports/' || true
+}
+
 # Check 8's two patterns. A citation's correctness is not a property of its syntax, so
 # this pair does not try to check one — it makes the ONE form that cannot be checked at
 # all illegal. `ScrAP-N` resolves in this tree (checks 2 and 3 prove the entry exists);
@@ -365,7 +377,7 @@ fi
 scan_subset()     { echo "$SCAN_SET" | grep -E  "$1" || true; }
 scan_subset_not() { echo "$SCAN_SET" | grep -Ev "$1" || true; }
 
-# Check 12's predicate, factored out so the CHECK and its SELF-TEST run the SAME code
+# Check 13's predicate, factored out so the CHECK and its SELF-TEST run the SAME code
 # over the same bytes. That is not tidiness: check 6's port bug survived a fully
 # populated corpus precisely because the corpus tested the pattern directly instead of
 # going through the call site, so a self-test that re-implements this rule over strings
@@ -461,6 +473,14 @@ PLAN.typed-gtk-seams.md|see PLAN.typed-gtk-seams.md for the seam list
 sdd/PLAN.help.md|retired: sdd/PLAN.help.md
 sdd/TECH.md|the module map in sdd/TECH.md
 tests/MANUAL-TEST.md|the plan lives in tests/MANUAL-TEST.md'
+    # The LOWERCASE Rust field access (`plan.switch_to`, `plan.spot`) is here for the
+    # PowerShell twin's benefit and is a no-op on this side: `grep -E` is case-sensitive,
+    # so this gate never matched it, while `Select-String`/`-match` are case-INSENSITIVE
+    # by default and the ps1 did -- failing check 6 on Windows and passing on Linux over
+    # identical source (`window/navhistory/traverse.rs`, reported by the windows seat).
+    # A shared corpus is the only mechanism that can carry a case like this to the port
+    # that needs it, which is why an entry that looks redundant here is not: the corpus
+    # is shared string-for-string, so the platform that is WRONG is the one it tests.
     # Prose mentions that resolve against nothing, and the one fixture form that made
     # the extension look unsafe. `PLAN.md` is not a plan filename under SDD naming.
     # NOTE a directory-qualified path that EXISTS (`sdd/ISSUES.md`) is not a false
@@ -480,7 +500,8 @@ tests/MANUAL-TEST.md|the plan lives in tests/MANUAL-TEST.md'
 a PLAN.<topic>.md is deleted by design once implemented
 doc_link_fragment("./sub/PLAN.md#caf%C3%A9")
 if plan.switch_to.is_some() {
-restore_place(&tab, plan.spot.as_ref());'
+restore_place(&tab, plan.spot.as_ref());
+let done = plan.switch_to.is_some() && plan.spot.as_ref();'
     # `|| true` on every extraction: under `set -euo pipefail` a no-match `grep` exits
     # 1, `pipefail` propagates it through `| head`, and the assignment kills the script
     # SILENTLY — self-test exits 1 having printed nothing, which reads exactly like a
@@ -491,12 +512,21 @@ restore_place(&tab, plan.spot.as_ref());'
         got=$(grep -oE "$PATH_RX" <<<"$subject" | head -1 || true)
         [ "$got" = "$want" ] || { echo "  WRONG EXTRACT: want '$want', got '$got' from: $subject"; st_fail=1; }
     done <<<"$path_must_match"
-    while IFS= read -r line; do
-        got=$(grep -oE "$PATH_RX" <<<"$line" | head -1 || true)
+    # Driven through `path_hits` — the function check 6a itself calls — over a real temp
+    # file, NOT through a bare `grep -oE "$PATH_RX"` here. The two differ by the check's
+    # flags, and a corpus run through a re-implementation cannot fail when a flag is
+    # dropped from the real one: mutation-tested, and that is precisely how the twin's
+    # missing `-CaseSensitive` stayed invisible to its own self-test.
+    st_tmp=$(mktemp) || { echo "  self-test: mktemp failed"; st_fail=1; }
+    printf '%s\n' "$path_must_not_match" >"$st_tmp"
+    while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        got=${hit##*:}
         # `PLAN.md` may be MATCHED; check 6a skips it by name. Anything else is a
         # false positive.
-        case "$got" in ""|PLAN.md) ;; *) echo "  FALSE POSITIVE: $got from: $line"; st_fail=1 ;; esac
-    done <<<"$path_must_not_match"
+        case "$got" in ""|PLAN.md) ;; *) echo "  FALSE POSITIVE: $got from: $hit"; st_fail=1 ;; esac
+    done <<<"$(path_hits "$st_tmp")"
+    rm -f "$st_tmp"
 
     # Check 8's corpus. It exercises `is_bare_ap`, the predicate the check itself calls,
     # not the two regexes in isolation: the rule is a strip-then-match COMPOSITE, and a
@@ -681,7 +711,7 @@ Scr-AP-9 is not a citation either'
         trap - EXIT
     fi
 
-    # Check 12's two fixtures, run through check 12's OWN predicate (ps1_encoding_violation)
+    # Check 13's two fixtures, run through check 13's OWN predicate (ps1_encoding_violation)
     # rather than through a re-implementation. That is the whole design: check 6's port bug
     # survived a fully populated corpus because the corpus matched the pattern DIRECTLY and
     # never reached the call site, so a self-test that re-derived this rule over strings
@@ -692,20 +722,20 @@ Scr-AP-9 is not a citation either'
     # BOM-less file only proves the check can say no; the invariant is a DISJUNCTION, so a
     # check that also flagged the BOM'd file would be banning the legitimate case and would
     # still pass a one-directional test.
-    st12_bad="tests/fixtures/encoding/bomless-nonascii.ps1"
-    st12_ok="tests/fixtures/encoding/bom-nonascii.ps1"
-    if [ ! -f "$st12_bad" ] || [ ! -f "$st12_ok" ]; then
-        echo "  FAIL: check 12's fixtures are missing, so the check is uncertified."
-        echo "    expected $st12_bad and $st12_ok"
+    st13_bad="tests/fixtures/encoding/bomless-nonascii.ps1"
+    st13_ok="tests/fixtures/encoding/bom-nonascii.ps1"
+    if [ ! -f "$st13_bad" ] || [ ! -f "$st13_ok" ]; then
+        echo "  FAIL: check 13's fixtures are missing, so the check is uncertified."
+        echo "    expected $st13_bad and $st13_ok"
         st_fail=1
     else
-        if ! ps1_encoding_violation "$st12_bad"; then
-            echo "  FAIL: check 12 did NOT flag $st12_bad"
+        if ! ps1_encoding_violation "$st13_bad"; then
+            echo "  FAIL: check 13 did NOT flag $st13_bad"
             echo "    — a BOM-less .ps1 carrying a byte above 0x7F must be refused."
             st_fail=1
         fi
-        if ps1_encoding_violation "$st12_ok"; then
-            echo "  FAIL: check 12 flagged $st12_ok"
+        if ps1_encoding_violation "$st13_ok"; then
+            echo "  FAIL: check 13 flagged $st13_ok"
             echo "    — a BOM makes non-ASCII legal; the invariant is BOM **or** pure ASCII."
             st_fail=1
         fi
@@ -1093,8 +1123,7 @@ if [ -n "$scan6a" ]; then
     # The remaining `tests/reports/` filter is TARGET-side: the contract already keeps
     # those generated artifacts out of the scanned files, but a live document may still
     # point AT one, and it is absent on a fresh clone.
-    hits6a=$(grep -HnoE "$PATH_RX" $scan6a 2>/dev/null \
-               | grep -v 'tests/reports/' | LC_ALL=C sort -u || true)
+    hits6a=$(path_hits $scan6a | LC_ALL=C sort -u)
 fi
 for hit in $hits6a; do
     path=${hit##*:}
@@ -1436,10 +1465,81 @@ fi
 [ "$bad11" = 1 ] && fail=1
 [ "$bad11" = 0 ] && [ -z "$big11" ] && [ "$reg_bytes" -le "$REG_WARN" ] && echo "  PASS"
 
-
 # ── Check 12 ───────────────────────────────────────────────────────────────────
-echo ""
-echo "── Check 12: .ps1 files must carry a UTF-8 BOM or contain no byte above 0x7F ──"
+# Paths that Windows cannot check out. `< > : " | ? *` and a trailing dot or space
+# are illegal in a Win32 filename, so a single such path makes `git checkout` refuse
+# the WHOLE tree -- "error: invalid path", nothing applied. Every Windows clone, and
+# any Windows user landing on or bisecting through the commit, is blocked.
+#
+# MEASURED, and it is why this check exists rather than being a theoretical nicety:
+# an unquoted `sed -i 's|a|b|'` had its `|` eaten by the shell, wrote the replacement
+# half to disk AS A FILENAME, and `git add -A` committed it. Nothing on Linux or macOS
+# noticed -- not fmt, not clippy, not the suite, not the other ten checks here. Only
+# the Windows seat could see it, one fetch later, and only by being blocked.
+#
+# INPUT SET IS `git ls-files`, DELIBERATELY -- not `lint-references.scan`. The scan is a
+# curated list and this file landed in the repo ROOT, outside it; a check whose input
+# set is narrower than the hazard is the failure this register calls ScrAP-132.
+#
+# THREE CLASSES, not one. Beyond the illegal characters, Windows also refuses RESERVED
+# DEVICE NAMES (`CON` `PRN` `AUX` `NUL` `COM1`-`9` `LPT1`-`9`, with or without an
+# extension, case-insensitive, in ANY path component) and control characters 1-31.
+# Same blast radius: `git checkout` refuses the whole tree.
+#
+# PLANTING A TEST CASE IS PLATFORM-SPECIFIC, and the platform this check defends is the
+# one that fights hardest against arming it. On Linux/macOS: `touch 'bad|name.txt' &&
+# git add`. On Windows the working-tree file cannot be created at all, and even
+# `git update-index --add --cacheinfo` refuses it -- the plant needs the guard off:
+#   git -c core.protectNTFS=false update-index --add --cacheinfo "100644,<sha>,bad|name.txt"
+#   git -c core.protectNTFS=false update-index --force-remove "bad|name.txt"
+# Recorded so the PowerShell half is testable rather than taken on trust from a Linux run.
+#
+# REMOVE PLANTS BY EXPLICIT NAME. Do not pipe this check's own output into a
+# `git rm --cached` loop: a planted path containing a TAB is re-split by `read`, the loop
+# then hands git a pathspec nobody intended, and it staged the deletion of 341 tracked
+# files here before `git checkout -- .` put them back. The cleanup for a check about
+# dangerous filenames must not itself be filename-driven.
+#
+# `-z` AND A NUL-BOUNDARY READ, both halves required. The first justification written here
+# was wrong twice and is corrected in place, because a wrong reason in a comment is the
+# failure this file exists to record: it is NOT `core.quotePath` (that governs high-bit
+# bytes; control characters and `"` are C-quoted unconditionally), and quoting would not
+# have HIDDEN the class either, since the quoted rendering is wrapped in `"` which is itself
+# in the illegal set — it was caught by accident. The defensible reasons are that `-z` makes
+# the catch PRINCIPLED rather than incidental (against a quoted enumeration the
+# `[\x01-\x1f]` clause can essentially never fire, so it is dead code there) and that it
+# reports the TRUE path rather than an escaped rendering.
+#
+# ⛔ AND DO NOT PIPE `-z` THROUGH `tr '\0' '\n'`. That destroys exactly what `-z` preserves:
+# a path containing a newline is torn into two fragments indistinguishable from two ordinary
+# paths, each of which matches nothing, so the gate silently MISSES a path the older
+# enumeration caught. MEASURED. Read on the NUL boundary and test each path whole.
+echo "── Check 12: paths Windows cannot check out ──"
+bad12=""
+while IFS= read -r -d '' p12; do
+    # The NEWLINE case cannot go through grep AT ALL: grep is line-oriented, so a `\n`
+    # inside a path is a SEPARATOR and never content -- the same tearing as `tr`, one
+    # stage further along, and it silently costs the `[\x01-\x1f]` clause its most
+    # likely member. Test it in the shell; grep handles the rest (other control
+    # characters survive intact within a line).
+    if [[ "$p12" == *$'\n'* ]] || printf '%s' "$p12" \
+        | grep -qP '[<>:"|?*]|[\x01-\x1f]|[. ]$|(^|/)(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^/]*)?$'
+    then
+        bad12="${bad12}$(printf '%q' "$p12")
+"
+    fi
+done < <(git -C . ls-files -z)
+bad12=${bad12%$'\n'}
+if [ -n "$bad12" ]; then
+    echo "  FAIL — tracked path(s) illegal on Win32 (git checkout refuses the whole tree):"
+    printf '%s\n' "$bad12" | sed 's/^/    /'
+    fail=1
+else
+    echo "  PASS"
+fi
+
+# ── Check 13 ───────────────────────────────────────────────────────────────────
+echo "── Check 13: .ps1 files must carry a UTF-8 BOM or contain no byte above 0x7F ──"
 # WHY A DISJUNCTION RATHER THAN "KEEP THEM ASCII". Windows PowerShell 5.1 decodes a
 # BOM-less .ps1 as the ANSI codepage. A UTF-8 byte inside a STRING LITERAL then arrives
 # as a different character, and a curly quote is a string DELIMITER -- the literal ends
@@ -1458,17 +1558,18 @@ echo "── Check 12: .ps1 files must carry a UTF-8 BOM or contain no byte abov
 # force was "non-ASCII is allowed, but only in comments, never in a string literal",
 # where the difference between harmless and fatal is which side of a quote mark a
 # character sits on. That is unenforceable by review and one copy-paste from breaking.
-bad12=""
+bad13=""
 for f in $(scan_subset '\.ps1$'); do
-    ps1_encoding_violation "$f" && bad12+="  $f — non-ASCII byte in a BOM-less .ps1"$'\n'
+    ps1_encoding_violation "$f" && bad13+="  $f — non-ASCII byte in a BOM-less .ps1"$'\n'
 done
-if [ -n "$bad12" ]; then
+if [ -n "$bad13" ]; then
     echo "  FAIL"
-    printf '%s' "$bad12"
+    printf '%s' "$bad13"
     echo "  → add a UTF-8 BOM to the file, or keep it pure ASCII. A BOM is the stronger"
     echo "    fix: it makes non-ASCII safe anywhere in the file, literals included."
     fail=1
 else
     echo "  PASS"
 fi
+
 exit $fail

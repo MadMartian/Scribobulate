@@ -356,6 +356,10 @@ pub(crate) fn apply_mode_action_state(window: &ApplicationWindow, mode: ViewMode
         set_action_enabled(window, "go-to-line", false);
     }
     update_edit_action_state(window);
+    // Export is enabled whenever the tab holds a document, INCLUDING an untitled or
+    // unsaved one — it reads the buffer, never the disk file (TDD 25.5). Driven from
+    // here so every surface greys together with the rest.
+    super::export::update_export_action_state(window);
     // Copy Link Location gates on the editor being visible AND a link under the
     // caret; a mode switch changes the first half and a tab switch (which routes
     // through here) changes both, and neither fires a buffer signal.
@@ -607,9 +611,18 @@ pub(crate) fn update_undo_redo_state(window: &ApplicationWindow) {
 /// Replace the editor buffer's content as a load baseline, NOT an undoable edit.
 /// Wrapping `set_text` in an irreversible action keeps the load off the undo stack
 /// (Undo can never revert a file load/reload back to the previous document or empty).
+///
+/// This is also the file-side half of the no-lone-carriage-return rule
+/// ([`crate::lineendings`]) — the single choke point every file load, live reload,
+/// session restore and crash recovery already funnels through, so none of them has to
+/// know about it. There is deliberately **no clipboard-side half**: the obvious
+/// mechanism for one was written, measured and rejected because it corrupts CRLF on a
+/// same-application paste (ScrAP-312), so lone-CR text arriving by paste is still
+/// mis-rendered until the document is saved and reopened.
 pub(crate) fn load_into_editor(buf: &sourceview::Buffer, text: &str) {
+    let text = crate::lineendings::normalize_lone_cr(text);
     buf.begin_irreversible_action();
-    buf.set_text(text);
+    buf.set_text(&text);
     buf.end_irreversible_action();
 }
 /// Re-bind the copy action to the now-active text view after a content swap.
@@ -626,6 +639,36 @@ mod gtk_integration_tests {
             .lookup_action(name)
             .unwrap_or_else(|| panic!("{name} action missing"))
             .is_enabled()
+    }
+
+    /// **A document whose file uses lone carriage returns loads as line feeds.**
+    ///
+    /// The file-side half of the no-lone-CR rule (`crate::lineendings`). This is the
+    /// path the live reproduction took — opening such a file rendered the whole
+    /// document as one heading in the preview and one entry in the outline, with no
+    /// clipboard involved — so the repair has to be here and not only on paste.
+    ///
+    /// The undo assertion is the part that is easy to break: the repair sits inside
+    /// `begin_irreversible_action`, and moving it outside would put a file load on the
+    /// undo stack.
+    #[gtktest::test]
+    fn a_lone_cr_document_loads_as_line_feeds_and_stays_off_the_undo_stack() {
+        let buffer = sourceview::Buffer::new(None);
+        load_into_editor(
+            &buffer,
+            "# Title\rSome prose here.\r\r- item one\r- item two\r",
+        );
+
+        let (start, end) = buffer.bounds();
+        assert_eq!(
+            buffer.slice(&start, &end, true).as_str(),
+            "# Title\nSome prose here.\n\n- item one\n- item two\n"
+        );
+        assert_eq!(buffer.line_count(), 6);
+        assert!(
+            !buffer.can_undo(),
+            "a file load is a baseline, never an undoable edit"
+        );
     }
 
     /// A fresh window opens in Preview and never fires a `view-mode`

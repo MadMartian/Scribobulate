@@ -35,7 +35,11 @@
 //! platform has a primary command modifier (Ctrl on Linux/Windows, Command on
 //! macOS) and a rarely-used extra one (Super on Linux, Control on macOS — the
 //! `Ctrl+Cmd+F` fullscreen idiom). `<Primary>`↔`<Meta>` maps each role onto the
-//! key that plays it. `<Shift>` and `<Alt>` (Option) need no rewrite.
+//! key that plays it. `<Shift>` and `<Alt>` (Option) need no rewrite **as
+//! modifiers** — but two specific `<Alt>`-held keystrokes are, like the
+//! `MAC_RESERVED` entries below, overridden outright: see `<Alt>Left`/`<Alt>Right`
+//! there. That is not a rewrite of the `<Alt>` token itself (which still means
+//! nothing special to `map`), only of the two whole strings that happen to use it.
 //!
 //! `tests::bindings_are_unique_on_every_platform`
 //! is the guard that keeps this true as commands are added; it is the reason the
@@ -91,13 +95,38 @@ pub(crate) const fn host() -> Platform {
 /// app's own command wins. MEASURED: Cmd+A then Cmd+C in the preview yields
 /// `# Code blocks` — `win.copy`'s copy-as-Markdown — not the plain buffer text
 /// `clipboard.copy` would have produced. Do not "complete" this table with them.
-const MAC_RESERVED: [(&str, &str); 2] = [
+///
+/// **`<Alt>Left`/`<Alt>Right` are a different kind of reservation, entered here
+/// for the same *effect* on a different *mechanism*.** GTK's Quartz backend does
+/// not itself claim these two — there is no `gtkapplication-quartz.c` entry for
+/// them, and nothing measures a collision the way Cmd+H/Cmd+Option+H do above. What
+/// actually claims them, measured, is `GtkSourceView`'s own `move-words` class
+/// keybinding — a *word-transposition* editing command, default-bound to
+/// Alt+Left/Right by GtkSourceView itself (`gtksourceview.c:953`) — which fires on
+/// the focused editor **ahead of** `win.nav-back`/`win.nav-forward` (TDD §23.6)
+/// declaring the identical keystroke: measured with this reservation reverted,
+/// Alt+Left silently reordered the buffer's words rather than walking history or
+/// moving the caret. See `macwordnav`'s module doc comment for the full mechanism
+/// and the fix (a key controller that pre-empts `move-words`); freeing this
+/// keystroke here is what lets that fix claim it instead. Back/Forward itself moves
+/// to Safari/Finder's own spelling, Cmd+[ / Cmd+] — a keystroke it was never
+/// actually reachable on from the editor, but every native macOS text field still
+/// binds Option+Left/Option+Right to word movement at the AppKit layer, and Back/
+/// Forward has no business contesting a key the platform owns just because GTK's
+/// own binding happened to win the contest first. `XF86Back`/`XF86Forward` and the
+/// two mouse thumb buttons are unaffected (TDD §23.6 declares them platform-neutral
+/// aliases already).
+const MAC_RESERVED: [(&str, &str); 4] = [
     // Cmd+H hides the application on every Mac. Find & Replace moves to the
     // macOS convention for it, Cmd+Option+F.
     ("<Primary>h", "<Meta><Alt>f"),
     // Cmd+Option+H hides all other applications. Highlight keeps its H, one
     // modifier over.
     ("<Primary><Alt>h", "<Meta><Shift>h"),
+    // Frees Option+Left for the editor's own word-navigation (`macwordnav`).
+    ("<Alt>Left", "<Meta>bracketleft"),
+    // Frees Option+Right for the editor's own word-navigation (`macwordnav`).
+    ("<Alt>Right", "<Meta>bracketright"),
 ];
 
 /// `accel` as `platform` spells it. Borrowed unchanged whenever nothing moves,
@@ -205,7 +234,10 @@ mod tests {
     fn mac_swaps_the_command_modifier_with_the_spare_one() {
         assert_eq!(map("<Primary>s", Platform::Mac), "<Meta>s");
         assert_eq!(map("<Primary><Shift>s", Platform::Mac), "<Meta><Shift>s");
-        assert_eq!(map("<Alt>Left", Platform::Mac), "<Alt>Left");
+        // <Alt>Left/Right are the MAC_RESERVED exception, not the general rule —
+        // see `mac_reserves_option_arrow_for_word_navigation` for that one. A
+        // key `<Alt>` combination unrelated to Back/Forward still passes through.
+        assert_eq!(map("<Alt><Shift>2", Platform::Mac), "<Alt><Shift>2");
         assert_eq!(map("F9", Platform::Mac), "F9");
         assert_eq!(map("", Platform::Mac), "");
         // The collision case this whole module exists for: a one-way rename would
@@ -218,6 +250,19 @@ mod tests {
             map("<Primary><Meta><Alt>c", Platform::Mac),
             map("<Primary><Alt>c", Platform::Mac)
         );
+    }
+
+    /// Back/Forward moves off Option+Left/Right on macOS, freeing the keystroke
+    /// for the editor's own word navigation (`macwordnav`), and lands on
+    /// Safari/Finder's own spelling rather than colliding with it.
+    #[test]
+    fn mac_reserves_option_arrow_for_word_navigation() {
+        assert_eq!(map("<Alt>Left", Platform::Mac), "<Meta>bracketleft");
+        assert_eq!(map("<Alt>Right", Platform::Mac), "<Meta>bracketright");
+        // Unaffected on every other platform — the declared, browser-convention
+        // spelling is still exactly what's bound.
+        assert_eq!(map("<Alt>Left", Platform::Other), "<Alt>Left");
+        assert_eq!(map("<Alt>Right", Platform::Other), "<Alt>Right");
     }
 
     /// Every accelerator the descriptors declare is built from modifiers [`map`]
