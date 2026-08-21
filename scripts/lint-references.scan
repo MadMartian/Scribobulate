@@ -175,6 +175,14 @@ root scripts
 root packaging
 root gtktest
 root data
+# `probes/` holds measurement rigs and their README — C sources, a nested Rust
+# workspace, and prose that cites the registers. It is enumerated for the same reason
+# every other root is: a gate is its pattern AND its file set, and a directory silently
+# outside the set is the exact drift this contract was written after. Depth 2 (the nested
+# crate's src/ costs a segment), well inside the maxdepth tripwire. Parity with the
+# PowerShell port proven by an identical ordinal-sorted list: 323 entries, 11 under
+# probes/, SHA256 F663...40ED on both platforms.
+root probes
 
 file AGENTS.md
 file README.md
@@ -203,5 +211,17 @@ exclude .git/
 exclude .agents/
 exclude .claude/
 exclude tests/reports/
+# A nested crate's build tree, and the reason it needs its own line rather than being
+# covered by `exclude target/` above: the exclusions are repo-relative path PREFIXES, and
+# `probes/binding-shape-rs/target/` does not begin with `target/`. Adding `probes` as a
+# root therefore brought that crate's build output into the set for anyone who has ever
+# built the rig, and cargo's own artefacts go deeper than the maxdepth budget, so BOTH
+# gates refuse to run and name a `.o` file. Measured by the macOS seat on a real
+# `cargo build --manifest-path probes/binding-shape-rs/Cargo.toml`, and reproduced here
+# by hand. It is the same gitignored-tree reasoning as every exclusion above — the
+# verdict must depend on the commit, not on what the developer happened to build — and
+# it changes no scan set on a clean checkout, where the directory does not exist, so
+# the two ports' ordinal lists are untouched.
+exclude probes/binding-shape-rs/target/
 
 maxdepth 6

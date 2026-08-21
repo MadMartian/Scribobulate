@@ -129,7 +129,11 @@ pub(crate) fn wire_tab_buffer_signals(content_box: &gtk::Box, buffer: &sourcevie
 /// on every future editor-setup change (a copy-paste update to one site is
 /// easy to forget in the other).
 pub(crate) fn build_tab_editor(md: &str) -> (sourceview::Buffer, sourceview::View) {
-    let sv_buffer = sourceview::Buffer::new(None);
+    // Born with the clipboard-side half of the no-lone-carriage-return rule already
+    // armed (`crate::lineendings`). Creation and arming are one call because the gap
+    // between them is the exposure, not a style question — see `new_editor_buffer`'s
+    // rustdoc for what rests on no buffer in this process ever holding a lone `\r`.
+    let sv_buffer = crate::lineendings::new_editor_buffer();
     if let Some(lang) = sourceview::LanguageManager::default().language("markdown") {
         sv_buffer.set_language(Some(&lang));
     }
@@ -138,6 +142,11 @@ pub(crate) fn build_tab_editor(md: &str) -> (sourceview::Buffer, sourceview::Vie
     // (TDD 18.7) — so this probes the desktop directly rather than reading the
     // preview palette's page lightness.
     apply_editor_style_scheme(&sv_buffer, crate::palette::desktop_is_dark());
+
+    // The file-side half of the no-lone-carriage-return rule is inside
+    // `load_into_editor` (`crate::lineendings`); the clipboard-side half came with the
+    // buffer above. Nothing between the two lines may populate the buffer, and nothing
+    // can: the buffer arrives armed rather than being armed here.
     load_into_editor(&sv_buffer, md);
 
     let sv_view = sourceview::View::with_buffer(&sv_buffer);
@@ -149,6 +158,17 @@ pub(crate) fn build_tab_editor(md: &str) -> (sourceview::Buffer, sourceview::Vie
     // `insert-text` hook could not tell Enter from one run of a paste, and silently
     // ate the tail of pasted text (see `wire_newline_edits`).
     wire_newline_edits(&sv_view);
+
+    // What this editor puts ON a clipboard: plain text, never a rich `GtkTextBuffer`
+    // (`crate::clipboard`). This is what keeps a same-application paste to a SINGLE
+    // `insert-text` emission — GTK's default rich content is re-inserted one chunk per
+    // syntax-highlight tag toggle, and a toggle landing inside a `\r\n` is what makes any
+    // payload-repairing handler corrupt CRLF (ScrAP-312). Both clipboards are covered
+    // because they fail differently: CLIPBOARD is written only on an explicit copy/cut,
+    // while PRIMARY is republished by GTK on every selection change from `GtkTextView`'s
+    // own realize, so it has to be taken over rather than overridden.
+    crate::clipboard::wire_plaintext_clipboard(&sv_view);
+    crate::clipboard::wire_primary_selection(&sv_view);
 
     // Ctrl+Home / Ctrl+End aim past the part of the document GTK has laid out, so
     // they need re-issuing once it has (ScrAP-260). Wired here because this is the

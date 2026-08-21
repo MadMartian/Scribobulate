@@ -116,6 +116,25 @@
 - **And** the mark's removal is invisible to every comparison the application makes about that file: saving it does not raise a spurious "changed on disk" prompt, and its crash-recovery snapshot does not report a spurious stale baseline
 - **And** the file on disk is untouched until the user saves it; an explicit save then writes the buffer, so the mark is not restored — the application holds no per-document encoding state and its own writes are BOM-less UTF-8
 
+### 1.10 A document containing lone carriage returns
+<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by the macOS agent 2026-08-20 for the lone-CR ingress repair. -->
+- **Given** text whose lines are separated by a bare `\r` with no `\n` — the classic Mac OS convention, which a keyboard/mouse sharing tool's clipboard bridge still converts to when the receiving machine is a Mac, and which macOS itself abandoned in 2001
+- **When** it arrives by ANY route — a file being opened, reloaded, restored from a session or recovered from a crash snapshot, or text pasted, dropped or middle-click-pasted into the editor
+- **Then** it renders exactly as the same document written with `\n`: headings are headings, blank lines separate blocks, and lists are lists — rather than the whole document collapsing into a single heading in the preview and a single entry in the outline while the editor pane beside it shows the lines laid out correctly
+- **And** that split between the two panes is the defining symptom, because GTK treats a bare `\r` as a line separator and the Markdown parser does not
+- **And** the repair is invisible to every comparison the application makes about the file: opening one does not mark it modified, saving it does not raise a spurious "changed on disk" prompt, and its crash-recovery snapshot does not report a spurious stale baseline
+- **And** the file on disk is untouched until the user saves it; an explicit save then writes the buffer, so the document gains the line endings the rest of the platform uses
+- **And** `\r\n` is **not** affected — a Windows-authored document parses correctly as it is, and this application does not rewrite it (the separate question of whether a save should preserve CRLF is deliberately left where it already sits, `tests/MANUAL-TEST.md` §4.2)
+- **And** an **undo never puts a lone `\r` back**. On every document reachable in normal use this costs nothing to observe — undo restores exactly the bytes the delete removed, `\r\n` pairs included — because no buffer holds a lone `\r` in the first place. Where the two would differ, the rule wins: a buffer that somehow held one has it repaired on the replay rather than restored verbatim, since byte-exact undo of a sequence no buffer may legally contain is worth less than the rule every derived surface depends on
+
+### 1.11 What a copy puts on the clipboard
+- **Given** a selection in the editor, in a document with syntax highlighting active
+- **When** the reader copies or cuts it, by any route — the keybinding, the Edit menu, the context menu or the selection bubble
+- **Then** what lands on the clipboard is **plain text**, not a rich buffer: pasting it into another application yields the Markdown source, and pasting it back into this one inserts it as a single edit
+- **And** a cut removes the selection and is a **single** undo step — one Ctrl+Z restores the document exactly as it was, never half of it
+- **And** the same holds for the PRIMARY selection on the platforms that have one: selecting text publishes it, and clearing the selection **releases** PRIMARY rather than claiming it for an empty string, so other applications' middle-click paste is unaffected
+- **And** none of this depends on rich formatting surviving an in-application paste — a Markdown document cannot represent a syntax-highlight tag, so carrying one was never meaningful
+
 ---
 
 ## 2. Rendering fidelity
@@ -162,6 +181,7 @@
 - **Given** a table whose cells and/or `---` delimiter row are separated by hard tabs (e.g. pasted from a spreadsheet), which GFM alone would reject as a table
 - **When** it is rendered
 - **Then** it appears as a real laid-out table, not a literal paragraph of pipes and em-dashes — inline hard tabs are normalised to spaces before parsing (length-preservingly, exempting leading indentation and verbatim code), so offsets/scroll-sync/copy are unaffected (ScrAP-75)
+- **And** every surface derived from the document reads that same normalised text, not only the rendered page: the **outline** lists exactly the headings the page shows (a tab-padded table never becomes a phantom heading, and a hard tab inside a heading reads as a space, as on the page), the **export** produces a table, and an **annotation** made over a cell's text in the editor wraps that cell's content and never a span crossing a cell boundary
 
 ### 2.9 Links within table cells
 - **Given** a table cell containing a Markdown hyperlink — **whether the link is the cell's entire content** (`[#1](https://github.com/…)`) **or sits beside other content** (`☑ [#1](…) filed`), which are the two shapes a reader cannot tell apart
@@ -484,15 +504,17 @@
 - **And given** the document is clean but its backing file has been **deleted** on disk (a genuine external deletion, not the app's own crash-safe self-rename), **then** the file monitor makes Save **enabled** while the "File deleted on disk — save to restore it" notice is shown, and activating Save re-creates the file with the buffer's content; once the file exists again (a successful save, a reload, or an external re-create) Save sensitivity returns to tracking the dirty flag. Pure predicate: `save_enabled(dirty, backing_missing) == dirty || backing_missing` (unit-tested in `winstate::decisions`).
 - **And** Save As remains available in every mode regardless of dirty state (it can write a copy of even a clean document to a new path)
 
-### 4.13 Option+Left/Right moves the caret by a word in the editor, on macOS
+### 4.13 Option+Left/Right moves the caret by a word in every text surface, on macOS
 <!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-20 in response to a reported defect: Option+Left/Right in the editor silently ran GtkSourceView's own `move-words` binding — a word-TRANSPOSITION edit, not navigation — instead of moving the caret, because macOS has no other claim on that key and, ON QUARTZ, GtkSourceView's own class binding wins over the app's Back/Forward accelerator (§23.6) declared on the same keystroke — an ordering measured to be REVERSED on Win32 and X11 (ScrAP-311), so this rubric is macOS-scoped by mechanism and not merely by convention. See accel.rs MAC_RESERVED and macwordnav.rs for the full mechanism, sourced to `gtksourceview.c:953`. -->
-- **Given** the editor pane has focus, on macOS
+- **Given** any of this application's text surfaces has focus, on macOS — the document editor, the find field, the replace field, the annotation comment entry, or the shared prompt field behind Go To Line and Insert Link/Image/Table
 - **When** the reader presses Option+Left or Option+Right
 - **Then** the caret moves one word back or forward, exactly as Ctrl+Left/Ctrl+Right already do on every platform (Linux/Windows convention) — Option is the macOS spelling of the same movement, not a second, different one
 - **And** the buffer's content and word order are completely unchanged — this is caret movement only, never the word-transposition edit `GtkSourceView` itself would otherwise perform on this key (that edit is what wins the key on Quartz with no interceptor; on Win32 and X11 the accelerator wins instead and this rubric has nothing to guard — ScrAP-311)
 - **And** Option+Shift+Left/Right extends the selection by a word instead of moving the caret, matching Ctrl+Shift+Left/Right
 - **And** this does **not** invoke Back/Forward (23.6) — on macOS that command no longer shares this key (Cmd+[ / Cmd+] instead), so the two can never race
 - **And** Ctrl+Left/Ctrl+Right keep working unchanged (GTK's own binding) — this adds a second spelling, it does not replace the first
+- **And** the surfaces that are not the document editor were never *destructive* on this key, they were **inert**: nothing outside the editor is a `GtkSourceView`, so no `move-words` binding exists there to run, and `GtkText` binds word movement to Ctrl+Left/Right only. Doing nothing at all is the milder face of the same gap between GTK's Ctrl-based bindings and the Option-based convention every native macOS text field honours, and the rule is one rule across all of them
+- **And** everything else those fields already answer for is untouched — Escape still closes the find bar, Enter still triggers a prompt form's default button, and a field's own Ctrl+Left/Right still moves by word
 
 ### 4.12 Save All writes every tab that needs saving
 - **Given** a window with several tabs, of which more than one is dirty (or clean over a deleted backing file)
@@ -1572,7 +1594,7 @@
 
 ---
 
-## §14 Show Unsafe Images
+## 14. Show Unsafe Images
 
 ### 14.1 Remote images are blocked by default
 - **Given** a document containing a remote image (e.g. `![badge](https://example.com/badge.png)`)
@@ -2887,11 +2909,14 @@ up doing.
 - **When** it is exported to PDF
 - **Then** no line of text is divided across a page boundary — a line falls wholly on one page or wholly on the next
 
-### 25.17 A table too wide for the page is scaled, not clipped
+### 25.17 A table too wide for the page wraps, then scales — never clips
 - **Given** a table wider than the printable width of the page
 - **When** the document is exported to PDF
-- **Then** the table is scaled to fit — never clipped at the margin, never reflowed into a different table
-- *(The bound on how far scaling may go before the result is unreadable is authored at phase 2 kickoff.)*
+- **Then** the table is contained within the printable width — **never clipped at the margin, never reflowed into a different table**
+- **And** *reflowed into a different table* means a change to the table's **structure**: a column dropped, merged, split, reordered, or degraded into prose or a list. **The column count is the invariant.** Wrapping a cell's text onto more lines *inside its own column* is not a reflow — the table a reader sees has the same columns in the same order, and every cell is still in the cell it belongs to
+- **And** the two remedies apply **in that order**: a table that cannot fit at its natural widths has its columns narrowed and its cells wrapped; **only** a table that still overflows once every column is at its own minimum content width (its longest unbreakable word) is uniformly scaled. Wrapping is preferred because it costs a reader nothing, where scaling costs legibility — so a table that could have wrapped must never be found scaled
+- **And** each row is one indivisible fragment, so 25.16's page-break rule holds for tables: a break falls **between** rows and never through one, however many lines a row's tallest cell wraps to
+- *(Ordering ratified by the operator 2026-08-20, replacing the unauthored "bound on how far scaling may go": the bound is no longer needed as a number, because scaling is now the last resort rather than the first response, and the regime that reaches it is one no wrapping could have saved. Automated in `export::pdftable`'s unit tests and `export::pdf`'s layout tests; driven end-to-end per MANUAL-TEST 25.17.)*
 
 ### 25.18 Text round-trips out of the PDF byte-exact
 - **Given** an exported PDF containing ASCII, precomposed and combining accents, em and en dashes, curly quotes, ellipses, CJK, arrows, typographic symbols and box drawing

@@ -50,6 +50,11 @@ impl CommentEntry {
         let entry = gtk::Entry::new();
         entry.set_text(initial);
         entry.set_hexpand(true);
+        // Option+Left/Right word navigation (`macwordnav`). Wired here for exactly
+        // the reason this type exists at all: a surface that had to remember it
+        // would be the fourth surface that forgot.
+        #[cfg(target_os = "macos")]
+        crate::macwordnav::wire_field_word_navigation(&entry);
         crate::a11y::name_field(&entry, "Comment");
         let save = gtk::Button::with_label("Save");
         save.add_css_class("suggested-action");

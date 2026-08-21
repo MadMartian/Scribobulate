@@ -161,6 +161,40 @@ fn without_bom(text: String) -> String {
     }
 }
 
+/// Repair a document's line endings on the way in: a lone `\r` becomes `\n`
+/// ([`crate::lineendings`], which states the measurements and why CRLF is left alone).
+///
+/// This sits beside [`without_bom`] because it is the same kind of obligation and it
+/// binds for the same reason. GTK treats a bare `\r` as a line separator and
+/// pulldown-cmark does not, so an unrepaired one renders the whole document as a
+/// single heading in the preview and the outline while the editor beside it looks
+/// correct — and the repair therefore has to happen where the *source text* is
+/// produced, not where the editor buffer is filled, because the preview is built from
+/// that same string and never reads the buffer.
+///
+/// And like the BOM strip, it has to be applied at **every** reader here, not just the
+/// display one. The save guard compares the on-disk text against the in-memory
+/// baseline and crash recovery digests the on-disk twin against that same baseline; a
+/// repair applied on one side of either comparison and not the other turns every save
+/// of a lone-CR document into a spurious "File changed on disk" prompt and every
+/// recovery of one into a spurious stale-baseline verdict. The blocking halves are
+/// private, so doing it at the module's own door makes "every reader" checkable rather
+/// than remembered.
+///
+/// **The original bytes are not restored on save**, on exactly the reasoning
+/// [`without_bom`] records for the BOM: the buffer is the document, the buffer has no
+/// lone `\r`, and `write_document` writes the buffer. The file is untouched until the
+/// user actually saves it, at which point it gains the line endings the rest of the
+/// world uses.
+fn repaired(text: String) -> String {
+    crate::lineendings::normalize_lone_cr(&text).into_owned()
+}
+
+/// [`repaired`] for the raw-bytes reader. Same invariant, same reason.
+fn repaired_bytes(bytes: Vec<u8>) -> Vec<u8> {
+    crate::lineendings::normalize_lone_cr_bytes(bytes)
+}
+
 /// [`without_bom`] for the raw-bytes reader. Same invariant, same reason.
 fn without_bom_bytes(mut bytes: Vec<u8>) -> Vec<u8> {
     if bytes.starts_with(UTF8_BOM_BYTES) {
@@ -217,7 +251,7 @@ fn read_document_blocking(path: &Path) -> DocRead {
     // Distinguish "not found" (an intended new document — TDD 1.3, empty and
     // creatable on save) from "exists but unreadable" (C3, see above).
     match std::fs::read_to_string(path) {
-        Ok(content) => DocRead::Loaded(without_bom(content)),
+        Ok(content) => DocRead::Loaded(repaired(without_bom(content))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocRead::Missing,
         Err(e) => DocRead::Failed(e),
     }
@@ -363,7 +397,7 @@ fn read_document_text_blocking(path: &Path) -> std::io::Result<String> {
             refusal.to_string(),
         ));
     }
-    std::fs::read_to_string(path).map(without_bom)
+    std::fs::read_to_string(path).map(without_bom).map(repaired)
 }
 
 /// Read a document's raw bytes for a content comparison — crash recovery's check
@@ -383,7 +417,9 @@ pub(crate) async fn read_document_bytes(path: PathBuf) -> std::io::Result<Vec<u8
                 refusal.to_string(),
             ));
         }
-        std::fs::read(&path).map(without_bom_bytes)
+        std::fs::read(&path)
+            .map(without_bom_bytes)
+            .map(repaired_bytes)
     })
     .await
 }
@@ -588,6 +624,99 @@ mod tests {
             body.as_bytes(),
             "crash recovery digests this against a baseline that has no BOM — a \
              mismatch here reports the on-disk twin as changed when it is not"
+        );
+    }
+
+    /// **A lone carriage return is repaired by every reader.**
+    ///
+    /// The same three-reader obligation as the BOM above, for the same reason and
+    /// with the same consequences if only one is fixed: `read_document_text` backs
+    /// the save guard's on-disk comparison and `read_document_bytes` backs crash
+    /// recovery's twin digest, both against a baseline that came from the display
+    /// reader. Repair one side of either comparison and not the other and every save
+    /// of a lone-CR document raises a spurious "File changed on disk" prompt.
+    ///
+    /// Mutation-tested, all three: reverting the `read_document_text` call fails the
+    /// save-guard assertion alone, reverting the `read_document_bytes` one fails the
+    /// digest assertion alone, and reverting the display reader's fails the first
+    /// assertion here *and* the parse test below — which is the right asymmetry, since
+    /// the display reader is the one both the editor and the preview are built from.
+    #[test]
+    fn a_lone_carriage_return_is_repaired_by_every_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cr.md");
+        let on_disk = "# Title\rSome prose here.\r\r- item one\r- item two\r";
+        let repaired_body = "# Title\nSome prose here.\n\n- item one\n- item two\n";
+        std::fs::write(&path, on_disk).unwrap();
+        assert!(
+            std::fs::read(&path).unwrap().contains(&b'\r'),
+            "precondition: the fixture really is written with lone CRs"
+        );
+
+        assert_eq!(
+            drive(read_document(Some(&path))).source,
+            repaired_body,
+            "this string is what BOTH the editor buffer and the preview are built \
+             from — unrepaired, pulldown-cmark reads the whole document as one heading"
+        );
+        assert_eq!(
+            drive(read_document_text(path.clone())).unwrap(),
+            repaired_body,
+            "the save guard compares this against a repaired baseline — a mismatch \
+             here is a spurious overwrite prompt on every save"
+        );
+        assert_eq!(
+            drive(read_document_bytes(path)).unwrap(),
+            repaired_body.as_bytes(),
+            "crash recovery digests this against a repaired baseline — a mismatch \
+             here reports the on-disk twin as changed when it is not"
+        );
+    }
+
+    /// **The repaired source is what makes the preview agree with the editor.**
+    ///
+    /// The screenshot comparison that found the first, incomplete version of this fix
+    /// reduced to exactly this: repairing the editor buffer alone left the preview
+    /// rendering the whole file as one heading, because the preview is built from the
+    /// source string and never reads the buffer. Asserting the parse here — on the
+    /// string `read_document` actually hands out — is the display-free form of that
+    /// check, and it fails against a repair sited anywhere downstream of this reader.
+    #[test]
+    fn the_source_a_lone_cr_file_yields_parses_like_its_lf_twin() {
+        let dir = tempfile::tempdir().unwrap();
+        let cr_path = dir.path().join("cr.md");
+        let lf_path = dir.path().join("lf.md");
+        std::fs::write(
+            &cr_path,
+            "# Title\rSome prose here.\r\r- item one\r- item two\r",
+        )
+        .unwrap();
+        std::fs::write(
+            &lf_path,
+            "# Title\nSome prose here.\n\n- item one\n- item two\n",
+        )
+        .unwrap();
+
+        let events = |src: &str| {
+            format!(
+                "{:?}",
+                pulldown_cmark::Parser::new_ext(src, crate::renderer::md_options())
+                    .collect::<Vec<_>>()
+            )
+        };
+        let from_cr = drive(read_document(Some(&cr_path))).source;
+        let from_lf = drive(read_document(Some(&lf_path))).source;
+
+        assert_eq!(
+            events(&from_cr),
+            events(&from_lf),
+            "a lone-CR document must produce the same event stream as its LF twin"
+        );
+        // Belt and braces: prove the shared stream is the RIGHT one, so this cannot
+        // pass by both sides being equally broken.
+        assert!(
+            events(&from_lf).contains("Tag::Item") || events(&from_lf).contains("Item"),
+            "precondition: the LF twin really does parse as a list"
         );
     }
 

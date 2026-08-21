@@ -365,6 +365,88 @@ function Write-StepList {
 }
 
 # --------------------------------------------------------------------------------------
+# THE CONTRACT'S GRAMMAR INCLUDES A LEADING `NAME=VALUE` ENV PREFIX, and this port has to
+# implement it rather than inherit it. The shell port runs `eval "$cmd"`, so a line like
+#   cmd.linux integration  G_DEBUG=fatal-criticals xvfb-run -a cargo test ...
+# sets that variable for the child and only the child, free, because POSIX shells define
+# it. `cmd.exe` has no such syntax: it reads the assignment as the name of a program.
+# MEASURED, the day `cmd.windows integration` gained the same prefix --
+#   $ G_DEBUG=fatal-criticals cargo test --features gtk-integration-tests -- --test-threads=1
+#   'G_DEBUG' is not recognized as an internal or external command,
+#   FAIL (exit 1)
+# -- and note the shape of that failure: a step whose PURPOSE is to turn a Gtk-CRITICAL
+# into a hard failure instead reported a hard failure that no critical caused. A gate that
+# cannot run is worse than one that is merely absent, because its red looks like a verdict.
+# None of -ListSteps, -SelfTest or the twelve contract mutations could have caught it; not
+# one of them executes a step, which is the same lesson Invoke-ContractCommand's own
+# return-value note records.
+#
+# Scoped to the child, matching the shell: the variables are restored -- including back to
+# UNSET, which `SetEnvironmentVariable($name, $null)` is what does -- in the caller's
+# `finally`, so a step can never leak an environment into the steps after it. That is the
+# same reasoning POLICY applies to a test that installs process-global state.
+#
+# DEFINED HERE, above -SelfTest, deliberately: PowerShell defines functions as the script
+# executes, and the -SelfTest/-ListSteps block exits BEFORE the executor section further
+# down is ever reached. Declared beside its caller instead, the self-test that covers it
+# dies with "The term 'Split-EnvPrefix' is not recognized" -- measured.
+# --------------------------------------------------------------------------------------
+function Split-EnvPrefix {
+    [OutputType([hashtable])]
+    param([string] $CommandLine)
+
+    $assignments = [ordered]@{}
+    $rest = $CommandLine
+    # Deliberately strict: an unquoted, space-free value, which is the whole of what the
+    # contract uses. Anything else falls through and reaches cmd.exe verbatim, where it
+    # fails loudly -- preferable to a clever parser that mis-splits a quoted value and
+    # runs a subtly different command than the contract says.
+    while ($rest -match '^([A-Za-z_][A-Za-z0-9_]*)=(\S*)\s+(.*)$') {
+        $assignments[$Matches[1]] = $Matches[2]
+        $rest = $Matches[3]
+    }
+    return @{ Env = $assignments; Command = $rest }
+}
+
+# Apply an env prefix for the duration of one call and put the environment back.
+#
+# SPLIT OUT OF Invoke-ContractCommand SO -SelfTest CAN MEASURE THE ISOLATION. The claim
+# "a step cannot leak its environment into the steps after it" was previously INFERRED
+# from the shape of the `finally` -- true, almost certainly, and unobserved. An inferred
+# claim about environment leakage is the exact class this project keeps paying for, and
+# the fix for a claim like that is a measurement, not a better argument.
+#
+# Restores to the PREVIOUS value, which includes restoring to *unset*: PowerShell's
+# `SetEnvironmentVariable($name, $null)` removes the variable rather than setting it
+# empty, and the two are distinguishable from a child (cmd echoes the literal `%VAR%`
+# for a variable that does not exist). Both directions are covered in -SelfTest.
+#
+# $Body takes its input through -ArgumentList rather than closing over a caller local.
+# A scriptblock invoked with `&` resolves free variables up the dynamic scope chain,
+# which happens to work here and is exactly the kind of thing that stops working when
+# someone moves the call site. Passing explicitly costs one `param` line.
+function Invoke-WithEnv {
+    param(
+        [System.Collections.IDictionary] $Assignments,
+        [scriptblock] $Body,
+        [object[]] $ArgumentList = @()
+    )
+
+    $saved = @{}
+    foreach ($name in @($Assignments.Keys)) {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+        [Environment]::SetEnvironmentVariable($name, [string] $Assignments[$name])
+    }
+    try {
+        & $Body @ArgumentList
+    } finally {
+        foreach ($name in @($saved.Keys)) {
+            [Environment]::SetEnvironmentVariable($name, $saved[$name])
+        }
+    }
+}
+
+# --------------------------------------------------------------------------------------
 # -SelfTest
 #
 # Proves the derivation property still holds after an edit. It cannot CREATE the property
@@ -399,6 +481,76 @@ function Invoke-SelfTest {
     Write-Host '   setup phase is absent from the step list (correct)'
 
     Write-Host "   $($derived.Count) steps derived"
+
+    # The env-prefix parser, exercised here because NOTHING ELSE in -SelfTest executes a
+    # step -- which is exactly how the prefix reached the contract's Windows line and broke
+    # step 5 while every contract check stayed green. Each case names what it protects:
+    # that a prefixed line loses its assignment from the command, that a bare line is
+    # untouched, that several prefixes are all taken, and that an `=` appearing later in a
+    # command (a cargo `--cfg name=value`, say) is NOT mistaken for one.
+    $prefixCases = @(
+        @{ In = 'G_DEBUG=fatal-criticals cargo test -- --test-threads=1'
+           Cmd = 'cargo test -- --test-threads=1'; Names = 'G_DEBUG'; Values = 'fatal-criticals' },
+        @{ In = 'cargo fmt --check'; Cmd = 'cargo fmt --check'; Names = ''; Values = '' },
+        @{ In = 'A=1 B=2 cargo build'; Cmd = 'cargo build'; Names = 'A|B'; Values = '1|2' },
+        @{ In = 'cargo test --cfg feature=x'; Cmd = 'cargo test --cfg feature=x'; Names = ''; Values = '' }
+    )
+    foreach ($case in $prefixCases) {
+        $got = Split-EnvPrefix -CommandLine $case.In
+        $names = @($got.Env.Keys) -join '|'
+        $values = @($got.Env.Values) -join '|'
+        if ($got.Command -cne $case.Cmd -or $names -cne $case.Names -or $values -cne $case.Values) {
+            Write-Err "pipeline: env-prefix parser wrong for '$($case.In)'"
+            Write-Err "  command: got '$($got.Command)' want '$($case.Cmd)'"
+            Write-Err "  names:   got '$names' want '$($case.Names)'"
+            Write-Err "  values:  got '$values' want '$($case.Values)'"
+            return $false
+        }
+    }
+    Write-Host "   env-prefix parser splits $($prefixCases.Count) cases correctly"
+
+    # ISOLATION, MEASURED. The parser cases above prove the prefix is SPLIT; they say
+    # nothing about whether it is applied, or whether it is put back. Both halves matter:
+    # a prefix that never reaches the child makes a gate silently unarmed, and one that
+    # outlives its step silently arms every step after it. Read from a CHILD process,
+    # because that is where a contract command actually runs.
+    $probe = 'SCRIB_SELFTEST_PROBE'
+    if ($null -ne [Environment]::GetEnvironmentVariable($probe)) {
+        Write-Err "pipeline: $probe is already set in this environment; cannot self-test isolation"
+        return $false
+    }
+    $seen = Invoke-WithEnv -Assignments ([ordered]@{ $probe = 'armed' }) -ArgumentList @($probe) -Body {
+        param([string] $Name)
+        cmd /c "echo %$Name%"
+    }
+    $seenFirst = @($seen | Select-Object -First 1)
+    if (($seenFirst -join '') -cne 'armed') {
+        Write-Err "pipeline: env prefix did not reach the child (got '$($seenFirst -join '')', want 'armed')"
+        return $false
+    }
+    $after = [Environment]::GetEnvironmentVariable($probe)
+    if ($null -ne $after) {
+        Write-Err "pipeline: env prefix LEAKED past its step ($probe = '$after' afterwards)"
+        return $false
+    }
+    Write-Host '   env prefix reaches the child, and is unset again afterwards'
+
+    # The other restore direction: a variable that ALREADY had a value must come back to
+    # that value, not be deleted. Unsetting it would be just as wrong as leaking, and a
+    # test that only ever starts from unset cannot tell the two apart.
+    [Environment]::SetEnvironmentVariable($probe, 'prior')
+    try {
+        [void](Invoke-WithEnv -Assignments ([ordered]@{ $probe = 'armed' }) -Body { })
+        $back = [Environment]::GetEnvironmentVariable($probe)
+        if ($back -cne 'prior') {
+            Write-Err "pipeline: env prefix did not restore a pre-existing value (got '$back', want 'prior')"
+            return $false
+        }
+    } finally {
+        [Environment]::SetEnvironmentVariable($probe, $null)
+    }
+    Write-Host '   env prefix restores a pre-existing value rather than deleting it'
+
     return $true
 }
 
@@ -473,18 +625,25 @@ function Show-Announce { param([string] $Text) Write-Host ''; Write-Host "=== $T
 # found on this object." It failed on the FIRST step of the first real run -- while
 # -ListSteps, -SelfTest and twelve contract mutations were all green, because not one of
 # them executes a step. A green contract-parsing suite is evidence about contract parsing.
+# The env prefix is stripped and applied by Split-EnvPrefix, defined earlier so -SelfTest
+# can exercise it; see the note there for why this port implements that grammar by hand.
 function Invoke-ContractCommand {
     [OutputType([string[]])]
     param([string] $CommandLine)
+
+    $parsed = Split-EnvPrefix -CommandLine $CommandLine
 
     $eap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     $global:LASTEXITCODE = 0
     try {
-        cmd /c $CommandLine 2>&1 | ForEach-Object {
-            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+        Invoke-WithEnv -Assignments $parsed.Env -ArgumentList @($parsed.Command) -Body {
+            param([string] $CommandText)
+            cmd /c $CommandText 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+            }
+            $script:StepExitCode = $LASTEXITCODE
         }
-        $script:StepExitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $eap
     }

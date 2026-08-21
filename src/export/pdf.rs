@@ -21,6 +21,7 @@
 
 use super::markup::{escape_pango, inline_markup};
 use super::paginate::{Fragment, PageMetrics};
+use super::pdftable;
 use super::{Align, Block, ExportDoc, ImageRef, ImageSource, Inline, ListItem};
 use crate::palette::Palette;
 use crate::theme::Theme;
@@ -66,6 +67,38 @@ enum LineKind {
         /// Drawn size in points.
         drawn: (f64, f64),
     },
+    /// One row of a table, on the column grid its whole table shares.
+    ///
+    /// A row is a single line — and therefore a single [`Fragment`] — precisely so
+    /// that "a page break falls between rows and never through one" is structural
+    /// rather than a rule someone has to remember (TDD 25.16).
+    TableRow {
+        cells: Vec<TableCell>,
+        /// The whole table's column geometry, in unscaled points.
+        columns: Vec<pdftable::Column>,
+        chrome: pdftable::Chrome,
+        /// Uniform scale for the table, `1.0` unless it could not be made to fit.
+        scale: f64,
+        /// The row's height in unscaled points, padding included.
+        box_height: f64,
+        is_head: bool,
+    },
+}
+
+/// One cell of a laid-out table row.
+struct TableCell {
+    layout: pango::Layout,
+    /// Which column of the row's grid this cell occupies.
+    column: usize,
+}
+
+/// What one cell's content wants, in points — the two measurements CSS calls
+/// max-content and min-content, and the two [`pdftable::fit`] shares a page between.
+struct CellWidths {
+    /// Unwrapped: everything on one line.
+    max: f64,
+    /// The widest word, which is as narrow as the cell can ever legibly go.
+    min: f64,
 }
 
 impl Line {
@@ -350,12 +383,12 @@ impl Layouter<'_> {
         }
     }
 
-    /// A table is laid out one **row** at a time, each row an indivisible fragment, so
-    /// a page break falls between rows and never through one.
+    /// A table is laid out one **row** at a time on a measured column grid, each row an
+    /// indivisible fragment, so a page break falls between rows and never through one.
     ///
-    /// Scale-to-fit is applied by the drawing pass from the width this measured
-    /// (TDD 25.17): a single transform with an obvious correctness test, rather than
-    /// splitting a table across pages, which is a layout engine.
+    /// The geometry decision — how wide each column is, and whether the table must be
+    /// scaled at all — belongs to [`pdftable::fit`] and is settled by unit test. What
+    /// happens here is measurement and ink, which is the only reason this file exists.
     fn table(
         &mut self,
         aligns: &[Align],
@@ -365,38 +398,193 @@ impl Layouter<'_> {
         indent: f64,
         quote_depth: u32,
     ) {
-        // Rendered as tab-separated runs: a real column model would be a layout
-        // engine, which the plan bounds out of scope. Each row is still its own
-        // indivisible fragment, which is the property the rubric asserts.
-        let header_row = (!head.is_empty()).then(|| {
-            head.iter()
-                .map(|c| inline_markup(c, doc, self.theme))
-                .collect::<Vec<_>>()
-                .join("\t")
-        });
-        if let Some(h) = &header_row {
-            self.paragraph(
-                &format!("<b>{h}</b>"),
-                BASE_PT,
-                self.theme.typography.bold_weight,
+        let column_count = table_column_count(head, rows);
+        if column_count == 0 {
+            return;
+        }
+        let chrome = self.table_chrome();
+
+        // Pass 1 — measure every cell unconstrained, so a column's natural width is
+        // its widest cell's own idea of how much room it wants.
+        let head_markup = self.row_markup(head, doc, true);
+        let body_markup: Vec<Vec<String>> = rows
+            .iter()
+            .map(|row| self.row_markup(row, doc, false))
+            .collect();
+
+        let mut natural = vec![0.0_f64; column_count];
+        let mut minimum = vec![0.0_f64; column_count];
+        for row in std::iter::once(&head_markup).chain(body_markup.iter()) {
+            for (index, markup) in row.iter().enumerate() {
+                let CellWidths { max, min } = self.cell_widths(markup);
+                if max > natural[index] {
+                    natural[index] = max;
+                }
+                if min > minimum[index] {
+                    minimum[index] = min;
+                }
+            }
+        }
+
+        // Pass 2 — the grid decides, then every row is built against it.
+        let grid = pdftable::fit(&natural, &minimum, self.width_pt - indent, &chrome);
+        if !head_markup.is_empty() {
+            self.table_row(
+                &head_markup,
+                aligns,
+                &grid,
+                &chrome,
                 indent,
                 quote_depth,
+                true,
                 // The header keeps company with the first body row.
                 !rows.is_empty(),
             );
         }
-        for row in rows {
-            let markup = row
-                .iter()
-                .map(|c| inline_markup(c, doc, self.theme))
-                .collect::<Vec<_>>()
-                .join("\t");
-            self.paragraph(&markup, BASE_PT, 400, indent, quote_depth, false);
+        for row in &body_markup {
+            self.table_row(
+                row,
+                aligns,
+                &grid,
+                &chrome,
+                indent,
+                quote_depth,
+                false,
+                false,
+            );
         }
-        // Column alignment is carried by the model but not yet applied: a real column
-        // model is a layout engine, which the plan bounds out of scope for v1.
-        let _ = aligns;
     }
+
+    /// The theme's table chrome in points — no literal, per THEMING.md.
+    fn table_chrome(&self) -> pdftable::Chrome {
+        let m = &self.theme.metrics;
+        pdftable::Chrome {
+            padding_h: f64::from(m.table_cell_padding_h) * PT_PER_PX,
+            padding_v: f64::from(m.table_cell_padding_v) * PT_PER_PX,
+            border: f64::from(m.table_border_width) * PT_PER_PX,
+        }
+    }
+
+    /// One row's cells as Pango markup, bolded when it is the header.
+    fn row_markup(&self, cells: &[Vec<Inline>], doc: &ExportDoc, head: bool) -> Vec<String> {
+        cells
+            .iter()
+            .map(|cell| {
+                let markup = inline_markup(cell, doc, self.theme);
+                if head {
+                    format!("<b>{markup}</b>")
+                } else {
+                    markup
+                }
+            })
+            .collect()
+    }
+
+    /// How wide a cell wants to be, both ways.
+    fn cell_widths(&self, markup: &str) -> CellWidths {
+        let layout = self.cell_layout(markup, None, Align::None);
+        let max = pango_to_pt(layout.extents().1.width());
+
+        // Min-content: squeeze the layout to nothing in `Word` mode, which refuses to
+        // break inside a word, so the widest line that comes back IS the widest word.
+        // `WordChar` would happily split one and report a meaningless 1pt.
+        layout.set_wrap(pango::WrapMode::Word);
+        layout.set_width(1);
+        let min = pango_to_pt(layout.extents().1.width());
+
+        CellWidths { max, min }
+    }
+
+    /// A layout for one cell. `text_width` of `None` measures unconstrained; `Some`
+    /// constrains it, which is what makes the text wrap **inside its column**.
+    fn cell_layout(&self, markup: &str, text_width: Option<f64>, align: Align) -> pango::Layout {
+        let layout = pango::Layout::new(self.ctx);
+        match text_width {
+            Some(width) => {
+                layout.set_width(pt_to_pango(width));
+                layout.set_wrap(pango::WrapMode::WordChar);
+            }
+            None => layout.set_width(-1),
+        }
+        layout.set_alignment(match align {
+            Align::Center => pango::Alignment::Center,
+            Align::Right => pango::Alignment::Right,
+            Align::None | Align::Left => pango::Alignment::Left,
+        });
+        let mut desc = pango::FontDescription::new();
+        if let Some(family) = self.theme.font_family.as_ref() {
+            desc.set_family(family.as_str());
+        }
+        desc.set_size(pt_to_pango(BASE_PT));
+        layout.set_font_description(Some(&desc));
+        layout.set_markup(markup);
+        layout
+    }
+
+    /// Build and push one row: every cell laid out in its column, the row's height the
+    /// tallest of them, and the whole thing **one** fragment.
+    #[allow(clippy::too_many_arguments)]
+    fn table_row(
+        &mut self,
+        cells: &[String],
+        aligns: &[Align],
+        grid: &pdftable::Grid,
+        chrome: &pdftable::Chrome,
+        indent: f64,
+        quote_depth: u32,
+        is_head: bool,
+        keep_with_next: bool,
+    ) {
+        let mut drawn = Vec::with_capacity(cells.len());
+        let mut text_height = 0.0_f64;
+        for (index, markup) in cells.iter().enumerate() {
+            let Some(column) = grid.columns.get(index) else {
+                // More cells than the delimiter row declared columns. GFM says the
+                // surplus is dropped, and the preview drops it too — so dropping it
+                // here is agreement, not loss.
+                break;
+            };
+            let align = aligns.get(index).copied().unwrap_or(Align::None);
+            let layout = self.cell_layout(markup, Some(column.text_width), align);
+            let height = pango_to_pt(layout.extents().1.height());
+            if height > text_height {
+                text_height = height;
+            }
+            drawn.push(TableCell {
+                layout,
+                column: index,
+            });
+        }
+
+        // The row's box is the tallest cell plus this theme's vertical padding; the
+        // fragment the paginator sees is that box at the grid's scale, so what it
+        // reserves and what gets drawn are the same number by construction.
+        let box_height = text_height + chrome.padding_v * 2.0;
+        self.fragments.push(Fragment {
+            height: box_height * grid.scale,
+            space_before: if is_head { BLOCK_GAP_PT } else { 0.0 },
+            keep_with_next,
+        });
+        self.lines.push(Line {
+            kind: LineKind::TableRow {
+                cells: drawn,
+                columns: grid.columns.clone(),
+                chrome: *chrome,
+                scale: grid.scale,
+                box_height,
+                is_head,
+            },
+            indent,
+            height: box_height * grid.scale,
+            quote_depth,
+        });
+    }
+}
+
+/// How many columns a table has: the delimiter row's count, which the header carries,
+/// falling back to the widest body row for a table whose header is empty.
+fn table_column_count(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>]) -> usize {
+    head.len().max(rows.iter().map(Vec::len).max().unwrap_or(0))
 }
 
 /// Draw one page's fragments onto `cr`, in points.
@@ -493,9 +681,131 @@ pub(crate) fn draw_page(
                     pangocairo::functions::show_layout_line(cr, &pl);
                 }
             }
+            LineKind::TableRow {
+                cells,
+                columns,
+                chrome,
+                scale,
+                box_height,
+                is_head,
+            } => {
+                draw_table_row(
+                    cr,
+                    TableRowInk {
+                        cells,
+                        columns,
+                        chrome,
+                        scale: *scale,
+                        box_height: *box_height,
+                        is_head: *is_head,
+                    },
+                    margin_pt + line.indent,
+                    y,
+                    palette,
+                    theme,
+                );
+                // The row drew its own colours; put the body pen back for whatever
+                // follows, or the next line of prose inherits a border colour.
+                cr.set_source_rgb(
+                    f64::from(fg.red()),
+                    f64::from(fg.green()),
+                    f64::from(fg.blue()),
+                );
+            }
         }
         y += line.height;
     }
+}
+
+/// Everything the ink pass needs about one table row, gathered so the drawing
+/// function takes a subject rather than eight positional arguments.
+struct TableRowInk<'a> {
+    cells: &'a [TableCell],
+    columns: &'a [pdftable::Column],
+    chrome: &'a pdftable::Chrome,
+    scale: f64,
+    box_height: f64,
+    is_head: bool,
+}
+
+/// Draw one table row with its cell borders, header fill and text.
+///
+/// `left`/`top` are the row's top-left corner on the page, in points. Everything after
+/// the transform is in **unscaled table coordinates**, so the geometry drawn here is
+/// exactly the geometry [`pdftable::fit`] decided — the scale is applied once, to the
+/// whole row, and nothing downstream has to know about it (TDD 25.17).
+fn draw_table_row(
+    cr: &cairo::Context,
+    row: TableRowInk<'_>,
+    left: f64,
+    top: f64,
+    palette: &Palette,
+    theme: &Theme,
+) {
+    let border_rgba = theme.table_border.unwrap_or(palette.table_border);
+    let head_bg = theme.table_head_bg.unwrap_or(palette.table_head_bg);
+    let fg = palette.body_fg;
+
+    cr.save().ok();
+    cr.translate(left, top);
+    if row.scale > 0.0 && (row.scale - 1.0).abs() > f64::EPSILON {
+        cr.scale(row.scale, row.scale);
+    }
+
+    // The header's fill goes down first, so the borders and text sit on top of it.
+    if row.is_head {
+        cr.set_source_rgb(
+            f64::from(head_bg.red()),
+            f64::from(head_bg.green()),
+            f64::from(head_bg.blue()),
+        );
+        for column in row.columns {
+            cr.rectangle(column.x, 0.0, column.box_width, row.box_height);
+        }
+        cr.fill().ok();
+    }
+
+    // One stroked box per cell. Adjacent cells share an edge, so a reader sees a
+    // continuous rule rather than a double line — the `border-collapse` the HTML sink
+    // asks for, expressed in the only way a page has.
+    if row.chrome.border > 0.0 {
+        cr.set_source_rgb(
+            f64::from(border_rgba.red()),
+            f64::from(border_rgba.green()),
+            f64::from(border_rgba.blue()),
+        );
+        cr.set_line_width(row.chrome.border);
+        let inset = row.chrome.border / 2.0;
+        for column in row.columns {
+            cr.rectangle(
+                column.x + inset,
+                inset,
+                (column.box_width - row.chrome.border).max(0.0),
+                (row.box_height - row.chrome.border).max(0.0),
+            );
+        }
+        cr.stroke().ok();
+    }
+
+    cr.set_source_rgb(
+        f64::from(fg.red()),
+        f64::from(fg.green()),
+        f64::from(fg.blue()),
+    );
+    for cell in row.cells {
+        let Some(column) = row.columns.get(cell.column) else {
+            continue;
+        };
+        cr.move_to(
+            column.x + row.chrome.border + row.chrome.padding_h,
+            row.chrome.padding_v,
+        );
+        // `show_layout` walks the layout's own lines and hands cairo UTF-8 with
+        // clusters, exactly as `show_layout_line` does for body text — a wrapped cell
+        // must stay searchable and selectable like everything else (TDD 25.18).
+        pangocairo::functions::show_layout(cr, &cell.layout);
+    }
+    cr.restore().ok();
 }
 
 /// CSS pixel → point. An image's natural size is in device pixels; a page counts in
@@ -1041,6 +1351,241 @@ mod pdf_layout_tests {
             .collect();
         assert!(text.contains("claim"), "{text:?}");
         assert!(text.contains("reviewer says this"), "{text:?}");
+    }
+
+    /// Every table row in `laid`, as (column x-offsets, is_head, scale).
+    fn table_rows(laid: &super::Laid) -> Vec<(Vec<String>, bool, f64)> {
+        laid.lines
+            .iter()
+            .filter_map(|line| match &line.kind {
+                super::LineKind::TableRow {
+                    columns,
+                    is_head,
+                    scale,
+                    ..
+                } => Some((
+                    columns.iter().map(|c| format!("{:.3}", c.x)).collect(),
+                    *is_head,
+                    *scale,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    const TABLE: &str = "| Username | Date/Time | Method |\n\
+        |---|---|---|\n\
+        | Conrad | Aug 19, 2026 10:29 PM | DM |\n\
+        | Gifny Richata - ORAY STUDIOS | Aug 20, 2026 8:41 PM | FR |\n";
+
+    #[test]
+    fn every_row_of_a_table_shares_one_column_grid() {
+        // THE regression. Rows used to be tab-joined paragraphs, so a cell one
+        // character too wide pushed the next column a whole tab stop right and the
+        // columns zig-zagged down the page — measured on a real export as column two
+        // starting at x=120 on one row, 144 on the next and 216 on the last.
+        let laid = lay_out(
+            &doc::build(TABLE, &RenderOptions::default()),
+            &ctx(),
+            468.0,
+            684.0,
+            &theme(),
+        );
+        let rows = table_rows(&laid);
+        assert_eq!(rows.len(), 3, "expected a header and two body rows");
+        let (first_grid, _, _) = &rows[0];
+        for (grid, _, _) in &rows {
+            assert_eq!(
+                grid, first_grid,
+                "a row was laid on a different grid: {rows:?}"
+            );
+        }
+        assert_eq!(first_grid.len(), 3, "the delimiter row declared 3 columns");
+    }
+
+    #[test]
+    fn a_table_row_is_exactly_one_indivisible_fragment() {
+        // TDD 25.16 for tables: one row is one fragment, so a page break can only ever
+        // fall BETWEEN rows. A wrapped cell must not become a second fragment.
+        let wide = "| A | B |\n|---|---|\n| short | ".to_string()
+            + &"a long sentence that has to wrap several times ".repeat(6)
+            + "|\n";
+        let laid = lay_out(
+            &doc::build(&wide, &RenderOptions::default()),
+            &ctx(),
+            200.0,
+            684.0,
+            &theme(),
+        );
+        assert_eq!(
+            table_rows(&laid).len(),
+            2,
+            "a wrapped cell split its row into extra fragments"
+        );
+        assert_eq!(
+            laid.fragments.len(),
+            laid.lines.len(),
+            "fragments and lines must stay index-parallel"
+        );
+    }
+
+    #[test]
+    fn a_tables_header_keeps_company_with_its_first_row() {
+        let laid = lay_out(
+            &doc::build(TABLE, &RenderOptions::default()),
+            &ctx(),
+            468.0,
+            684.0,
+            &theme(),
+        );
+        let head = laid
+            .lines
+            .iter()
+            .position(|l| matches!(&l.kind, super::LineKind::TableRow { is_head: true, .. }))
+            .expect("no header row");
+        assert!(
+            laid.fragments[head].keep_with_next,
+            "a header orphaned at the foot of a page is the one break that matters"
+        );
+    }
+
+    #[test]
+    fn a_table_too_wide_to_wrap_is_scaled_to_fit_the_page() {
+        // TDD 25.17. Ten columns of one long unbreakable word cannot be wrapped into
+        // the page, so the whole table is scaled — never clipped at the margin.
+        let header = "| ".to_string() + &"Col | ".repeat(10) + "\n";
+        let delim = "|".to_string() + &"---|".repeat(10) + "\n";
+        let body = "| ".to_string() + &"Supercalifragilistic | ".repeat(10) + "\n";
+        let laid = lay_out(
+            &doc::build(&(header + &delim + &body), &RenderOptions::default()),
+            &ctx(),
+            468.0,
+            684.0,
+            &theme(),
+        );
+        let rows = table_rows(&laid);
+        assert!(!rows.is_empty(), "no table was laid out");
+        for (_, _, scale) in &rows {
+            assert!(
+                *scale < 1.0,
+                "an unwrappable table was left unscaled at {scale}"
+            );
+            assert!(*scale > 0.0, "a non-positive scale draws nothing");
+        }
+    }
+
+    #[test]
+    fn a_narrow_table_is_scaled_by_nothing_at_all() {
+        let laid = lay_out(
+            &doc::build(
+                "| a | b |\n|---|---|\n| 1 | 2 |\n",
+                &RenderOptions::default(),
+            ),
+            &ctx(),
+            468.0,
+            684.0,
+            &theme(),
+        );
+        for (_, _, scale) in table_rows(&laid) {
+            assert_eq!(scale, 1.0, "a table that fits was scaled");
+        }
+    }
+
+    #[test]
+    fn a_cells_text_reaches_the_page_through_a_real_layout() {
+        // Content, not call-shape: the cell's own characters must be in a layout, or
+        // the artefact is a picture of a table (TDD 25.18).
+        let laid = lay_out(
+            &doc::build(TABLE, &RenderOptions::default()),
+            &ctx(),
+            468.0,
+            684.0,
+            &theme(),
+        );
+        let mut seen = String::new();
+        for line in &laid.lines {
+            if let super::LineKind::TableRow { cells, .. } = &line.kind {
+                for cell in cells {
+                    seen.push_str(&cell.layout.text());
+                    seen.push(' ');
+                }
+            }
+        }
+        for want in [
+            "Username",
+            "Conrad",
+            "Aug 19, 2026 10:29 PM",
+            "Gifny Richata - ORAY STUDIOS",
+        ] {
+            assert!(seen.contains(want), "{want:?} never reached a cell layout");
+        }
+    }
+
+    #[test]
+    fn a_column_alignment_reaches_the_cells_layout() {
+        // The delimiter row's alignments used to be parsed and then discarded.
+        let src = "| L | C | R |\n|:---|:---:|---:|\n| a | b | c |\n";
+        let laid = lay_out(
+            &doc::build(src, &RenderOptions::default()),
+            &ctx(),
+            468.0,
+            684.0,
+            &theme(),
+        );
+        let row = laid
+            .lines
+            .iter()
+            .find_map(|l| match &l.kind {
+                super::LineKind::TableRow {
+                    cells,
+                    is_head: false,
+                    ..
+                } => Some(cells),
+                _ => None,
+            })
+            .expect("no body row");
+        let got: Vec<gtk::pango::Alignment> = row.iter().map(|c| c.layout.alignment()).collect();
+        assert_eq!(
+            got,
+            vec![
+                gtk::pango::Alignment::Left,
+                gtk::pango::Alignment::Center,
+                gtk::pango::Alignment::Right,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_table_never_reaches_past_the_printable_width() {
+        // The margin is the contract: scaled or wrapped, the drawn table ends inside
+        // it. Swept across widths so the three regimes are all exercised.
+        for width in [80.0, 140.0, 300.0, 468.0] {
+            let laid = lay_out(
+                &doc::build(TABLE, &RenderOptions::default()),
+                &ctx(),
+                width,
+                684.0,
+                &theme(),
+            );
+            for line in &laid.lines {
+                if let super::LineKind::TableRow {
+                    columns,
+                    scale,
+                    chrome,
+                    ..
+                } = &line.kind
+                {
+                    let right = columns
+                        .last()
+                        .map(|c| (c.x + c.box_width + chrome.border) * scale)
+                        .unwrap_or(0.0);
+                    assert!(
+                        right <= width + 0.01,
+                        "table ran {right}pt past a {width}pt page"
+                    );
+                }
+            }
+        }
     }
 }
 

@@ -29,7 +29,11 @@
 //! selection (per-cell; tables are anchored islands) and links are kept,
 //! unlike the rejected `GdkPaintable` route.
 
-mod layout;
+// `pub(crate)` for one reason worth stating: `export::pdftable` shares this module's
+// column-fitting RULE (Document Rendering CAM row 17 — an export shows what the preview
+// showed), and its test cross-checks the two implementations against each other. The
+// widget half of this directory stays private.
+pub(crate) mod layout;
 mod linkcell;
 
 pub(crate) use linkcell::{

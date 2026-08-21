@@ -1422,6 +1422,58 @@ if ($bad11) { $failed = $true } elseif (-not $warn -and $regBytes -le $REG_WARN)
     Write-Host '   PASS' -ForegroundColor Green
 }
 
+# -- Check 12: paths Windows cannot check out -----------------------------------
+# Parity with lint-references.sh check 12. See that script for the measured
+# rationale; the input set is `git ls-files`, NOT lint-references.scan, because the
+# path that prompted this landed in the repository root, outside the curated scan.
+# This platform is the one that actually suffers the failure, so the check is here
+# as much to name the cause as to catch it.
+Write-Host '-- Check 12: paths Windows cannot check out --'
+# ENUMERATION PARITY with the shell port, which POLICY requires alongside pattern parity:
+# both read `git ls-files -z`. Plain `ls-files` C-quotes any path containing a control
+# character or a `"`, which replaces the raw bytes with an escaped rendering -- so the
+# `[\x01-\x1f]` clause could never fire against it, and such a path was only ever caught
+# by ACCIDENT, matching on the `"` its own quoting wrapped it in. (That quoting is
+# unconditional, MEASURED: it still happens with `core.quotePath=false`, which governs
+# non-ASCII bytes, not control characters.) `-z` gives the true bytes and makes the catch
+# principled.
+#
+# BUT `-z` ALONE IS NOT ENOUGH IN POWERSHELL, and this is the part that does not port.
+# PowerShell splits a native command's stdout into lines BEFORE the pipeline sees it, so a
+# path containing \x0a is already torn in two by the time `-split "`0"` runs -- the split
+# operates on fragments, not on the stream. MEASURED against a planted `nl<LF>name.txt`:
+# the pipeline form yielded 350 elements including `nl` and `name.txt` as separate
+# entries, zero elements containing a raw LF, and check 12 reported the other seven
+# planted classes while silently missing that one. Reading the child's stdout as a STREAM
+# yields 349 elements, one of which is `6e 6c 0a 6e 61 6d 65 2e 74 78 74` -- intact.
+#
+# So the enumeration goes through ProcessStartInfo rather than the native-command
+# pipeline. The shell port has the same defect in different clothing (`tr '\0' '\n'`
+# converts the separator and keeps the newline, which is the same tear); it needs
+# `mapfile -d ''` or `while IFS= read -r -d ''`, and that half is the Linux seat's.
+$psi12 = New-Object System.Diagnostics.ProcessStartInfo
+$psi12.FileName               = 'git'
+$psi12.Arguments              = 'ls-files -z'
+$psi12.WorkingDirectory       = (Get-Location).Path
+$psi12.RedirectStandardOutput = $true
+$psi12.UseShellExecute        = $false
+$psi12.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+$proc12 = [System.Diagnostics.Process]::Start($psi12)
+$out12  = $proc12.StandardOutput.ReadToEnd()
+$proc12.WaitForExit()
+$tracked12 = @($out12 -split "`0" | Where-Object { $_ })
+$bad12 = $tracked12 | Where-Object {
+    $_ -match '[<>:"|?*]' -or $_ -match '[\x01-\x1f]' -or $_ -match '[. ]$' -or
+    $_ -match '(?i)(^|/)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^/]*)?$'
+}
+if ($bad12) {
+    Write-Host '   FAIL - tracked path(s) illegal on Win32 (git checkout refuses the whole tree):' -ForegroundColor Red
+    $bad12 | ForEach-Object { Write-Host "     $_" }
+    $failed = $true
+} else {
+    Write-Host '   PASS' -ForegroundColor Green
+}
+
 Pop-Location
 Write-Host ''
 if ($failed) {

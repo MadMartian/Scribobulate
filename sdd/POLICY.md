@@ -157,7 +157,7 @@ Before any change is considered valid, run these steps in order:
    run `--list-scan` / `-ListScan` on both platforms and diff the output. A claim of
    parity that nothing checks is worse than no claim, because the next author trusts
    it. It enforces
-   eight rules mechanically — three over citations into the SDD registers, two over
+   nine rules mechanically — three over citations into the SDD registers, two over
    the test architecture, both of whose failure modes are silent (that
    `src/gtk_suite.rs`'s duplicated module list has not drifted from `src/lib.rs`'s — a
    module missing there drops every test body inside it from the main-thread run, with
@@ -191,6 +191,16 @@ Before any change is considered valid, run these steps in order:
    held by both registers, cite `ScrAP-N`; this one is always resolvable. ScrAP-231
    records what the previous, laxer version of this rule cost. Checks 4, 5, 6, 7 and 8
    were each mutation-tested when written.
+   The ninth is over **tracked PATH LEGALITY**: `< > : " | ? *` and a trailing dot or
+   space are illegal in a Win32 filename, so **one such path makes `git checkout` refuse
+   the entire tree** — not that file, the whole tree — blocking every Windows clone and
+   anyone bisecting through the commit. MEASURED: an unquoted `sed -i 's|a|b|'` had its
+   `|` eaten by the shell, wrote the replacement half to disk as a filename, and
+   `git add -A` committed it; fmt, clippy, the whole suite and the other eleven checks
+   all passed, and only the Windows seat could see it, one fetch later, by being blocked.
+   **Its input set is `git ls-files`, deliberately NOT `lint-references.scan`** — the
+   offending path landed in the repository root, outside the curated scan, and a check
+   whose input is narrower than its hazard is ScrAP-132's species.
    The three citation rules: no `sdd/ISSUES.md` entry may be cited from outside that
    file (SDD principle 6 — issue IDs are ephemeral, so every such pointer dangles
    when the fix lands, and *lies quietly* if IDs are ever compacted); every
@@ -457,7 +467,18 @@ the physical machine for anything none of them can reach.
 
 **Linux remains the gate for GTK-level regressions.** A macOS-only defect is
 therefore discoverable only by the above, which is why the manual suite carries
-platform-specific items rather than assuming parity.
+platform-specific items rather than assuming parity. **And the converse now has a measured
+instance**: a Linux-era guard can be *inert* on the macOS GTK without being broken —
+ScrAP-157's collapse-all guard passes there with the fix it guards removed, because
+`GtkListView` 4.22.4 does not exhibit the 4.6 defect at all. So a green macOS suite is not
+evidence that a Linux-era fix is still required; the guard is live only where the defect is.
+
+**A locked macOS session makes that suite RED, and correctly so.** `codeview::markers`'s
+a11y focus test panics on its own precondition — "the stand-in can hold the focus (a mapped,
+active toplevel)" — rather than passing when no active toplevel exists. That is a positive
+control doing its job, not a defect: a locked screen has no active toplevel. Do not chase it,
+do not "fix" it by relaxing the precondition, and do not report the suite as passing on a
+locked machine. Unlock and re-run.
 
 **Before filing a defect as macOS-specific, have the Linux counterpart try to
 reproduce it.** Behaviour found here is not platform-specific until a peer fails
@@ -866,6 +887,31 @@ category must **account for every applicable cell** in
 that matrix, and derive its `tests/MANUAL-TEST.md` checks from the cells (build
 pipeline step 7). Operator-granted exceptions are recorded in `CAM.md` too.
 
+## Cross-machine seat branches
+
+The platform seats' `origin` **is the Linux seat's working clone**, not a neutral server. A
+seat's push therefore writes directly into the integration machine's repository, and that
+topology has one sharp edge worth stating before it is discovered.
+
+**Push a seat branch with an explicit refspec** — `git push origin
+mac/feature:refs/heads/mac/feature` — and set tracking deliberately afterwards. Do **not**
+rely on a bare `git push -u origin <branch>`.
+
+The reason is not style. A branch created with `git checkout -b <name> origin/<shared>` has its
+upstream set to the **shared** branch, and under `push.default = tracking` a bare push sends
+the current branch to *its upstream's name* — aiming a seat branch straight at the shared
+integration branch. **Measured, and it was one fast-forward away from succeeding silently**: the
+push was rejected only because the integration branch had moved on. Had it been fast-forwardable
+the seat's work would have been written onto the shared branch with no error, and nobody would
+have learned of it until something looked wrong downstream. This is a property of the topology,
+not of any seat's carelessness, and the failure mode is a **silent write to a shared branch
+rather than an error** — which is why it belongs here rather than in a seat's habits.
+
+Corollaries already paid for elsewhere in this document's registers: **verify integration by
+diffing the trees, not by trusting a record of what was picked** (`git diff HEAD <seat-branch>
+-- <paths>` before deleting a branch), because a seat that is still working moves the target
+under a confirmation that was accurate when it was sent.
+
 ## SDD register writes
 
 `sdd/ANTI-PATTERNS.md` and `sdd/ISSUES.md` have **one writer**. When work is split
@@ -893,6 +939,27 @@ the three-collision rate above is the only defence it will ever have.
 Content authored elsewhere keeps its author's reasoning and its
 MEASURED/INFERRED labelling; the allocating seat edits for the register's format,
 not for its argument, and says so in the entry.
+
+**Cite an entry by READING it, not from a remembered gloss of it.** `lint-references` check 2
+proves a cited `ScrAP-N` exists and never that it is the right one, so the whole weight of
+correctness sits on the author — and the way it fails in practice is specific enough to name:
+a seat cites a number it *does* hold, for a claim the entry does not make, because it is
+working from a note *about* the entry rather than from the entry. MEASURED: a seat cited
+`ScrAP-157` for "a guard that is inert on this platform", which is an observation recorded in
+that seat's own working memory *about* the entry; the entry itself is a `GtkTreeListModel`
+collapse defect and makes no such claim. The gate passed, as it must. This is the documentary
+twin of trusting an instrument's reading without checking what it measured — and it is one
+step past the rule below, which covers a number a seat has *not* been given.
+
+**A number a seat has been TOLD is not a number that seat can CITE.** The writing
+seat allocates an ID in its own clone, so until that clone's register reaches the
+other seat, an entry cited there resolves to nothing — and `lint-references` check
+2 fails, correctly, on a citation whose body is not in the tree. So an instruction
+to cite a freshly allocated `ScrAP-N` is implicitly an instruction to wait for it:
+the citing seat leaves a one-line note at the site and adds the citation once the
+register lands, rather than committing a forward reference that breaks its own
+gate. Measured, not anticipated — the macOS seat hit exactly this and the gate
+caught it, which is the gate working, not friction to route around.
 
 ## Prohibited actions
 
@@ -960,7 +1027,42 @@ RUST_LOG=warn,scribobulate::scroll=trace   # just the scroll hot path
 ```
 
 CI: run the test binary with `G_DEBUG=fatal-criticals` so any `Gtk-CRITICAL`
-becomes a hard failure instead of a silent log line. **The test binary, and only
+becomes a hard failure instead of a silent log line. **This is armed on Linux, in
+build-pipeline step 5's contract line — and it was a dead letter until 2026-08-21.**
+The prescription had stood for a long time with **nothing in the toolchain setting the
+flag**, which is the failure this document keeps recording in other people's code: a gate
+that is never armed cannot fail, and looks identical to one that passes. When it was
+finally run, the suite was carrying three latent criticals while reporting `ok` — the
+worst of them a `change_action_state` on a **stateless** action, silently no-opping a
+guard's setup so it walked a smaller tree than it claimed to, inside the very test that
+cites ScrAP-209 for that species. **Do not prescribe a flag without wiring it to a
+runner.** Windows carries it too, having confirmed its own suite clean **and mutation-tested the
+gate** — reverting one of the three fixes above makes the suite pass with the flag off and
+die with it on, which is the only evidence that distinguishes an armed gate from a quiet
+one. Note the **death code differs by platform**: a promoted critical is `SIGTRAP` (exit
+133) on Linux and `0xC0000409 STATUS_STACK_BUFFER_OVERRUN` under MSVC, where the harness
+reports only "test exited abnormally".
+
+**macOS CANNOT carry it, and this is settled rather than pending.** Its suite emits
+`gdk_surface_thaw_updates: assertion 'surface->update_freeze_count > 0' failed` — nine
+occurrences across eight tests, every one opening or dismissing a popover or annotation
+card. The cause is upstream in GDK's macOS backend (one freeze per surface *construction*,
+one thaw per *map*, and `gdk_macos_surface_hide` never freezes, so the second map thaws at
+zero), it is present from 4.22.4 through `main`, and `gdk_surface_freeze_updates` /
+`thaw_updates` are private and absent from the `gdk4` bindings, so **no application-side
+fix exists**.
+
+⛔ **Do NOT arm it there by masking `Gdk-CRITICAL`.** That mask would also silence a
+*latent* defect in the same file at the version macOS ships — a leaked surface
+update-freeze that stops a surface repainting, ScrAP-318 — which is the one signal anybody
+would get if that ever happened.
+⛔ **And do NOT reach for a `g_log_set_writer_func` allowlist without reading ScrAP-268
+first.** Installing a writer replaces `g_log_writer_default`, which is *where GLib
+consults `g_log_always_fatal`* for structured logs — so the naive allowlist **disarms the
+gate entirely and silently**, and a disarmed gate is indistinguishable from a passing one.
+Any such writer must delegate to `g_log_writer_default` for everything it does not
+allowlist, and must be **mutation-tested** by planting a second, different critical and
+confirming the suite still fails on it. **The test binary, and only
 it** — the flag is a no-op against the *running application*, MEASURED (GLib 2.72.4):
 for structured logs, which GTK's own diagnostics are, GLib consults
 `g_log_always_fatal` inside `g_log_writer_default`, and `logging::init` replaces that

@@ -278,6 +278,11 @@ pub(super) fn build_chrome(
     // A placeholder is not a name either — GTK publishes it as `Placeholder`, which AT
     // reads as a hint about the *content*, not as the field's identity. Name it too.
     crate::a11y::name_field(&find_entry, "Find");
+    // Option+Left/Right word navigation (`macwordnav`). A GtkSearchEntry delegates
+    // to a GtkText like any other wrapper, and a multi-word search term is exactly
+    // the case a Mac reader reaches for Option+Left in.
+    #[cfg(target_os = "macos")]
+    crate::macwordnav::wire_field_word_navigation(&find_entry);
 
     let find_prev_btn = gtk::Button::from_icon_name(Icon::GoUp.name());
     crate::a11y::name_with_tooltip(
@@ -314,6 +319,8 @@ pub(super) fn build_chrome(
     replace_entry.set_hexpand(true);
     replace_entry.set_placeholder_text(Some("Replace with…"));
     crate::a11y::name_field(&replace_entry, "Replace with");
+    #[cfg(target_os = "macos")]
+    crate::macwordnav::wire_field_word_navigation(&replace_entry);
 
     let replace_btn = gtk::Button::with_label("Replace");
     replace_btn.add_css_class("flat");
