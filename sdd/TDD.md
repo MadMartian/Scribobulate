@@ -181,6 +181,7 @@
 - **Given** a table whose cells and/or `---` delimiter row are separated by hard tabs (e.g. pasted from a spreadsheet), which GFM alone would reject as a table
 - **When** it is rendered
 - **Then** it appears as a real laid-out table, not a literal paragraph of pipes and em-dashes — inline hard tabs are normalised to spaces before parsing (length-preservingly, exempting leading indentation and verbatim code), so offsets/scroll-sync/copy are unaffected (ScrAP-75)
+- **And** every surface derived from the document reads that same normalised text, not only the rendered page: the **outline** lists exactly the headings the page shows (a tab-padded table never becomes a phantom heading, and a hard tab inside a heading reads as a space, as on the page), the **export** produces a table, and an **annotation** made over a cell's text in the editor wraps that cell's content and never a span crossing a cell boundary
 
 ### 2.9 Links within table cells
 - **Given** a table cell containing a Markdown hyperlink — **whether the link is the cell's entire content** (`[#1](https://github.com/…)`) **or sits beside other content** (`☑ [#1](…) filed`), which are the two shapes a reader cannot tell apart

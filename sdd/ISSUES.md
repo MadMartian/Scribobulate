@@ -11,7 +11,6 @@
 | Q | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | R | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | S | macOS only: every `GtkFileChooserNative` invocation (Open, Save, Export) grows RSS by ~1 MB and does not give it back; no plateau over 20 cycles. NOT a native-dialog property — Windows uses a native panel too and plateaus | Medium |
-| V | The inline-tab pre-pass reaches two of the four parse sites, though its doc says "every parse site" — the outline and copy-as-Markdown parse the raw source | Low |
 
 ## A. Tables are selection islands
 
@@ -799,42 +798,3 @@ chooser, and the per-process GPU counters read a flat 0 B throughout. It remains
 cannot be separated from the chooser's while every measurement cycle opens one. The GPU
 half of that rubric *is* verified: the process never appears as a GPU client, before or
 after 30 export cycles, at either document size.
-
-## V. The inline-tab pre-pass reaches two of the four parse sites
-
-**Severity**: Low (it takes a hard TAB inside a GFM table to observe anything, the
-preview — the surface a reader actually looks at — is one of the two sites that IS
-covered, and the divergence has not been shown to produce a wrong result on either
-uncovered surface. Found by inspection during the lone-CR review, not from a report.)
-
-`renderer::normalize_inline_tabs` (ScrAP-75) documents itself as "Used at every parse
-site (preview render, outline, copymap)". It is called at exactly two: `preview/build.rs`
-and `export/doc.rs`. `outline.rs` and `copymap.rs` both build a `pulldown_cmark::Parser`
-over the raw source instead.
-
-**This is an instance of a class, not a one-off.** A doc comment that asserts a behaviour
-the code does not implement is worse than no comment, because it **terminates the audit it
-appears to serve**: a reader checking whether every parse site is covered finds the
-sentence saying they are and stops. A second instance of exactly this was found
-independently in `export/pdf.rs` during the same period — a `table()` rustdoc claiming
-conformance to two TDD rubrics that nothing in the file implemented. The general form is
-worth stating wherever it recurs: **a comment claiming a contract is satisfied is a claim
-that needs a TEST behind it, not prose.**
-
-**Why it might matter.** The preview and `copymap` are supposed to be two readings of the
-same document, and `copymap` is what turns a preview selection back into Markdown source.
-Feed them a document with a tab-delimited GFM table and they disagree about its
-*structure* — the preview sees a table, `copymap` sees a paragraph — so a copy spanning
-that region can resolve to the wrong span. Offsets themselves stay aligned, since the
-pre-pass is length-preserving by design, which is why this is a structural divergence and
-not a drift.
-
-**Not verified.** Nobody has produced a user-visible wrong result from it; the reasoning
-above is inference from the call sites. Establishing whether the defect is real is the
-first step, not the fix — and a check that a tab-delimited table copies correctly out of
-the preview is what would settle it either way.
-
-**Mitigation.** Either route the two uncovered parsers through the pre-pass, or correct
-the doc comment to say which sites it actually covers and why the others are exempt. The
-second is not a cop-out if the exemption is real: a comment that overstates its reach is
-what made this look settled for as long as it did.

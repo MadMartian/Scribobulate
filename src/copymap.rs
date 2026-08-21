@@ -1018,6 +1018,15 @@ fn wrap_span_node(md: &str, node: &Node, a: i32, b: i32) -> Option<Range<usize>>
 /// enable pulldown's strikethrough, so such an event can never be emitted — the
 /// scanner pass is what covers `~~`.
 pub(crate) fn balance_source_span(md: &str, sel: Range<usize>) -> Range<usize> {
+    // Read the document the way the preview does: through the inline-tab pre-pass
+    // (ScrAP-75). Without it a tab-padded GFM table is a *paragraph* here while the
+    // reader sees a *table*, and the two disagree about where a cell ends — MEASURED,
+    // `| **a\t| b** |`: the paragraph reading swallowed `**a\t| b**` as one Strong
+    // span, so annotating a word in the first cell wrapped CriticMarkup across the
+    // cell boundary. The substitution is length- and position-preserving, so every
+    // range below still indexes `md` itself; that is what makes normalising here safe
+    // rather than a coordinate change.
+    let md = &*crate::renderer::normalize_inline_tabs(md);
     let mut cur = sel;
     // Nesting is finite; the guard only stops a pathological non-convergence.
     for _ in 0..32 {

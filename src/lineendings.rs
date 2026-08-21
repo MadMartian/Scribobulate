@@ -53,10 +53,13 @@
 //! # Where the repair goes: the two doors, not the parse sites
 //!
 //! Normalising inside the parse pre-pass (`renderer::normalize_inline_tabs`) would fix
-//! the preview and leave the outline and `copymap` broken, because they parse the
-//! source directly rather than through that pre-pass — it documents itself as covering
-//! "every parse site" and already does not. Repairing where text *arrives* means every
-//! consumer is correct without any of them knowing this module exists.
+//! only what is *parsed*, and arrival is a different moment from parsing: the save
+//! guard, crash recovery and the editor buffer never go through a parse at all, so a
+//! lone `\r` would survive in each of them. (That pre-pass does now cover all four
+//! parse sites, so this is a statement about its MOMENT, not its reach — an earlier
+//! version of this note leaned on the reach gap, which has since been closed.)
+//! Repairing where text *arrives* means every consumer is correct without any of them
+//! knowing this module exists.
 //!
 //! There are exactly two such doors, and both are needed. Fixing only one of them was
 //! the first attempt at this and it looked convincing:
