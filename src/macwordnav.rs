@@ -46,11 +46,31 @@
 //! navigation, confirming the class binding really does win over the `GAction`
 //! accelerator on this key while the view holds focus.
 //!
-//! **Scope.** Wired onto the main document editor only (`build_tab_editor`, the one
-//! place every editor `sourceview::View` is built) — the surface the report was
-//! about. `GtkEntry`/`GtkText` fields elsewhere (the comment entry, Go To Line, the
-//! rename/URL dialogs) are plain GTK widgets with no `move-words` binding, so they
-//! don't carry this defect at all — nothing to fold into this fix there.
+//! **Scope: two wirings, one decision function, two different defects.**
+//!
+//! [`wire_word_navigation`] covers the main document editor (`build_tab_editor`, the
+//! one place every editor `sourceview::View` is built) — the surface the report was
+//! about, and the only one that carries the *mutation* defect above, because
+//! `move-words` is `GtkSourceView`'s binding and nothing else in the tree is a
+//! `sourceview::View`.
+//!
+//! [`wire_field_word_navigation`] covers the in-app text fields — the shared prompt
+//! form behind Go To Line and Insert Link/Image/Table (`window::editbar::dialog`), the
+//! annotation comment entry (`widgets::comment_entry`), and the find and replace
+//! fields (`window::chrome`). Those are plain `GtkEditable` wrappers with **no**
+//! `move-words` binding, so they never rearranged anything — an earlier revision of
+//! this paragraph concluded from that there was "nothing to fold into this fix there",
+//! and that was wrong. Absence of the mutation is not presence of the navigation:
+//! `GtkText` binds word movement to Ctrl+Left/Right only, so Option+Left in any of
+//! these fields did nothing at all, against a convention every native macOS text field
+//! honours. Inert is a milder defect than destructive, not a different one, and both
+//! are the same gap between GTK's Ctrl-based bindings and AppKit's Option-based ones.
+//! Hence one [`word_movement`] and two thin wirings, never two decision functions.
+//!
+//! **The field wiring goes on the delegate, not on the widget the caller built** — see
+//! [`key_target`]. That is the one non-obvious mechanical fact here and it decides both
+//! halves of the wiring: where the controller is attached *and* what the signal is
+//! emitted on.
 //!
 //! **Why a plain key controller and not a `GtkShortcutController`/accelerator.** A
 //! bubble-phase `GtkEventControllerKey` on the view, added after construction, runs
@@ -64,13 +84,13 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk::MovementStep;
 
-/// The word-movement Option+`key` means for the editor, or `None` if `key`/`mods`
+/// The word-movement Option+`key` means for a text surface, or `None` if `key`/`mods`
 /// is not that combination.
 ///
 /// A pure function over plain data (mirroring `crate::keynav::document_movement`'s
-/// own shape) so the decision is unit-testable without a display, and so a future
-/// caller — the follow-up for the standalone `GtkEntry` fields noted above — can
-/// reuse it without depending on a live widget.
+/// own shape) so the decision is unit-testable without a display, and so both callers
+/// — the editor view and the `GtkEditable` fields — share one answer rather than
+/// growing a second, drifting copy of the modifier rules below.
 ///
 /// Only a bare Option or Option+Shift qualifies. Any other modifier riding along
 /// (Control, Command/Meta, Super, Hyper) means this is someone else's combination —
@@ -125,6 +145,99 @@ pub(crate) fn wire_word_navigation(view: &sourceview::View) {
         }
     ));
     view.upcast_ref::<gtk::Widget>().add_controller(keys);
+}
+
+/// The `GtkText` that actually receives key events for `field`, or `None` if `field`
+/// is a `GtkEditable` implemented some other way.
+///
+/// **`GtkEntry`, `GtkSearchEntry` and friends are wrappers, not text widgets.** Each
+/// one delegates its editing — focus, key events, and the `move-cursor` signal alike —
+/// to an internal `GtkText` child reachable through `gtk_editable_get_delegate`. The
+/// project already has this recorded from the other side: `editoractions`' test probe
+/// `focus_is_within` exists because `entry.has_focus()` stays *false* for an entry the
+/// reader is typing into, since the focus is on that child.
+///
+/// Two consequences, and together they are the whole reason this function exists
+/// rather than the caller's widget being used directly:
+///
+/// 1. **The controller belongs on the delegate.** A controller on the wrapper sits
+///    behind the delegate in the propagation chain, so a key the delegate answers is
+///    already spent by the time the wrapper's bubble phase runs.
+/// 2. **The emission target is the delegate.** `move-cursor` is `GtkText`'s signal;
+///    `GtkEntry` has no such signal at all, so an emission aimed at the wrapper is not
+///    a subtler bug, it is a panic.
+///
+/// A bare `gtk::Text` (no wrapper) is its own delegate — `gtk_editable_get_delegate`
+/// returns NULL for it — so it is returned directly rather than being treated as an
+/// unsupported shape.
+pub(crate) fn key_target(field: &impl IsA<gtk::Editable>) -> Option<gtk::Text> {
+    let field = field.as_ref();
+    if let Some(text) = field.downcast_ref::<gtk::Text>() {
+        return Some(text.clone());
+    }
+    field.delegate()?.downcast::<gtk::Text>().ok()
+}
+
+/// Wire Option+Left/Option+Right (and Option+Shift, to extend the selection) onto a
+/// `GtkEditable` field as word movement — the sibling of [`wire_word_navigation`] for
+/// everything in the app that is not the document editor.
+///
+/// Call once, at the field's construction site, so a field cannot be built without it
+/// (the same siting rule as [`wire_word_navigation`], and for the same reason: an
+/// obligation attached to a *use* site regresses at the next use site).
+///
+/// **Capture phase, deliberately.** `GtkText` does its own key handling through a
+/// `GtkEventControllerKey` of its own, installed at construction, and the relative
+/// order of two controllers on one widget in the same phase is a list-order detail of
+/// `gtk_widget_add_controller` — not a documented contract, and not something this
+/// wiring should depend on. Capture runs before target and bubble by definition, so
+/// the ordering is decided by the phase rather than by construction order. This
+/// differs from [`wire_word_navigation`], whose bubble phase was *measured* to outrun
+/// `GtkSourceView`'s class binding; here there is no class binding to outrun (nothing
+/// binds Option+Left in `GtkText`) and the only requirement is to answer before the
+/// widget's own controller can decide the key means something else.
+///
+/// A field whose delegate is not a `GtkText` is left alone rather than half-wired —
+/// see [`key_target`].
+///
+/// **Measured live on Quartz** (GTK 4.22.4, release build), each of the four sites in
+/// turn, by typing `alpha beta gamma`, pressing Option+Left twice and typing `|`:
+/// every one read back `alpha |beta gamma`, so the caret had moved two words rather
+/// than none. The control was run first and matters, because a key that never reaches
+/// the app is indistinguishable from a wiring that is not there (GTK4Rs/AP-245 — this
+/// platform has such a channel, `cliclick kp:`): a plain Left arrow through the same
+/// `System Events` route gave `alpha beta gamm^a`, proving delivery before any
+/// Option result was believed. Option+Right moved forward one word
+/// (`alpha |beta] gamma`) and Option+Shift+Left extended the selection over the
+/// preceding word.
+pub(crate) fn wire_field_word_navigation(field: &impl IsA<gtk::Editable>) {
+    let Some(text) = key_target(field) else {
+        log::debug!(
+            "macwordnav: {} has no GtkText delegate; Option+Left/Right word navigation not wired",
+            field.as_ref().type_().name()
+        );
+        return;
+    };
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(glib::clone!(
+        #[weak]
+        text,
+        #[upgrade_or]
+        glib::Propagation::Proceed,
+        move |_, key, _, mods| {
+            let Some((count, extend)) = word_movement(key, mods) else {
+                return glib::Propagation::Proceed;
+            };
+            // `GtkText` has no `emit_move_cursor` in gtk4-rs — `move-cursor` is bound
+            // for connecting, not for emitting — but it is a `G_SIGNAL_ACTION` signal,
+            // so emitting it by name is the sanctioned route and does exactly what
+            // GTK's own Ctrl+Left/Right binding does.
+            text.emit_by_name::<()>("move-cursor", &[&MovementStep::Words, &count, &extend]);
+            glib::Propagation::Stop
+        }
+    ));
+    text.add_controller(keys);
 }
 
 #[cfg(test)]
@@ -218,5 +331,249 @@ mod tests {
     fn a_non_navigation_key_means_nothing_here() {
         assert_eq!(word_movement(Key::a, ModifierType::ALT_MASK), None);
         assert_eq!(word_movement(Key::Home, ModifierType::ALT_MASK), None);
+    }
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_tests {
+    use super::*;
+
+    /// Every `GtkEventController` currently attached to `w`, in `observe_controllers`
+    /// order.
+    ///
+    /// Returned as objects rather than counted so a test can identify the controller a
+    /// wiring call ADDED (set difference by object identity) instead of asserting on a
+    /// total — a count says a controller appeared, not that it is ours, and `GtkText`
+    /// arrives with controllers of its own.
+    fn controllers(w: &impl IsA<gtk::Widget>) -> Vec<gtk::EventController> {
+        let model = w.as_ref().observe_controllers();
+        (0..model.n_items())
+            .filter_map(|i| model.item(i))
+            .filter_map(|o| o.downcast::<gtk::EventController>().ok())
+            .collect()
+    }
+
+    /// The capture-phase key controller `wire_field_word_navigation` installs, found on
+    /// `field`'s delegate — the signature a production wiring site is checked by below.
+    ///
+    /// Phase is the discriminator because `GtkText` installs key controllers of its own
+    /// and none of them is capture-phase (asserted directly by
+    /// [`the_controller_lands_on_the_delegate_in_capture_phase`], which measures the
+    /// before-state rather than assuming it).
+    fn capture_key_controllers(field: &impl IsA<gtk::Editable>) -> usize {
+        let Some(text) = key_target(field) else {
+            return 0;
+        };
+        controllers(&text)
+            .into_iter()
+            .filter(|c| {
+                c.is::<gtk::EventControllerKey>()
+                    && c.propagation_phase() == gtk::PropagationPhase::Capture
+            })
+            .count()
+    }
+
+    #[gtktest::test]
+    fn a_wrapper_entrys_key_target_is_the_gtk_text_inside_it() {
+        for (what, field) in [
+            ("GtkEntry", gtk::Entry::new().upcast::<gtk::Widget>()),
+            ("GtkSearchEntry", gtk::SearchEntry::new().upcast()),
+        ] {
+            let editable = field
+                .clone()
+                .downcast::<gtk::Editable>()
+                .unwrap_or_else(|_| panic!("{what} is a GtkEditable"));
+            let target =
+                key_target(&editable).unwrap_or_else(|| panic!("{what} delegates to a GtkText"));
+            assert!(
+                target.is_ancestor(&field),
+                "{what}'s delegate must be the GtkText INSIDE it — a wiring aimed at the \
+                 wrapper would sit behind that child in the propagation chain"
+            );
+        }
+    }
+
+    #[gtktest::test]
+    fn a_bare_gtk_text_is_its_own_key_target() {
+        // `gtk_editable_get_delegate` returns NULL for GtkText itself, so the
+        // delegate lookup alone would report "unsupported" for the one widget that
+        // needs no delegation at all.
+        let text = gtk::Text::new();
+        assert_eq!(key_target(&text).as_ref(), Some(&text));
+    }
+
+    #[gtktest::test]
+    fn move_cursor_by_word_is_emittable_on_the_delegate() {
+        // The load-bearing fact of the whole field wiring: gtk4-rs binds no
+        // `emit_move_cursor` for GtkText (unlike `sourceview::View`, whose typed
+        // emitter `wire_word_navigation` uses), so this signal is reachable only by
+        // name — and by-name emission is checked at RUNTIME, not by the compiler. A
+        // wrong signal name or argument list is a panic in the reader's hands, so it
+        // is proved here rather than trusted.
+        let entry = gtk::Entry::new();
+        entry.set_text("alpha beta gamma");
+        let text = key_target(&entry).expect("GtkEntry delegates to a GtkText");
+
+        entry.set_position(-1);
+        assert_eq!(entry.position(), 16, "set_position(-1) parks at the end");
+
+        text.emit_by_name::<()>("move-cursor", &[&MovementStep::Words, &-1i32, &false]);
+        assert_eq!(
+            entry.position(),
+            11,
+            "Option+Left from the end must land on the start of `gamma`"
+        );
+
+        text.emit_by_name::<()>("move-cursor", &[&MovementStep::Words, &-1i32, &true]);
+        assert_eq!(
+            entry.selection_bounds(),
+            Some((6, 11)),
+            "Option+Shift+Left must EXTEND from where the caret was, not re-anchor"
+        );
+    }
+
+    #[gtktest::test]
+    fn the_controller_lands_on_the_delegate_in_capture_phase() {
+        let entry = gtk::Entry::new();
+        let text = key_target(&entry).expect("GtkEntry delegates to a GtkText");
+        let wrapper_before = controllers(&entry).len();
+        let text_before = controllers(&text);
+        assert_eq!(
+            capture_key_controllers(&entry),
+            0,
+            "GtkText's OWN key controllers must not be capture-phase, or the phase \
+             below is not a signature for ours"
+        );
+
+        wire_field_word_navigation(&entry);
+
+        assert_eq!(
+            controllers(&entry).len(),
+            wrapper_before,
+            "nothing may be attached to the wrapper — the events do not land there"
+        );
+        let added: Vec<_> = controllers(&text)
+            .into_iter()
+            .filter(|c| !text_before.contains(c))
+            .collect();
+        assert_eq!(
+            added.len(),
+            1,
+            "exactly one controller added, on the delegate"
+        );
+        assert!(added[0].is::<gtk::EventControllerKey>());
+        assert_eq!(
+            added[0].propagation_phase(),
+            gtk::PropagationPhase::Capture,
+            "capture, so the ordering against GtkText's own key controller is decided \
+             by the phase rather than by add_controller list order"
+        );
+    }
+
+    #[gtktest::test]
+    fn the_annotation_comment_entry_is_wired_at_construction() {
+        let entry = crate::widgets::comment_entry::CommentEntry::new("", |_| {}).entry;
+        assert_eq!(
+            capture_key_controllers(&entry),
+            1,
+            "CommentEntry::new must wire word navigation, like every other commit route \
+             it owns — a surface that gets it from its CALLER is a surface the next \
+             caller forgets"
+        );
+    }
+
+    #[gtktest::test]
+    fn the_find_and_replace_fields_are_wired_in_a_real_window() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.macwordnav.fields"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let window = crate::window::new_window(&app, "IT", "# Heading\n\nbody text", None);
+        let chrome = crate::winstate::chrome(&window).expect("chrome registered");
+
+        assert_eq!(
+            capture_key_controllers(&chrome.find_entry),
+            1,
+            "the find field must carry the wiring"
+        );
+
+        // The replace entry is not held in `WindowChrome` (only its row is), so it is
+        // reached the way the chrome holds it — the row's first GtkEntry child.
+        let replace_entry =
+            std::iter::successors(chrome.replace_row.first_child(), |w| w.next_sibling())
+                .find_map(|w| w.downcast::<gtk::Entry>().ok())
+                .expect("the replace row holds a GtkEntry");
+        assert_eq!(
+            capture_key_controllers(&replace_entry),
+            1,
+            "the replace field must carry the wiring"
+        );
+    }
+
+    /// The first `GtkEntry` anywhere under `root`, depth-first.
+    ///
+    /// A recursive walk rather than a child scan because the prompt form nests its
+    /// fields two levels down (form box → labelled row → entry), and the test has no
+    /// handle on the dialog's interior — `input_form` returns nothing and stores
+    /// nothing.
+    fn first_entry(root: &gtk::Widget) -> Option<gtk::Entry> {
+        if let Some(entry) = root.downcast_ref::<gtk::Entry>() {
+            return Some(entry.clone());
+        }
+        std::iter::successors(root.first_child(), |w| w.next_sibling())
+            .find_map(|c| first_entry(&c))
+    }
+
+    #[gtktest::test]
+    fn the_shared_prompt_forms_field_is_wired_when_the_form_opens() {
+        // The choke point that matters most: `input_form` builds the field for Go To
+        // Line AND all three Insert dialogs, so this one call site is four commands.
+        // Driven through the real action rather than by calling the builder, because
+        // the builder is private to `window` — and because what is being pinned is
+        // that the *production* path reaches the wiring.
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.macwordnav.prompt"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let window = crate::window::new_window(&app, "IT", "# Heading\n\nbody text", None);
+
+        // The action is gated on edit mode AND editor focus (`setup_editor_focus_gate`);
+        // both are someone else's contract and neither is what this test is about, so
+        // the gate is opened directly instead of being satisfied by driving focus.
+        const GO_TO_LINE: &str = "go-to-line";
+        crate::window::set_action_enabled(&window, GO_TO_LINE, true);
+        gtk::gio::prelude::ActionGroupExt::activate_action(&window, GO_TO_LINE, None);
+
+        let title = "Go To Line";
+        let toplevels = gtk::Window::toplevels();
+        let dialog = (0..toplevels.n_items())
+            .filter_map(|i| toplevels.item(i))
+            .filter_map(|o| o.downcast::<gtk::Window>().ok())
+            .find(|w| {
+                w.title().is_some_and(|t| t == title)
+                    && w.transient_for().as_ref() == Some(window.upcast_ref::<gtk::Window>())
+            })
+            .expect("win.go-to-line presents its prompt form");
+
+        let entry = first_entry(dialog.child().expect("the form has content").as_ref())
+            .expect("the prompt form holds a GtkEntry");
+        assert_eq!(
+            capture_key_controllers(&entry),
+            1,
+            "the shared prompt field must carry the wiring — this one site is Go To \
+             Line plus Insert Link/Image/Table"
+        );
+
+        // The suite shares one process across every body, and a live modal toplevel
+        // is process-global state: left open it stays in `gtk::Window::toplevels()`
+        // for every later body, and this test's own `find` would then be picking one
+        // of several. Destroy, not close — `close()` is a request the window may
+        // answer on a later main-loop turn, which is exactly the deferral this test
+        // must not leave behind.
+        dialog.destroy();
     }
 }

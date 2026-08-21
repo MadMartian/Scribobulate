@@ -503,15 +503,17 @@
 - **And given** the document is clean but its backing file has been **deleted** on disk (a genuine external deletion, not the app's own crash-safe self-rename), **then** the file monitor makes Save **enabled** while the "File deleted on disk — save to restore it" notice is shown, and activating Save re-creates the file with the buffer's content; once the file exists again (a successful save, a reload, or an external re-create) Save sensitivity returns to tracking the dirty flag. Pure predicate: `save_enabled(dirty, backing_missing) == dirty || backing_missing` (unit-tested in `winstate::decisions`).
 - **And** Save As remains available in every mode regardless of dirty state (it can write a copy of even a clean document to a new path)
 
-### 4.13 Option+Left/Right moves the caret by a word in the editor, on macOS
+### 4.13 Option+Left/Right moves the caret by a word in every text surface, on macOS
 <!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-20 in response to a reported defect: Option+Left/Right in the editor silently ran GtkSourceView's own `move-words` binding — a word-TRANSPOSITION edit, not navigation — instead of moving the caret, because macOS has no other claim on that key and, ON QUARTZ, GtkSourceView's own class binding wins over the app's Back/Forward accelerator (§23.6) declared on the same keystroke — an ordering measured to be REVERSED on Win32 and X11 (ScrAP-311), so this rubric is macOS-scoped by mechanism and not merely by convention. See accel.rs MAC_RESERVED and macwordnav.rs for the full mechanism, sourced to `gtksourceview.c:953`. -->
-- **Given** the editor pane has focus, on macOS
+- **Given** any of this application's text surfaces has focus, on macOS — the document editor, the find field, the replace field, the annotation comment entry, or the shared prompt field behind Go To Line and Insert Link/Image/Table
 - **When** the reader presses Option+Left or Option+Right
 - **Then** the caret moves one word back or forward, exactly as Ctrl+Left/Ctrl+Right already do on every platform (Linux/Windows convention) — Option is the macOS spelling of the same movement, not a second, different one
 - **And** the buffer's content and word order are completely unchanged — this is caret movement only, never the word-transposition edit `GtkSourceView` itself would otherwise perform on this key (that edit is what wins the key on Quartz with no interceptor; on Win32 and X11 the accelerator wins instead and this rubric has nothing to guard — ScrAP-311)
 - **And** Option+Shift+Left/Right extends the selection by a word instead of moving the caret, matching Ctrl+Shift+Left/Right
 - **And** this does **not** invoke Back/Forward (23.6) — on macOS that command no longer shares this key (Cmd+[ / Cmd+] instead), so the two can never race
 - **And** Ctrl+Left/Ctrl+Right keep working unchanged (GTK's own binding) — this adds a second spelling, it does not replace the first
+- **And** the surfaces that are not the document editor were never *destructive* on this key, they were **inert**: nothing outside the editor is a `GtkSourceView`, so no `move-words` binding exists there to run, and `GtkText` binds word movement to Ctrl+Left/Right only. Doing nothing at all is the milder face of the same gap between GTK's Ctrl-based bindings and the Option-based convention every native macOS text field honours, and the rule is one rule across all of them
+- **And** everything else those fields already answer for is untouched — Escape still closes the find bar, Enter still triggers a prompt form's default button, and a field's own Ctrl+Left/Right still moves by word
 
 ### 4.12 Save All writes every tab that needs saving
 - **Given** a window with several tabs, of which more than one is dirty (or clean over a deleted backing file)

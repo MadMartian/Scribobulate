@@ -12,7 +12,6 @@
 | R | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | S | macOS only: every `GtkFileChooserNative` invocation (Open, Save, Export) grows RSS by ~1 MB and does not give it back; no plateau over 20 cycles. NOT a native-dialog property — Windows uses a native panel too and plateaus | Medium |
 | T | Two File-menu mnemonics collide on `l` (`Save A_ll` vs `_Load Unsafe Linked Documents`), and the uniqueness test that exists to catch exactly this never sees eight of the table's entries | Low |
-| U | Option+Left/Right word navigation on macOS only reaches the main document editor; every other in-app text field is unchanged | Low |
 | V | The inline-tab pre-pass reaches two of the four parse sites, though its doc says "every parse site" — the outline and copy-as-Markdown parse the raw source | Low |
 
 ## A. Tables are selection islands
@@ -851,28 +850,6 @@ through a hand-maintained list rather than through a wrong assertion.
 **Not introduced by the export feature.** `_Export`, `_PDF` and `_HTML` are correct and
 do not collide with anything; they are simply three of the eight entries the guard never
 checks. Found while confirming the export items had mnemonics at all.
-
-## U. Option+Left/Right word navigation on macOS only reaches the main document editor
-
-**Severity**: Low (nothing else claims that key inside these fields, so it is a missing
-convenience, not a defect — Ctrl+Left/Right still works everywhere, matching every
-platform.)
-
-Fixed this cycle for the surface the report was about: the main editor's Option+Left/
-Right now moves the caret by a word (`src/macwordnav.rs`), pre-empting `GtkSourceView`'s
-own `move-words` class binding, which used to transpose the word at the cursor instead.
-
-**Every other in-app text field still lacks it.** The annotation comment entry, Go To
-Line, and the rename/URL dialogs are plain `GtkEntry`/`GtkText` widgets — GTK does not
-bind Option+Left/Right there either, and nothing in this app has wired the equivalent
-key controller onto them, so a Mac reader's Option+Left in one of those fields simply
-does nothing.
-
-**Mitigation options.** Generalize `macwordnav::word_movement` (already a pure,
-display-free decision, kept reusable for exactly this) into a small wiring helper for
-`GtkText`/`GtkEditable`, and attach it at each field's construction site — there is no
-single choke point today the way `build_tab_editor` is for the main editor, so it would
-need one call per surface (or a shared builder wrapper, if one gets introduced first).
 
 ## V. The inline-tab pre-pass reaches two of the four parse sites
 

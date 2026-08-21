@@ -102,6 +102,12 @@ pub(in crate::window) fn input_form(
             let entry = gtk::Entry::new();
             entry.set_text(initial);
             entry.set_hexpand(true);
+            // Option+Left/Right word navigation, on the field's internal GtkText.
+            // Sited here rather than at the three commands that call `input_form`
+            // (Go To Line, Insert Link/Image/Table) because this is the one place
+            // every prompt field is built — see `macwordnav`'s module doc comment.
+            #[cfg(target_os = "macos")]
+            crate::macwordnav::wire_field_word_navigation(&entry);
             // Enter triggers the default widget (Insert) from any field.
             entry.set_activates_default(true);
             row.append(&entry);

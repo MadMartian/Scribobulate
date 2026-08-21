@@ -10,7 +10,7 @@ Seven are C on purpose: each has to be runnable against an arbitrary installed
 GTK, by a seat that may not have this crate building, in order to compare two
 platforms' *toolkits* rather than two platforms' builds of us.
 
-The fifth is Rust, because its subject is the **gtk4-rs marshalling layer** and a
+The eighth is Rust, because its subject is the **gtk4-rs marshalling layer** and a
 C probe cannot prove anything about a Rust trampoline. It is a standalone crate
 with its own `[workspace]`, deliberately outside the application's, so that it is
 never built, linted or gated with the app — it asserts a property of the binding,
