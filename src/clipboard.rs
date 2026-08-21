@@ -281,8 +281,7 @@ mod gtk_integration_tests {
     use sourceview::prelude::*;
 
     fn editor(md: &str) -> (sourceview::Buffer, sourceview::View) {
-        let buf = sourceview::Buffer::new(None);
-        crate::lineendings::wire_paste_normalization(&buf);
+        let buf = crate::lineendings::new_editor_buffer();
         buf.set_language(
             sourceview::LanguageManager::default()
                 .language("markdown")

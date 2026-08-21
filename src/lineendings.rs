@@ -70,13 +70,22 @@
 //!    only a screenshot against an LF twin showed it.
 //! 2. **The clipboard**, for text arriving by paste, drag-and-drop or middle-click
 //!    PRIMARY. That is the route this defect was actually reported through, and it is
-//!    **NOT closed here** — the obvious mechanism for it (a `insert-text` hook) was
-//!    written, measured and rejected because it corrupts CRLF on a same-application
-//!    paste. See the note above `has_lone_cr`'s neighbours below, and ScrAP-312.
+//!    closed by the `insert-text` hook [`new_editor_buffer`] arms — but only because
+//!    [`crate::clipboard`] landed first and stopped publishing a `GtkTextBuffer`, so a
+//!    same-application paste arrives as one untagged emission. An earlier version of
+//!    that hook, wired while GTK's rich content was still being published, corrupted
+//!    CRLF on a same-application paste; ScrAP-312 records why.
 //!
 //! ScrAP-312 records the whole episode, including the version of this fix that repaired
 //! the buffer alone and passed every gate. Both halves of the disagreement were
 //! re-measured on X11 as well as Quartz, so nothing here is macOS-specific.
+//!
+//! # Arming and populating are ONE step, deliberately
+//!
+//! [`new_editor_buffer`] is the only route to an armed buffer: the arming function is
+//! private to this module, so no caller can create a buffer, populate it, and arm the
+//! repair afterwards. That ordering is not stylistic — the whole soundness argument for
+//! repairing during an **undo replay** rests on it, and ScrAP-316 records the decision.
 
 use gtk::prelude::*;
 use std::borrow::Cow;
@@ -145,24 +154,59 @@ pub(crate) fn normalize_lone_cr_bytes(mut bytes: Vec<u8>) -> Vec<u8> {
     bytes
 }
 
-// The clipboard-side half of this rule is DELIBERATELY ABSENT. A
-// `GtkTextBuffer::insert-text` hook that repaired the payload was written, measured and
-// REJECTED — it corrupts a CRLF document on a same-application paste, because
-// `insert_range_not_inside_self` chunks the copied region on tag toggles and a toggle
-// can fall between the `\r` and the `\n`, manufacturing a lone `\r` no buffer contains.
-// See ScrAP-312 for the measurements and `probes/` for the rigs. The remedy is to stop
-// publishing a `GtkTextBuffer` on the clipboard, which makes every paste arrive in a
-// fresh untagged buffer as a single emission; that is a behaviour change across three
-// platforms and is not taken here. Until it is, text pasted from outside carrying lone
-// CRs is repaired only if it is subsequently saved and reopened.
-//
-// If you are about to add that hook back, read ScrAP-312 first, and use
-// `TextBufferImpl::insert_text` rather than the signal: gtk4-rs's `connect_insert_text`
-// hands the closure a COPY of the caller's iterator and never writes it back, which
-// scrambles a multi-run paste outright.
+/// A fresh editor buffer with the no-lone-carriage-return repair already armed — the
+/// **only** route to one, and the only reason [`wire_paste_normalization`] below is
+/// private.
+///
+/// # Why creation and arming are one call
+///
+/// The repair is a `GtkTextBuffer::insert-text` hook, so it repairs what arrives
+/// *after* it is wired and can say nothing about what was already there. Split the two
+/// steps and the gap between them is a buffer that accepts a lone `\r` and keeps it —
+/// which is not merely a missed repair, because a second property rests on that
+/// buffer's contents:
+///
+/// **An undo replay re-enters this hook.** `gtk_text_buffer_history_insert` reaches the
+/// buffer through the **public** `gtk_text_buffer_insert`, so the repair fires while
+/// `GtkTextHistory` is replaying, and `GtkTextHistory` cannot notice — it sets
+/// `applying` across the whole replay and GTK's implementation ignores the
+/// `expected_text` its delete path is handed. So on a buffer that holds a lone `\r`,
+/// undo restores a `\n` where a `\r` was deleted and *nothing warns*: the history's own
+/// model still believes the original bytes went back. MEASURED on GTK 4.22.4 /
+/// GtkSourceView 5.20.0 and matching 4.6.9 byte for byte; `probes/undo-replay.c` is the
+/// rig.
+///
+/// **That divergence is unreachable, and this function is what makes it so** — not an
+/// ordering convention someone has to remember. No buffer this process builds can hold
+/// a lone `\r`: it is armed at birth here, and every route that fills it repairs
+/// independently anyway (`docio`'s three readers, and
+/// `window::actions::load_into_editor` for swap-recovery text that bypasses them). A
+/// replay therefore only ever re-inserts text with no lone `\r` in it, `has_lone_cr`
+/// answers `false`, and the hook returns before touching anything.
+///
+/// # The decision NOT to bracket the replay, and why it is not a free choice
+///
+/// The alternative is to suppress the repair across a replay — a `connect` plus
+/// `connect_after` pair on `undo`/`redo` straddles the default handler exactly — which
+/// restores the original bytes unconditionally. **Rejected deliberately** (ScrAP-316):
+/// it buys byte-exact undo of a sequence no buffer may legally contain, and pays for it
+/// by letting a lone `\r` back *in* through undo, where every derived surface collapses
+/// on it — the preview renders the document as one heading, the outline as one entry,
+/// and the export follows. The invariant is worth more than the bytes, and the bytes
+/// only differ in a state this function prevents. Neither remedy is free, so the choice
+/// is recorded rather than left to the next reader to re-derive.
+pub(crate) fn new_editor_buffer() -> sourceview::Buffer {
+    let buffer = sourceview::Buffer::new(None);
+    wire_paste_normalization(&buffer);
+    buffer
+}
 
 /// Install the clipboard-side half of the no-lone-carriage-return rule on a tab's
 /// editor buffer.
+///
+/// **Private on purpose** — reachable only through [`new_editor_buffer`], so no caller
+/// can arm a buffer that has already been populated. See that function for what rests
+/// on it.
 ///
 /// # This fix is a fence around the hole, not a filled-in hole — and the fence is marked
 ///
@@ -206,7 +250,7 @@ pub(crate) fn normalize_lone_cr_bytes(mut bytes: Vec<u8>) -> Vec<u8> {
 /// counting diagnostics — `set_text`, `insert_at_cursor`, `insert_interactive_at_cursor`,
 /// undo replay, and a real foreign plain-text paste — all **zero** criticals, all
 /// repairing the lone `\r` while leaving `\r\n` intact.
-pub(crate) fn wire_paste_normalization(buffer: &sourceview::Buffer) {
+fn wire_paste_normalization(buffer: &sourceview::Buffer) {
     let in_repair = std::cell::Cell::new(false);
     buffer.connect_insert_text(move |buf, iter, text| {
         // Our own re-insertion arriving back through the signal. The flag is STRUCTURAL,
@@ -316,5 +360,97 @@ mod tests {
     fn empty_text_is_handled() {
         assert!(!has_lone_cr(""));
         assert_eq!(normalize_lone_cr(""), "");
+    }
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+    use crate::saferizer::BufferText;
+
+    /// Load `md` as a baseline edit that is not itself undoable, exactly as
+    /// `window::actions::load_into_editor` does — otherwise the first undo of the test
+    /// pops the load instead of the edit under test.
+    fn baseline(buffer: &sourceview::Buffer, md: &str) {
+        buffer.set_enable_undo(true);
+        buffer.begin_irreversible_action();
+        buffer.set_text(md);
+        buffer.end_irreversible_action();
+    }
+
+    /// **A buffer from `new_editor_buffer` repairs the very first insertion.**
+    ///
+    /// The arming is what makes the undo-replay divergence below unreachable, and the
+    /// only thing that guarantees it happens before anything can populate the buffer is
+    /// that creation and arming are one call. Mutation-checked: drop the
+    /// `wire_paste_normalization` call from `new_editor_buffer` and this fails with the
+    /// lone `\r` intact.
+    #[gtktest::test]
+    fn a_fresh_editor_buffer_is_armed_before_anything_can_populate_it() {
+        let buffer = new_editor_buffer();
+
+        buffer.insert(&mut buffer.start_iter(), "one\rtwo\r\nthree");
+
+        assert_eq!(
+            BufferText::of(&buffer).as_str(),
+            "one\ntwo\r\nthree",
+            "the lone CR must be repaired and the CRLF left alone, with no load first"
+        );
+    }
+
+    /// **Undo restores the exact bytes a delete removed, on every reachable document.**
+    ///
+    /// `gtk_text_buffer_history_insert` replays through the PUBLIC
+    /// `gtk_text_buffer_insert`, so the repair hook fires during an undo — this is the
+    /// assertion that it is a no-op there. The deleted range deliberately spans a CRLF,
+    /// the one sequence a repair could damage while still being length-preserving.
+    #[gtktest::test]
+    fn an_undo_replay_restores_the_exact_bytes_a_delete_removed() {
+        const DOC: &str = "first\r\nsecond\r\nthird\n";
+        let buffer = new_editor_buffer();
+        baseline(&buffer, DOC);
+
+        let (mut start, mut end) = (buffer.iter_at_offset(3), buffer.iter_at_offset(10));
+        assert_eq!(
+            BufferText::of_range(&buffer, &start, &end).as_str(),
+            "st\r\nsec",
+            "precondition: the deleted range spans the CRLF, or this proves nothing"
+        );
+        buffer.delete(&mut start, &mut end);
+        buffer.undo();
+
+        assert_eq!(BufferText::of(&buffer).as_str(), DOC);
+    }
+
+    /// **If a buffer ever does hold a lone CR, undo REPAIRS it rather than restoring
+    /// it — the deliberate half of the trade (ScrAP-316).**
+    ///
+    /// Reaching this state needs the precondition `new_editor_buffer` exists to prevent:
+    /// a buffer populated before the repair is armed. The remedy not taken — bracketing
+    /// the replay with a `connect`/`connect_after` pair on `undo`/`redo` — would assert
+    /// `"a\rb"` here, restoring the original bytes and letting a lone `\r` back into a
+    /// buffer, where the preview collapses the whole document into one heading. This
+    /// asserts the choice that was made: the no-lone-CR invariant outranks byte-exact
+    /// undo of a sequence no buffer may legally hold.
+    #[gtktest::test]
+    fn an_undo_replay_repairs_a_lone_cr_rather_than_restoring_it() {
+        // Deliberately NOT `new_editor_buffer` — this is the precondition break.
+        let buffer = sourceview::Buffer::new(None);
+        baseline(&buffer, "a\rb");
+        wire_paste_normalization(&buffer);
+        assert!(
+            has_lone_cr(BufferText::of(&buffer).as_str()),
+            "precondition: the buffer really was populated before the repair was armed"
+        );
+
+        let (mut start, mut end) = (buffer.start_iter(), buffer.end_iter());
+        buffer.delete(&mut start, &mut end);
+        buffer.undo();
+
+        assert_eq!(
+            BufferText::of(&buffer).as_str(),
+            "a\nb",
+            "the repair fires during the replay, and the invariant wins over the bytes"
+        );
     }
 }

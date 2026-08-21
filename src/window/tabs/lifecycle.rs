@@ -129,7 +129,11 @@ pub(crate) fn wire_tab_buffer_signals(content_box: &gtk::Box, buffer: &sourcevie
 /// on every future editor-setup change (a copy-paste update to one site is
 /// easy to forget in the other).
 pub(crate) fn build_tab_editor(md: &str) -> (sourceview::Buffer, sourceview::View) {
-    let sv_buffer = sourceview::Buffer::new(None);
+    // Born with the clipboard-side half of the no-lone-carriage-return rule already
+    // armed (`crate::lineendings`). Creation and arming are one call because the gap
+    // between them is the exposure, not a style question — see `new_editor_buffer`'s
+    // rustdoc for what rests on no buffer in this process ever holding a lone `\r`.
+    let sv_buffer = crate::lineendings::new_editor_buffer();
     if let Some(lang) = sourceview::LanguageManager::default().language("markdown") {
         sv_buffer.set_language(Some(&lang));
     }
@@ -140,25 +144,9 @@ pub(crate) fn build_tab_editor(md: &str) -> (sourceview::Buffer, sourceview::Vie
     apply_editor_style_scheme(&sv_buffer, crate::palette::desktop_is_dark());
 
     // The file-side half of the no-lone-carriage-return rule is inside
-    // `load_into_editor` (`crate::lineendings`). There is deliberately NO clipboard-side
-    // half here: a `GtkTextBuffer::insert-text` hook was written for it and rejected on
-    // measurement, because it corrupts CRLF on a same-application paste (ScrAP-312).
-    //
-    // **If one is ever added back, it goes BEFORE the load, and that ordering is
-    // load-bearing rather than stylistic.** Arming the repair before anything populates
-    // the buffer is what would guarantee no buffer in this process holds a lone `\r`,
-    // and a second defect rests entirely on that guarantee: undo replay re-emits
-    // `insert-text` (`gtk_text_buffer_history_insert` calls the *public* insert), so a
-    // repair handler fires during replay and undo restores different bytes than were
-    // deleted — silently, because `GtkTextHistory` sets `applying` across the replay and
-    // ignores the `expected_text` it is handed. `probes/undo-replay.c` is the rig,
-    // measured on GTK 4.22.4 / GtkSourceView 5.20.0 and matching 4.6.9 byte for byte.
-    // The obligation outlives the mechanism, so it is recorded here rather than in the
-    // hook that no longer exists.
-    // Clipboard-side half of the no-lone-CR rule. Wired BEFORE the load, and that
-    // ordering is load-bearing rather than stylistic — see the note above.
-    crate::lineendings::wire_paste_normalization(&sv_buffer);
-
+    // `load_into_editor` (`crate::lineendings`); the clipboard-side half came with the
+    // buffer above. Nothing between the two lines may populate the buffer, and nothing
+    // can: the buffer arrives armed rather than being armed here.
     load_into_editor(&sv_buffer, md);
 
     let sv_view = sourceview::View::with_buffer(&sv_buffer);

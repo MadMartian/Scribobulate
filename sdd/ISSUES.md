@@ -8,13 +8,12 @@
 | G | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
 | N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
-| Q | A wall-clock growth-ratio guard on tab normalisation fails on a loaded machine — the ratio is scheduler noise on a 5 ms baseline, not an exponent | Low |
+| Q | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | R | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | S | macOS only: every `GtkFileChooserNative` invocation (Open, Save, Export) grows RSS by ~1 MB and does not give it back; no plateau over 20 cycles. NOT a native-dialog property — Windows uses a native panel too and plateaus | Medium |
 | T | Two File-menu mnemonics collide on `l` (`Save A_ll` vs `_Load Unsafe Linked Documents`), and the uniqueness test that exists to catch exactly this never sees eight of the table's entries | Low |
 | U | Option+Left/Right word navigation on macOS only reaches the main document editor; every other in-app text field is unchanged | Low |
 | V | The inline-tab pre-pass reaches two of the four parse sites, though its doc says "every parse site" — the outline and copy-as-Markdown parse the raw source | Low |
-| X | Undo replay fires a buffer-repair hook, so undo can restore different bytes than were deleted — and the two available remedies contradict each other | Low |
 
 ## A. Tables are selection islands
 
@@ -610,6 +609,17 @@ is the only variant that is not a timing test at all and is the one worth pricin
 **Workaround**: re-run. A ratio between 8 and roughly 10 on an otherwise-green suite is
 this issue; a genuine return of the quadratic walk reads ~16x and does not come and go.
 
+**The sibling guard has now been measured failing too, and it is already best-of-N**
+(2026-08-21, reference host, `cargo test` step 4 of a routine pipeline run):
+`annotate::scan::tests::extraction_over_adversarial_input_grows_linearly_not_quadratically`
+went red once and passed on an immediate isolated re-run of the same binary. That matters
+for the choice above, because it is evidence *against* the cheapest candidate — the
+annotation guard takes the best of N repetitions per sample and a preemption still moved
+the ratio across the threshold, so best-of-N narrows the window rather than closing it.
+The remaining two candidates (raise the baseline, or count a proxy for work done) are
+unaffected by this measurement, and counting work done is still the only one that stops
+being a timing test.
+
 ---
 
 ## R. macOS: the preview's hover cursor sometimes does not take over body text or a link
@@ -902,38 +912,3 @@ the preview is what would settle it either way.
 the doc comment to say which sites it actually covers and why the others are exempt. The
 second is not a cop-out if the exemption is real: a comment that overstates its reach is
 what made this look settled for as long as it did.
-
-## X. Undo replay fires a buffer-repair hook, and both remedies cost something
-
-**Severity**: Low **while the precondition below holds** — it is not reachable today. It is
-logged rather than fixed because the choice between the two remedies is a real trade with
-no free option, and it must be made deliberately at the moment a repair hook exists, not
-fallen into.
-
-`gtk_text_buffer_history_insert` reaches the buffer through the **public**
-`gtk_text_buffer_insert`, so any handler that repairs inserted text fires during an undo
-replay and can put back something other than what was deleted. `GtkTextHistory` cannot
-notice: it sets `applying` for the whole replay and suppresses its own bookkeeping, and
-the `expected_text` its delete path is handed is ignored by GTK's implementation. The
-divergence is therefore silent — nothing warns, and the history's model still believes the
-original bytes were restored. Measured on GTK 4.22.4 / GtkSourceView 5.20.0 and matching
-4.6.9 byte for byte; `probes/undo-replay.c` is the rig.
-
-**Why it is not reachable today.** No buffer in this process ever holds a lone `\r`, so an
-undo has none to restore. That rests entirely on the ingress repairs running before
-anything populates a buffer — see the ordering note in `window::tabs::lifecycle`'s
-`build_tab_editor`. **The precondition breaks** if a buffer is ever filled before the
-repair is armed, which includes any future session-restore, template-insertion or
-duplicate-tab path, and is one line of reordering away.
-
-**The choice, when a repair hook exists.** Bracket the replay — a `connect` plus
-`connect_after` pair on `undo`/`redo`, which straddles the default handler exactly — and
-the original bytes are restored, which means a lone `\r` can re-enter a buffer and the
-no-lone-CR invariant no longer holds. Do not bracket, and undo silently restores something
-other than what it undid. A legacy document that legitimately contains a lone `\r` forces
-the choice; there is no option that costs nothing.
-
-**Not an invariant, despite appearances**: a repair that preserves character count is *not*
-required for undo to work. An early probe appeared to show it was; the control with no hook
-at all reproduced the same behaviour, which is `GtkTextHistory`'s action coalescing merging
-adjacent inserts when the text contains no newline. Do not add that constraint.
