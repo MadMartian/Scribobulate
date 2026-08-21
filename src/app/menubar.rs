@@ -493,17 +493,9 @@ fn build_file_menu() -> Menu {
     file_menu
 }
 
-/// Build one window's menubar model and wrap it in a `GtkPopoverMenuBar`. Called
-/// once per window by `window::build_chrome`. `win.*` items resolve against the
-/// window's OWN action muxer once the bar is packed into that window's widget
-/// tree (the bar walks up to the window — researcher-confirmed against
-/// gtkpopovermenubar.c), so no explicit action-group insertion is needed and
-/// action state stays per-window. Keyboard accelerators are still app-wide
-/// (`setup_app`'s `set_accels_for_action`) and independent of this model.
-///
-/// `GtkPopoverMenuBar` silently ignores `g_menu_item_set_icon()` — see
-/// GTK4Rs/AP-11; icons are not set here.
-pub(crate) fn build_menubar() -> BuiltMenubar {
+/// Help menu — Keyboard Shortcuts, Markdown Reference, and About in its own
+/// trailing section.
+fn build_help_menu() -> Menu {
     let help_menu = Menu::new();
     // Keyboard Shortcuts opens the GtkShortcutsWindow via the per-window
     // win.show-help-overlay action that `set_help_overlay` installs (TDD 16.1).
@@ -520,19 +512,65 @@ pub(crate) fn build_menubar() -> BuiltMenubar {
     let about_section = Menu::new();
     about_section.append(Some(&mnem("About")), Some("app.about"));
     help_menu.append_section(None, &about_section);
+    help_menu
+}
 
-    let file_menu = build_file_menu();
-    let edit_menu = build_edit_menu();
+/// The bar's top-level menus, plus the two submenu handles whose CONTENT is
+/// mutated at runtime.
+pub(crate) struct TopLevelMenus {
+    /// Each top-level menu paired with its `_`-marked bar title, in bar order.
+    /// Titles carry the Alt+&lt;letter&gt; mnemonics directly (Alt+F/E/R/V/H).
+    pub menus: Vec<(&'static str, Menu)>,
+    pub documents_menu: Menu,
+    pub format_insert_menu: Menu,
+}
+
+/// Build the top-level menus. This is the SINGLE enumeration of the menubar's
+/// structure: [`build_menubar`] assembles the shipped model from it, and the
+/// mnemonics guards in [`super::mnemonics`] derive their per-popover access-key
+/// namespaces from it. Deriving matters — the guard used to compare a
+/// hand-maintained mirror of these menus, which silently stopped matching and
+/// left eight live entries (one of them half of a real access-key collision)
+/// checked by nothing.
+///
+/// Pure `gio::Menu` models, no widgets, so a caller can build them headlessly.
+pub(crate) fn build_top_level_menus() -> TopLevelMenus {
     let (view_menu, documents_menu) = build_view_menu();
     let (format_menu, format_insert_menu) = build_format_menu();
+    TopLevelMenus {
+        menus: vec![
+            ("_File", build_file_menu()),
+            ("_Edit", build_edit_menu()),
+            ("Fo_rmat", format_menu),
+            ("_View", view_menu),
+            ("_Help", build_help_menu()),
+        ],
+        documents_menu,
+        format_insert_menu,
+    }
+}
+
+/// Build one window's menubar model and wrap it in a `GtkPopoverMenuBar`. Called
+/// once per window by `window::build_chrome`. `win.*` items resolve against the
+/// window's OWN action muxer once the bar is packed into that window's widget
+/// tree (the bar walks up to the window — researcher-confirmed against
+/// gtkpopovermenubar.c), so no explicit action-group insertion is needed and
+/// action state stays per-window. Keyboard accelerators are still app-wide
+/// (`setup_app`'s `set_accels_for_action`) and independent of this model.
+///
+/// `GtkPopoverMenuBar` silently ignores `g_menu_item_set_icon()` — see
+/// GTK4Rs/AP-11; icons are not set here.
+pub(crate) fn build_menubar() -> BuiltMenubar {
+    let TopLevelMenus {
+        menus,
+        documents_menu,
+        format_insert_menu,
+    } = build_top_level_menus();
 
     let menubar = Menu::new();
-    // Top-level bar titles carry the Alt+<letter> mnemonics directly (Alt+F/E/R/V/H).
-    menubar.append_submenu(Some("_File"), &file_menu);
-    menubar.append_submenu(Some("_Edit"), &edit_menu);
-    menubar.append_submenu(Some("Fo_rmat"), &format_menu);
-    menubar.append_submenu(Some("_View"), &view_menu);
-    menubar.append_submenu(Some("_Help"), &help_menu);
+    for (title, menu) in &menus {
+        menubar.append_submenu(Some(title), menu);
+    }
 
     // macOS renders this model in the SYSTEM menu bar instead
     // (`platform::mac::menubar::track_active_window`), so no in-window bar is
@@ -548,64 +586,5 @@ pub(crate) fn build_menubar() -> BuiltMenubar {
         model: menubar,
         documents_menu,
         format_insert_menu,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Recursively collect every SUBMENU title (the label on an item that carries a
-    /// `submenu` link) from a built menu model, descending through sections.
-    fn collect_submenu_titles(model: &gtk::gio::MenuModel, out: &mut Vec<String>) {
-        for i in 0..model.n_items() {
-            if let Some(sub) = model.item_link(i, "submenu") {
-                if let Some(label) = model
-                    .item_attribute_value(i, "label", None)
-                    .and_then(|v| v.str().map(str::to_string))
-                {
-                    out.push(label);
-                }
-                collect_submenu_titles(&sub, out);
-            }
-            if let Some(sec) = model.item_link(i, "section") {
-                collect_submenu_titles(&sec, out);
-            }
-        }
-    }
-
-    /// QA M-3: exercise the REAL menu-model builders (not the hardcoded mirror in
-    /// `mnemonics.rs`, which reserved `H` for Heading yet never checked the runtime
-    /// bound it), so a submenu title that forgets `mnem()` can no longer pass
-    /// silently — `Format ▸ Heading` did exactly that (it shipped the bare
-    /// "Heading"). These builders are pure `gio::Menu` models (no widgets), so the
-    /// test runs headlessly.
-    #[test]
-    fn every_runtime_submenu_title_carries_a_mnemonic() {
-        let (format_menu, _) = build_format_menu();
-        let (view_menu, _) = build_view_menu();
-        let mut titles = Vec::new();
-        for model in [
-            build_file_menu().upcast::<gtk::gio::MenuModel>(),
-            build_edit_menu().upcast(),
-            format_menu.upcast(),
-            view_menu.upcast(),
-        ] {
-            collect_submenu_titles(&model, &mut titles);
-        }
-        assert!(!titles.is_empty(), "expected at least one nested submenu");
-        // Every runtime submenu title must carry a GTK mnemonic marker ('_').
-        for title in &titles {
-            assert!(
-                title.contains('_'),
-                "runtime submenu title {title:?} has no mnemonic marker — missing mnem()?"
-            );
-        }
-        // And specifically the title that regressed must use mnem("Heading").
-        assert!(
-            titles.contains(&mnem("Heading")),
-            "Format ▸ Heading must use mnem(\"Heading\") = {:?}; got {titles:?}",
-            mnem("Heading")
-        );
     }
 }
