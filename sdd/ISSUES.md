@@ -1,16 +1,30 @@
 # Known Issues
 
-| ID | Issue | Severity |
-|----|-------|----------|
-| A | Tables are selection islands; cells are individually selectable but not part of the continuous buffer | Closed |
-| D | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
-| E | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
-| G | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
-| N | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
-| O | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
-| Q | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
-| R | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
-| S | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
+**`Platform`** is one of **`Windows`** · **`Mac`** · **`Linux`** · **`Any`** — the platforms an
+entry is known to affect, not where it was found. `Any` means reproduced on, or inherent to,
+every platform; a named one means the others were checked and do not exhibit it. Before
+narrowing an entry to a single platform, have that platform's peer seat fail to reproduce it
+(POLICY § Verifying a change on macOS) — behaviour found on one platform is not
+platform-specific until someone else looks.
+
+**`Scope`** is one of **`Test`** · **`Production`** · **`Project`** · **`Upstream`**.
+`Test` affects only the suite or the pipeline; `Production` affects what a user runs;
+`Project` is both. **`Upstream` means the defect is in a third-party library and we cannot
+FIX it** — a workaround may exist, but the repair is not ours to make, so an `Upstream`
+entry is not work waiting to be scheduled here. It is orthogonal to severity: an `Upstream`
+entry can still be the worst thing in the register.
+
+| ID | Platform | Scope | Issue | Severity |
+|----|----------|-------|-------|----------|
+| A | Any | Upstream | Tables are selection islands; cells are individually selectable but not part of the continuous buffer | Closed |
+| D | Any | Production | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
+| E | Linux | Production | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
+| G | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
+| N | Any | Production | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
+| O | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
+| Q | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
+| R | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
+| S | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 
 ## A. Tables are selection islands
 
