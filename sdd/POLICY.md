@@ -157,7 +157,7 @@ Before any change is considered valid, run these steps in order:
    run `--list-scan` / `-ListScan` on both platforms and diff the output. A claim of
    parity that nothing checks is worse than no claim, because the next author trusts
    it. It enforces
-   eight rules mechanically — three over citations into the SDD registers, two over
+   nine rules mechanically — three over citations into the SDD registers, two over
    the test architecture, both of whose failure modes are silent (that
    `src/gtk_suite.rs`'s duplicated module list has not drifted from `src/lib.rs`'s — a
    module missing there drops every test body inside it from the main-thread run, with
@@ -191,6 +191,16 @@ Before any change is considered valid, run these steps in order:
    held by both registers, cite `ScrAP-N`; this one is always resolvable. ScrAP-231
    records what the previous, laxer version of this rule cost. Checks 4, 5, 6, 7 and 8
    were each mutation-tested when written.
+   The ninth is over **tracked PATH LEGALITY**: `< > : " | ? *` and a trailing dot or
+   space are illegal in a Win32 filename, so **one such path makes `git checkout` refuse
+   the entire tree** — not that file, the whole tree — blocking every Windows clone and
+   anyone bisecting through the commit. MEASURED: an unquoted `sed -i 's|a|b|'` had its
+   `|` eaten by the shell, wrote the replacement half to disk as a filename, and
+   `git add -A` committed it; fmt, clippy, the whole suite and the other eleven checks
+   all passed, and only the Windows seat could see it, one fetch later, by being blocked.
+   **Its input set is `git ls-files`, deliberately NOT `lint-references.scan`** — the
+   offending path landed in the repository root, outside the curated scan, and a check
+   whose input is narrower than its hazard is ScrAP-132's species.
    The three citation rules: no `sdd/ISSUES.md` entry may be cited from outside that
    file (SDD principle 6 — issue IDs are ephemeral, so every such pointer dangles
    when the fix lands, and *lies quietly* if IDs are ever compacted); every
@@ -1026,7 +1036,12 @@ finally run, the suite was carrying three latent criticals while reporting `ok` 
 worst of them a `change_action_state` on a **stateless** action, silently no-opping a
 guard's setup so it walked a smaller tree than it claimed to, inside the very test that
 cites ScrAP-209 for that species. **Do not prescribe a flag without wiring it to a
-runner.** Windows does not carry it yet and must confirm its own suite first.
+runner.** Windows carries it too, having confirmed its own suite clean **and mutation-tested the
+gate** — reverting one of the three fixes above makes the suite pass with the flag off and
+die with it on, which is the only evidence that distinguishes an armed gate from a quiet
+one. Note the **death code differs by platform**: a promoted critical is `SIGTRAP` (exit
+133) on Linux and `0xC0000409 STATUS_STACK_BUFFER_OVERRUN` under MSVC, where the harness
+reports only "test exited abnormally".
 
 **macOS CANNOT carry it, and this is settled rather than pending.** Its suite emits
 `gdk_surface_thaw_updates: assertion 'surface->update_freeze_count > 0' failed` — nine

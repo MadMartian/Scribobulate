@@ -1383,4 +1383,77 @@ fi
 [ "$bad11" = 1 ] && fail=1
 [ "$bad11" = 0 ] && [ -z "$big11" ] && [ "$reg_bytes" -le "$REG_WARN" ] && echo "  PASS"
 
+# ── Check 12 ───────────────────────────────────────────────────────────────────
+# Paths that Windows cannot check out. `< > : " | ? *` and a trailing dot or space
+# are illegal in a Win32 filename, so a single such path makes `git checkout` refuse
+# the WHOLE tree -- "error: invalid path", nothing applied. Every Windows clone, and
+# any Windows user landing on or bisecting through the commit, is blocked.
+#
+# MEASURED, and it is why this check exists rather than being a theoretical nicety:
+# an unquoted `sed -i 's|a|b|'` had its `|` eaten by the shell, wrote the replacement
+# half to disk AS A FILENAME, and `git add -A` committed it. Nothing on Linux or macOS
+# noticed -- not fmt, not clippy, not the suite, not the other ten checks here. Only
+# the Windows seat could see it, one fetch later, and only by being blocked.
+#
+# INPUT SET IS `git ls-files`, DELIBERATELY -- not `lint-references.scan`. The scan is a
+# curated list and this file landed in the repo ROOT, outside it; a check whose input
+# set is narrower than the hazard is the failure this register calls ScrAP-132.
+#
+# THREE CLASSES, not one. Beyond the illegal characters, Windows also refuses RESERVED
+# DEVICE NAMES (`CON` `PRN` `AUX` `NUL` `COM1`-`9` `LPT1`-`9`, with or without an
+# extension, case-insensitive, in ANY path component) and control characters 1-31.
+# Same blast radius: `git checkout` refuses the whole tree.
+#
+# PLANTING A TEST CASE IS PLATFORM-SPECIFIC, and the platform this check defends is the
+# one that fights hardest against arming it. On Linux/macOS: `touch 'bad|name.txt' &&
+# git add`. On Windows the working-tree file cannot be created at all, and even
+# `git update-index --add --cacheinfo` refuses it -- the plant needs the guard off:
+#   git -c core.protectNTFS=false update-index --add --cacheinfo "100644,<sha>,bad|name.txt"
+#   git -c core.protectNTFS=false update-index --force-remove "bad|name.txt"
+# Recorded so the PowerShell half is testable rather than taken on trust from a Linux run.
+#
+# REMOVE PLANTS BY EXPLICIT NAME. Do not pipe this check's own output into a
+# `git rm --cached` loop: a planted path containing a TAB is re-split by `read`, the loop
+# then hands git a pathspec nobody intended, and it staged the deletion of 341 tracked
+# files here before `git checkout -- .` put them back. The cleanup for a check about
+# dangerous filenames must not itself be filename-driven.
+#
+# `-z` AND A NUL-BOUNDARY READ, both halves required. The first justification written here
+# was wrong twice and is corrected in place, because a wrong reason in a comment is the
+# failure this file exists to record: it is NOT `core.quotePath` (that governs high-bit
+# bytes; control characters and `"` are C-quoted unconditionally), and quoting would not
+# have HIDDEN the class either, since the quoted rendering is wrapped in `"` which is itself
+# in the illegal set — it was caught by accident. The defensible reasons are that `-z` makes
+# the catch PRINCIPLED rather than incidental (against a quoted enumeration the
+# `[\x01-\x1f]` clause can essentially never fire, so it is dead code there) and that it
+# reports the TRUE path rather than an escaped rendering.
+#
+# ⛔ AND DO NOT PIPE `-z` THROUGH `tr '\0' '\n'`. That destroys exactly what `-z` preserves:
+# a path containing a newline is torn into two fragments indistinguishable from two ordinary
+# paths, each of which matches nothing, so the gate silently MISSES a path the older
+# enumeration caught. MEASURED. Read on the NUL boundary and test each path whole.
+echo "── Check 12: paths Windows cannot check out ──"
+bad12=""
+while IFS= read -r -d '' p12; do
+    # The NEWLINE case cannot go through grep AT ALL: grep is line-oriented, so a `\n`
+    # inside a path is a SEPARATOR and never content -- the same tearing as `tr`, one
+    # stage further along, and it silently costs the `[\x01-\x1f]` clause its most
+    # likely member. Test it in the shell; grep handles the rest (other control
+    # characters survive intact within a line).
+    if [[ "$p12" == *$'\n'* ]] || printf '%s' "$p12" \
+        | grep -qP '[<>:"|?*]|[\x01-\x1f]|[. ]$|(^|/)(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^/]*)?$'
+    then
+        bad12="${bad12}$(printf '%q' "$p12")
+"
+    fi
+done < <(git -C . ls-files -z)
+bad12=${bad12%$'\n'}
+if [ -n "$bad12" ]; then
+    echo "  FAIL — tracked path(s) illegal on Win32 (git checkout refuses the whole tree):"
+    printf '%s\n' "$bad12" | sed 's/^/    /'
+    fail=1
+else
+    echo "  PASS"
+fi
+
 exit $fail

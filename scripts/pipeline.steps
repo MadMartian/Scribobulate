@@ -55,9 +55,35 @@
 #   verdict   <id>   exit | marker:<text>  how the step is judged
 #   class     <id>   required | informational | review
 #   cmd.<plat> <id>  <command line>        how THIS platform satisfies the intent
+#                                          MAY carry leading `NAME=VALUE ` env prefixes;
+#                                          see ENV PREFIXES below — every port must
+#                                          implement them, none may ignore them
 #   na.<plat> <id>   permanent|tooling <reason>
 #   carveout.<plat> <id>  <test name>      by-name test exclusions, may be absent
 #   setup     <plat> <description>         per-platform setup PHASE, not a step
+#
+# ENV PREFIXES ARE PART OF THE GRAMMAR, AND A PORT MUST IMPLEMENT THEM DELIBERATELY.
+# A `cmd.<plat>` line may begin with one or more `NAME=VALUE ` pairs, applied to that
+# command only. `scripts/pipeline.sh` gets this free from `eval "$cmd"`. NOTHING ELSE
+# DOES: `packaging/windows/pipeline.ps1` dispatches through `cmd /c`, which has no such
+# syntax and reads `G_DEBUG=fatal-criticals` as a program name — so the first line to
+# use a prefix failed there with "'G_DEBUG' is not recognized", and the step whose whole
+# purpose is to turn a Gtk-CRITICAL into a hard failure instead produced a hard failure
+# no critical caused. A gate that cannot RUN is worse than one that is absent, because
+# its red reads as a verdict.
+#
+# A port must strip the prefixes, apply them for the child, and RESTORE afterwards
+# (including back to unset) so a step cannot leak an environment into later steps. Parse
+# strictly — unquoted, space-free values, which is all this contract uses — and let
+# anything else fall through and fail loudly rather than silently running a different
+# command than the contract states.
+#
+# WHY THIS WENT UNCAUGHT, which is the more useful half: `--list-steps`/`-ListSteps`,
+# `--self-test`/`-SelfTest` and the contract-mutation cases were ALL green, because not
+# one of them EXECUTES a step. The self-tests validate the DERIVATION and never the
+# EXECUTION, so both ports could be incapable of running a command and every check would
+# still pass. Adding a grammar feature therefore obliges you to run it on every port,
+# because nothing here will tell you it is unimplemented.
 #
 # SETUP IS A PHASE, NOT A STEP. Windows needs four environment variables before ANY step:
 # PATH must carry the GTK bin for the runtime (a built binary will not start without it),
@@ -222,7 +248,7 @@ cmd.windows skipreport  cargo test -- --nocapture
 # (ScrAP-166), on Windows, which is where a wedging GTK suite is most likely. It is
 # scoped to the platform whose failure mode it serves rather than slowing the other two.
 #
-# LINUX CARRIES `G_DEBUG=fatal-criticals`; THE OTHER TWO DO NOT YET. POLICY § Logging has
+# LINUX AND WINDOWS CARRY `G_DEBUG=fatal-criticals`; macOS CANNOT. POLICY § Logging has
 # always prescribed this flag for the test binary, so that a `Gtk-CRITICAL` becomes a hard
 # failure instead of a silent log line — and until 2026-08-21 NOTHING IN THE TOOLCHAIN SET
 # IT. A prescribed gate that is never armed cannot fail, and this one had not: the suite was
@@ -231,10 +257,18 @@ cmd.windows skipreport  cargo test -- --nocapture
 # `change_action_state` on a STATELESS action, which was silently no-opping a guard's setup
 # so it walked a smaller tree than it claimed to — ScrAP-209's own species, inside the test
 # that cites it). All three are fixed and both Linux harnesses are clean under the flag.
-# It is scoped to Linux because Linux is the canonical gate and because only Linux has been
-# verified under it; macOS and Windows must each confirm their own suite is clean before
-# their line gains it, since a platform-specific critical would turn a real gate into a
-# blocked pipeline on a platform nobody could green.
+# Windows confirmed its own suite clean under the flag and MUTATION-TESTED the gate rather
+# than merely observing quiet: reverting one of the three fixes above makes the suite pass
+# with the flag off and die with it on. macOS CANNOT carry it — an upstream GDK assertion
+# fires on every popover open, with no application-side fix because the freeze/thaw calls
+# are private and unbound, and masking that domain would also silence a latent defect in the
+# same file at the version macOS ships (ScrAP-318).
+#
+# THE DEATH CODE DIFFERS BY PLATFORM AND A FAILURE IS EASY TO MISREAD. A promoted critical
+# kills the process via `G_BREAKPOINT()`, which is `SIGTRAP` (exit 133) on Linux and
+# `0xC0000409 STATUS_STACK_BUFFER_OVERRUN` — Windows' fast-fail — under MSVC, where the
+# harness reports only "test exited abnormally". Anyone matching on `SIGTRAP` will misread a
+# Windows failure as something else entirely (ScrAP-268 records the Linux half).
 # ---------------------------------------------------------------------------
 step   5  integration
 intent integration  The GTK integration suite passes against a real display, through Cargo so the [env] pins apply
@@ -242,7 +276,7 @@ verdict integration  exit
 class  integration  required
 cmd.linux   integration  G_DEBUG=fatal-criticals xvfb-run -a cargo test --features gtk-integration-tests
 cmd.macos   integration  cargo test --features gtk-integration-tests --test gtk_suite --test icon_resolution --test macos_dark_mode --test popover_deferred_focus
-cmd.windows integration  cargo test --features gtk-integration-tests -- --test-threads=1
+cmd.windows integration  G_DEBUG=fatal-criticals cargo test --features gtk-integration-tests -- --test-threads=1
 
 # ---------------------------------------------------------------------------
 # Step 6 — coverage ratchet
@@ -256,7 +290,7 @@ verdict coverage  exit
 class  coverage  required
 cmd.linux   coverage  scripts/coverage.sh
 na.macos    coverage  permanent  src/platform/mac/*.rs compiles only here and is mostly GTK/CoreFoundation glue with no headless test, so it drags the scoped total below a Linux-calibrated floor. The floor's job is to gate Linux, where these files do not exist at all.
-na.windows  coverage  permanent  Unix-only code (atomic_io.rs and its tests) is not compiled here, shifting both numerator and denominator, so a Windows figure can legitimately fall below the Linux floor with no regression. Never lower the Linux floor to make a Windows run pass.
+na.windows  coverage  permanent  Some unix-only code and tests (parts of atomic_io.rs, gated #[cfg(unix)] within a file that IS otherwise compiled here) are not built here, shifting both numerator and denominator, so a Windows figure can legitimately fall below the Linux floor with no regression. Never lower the Linux floor to make a Windows run pass.
 
 # ---------------------------------------------------------------------------
 # Step 7 — UI-behaviour coverage alignment
