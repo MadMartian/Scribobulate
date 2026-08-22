@@ -130,6 +130,10 @@ pub(crate) use registry::{
 };
 pub(crate) use scrollsync::{ScrollDriver, ScrollSync};
 pub(crate) use selfdelete::SelfDeleteGuard;
+/// Test-only at this level: the production caller matches on the value inline and never
+/// names the type, so an ungated re-export is an unused import under `-D warnings`.
+#[cfg(test)]
+pub(crate) use selfdelete::SwallowReason;
 pub(crate) use status::{StatusCtx, StatusStack, ERROR_NOTICE_TIME};
 pub(crate) use swap::{next_delay_ms, SwapState, MAX_LATENCY_MS};
 pub(crate) use tab::{TabInit, TabState};

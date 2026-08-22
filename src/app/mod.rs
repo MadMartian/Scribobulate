@@ -19,9 +19,10 @@ pub(crate) use commands::{
     FORMAT_CMDS, INLINE_ACCEL_CMDS, TBTN_SECTION_IDS, VIEW_CMDS, WELCOME,
 };
 pub(crate) use menubar::{
-    build_menubar, build_reading_theme_toolbar_menu, update_format_menu_labels,
+    build_menubar, build_reading_theme_toolbar_menu, defer_live_menu_mutation,
+    update_format_menu_labels,
 };
-pub(crate) use mnemonics::{access_markup, access_shortcut, mnem};
+pub(crate) use mnemonics::{access_markup, access_shortcut, escape_mnemonic, mnem};
 pub(crate) use open::{
     attach_file_backing, dialog_dir_for, find_open_tab_for_path, focus_tab, remember_dialog_dir,
     LAST_DIALOG_DIR,

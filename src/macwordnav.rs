@@ -1,5 +1,15 @@
 //! Option+Left / Option+Right word navigation in the editor, on macOS only.
 //!
+//! **The module compiles everywhere; only the WIRING is `cfg`-gated.** [`word_movement`]
+//! is a pure function over a keyval and a modifier mask — there is nothing
+//! platform-bound about deciding what Option+Left MEANS, and a `#[cfg]` on the module
+//! declaration deleted its nine tests from every platform but the target. Not skipped,
+//! not reported, not counted: `cargo test --lib -- --list` found zero cases here on the
+//! platform POLICY names as canonical, so the decision that carries the whole feature
+//! was unverified by the only gate that runs (ScrAP-212, which
+//! `scripts/pipeline.steps` states as a rule about tests and which this module was
+//! breaking through its module declaration instead).
+//!
 //! **The bug this fixes, and its real mechanism.** `GtkSourceView` — not base
 //! `GtkTextView` — carries its own extra class keybinding on top of the ones
 //! `crate::keynav::document_movement` mirrors: a `move-words` signal, **"default
@@ -55,7 +65,7 @@
 //! `sourceview::View`.
 //!
 //! [`wire_field_word_navigation`] covers the in-app text fields — the shared prompt
-//! form behind Go To Line and Insert Link/Image/Table (`window::editbar::dialog`), the
+//! form behind Go To Line, Rename and Insert Link/Image/Table (`window::editbar::dialog`), the
 //! annotation comment entry (`widgets::comment_entry`), and the find and replace
 //! fields (`window::chrome`). Those are plain `GtkEditable` wrappers with **no**
 //! `move-words` binding, so they never rearranged anything — an earlier revision of
@@ -80,8 +90,14 @@
 //! needed here: this view has no such descendant, and bubble already outruns the
 //! view's own binding set.
 use gtk::gdk::{Key, ModifierType};
+// The wiring's imports, gated with the wiring itself: on a platform that compiles only
+// the decision, an ungated `use` here is an unused import and the `-D warnings` gate is
+// a build failure. `prelude` is a glob and needs no gate.
+#[cfg(target_os = "macos")]
 use gtk::glib;
+#[cfg(target_os = "macos")]
 use gtk::prelude::*;
+#[cfg(target_os = "macos")]
 use gtk::MovementStep;
 
 /// The word-movement Option+`key` means for a text surface, or `None` if `key`/`mods`
@@ -99,6 +115,10 @@ use gtk::MovementStep;
 /// Caps Lock / Num Lock are excluded from `significant` for the same reason
 /// `keynav::document_movement` excludes them: they ride along on real events and
 /// must not defeat the match for a reader who has either one on.
+// Compiled on every platform so its tests are, which is the whole point of the split;
+// only macOS has a caller, so every other target sees a function with none. The
+// alternative is the `cfg` that deleted these tests in the first place (ScrAP-212).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // no caller off macOS; see above
 pub(crate) fn word_movement(key: Key, mods: ModifierType) -> Option<(i32, bool)> {
     let significant = ModifierType::SHIFT_MASK
         | ModifierType::CONTROL_MASK
@@ -126,6 +146,7 @@ pub(crate) fn word_movement(key: Key, mods: ModifierType) -> Option<(i32, bool)>
 /// `view` as word movement. Call once, at the view's construction site
 /// (`build_tab_editor`) — the same place `farscroll::wire_buffer_ends_scroll` and
 /// `wire_newline_edits` are wired.
+#[cfg(target_os = "macos")]
 pub(crate) fn wire_word_navigation(view: &sourceview::View) {
     let keys = gtk::EventControllerKey::new();
     keys.connect_key_pressed(glib::clone!(
@@ -170,6 +191,7 @@ pub(crate) fn wire_word_navigation(view: &sourceview::View) {
 /// A bare `gtk::Text` (no wrapper) is its own delegate — `gtk_editable_get_delegate`
 /// returns NULL for it — so it is returned directly rather than being treated as an
 /// unsupported shape.
+#[cfg(target_os = "macos")]
 pub(crate) fn key_target(field: &impl IsA<gtk::Editable>) -> Option<gtk::Text> {
     let field = field.as_ref();
     if let Some(text) = field.downcast_ref::<gtk::Text>() {
@@ -210,6 +232,7 @@ pub(crate) fn key_target(field: &impl IsA<gtk::Editable>) -> Option<gtk::Text> {
 /// Option result was believed. Option+Right moved forward one word
 /// (`alpha |beta] gamma`) and Option+Shift+Left extended the selection over the
 /// preceding word.
+#[cfg(target_os = "macos")]
 pub(crate) fn wire_field_word_navigation(field: &impl IsA<gtk::Editable>) {
     let Some(text) = key_target(field) else {
         log::debug!(
@@ -334,7 +357,9 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gtk-integration-tests"))]
+// The GTK half asserts on live controllers and delegates, so it stays with the wiring.
+// The DECISION's tests, above, are display-free and compile everywhere on purpose.
+#[cfg(all(test, target_os = "macos", feature = "gtk-integration-tests"))]
 mod gtk_tests {
     use super::*;
 
@@ -529,7 +554,10 @@ mod gtk_tests {
     #[gtktest::test]
     fn the_shared_prompt_forms_field_is_wired_when_the_form_opens() {
         // The choke point that matters most: `input_form` builds the field for Go To
-        // Line AND all three Insert dialogs, so this one call site is four commands.
+        // Line, Rename AND all three Insert dialogs, so this one call site is FIVE
+        // commands. Rename is the one an enumeration keeps missing -- it lives in
+        // `window::rename`, not under `editbar/`, so it is invisible to anyone who
+        // enumerates this choke point's callers by reading the module beside it.
         // Driven through the real action rather than by calling the builder, because
         // the builder is private to `window` — and because what is being pinned is
         // that the *production* path reaches the wiring.

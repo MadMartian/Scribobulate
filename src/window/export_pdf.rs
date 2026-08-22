@@ -35,7 +35,6 @@ use crate::export::{self, paginate};
 use crate::winstate::{self, TabState};
 use gtk::prelude::*;
 use gtk::{ApplicationWindow, PrintOperation, PrintOperationAction};
-use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -87,8 +86,10 @@ pub(super) fn export_pdf(window: &ApplicationWindow, st: Rc<TabState>, path: Pat
     let pages: Rc<std::cell::RefCell<Vec<std::ops::Range<usize>>>> =
         Rc::new(std::cell::RefCell::new(Vec::new()));
     // The application's OWN count of what it drew. GTK's own reporting cannot be
-    // trusted for this (see the module doc), so success is concluded from here.
-    let drawn = Rc::new(Cell::new(0usize));
+    // trusted for this (see the module doc), so success is concluded from here — and
+    // the tally only moves on presentation of a `PageDrawn`, which only `draw_page`
+    // can make. See its doc comment for what the hand-incremented version promoted.
+    let drawn = Rc::new(export::pdf::PageTally::default());
 
     op.connect_begin_print({
         let laid = Rc::clone(&laid);
@@ -102,9 +103,22 @@ pub(super) fn export_pdf(window: &ApplicationWindow, st: Rc<TabState>, path: Pat
             let l = export::pdf::lay_out(&doc, &pango_ctx, width, height, &theme);
             let p = paginate::paginate(&l.fragments, &export::pdf::metrics_for(height));
             // At least one page: an empty document still produces a file, rather than
-            // a zero-page PDF that no reader will open.
-            let n = p.len().max(1);
-            op.set_n_pages(n as i32);
+            // a zero-page PDF that no reader will open. Expressed as a real empty PAGE
+            // rather than as `n_pages().max(1)`, which is what it used to be: that form
+            // told GTK to draw a page the `pages` vector had no entry for, so the draw
+            // handler took its "no range for this index" early return and drew nothing,
+            // and it also meant `expected` could never be zero — closing off `finish`'s
+            // zero-page branch, which has a test of its own, in production only.
+            // `paginate` is left alone: "no fragments, no pages" is the honest answer
+            // for a paginator, and "a document always gets at least one page" is this
+            // boundary's policy.
+            // One page holding no fragments. Named rather than written inline as
+            // `vec![0..0]`, which trips `clippy::single_range_in_vec_init` — that lint
+            // reads a bare range literal in a vec as a likely typo for a collected
+            // range, and here it genuinely is one empty page.
+            let blank_page: std::ops::Range<usize> = 0..0;
+            let p = if p.is_empty() { vec![blank_page] } else { p };
+            op.set_n_pages(p.len() as i32);
             *laid.borrow_mut() = Some(l);
             *pages.borrow_mut() = p;
         }
@@ -116,7 +130,6 @@ pub(super) fn export_pdf(window: &ApplicationWindow, st: Rc<TabState>, path: Pat
         let theme = Rc::clone(&theme);
         let drawn = Rc::clone(&drawn);
         move |_op, ctx, page| {
-            drawn.set(drawn.get() + 1);
             let cr = ctx.cairo_context();
             let laid = laid.borrow();
             let Some(l) = laid.as_ref() else { return };
@@ -124,7 +137,16 @@ pub(super) fn export_pdf(window: &ApplicationWindow, st: Rc<TabState>, path: Pat
             let Some(range) = pages.get(page as usize) else {
                 return;
             };
-            export::pdf::draw_page(&cr, l, range.clone(), &palette, &theme, MARGIN_PT);
+            // Tallied from what `draw_page` returns, so neither early return above can
+            // count a page it did not draw.
+            drawn.record(export::pdf::draw_page(
+                &cr,
+                l,
+                range.clone(),
+                &palette,
+                &theme,
+                MARGIN_PT,
+            ));
         }
     });
 
@@ -137,7 +159,7 @@ pub(super) fn export_pdf(window: &ApplicationWindow, st: Rc<TabState>, path: Pat
     drop(busy);
 
     let expected = op.n_pages().max(0) as usize;
-    let outcome = finish(result, drawn.get(), expected);
+    let outcome = finish(result, drawn.count(), expected);
     let chrome = st.chrome();
     match outcome {
         Outcome::Promote => match publish.publish_external() {
@@ -249,6 +271,50 @@ mod export_destination_tests {
         assert!(
             after.starts_with(b"%PDF-"),
             "the partial is a structurally valid PDF, which is the whole problem"
+        );
+    }
+
+    /// **QA F-VIEW-002** — a run whose draw handler draws nothing must NOT promote.
+    ///
+    /// The scenario the tally could not see: `begin-print` never populates the layout,
+    /// so every `draw-page` takes an early return having drawn nothing at all. The
+    /// counter was incremented at the TOP of that handler, before the returns, so the
+    /// run reported `drawn == expected` and the gate promoted a blank PDF over the
+    /// reader's existing file — the exact outcome the staging apparatus exists to
+    /// prevent, reached THROUGH the gate rather than around it.
+    ///
+    /// This drives a real `PrintOperation` whose handler mimics that shape, and asserts
+    /// the gate discards and reports. It is the regression guard for the type change:
+    /// the tally now moves only on a `PageDrawn`, which only `draw_page` can produce.
+    #[gtktest::test]
+    fn a_run_that_draws_nothing_is_discarded_rather_than_promoted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("nothing.pdf");
+        let op = PrintOperation::new();
+        op.set_export_filename(&path);
+        op.set_unit(gtk::Unit::Points);
+        op.set_n_pages(3);
+        // The production tally, so this tests the mechanism and not a stand-in.
+        let drawn = Rc::new(crate::export::pdf::PageTally::default());
+        op.connect_draw_page({
+            let drawn = Rc::clone(&drawn);
+            move |_op, _ctx, _page| {
+                // Nothing is drawn, so there is no `PageDrawn` to record. Under the old
+                // hand-incremented counter this handler still reported three pages.
+                let _ = &drawn;
+            }
+        });
+        let result = op.run(PrintOperationAction::Export, None::<&gtk::Window>);
+        let expected = op.n_pages().max(0) as usize;
+        assert_eq!(
+            drawn.count(),
+            0,
+            "nothing was drawn, so nothing may be tallied"
+        );
+        assert_eq!(
+            finish(result, drawn.count(), expected),
+            Outcome::Discard { report_error: true },
+            "a run that drew no pages must never promote over the reader's file"
         );
     }
 

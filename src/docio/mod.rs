@@ -187,7 +187,15 @@ fn without_bom(text: String) -> String {
 /// user actually saves it, at which point it gains the line endings the rest of the
 /// world uses.
 fn repaired(text: String) -> String {
-    crate::lineendings::normalize_lone_cr(&text).into_owned()
+    // Keeps the `Cow` rather than allocating unconditionally, which is what its sibling
+    // `without_bom` does thirty lines up and deliberately so: `normalize_lone_cr` returns
+    // `Borrowed` for every document this application produces and every same-application
+    // copy, so the common case is no allocation at all. `into_owned()` on a `Borrowed`
+    // copies the whole document to change nothing.
+    match crate::lineendings::normalize_lone_cr(&text) {
+        std::borrow::Cow::Borrowed(_) => text,
+        std::borrow::Cow::Owned(repaired) => repaired,
+    }
 }
 
 /// [`repaired`] for the raw-bytes reader. Same invariant, same reason.
@@ -262,7 +270,51 @@ fn read_document_blocking(path: &Path) -> DocRead {
 /// would let a save silently overwrite content the user never saw (C3); instead
 /// the tab shows this notice and is given NO backing path, so Save stays disabled.
 fn read_error_doc(path: &Path, err: &std::io::Error) -> String {
-    format!("# ⚠ Could not open file\n\n`{}`\n\n{err}\n", path.display())
+    format!(
+        "# ⚠ Could not open file\n\n{}\n\n{err}\n",
+        notice_path_span(path)
+    )
+}
+
+/// A path rendered as a Markdown code span that a hostile FILENAME cannot break out of.
+///
+/// Both notices below show a path the reader did not necessarily choose — link
+/// navigation reaches them — so the name in one is not necessarily trusted text. A
+/// filename may legally contain a newline or a backtick, and each defeats a naive
+/// `` `{}` `` differently: the newline ends the line so what follows starts a new
+/// block, and the backtick closes the span early so the rest of the name is parsed as
+/// Markdown. Reaching this needs an attacker to control a filename on the local
+/// filesystem AND a link in an untrusted document pointing at it — contrived on a
+/// single-user desktop, merely plausible on a shared machine — and the impact is capped
+/// anyway (these documents get `backing: None`, so no save can write one back, and the
+/// renderer enables no raw-HTML or scripting construct). It is closed regardless,
+/// because the alternative is re-deriving that whole argument every time either notice
+/// is edited.
+///
+/// Two mechanisms, because one does not cover the other:
+/// - `escape_debug` renders newlines and control characters inert, and keeps the name
+///   legible while doing it.
+/// - The span's delimiter is then made **longer than the longest backtick run in the
+///   name**, which is CommonMark's own rule for this and the only thing that works —
+///   a backslash escape is NOT honoured inside a code span, so escaping cannot solve
+///   the backtick half. A name that begins or ends with a backtick additionally gets
+///   the padding space CommonMark strips back off on render.
+fn notice_path_span(path: &Path) -> String {
+    let name = path.display().to_string().escape_debug().to_string();
+
+    let longest_run = name
+        .split(|c| c != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or_default();
+    let delim = "`".repeat(longest_run + 1);
+    let pad = if name.starts_with('`') || name.ends_with('`') {
+        " "
+    } else {
+        ""
+    };
+
+    format!("{delim}{pad}{name}{pad}{delim}")
 }
 
 /// The placeholder shown when a path is REFUSED rather than failed (QA round 3,
@@ -272,8 +324,8 @@ fn read_error_doc(path: &Path, err: &std::io::Error) -> String {
 /// not change on its own.
 fn refusal_doc(path: &Path, refusal: &limits::LoadRefusal) -> String {
     format!(
-        "# ⚠ Refused to open file\n\n`{}`\n\n{refusal}\n",
-        path.display()
+        "# ⚠ Refused to open file\n\n{}\n\n{refusal}\n",
+        notice_path_span(path)
     )
 }
 
@@ -442,36 +494,78 @@ pub(crate) async fn write_document(path: PathBuf, content: String) -> std::io::R
 /// loop run before it can assert. This is that step, in one place, so each test
 /// site is a single line naming the condition it is waiting for.
 ///
-/// Two deliberate choices:
-///
-/// * It **blocks** (`iteration(true)`) rather than spinning, because the wakeup is a
-///   thread-pool completion posted to this context and there may be nothing else
-///   pending until it lands — a non-blocking spin can run its whole budget out
-///   before the pool has answered, which is a flaky test rather than a fast one.
-///   A tick source keeps `iteration` returning regularly so a condition that never
-///   becomes true fails the test instead of hanging it.
-/// * The wall-clock deadline is a **failure bound, not the completion signal**
-///   (GTK4Rs/AP-122): success is always `done()` observing the real state. Nothing here
-///   waits out a duration and then assumes.
+/// A thin, module-local name for [`crate::testpump::until_or_for`] with
+/// [`crate::testpump::Clock::Worker`]: the wakeup here is a thread-pool completion
+/// posted to this context (M31 moved the mechanism itself there — see that module's
+/// rustdoc for why it blocks rather than spins, and why the deadline is a failure
+/// bound, GTK4Rs/AP-122, never the completion signal). The 20 s deadline is kept
+/// exactly as measured here rather than `Worker`'s 30 s default, so this call's
+/// timing is unchanged by the move.
 #[cfg(all(test, feature = "gtk-integration-tests"))]
-pub(crate) fn settle(done: impl Fn() -> bool) -> bool {
-    let ctx = gtk::glib::MainContext::default();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    // Guarantees a source is always due, so the blocking iteration below cannot
-    // park forever when the awaited work never arrives.
-    let ticker = gtk::glib::timeout_add_local(std::time::Duration::from_millis(2), || {
-        gtk::glib::ControlFlow::Continue
-    });
-    while !done() && std::time::Instant::now() < deadline {
-        ctx.iteration(true);
-    }
-    ticker.remove();
-    done()
+pub(crate) fn settle(done: impl FnMut() -> bool) -> bool {
+    crate::testpump::until_or_for(
+        crate::testpump::Clock::Worker,
+        std::time::Duration::from_secs(20),
+        done,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A filename cannot break out of the code span the placeholder notices wrap it
+    /// in. Both notices are shown for a path the reader did not choose — link
+    /// navigation reaches them — so the name in them is not necessarily trusted text.
+    #[test]
+    fn a_hostile_filename_cannot_inject_markdown_into_a_placeholder_notice() {
+        // A backtick closes the span; a newline ends the line and lets what follows
+        // start a new block. Both are legal in a POSIX filename.
+        let hostile = Path::new("evil`\n# Injected heading\n[click](http://example.invalid)`");
+
+        let refused = refusal_doc(hostile, &limits::LoadRefusal::NotARegularFile);
+        let errored = read_error_doc(
+            hostile,
+            &std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+        );
+
+        for (which, doc) in [("refusal", &refused), ("read error", &errored)] {
+            let body = doc
+                .split_once("\n\n")
+                .expect("the notice has a heading and a body")
+                .1;
+            let name_line = body.lines().next().expect("the code span is one line");
+
+            // The newline half: nothing the filename carries may start a new block.
+            assert!(
+                !doc.contains("\n# Injected heading"),
+                "{which} notice let the filename start a new block: {doc:?}"
+            );
+
+            // The backtick half: the span must actually parse as ONE code span, i.e.
+            // its opening delimiter run must be longer than any run inside the name.
+            let opening = name_line.len() - name_line.trim_start_matches('`').len();
+            let inner = &name_line[opening..name_line.len() - opening];
+            let longest_inside = inner.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+            assert!(
+                opening > longest_inside,
+                "{which} notice's delimiter ({opening} backticks) does not outrun the \
+                 longest run inside the name ({longest_inside}), so the name closes \
+                 the span early: {name_line:?}"
+            );
+        }
+    }
+
+    /// The delimiter widens only as far as it has to, and an ordinary path still
+    /// renders in a plain single-backtick span — the common case must not get uglier
+    /// to defend the pathological one.
+    #[test]
+    fn an_ordinary_path_still_gets_a_plain_single_backtick_span() {
+        assert_eq!(
+            notice_path_span(Path::new("/home/reader/notes.md")),
+            "`/home/reader/notes.md`"
+        );
+    }
 
     /// Every assertion below is about the classification, which is the blocking
     /// half — so it is exercised directly rather than through the pool. That is the

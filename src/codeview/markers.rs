@@ -1343,19 +1343,17 @@ mod a11y_integration_tests {
             .expect("scroller holds the CodePreviewView")
     }
 
-    /// Pump the main loop until `done` reports true, or `budget` iterations elapse.
-    /// Returns whether it converged. A paint is frame-clock driven, so this cannot be
-    /// a single drain of pending events.
-    fn pump_until(budget: u32, done: impl Fn() -> bool) -> bool {
-        let ctx = glib::MainContext::default();
-        for _ in 0..budget {
-            if done() {
-                return true;
-            }
-            ctx.iteration(false);
-            std::thread::sleep(std::time::Duration::from_millis(4));
-        }
-        done()
+    /// Pump the main loop until `done` reports true, or `budget` turns' worth of
+    /// wall-clock time elapses. Returns whether it converged. A paint is frame-clock
+    /// driven, so this cannot be a single drain of pending events —
+    /// `crate::testpump::until_or_for` under `Clock::Frame` (M31); `budget * 4ms`
+    /// matches this function's old worst-case ceiling.
+    fn pump_until(budget: u32, done: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(budget as u64 * 4),
+            done,
+        )
     }
 
     fn hitbox_count(view: &CodePreviewView) -> usize {

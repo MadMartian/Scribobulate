@@ -1017,16 +1017,20 @@ fn wrap_span_node(md: &str, node: &Node, a: i32, b: i32) -> Option<Range<usize>>
 /// there is deliberately no `Tag::Strikethrough` arm: `md_options()` does not
 /// enable pulldown's strikethrough, so such an event can never be emitted — the
 /// scanner pass is what covers `~~`.
-pub(crate) fn balance_source_span(md: &str, sel: Range<usize>) -> Range<usize> {
-    // Read the document the way the preview does: through the inline-tab pre-pass
-    // (ScrAP-75). Without it a tab-padded GFM table is a *paragraph* here while the
-    // reader sees a *table*, and the two disagree about where a cell ends — MEASURED,
-    // `| **a\t| b** |`: the paragraph reading swallowed `**a\t| b**` as one Strong
-    // span, so annotating a word in the first cell wrapped CriticMarkup across the
-    // cell boundary. The substitution is length- and position-preserving, so every
-    // range below still indexes `md` itself; that is what makes normalising here safe
-    // rather than a coordinate change.
-    let md = &*crate::renderer::normalize_inline_tabs(md);
+pub(crate) fn balance_source_span(
+    md: &crate::renderer::NormalizedMd<'_>,
+    sel: Range<usize>,
+) -> Range<usize> {
+    // The caller normalises (ScrAP-75) — the one discipline every parse site now
+    // shares, `NormalizedMd`'s own doc. Without it a tab-padded GFM table is a
+    // *paragraph* here while the reader sees a *table*, and the two disagree about
+    // where a cell ends — MEASURED, `| **a\t| b** |`: the paragraph reading swallowed
+    // `**a\t| b**` as one Strong span, so annotating a word in the first cell wrapped
+    // CriticMarkup across the cell boundary. The substitution is length- and
+    // position-preserving, so every range below still indexes the caller's original
+    // text; that is what makes normalising upstream safe rather than a coordinate
+    // change.
+    let text = md.as_str();
     let mut cur = sel;
     // Nesting is finite; the guard only stops a pathological non-convergence.
     for _ in 0..32 {
@@ -1039,9 +1043,7 @@ pub(crate) fn balance_source_span(md: &str, sel: Range<usize>) -> Range<usize> {
                 next.end = next.end.max(src.end);
             }
         };
-        for (ev, src) in
-            pulldown_cmark::Parser::new_ext(md, crate::renderer::md_options()).into_offset_iter()
-        {
+        for (ev, src) in md.parse().into_offset_iter() {
             // `into_offset_iter` reports a Start tag's range as the WHOLE construct
             // (delimiters included), which is exactly the span to swallow.
             if matches!(
@@ -1060,7 +1062,7 @@ pub(crate) fn balance_source_span(md: &str, sel: Range<usize>) -> Range<usize> {
             if matches!(&ev, Event::Text(_)) {
                 // `sl()` (not a raw `md[..]`): every other slice in this module
                 // goes through it, and this one did not (QA round 3, P-8).
-                for found in crate::renderer::scan_script_spans(sl(md, src.clone())) {
+                for found in crate::renderer::scan_script_spans(sl(text, src.clone())) {
                     swallow(
                         src.start + found.outer.start..src.start + found.outer.end,
                         &mut next,

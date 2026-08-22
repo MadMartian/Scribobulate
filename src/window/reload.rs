@@ -86,7 +86,7 @@ fn apply_reload_from_disk(window: &ApplicationWindow, st: &Rc<TabState>, content
     st.loading.set(true);
     load_into_editor(&st.editor_buf, &content);
     st.loading.set(false);
-    *st.source.borrow_mut() = content.clone();
+    st.set_source(&content);
     *st.saved_baseline.borrow_mut() = content;
     // Content and baseline both just changed, so any read still in flight for this
     // document is now describing a document that no longer exists.
@@ -206,7 +206,7 @@ pub(crate) fn check_and_reload_tab(tab: &Rc<TabState>) {
 /// The external-change decision for a tab that is its window's ACTIVE one: apply it
 /// now, because the widgets it would touch are the ones on screen.
 fn decide_for_active(window: &ApplicationWindow, tab: &Rc<TabState>, content: &str) {
-    let differs = content != *tab.source.borrow();
+    let differs = content != *tab.source();
     match winstate::external_change_action(differs, tab.is_dirty(), tab.suppress_conflict.get()) {
         winstate::ExternalChange::Ignore => {}
         winstate::ExternalChange::Toast => show_conflict_toast(window),
@@ -217,7 +217,7 @@ fn decide_for_active(window: &ApplicationWindow, tab: &Rc<TabState>, content: &s
 /// The same decision for a tab in the BACKGROUND: record it and badge the tab, so
 /// the active-tab machinery replays it for real on the next switch.
 fn decide_for_background(tab: &Rc<TabState>, content: &str) {
-    let differs = content != *tab.source.borrow();
+    let differs = content != *tab.source();
     match winstate::external_change_action(differs, tab.is_dirty(), tab.suppress_conflict.get()) {
         winstate::ExternalChange::Ignore => {
             // QA round-1 M3: the badge must be cleared here too, not just the
@@ -291,7 +291,7 @@ pub(crate) fn apply_external_reload(window: &ApplicationWindow, content: &str) {
             .unwrap_or_else(|| "(no path)".to_owned()),
         content.len()
     );
-    *st.source.borrow_mut() = content.to_string();
+    st.set_source(content);
     *st.saved_baseline.borrow_mut() = content.to_string();
     // See `apply_reload_from_disk`: mutations bump, deferred readers check.
     st.doc_epoch.bump();
@@ -484,17 +484,20 @@ mod gtk_integration_tests {
         window.destroy();
     }
 
-    /// Iterate the main loop until `done` or the budget is spent. Frame-count based
-    /// deliberately — never a wall-clock sleep (GTK4Rs/AP-122).
-    fn pump_until(budget: u32, done: impl Fn() -> bool) -> bool {
-        let ctx = glib::MainContext::default();
-        for _ in 0..budget {
-            if done() {
-                return true;
-            }
-            ctx.iteration(false);
-        }
-        done()
+    /// Iterate the main loop until `done` or `budget` turns' worth of wall-clock
+    /// time is spent; reports whether it converged. `crate::testpump::until_or_for`
+    /// under `Clock::Idle` (M31) — this function's old doc cited GTK4Rs/AP-122 for
+    /// avoiding a manual sleep, which is really GTK4Rs/AP-261's "idle work wants a
+    /// tight pump" (GTK4Rs/AP-122 is about a frame-COUNT bound on WALL-CLOCK work, the
+    /// opposite direction); `budget` here is converted to an equivalent millisecond
+    /// ceiling since this state (scroll-spy rewiring) is idle-driven, not frame-count
+    /// bound.
+    fn pump_until(budget: u32, done: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Idle,
+            std::time::Duration::from_millis(budget as u64),
+            done,
+        )
     }
 
     /// An external reload in Preview mode must CLOSE an open marker popover before

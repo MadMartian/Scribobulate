@@ -179,9 +179,24 @@ root data
 # workspace, and prose that cites the registers. It is enumerated for the same reason
 # every other root is: a gate is its pattern AND its file set, and a directory silently
 # outside the set is the exact drift this contract was written after. Depth 2 (the nested
-# crate's src/ costs a segment), well inside the maxdepth tripwire. Parity with the
-# PowerShell port proven by an identical ordinal-sorted list: 323 entries, 11 under
-# probes/, SHA256 F663...40ED on both platforms.
+# crate's src/ costs a segment), well inside the maxdepth tripwire.
+#
+# PARITY WITH THE POWERSHELL PORT IS THE PROCEDURE, NOT A FIGURE. Run
+# `scripts/lint-references.sh --list-scan` and `scripts/lint-references.ps1 -ListScan`,
+# ordinal-sort both, and compare; identical lists are the claim.
+#
+# This comment used to record `323 entries, 11 under probes/, SHA256 F663...40ED`. By the
+# time anyone looked the set was 332 and 16, so both numbers were wrong and neither had
+# gone loudly stale -- the note went on reading as evidence while describing a tree that no
+# longer existed. That is the same silent negative the registers keep recording, in the one
+# place a reader goes to find out whether the ports agree. A figure is stale the moment
+# either scan set moves and a reader cannot tell from looking; the procedure is checkable
+# on demand and cannot rot.
+#
+# Not a hypothetical about what a future reader could do: the lists WERE compared this way,
+# on a single host running both shells, and came back byte-identical. Doing it on one
+# machine is stronger than two seats each recording their own number, because it removes
+# the question of whether they ran the same tree.
 root probes
 
 file AGENTS.md

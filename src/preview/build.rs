@@ -181,7 +181,7 @@ pub(super) fn build_render_products_into(
     // buffer the mutation will later be applied to — and an anchor is matched by
     // its TEXT, so a normalised tab would make it unfindable.
     let raw_src = md;
-    let md_norm = crate::renderer::normalize_inline_tabs(md);
+    let md_norm = crate::renderer::NormalizedMd::new(md);
 
     // Pre-parse CriticMarkup extraction (the pure `annotate::scan` pass): lift annotations
     // out of the source *before* pulldown sees them, and render the CriticMarkup
@@ -190,7 +190,7 @@ pub(super) fn build_render_products_into(
     // editor's original text happens per-position at the scroll-sync boundary and
     // is identity when the doc has no annotations. When there is no CriticMarkup,
     // `cleaned == md_norm`, so this is behaviour-preserving for every existing doc.
-    let extraction = crate::annotate::extract(md_norm.as_ref());
+    let extraction = crate::annotate::extract(md_norm.as_str());
     let md = extraction.cleaned.as_str();
 
     let md_owned = md.to_string();
@@ -2155,5 +2155,101 @@ mod gtk_integration_tests {
             !buffer_slice(&products.buf).contains("<picture"),
             "the <picture> markup must not leak into the rendered text"
         );
+    }
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod table_alignment_tests {
+    use super::build_render_products;
+    use crate::mdtable::Align;
+    use crate::preview::cells::collect_cell_labels;
+
+    /// A three-column table whose delimiter row states one of each alignment, plus a
+    /// column that states nothing.
+    const DOC: &str = "\
+| Left | Right | Mid | Bare |
+|:-----|------:|:---:|------|
+| a | 12 | ok | q |
+";
+
+    /// The preview honours the delimiter row.
+    ///
+    /// The gap this closes: the renderer discarded `Tag::Table`'s payload entirely and
+    /// hardcoded `set_xalign(0.0)` on every cell, so a document rendered flush-left on
+    /// screen and right/centre-aligned on the page — a Document Rendering CAM row 17
+    /// divergence in the direction nobody checks, because the EXPORT was the richer half
+    /// and an export is compared against the preview, not the other way round.
+    ///
+    /// Asserted on the resolved `xalign` of the built cell labels rather than on the
+    /// `Align` values threaded through, because the threading is the easy half — a
+    /// vector carried correctly and then never applied looks identical to this test's
+    /// subject at every level above the widget.
+    #[gtktest::test]
+    fn a_delimiter_rows_alignment_reaches_the_preview_cells() {
+        let products = build_render_products(DOC, None, 1.0, false);
+        let labels = collect_cell_labels(&products.anchored);
+        // Two rows of four cells. Guard against a walk that finds nothing and passes.
+        assert_eq!(
+            labels.len(),
+            8,
+            "expected 8 cell labels (2 rows x 4 columns), got {}",
+            labels.len()
+        );
+        let expected = [
+            Align::Left.xalign(),
+            Align::Right.xalign(),
+            Align::Center.xalign(),
+            Align::None.xalign(),
+        ];
+        for (i, label) in labels.iter().enumerate() {
+            let col = i % 4;
+            assert_eq!(
+                label.xalign(),
+                expected[col],
+                "cell {i:?} ({:?}) is in column {col}, which the delimiter row aligned \
+                 to {:?}",
+                label.text(),
+                expected[col]
+            );
+        }
+    }
+
+    /// The preview and the export agree, column for column.
+    ///
+    /// The actual contract — CAM row 17 — rather than two independent assertions that
+    /// each half does something reasonable. Reads the export's own alignment vector for
+    /// the same document and compares it against what the preview applied, so a future
+    /// change to either half that does not change the other fails here.
+    #[gtktest::test]
+    fn the_preview_and_the_export_align_the_same_columns() {
+        let doc = crate::export::doc::build(
+            DOC,
+            &crate::export::RenderOptions {
+                doc_dir: None,
+                allow_unsafe_images: false,
+            },
+        );
+        let export_aligns = doc
+            .blocks
+            .iter()
+            .find_map(|b| match b {
+                crate::export::Block::Table { aligns, .. } => Some(aligns.clone()),
+                _ => None,
+            })
+            .expect("the export pipeline produced a table block");
+
+        let products = build_render_products(DOC, None, 1.0, false);
+        let labels = collect_cell_labels(&products.anchored);
+        assert_eq!(labels.len(), 8, "the cell walk found nothing to compare");
+
+        for (col, align) in export_aligns.iter().enumerate() {
+            assert_eq!(
+                labels[col].xalign(),
+                align.xalign(),
+                "column {col}: the export says {align:?} and the preview applied \
+                 xalign {}",
+                labels[col].xalign()
+            );
+        }
     }
 }

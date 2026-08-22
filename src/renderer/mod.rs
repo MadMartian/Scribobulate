@@ -12,8 +12,9 @@
 //! * **Pure (GTK-free, unit-tested, in the coverage gate):**
 //!   * [`scan`] — the tight `^sup^`/`~sub~`/`~~strike~~` tokenizer (`scan_scripts`,
 //!     `Script`, `script_tag`; ScrAP-66).
-//!   * [`normalize`] — the shared parse flags (`md_options`) and the length/position-
-//!     preserving inline-tab pre-pass (`normalize_inline_tabs`; ScrAP-75).
+//!   * [`normalize`] — the shared parse flags (`md_options`) and [`NormalizedMd`],
+//!     the length/position-preserving inline-tab pre-pass (ScrAP-75) promoted to a
+//!     type: its constructor is the only route to a normalised document string.
 //!   * [`blockquote`] — `logical_line_ranges`, the per-line content split that
 //!     gives every quoted or list-item line its own tag toggle (GTK4Rs/AP-72).
 //!   * [`image`] — `image_placeholder_tooltip`, the broken-image reason string.
@@ -48,7 +49,7 @@ mod scan;
 mod start;
 
 pub(crate) use image::image_placeholder_tooltip;
-pub(crate) use normalize::{md_options, normalize_inline_tabs};
+pub(crate) use normalize::{md_options, NormalizedMd};
 pub(crate) use picture::{scan_image_tags, ImgTag};
 pub(crate) use scan::{scan_script_spans, scan_scripts, Script, ScriptSpan};
 
@@ -212,6 +213,15 @@ pub(crate) struct TableState {
     pub(crate) cell_content_evs: Vec<(usize, usize, i32, i32)>,
     /// Running cell-local char offset (matches `copymap::cell_width` accumulation).
     pub(crate) cell_off: i32,
+    /// This table's column alignments, as its delimiter row stated them
+    /// (`|:---|---:|:---:|`). Carried from `Tag::Table`'s payload, which the renderer
+    /// used to discard — which is why the preview left-aligned every cell while the PDF
+    /// and HTML exports honoured the delimiter row (Document Rendering CAM row 17).
+    pub(crate) aligns: Vec<crate::mdtable::Align>,
+    /// Index of the cell being accumulated within its row, reset at every row start.
+    /// The renderer sees cells as a stream of `TableCell` events with no index of their
+    /// own, so the column a cell belongs to has to be counted.
+    pub(crate) col: usize,
 }
 
 /// The marker kind of a rendered list item, recorded so the preview can draw it in a

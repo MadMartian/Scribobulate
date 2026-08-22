@@ -592,31 +592,17 @@ mod gtk_integration_tests {
         });
     }
 
-    /// Pump until `done()`, bounded by a real glib timeout SOURCE — never a
-    /// wall-clock check between iterations (GTK4Rs/AP-79). Non-blocking iteration with no
-    /// sleep: a sleep between turns throttles the validation idle this test is
-    /// waiting on (measured: a 2 ms sleep stretched a 100 ms settle past 3 s).
-    fn pump_until(what: &str, mut done: impl FnMut() -> bool) {
-        use std::cell::Cell;
-        use std::rc::Rc;
-        let fired = Rc::new(Cell::new(false));
-        let f = Rc::clone(&fired);
-        let deadline =
-            glib::timeout_add_local_once(std::time::Duration::from_secs(30), move || f.set(true));
-        let ctx = glib::MainContext::default();
-        let mut deadline = Some(deadline);
-        while !done() {
-            assert!(
-                !fired.get(),
-                "pump watchdog (30s) fired waiting for: {what}"
-            );
-            ctx.iteration(false);
-        }
-        if let Some(id) = deadline.take() {
-            if !fired.get() {
-                id.remove();
-            }
-        }
+    /// Pump until `done()`, or panic naming `what`. `crate::testpump::until_for`
+    /// under `Clock::Idle` with this module's own 30s deadline (M31) — the
+    /// deadline is kept explicit rather than `Idle`'s 20s default so this
+    /// module's nine call sites keep their original margin unchanged.
+    fn pump_until(what: &str, done: impl FnMut() -> bool) {
+        crate::testpump::until_for(
+            crate::testpump::Clock::Idle,
+            std::time::Duration::from_secs(30),
+            what,
+            done,
+        );
     }
 
     /// **Ctrl+End reaches the last line of a document GTK has not finished

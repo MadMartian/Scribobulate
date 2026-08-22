@@ -10,15 +10,11 @@ use crate::span::OriginalByteOffset;
 /// document changes: initial build, view-mode switch, external reload, theme
 /// re-render, and the split/edit live-edit debounce.
 ///
-/// The source it reads depends on the mode: in editor-backed modes the live
-/// buffer is the truth (so the outline tracks in-progress edits); in preview mode
-/// the stored source is.
+/// Reads the document through [`TabState::shown_source`], which owns the
+/// mode-to-source rule for every derived view.
 pub(crate) fn refresh_outline(window: &ApplicationWindow) {
     let Some(st) = state(window) else { return };
-    let md = match current_mode(window) {
-        ViewMode::Edit | ViewMode::Split => st.editor_text(),
-        ViewMode::Preview => st.source.borrow().clone(),
-    };
+    let md = st.shown_source(current_mode(window));
     let headings = extract_headings(&md);
     // Cache the src_offsets so a caret move can binary-search them instead of
     // re-parsing the document (U-3) — see `heading_src_offsets`'s doc comment.
@@ -504,18 +500,17 @@ fn editor_cursor_doc_index(window: &ApplicationWindow) -> Option<usize> {
     }
 }
 
-/// The document's heading levels in doc order (index == `doc_index`) for the
-/// CURRENT mode's source — the SAME source `refresh_outline` builds the tree from,
-/// so this level list's indices line up with the outline rows and the spy's target
-/// `doc_index`.
+/// The document's heading levels in doc order (index == `doc_index`).
+///
+/// Reads through [`TabState::shown_source`], which is what makes "the SAME source
+/// `refresh_outline` built the tree from" true by construction rather than by two
+/// matching copies — the indices must line up with the outline rows and the spy's
+/// target `doc_index`, and they only do if both read the same document.
 fn current_heading_levels(window: &ApplicationWindow) -> Vec<u8> {
     let Some(st) = state(window) else {
         return Vec::new();
     };
-    let md = match current_mode(window) {
-        ViewMode::Edit | ViewMode::Split => st.editor_text(),
-        ViewMode::Preview => st.source.borrow().clone(),
-    };
+    let md = st.shown_source(current_mode(window));
     extract_headings(&md).iter().map(|h| h.level).collect()
 }
 
@@ -640,12 +635,7 @@ fn scroll_spy_set_selection(window: &ApplicationWindow, doc_index: Option<usize>
 mod collapse_all_tests {
     use super::*;
 
-    fn test_app(id: &str) -> gtk::Application {
-        let app = gtk::Application::new(Some(id), gtk::gio::ApplicationFlags::NON_UNIQUE);
-        app.register(gtk::gio::Cancellable::NONE)
-            .expect("register before building a window");
-        app
-    }
+    use crate::window::testkit::test_app;
 
     /// A deeply nested single-root document, matching `sdd/TDD.md`'s exact shape
     /// (one `#`, twenty `##`, 289 `###` — 310 headings). One depth-0 root. The
@@ -670,22 +660,16 @@ mod collapse_all_tests {
     /// Total heading rows the fully-open outline should carry: 1 + 20 + 289.
     const TOTAL_HEADINGS: u32 = 1 + 20 + 289;
 
-    /// Pump the main loop until `done` reports true, or `budget` iterations elapse.
-    /// Returns whether it converged. A fixed-count drain (no `done` check) makes a
-    /// test's result depend on the iteration budget rather than on the state it
-    /// claims to wait for (T-9) — this backs off with a short sleep only when an
-    /// iteration dispatched nothing, so it neither busy-spins nor blocks past
-    /// convergence.
-    fn pump_until(ctx: &glib::MainContext, budget: u32, mut done: impl FnMut() -> bool) -> bool {
-        for _ in 0..budget {
-            if done() {
-                return true;
-            }
-            if !ctx.iteration(false) {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        }
-        done()
+    /// Pump the main loop until `done` reports true, or `budget` turns' worth of
+    /// wall-clock time elapses. Returns whether it converged.
+    /// `crate::testpump::until_or_for` under `Clock::Idle` (M31); `budget * 5ms`
+    /// matches this function's old worst-case ceiling.
+    fn pump_until(_ctx: &glib::MainContext, budget: u32, done: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Idle,
+            std::time::Duration::from_millis(budget as u64 * 5),
+            done,
+        )
     }
 
     fn row_doc_indices(model: &gtk::TreeListModel) -> Vec<usize> {

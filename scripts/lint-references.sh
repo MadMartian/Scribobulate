@@ -1,15 +1,26 @@
 #!/usr/bin/env bash
 # Cross-reference gate — POLICY.md § "Build pipeline" step 9 states the rule; THIS
-# SCRIPT is the source of truth for what is checked. Eight mechanical checks: three
-# over the citations the codebase makes into the SDD registers, two over the test
-# architecture — that the main-thread GTK suite's duplicated module list has not
-# drifted (check 4) and that the superseded `#[gtk::test]` attribute has not returned
-# (check 5) — one over document paths, that every file this tree points at still
-# exists (check 6), one over the application ID, which several non-Rust packaging
-# files restate and none of them derived (check 7), and one over the citation FORM
-# itself, that no bare `AP-N` (illegal, because it names neither register unambiguously)
-# has been written (check 8). Checks 4, 5, 6, 7 and 8 were all mutation-tested when
-# written.
+# SCRIPT is the source of truth for what is checked.
+#
+# DELIBERATELY NO COUNT HERE, and no count in POLICY.md either. This header said
+# "Eight mechanical checks" and POLICY.md said "nine" while the script implemented
+# FOURTEEN — the same defect the coverage floor and the input limits are each written
+# up under, committed by the two places that describe this gate. A count is the one
+# fact about a growing list guaranteed to be wrong by the next addition, and neither
+# reader can tell a stale number from a current one. The run output enumerates every
+# check by number and title as it executes; that enumeration IS the list, and it cannot
+# drift from what ran because it is emitted by the checks themselves.
+#
+# The classes, which do not change when a check is added: citations the codebase makes
+# into the SDD registers; the test architecture, whose failure modes are silent (that
+# the main-thread GTK suite's duplicated module list has not drifted, and that the
+# superseded `#[gtk::test]` attribute has neither returned nor been prescribed in
+# prose); document paths, that every file this tree points at still exists; the
+# application ID, which several non-Rust packaging files restate and none derived;
+# the citation FORM itself, that no bare `AP-N` (illegal, because it names neither
+# register unambiguously) has been written; the registers' own integrity (number
+# immutability, TOC/body agreement, growth); and path legality, that no tracked path
+# is one Windows refuses to check out. Every check was mutation-tested when written.
 #
 # WHY THIS EXISTS. Both classes below were found in one session, in a single 103-line
 # change, by human review — after `cargo fmt`, `cargo clippy -D warnings` and 625
@@ -68,7 +79,13 @@ cd "$(dirname "$0")/.."
 # so `read ISSUES.md and TECH.md together` stays clean. Both engines agree here because
 # the check is boolean — leftmost-longest vs leftmost-first cannot change whether a
 # match exists, only which one is reported, and nothing reads the capture.
-ISSUES_RX='\bISSUES(\.md)?([ .:_-]*([a-z]+ )?[A-Z]\b|[ .:_-]*#[A-Z]+\b)'
+# The third alternative is the TITLE form, and it is here because check 1 reported PASS
+# over a live violation: `probes/native-chooser-rss.m` cited an entry by its QUOTED TITLE
+# rather than its letter, and a pattern hunting letter IDs cannot see that. A title
+# pointer dangles exactly as an ID pointer does — the entry is deleted when fixed either
+# way — so the rule was right and only its pattern was narrow. Prose ABOUT the register
+# is still legal, which is what the `must_not_match` corpus pins.
+ISSUES_RX='\bISSUES(\.md)?([ .:_-]*([a-z]+ )?[A-Z]\b|[ .:_-]*#[A-Z]+\b|[ .:_-]*"[^"]+")'
 
 # The document-path forms check 6a must catch. Pinned beside ISSUES_RX and self-tested
 # for the same reason: check 6 passed clean over 21 live danglers because its pattern
@@ -77,6 +94,58 @@ ISSUES_RX='\bISSUES(\.md)?([ .:_-]*([a-z]+ )?[A-Z]\b|[ .:_-]*#[A-Z]+\b)'
 # leftmost-first, and this ordering makes `PLAN.x.md` match whole under both, which is
 # what keeps the twin honest.
 PATH_RX='((sdd|tests|packaging|gtktest|scripts|data|src)/[A-Za-z0-9._/-]+\.md|\bPLAN\.[A-Za-z0-9._-]+\.md|\bPLAN\.[A-Za-z0-9_-]+)'
+
+# The ONE place check 12's Win32 path-legality predicate lives, so its corpus drives the
+# CHECK rather than a re-implementation of it — the lesson `path_hits` below records,
+# applied to the check that shipped with no corpus at all.
+#
+# TWO STAGES, NOT ONE REGEX, and portability is the reason rather than taste. This test
+# was written as a single `grep -qP`, and `grep -P` is absent from the BSD grep macOS
+# ships — which `scripts/pipeline.steps` dispatches this bash port to. BSD grep exits 2,
+# the call sat inside an `if … || grep …` where that reads as "no match", `set -e` never
+# saw it, and check 12 printed PASS over EVERY path on macOS. The constraint is stated at
+# the top of this file and was broken 1300 lines below it.
+#
+# ScrAP-319 records the whole episode, including the half that is not about grep: the macOS
+# seat's INTERACTIVE `grep` was a shell function wrapping ugrep, which DOES support -P, so
+# the one seat able to catch this would have watched the command work by hand. A shell
+# function does not cross into a script. Judge a script's tooling by what the SCRIPT
+# resolves — `bash -c 'command -v X'` — never by the interactive shell.
+#
+# Stage 1 is the case-SENSITIVE character rule, with the control range built by the shell
+# because `\x01-\x1f` is a PCRE escape. Stage 2 is the reserved DEVICE-NAME rule, whose
+# case-insensitivity ERE has no inline flag for, so it is its own `grep -i` pass rather
+# than a `(?i:…)` group.
+#
+# The NEWLINE case is deliberately not grep's: grep is line-oriented, so a `\n` inside a
+# path is a SEPARATOR and never content, and the `[\001-\037]` clause would silently lose
+# its most likely member.
+win_illegal_path() {
+    # Whole-path rules first: these characters are illegal wherever they appear.
+    # `if` conditions are exempt from `set -e`, which the earlier `||` chain relied on
+    # implicitly; making it explicit costs nothing and survives someone adding a stage.
+    if [[ "$1" == *$'\n'* ]]; then return 0; fi
+    if printf '%s' "$1" | grep -qE '[<>:"|?*]|['$'\001''-'$'\037'']'; then return 0; fi
+
+    # PER COMPONENT. `/` is the separator in everything this gate sees (`git ls-files -z`),
+    # so splitting on it is exact rather than a guess. Done with parameter expansion, no
+    # subshell and no dependence on which grep is first on PATH for the SPLIT -- the device
+    # test still needs a regex, and `-i` is used rather than a bracketed spelling because
+    # the case-insensitivity is the rule, not an accident of the pattern.
+    local rest="$1" seg
+    while : ; do
+        seg=${rest%%/*}
+        case "$seg" in
+            *. | *' ') return 0 ;;
+        esac
+        if printf '%s' "$seg" | grep -qiE '^(CON|PRN|AUX|NUL|COM[1-9]|LPT[0-9])(\..*)?$'; then
+            return 0
+        fi
+        if [ "$seg" = "$rest" ]; then break; fi
+        rest=${rest#*/}
+    done
+    return 1
+}
 
 # The ONE place check 6a's path extraction happens, flags included — so the self-test can
 # drive the check's own invocation instead of re-implementing it. This exists because a
@@ -87,7 +156,7 @@ PATH_RX='((sdd|tests|packaging|gtktest|scripts|data|src)/[A-Za-z0-9._/-]+\.md|\b
 # ("it exercises the predicate the check itself calls, not the two patterns in isolation")
 # and 6a was the one that had not followed it. Add a flag here, not at the call site.
 path_hits() {
-    grep -HnoE "$PATH_RX" "$@" 2>/dev/null | grep -v 'tests/reports/' || true
+    grep -HnoE "$PATH_RX" "$@" 2>/dev/null || true
 }
 
 # Check 8's two patterns. A citation's correctness is not a property of its syntax, so
@@ -245,7 +314,13 @@ fi
 # Anchored alternation of excluded path prefixes, e.g. `^(target/|docs/|\.git/)`.
 scan_excludes=$(scan_field exclude)
 if [ -n "$scan_excludes" ]; then
-    SCAN_EXCLUDE_RX="^($(echo "$scan_excludes" | sed 's/\./\\./g' | paste -sd'|' -))"
+    # EVERY ERE metacharacter is escaped, not just `.`. These values come from the
+    # contract, and the PowerShell twin compares them as ORDINAL LITERAL prefixes
+    # (M41) — so a `[`, `+`, `(`, `*`, `?`, `{` or `^` in an exclude would be a
+    # metacharacter here and a literal there, and the two ports would silently disagree
+    # about which files they scan. No current value contains one, which is exactly why
+    # this is worth closing now rather than when one does.
+    SCAN_EXCLUDE_RX="^($(echo "$scan_excludes" | sed 's/[][\\.^$*+?(){}|]/\\&/g' | paste -sd'|' -))"
 else
     # No excludes to apply: `^$` matches only a wholly empty line, which none of the
     # three enumeration sites ever emit, so this is a safe no-op filter.
@@ -282,7 +357,8 @@ symlink_paths=$(
 # shapes without drifting, so it matches a full line OR a path immediately followed by
 # the `:` that starts grep -n's line/match suffix.
 if [ -n "$symlink_paths" ]; then
-    SCAN_SYMLINK_RX="^($(echo "$symlink_paths" | sed 's/\./\\./g' | paste -sd'|' -))(:|\$)"
+    # Same escaping rule as SCAN_EXCLUDE_RX above, and for the same reason.
+    SCAN_SYMLINK_RX="^($(echo "$symlink_paths" | sed 's/[][\\.^$*+?(){}|]/\\&/g' | paste -sd'|' -))(:|\$)"
 else
     # No symlink to exclude: `^$` matches only a wholly empty line, which the
     # enumeration below never emits, so this is a safe no-op filter.
@@ -425,7 +501,9 @@ regression, see ISSUES #P
 see sdd/ISSUES.md #WW
 (ISSUES.md item P)
 see ISSUES issue P
-the ISSUES.md letter P'
+the ISSUES.md letter P
+attribute the growth (ISSUES.md "native file chooser RSS growth")
+see ISSUES "the rename suite finalizes a cancelled monitor"'
     must_not_match='issues a queue_draw that CLEARS the cache
 see sdd/ISSUES.md
 the sdd/ISSUES.md TOC lists them
@@ -433,13 +511,72 @@ the sdd/ISSUES.md IDs are ephemeral
 ISSUES.md is not a changelog
 the ISSUES register empties as it works
 ISSUES.md entries are deleted when fixed
-read ISSUES.md and TECH.md together'
+read ISSUES.md and TECH.md together
+the register lives in sdd/ISSUES.md and shrinks as it works'
     while IFS= read -r line; do
         grep -qE "$ISSUES_RX" <<<"$line" || { echo "  MISS (should match): $line"; st_fail=1; }
     done <<<"$must_match"
     while IFS= read -r line; do
         grep -qE "$ISSUES_RX" <<<"$line" && { echo "  FALSE POSITIVE: $line"; st_fail=1; }
     done <<<"$must_not_match"
+
+    # Check 12's corpus. It shipped with NO self-test in either port, which is the
+    # mechanism that would have caught its `grep -P` on a BSD-grep host — so the corpus
+    # is the fix and the pattern change is only half of it. It drives
+    # `win_illegal_path`, the predicate the check itself calls.
+    #
+    # `PLAN.console.md`, `contents.md` and `nullable.rs` are the negative controls that
+    # matter: each CONTAINS a reserved device name and none of them IS one, so a
+    # device-name rule written without the anchors would fail the whole tree.
+    win_must_match='a<b.md
+a>b.md
+a:b.md
+a"b.md
+a|b.md
+a?b.md
+a*b.md
+trailing.
+trailing 
+con
+CON.txt
+src/nul
+lpt9.md
+com1
+PRN.md
+src/dir/AUX.rs
+src/nul/thing.rs
+src/com1/x.rs
+deep/a/b/nul/c/x.rs
+src/nul.txt/x.rs
+src/con.foo/x.rs
+src/lpt0/x.rs
+a./b.md
+a /b.md'
+    win_must_not_match='ok.md
+src/normal-file.rs
+contents.md
+nullable.rs
+PLAN.console.md
+sdd/ANTI-PATTERNS.md
+scripts/lint-references.sh
+a-b_c.rs
+Cargo.toml
+src/console/x.rs
+src/nullable/x.rs
+src/a.b/x.rs
+src/com0/x.rs
+src/conin/x.rs
+src/conout/x.rs'
+    while IFS= read -r line; do
+        win_illegal_path "$line" || { echo "  MISS (should match): [$line]"; st_fail=1; }
+    done <<<"$win_must_match"
+    while IFS= read -r line; do
+        win_illegal_path "$line" && { echo "  FALSE POSITIVE: [$line]"; st_fail=1; }
+    done <<<"$win_must_not_match"
+    # The control character and the newline, which cannot survive a heredoc corpus: the
+    # first is invisible in a source listing and the second IS the corpus separator.
+    win_illegal_path "$(printf 'a\001b.md')" || { echo "  MISS: control character"; st_fail=1; }
+    win_illegal_path "$(printf 'a\nb.md')" || { echo "  MISS: newline in path"; st_fail=1; }
 
     # Check 6a's corpus. The `expected -> line` form pins WHAT is extracted, not merely
     # that something matched: the bug this closes was a pattern that matched the wrong
@@ -1058,13 +1195,22 @@ missing_paths=""
 scan6a=$(scan_subset_not '^scripts/lint-references\.(sh|ps1)$')
 hits6a=""
 if [ -n "$scan6a" ]; then
-    # The remaining `tests/reports/` filter is TARGET-side: the contract already keeps
-    # those generated artifacts out of the scanned files, but a live document may still
-    # point AT one, and it is absent on a fresh clone.
+    # The `tests/reports/` exclusion is applied TARGET-side, in the loop below --
+    # not here and NOT inside `path_hits`, where it used to live as a `grep -v` over
+    # the whole `file:line:match` line. That form was two bugs at once: it dropped a
+    # hit because the CONTAINING file's path happened to contain the string, and being
+    # unanchored it also dropped a legitimate `packaging/tests/reports/a.md` that the
+    # PowerShell twin's anchored `-like 'tests/reports/*'` keeps. Two ports disagreeing
+    # on the same tree is precisely what POLICY step 9 forbids; 6b already had the
+    # anchored form, so 6a was the outlier.
     hits6a=$(path_hits $scan6a | LC_ALL=C sort -u)
 fi
 for hit in $hits6a; do
     path=${hit##*:}
+    # Target-side and ANCHORED, matching 6b and the PowerShell twin: a link to a
+    # generated report artifact is absent on a fresh clone, so the verdict would
+    # otherwise depend on what the developer had run locally.
+    case "$path" in tests/reports/*) continue ;; esac
     # A bare `PLAN.<topic>` citation names a document, so give it the extension the
     # document has. `PLAN.md` strips to an empty topic and is not a plan citation.
     case "$path" in
@@ -1327,8 +1473,33 @@ while IFS= read -r line; do
             has_impl=0; is_stub=1; body10=0
             ;;
         '**Symptom'*) body10=1 ;;
-        '**'*Scribobulate*) has_impl=1 ;;
+        # ORDER: the stub-disqualifiers are tested BEFORE the implementation-pointer arm,
+        # and that is load-bearing here in a way it is not in the twin. A `case` stops at
+        # the first matching arm, and the glob below still matches `**Resolution**: ... in
+        # Scribobulate the zoom provider ...` (live, ScrAP-127) -- so with the old order
+        # that line was consumed here and this arm never ran, leaving is_stub=1 on a full
+        # body. Tightening the predicate alone does NOT fix that: the outer glob still
+        # matches the line, it just no longer sets has_impl. The PowerShell port needs no
+        # reorder because its regex is exact enough never to capture such a line at all.
         '**Resolution'*|'**Root cause'*|'**Lesson'*|'**What was tried'*) is_stub=0 ;;
+        # PARITY WITH THE POWERSHELL PORT'S `^\*\*[^*]*Scribobulate`, which is the correct
+        # rule: all six spellings of this field put `Scribobulate` INSIDE the leading bold
+        # run, so a match after a further `*` is prose, not the field. The bare glob
+        # `'**'*Scribobulate*` accepted any line opening with `**` that named the project
+        # anywhere afterwards, and three live entries have exactly that shape -- ScrAP-127,
+        # -144 and -160 were each credited with an implementation pointer they do not
+        # carry. MEASURED over the register: the tight rule keeps all 245 genuine field
+        # lines (including the sole `**Non-core (Scribobulate's ...)**` variant) and drops
+        # exactly six prose lines, of which three are already caught by the Symptom arm.
+        #
+        # A glob cannot express `[^*]*`, so the leading run is isolated by parameter
+        # expansion rather than by `grep -E` -- no subprocess, and nothing that depends on
+        # which grep is first on PATH, which is the defect ScrAP-319 records one check over.
+        '**'*Scribobulate*)
+            lead=${line#'**'}
+            case "$lead" in *'*'*) lead=${lead%%'*'*} ;; esac
+            case "$lead" in *Scribobulate*) has_impl=1 ;; esac
+            ;;
     esac
 done < sdd/ANTI-PATTERNS.md
 if [ -n "$cur10" ] && [ "$is_stub" = 1 ] && [ "$body10" = 1 ] && [ "$has_impl" = 0 ]; then
@@ -1432,23 +1603,82 @@ fi
 # a path containing a newline is torn into two fragments indistinguishable from two ordinary
 # paths, each of which matches nothing, so the gate silently MISSES a path the older
 # enumeration caught. MEASURED. Read on the NUL boundary and test each path whole.
+# ── Check 13: every entry body has a TOC row ─────────────────────────────────────
+#
+# THE CONVERSE OBLIGATION, and it exists because it was violated by the seat that owns
+# this register, on the entry it had just landed. ScrAP-319's body was correct and
+# complete and had no row in the table of contents. SDD principle 7 makes the TOC a
+# FILTER — an agent reads it to decide which bodies to open — so an entry missing from
+# it is invisible to the one path meant to find it while still existing, which is worse
+# than a missing entry because nothing anywhere reads as wrong.
+#
+# Nothing could see it. Check 9 is number immutability, check 10 is the implementation
+# line, checks 2 and 3 prove a cited number HAS a body. None asks whether a body can be
+# FOUND. That is the same shape POLICY records for rubrics against MANUAL-TEST checks:
+# the change-triggered direction is covered and the converse is not, so a thing can land
+# half-registered and every gate stays green.
+#
+# The row is matched on the leading `| N |` cell only. Matching the title too would make
+# this a second place the title is written down, which is the defect one register over.
+#
+# COVERAGE OF THE CONVERSE DIRECTION, mapped by the macOS seat so nobody re-derives it:
+# a row left behind after its BODY was deleted is already caught by check 9, which is
+# manifest-driven and reports an allocated number with no `## N.` heading. The one shape
+# that slips through both is an INVENTED row for a number that was never allocated — a
+# planted `| 999 | … |` with no body leaves the whole gate green, since 999 is not in the
+# manifest either. Assessed and deliberately NOT gated: it needs someone to hand-type a
+# row for an entry that does not exist, and the row is written beside the body. The two
+# directions that actually occur are both covered.
+echo "── Check 13: entry bodies with no TOC row ──"
+bodies13=$(grep -oE '^##[[:space:]]+[0-9]+\.' sdd/ANTI-PATTERNS.md | grep -oE '[0-9]+' | sort -un || true)
+rows13=$(grep -oE '^\|[[:space:]]*[0-9]+[[:space:]]*\|' sdd/ANTI-PATTERNS.md | grep -oE '[0-9]+' | sort -un || true)
+missing13=$(comm -23 <(echo "$bodies13") <(echo "$rows13"))
+if [ -n "$missing13" ]; then
+    echo "  FAIL — entr(ies) with a body but no row in the table of contents:"
+    for n13 in $missing13; do
+        echo "    ScrAP-$n13  $(grep -m1 -E "^##[[:space:]]+$n13\." sdd/ANTI-PATTERNS.md | cut -c1-90)"
+    done
+    echo "    The TOC is how an agent decides which bodies to read (SDD principle 7), so an"
+    echo "    entry absent from it is unreachable by the path meant to find it."
+    fail=1
+else
+    echo "  PASS"
+fi
+
 echo "── Check 12: paths Windows cannot check out ──"
 bad12=""
+# THE ENUMERATOR'S EXIT STATUS IS READ, and it takes a temp file to read it. Process
+# substitution reports the status of the *redirection*, never of the command inside it, so
+# `done < <(git ls-files -z)` makes a failed enumeration indistinguishable from a clean
+# tree: zero paths in, zero violations out, PASS. That is the same defect the scan
+# contract's `maxdepth` tripwire exists to prevent one file over — a check whose input
+# silently emptied is leniently incomplete without saying so. A command substitution
+# cannot be used instead: bash DROPS NUL bytes from `$(...)`, which is the whole point of
+# `-z`.
+# Enumerate to a FILE first, so the status belongs to the command rather than to a
+# redirection. A process substitution whose subshell writes `$?` to a temp file does not
+# work here either: the loop ends when the pipe closes and the read races the subshell's
+# exit, which is how the first attempt at this fix printed an EMPTY status.
+list12=$(mktemp)
+ls12_rc=0
+git -C . ls-files -z >"$list12" || ls12_rc=$?
 while IFS= read -r -d '' p12; do
-    # The NEWLINE case cannot go through grep AT ALL: grep is line-oriented, so a `\n`
-    # inside a path is a SEPARATOR and never content -- the same tearing as `tr`, one
-    # stage further along, and it silently costs the `[\x01-\x1f]` clause its most
-    # likely member. Test it in the shell; grep handles the rest (other control
-    # characters survive intact within a line).
-    if [[ "$p12" == *$'\n'* ]] || printf '%s' "$p12" \
-        | grep -qP '[<>:"|?*]|[\x01-\x1f]|[. ]$|(^|/)(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^/]*)?$'
-    then
+    # The predicate is `win_illegal_path`, defined once at the top of this file so the
+    # self-test drives THIS test rather than a copy of it. Its two-stage shape, why a
+    # single `grep -P` was a permanent false green on macOS, and why the newline case
+    # cannot go through grep at all, are all documented there.
+    if win_illegal_path "$p12"; then
         bad12="${bad12}$(printf '%q' "$p12")
 "
     fi
-done < <(git -C . ls-files -z)
+done <"$list12"
+rm -f "$list12"
 bad12=${bad12%$'\n'}
-if [ -n "$bad12" ]; then
+if [ "$ls12_rc" != "0" ]; then
+    echo "  FAIL — 'git ls-files' exited $ls12_rc; the tree was not enumerated, so this"
+    echo "    check proved nothing. A silent empty input reads exactly like a clean tree."
+    fail=1
+elif [ -n "$bad12" ]; then
     echo "  FAIL — tracked path(s) illegal on Win32 (git checkout refuses the whole tree):"
     printf '%s\n' "$bad12" | sed 's/^/    /'
     fail=1

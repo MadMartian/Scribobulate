@@ -225,20 +225,17 @@ mod gtk_integration_tests {
         settings.set_gtk_application_prefer_dark_theme(restore);
     }
 
-    /// Pump the main loop until `cond` holds or `budget` iterations elapse.
-    /// Non-blocking `iteration(false)`, never `iteration(true)`, so a condition that
-    /// never becomes true returns promptly and the caller's assertion fires instead
-    /// of the suite hanging (GTK4Rs/AP-79).
-    fn pump_until(budget: u32, cond: impl Fn() -> bool) -> bool {
-        let ctx = glib::MainContext::default();
-        for _ in 0..budget {
-            if cond() {
-                return true;
-            }
-            ctx.iteration(false);
-            std::thread::sleep(std::time::Duration::from_millis(4));
-        }
-        cond()
+    /// Pump the main loop until `cond` holds or `budget` turns' worth of wall-clock
+    /// time elapses. `crate::testpump::until_or_for` under `Clock::Frame` (M31) —
+    /// the repaint this waits on is frame-clock driven, same family as the Linux
+    /// popover-animation copies this replaces; `budget * 4ms` keeps this function's
+    /// old worst-case ceiling.
+    fn pump_until(budget: u32, cond: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(budget as u64 * 4),
+            cond,
+        )
     }
 
     /// Present a small window, render it through GSK and return its centre pixel —

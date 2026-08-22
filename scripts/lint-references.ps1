@@ -155,6 +155,61 @@ function Get-RepoRelativePath {
     $p
 }
 
+# The ONE place check 12's Win32 path-legality predicate lives, so its corpus drives the
+# CHECK rather than a re-implementation of it. Kept structurally paired with the bash
+# port's `win_illegal_path`, which is TWO STAGES for a reason that does not apply here
+# but must not be optimised away: the bash port had this as a single `grep -qP`, and
+# `grep -P` is absent from the BSD grep macOS ships, so check 12 was a permanent false
+# green on that platform. .NET regex has both `(?i)` and `\x01-\x1f`, so this port
+# expresses the same rule in one pass — the RULE is shared, the spelling cannot be.
+#
+# The newline case is explicit here for the same reason it is there: it is the member of
+# the control-character class most likely to occur, and the likeliest to be lost to a
+# line-oriented tool.
+# PER COMPONENT, not per path. The device-name rule was anchored `(^|/)...$` and the
+# trailing dot/space rule to `[. ]$`, so both only ever saw the LAST component. A DIRECTORY
+# named for a reserved device breaks a checkout exactly as a file does, and git refuses the
+# whole tree either way.
+#
+# MEASURED against real `git clone` on git 2.49.0.windows.1 -- paths planted with
+# `update-index --cacheinfo core.protectNTFS=false`, then cloned with default settings:
+#
+#   REFUSED   src/nul/thing.rs   a./b.md   a /b.md   src/com1/x.rs
+#             deep/a/b/nul/c/x.rs   src/nul.txt/x.rs   src/con.foo/x.rs   src/lpt0/x.rs
+#   ACCEPTED  ok/fine.md   src/console/x.rs   src/nullable/x.rs   src/a.b/x.rs
+#             src/com0/x.rs   src/conin/x.rs   src/conout/x.rs
+#
+# The old rule was blind to every one of the eight refusals except a final-component one.
+#
+# LPT[0-9], NOT LPT[1-9], AND THAT IS DELIBERATE. Measured, twice, in isolation: git
+# REFUSES `lpt0` while the filesystem ACCEPTS it -- `Directory.CreateDirectory` makes
+# `lpt0` and `com0` happily, and git refuses `lpt0` but accepts `com0`. The asymmetry is
+# git's, not this gate's. This check exists to predict "git checkout refuses the whole
+# tree", so it encodes what GIT refuses; a path git will not write is unusable here whether
+# or not Win32 would have allowed it. Version-scoped: measured on 2.49.0.windows.1, and if
+# a later git drops the quirk this rule is merely one name stricter than necessary, which
+# is the safe direction for a gate.
+#
+# Trailing dot and space are not refused by Win32 itself -- they are SILENTLY STRIPPED.
+# Measured: creating `a.` and `a ` both yield a directory called `a`, so two distinct
+# contract paths collapse onto one. For a tracked tree that is worse than a refusal, since
+# git then reports the file missing forever. git refuses them outright, which is why they
+# belong here rather than in a warning.
+function Test-WinIllegalPath {
+    param([string]$Path)
+    # Whole-path rules: these characters are illegal wherever they appear.
+    if (($Path -match "`n") -or ($Path -match '[<>:"|?*]') -or ($Path -match '[\x01-\x1f]')) {
+        return $true
+    }
+    # Component rules. `/` is the separator in every path this gate sees (git ls-files),
+    # so splitting on it is exact rather than a guess.
+    foreach ($seg in $Path.Split('/')) {
+        if ($seg -match '[. ]$') { return $true }
+        if ($seg -match '(?i)^(CON|PRN|AUX|NUL|COM[1-9]|LPT[0-9])(\..*)?$') { return $true }
+    }
+    return $false
+}
+
 # Matches `ISSUES P`, `ISSUES-P`, `ISSUES_P`, `ISSUES: P`, `ISSUES.md entry P`, and
 # `sdd/ISSUES.md entry P`. Kept byte-identical to the bash gate's pattern so the two
 # platforms enforce the SAME rule -- a lint whose strictness depends on who ran it is
@@ -186,7 +241,13 @@ function Get-RepoRelativePath {
 # so `read ISSUES.md and TECH.md together` stays clean. Both engines agree here because
 # the check is boolean -- leftmost-longest vs leftmost-first cannot change whether a
 # match exists, only which one is reported, and nothing reads the capture.
-$issuePattern = '\bISSUES(\.md)?([ .:_-]*([a-z]+ )?[A-Z]\b|[ .:_-]*#[A-Z]+\b)'
+# The third alternative is the TITLE form, and it is here because check 1 reported PASS
+# over a live violation: `probes/native-chooser-rss.m` cited an entry by its QUOTED TITLE
+# rather than its letter, and a pattern hunting letter IDs cannot see that. A title
+# pointer dangles exactly as an ID pointer does -- the entry is deleted when fixed either
+# way -- so the rule was right and only its pattern was narrow. Prose ABOUT the register
+# is still legal, which is what the `mustNotMatch` corpus pins.
+$issuePattern = '\bISSUES(\.md)?([ .:_-]*([a-z]+ )?[A-Z]\b|[ .:_-]*#[A-Z]+\b|[ .:_-]*"[^"]+")'
 
 # The document-path forms check 6a must catch. Byte-identical to the bash gate's
 # PATH_RX for the same reason $issuePattern is.
@@ -286,6 +347,29 @@ function Get-ScanField {
     ,$out
 }
 
+# -Encoding UTF8 ON EVERY Get-Content IN THIS FILE, all nine call sites, and it is not
+# optional. PS 5.1's Get-Content sniffs a BOM and falls back to the ANSI CODEPAGE when
+# there is none. `sdd/ANTI-PATTERNS.md` has no BOM and is UTF-8, so every em dash in it
+# was decoded as three Windows-1252 characters.
+#
+# BOUNDED BEFORE IT WAS FIXED, because "add an encoding flag everywhere" is the kind of
+# change that quietly moves a verdict: no verdict changes. Every pattern this file matches
+# on is ASCII and line-anchored, a multi-byte sequence mis-decoded mid-line cannot produce
+# a `^##` or a `^|`, and line splitting is on CR/LF which the misdecode leaves alone.
+# MEASURED on the register under both decodings: 300 bodies and 300 TOC rows either way,
+# Compare-Object empty. Check 11 reads the file's real byte length (630687B, matching
+# `stat`), not a decoded string, so its warning is unaffected too.
+#
+# What it does change is the DIAGNOSTIC. Check 13's FAIL echoes the offending entry's
+# heading, and it came back as `A portability gate ... on PATH â€” and`. That line is read
+# by a human who is already dealing with a failure, which is the worst moment to hand
+# someone a corrupted rendering of the thing that failed.
+#
+# The sibling port already knew: packaging/windows/pipeline.ps1 reads the contract with
+# -Encoding UTF8 and carries a comment explaining this exact trap. Same author, same trap,
+# one file knowing it and the other not is drift, not an open question. The shell twin has
+# no analogue -- it is byte-transparent -- so nothing here needs a matching change there.
+#
 # `Get-Content -Raw` on an EMPTY file returns $null, and every method call on that
 # ($null.Contains(...)) throws with a message naming neither the file nor the check —
 # so a truncated input would be reported by the runtime instead of by the gate, and
@@ -295,7 +379,7 @@ function Get-ScanField {
 function Get-FileText {
     param([Parameter(Mandatory)] [string] $Path)
     if (-not (Test-Path $Path)) { return '' }
-    $raw = Get-Content $Path -Raw
+    $raw = Get-Content -Encoding UTF8 $Path -Raw
     if ([string]::IsNullOrWhiteSpace($raw)) { return '' }
     $raw
 }
@@ -315,7 +399,7 @@ if (-not (Test-Path $scanContract)) {
 # class this whole guard exists to close. One read after one check removes the ordering
 # dependency instead of documenting it. `@()` so a single-line contract is still an
 # array rather than a scalar.
-$scanContractLines = @(Get-Content $scanContract)
+$scanContractLines = @(Get-Content -Encoding UTF8 $scanContract)
 $scanRoots    = Get-ScanField 'root'
 $scanFiles    = Get-ScanField 'file'
 $scanExcludes = Get-ScanField 'exclude'
@@ -442,7 +526,20 @@ foreach ($l in $idxLines) {
 # walk is a second enumeration; there is no such thing as a harmless one here.
 function Test-ScanExcluded {
     param([Parameter(Mandatory)] [string] $Rel, $LinkType)
-    foreach ($x in $scanExcludes) { if ($Rel -like ($x + '*')) { return $true } }
+    # ORDINAL, CASE-SENSITIVE, LITERAL prefix -- the same comparison the scan-set index and
+    # the depth tripwire in this file already use, and NOT `-like`.
+    #
+    # `-like` was wrong twice over for a contract-driven prefix. It is case-INSENSITIVE
+    # where the bash twin's `grep -E` is not, so `exclude Docs/` would have excluded
+    # `docs/` here and nothing there -- a scan set whose membership depends on which
+    # platform enumerated it, in the one gate whose entire purpose is proving the two
+    # platforms see the same files. And it treats `[`, `?` and `*` as WILDCARDS, so an
+    # exclude value containing any of them means something other than itself.
+    #
+    # A prefix from a contract is a literal. Compare it as one.
+    foreach ($x in $scanExcludes) {
+        if ($x -and $Rel.StartsWith($x, [System.StringComparison]::Ordinal)) { return $true }
+    }
     # Union of the two symlink tests: the git index (authoritative on both platforms, and
     # the ONLY half that fires on a core.symlinks=false checkout) OR the filesystem
     # (which catches an untracked symlink the index cannot see). See the block above.
@@ -582,7 +679,9 @@ if ($SelfTest) {
         'see sdd/ISSUES.md #WW',
         '(ISSUES.md item P)',
         'see ISSUES issue P',
-        'the ISSUES.md letter P'
+        'the ISSUES.md letter P',
+        'attribute the growth (ISSUES.md "native file chooser RSS growth")',
+        'see ISSUES "the rename suite finalizes a cancelled monitor"'
     )
     $mustNotMatch = @(
         'issues a queue_draw that CLEARS the cache',
@@ -592,7 +691,77 @@ if ($SelfTest) {
         'ISSUES.md is not a changelog',
         'the ISSUES register empties as it works',
         'ISSUES.md entries are deleted when fixed',
-        'read ISSUES.md and TECH.md together'
+        'read ISSUES.md and TECH.md together',
+        'the register lives in sdd/ISSUES.md and shrinks as it works'
+    )
+    # Check 12's corpus, kept string-for-string with the bash gate's. It shipped with NO
+    # self-test in either port, which is the mechanism that would have caught the bash
+    # port's `grep -P` on a BSD-grep host -- so the corpus is the fix and the pattern
+    # change is only half of it. It drives `Test-WinIllegalPath`, the predicate the check
+    # itself calls.
+    #
+    # `PLAN.console.md`, `contents.md` and `nullable.rs` are the negative controls that
+    # matter: each CONTAINS a reserved device name and none of them IS one, so a
+    # device-name rule written without the anchors would fail the whole tree.
+    $winMustMatch = @(
+        'a<b.md',
+        'a>b.md',
+        'a:b.md',
+        'a"b.md',
+        'a|b.md',
+        'a?b.md',
+        'a*b.md',
+        'trailing.',
+        'trailing ',
+        'con',
+        'CON.txt',
+        'src/nul',
+        'lpt9.md',
+        'com1',
+        'PRN.md',
+        'src/dir/AUX.rs',
+        # NON-FINAL components. Every one of these was planted in a real index and REFUSED
+        # by `git clone` on 2.49.0.windows.1; the pre-M65 rule saw none of them.
+        'src/nul/thing.rs',
+        'src/com1/x.rs',
+        'deep/a/b/nul/c/x.rs',
+        'src/nul.txt/x.rs',
+        'src/con.foo/x.rs',
+        'src/lpt0/x.rs',
+        'a./b.md',
+        'a /b.md',
+        # NOT "a`u{0001}b.md": `u{...} is a PowerShell 6+ escape. Windows PowerShell 5.1
+        # does not recognise it and an unrecognised backtick escape yields the LITERAL
+        # character, so that spelling produces the 12-char string `au{0001}b.md` -- a
+        # corpus entry with no control character in it, which the predicate then
+        # correctly refuses to flag. The self-test read as a predicate defect and was a
+        # corpus defect. `[char]1` is the spelling both editions share.
+        "a$([char]1)b.md",
+        "a`nb.md"
+    )
+    $winMustNotMatch = @(
+        'ok.md',
+        'src/normal-file.rs',
+        'contents.md',
+        'nullable.rs',
+        'PLAN.console.md',
+        'sdd/ANTI-PATTERNS.md',
+        'scripts/lint-references.sh',
+        'a-b_c.rs',
+        'Cargo.toml',
+        # The negative controls that matter for the PER-COMPONENT rule: each contains a
+        # device name inside a directory component without BEING one, and each was planted
+        # and ACCEPTED by the same real `git clone`. A per-component rule written without
+        # its anchors would reject the whole src tree.
+        'src/console/x.rs',
+        'src/nullable/x.rs',
+        'src/a.b/x.rs',
+        # COM0 and LPT0 are the asymmetry, measured: git accepts com0 and refuses lpt0.
+        # This pins the accepting half, so widening COM[1-9] to COM[0-9] "for symmetry"
+        # fails here rather than quietly rejecting a legal path.
+        'src/com0/x.rs',
+        'src/conin/x.rs',
+        'src/conout/x.rs'
     )
     # Check 6a's corpus, kept string-for-string with the bash gate's. The
     # `expected|line` form pins WHAT is extracted, not merely that something matched:
@@ -653,6 +822,12 @@ if ($SelfTest) {
     }
     foreach ($s in $bareApMustNotFlag) {
         if (Test-BareAp $s) { Write-Host "   FALSE POSITIVE (check 8): $s" -ForegroundColor Red; $bad++ }
+    }
+    foreach ($line in $winMustMatch) {
+        if (-not (Test-WinIllegalPath $line)) { Write-Host "   MISS (should match): [$line]" -ForegroundColor Red; $bad++ }
+    }
+    foreach ($line in $winMustNotMatch) {
+        if (Test-WinIllegalPath $line) { Write-Host "   FALSE POSITIVE: [$line]" -ForegroundColor Red; $bad++ }
     }
     foreach ($s in $mustMatch) {
         if ($s -cnotmatch $issuePattern) { Write-Host "   MUST MATCH but did not: '$s'" -ForegroundColor Red; $bad++ }
@@ -847,9 +1022,13 @@ if ($SelfTest) {
     # running and passing, so the summary said "four corpora" over six -- a reader auditing
     # whether check 8 is covered would conclude it is not, and would "add" what exists.
     # If you add a corpus above, add its count here in the same change.
-    Write-Host ("self-test: OK ({0}/{0} must-match, {1}/{1} must-not-match, {2}/{2} path-extract, {3}/{3} path-must-not-match, {4}/{4} bare-AP-flag, {5}/{5} bare-AP-silent)" -f `
+    # Check 12's two corpora were the next omission, running and passing unnamed -- the
+    # same shape one check later. They are the ones a reader is MOST likely to audit,
+    # because check 12 is the check whose bash twin was a permanent false green.
+    Write-Host ("self-test: OK ({0}/{0} must-match, {1}/{1} must-not-match, {2}/{2} path-extract, {3}/{3} path-must-not-match, {4}/{4} bare-AP-flag, {5}/{5} bare-AP-silent, {6}/{6} win-illegal, {7}/{7} win-legal)" -f `
         $mustMatch.Count, $mustNotMatch.Count, $pathMustMatch.Count, $pathMustNotMatch.Count, `
-        $bareApMustFlag.Count, $bareApMustNotFlag.Count) -ForegroundColor Green
+        $bareApMustFlag.Count, $bareApMustNotFlag.Count, `
+        $winMustMatch.Count, $winMustNotMatch.Count) -ForegroundColor Green
     exit 0
 }
 
@@ -975,7 +1154,7 @@ $missingReg = @($citedInReg | Where-Object { -not $definedSet.Contains($_) })
 if ($missingReg.Count) {
     $failed = $true
     Write-Host '   FAIL' -ForegroundColor Red
-    $regLines = Get-Content 'sdd/ANTI-PATTERNS.md'
+    $regLines = Get-Content -Encoding UTF8 'sdd/ANTI-PATTERNS.md'
     foreach ($n in $missingReg) {
         Write-Host ('      ScrAP-{0} is cited in the register but has no `## {0}.` body:' -f $n)
         for ($i = 0; $i -lt $regLines.Count; $i++) {
@@ -999,7 +1178,7 @@ Write-Host '-- Check 4: module list drift between src/lib.rs and src/gtk_suite.r
 # on the preceding line is ignored — which is what makes `suite_registry` and the
 # unix/windows-gated modules compare equal rather than reading as drift.
 function Get-ModuleList([string]$Path) {
-    Get-Content $Path |
+    Get-Content -Encoding UTF8 $Path |
         Select-String -Pattern '^\s*(pub\(crate\) )?mod ([a-z_0-9]+);' |
         ForEach-Object { $_.Matches[0].Groups[2].Value } |
         Sort-Object -Unique
@@ -1077,7 +1256,7 @@ Write-Host '-- Check 5b: #[gtk::test] PRESCRIBED in prose without naming the rep
 $prosehits = @()
 foreach ($doc in $scanPrescriptive) {
     if (-not (Test-Path $doc)) { continue }
-    $lines = @(Get-Content $doc)
+    $lines = @(Get-Content -Encoding UTF8 $doc)
     $i = 0
     while ($i -lt $lines.Count) {
         if ($lines[$i] -match '^\s*$') { $i++; continue }
@@ -1331,9 +1510,14 @@ if (-not (Test-Path $manifest)) {
     Write-Host "   FAIL - manifest $manifest is missing; number immutability is unenforced" -ForegroundColor Red
     $failed = $true
 } else {
-    $have9 = Select-String -Path 'sdd/ANTI-PATTERNS.md' -Pattern '^## ([0-9]+[a-z]?)\.' -AllMatches |
+    # -CaseSensitive because the shell twin uses `grep -oE`, which is case-sensitive,
+    # and Select-String is NOT by default. Without it this port would accept an entry
+    # heading spelled with a suffix letter in the wrong case that the shell port
+    # rejects -- the lenient-port drift POLICY step 9 exists to prevent, in the one
+    # check that was missed when -CaseSensitive was added to the others.
+    $have9 = Select-String -Path 'sdd/ANTI-PATTERNS.md' -Pattern '^## ([0-9]+[a-z]?)\.' -AllMatches -CaseSensitive |
              ForEach-Object { $_.Matches[0].Groups[1].Value }
-    $want9 = Get-Content $manifest | Where-Object { $_ -and $_ -notmatch '^\s*#' }
+    $want9 = Get-Content -Encoding UTF8 $manifest | Where-Object { $_ -and $_ -notmatch '^\s*#' }
     $missing9 = $want9 | Where-Object { $have9 -notcontains $_ }
     $added9   = $have9 | Where-Object { $want9 -notcontains $_ }
     $dupes9   = $have9 | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name }
@@ -1369,7 +1553,7 @@ Write-Host "-- Check 10: a compressed entry keeps its implementation line --" -F
 # field the detector "could not see".
 $bad10 = @()
 $cur10 = ''; $hasImpl = $false; $isStub = $true; $sawSym = $false
-foreach ($line in Get-Content 'sdd/ANTI-PATTERNS.md') {
+foreach ($line in Get-Content -Encoding UTF8 'sdd/ANTI-PATTERNS.md') {
     if ($line -match '^## ([0-9]+[a-z]?)\.') {
         if ($cur10 -and $isStub -and $sawSym -and -not $hasImpl) { $bad10 += $cur10 }
         $cur10 = $Matches[1]; $hasImpl = $false; $isStub = $true; $sawSym = $false
@@ -1404,7 +1588,7 @@ if ($regBytes -gt $REG_FAIL) {
     Write-Host "   WARN - register is ${regBytes}B, past the ${REG_WARN}B soft limit" -ForegroundColor Yellow
 }
 $sizes = @{}; $n11 = ''
-foreach ($line in Get-Content 'sdd/ANTI-PATTERNS.md') {
+foreach ($line in Get-Content -Encoding UTF8 'sdd/ANTI-PATTERNS.md') {
     if ($line -match '^## ([0-9]+[a-z]?)\.') { $n11 = $Matches[1]; $sizes[$n11] = 0 }
     elseif ($n11) { $sizes[$n11] += $line.Length + 1 }
 }
@@ -1419,6 +1603,49 @@ if ($over) {
     $warn | ForEach-Object { Write-Host "     ScrAP-$($_.Key) $($_.Value)B" }
 }
 if ($bad11) { $failed = $true } elseif (-not $warn -and $regBytes -le $REG_WARN) {
+    Write-Host '   PASS' -ForegroundColor Green
+}
+
+# -- Check 13: entry bodies with no TOC row --------------------------------------
+#
+# THE CONVERSE OBLIGATION, and it exists because it was violated by the seat that owns
+# this register, on the entry it had just landed. ScrAP-319's body was correct and
+# complete and had no row in the table of contents. SDD principle 7 makes the TOC a
+# FILTER -- an agent reads it to decide which bodies to open -- so an entry missing from
+# it is invisible to the one path meant to find it while still existing, which is worse
+# than a missing entry because nothing anywhere reads as wrong.
+#
+# Nothing could see it. Check 9 is number immutability, check 10 is the implementation
+# line, checks 2 and 3 prove a cited number HAS a body. None asks whether a body can be
+# FOUND.
+#
+# The row is matched on the leading `| N |` cell only. Matching the title too would make
+# this a second place the title is written down, which is the defect one register over.
+#
+# COVERAGE OF THE CONVERSE DIRECTION, mapped by the macOS seat so nobody re-derives it:
+# a row left behind after its BODY was deleted is already caught by check 9, which is
+# manifest-driven and reports an allocated number with no `## N.` heading. The one shape
+# that slips through both is an INVENTED row for a number that was never allocated -- a
+# planted `| 999 | ... |` with no body leaves the whole gate green, since 999 is not in
+# the manifest either. Assessed and deliberately NOT gated: it needs someone to hand-type
+# a row for an entry that does not exist, and the row is written beside the body. The two
+# directions that actually occur are both covered.
+Write-Host '-- Check 13: entry bodies with no TOC row --'
+$apLines13 = Get-Content -Encoding UTF8 'sdd/ANTI-PATTERNS.md'
+$bodies13  = @($apLines13 | ForEach-Object { if ($_ -match '^##\s+([0-9]+)\.') { [int]$Matches[1] } }) | Sort-Object -Unique
+$rows13    = @($apLines13 | ForEach-Object { if ($_ -match '^\|\s*([0-9]+)\s*\|') { [int]$Matches[1] } }) | Sort-Object -Unique
+$missing13 = @($bodies13 | Where-Object { $rows13 -notcontains $_ })
+if ($missing13.Count -gt 0) {
+    Write-Host '   FAIL - entr(ies) with a body but no row in the table of contents:' -ForegroundColor Red
+    foreach ($n13 in $missing13) {
+        $head13 = ($apLines13 | Where-Object { $_ -match "^##\s+$n13\." } | Select-Object -First 1)
+        if ($head13.Length -gt 90) { $head13 = $head13.Substring(0, 90) }
+        Write-Host "     ScrAP-$n13  $head13"
+    }
+    Write-Host '     The TOC is how an agent decides which bodies to read (SDD principle 7), so an'
+    Write-Host '     entry absent from it is unreachable by the path meant to find it.'
+    $failed = $true
+} else {
     Write-Host '   PASS' -ForegroundColor Green
 }
 
@@ -1461,17 +1688,31 @@ $psi12.StandardOutputEncoding = [System.Text.Encoding]::UTF8
 $proc12 = [System.Diagnostics.Process]::Start($psi12)
 $out12  = $proc12.StandardOutput.ReadToEnd()
 $proc12.WaitForExit()
-$tracked12 = @($out12 -split "`0" | Where-Object { $_ })
-$bad12 = $tracked12 | Where-Object {
-    $_ -match '[<>:"|?*]' -or $_ -match '[\x01-\x1f]' -or $_ -match '[. ]$' -or
-    $_ -match '(?i)(^|/)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^/]*)?$'
-}
-if ($bad12) {
-    Write-Host '   FAIL - tracked path(s) illegal on Win32 (git checkout refuses the whole tree):' -ForegroundColor Red
-    $bad12 | ForEach-Object { Write-Host "     $_" }
+# THE ENUMERATOR'S EXIT STATUS IS READ. This port never looked at `$proc12.ExitCode`, so
+# a failed enumeration was indistinguishable from a clean tree: zero paths in, zero
+# violations out, PASS. Same defect as the bash port's process substitution, different
+# clothing.
+# The violation scan is NESTED INSIDE the success branch, not sequenced after it. When
+# the enumerator's failure only set `$tracked12 = @()` and fell through, the empty set
+# reached a scan that found nothing in it and printed `PASS` on the line below the FAIL --
+# one check emitting both verdicts, with PASS last. The exit status was right and the
+# transcript was not, which is the worse of the two to get wrong: a reader greps the
+# per-check verdict, and the gate's whole subject here is that an empty input is
+# indistinguishable from a clean tree. MEASURED with a `git` that exits 3 on `ls-files`.
+if ($proc12.ExitCode -ne 0) {
+    Write-Host "   FAIL - 'git ls-files' exited $($proc12.ExitCode); the tree was not enumerated, so this" -ForegroundColor Red
+    Write-Host '     check proved nothing. A silent empty input reads exactly like a clean tree.'
     $failed = $true
 } else {
-    Write-Host '   PASS' -ForegroundColor Green
+    $tracked12 = @($out12 -split "`0" | Where-Object { $_ })
+    $bad12 = @($tracked12 | Where-Object { Test-WinIllegalPath $_ })
+    if ($bad12.Count -gt 0) {
+        Write-Host '   FAIL - tracked path(s) illegal on Win32 (git checkout refuses the whole tree):' -ForegroundColor Red
+        $bad12 | ForEach-Object { Write-Host "     $_" }
+        $failed = $true
+    } else {
+        Write-Host '   PASS' -ForegroundColor Green
+    }
 }
 
 Pop-Location

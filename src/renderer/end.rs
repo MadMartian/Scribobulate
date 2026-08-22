@@ -105,6 +105,10 @@ impl Renderer {
             TagEnd::TableCell => {
                 if let Some(ts) = &mut self.table {
                     ts.in_cell = false;
+                    // What the delimiter row said about THIS cell's column. Both cell
+                    // shapes honour it, so `:---:` centres a pure-link cell exactly as
+                    // it centres a text one.
+                    let align = crate::mdtable::column_align(&ts.aligns, ts.col);
                     // Table-cell annotation: paint CriticMarkup claim highlights into the cell label.
                     if !self.ann_highlights.is_empty() {
                         ts.cell_markup = Self::finalize_cell_markup(
@@ -125,6 +129,23 @@ impl Renderer {
                             // (ScrAP-250).
                             let btn = link_cell_button(&url, &ts.cell_plain);
                             btn.set_has_frame(false);
+                            // A GtkButton fills its cell, so the column's alignment has
+                            // to move the BUTTON within the cell rather than the text
+                            // within the button — `xalign` on the inner caption label
+                            // would leave the button's own box flush left.
+                            //
+                            // Setting it also fixes an inconsistency nobody had
+                            // reported: with no `halign` a GtkLinkButton defaults to
+                            // Fill and centres its own caption, so a pure-link cell
+                            // rendered CENTRED while the text cells beside it in the
+                            // same column rendered flush left — one table disagreeing
+                            // with itself. MEASURED against a pre-change binary on a
+                            // four-column fixture.
+                            btn.set_halign(match align {
+                                crate::mdtable::Align::Center => gtk::Align::Center,
+                                crate::mdtable::Align::Right => gtk::Align::End,
+                                _ => gtk::Align::Start,
+                            });
                             btn.add_css_class("cell");
                             if ts.in_head {
                                 btn.add_css_class("cell-head");
@@ -141,7 +162,7 @@ impl Renderer {
                             // them out (it never re-measures at validation, so they never
                             // re-arm the GTK4Rs/AP-23 blank).
                             let label = cell_markup_label(&ts.cell_markup);
-                            label.set_xalign(0.0);
+                            label.set_xalign(align.xalign());
                             // Fill (not Start) so the cell's CSS border spans the FULL
                             // row height even when a sibling cell wraps taller; yalign 0
                             // keeps this cell's text aligned to the top.
@@ -163,6 +184,7 @@ impl Renderer {
                     ts.cell_plain.clear();
                     ts.cell_content_evs.clear();
                     ts.cell_off = 0;
+                    ts.col += 1;
                 }
             }
             TagEnd::TableHead => {}

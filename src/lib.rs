@@ -63,13 +63,21 @@ pub(crate) mod lineendings;
 pub(crate) mod links;
 pub(crate) mod logging;
 // Option+Left/Right word navigation in the editor — a macOS-only convention GTK
-// itself does not bind on any backend (see the module doc comment). Top-level and
-// cfg-gated at this declaration, not under `platform/mac/`: that directory's
-// contract (below) is narrow plumbing, whereas this is a keybinding-semantics
-// difference — the same kind of cross-platform behavioural divergence `accel.rs`
-// already centralizes at the top level, not under `platform/`.
-#[cfg(target_os = "macos")]
+// itself does not bind on any backend (see the module doc comment). Top-level rather
+// than under `platform/mac/`: that directory's contract (below) is narrow plumbing,
+// whereas this is a keybinding-semantics difference — the same kind of cross-platform
+// behavioural divergence `accel.rs` already centralizes at the top level.
+//
+// **Declared unconditionally, and only the WIRING inside it is `cfg`-gated.** The
+// module was gated here, which deleted its decision function's tests from every
+// platform but the target: `cargo test --lib -- --list` reported zero cases under it
+// on the platform POLICY names as canonical. A `cfg`'d-out test is not skipped, it is
+// deleted (ScrAP-212), and `word_movement` is pure data — the one thing that has no
+// reason to be platform-bound. This is NOT the `platform/` seam rule below: that rule
+// gates a module whose every line is a platform's plumbing, and this module's decision
+// core is not.
 pub(crate) mod macwordnav;
+pub(crate) mod mdtable;
 pub(crate) mod outline;
 pub(crate) mod outline_view;
 pub(crate) mod palette;
@@ -77,6 +85,9 @@ pub(crate) mod palette;
 /// `#[cfg]`-gated inside `platform/mod.rs`, at its own declaration.
 pub(crate) mod platform;
 pub(crate) mod preview;
+/// The PRIMARY-selection policy: what a selection change owes the display-global
+/// selection. Display-free, because its decisive case — a FOREIGN owner — cannot be
+/// staged inside this process at all.
 pub(crate) mod renderer;
 pub(crate) mod saferizer;
 pub(crate) mod session;
@@ -92,6 +103,13 @@ pub(crate) mod suite_registry;
 pub(crate) mod swapfile;
 pub(crate) mod tags;
 pub(crate) mod tasklist;
+/// Test-only. The one shared main-loop pump for every `gtk-integration-tests` body —
+/// see the module's own rustdoc for why ~24 hand-rolled copies across 19 files needed
+/// replacing (M31). Gated on the GTK-suite feature, not bare `#[cfg(test)]`: every
+/// consumer blocks on `glib::MainContext`, which a plain `cargo test` body has no use
+/// for.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) mod testpump;
 /// Test-only. Shared symlink setup with a runtime skip, so a test whose subject is a
 /// symlink is *skipped and counted* where the platform refuses one rather than
 /// `#[cfg(unix)]`-deleted (ScrAP-212). Not gated on the GTK-suite feature: its

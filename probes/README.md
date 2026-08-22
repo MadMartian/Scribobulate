@@ -68,6 +68,19 @@ cc probes/binding-shape.c -o /tmp/binding-shape \
 clang -ObjC -O1 -g -Wno-deprecated-declarations -o /tmp/native-chooser-rss \
    probes/native-chooser-rss.m $(pkg-config --cflags --libs gtk4) -framework AppKit
 
+# The two pure-AppKit rigs need no GTK at all — that is the point of them.
+clang -ObjC -O1 -o /tmp/accessory-view-dealloc \
+   probes/accessory-view-dealloc.m -framework AppKit
+clang -ObjC -O1 -o /tmp/appkit-panel-control \
+   probes/appkit-panel-control.m -framework AppKit
+
+clang -ObjC -O1 -o /tmp/middleclick-primary-paste \
+   probes/middleclick-primary-paste.m $(pkg-config --cflags --libs gtk4) -framework AppKit
+
+cc probes/textbuffer-selection-leak.c   -o /tmp/textbuffer-selection-leak   $(pkg-config --cflags --libs gtk4)
+cc probes/textview-primary-overwrite.c  -o /tmp/textview-primary-overwrite  $(pkg-config --cflags --libs gtk4)
+cc probes/textview-selection-clipboard.c -o /tmp/textview-selection-clipboard $(pkg-config --cflags --libs gtk4)
+
 # the Rust one builds and runs itself
 cargo run --manifest-path probes/binding-shape-rs/Cargo.toml
 ```
@@ -118,6 +131,22 @@ Fixtures 3 and 4 exist because `GtkTextView` calls
 GtkTextBuffer content and refreshes on **selection**. The trigger is therefore
 selecting inside an unclosed fence and middle-clicking, with no explicit copy.
 
+**The split is a precondition, and the rig checks it, not just reports it.**
+`report_toggles` computes whether a fixture's source document actually has a
+tag toggle sitting inside its final CRLF (the `case-bad` count) before the
+paste happens; each `Case` carries `expect_split` recording whether its
+verdict *depends* on that toggle being there. Fixtures 1 and 3 require it —
+"corrupts under `repair`" is only a meaningful negative if the toggle that
+would cause the chunking was actually present. Fixtures 2 and 4 are controls
+and must NOT have it. Fixture 5 does not require it either, even though the
+toggle happens to be present today: the plain-text remedy removes the
+chunking-by-toggle mechanism itself, so its byte-identical verdict holds
+whether or not GtkSourceView still places a toggle there. If a future
+GtkSourceView release moves the toggle off the CRLF, fixtures 1 or 3 would
+otherwise paste clean and get silently misread as "corruption fixed" — `main`
+checks `expect_split` against the measured `case-bad` count and refuses that
+reading: it prints a loud `RIG BROKEN` line naming the fixture and exits `2`.
+
 ### Expected output, measured 2026-08-20 on GTK 4.22.4 / GtkSourceView 5.20.0 / GdkMacosDisplay
 
 Arm 1, no repair — the split is real but nothing rewrites, so nothing corrupts:
@@ -150,6 +179,33 @@ comparison passes on a corrupted buffer. The researcher's first probe reported
 This probe emits no `Gtk-CRITICAL` and no `Gtk-WARNING` at all, and so do the
 researcher's four equivalent rigs at GTK 4.6.9 / X11, all run under
 `G_DEBUG=fatal-criticals`, all producing the same corrupted bytes.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | No corruption, and every `expect_split` fixture's precondition held — a trustworthy null result. |
+| `1` | At least one fixture's pasted bytes differ from its source — corruption reproduced. |
+| `2` | **Rig blind, not "worse corruption".** A fixture marked `expect_split` measured `case-bad == 0` — no toggle sat inside its CRLF, so the mechanism this probe exists to exercise never fired. GtkSourceView's tag geometry likely moved since 5.4.1/5.20.0; re-derive the offsets in `report_toggles`'s output before trusting exit `0` or `1` from this binary again. This mirrors `binding-shape-rs`'s multi-run precondition assert (above) — the difference is this probe reports the failure as a distinct exit code rather than a panic, so a caller can tell "rig blind" apart from "the process crashed". |
+
+Mutation-tested 2026-08-22 on GTK 4.6.9 / GtkSourceView 5.20.0 / X11 (Xvfb): forcing
+fixture 1's and 3's stashed `case-bad` to `0` (simulating the toggle no longer
+splitting the CRLF) produces, unmodified otherwise:
+
+```
+=== UNCLOSED fence (researcher's repro)  (repair=off, clipboard=CLIPBOARD) ===
+  ...
+  VERDICT: byte-identical
+  *** RIG BROKEN: this fixture requires a tag toggle inside the CRLF to test
+  anything, but none was found (case-bad=0) — GtkSourceView's tag geometry may
+  have moved. The VERDICT above is MEANINGLESS. ***
+...
+==== OVERALL: RIG BROKEN (precondition unmet — verdict meaningless) ====
+```
+exiting `2`. Fixtures 2, 4 (controls, `expect_split = FALSE`) and 5 (plain-text
+remedy, robust by design — see above) do not fire even with the same forced
+`case-bad = 0`. Restoring the real `case-bad` value returns the binary to its
+normal exit `0` / no-corruption output.
 
 Read the first version of that sentence in `iter-diagnostics.c`'s section before
 trusting any platform claim here: this seat originally recorded it as *"silent on
@@ -381,6 +437,18 @@ So the claim the project may assert is narrower than "the vfunc is correct":
 > binding is fixed upstream. If completion or snippets are ever enabled, re-run
 > arm R3 first.
 
+**This obligation is now a build failure rather than a sentence here.** `clippy.toml`
+bans `TextBufferExt::insert_markup` and the `sourceview5::CompletionWords` type, both
+citing arm R3, and `-D warnings` makes either a hard stop — so "re-run R3 first" is
+enforced at the moment someone tries, instead of depending on them having read this
+paragraph. Two notes from installing it, because both are the reusable part:
+`insert_with_attributes`, the probe's other named caller, turns out **not to be bound in
+gtk4-rs 0.10 at all**, so there is nothing to ban and the hazard is unreachable from Rust
+— checked against the crate source rather than assumed, since a ban on a path that does
+not resolve fails OPEN while looking installed. And GtkSourceView's two internal sites
+are inside the library, where no ban on our own call sites could ever see them, which is
+why the guard is on the TYPE that turns the feature on rather than on any call.
+
 **Whether GtkSourceView reaches a bounded-length insert internally is no longer
 open — it does, at two sites, and the researcher audited every
 `gtk_text_buffer_insert` call in the 5.20.0 tarball to find them:**
@@ -599,6 +667,14 @@ reason, and the comment at that site says so.
 The design rule behind the flag list: each one removes exactly one thing, so the
 difference between two runs names a cause instead of suggesting one.
 
+Two properties that rule depends on, and which the probe now enforces rather than
+assumes. **An unknown flag is rejected with exit 2**, because a silently ignored
+`--instaces` runs the default configuration and prints a clean, wrong answer under the
+heading you thought you had selected — the difference between two runs then names a
+cause that was never varied. And **every mode that changes what is measured is echoed
+in the run header**, not just some of them: a transcript that omits a mode cannot be
+told apart from one that did not use it, which is the same failure one step later.
+
 ---
 
 ## `empty-filter-crash.c` and `allowed-file-types-empty.m` — a claim that did not survive
@@ -639,3 +715,125 @@ gets rewritten underneath its documentation.
 What survives the falsification is the version-independent half: a zero-rule
 filter should not produce a filter entry at all. That argument cannot be refuted
 by a maintainer's OS version, which is exactly why it is the one worth making.
+
+---
+
+## `textview-selection-clipboard.c` — which caller raises the assertion
+
+**Question.** When an application takes PRIMARY over by removing GTK's selection-clipboard
+registration at realize, who raises `gtk_text_buffer_remove_selection_clipboard: assertion
+'selection_clipboard != NULL'`?
+
+**Why a probe and not a reading.** The assertion message names neither the caller nor the
+buffer — it asserts on the result of a local — and there are three live callers. Reading it
+as "my handler ran and found nothing" is an inference, and the source trace says that
+inference is false.
+
+**Measured** 2026-08-21, GTK 4.22.4 / Quartz. The backtrace names the caller outright:
+`gtk_text_view_set_buffer`. `--take-over` raises exactly one critical from inside
+`set_buffer`; `--control` raises none on an identical swap. The registration is ref-counted,
+`set_buffer` removes from the outgoing buffer and adds to the incoming one on every swap, so
+the take-over is undone by the swap — which the preview does on every re-render.
+
+**This is one of the two measurements that killed the publisher-side design.**
+
+---
+
+## `textview-primary-overwrite.c` — the other publisher-side design, also refuted
+
+**Question.** Can an application own PRIMARY by OVERWRITING the clipboard content instead of
+removing GTK's registration — leaving GTK's ref counting alone?
+
+**The trap it was built to find, and did.** GTK clears PRIMARY only while the content is
+still its own (guarded on `get_content == priv->selection_content`). Once the application
+owns it, GTK will never relinquish on the application's behalf, so handling only the
+has-selection case leaves the application's stale text on PRIMARY after the user deselects —
+silent, and worse than the defect being fixed.
+
+Together with the probe above, this is why the take-over was deleted rather than repaired:
+both designs attacked the PUBLISHER in order to change what the CONSUMER does.
+
+---
+
+## `middleclick-primary-paste.m` — attacking the consumer instead
+
+**Question.** Can an application replace GTK's middle-click PRIMARY paste with its own, and
+does its gesture actually receive the event?
+
+**The design it validates** is the one that shipped: leave GTK's publishing entirely alone,
+and fix the consumer — the editor's middle-click reads PRIMARY as *text*, which is safe
+against any publisher's content, including the preview's still-rich one.
+
+**A 2×2, agreed before running, so no claim is uncontrolled**: `--baseline` (setting on, no
+gesture) proves the rig delivers a middle click at all and must be run first — without it a
+silent gesture is indistinguishable from an undelivered event; `--gtk-off` proves the setting
+is what gates GTK's branch; `--ours` is the shipped design; `--both-on` decides whether
+turning the setting off is required or merely tidy.
+
+---
+
+## `textbuffer-selection-leak.c` — a leak that no application change reaches
+
+**Question.** Does a `GtkTextBuffer` leak a reference per select-then-deselect, and does
+taking PRIMARY over change that? (ScrAP-313.)
+
+**Why measure it again.** The register's refcount table records a SOURCE read, not a run —
+and ScrAP-157 is this project's standing example of a Linux-era defect simply absent on a
+later GTK. More importantly, the entry had been cited *against* a proposed change, with the
+claim that the take-over avoids the leak.
+
+**Measured** 2026-08-21, GTK 4.22.4 / Quartz, 7 cycles: control `+0`; select/deselect `+7`;
+select/deselect **with** the take-over `+7` — **identical**. The leak reproduces, and the
+take-over neither causes nor cures it. This is the probe that refuted an objection raised
+against removing the take-over, which is the whole reason it exists.
+
+---
+
+## `appkit-panel-control.m` — the control that inverted its own conclusion
+
+**Question.** How much of the native file chooser's per-invocation footprint growth is GTK's?
+
+**Read this before quoting it.** The FIRST version of this control was wrong in a way that
+flattered a conclusion: it dismissed the panel with `-close` while GTK's completion path sends
+only `-orderOut:`, so control and treatment differed in two ways at once and the entire
+difference was charged to GTK.
+
+**Corrected, it inverts the conclusion.** A process with no GTK in it at all grows ~0.56 MB per
+panel presentation (~0.97 MB with an accessory view), linearly to at least 40 cycles, and the
+panel is never deallocated whichever dismissal is used. **The cost is AppKit's.** On macOS
+26.6.1 `NSSavePanel` holds a strong reference to itself in a `_retainedSelf` ivar, which is why
+nothing anyone releases ever deallocates it.
+
+Every switch is a variable someone asked to hold still: `--dismiss` isolates close from
+orderOut, `--accessory` isolates the filter popup GTK installs, `--no-spy` proves the dealloc
+instrument is not itself causing what it measures, and `--verbose` prints the per-cycle curve
+so its SHAPE (linear vs plateauing) is visible rather than just its total.
+
+---
+
+## `accessory-view-dealloc.m` — an ordering bug that looks like a correct fix
+
+**Question.** Does `-[NSSavePanel setAccessoryView:nil]` actually let the accessory view
+deallocate, or does releasing it while the panel still references it merely balance the books
+without freeing anything?
+
+**Measured** (macOS 26.6.1, unlocked, n=3, 20 presentations per run):
+
+| arm | deallocations | per cycle |
+|---|---|---|
+| release popup with `accessoryView` still set | 0/20 | 932.2 KB |
+| `setAccessoryView:nil` first, THEN release | 19/20 | 542.3 KB |
+
+**The failure mode is the ORDERING, not the release** — and the wrong version is exactly what
+someone writes reasoning only from "we own a +1, so give it back". It looks right, it passes
+review, and it reclaims nothing.
+
+Two honesty notes carried from the source, because they are the reusable part: the residual
+(542.3) is *close* to `appkit-panel-control.m`'s bare-panel figure, but the two rigs differ in
+`setReleasedWhenClosed:`, dismissal path and inter-cycle gap, and the exact invocation behind
+the comparison figure was never recorded — so that agreement is **INFERRED, not MEASURED**. And
+it is 19/20, not 20/20; the entry should not say "all". Nineteen against zero carries the
+verdict without needing either.
+
+**Do not de-duplicate the two ObjC rigs' boilerplate.** `accessory-view-dealloc.m` rests its
+conclusion on the two probes sharing no code path — the duplication is load-bearing.

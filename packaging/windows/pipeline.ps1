@@ -112,7 +112,7 @@ $script:ContractLines = @(Get-Content -Encoding UTF8 -LiteralPath $CONTRACT)
 # matching defaults are case-INSENSITIVE where grep's are not: porting this gate with the
 # default operator would silently accept `Step 1 fmt` and `CMD.WINDOWS`, quietly relaxing
 # the contract's strictness relative to the Linux runner.
-$script:LineShape = '^(platform|step|intent|verdict|class|setup|cmd\.[a-z]+|na\.[a-z]+|carveout\.[a-z]+)\s+\S+(\s+.*)?$'
+$script:LineShape = '^(platform|step|intent|verdict|class|setup|cmd\.[a-z]+|na\.[a-z]+|carveout\.[a-z]+|disarm\.[a-z]+)\s+\S+(\s+.*)?$'
 
 function Split-ContractLine {
     param([string] $Line)
@@ -161,6 +161,27 @@ function Get-ContractValue {
 # unwrapping but DOUBLE-wraps when the caller also writes @(...), and PS 5.1 enumerates a
 # method call on an accidental collection instead of rejecting it -- Set-StrictMode does
 # not catch either.
+# Every carve-out declared for one step on one platform.
+#
+# DEFINED HERE, with the other contract queries, and not down in the step-execution
+# section where its three siblings live. Test-Contract calls it, and Test-Contract is
+# itself called from the -ListSteps branch far above those definitions -- PowerShell
+# defines functions as it executes, so a definition below that branch does not exist when
+# it runs. Measured: `-ListSteps` died with "The term 'Get-Carveouts' is not recognized".
+# Same trap as the -SelfTest dispatch two sections down, in the opposite direction.
+function Get-Carveouts {
+    [OutputType([string[]])]
+    param([string] $Id, [string] $Platform = $PLATFORM)
+    $list = @()
+    foreach ($r in @(Get-ContractRecords)) {
+        if ($r.Keyword -ceq "carveout.$Platform" -and $r.Key -ceq $Id) { $list += $r.Value }
+    }
+    # A typed array so an empty result stays an array and a single result does not unwrap
+    # to a bare string -- `.Count` on an unwrapped string is its LENGTH, which would report
+    # a one-element carve-out list as however many characters the test name has.
+    return [string[]] $list
+}
+
 function Get-DerivedStepIds {
     [OutputType([string[]])]
     param()
@@ -300,6 +321,75 @@ function Test-Contract {
                     Write-Err "pipeline: step '$id' na.$plat has a kind but no reason"
                     $errs++
                 }
+            }
+
+            # A DISARM declaration says the step RUNS on this platform with a named
+            # capability deliberately absent -- the case `na.` and `carveout.` between them
+            # cannot express. `na.` means the step does not run at all; `carveout.` means
+            # named tests are skipped. Neither covers "runs, but one of its gates is off",
+            # which is how a disarmed gate came to be documented in a source comment where
+            # the pipeline's user could never see it.
+            #
+            # Four checks, and the last two are the ones that make it honest: a kind, a
+            # reason, and that the step it names actually RUNS here. A disarm on a step that
+            # is `na.` on the same platform, or that has no command, describes a capability
+            # of something that never happens -- which reads to the run's reader as a live
+            # caveat. Validated for EVERY declared platform, not just this runner's, since a
+            # disarm is per-platform data and a malformed one must not depend on who ran the
+            # gate to be found.
+            #
+            # Parity: scripts/pipeline-lib.sh `validate_contract`. That port runs its disarm
+            # pass as a separate loop after the cmd/na pass; this one folds it into the
+            # existing platform loop, so with several faults present the two emit the same
+            # errors in a different ORDER. Both count identically and both gate on the
+            # count, which is the property that matters.
+            $dis = Get-ContractValue "disarm.$plat" $id
+            if ($dis) {
+                $disParts = $dis -split '\s+', 2
+                $dkind    = $disParts[0]
+                $dreason  = if ($disParts.Count -ge 2) { $disParts[1].Trim() } else { '' }
+                if ($dkind -cnotin @('permanent', 'tooling')) {
+                    Write-Err "pipeline: step '$id' disarm.$plat has kind '$dkind'; expected"
+                    Write-Err "  'permanent' or 'tooling'"
+                    $errs++
+                }
+                if (-not $dreason) {
+                    Write-Err "pipeline: step '$id' disarm.$plat has a kind but no reason."
+                    Write-Err '  The reason IS the declaration -- the fact alone is what a source'
+                    Write-Err '  comment already said.'
+                    $errs++
+                }
+                if ($na) {
+                    Write-Err "pipeline: step '$id' has BOTH na.$plat and disarm.$plat. A step that"
+                    Write-Err '  does not run cannot have a disarmed capability.'
+                    $errs++
+                }
+                if (-not $cmd) {
+                    Write-Err "pipeline: step '$id' has disarm.$plat but no cmd.$plat, so there is"
+                    Write-Err '  no run for the declaration to qualify.'
+                    $errs++
+                }
+            }
+        }
+
+        # A carve-out is applied by appending libtest `--skip` arguments, so a step that
+        # carries one must be a `cargo test` invocation. CHECKED rather than assumed: the
+        # assumption holds right up until somebody adds a carve-out to a step where it
+        # cannot mean anything, and then it is applied silently to a command that ignores
+        # it -- and the run still prints `skipped: <test>`, so the transcript claims a
+        # skip that did not happen.
+        #
+        # This is the precondition the contract requires of "the runners" and that this
+        # port did not have while it also did not apply carve-outs at all (F-GATE-003).
+        # Checked for EVERY declared platform, since a carve-out is per-platform data and a
+        # bad one must not depend on who ran the gate to be found.
+        foreach ($plat in $platforms) {
+            if (@(Get-Carveouts -Id $id -Platform $plat).Count -eq 0) { continue }
+            $carveCmd = Get-ContractValue "cmd.$plat" $id
+            if ($carveCmd -cnotlike '*cargo test*') {
+                Write-Err "pipeline: step '$id' has carveout.$plat, but cmd.$plat is not a"
+                Write-Err "  'cargo test' invocation, so --skip cannot apply to it."
+                $errs++
             }
         }
 
@@ -551,6 +641,335 @@ function Invoke-SelfTest {
     }
     Write-Host '   env prefix restores a pre-existing value rather than deleting it'
 
+    # ---------------------------------------------------------------------------------
+    # The `disarm.` grammar.
+    #
+    # These cases drive the REAL Test-Contract over a synthetic contract, by swapping
+    # $script:ContractLines for the duration of the call. They do NOT re-implement the
+    # validation, and that is the point: a corpus that matched $script:LineShape itself, or
+    # that re-derived the kind/reason rule, would stay green if the validation block were
+    # deleted -- the shape of finding F-GATE-005 one function over.
+    #
+    # Written BEFORE the contract carries a `disarm.` line, deliberately. The readers must
+    # accept the line before the writer emits it, or the first run after the contract gains
+    # one goes red on this platform over a declaration that says nothing about this
+    # platform. Measured at 5666c2f: a well-formed `disarm.macos` line is rejected outright
+    # by a runner that has not yet learned the keyword.
+    $base = @(
+        'platform linux    Linux',
+        'platform macos    macOS',
+        'platform windows  Windows',
+        'step   1  probe',
+        'intent probe  a synthetic step used only by -SelfTest',
+        'verdict probe  exit',
+        'class  probe  required',
+        'cmd.linux   probe  cargo fmt --check',
+        'cmd.macos   probe  cargo fmt --check'
+    )
+    # Test-Contract reports through Write-Err, which writes straight to the console error
+    # stream and so cannot be caught by a redirection operator here. Swapping the writer
+    # captures it, which also lets each case assert on the MESSAGE rather than only on the
+    # boolean -- four of these cases fail for four different reasons, and a bare $false
+    # cannot tell them apart.
+    function Test-SyntheticContract {
+        param([string[]] $Lines)
+        $savedLines = $script:ContractLines
+        $savedErr   = [Console]::Error
+        $sw         = New-Object System.IO.StringWriter
+        try {
+            $script:ContractLines = $Lines
+            [Console]::SetError($sw)
+            $ok = Test-Contract
+        } finally {
+            [Console]::SetError($savedErr)
+            $script:ContractLines = $savedLines
+        }
+        [pscustomobject]@{ Ok = $ok; Err = $sw.ToString() }
+    }
+
+    $disarmCases = @(
+        @{ Name  = 'well-formed disarm is accepted'
+           Lines = @('cmd.windows probe  cargo fmt --check',
+                     'disarm.windows probe  tooling no code-signing certificate on this box')
+           Want  = $true;  Expect = '' },
+        @{ Name  = 'unknown kind is rejected'
+           Lines = @('cmd.windows probe  cargo fmt --check',
+                     'disarm.windows probe  sometimes it is off on Tuesdays')
+           Want  = $false; Expect = "has kind 'sometimes'" },
+        @{ Name  = 'kind with no reason is rejected'
+           Lines = @('cmd.windows probe  cargo fmt --check',
+                     'disarm.windows probe  tooling')
+           Want  = $false; Expect = 'has a kind but no reason' },
+        # ONE case, TWO assertions, deliberately -- and this is the shape rather than an
+        # economy. A `disarm.` on a step with no `cmd.` for that platform is only reachable
+        # when the step is `na.` there (otherwise "neither cmd nor na" fires instead), so
+        # these two rules ALWAYS co-occur on any input that reaches either. Both messages
+        # must fire and both must stay uncollapsed.
+        #
+        # Written as two cases over identical inputs, the pin holds by a coincidence no
+        # comment records, and the obvious tidy -- "these two feed the same contract, merge
+        # them" -- silently drops one rule's coverage while the survivor still passes.
+        # Asserting both fragments in one case makes the pairing the case's subject, so
+        # there is nothing left to merge.
+        #
+        # It also demonstrates why the assertion is on the MESSAGE. Disable either rule and
+        # the other keeps the return non-zero, so a boolean assertion passes with the rule
+        # deleted -- provably vacuous for exactly this pair. MEASURED both ways.
+        @{ Name  = 'disarm on an na. step: BOTH rules fire, uncollapsed'
+           Lines = @('na.windows probe  permanent no GTK suite on this box',
+                     'disarm.windows probe  tooling a gate that never runs cannot be off')
+           Want  = $false
+           Expect = @('BOTH na.windows and disarm.windows', 'no cmd.windows') }
+    )
+    foreach ($case in $disarmCases) {
+        $r = Test-SyntheticContract -Lines ($base + $case.Lines)
+        if ($r.Ok -ne $case.Want) {
+            Write-Err "pipeline: disarm grammar -- '$($case.Name)' returned $($r.Ok), want $($case.Want)"
+            Write-Err "  validator said: $($r.Err.Trim())"
+            return $false
+        }
+        # Expect is a LIST. Every fragment must appear -- a case that pins two co-occurring
+        # rules is not satisfied by either one of them alone.
+        foreach ($frag in @($case.Expect | Where-Object { $_ })) {
+            if ($r.Err -notlike "*$frag*") {
+                Write-Err "pipeline: disarm grammar -- '$($case.Name)' rejected for the wrong reason"
+                Write-Err "  want a message containing: $frag"
+                Write-Err "  got: $($r.Err.Trim())"
+                return $false
+            }
+        }
+    }
+    Write-Host "   disarm grammar accepts and rejects $($disarmCases.Count) cases correctly"
+
+    # The keyword must reach the validation at all. A `disarm.` line that $script:LineShape
+    # does not recognise is rejected as a malformed TRIPLE, several checks earlier and with
+    # a message about line shape -- which the case above would score as a correct
+    # rejection while the kind/reason rules were never consulted. Asserted directly so the
+    # two failures cannot be confused.
+    if ('disarm.windows probe  tooling a reason' -cnotmatch $script:LineShape) {
+        Write-Err 'pipeline: $script:LineShape does not accept a disarm. line'
+        return $false
+    }
+    if ('DISARM.windows probe  tooling a reason' -cmatch $script:LineShape) {
+        Write-Err 'pipeline: $script:LineShape accepts DISARM. -- matching is not case-sensitive'
+        return $false
+    }
+    Write-Host '   disarm. is a recognised line shape, case-sensitively'
+
+    # THE ANNOUNCEMENT, driven through the real Invoke-ContractStep against a synthetic
+    # contract. Validating the grammar proves a malformed declaration is refused; it says
+    # nothing about whether a well-formed one is ever SHOWN to the person reading the run,
+    # and that is the entire point of the feature -- the reason previously lived in a
+    # source comment, so a disarm that validates and prints nothing has reproduced the
+    # original defect through a longer route. Mutation-checked: deleting the `reason:` line
+    # from the announcement leaves every other case in this self-test green.
+    #
+    # This also executes a step end to end, which nothing in -SelfTest previously did, so
+    # the command travels through Invoke-ContractCommand rather than around it.
+    # The command is `set /a 123*456`, and the assertion is on its RESULT, 56088 -- a
+    # string that appears NOWHERE in the command line. The first version of this case ran
+    # `echo synthetic-probe-ran` and asserted that text, which the step prints on its
+    # `$ <cmd>` echo line BEFORE running anything: the assertion passed with the executor
+    # gutted. A step's output assertion has to name something only the execution can
+    # produce, or it is measuring the announcement twice.
+    function Invoke-SyntheticStep {
+        param([string[]] $Lines)
+        $savedLines = $script:ContractLines
+        try {
+            $script:ContractLines = $Lines
+            # 6>&1 folds the information stream (Write-Host) into the output stream; in
+            # PS 5.1 Write-Host writes there rather than to the console directly, which is
+            # what makes the announcement capturable at all.
+            $text = (Invoke-ContractStep 'probe' 6>&1 | Out-String)
+        } finally {
+            $script:ContractLines = $savedLines
+        }
+        [pscustomobject]@{ Text = $text; Ok = $script:StepOk }
+    }
+
+    # The command carries an ENV PREFIX and computes its answer FROM it, so the single
+    # assertion on 56088 covers three things at once: the executor ran, the prefix was
+    # applied to the child, and the exit code came back. Drop the prefix and cmd leaves
+    # `%SCRIB_SELFTEST_A%` unexpanded, `set /a` fails, and there is no 56088 to find. The
+    # isolation cases further up prove the prefix is SPLIT and RESTORED; this is the only
+    # place that proves a contract command actually receives it.
+    $reason  = 'no code-signing certificate is installed on this box'
+    $passing = Invoke-SyntheticStep -Lines ($base + @(
+        'cmd.windows probe  SCRIB_SELFTEST_A=123 SCRIB_SELFTEST_B=456 set /a %SCRIB_SELFTEST_A%*%SCRIB_SELFTEST_B%',
+        "disarm.windows probe  tooling $reason"
+    ))
+    foreach ($want in @('DISARMED on windows (tooling)', $reason, '56088', 'PASS')) {
+        if ($passing.Text -notlike "*$want*") {
+            Write-Err "pipeline: a disarmed step's output is missing '$want'"
+            Write-Err "  got: $($passing.Text.Trim())"
+            return $false
+        }
+    }
+    if (-not $passing.Ok) {
+        Write-Err 'pipeline: the synthetic disarmed step reported failure'
+        Write-Err "  got: $($passing.Text.Trim())"
+        return $false
+    }
+    Write-Host '   a disarmed step announces its kind AND its reason, runs, and passes'
+
+    # The other direction. A step that runs the executor but reports every exit code as 0
+    # would satisfy every assertion above -- the disarm lines print, the command runs, PASS
+    # appears. Only a command that FAILS can tell whether the exit code is read at all, and
+    # that is the property the whole runner is built on.
+    $failing = Invoke-SyntheticStep -Lines ($base + @('cmd.windows probe  exit 3'))
+    if ($failing.Text -notlike '*FAIL (exit 3)*') {
+        Write-Err "pipeline: a failing step did not report 'FAIL (exit 3)'"
+        Write-Err "  got: $($failing.Text.Trim())"
+        return $false
+    }
+    if ($failing.Ok) {
+        Write-Err 'pipeline: a failing step left $script:StepOk true'
+        return $false
+    }
+    $script:Failed = @()
+    Write-Host '   a failing step reports its exit code and sets the failure flag'
+
+    # ---------------------------------------------------------------------------------
+    # Carve-outs (F-GATE-003). Three separable properties, tested separately because a
+    # single end-to-end case that passed would not say WHICH of them holds.
+
+    # 1. The `--` separator is REUSED, not duplicated. A second `--` reaches libtest as a
+    #    literal argument rather than as a separator, and `cmd.windows integration` really
+    #    does carry `-- --test-threads=1`, so this is the live shape and not a hypothetical.
+    $applyCases = @(
+        @{ Cmd = 'cargo test';                        Skip = ' --skip a';           Want = 'cargo test -- --skip a' },
+        @{ Cmd = 'cargo test -- --test-threads=1';    Skip = ' --skip a';           Want = 'cargo test -- --test-threads=1 --skip a' },
+        @{ Cmd = 'cargo test';                        Skip = ' --skip a --skip b';  Want = 'cargo test -- --skip a --skip b' },
+        @{ Cmd = 'cargo test';                        Skip = '';                    Want = 'cargo test' }
+    )
+    foreach ($case in $applyCases) {
+        $got = Add-Carveouts -CommandLine $case.Cmd -SkipArgs $case.Skip
+        if ($got -cne $case.Want) {
+            Write-Err "pipeline: carve-out application wrong for '$($case.Cmd)' + '$($case.Skip)'"
+            Write-Err "  got '$got' want '$($case.Want)'"
+            return $false
+        }
+    }
+    Write-Host "   carve-out `--` handling correct in $($applyCases.Count) cases"
+
+    # 2. A carve-out on a step that is not a `cargo test` invocation is a contract error.
+    #    This is the precondition applying them depends on, and the contract asks the
+    #    runners for it explicitly.
+    $carveBase = @(
+        'platform windows  Windows',
+        'step   1  probe',
+        'intent probe  a synthetic step used only by -SelfTest',
+        'verdict probe  exit',
+        'class  probe  required'
+    )
+    $carveCases = @(
+        @{ Name = 'carve-out on a cargo test step is accepted'
+           Lines = @('cmd.windows probe  cargo test --lib', 'carveout.windows probe  some_test')
+           Want = $true;  Expect = '' },
+        @{ Name = 'carve-out on a non-cargo-test step is rejected'
+           Lines = @('cmd.windows probe  cargo fmt --check', 'carveout.windows probe  some_test')
+           Want = $false; Expect = 'is not a' }
+    )
+    foreach ($case in $carveCases) {
+        $r = Test-SyntheticContract -Lines ($carveBase + $case.Lines)
+        if ($r.Ok -ne $case.Want) {
+            Write-Err "pipeline: carve-out precondition -- '$($case.Name)' returned $($r.Ok), want $($case.Want)"
+            Write-Err "  validator said: $($r.Err.Trim())"
+            return $false
+        }
+        if ($case.Expect -and $r.Err -notlike "*$($case.Expect)*") {
+            Write-Err "pipeline: carve-out precondition -- '$($case.Name)' rejected for the wrong reason"
+            Write-Err "  got: $($r.Err.Trim())"
+            return $false
+        }
+    }
+    Write-Host "   carve-outs are refused on a step --skip cannot apply to"
+
+    # 3. THE SKIP ARGUMENTS REACH THE COMMAND THAT ACTUALLY RUNS. The step's `$ <cmd>` echo
+    #    line also contains them, so an assertion that merely finds the text somewhere in
+    #    the output proves nothing -- the same vacuity that made the first disarm execution
+    #    case pass with the executor gutted. The command is `echo cargo test`, so the
+    #    child's own stdout is the line `cargo test -- --skip probe_only`, which the echo
+    #    line (`$ echo cargo test -- --skip probe_only`) is not. The assertion is on an
+    #    EXACT line, and it also pins the `--` INSERTION path: the command carries no
+    #    separator of its own, so one is added.
+    $carved = Invoke-SyntheticStep -Lines ($carveBase + @(
+        'cmd.windows probe  echo cargo test',
+        'carveout.windows probe  probe_only'
+    ))
+    $exact = @($carved.Text -split "`r?`n" | ForEach-Object { $_.Trim() } |
+               Where-Object { $_ -ceq 'cargo test -- --skip probe_only' })
+    if ($exact.Count -eq 0) {
+        Write-Err 'pipeline: carve-out --skip args did not reach the executed command'
+        Write-Err "  got: $($carved.Text.Trim())"
+        return $false
+    }
+    if ($carved.Text -notlike '*applied via --skip*') {
+        Write-Err 'pipeline: a carved step did not report its carve-outs as applied'
+        Write-Err "  got: $($carved.Text.Trim())"
+        return $false
+    }
+    Write-Host '   carve-out --skip args reach the command the step actually runs'
+
+    # ---------------------------------------------------------------------------------
+    # Packaging provenance (F-GATE-004). A packaging step running after an operator
+    # override must NAME the override, so whoever holds the installer knows what gated it.
+    # Silence here reads exactly like a run where everything passed.
+    $savedOverride = $script:OverriddenSteps
+    $savedPackage  = $Package
+    try {
+        $script:OverriddenSteps = ' step 5 (integration), skipped by -SkipIntegration;'
+        Set-Variable -Name Package -Value $true -Scope Script
+        $packed = Invoke-SyntheticStep -Lines ($carveBase[0..3] + @(
+            'class  probe  packaging',
+            'cmd.windows probe  set /a 1+1'
+        ))
+        foreach ($want in @(
+            'WARNING: built without step 5 (integration), skipped by -SkipIntegration',
+            'The artefact below comes from a tree those gates did not check.'
+        )) {
+            if ($packed.Text -notlike "*$want*") {
+                Write-Err "pipeline: a packaging step built after an override is missing '$want'"
+                Write-Err "  got: $($packed.Text.Trim())"
+                return $false
+            }
+        }
+        # THE RECORDING HALF. Everything above sets $script:OverriddenSteps by hand, so it
+        # proves the warning PRINTS and says nothing about whether the run ever fills the
+        # variable it reads. Deleting the accumulation left every case above green.
+        $script:OverriddenSteps = ''
+        $savedLines2 = $script:ContractLines
+        try {
+            $script:ContractLines = $carveBase + @('cmd.windows probe  set /a 1+1')
+            [void](Show-OperatorSkip 'probe' 6>&1)
+        } finally {
+            $script:ContractLines = $savedLines2
+        }
+        if ($script:OverriddenSteps -cne ' step 1 (probe), skipped by -SkipIntegration;') {
+            Write-Err 'pipeline: an operator-skipped step did not record itself for provenance'
+            Write-Err "  got '$($script:OverriddenSteps)'"
+            return $false
+        }
+
+        # The converse, which is what keeps the warning meaningful: with no override, the
+        # line must be ABSENT. A warning that always prints is one the reader learns to skip.
+        $script:OverriddenSteps = ''
+        $clean = Invoke-SyntheticStep -Lines ($carveBase[0..3] + @(
+            'class  probe  packaging',
+            'cmd.windows probe  set /a 1+1'
+        ))
+        if ($clean.Text -like '*WARNING: built without*') {
+            Write-Err 'pipeline: a packaging step with no override still printed the provenance warning'
+            Write-Err "  got: $($clean.Text.Trim())"
+            return $false
+        }
+    } finally {
+        $script:OverriddenSteps = $savedOverride
+        Set-Variable -Name Package -Value $savedPackage -Scope Script
+        $script:Failed = @()
+    }
+    Write-Host '   a packaging step names the overrides it was built without, and only then'
+
     return $true
 }
 
@@ -564,12 +983,8 @@ if ($ListSteps) {
     Write-StepList
     exit 0
 }
-if ($SelfTest) {
-    if (-not (Invoke-SelfTest)) { exit 1 }
-    exit 0
-}
-
-if (-not (Test-Contract)) { exit 2 }
+# -SelfTest is dispatched further down, AFTER the step-execution functions are defined --
+# see the note at that dispatch. -ListSteps stays here because it needs none of them.
 
 # --------------------------------------------------------------------------------------
 # Step execution
@@ -577,6 +992,11 @@ if (-not (Test-Contract)) { exit 2 }
 $script:Failed = @()
 $script:StepExitCode = 0
 $script:StepOk = $true
+# Operator overrides accumulated during the run, for the packaging step's provenance
+# warning. Semicolon-separated with a trailing separator, matching the shell port's
+# OVERRIDDEN_STEPS so the two produce the same sentence; the trailing `;` is trimmed at
+# the point of printing rather than at each append.
+$script:OverriddenSteps = ''
 
 function Show-Announce { param([string] $Text) Write-Host ''; Write-Host "=== $Text ===" -ForegroundColor Cyan }
 
@@ -652,23 +1072,77 @@ function Invoke-ContractCommand {
 # Carve-outs are reported even when there are none -- that is what lets the statement MEAN
 # something rather than be silence.
 #
-# ANNOUNCE-ONLY, matching scripts/pipeline.sh, which prints carve-outs and then runs the
-# contract command unmodified. That parity is deliberate: injecting `--skip` here would
-# make the Windows run genuinely exclude tests the Linux run does not, which is precisely
-# the per-platform divergence the contract exists to remove, and it would require assuming
-# every carve-out-bearing command is a cargo test invocation. The list is empty today so
-# nothing is currently mis-reported; the gap is flagged for a contract-level decision
-# rather than patched unilaterally on one platform.
+# THEY ARE NOW APPLIED, NOT MERELY ANNOUNCED. The comment that stood here claimed parity
+# with scripts/pipeline.sh on the grounds that the shell port also only announced. That
+# was true when it was written and is not true now -- the shell port applies them through
+# `apply_carveouts` (scripts/pipeline-lib.sh), and the contract at scripts/pipeline.steps
+# requires it of "the runners", plural. So the comment had become a statement of parity
+# that was itself the divergence, which is the worst kind: a reader checking whether the
+# ports agree finds a note saying they do.
+#
+# The old note's two objections were real and are both answered rather than waved away.
+# "It would make Windows exclude tests Linux does not" -- it does the opposite now, since
+# both ports read the same per-platform contract lines and apply them the same way; the
+# divergence was one port ignoring them. "It assumes every carve-out-bearing command is a
+# cargo test invocation" -- correct, and that assumption is now CHECKED in Test-Contract
+# for every declared platform rather than assumed, which is what the contract asks for.
+#
+# The list is empty today, which is exactly why this was invisible: nothing is
+# mis-reported until the first carve-out is added, and then the run prints
+# `skipped: <test>` for a test it actually ran.
+# The libtest arguments that APPLY the carve-outs. Analogue of the shell port's
+# `carveout_skip_args`.
+function Get-CarveoutSkipArgs {
+    [OutputType([string])]
+    param([string] $Id)
+    # NOT named $args: that is an automatic variable holding a function's unbound
+    # arguments, and assigning to it inside a function that also has a param() block is
+    # legal, silent, and reads as a plain local right up until someone adds a parameter.
+    $skips = ''
+    foreach ($name in @(Get-Carveouts $Id)) {
+        if ($name) { $skips += " --skip $name" }
+    }
+    return $skips
+}
+
+# Append the skip args past a `--` separator, REUSING one if the command already has it.
+# `cmd.windows integration` carries `-- --test-threads=1`, and a second `--` would reach
+# libtest as a literal argument rather than as a separator. Analogue of `apply_carveouts`,
+# and kept structurally identical to it so the two can be read side by side.
+function Add-Carveouts {
+    [OutputType([string])]
+    param([string] $CommandLine, [string] $SkipArgs)
+    if (-not $SkipArgs) { return $CommandLine }
+    if ($CommandLine -clike '* -- *') { return "$CommandLine$SkipArgs" }
+    return "$CommandLine --$SkipArgs"
+}
+
+# Announce an operator-skipped step AND record it for the packaging provenance warning.
+#
+# A FUNCTION, not four lines inline in the run loop, because the run loop is inside the
+# `try` after Push-Location and nothing in -SelfTest can reach it. Inline, deleting the
+# accumulation left the entire self-test green: the provenance cases set
+# $script:OverriddenSteps directly, so they proved the WARNING prints and said nothing
+# about whether anything ever fills the variable it reads. Measured by mutation, which is
+# the only reason it was noticed -- the announcement half was covered and the recording
+# half was not, and the two look like one feature from the outside.
+function Show-OperatorSkip {
+    param([string] $Id)
+    $o = Get-StepOrdinal $Id
+    Show-Announce "$o. $Id - SKIPPED (-SkipIntegration)"
+    Write-Host '    NOTE: this is an operator override, not a contract declaration.' -ForegroundColor Yellow
+    $script:OverriddenSteps += " step $o ($Id), skipped by -SkipIntegration;"
+}
+
 function Show-Carveouts {
     param([string] $Id)
-    $list = @()
-    foreach ($r in @(Get-ContractRecords)) {
-        if ($r.Keyword -ceq "carveout.$PLATFORM" -and $r.Key -ceq $Id) { $list += $r.Value }
-    }
+    $list = @(Get-Carveouts $Id)
     if ($list.Count -eq 0) {
         if ($Id -cin @('integration', 'test')) { Write-Host '    carve-outs: none' }
     } else {
-        Write-Host "    carve-outs: $($list.Count) by name (ANNOUNCED, NOT APPLIED -- see Show-Carveouts)"
+        # "applied via --skip", matching the shell port's wording, because the sentence is
+        # now true. Announcing a carve-out without applying it is worse than saying nothing.
+        Write-Host "    carve-outs: $($list.Count) by name, applied via --skip"
         foreach ($t in $list) { Write-Host "      skipped: $t" -ForegroundColor Yellow }
     }
 }
@@ -760,7 +1234,57 @@ function Invoke-ContractStep {
 
     Show-Announce "$ord. $Id"
     Write-Host "    intent: $intent"
+
+    # PROVENANCE TRAVELS WITH THE ARTEFACT (scripts/pipeline.steps, "PROVENANCE"). A
+    # packaging step may legitimately run in a run where a required step was skipped by
+    # operator override -- -SkipIntegration plus -Package is reasonable on a box where the
+    # GTK suite cannot run, and refusing the combination would be paternalistic about two
+    # flags the operator passed deliberately. But the packaging step must then NAME what
+    # did not run, so whoever ends up holding the installer can tell what gated it. Silence
+    # is the same failure as omitting a non-applicable step: the run reads identically to
+    # one where everything passed.
+    #
+    # Both shell runners had this and this port did not, so a Windows installer built with
+    # -SkipIntegration carried no record of it (F-GATE-004).
+    #
+    # OVERRIDES ONLY, never contract-declared non-applicable steps: those are always absent
+    # on their platform, so naming them every time is noise that trains the reader to skim
+    # the one line whose whole value is appearing rarely.
+    #
+    # The flag is spelled -SkipIntegration, not --skip-integration as the contract's
+    # example shows: the provenance names the flag the operator ACTUALLY passed on this
+    # platform, and a Windows log quoting a POSIX flag nobody typed is a worse record than
+    # a slightly different string. The shell runners name theirs the same way.
+    if ($class -ceq 'packaging' -and $script:OverriddenSteps) {
+        Write-Host "    WARNING: built without$($script:OverriddenSteps.TrimEnd(';'))" -ForegroundColor Yellow
+        Write-Host '    The artefact below comes from a tree those gates did not check.' -ForegroundColor Yellow
+    }
+
+    # A DISARMED capability is stated in the run output, with its REASON, for the same
+    # reason a non-applicable step is: the pipeline's user cannot see a source comment.
+    # Printing only the fact would move the comment into the output without moving the
+    # information, which is the whole finding this grammar exists to close.
+    #
+    # Placed HERE -- in the general run path, after the review, na, packaging-opt-in and
+    # marker branches have all returned -- to match scripts/pipeline-lib.sh `run_step`
+    # exactly. A marker step therefore does not announce a disarm in either port. That is
+    # the reference behaviour rather than an oversight of mine, and it is consistent: a
+    # marker step cannot fail, so it has no gate to disarm.
+    $disarm = Get-ContractValue "disarm.$PLATFORM" $Id
+    if ($disarm) {
+        $disParts = $disarm -split '\s+', 2
+        $dkind    = $disParts[0]
+        $dreason  = if ($disParts.Count -ge 2) { $disParts[1].Trim() } else { '' }
+        Write-Host "    DISARMED on $PLATFORM ($dkind) - this step runs, with a gate deliberately off" -ForegroundColor Yellow
+        Write-Host "    reason: $dreason" -ForegroundColor Yellow
+    }
+
+    # APPLIED, then echoed, then run -- in that order, so the `$ <cmd>` line shows the
+    # command that actually executes rather than the one before its carve-outs were
+    # appended. Echoing the pre-application form would reproduce the original defect in a
+    # subtler place: the run would do the right thing and say it did something else.
     Show-Carveouts $Id
+    $cmd = Add-Carveouts -CommandLine $cmd -SkipArgs (Get-CarveoutSkipArgs $Id)
     Write-Host "    `$ $cmd"
     Invoke-ContractCommand -CommandLine $cmd
     if ($script:StepExitCode -eq 0) {
@@ -825,6 +1349,33 @@ function Invoke-SetupPhase {
 # contract names as the packaging step's command. Deliberately NOT duplicated here: a second
 # copy of the ISCC probe is how the two silently stop matching.
 
+# --------------------------------------------------------------------------------------
+# -SelfTest dispatch.
+#
+# MOVED HERE FROM ABOVE Show-Announce, and the move is the point rather than tidying.
+# PowerShell defines functions as it executes top to bottom, so a dispatch placed before
+# Invoke-ContractCommand / Invoke-ContractStep cannot call them -- they do not exist yet.
+# The self-test was therefore not merely declining to exercise the executor, it was
+# STRUCTURALLY UNABLE TO, and every case it did have reached for the pieces it could
+# see: Split-EnvPrefix and Invoke-WithEnv directly. Deleting Invoke-ContractCommand
+# outright left the whole self-test green -- a self-test that cannot detect the removal
+# of its own subject.
+#
+# Still BEFORE Push-Location and Invoke-SetupPhase, so the property the old placement was
+# protecting is kept intact: -SelfTest needs no GTK toolchain and no environment, and runs
+# on a box where the port is only half brought up. Setup is called inside the try below,
+# not at top level, so nothing between here and there has run.
+#
+# The bare Test-Contract gate follows rather than precedes it, so a malformed contract
+# still exits 2 on a normal run and 1 under -SelfTest, exactly as before the move.
+# --------------------------------------------------------------------------------------
+if ($SelfTest) {
+    if (-not (Invoke-SelfTest)) { exit 1 }
+    exit 0
+}
+
+if (-not (Test-Contract)) { exit 2 }
+
 # Every exit path from here on has to leave the caller's directory as it found it,
 # including the throws -- hence one `finally` rather than a Pop-Location before each throw.
 Push-Location $repo
@@ -834,8 +1385,7 @@ try {
 
     foreach ($stepId in @(Get-DerivedStepIds)) {
         if ($SkipIntegration -and $stepId -ceq 'integration') {
-            Show-Announce "$(Get-StepOrdinal $stepId). $stepId - SKIPPED (-SkipIntegration)"
-            Write-Host '    NOTE: this is an operator override, not a contract declaration.' -ForegroundColor Yellow
+            Show-OperatorSkip $stepId
             continue
         }
         # The verdict is read from $script:StepOk, never from a return value -- see the

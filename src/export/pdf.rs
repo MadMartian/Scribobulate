@@ -36,6 +36,34 @@ const BASE_PT: f64 = 11.0;
 const BLOCK_GAP_PT: f64 = 6.0;
 /// Indent per list depth, in points.
 const INDENT_PT: f64 = 18.0;
+/// How thick a horizontal rule is drawn, in points.
+///
+/// **A named const rather than a themed metric, and the reason is that there is nothing to
+/// theme it FROM.** The preview renders its rule as a `GtkSeparator` whose thickness comes
+/// from GTK's own CSS, not from a `metrics` key — so there is no existing key for this sink
+/// to read, and inventing one here would give the two surfaces separate sources for one
+/// decoration, which is precisely what POLICY's "one theme key, every application path" rule
+/// forbids. Closing this properly means adding the key AND routing the preview's separator
+/// through it, in one change; until then a named constant states the value once instead of
+/// burying it in a `cr.rectangle` call.
+///
+/// The genuine defect here was the WIDTH, which was the literal `400.0` — a fixed length
+/// that over- or under-ran the margin depending on page setup and nesting depth. That is now
+/// derived from the page and the block's own indent, matching what the preview does when it
+/// insets a nested rule by its enclosing content margin.
+const RULE_THICKNESS_PT: f64 = 0.75;
+
+/// The narrowest printable width any block is ever laid out against.
+///
+/// `indent` grows by `INDENT_PT` per nesting level and nothing upstream bounds it
+/// against the page, so a deeply nested block can ask for a width of zero or less.
+/// Every consumer of that width mis-handles a non-positive one in its own way — Pango
+/// reads it as "do not wrap", and the table grid returns a scale outside its published
+/// `(0, 1]` — so the floor is applied once, here, rather than at each call site.
+const MIN_PRINTABLE_PT: f64 = 1.0;
+/// Pango's numeric weight for normal text, named because a bare `400` in a font
+/// descriptor reads as a magic number.
+const PANGO_WEIGHT_NORMAL: i32 = 400;
 
 /// One drawable line: a Pango layout line plus where it sits horizontally.
 pub(crate) struct Line {
@@ -85,6 +113,19 @@ enum LineKind {
     },
 }
 
+/// What a Pango layout for this sink needs beyond its markup.
+///
+/// A struct rather than four positional arguments: two of them are `f64`/`i32` and
+/// adjacent, which is the transposition hazard `pdftable::ColumnWant` exists for one
+/// module over.
+struct LayoutSpec {
+    /// `None` means unconstrained — Pango's "do not wrap".
+    width_pt: Option<f64>,
+    size_pt: f64,
+    weight: i32,
+    align: pango::Alignment,
+}
+
 /// One cell of a laid-out table row.
 struct TableCell {
     layout: pango::Layout,
@@ -123,6 +164,10 @@ impl Line {
 pub(crate) struct Laid {
     pub(crate) lines: Vec<Line>,
     pub(crate) fragments: Vec<Fragment>,
+    /// The printable width the document was laid out against, in points. Carried so the
+    /// drawing pass can span a horizontal rule across the column it sits in rather than
+    /// guessing at a fixed length.
+    pub(crate) printable_width_pt: f64,
 }
 
 /// Lay `doc` out for a page `width_pt` points wide.
@@ -151,6 +196,7 @@ pub(crate) fn lay_out(
     Laid {
         lines: b.lines,
         fragments: b.fragments,
+        printable_width_pt: width_pt,
     }
 }
 
@@ -166,6 +212,81 @@ struct Layouter<'a> {
 }
 
 impl Layouter<'_> {
+    /// Build a Pango layout for this sink, from the four things that actually vary.
+    ///
+    /// **One constructor, because there were two and they had already drifted.** The
+    /// paragraph path set a font weight and took its size from the caller; the table-cell
+    /// path set no weight and hardcoded the base size, so a themed heading weight reached
+    /// prose and never reached a cell. Neither difference was intended — they are what two
+    /// copies of six lines become.
+    fn layout_of(&self, markup: &str, spec: LayoutSpec) -> pango::Layout {
+        let layout = pango::Layout::new(self.ctx);
+        match spec.width_pt {
+            // A negative width is Pango's "do not wrap", which is what an unconstrained
+            // measuring pass wants and what a laid-out block must never get.
+            None => layout.set_width(-1),
+            Some(width) => {
+                layout.set_width(pt_to_pango(width));
+                layout.set_wrap(pango::WrapMode::WordChar);
+            }
+        }
+        layout.set_alignment(spec.align);
+        let mut desc = pango::FontDescription::new();
+        if let Some(family) = self.theme.font_family.as_ref() {
+            desc.set_family(family.as_str());
+        }
+        desc.set_size(pt_to_pango(spec.size_pt));
+        desc.set_weight(pango::Weight::__Unknown(spec.weight));
+        layout.set_font_description(Some(&desc));
+        layout.set_markup(markup);
+        layout
+    }
+
+    /// Where a block indented `indent` points actually starts on the page.
+    ///
+    /// Bounded by the page, because `indent` is not: it grows `INDENT_PT` per nesting
+    /// level and 26 nested quotes on a 468pt page already exceed it, at which point the
+    /// block draws entirely past the right margin — invisible, not merely cramped.
+    fn indent_on_page(&self, indent: f64) -> f64 {
+        indent.clamp(0.0, (self.width_pt - MIN_PRINTABLE_PT).max(0.0))
+    }
+
+    /// The width a block indented `indent` points actually has to draw in.
+    ///
+    /// Never zero or negative, whatever the nesting depth — see `MIN_PRINTABLE_PT`.
+    fn printable_width(&self, indent: f64) -> f64 {
+        (self.width_pt - self.indent_on_page(indent)).max(MIN_PRINTABLE_PT)
+    }
+
+    /// Record one drawable line, with its indent bounded to the page.
+    ///
+    /// **The only way a `Line` is created, and the only way a `Fragment` is.** The bound
+    /// belongs to the line rather than to each caller's arithmetic, so a new line kind
+    /// cannot be added that forgets it — and the two vectors are pushed TOGETHER, so
+    /// `lines[i]` and `fragments[i]` describe the same thing by construction.
+    ///
+    /// That pairing used to be a convention held by four call sites each remembering to
+    /// push both, and the drawing pass relied on it: it guarded `lines.get(idx)` and then
+    /// indexed `fragments[idx]` three lines later, so a guard that returned `None` was
+    /// followed by a panic on the same index. One push site, one invariant, no guard to
+    /// defeat.
+    fn push_line(
+        &mut self,
+        kind: LineKind,
+        fragment: Fragment,
+        indent: f64,
+        height: f64,
+        quote_depth: u32,
+    ) {
+        self.fragments.push(fragment);
+        self.lines.push(Line {
+            kind,
+            indent: self.indent_on_page(indent),
+            height,
+            quote_depth,
+        });
+    }
+
     /// Lay one block out at `indent` points, inside `quote_depth` block quotes.
     fn block(&mut self, block: &Block, doc: &ExportDoc, indent: f64, quote_depth: u32) {
         match block {
@@ -192,7 +313,14 @@ impl Layouter<'_> {
                         Seg::Text(run) => {
                             let markup = inline_markup(&run, doc, self.theme);
                             if !markup.trim().is_empty() {
-                                self.paragraph(&markup, BASE_PT, 400, indent, quote_depth, false);
+                                self.paragraph(
+                                    &markup,
+                                    BASE_PT,
+                                    PANGO_WEIGHT_NORMAL,
+                                    indent,
+                                    quote_depth,
+                                    false,
+                                );
                             }
                         }
                         Seg::Image(img) => self.image(&img, doc, indent, quote_depth),
@@ -205,7 +333,14 @@ impl Layouter<'_> {
                     "<span font_family=\"monospace\">{}</span>",
                     escape_pango(text.trim_end_matches('\n'))
                 );
-                self.paragraph(&markup, BASE_PT, 400, indent, quote_depth, false);
+                self.paragraph(
+                    &markup,
+                    BASE_PT,
+                    PANGO_WEIGHT_NORMAL,
+                    indent,
+                    quote_depth,
+                    false,
+                );
             }
             Block::BlockQuote(inner) => {
                 for b in inner {
@@ -219,17 +354,17 @@ impl Layouter<'_> {
             Block::Rule => {
                 // A rule is one indivisible fragment of its own, so a page break can
                 // fall either side of it but never through it.
-                self.fragments.push(Fragment {
-                    height: self.theme.metrics.rule_space as f64,
-                    space_before: BLOCK_GAP_PT,
-                    keep_with_next: false,
-                });
-                self.lines.push(Line {
-                    kind: LineKind::Rule,
+                self.push_line(
+                    LineKind::Rule,
+                    Fragment {
+                        height: self.theme.metrics.rule_space as f64,
+                        space_before: BLOCK_GAP_PT,
+                        keep_with_next: false,
+                    },
                     indent,
-                    height: self.theme.metrics.rule_space as f64,
+                    self.theme.metrics.rule_space as f64,
                     quote_depth,
-                });
+                );
             }
         }
     }
@@ -243,7 +378,7 @@ impl Layouter<'_> {
     /// corrupt file — it falls back to the same visible note a refused or missing image
     /// gets, because a silent gap is the one outcome worth avoiding.
     fn image(&mut self, img: &ImageRef, doc: &ExportDoc, indent: f64, quote_depth: u32) {
-        let available = (self.width_pt - indent).max(1.0);
+        let available = self.printable_width(indent);
         let decoded = match &img.source {
             ImageSource::Embedded { bytes, .. } => decode(bytes),
             // A PDF cannot follow a URL the way HTML can, and fetching here would be a
@@ -262,21 +397,21 @@ impl Layouter<'_> {
         let scale = (available / w).min(limit_h / h).min(1.0);
         w *= scale;
         h *= scale;
-        self.fragments.push(Fragment {
-            height: h,
-            space_before: BLOCK_GAP_PT,
-            keep_with_next: false,
-        });
-        self.lines.push(Line {
-            kind: LineKind::Image {
+        self.push_line(
+            LineKind::Image {
                 surface,
                 natural: (nat_w, nat_h),
                 drawn: (w, h),
             },
+            Fragment {
+                height: h,
+                space_before: BLOCK_GAP_PT,
+                keep_with_next: false,
+            },
             indent,
-            height: h,
+            h,
             quote_depth,
-        });
+        );
     }
 
     /// The visible note an image that cannot be drawn falls back to.
@@ -286,7 +421,14 @@ impl Layouter<'_> {
             doc,
             self.theme,
         );
-        self.paragraph(&markup, BASE_PT, 400, indent, quote_depth, false);
+        self.paragraph(
+            &markup,
+            BASE_PT,
+            PANGO_WEIGHT_NORMAL,
+            indent,
+            quote_depth,
+            false,
+        );
     }
 
     /// Lay a marked-up run out as one Pango paragraph and split it into per-line
@@ -301,17 +443,15 @@ impl Layouter<'_> {
         quote_depth: u32,
         keep_with_next: bool,
     ) {
-        let layout = pango::Layout::new(self.ctx);
-        layout.set_width(pt_to_pango(self.width_pt - indent));
-        layout.set_wrap(pango::WrapMode::WordChar);
-        let mut desc = pango::FontDescription::new();
-        if let Some(f) = self.theme.font_family.as_ref() {
-            desc.set_family(f.as_str());
-        }
-        desc.set_size(pt_to_pango(size_pt));
-        desc.set_weight(pango::Weight::__Unknown(weight));
-        layout.set_font_description(Some(&desc));
-        layout.set_markup(markup);
+        let layout = self.layout_of(
+            markup,
+            LayoutSpec {
+                width_pt: Some(self.printable_width(indent)),
+                size_pt,
+                weight,
+                align: pango::Alignment::Left,
+            },
+        );
 
         let count = layout.line_count();
         for index in 0..count {
@@ -320,22 +460,22 @@ impl Layouter<'_> {
             };
             let (_ink, logical) = line.extents();
             let height = pango_to_pt(logical.height());
-            self.fragments.push(Fragment {
-                height,
-                // Only the first line of a block carries the inter-block gap.
-                space_before: if index == 0 { BLOCK_GAP_PT } else { 0.0 },
-                // A keep-with-next block keeps only its LAST line with what follows.
-                keep_with_next: keep_with_next && index == count - 1,
-            });
-            self.lines.push(Line {
-                kind: LineKind::Text {
+            self.push_line(
+                LineKind::Text {
                     layout: layout.clone(),
                     index,
+                },
+                Fragment {
+                    height,
+                    // Only the first line of a block carries the inter-block gap.
+                    space_before: if index == 0 { BLOCK_GAP_PT } else { 0.0 },
+                    // A keep-with-next block keeps only its LAST line with what follows.
+                    keep_with_next: keep_with_next && index == count - 1,
                 },
                 indent,
                 height,
                 quote_depth,
-            });
+            );
         }
     }
 
@@ -370,7 +510,7 @@ impl Layouter<'_> {
                         self.paragraph(
                             &markup,
                             BASE_PT,
-                            400,
+                            PANGO_WEIGHT_NORMAL,
                             indent + INDENT_PT,
                             quote_depth,
                             false,
@@ -412,22 +552,29 @@ impl Layouter<'_> {
             .map(|row| self.row_markup(row, doc, false))
             .collect();
 
-        let mut natural = vec![0.0_f64; column_count];
-        let mut minimum = vec![0.0_f64; column_count];
+        // One `ColumnWant` per column rather than two parallel slices: the pair travels
+        // as a pair, so nothing downstream can transpose it.
+        let mut wants = vec![
+            pdftable::ColumnWant {
+                natural: 0.0,
+                minimum: 0.0,
+            };
+            column_count
+        ];
         for row in std::iter::once(&head_markup).chain(body_markup.iter()) {
             for (index, markup) in row.iter().enumerate() {
                 let CellWidths { max, min } = self.cell_widths(markup);
-                if max > natural[index] {
-                    natural[index] = max;
+                if max > wants[index].natural {
+                    wants[index].natural = max;
                 }
-                if min > minimum[index] {
-                    minimum[index] = min;
+                if min > wants[index].minimum {
+                    wants[index].minimum = min;
                 }
             }
         }
 
         // Pass 2 — the grid decides, then every row is built against it.
-        let grid = pdftable::fit(&natural, &minimum, self.width_pt - indent, &chrome);
+        let grid = pdftable::fit(&wants, self.printable_width(indent), &chrome);
         if !head_markup.is_empty() {
             self.table_row(
                 &head_markup,
@@ -498,27 +645,22 @@ impl Layouter<'_> {
     /// A layout for one cell. `text_width` of `None` measures unconstrained; `Some`
     /// constrains it, which is what makes the text wrap **inside its column**.
     fn cell_layout(&self, markup: &str, text_width: Option<f64>, align: Align) -> pango::Layout {
-        let layout = pango::Layout::new(self.ctx);
-        match text_width {
-            Some(width) => {
-                layout.set_width(pt_to_pango(width));
-                layout.set_wrap(pango::WrapMode::WordChar);
-            }
-            None => layout.set_width(-1),
-        }
-        layout.set_alignment(match align {
-            Align::Center => pango::Alignment::Center,
-            Align::Right => pango::Alignment::Right,
-            Align::None | Align::Left => pango::Alignment::Left,
-        });
-        let mut desc = pango::FontDescription::new();
-        if let Some(family) = self.theme.font_family.as_ref() {
-            desc.set_family(family.as_str());
-        }
-        desc.set_size(pt_to_pango(BASE_PT));
-        layout.set_font_description(Some(&desc));
-        layout.set_markup(markup);
-        layout
+        self.layout_of(
+            markup,
+            LayoutSpec {
+                width_pt: text_width,
+                size_pt: BASE_PT,
+                // A cell's weight comes from its markup (the header row is bolded there),
+                // so the descriptor stays at normal — stated because the paragraph path
+                // passes a weight and the difference used to be silent.
+                weight: PANGO_WEIGHT_NORMAL,
+                align: match align {
+                    Align::Center => pango::Alignment::Center,
+                    Align::Right => pango::Alignment::Right,
+                    Align::None | Align::Left => pango::Alignment::Left,
+                },
+            },
+        )
     }
 
     /// Build and push one row: every cell laid out in its column, the row's height the
@@ -560,13 +702,8 @@ impl Layouter<'_> {
         // fragment the paginator sees is that box at the grid's scale, so what it
         // reserves and what gets drawn are the same number by construction.
         let box_height = text_height + chrome.padding_v * 2.0;
-        self.fragments.push(Fragment {
-            height: box_height * grid.scale,
-            space_before: if is_head { BLOCK_GAP_PT } else { 0.0 },
-            keep_with_next,
-        });
-        self.lines.push(Line {
-            kind: LineKind::TableRow {
+        self.push_line(
+            LineKind::TableRow {
                 cells: drawn,
                 columns: grid.columns.clone(),
                 chrome: *chrome,
@@ -574,10 +711,15 @@ impl Layouter<'_> {
                 box_height,
                 is_head,
             },
+            Fragment {
+                height: box_height * grid.scale,
+                space_before: if is_head { BLOCK_GAP_PT } else { 0.0 },
+                keep_with_next,
+            },
             indent,
-            height: box_height * grid.scale,
+            box_height * grid.scale,
             quote_depth,
-        });
+        );
     }
 }
 
@@ -588,6 +730,53 @@ fn table_column_count(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>]) -> usize 
 }
 
 /// Draw one page's fragments onto `cr`, in points.
+/// Proof that one page reached the surface.
+///
+/// Its field is private to this module, so `draw_page` is the only thing that can make
+/// one — which is what makes [`PageTally`] countable only by drawing. The tally used to
+/// be a bare `Cell<usize>` incremented by hand at the top of the `draw-page` handler,
+/// **before** two early returns that leave without drawing anything; a run in which
+/// `begin-print` never populated the layout therefore reported `drawn == expected` and
+/// promoted a BLANK PDF over the reader's existing file. That is precisely the outcome
+/// the staging apparatus exists to prevent, reached through the gate rather than around
+/// it, and a comment saying "count it afterwards" would be the same class of defence
+/// that failed here (POLICY § Typed GTK seams: a mechanism, not a thing to remember).
+#[must_use = "a drawn page that is never tallied is a page the promote gate cannot see"]
+pub(crate) struct PageDrawn(());
+
+/// The application's own count of pages it actually drew.
+///
+/// Increments only on presentation of a [`PageDrawn`], so there is no way to spell a
+/// tally that outruns the drawing.
+#[derive(Default)]
+pub(crate) struct PageTally(std::cell::Cell<usize>);
+
+impl PageTally {
+    /// Record one drawn page. Takes the proof by value, so it cannot be replayed.
+    pub(crate) fn record(&self, _proof: PageDrawn) {
+        self.0.set(self.0.get() + 1);
+    }
+
+    /// How many pages were drawn.
+    pub(crate) fn count(&self) -> usize {
+        self.0.get()
+    }
+}
+
+/// Set cairo's source to an RGBA's colour.
+///
+/// The three-line `set_source_rgb(f64::from(c.red()), …)` incantation was written out ten
+/// times in this file, four of them restoring a colour nothing subsequently drew with.
+/// One name, so a reader can see WHICH colour is being set rather than decode that it is
+/// being set at all.
+fn set_ink(cr: &cairo::Context, colour: gtk::gdk::RGBA) {
+    cr.set_source_rgb(
+        f64::from(colour.red()),
+        f64::from(colour.green()),
+        f64::from(colour.blue()),
+    );
+}
+
 pub(crate) fn draw_page(
     cr: &cairo::Context,
     laid: &Laid,
@@ -595,58 +784,57 @@ pub(crate) fn draw_page(
     palette: &Palette,
     theme: &Theme,
     margin_pt: f64,
-) {
+) -> PageDrawn {
     let fg = palette.body_fg;
-    cr.set_source_rgb(
-        f64::from(fg.red()),
-        f64::from(fg.green()),
-        f64::from(fg.blue()),
-    );
+    // Resolved ONCE for the page, not per line. Neither depends on the line, so both
+    // used to be recomputed inside the loop below — the quote bar's on every quoted
+    // line, the rule's on every horizontal rule. Hoisting also puts the whole page's
+    // "theme key, else palette" resolution in one readable place, which is where the
+    // POLICY § One theme key rule wants it: a reader checking that a surface is themed
+    // consistently should not have to find every draw site to be sure.
+    let bar_ink = theme.blockquote_bar.unwrap_or(palette.blockquote_bar);
+    let rule_ink = theme.rule.unwrap_or(palette.rule);
+    set_ink(cr, fg);
     let mut y = margin_pt;
     for (i, idx) in range.clone().enumerate() {
-        let Some(line) = laid.lines.get(idx) else {
+        // Both `.get()`, though `push_line` now makes them the same length by
+        // construction: this used to guard `lines` and then INDEX `fragments` three lines
+        // later, so a guard returning None was followed by a panic on the same index.
+        let (Some(line), Some(frag)) = (laid.lines.get(idx), laid.fragments.get(idx)) else {
             continue;
         };
-        let frag = &laid.fragments[idx];
         if i > 0 {
             y += frag.space_before;
         }
         // The quote bar, at the metric the theme states.
         if line.quote_depth > 0 {
-            let bar = theme.blockquote_bar.unwrap_or(palette.blockquote_bar);
             cr.save().ok();
-            cr.set_source_rgb(
-                f64::from(bar.red()),
-                f64::from(bar.green()),
-                f64::from(bar.blue()),
-            );
+            set_ink(cr, bar_ink);
             let w = f64::from(theme.metrics.blockquote_bar_width);
             cr.rectangle(margin_pt + line.indent - w * 2.0, y, w, line.height);
             cr.fill().ok();
             cr.restore().ok();
-            cr.set_source_rgb(
-                f64::from(fg.red()),
-                f64::from(fg.green()),
-                f64::from(fg.blue()),
-            );
+            set_ink(cr, fg);
         }
         match &line.kind {
             LineKind::Rule => {
-                let rule = theme.rule.unwrap_or(palette.rule);
                 cr.save().ok();
-                cr.set_source_rgb(
-                    f64::from(rule.red()),
-                    f64::from(rule.green()),
-                    f64::from(rule.blue()),
+                set_ink(cr, rule_ink);
+                // Span the printable column this rule sits in, at the theme's own
+                // thickness. It used to be `400.0, 0.75` — two literals in a file whose
+                // POLICY forbids them, which over- or under-ran the margin depending on
+                // page setup and nesting depth rather than tracking either.
+                let width = (laid.printable_width_pt - line.indent).max(MIN_PRINTABLE_PT);
+                let thickness = RULE_THICKNESS_PT;
+                cr.rectangle(
+                    margin_pt + line.indent,
+                    y + line.height / 2.0,
+                    width,
+                    thickness,
                 );
-                cr.rectangle(margin_pt + line.indent, y + line.height / 2.0, 400.0, 0.75);
                 cr.fill().ok();
                 cr.restore().ok();
-                cr.set_source_rgb(
-                    f64::from(fg.red()),
-                    f64::from(fg.green()),
-                    f64::from(fg.blue()),
-                );
+                set_ink(cr, fg);
             }
             LineKind::Image {
                 surface,
@@ -666,11 +854,7 @@ pub(crate) fn draw_page(
                     cr.paint().ok();
                 }
                 cr.restore().ok();
-                cr.set_source_rgb(
-                    f64::from(fg.red()),
-                    f64::from(fg.green()),
-                    f64::from(fg.blue()),
-                );
+                set_ink(cr, fg);
             }
             LineKind::Text { layout, index } => {
                 if let Some(pl) = layout.line_readonly(*index) {
@@ -706,15 +890,24 @@ pub(crate) fn draw_page(
                 );
                 // The row drew its own colours; put the body pen back for whatever
                 // follows, or the next line of prose inherits a border colour.
-                cr.set_source_rgb(
-                    f64::from(fg.red()),
-                    f64::from(fg.green()),
-                    f64::from(fg.blue()),
-                );
+                set_ink(cr, fg);
             }
         }
         y += line.height;
     }
+    // ONE status check, at the one place that owns the page's outcome.
+    //
+    // Every cairo call in this function ends `.ok()`, and that is not laziness: cairo is a
+    // latching state machine, so the FIRST error puts the context into a permanent error
+    // state and every later call becomes a no-op returning the same error. Checking each
+    // call would report the same fault a dozen times and still not tell you which one was
+    // first. Checking once, here, asks the question that matters — did this page reach the
+    // surface intact — and a failure is logged rather than swallowed, because the promote
+    // gate upstream decides what to do about a short page and cannot see a cairo status.
+    if let Err(e) = cr.status() {
+        log::error!("PDF page draw ended in a cairo error state: {e}; the page may be incomplete");
+    }
+    PageDrawn(())
 }
 
 /// Everything the ink pass needs about one table row, gathered so the drawing
@@ -754,11 +947,7 @@ fn draw_table_row(
 
     // The header's fill goes down first, so the borders and text sit on top of it.
     if row.is_head {
-        cr.set_source_rgb(
-            f64::from(head_bg.red()),
-            f64::from(head_bg.green()),
-            f64::from(head_bg.blue()),
-        );
+        set_ink(cr, head_bg);
         for column in row.columns {
             cr.rectangle(column.x, 0.0, column.box_width, row.box_height);
         }
@@ -769,11 +958,7 @@ fn draw_table_row(
     // continuous rule rather than a double line — the `border-collapse` the HTML sink
     // asks for, expressed in the only way a page has.
     if row.chrome.border > 0.0 {
-        cr.set_source_rgb(
-            f64::from(border_rgba.red()),
-            f64::from(border_rgba.green()),
-            f64::from(border_rgba.blue()),
-        );
+        set_ink(cr, border_rgba);
         cr.set_line_width(row.chrome.border);
         let inset = row.chrome.border / 2.0;
         for column in row.columns {
@@ -787,11 +972,7 @@ fn draw_table_row(
         cr.stroke().ok();
     }
 
-    cr.set_source_rgb(
-        f64::from(fg.red()),
-        f64::from(fg.green()),
-        f64::from(fg.blue()),
-    );
+    set_ink(cr, fg);
     for cell in row.cells {
         let Some(column) = row.columns.get(cell.column) else {
             continue;
@@ -1293,7 +1474,9 @@ mod pdf_layout_tests {
             .expect("an image surface needs no display");
         let cr = cairo::Context::new(&surface).expect("a cairo context");
         for page in &pages {
-            draw_page(&cr, &laid, page.clone(), &p, &t, 54.0);
+            // The proof is deliberately dropped: this test asserts that every page
+            // DRAWS without panicking, and has no promote gate to satisfy.
+            let _drawn = draw_page(&cr, &laid, page.clone(), &p, &t, 54.0);
         }
         drop(cr);
         // Ink actually reached the surface: a draw path that no-opped would leave the
@@ -1553,6 +1736,100 @@ mod pdf_layout_tests {
                 gtk::pango::Alignment::Right,
             ]
         );
+    }
+
+    #[test]
+    fn the_water_fill_rule_reaches_the_page_and_not_only_the_grid() {
+        // A wide prose column and two short ones, squeezed: the short columns keep
+        // roughly their natural width and the prose column absorbs the squeeze. The
+        // rule was pinned only by direct `fit` calls; nothing exercised it through
+        // `Layouter::table`, which is the path that ships.
+        //
+        // MEASURED, and it corrects the review that prompted this: the finding argued
+        // that swapping a column's two measurements "still produces a plausible grid"
+        // with floors and wants exchanged. It does not reach the grid at all. `fit`
+        // clamps each floor with `.min(natural.max(MIN_COLUMN_PT))`, and since a
+        // max-content width is never below a min-content one, a transposed pair
+        // normalises straight back to the same floors — verified by transposing the
+        // assignment below and watching every export test, this one included, stay
+        // green. So the argument-order hazard `ColumnWant` removes was real and the
+        // *consequence* attributed to it was not; this test pins the rule rather than
+        // pretending to detect a swap it cannot see.
+        let md = "| A very long prose column that wants a great deal of horizontal room indeed | Yes | No |\n\
+                  |---|---|---|\n\
+                  | More long prose here, again wanting plenty of width to lay itself out | Yes | No |\n";
+        let laid = lay_out(
+            &doc::build(md, &RenderOptions::default()),
+            &ctx(),
+            200.0,
+            684.0,
+            &theme(),
+        );
+        let row = laid
+            .lines
+            .iter()
+            .find_map(|line| match &line.kind {
+                super::LineKind::TableRow { columns, .. } => Some(columns.clone()),
+                _ => None,
+            })
+            .expect("no table row");
+        assert_eq!(row.len(), 3);
+        let prose = row[0].text_width;
+        let short = row[1].text_width.max(row[2].text_width);
+        assert!(
+            prose > short * 2.0,
+            "the prose column should dominate; got prose={prose} short={short} \
+             (converging widths mean natural and minimum were swapped)"
+        );
+    }
+
+    #[test]
+    fn a_table_indented_past_the_page_still_lands_on_it() {
+        // No test anywhere passed a non-zero indent to `Layouter::table`, which is how
+        // the missing clamp survived: `indent` grows INDENT_PT per nesting level with
+        // nothing bounding it against the page, so 26 nested quotes on a 468pt page
+        // hand the grid a printable width of zero. `fit` then returned a scale of 0.0
+        // or below, and `draw_table_row` SKIPS a non-positive transform — so the row
+        // drew unscaled, off the page, through the code written to honour TDD 25.17.
+        let width = 468.0;
+        let prefix = format!("{} ", ">".repeat(30));
+        let quoted: String = TABLE
+            .lines()
+            .map(|line| format!("{prefix}{}\n", line.trim_start()))
+            .collect();
+        let laid = lay_out(
+            &doc::build(&quoted, &RenderOptions::default()),
+            &ctx(),
+            width,
+            684.0,
+            &theme(),
+        );
+        let mut rows = 0;
+        for line in &laid.lines {
+            if let super::LineKind::TableRow {
+                columns,
+                scale,
+                chrome,
+                ..
+            } = &line.kind
+            {
+                rows += 1;
+                assert!(
+                    *scale > 0.0 && *scale <= 1.0,
+                    "scale {scale} outside the (0, 1] the drawing pass relies on"
+                );
+                let right = line.indent
+                    + columns
+                        .last()
+                        .map(|c| (c.x + c.box_width + chrome.border) * scale)
+                        .unwrap_or(0.0);
+                assert!(
+                    right <= width + 0.01,
+                    "table ran {right}pt past a {width}pt page"
+                );
+            }
+        }
+        assert!(rows > 0, "the fixture produced no table rows to check");
     }
 
     #[test]

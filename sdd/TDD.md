@@ -2,7 +2,7 @@
 
 | # | Functional area | Rubrics |
 |---|-----------------|---------|
-| 1 | Opening & displaying documents | 1.1 – 1.8 |
+| 1 | Opening & displaying documents | 1.1 – 1.11a |
 | 2 | Rendering fidelity | 2.1 – 2.24 |
 | 3 | Live reload (external edits) | 3.1 – 3.4 |
 | 4 | Editing & saving | 4.1 – 4.9 |
@@ -17,7 +17,7 @@
 | 13 | Preview zoom | 13.1 – 13.10 |
 | 14 | Show Unsafe Images | 14.1 – 14.10 |
 | 15 | Tabbed documents | 15.1 – 15.22 |
-| 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.6 |
+| 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.9 |
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.53 |
 | 18 | Preview reading themes | 18.1 – 18.16 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
@@ -128,12 +128,23 @@
 - **And** an **undo never puts a lone `\r` back**. On every document reachable in normal use this costs nothing to observe — undo restores exactly the bytes the delete removed, `\r\n` pairs included — because no buffer holds a lone `\r` in the first place. Where the two would differ, the rule wins: a buffer that somehow held one has it repaired on the replay rather than restored verbatim, since byte-exact undo of a sequence no buffer may legally contain is worth less than the rule every derived surface depends on
 
 ### 1.11 What a copy puts on the clipboard
+<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-20 alongside 1.10, for the clipboard plain-text rework. Marker added 2026-08-22 from a review finding — the sibling rubric written beside it carried one and this did not, which reads as human-authored intent when it is not. -->
 - **Given** a selection in the editor, in a document with syntax highlighting active
 - **When** the reader copies or cuts it, by any route — the keybinding, the Edit menu, the context menu or the selection bubble
 - **Then** what lands on the clipboard is **plain text**, not a rich buffer: pasting it into another application yields the Markdown source, and pasting it back into this one inserts it as a single edit
 - **And** a cut removes the selection and is a **single** undo step — one Ctrl+Z restores the document exactly as it was, never half of it
 - **And** the same holds for the PRIMARY selection on the platforms that have one: selecting text publishes it, and clearing the selection **releases** PRIMARY rather than claiming it for an empty string, so other applications' middle-click paste is unaffected
 - **And** none of this depends on rich formatting surviving an in-application paste — a Markdown document cannot represent a syntax-highlight tag, so carrying one was never meaningful
+
+### 1.11a What a middle-click paste inserts
+<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-21 for the consumer-side middle-click paste fix. -->
+- **Given** a PRIMARY selection on a platform that has one, published by **any** application including this one
+- **When** the reader middle-clicks in the **editor**
+- **Then** the text is inserted as **plain text** at the click position, exactly once, and as a **single** undo step — one Ctrl+Z removes the whole paste
+- **And** the bytes arrive unchanged: a selection containing `\r\n` inserts `\r\n`, because a rich buffer-to-buffer transfer is what used to split a paste into one edit per syntax-highlight tag and corrupt line endings across the split (ScrAP-312)
+- **And** a middle-click in the **preview** does nothing — it is not an editable surface, and it must not paste, scroll or move the caret
+- **And** every other text field in the application keeps the platform's own middle-click paste; this changes one view, not the process
+- *(Not verified on every platform: PRIMARY middle-click is an X11 convention that Quartz and Win32 do not share, so this rubric is exercised on Linux. The unaffected memory behaviour of selecting is ScrAP-313's, not this rubric's.)*
 
 ---
 
@@ -176,6 +187,13 @@
 - **Given** a GFM table (the header row is the row above the `---` delimiter row)
 - **When** it is rendered
 - **Then** the header row's cells are **bold on a faint grayish, theme-aware fill** (the `cell-head` CSS class), distinguishing the header from the body rows, which are plain
+
+### 2.2d A column's delimiter-row alignment reaches the page AND the preview
+*(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-22, from a review finding: GFM column alignment existed only on the export side of a rule that claims parity.)*
+- **Given** a GFM table whose delimiter row states alignments — `|:---|---:|:---:|---|`
+- **When** it is rendered in the preview and exported to PDF and HTML
+- **Then** each column's cells are aligned as its delimiter stated — flush left for `:---` and for a bare `---`, flush right for `---:`, centred for `:---:` — **in all three**, and a cell that is nothing but a link is aligned the same way as a text cell
+- **And** the preview and the export agree column for column: this is Document Rendering CAM row 17, and it was previously broken in the direction that rule does not look — the exports honoured the delimiter row and the preview hardcoded flush-left, so the same document read differently on screen and on the page
 
 ### 2.2b Tab-separated tables render as tables
 - **Given** a table whose cells and/or `---` delimiter row are separated by hard tabs (e.g. pasted from a spreadsheet), which GFM alone would reject as a table
@@ -506,7 +524,7 @@
 
 ### 4.13 Option+Left/Right moves the caret by a word in every text surface, on macOS
 <!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-20 in response to a reported defect: Option+Left/Right in the editor silently ran GtkSourceView's own `move-words` binding — a word-TRANSPOSITION edit, not navigation — instead of moving the caret, because macOS has no other claim on that key and, ON QUARTZ, GtkSourceView's own class binding wins over the app's Back/Forward accelerator (§23.6) declared on the same keystroke — an ordering measured to be REVERSED on Win32 and X11 (ScrAP-311), so this rubric is macOS-scoped by mechanism and not merely by convention. See accel.rs MAC_RESERVED and macwordnav.rs for the full mechanism, sourced to `gtksourceview.c:953`. -->
-- **Given** any of this application's text surfaces has focus, on macOS — the document editor, the find field, the replace field, the annotation comment entry, or the shared prompt field behind Go To Line and Insert Link/Image/Table
+- **Given** any of this application's text surfaces has focus, on macOS — the document editor, the find field, the replace field, the annotation comment entry, or the shared prompt field behind Go To Line, Rename and Insert Link/Image/Table
 - **When** the reader presses Option+Left or Option+Right
 - **Then** the caret moves one word back or forward, exactly as Ctrl+Left/Ctrl+Right already do on every platform (Linux/Windows convention) — Option is the macOS spelling of the same movement, not a second, different one
 - **And** the buffer's content and word order are completely unchanged — this is caret movement only, never the word-transposition edit `GtkSourceView` itself would otherwise perform on this key (that edit is what wins the key on Quartz with no interceptor; on Win32 and X11 the accelerator wins instead and this rubric has nothing to guard — ScrAP-311)
@@ -1833,6 +1851,7 @@
 - **Given** a screen reader is active, and a window's toolbar, find bar, sidebars and tab strip
 - **When** the user moves focus through the controls
 - **Then** every icon-only button, dropdown and label-less text field announces a name describing the command it runs — not silence, and not the file path or availability note that a tooltip may separately carry
+- **And** the same holds for a control in a transient **dialog** — the Go To Line / Insert Link / Insert Image / Insert Table prompt fields — which a window-scoped audit does not reach; a field sitting beside a visible `GtkLabel` still announces its own name rather than relying on the reader to associate the two
 - **And** a control whose visible label shows a *value* rather than its purpose (the reading-theme and open-documents dropdowns, which display the active theme and document) announces its purpose, so the name does not change as the value does
 - **And** a shortcut is announced as a shortcut rather than as part of the control's name
 
@@ -1841,6 +1860,13 @@
 - **Given** a transient status-bar notice is up in a window (a "File reloaded"/"File saved" announcement, a link-navigation error, or "File deleted on disk"), and it clears itself after a few seconds
 - **When** the tab that raised it is dragged to another window, or closed, before the notice's time is up
 - **Then** the notice still clears from the window it appeared in, leaving that window's persistent status (§4.4) intact underneath — it is never left on screen permanently, and it never appears in the window the tab moved to
+
+### 16.9 A menu item's shortcut hint is the key that command is bound to
+*(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-21. Drafted for a review finding that measurement refuted, and aimed at what survived. The finding was that two View-menu items set no `accel` attribute and therefore showed no key. They showed the right key: GTK derives the hint from the registered accelerator when the model declares none, MEASURED on two release binaries driven identically (GTK 4.6.9/X11) and read off the live macOS system menu bar by the `mac` seat through the Accessibility API. The attribute was then removed everywhere, since it could only restate the binding or silently contradict it — a third binary proved an attribute WINS over the binding. The reachable defect is therefore a command whose accelerator is never registered, which is the one state that yields a hintless item.)*
+- **Given** a command that has a keyboard shortcut and a menu-bar item
+- **When** the user opens the menu containing it
+- **Then** that item shows the command's shortcut beside its label, in the platform's own spelling (Cmd on macOS, Ctrl elsewhere), and the key shown is the key that command is actually bound to — agreeing with the shortcuts window (§16.2) and the toolbar tooltip (§16.4), the other two discoverability surfaces
+- **And** a command that has no shortcut shows no hint, so a blank is information rather than an omission
 
 ### 16.6 Online Markdown reference is reachable from Help
 - **Given** any open window

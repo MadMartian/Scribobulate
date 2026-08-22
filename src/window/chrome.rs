@@ -272,17 +272,11 @@ pub(super) fn build_chrome(
     // A GtkRevealer in outer_box between the content area and the footer.
     // It survives mode/content swaps because it lives outside content_box.
 
-    let find_entry = gtk::SearchEntry::new();
-    find_entry.set_hexpand(true);
+    // A placeholder is not a name — GTK publishes it as `Placeholder`, which AT reads as
+    // a hint about the *content* rather than the field's identity, and which vanishes as
+    // soon as the user types. The constructor takes the name for that reason.
+    let find_entry = crate::widgets::textfield::named_search_entry("Find");
     find_entry.set_placeholder_text(Some("Find…"));
-    // A placeholder is not a name either — GTK publishes it as `Placeholder`, which AT
-    // reads as a hint about the *content*, not as the field's identity. Name it too.
-    crate::a11y::name_field(&find_entry, "Find");
-    // Option+Left/Right word navigation (`macwordnav`). A GtkSearchEntry delegates
-    // to a GtkText like any other wrapper, and a multi-word search term is exactly
-    // the case a Mac reader reaches for Option+Left in.
-    #[cfg(target_os = "macos")]
-    crate::macwordnav::wire_field_word_navigation(&find_entry);
 
     let find_prev_btn = gtk::Button::from_icon_name(Icon::GoUp.name());
     crate::a11y::name_with_tooltip(
@@ -315,12 +309,8 @@ pub(super) fn build_chrome(
     find_row.append(&match_count_label);
     find_row.append(&close_find_btn);
 
-    let replace_entry = gtk::Entry::new();
-    replace_entry.set_hexpand(true);
+    let replace_entry = crate::widgets::textfield::named_entry("Replace with", "");
     replace_entry.set_placeholder_text(Some("Replace with…"));
-    crate::a11y::name_field(&replace_entry, "Replace with");
-    #[cfg(target_os = "macos")]
-    crate::macwordnav::wire_field_word_navigation(&replace_entry);
 
     let replace_btn = gtk::Button::with_label("Replace");
     replace_btn.add_css_class("flat");

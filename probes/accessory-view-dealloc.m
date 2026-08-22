@@ -10,11 +10,33 @@
  * reasoning only from "we own a +1, so give it back". It looks right, it passes
  * review, and it reclaims nothing.
  *
- * The number that makes it a mechanism rather than a figure: the cleared-mode
- * residual (542.3) lands on the independently measured bare-panel cost from
- * appkit-panel-control.m (518.5, no accessory view at all). With the popup
- * genuinely freed, what remains is the pinned panel and nothing else. The two
- * probes share no code path.
+ * The residual, and it is INFERRED rather than MEASURED -- read this before quoting it.
+ * The cleared-mode residual here (542.3) is close to the bare-panel cost reported by
+ * appkit-panel-control.m (518.5, no accessory view at all), and the tempting reading is
+ * that with the popup genuinely freed what remains is the pinned panel and nothing else.
+ * That reading may well be right, but the two figures have NOT been produced under
+ * matched conditions, so the agreement is suggestive and not evidence:
+ *
+ *   - This rig sets `setReleasedWhenClosed:NO` (:86) and holds the panel deliberately,
+ *     because the subject is whether the ACCESSORY view deallocates. appkit-panel-control.m
+ *     sets `setReleasedWhenClosed:YES` (:130). That is a difference in what happens to the
+ *     larger of the two objects at dismissal, which is precisely the quantity the residual
+ *     is claimed to consist of.
+ *   - The dismissal paths differ, and appkit-panel-control.m's is selectable (`--dismiss
+ *     close` vs `--dismiss orderout`) while this rig's is fixed.
+ *   - The inter-cycle gaps differ (150 ms here, 200 ms there), which changes how much
+ *     autorelease draining has happened by the time a snapshot is taken.
+ *
+ * And the exact invocation behind 518.5 is NOT RECORDED -- neither the `--dismiss` mode nor
+ * n nor the cycle count. A figure quoted as corroboration whose command line nobody wrote
+ * down cannot be reproduced, which is the same defect as an unlabelled measurement.
+ *
+ * "The two probes share no code path" is true and is the reason the comparison is worth
+ * making at all; it is not a reason the comparison is controlled. To promote this from
+ * INFERRED to MEASURED: run both rigs with `setReleasedWhenClosed:` matched and the same
+ * dismissal, on an unlocked session, and record both command lines beside both numbers.
+ * Until then the verdict above stands on 19/20 against 0/20, which does not need the
+ * residual at all.
  *
  * Not rounded: it is 19/20, not 20/20. One popup per run does not deallocate. Not
  * investigated; the untested guess is first-presentation warm-up or an autorelease
@@ -40,6 +62,7 @@
 #import <objc/runtime.h>
 #include <mach/mach.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 @interface Spy : NSObject @end
@@ -100,7 +123,11 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--clear")) clear_first = 1;
         else if (!strcmp(argv[i], "--cycles") && i + 1 < argc) total = atoi(argv[++i]);
+        else { fprintf(stderr, "unknown flag %s\n", argv[i]); return 2; }
     }
+    /* per_cycle divides by (total - 1) because cycle 1 sets the baseline, so a
+     * single cycle has no growth to report and would divide by zero. */
+    if (total < 2) { fprintf(stderr, "--cycles must be at least 2\n"); return 2; }
     @autoreleasepool {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];

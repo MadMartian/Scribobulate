@@ -164,8 +164,11 @@ pub(crate) fn editor_selection_target(
     }
     // Balance BEFORE the block-crossing test: swallowing a construct can only widen
     // the span, and the widened span is what actually gets wrapped — so it is the one
-    // that must be tested for the cross-block point-comment fallback.
-    let span = crate::copymap::balance_source_span(source, start..end);
+    // that must be tested for the cross-block point-comment fallback. The caller
+    // normalises (ScrAP-75, `NormalizedMd`'s doc): the substitution is length- and
+    // position-preserving, so the returned range still indexes `source` unchanged.
+    let normalized = crate::renderer::NormalizedMd::new(source);
+    let span = crate::copymap::balance_source_span(&normalized, start..end);
     // Same reasoning as the cleaned-side sibling above (QA round 3, P-3):
     // `balance_source_span` returns byte arithmetic over the source, not a
     // proven char boundary.

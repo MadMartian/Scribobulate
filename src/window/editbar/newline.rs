@@ -224,16 +224,17 @@ mod gtk_integration_tests {
         (buf, view)
     }
 
-    fn pump(ctx: &glib::MainContext, budget: u32, done: impl Fn() -> bool) -> bool {
-        for _ in 0..budget {
-            if done() {
-                return true;
-            }
-            if !ctx.iteration(false) {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        }
-        done()
+    /// Pump the main loop until `done` reports true, or `budget` turns' worth of
+    /// wall-clock time elapses. `crate::testpump::until_or_for` under `Clock::Idle`
+    /// (M31) — the awaited work here (`insert-text` dispatch after a same-app paste)
+    /// is main-context idle-driven; `budget * 5ms` matches this function's old
+    /// worst-case ceiling (a 5ms sleep on every turn that dispatched nothing).
+    fn pump(_ctx: &glib::MainContext, budget: u32, done: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Idle,
+            std::time::Duration::from_millis(budget as u64 * 5),
+            done,
+        )
     }
 
     fn text_of(buf: &sourceview::Buffer) -> String {

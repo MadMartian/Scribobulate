@@ -95,23 +95,15 @@ pub(super) fn retitle_window(window: &ApplicationWindow) {
 /// `select-tab` action state (`on_active_tab_changed`), rebuilding nothing.
 /// See GTK4Rs/AP-76.
 pub(crate) fn refresh_documents_menu(window: &ApplicationWindow) {
-    let Some(chrome) = winstate::chrome(window) else {
-        return;
-    };
-    if chrome.documents_refresh_scheduled.replace(true) {
-        return; // a rebuild is already queued for this window
-    }
-    glib::idle_add_local_once(glib::clone!(
-        #[weak(rename_to = w)]
+    // Deferred through the shared choke point rather than a private idle of its own.
+    // This site had the mitigation first and the sibling `Format ▸` submenu did not;
+    // routing both through one function is what stops the next live-bound menu being
+    // the third site to decide for itself (GTK4Rs/AP-76).
+    crate::app::defer_live_menu_mutation(
         window,
-        move || {
-            let Some(chrome) = winstate::chrome(&w) else {
-                return;
-            };
-            chrome.documents_refresh_scheduled.set(false);
-            rebuild_documents_menu(&w, &chrome);
-        }
-    ));
+        |chrome| &chrome.documents_refresh_scheduled,
+        rebuild_documents_menu,
+    );
 }
 
 /// Rebuild `window`'s Documents submenu in place (`remove_all` + re-append). Runs
@@ -213,7 +205,7 @@ fn documents_item_label(tab: &TabState) -> String {
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Untitled".to_string());
-    name.replace('_', "__")
+    crate::app::escape_mnemonic(&name)
 }
 
 /// Refresh one tab's own tab-strip label text (filename + a "•" dirty marker,

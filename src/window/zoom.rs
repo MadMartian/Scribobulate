@@ -12,6 +12,14 @@ const ZOOM_LADDER: &[f64] = &[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 /// on — so this CSS scope and the registry key can never diverge for a window
 /// (a moved preview re-matches by tree position, so cross-window tab moves need
 /// no reparenting).
+/// Test-only alias, so `winstate::ids`' scope test can assert that the zoom rule and the
+/// window's own CSS class land on the SAME selector — rather than rebuilding both strings
+/// itself and comparing its own two copies, which is what it used to do.
+#[cfg(test)]
+pub(crate) fn zoom_css_rule_for_test(window: &ApplicationWindow, zoom: f64) -> String {
+    zoom_css_rule(window, zoom)
+}
+
 pub(super) fn zoom_css_rule(window: &ApplicationWindow, zoom: f64) -> String {
     let id = winstate::WindowId::of(window).raw();
     format!(".scrib-win-{id} textview.scrib-preview {{ font-size: {zoom}em; }}")
@@ -102,7 +110,7 @@ fn rerender_and_restore_scroll(
 ) {
     let md = match mode {
         ViewMode::Split => tab.editor_text(),
-        ViewMode::Preview | ViewMode::Edit => tab.source.borrow().clone(),
+        ViewMode::Preview | ViewMode::Edit => tab.source().clone(),
     };
 
     // Capture the reading position as a buffer LINE before the swap — this is a
@@ -188,7 +196,7 @@ pub(crate) fn rerender_preview_from_live_edit(window: &ApplicationWindow) {
     // annotation — it vanished on Preview→Split until a second toggle flushed it
     // back. Flushing here keeps `st.source` == the live buffer at every annotation
     // edit, so any later fresh render reproduces the annotation.
-    *st.source.borrow_mut() = md.clone();
+    st.set_source(&md);
 
     // Refresh the sidebar annotations viewer (the flat list) at this same choke point.
     // Every preview-side annotation CRUD routes through here (the preview sink via

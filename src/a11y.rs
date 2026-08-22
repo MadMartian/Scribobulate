@@ -171,20 +171,95 @@ mod gtk_integration_tests {
         out
     }
 
-    /// Whether this application owes `w` an explicit accessible name. A button showing a
-    /// visible text label already has one — GTK derives the name from the label — so only
-    /// the icon-only controls and the label-less text fields are in scope.
+    /// Whether this application owes `w` an explicit accessible name.
+    ///
+    /// SEMANTIC, not a type list. This used to be a downcast cascade over `GtkButton`,
+    /// `GtkMenuButton`, `GtkEntry` and `GtkSearchEntry`, under a doc claim that the guard's
+    /// coverage "grows with the application". It did not: a control of any other type — a
+    /// `GtkToggleButton`, a `GtkSpinButton`, a subclassed widget, anything added next year —
+    /// answered `None` on the first two arms and `false` on the last, so it was silently out
+    /// of scope. The cascade decided coverage by naming types, which is exactly the
+    /// remembered-to-write-it-down weakness the module doc says this replaces.
+    ///
+    /// The question GTK can answer directly is: **can a user land on this thing, and if they
+    /// do, is there anything to announce?** A widget owes a name iff it is focusable — the
+    /// operative definition of an interactive control — and neither carries an explicit
+    /// accessible label nor derives one from visible text of its own.
+    ///
+    /// The third clause is what keeps a labelled button out of scope without naming
+    /// `GtkButton`: GTK builds a real `GtkLabel` child for it and derives the accessible name
+    /// from that, so "has a visible text descendant" is the general form of the old
+    /// `b.label()` special case, and it covers every widget that gets its name the same way.
     fn owes_a_name(w: &gtk::Widget) -> bool {
-        let labelled = w
-            .downcast_ref::<gtk::Button>()
-            .map(|b| b.label())
-            .or_else(|| w.downcast_ref::<gtk::MenuButton>().map(|b| b.label()))
-            .map(|l| l.is_some_and(|l| !l.is_empty()));
-        match labelled {
-            Some(true) => false, // a visible label IS the name
-            Some(false) => true, // icon-only: must be named here
-            None => w.is::<gtk::Entry>() || w.is::<gtk::SearchEntry>(),
+        // SCOPE, not compliance. This answers "does this control need a name", and the
+        // walk then asserts separately that each one HAS a name. Folding `has_name` in
+        // here — which a first attempt did — collapses the candidate set to exactly the
+        // failing widgets, so the guard passes vacuously the moment the application is
+        // correct, and its own vacuity check is what catches that.
+        if !is_interactive_role(w.accessible_role()) {
+            return false;
         }
+        !has_visible_text(w)
+    }
+
+    /// Roles a screen-reader user can act on, and which therefore have to announce as
+    /// something.
+    ///
+    /// NOT `is_focusable()`, which was the first attempt and was wrong for this application
+    /// specifically: its toolbar controls are deliberately not focusable — a toolbar button
+    /// that takes focus on click steals it from the editor — yet they are exactly the
+    /// controls this guard exists for. MEASURED: the focusable form found 7 nameable
+    /// controls in a real window and tripped the walk's own vacuity check, which is the
+    /// check earning its keep. A role is what the accessibility tree actually publishes, it
+    /// is assigned to subclasses and custom widgets alike, and it does not enumerate types.
+    fn is_interactive_role(role: gtk::AccessibleRole) -> bool {
+        matches!(
+            role,
+            // No `ToggleButton` arm: that variant is above this project's 4.6 floor
+            // (GTK4Rs/AP-114 — it compiles against a newer gtk4 and is simply absent here),
+            // and at 4.6 a GtkToggleButton publishes `Button` anyway.
+            gtk::AccessibleRole::Button
+                | gtk::AccessibleRole::MenuItem
+                | gtk::AccessibleRole::MenuItemCheckbox
+                | gtk::AccessibleRole::MenuItemRadio
+                | gtk::AccessibleRole::Checkbox
+                | gtk::AccessibleRole::Radio
+                | gtk::AccessibleRole::ComboBox
+                | gtk::AccessibleRole::TextBox
+                | gtk::AccessibleRole::SearchBox
+                | gtk::AccessibleRole::SpinButton
+                | gtk::AccessibleRole::Slider
+                | gtk::AccessibleRole::Switch
+                | gtk::AccessibleRole::Tab
+        )
+    }
+
+    /// Does `w` show text of its own that GTK can derive an accessible name from?
+    ///
+    /// Depth-limited on purpose. A container full of labels is not "named by" them, and an
+    /// unbounded walk would excuse any control that happens to contain text somewhere
+    /// beneath it. GTK's own derivation is from the widget's immediate label child, which is
+    /// what a `GtkButton`/`GtkToggleButton` builds for its `label` property.
+    fn has_visible_text(w: &gtk::Widget) -> bool {
+        fn text_in(w: &gtk::Widget, depth: usize) -> bool {
+            if let Some(l) = w.downcast_ref::<gtk::Label>() {
+                if !l.text().is_empty() {
+                    return true;
+                }
+            }
+            if depth == 0 {
+                return false;
+            }
+            let mut child = w.first_child();
+            while let Some(c) = child {
+                if text_in(&c, depth - 1) {
+                    return true;
+                }
+                child = c.next_sibling();
+            }
+            false
+        }
+        text_in(w, 2)
     }
 
     /// **Every icon-only control and label-less text field in a window carries an

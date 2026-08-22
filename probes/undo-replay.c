@@ -68,8 +68,15 @@ static void run(const char *label, int guard) {
 
 int main(void) {
   gtk_init(); gtk_source_init();
-  g_print("GTK %d.%d.%d / GtkSourceView 5.20.0 / %s\n\n",
+  /* Every component MEASURED at runtime. This line used to hardcode
+   * "GtkSourceView 5.20.0" beside two versions it really did read, so a probe
+   * run against a different GtkSourceView would have reported the version the
+   * author had when they wrote it -- a banner that looks like evidence and is
+   * not, in the one place a reader checks what the result applies to. */
+  g_print("GTK %d.%d.%d / GtkSourceView %u.%u.%u / %s\n\n",
     gtk_get_major_version(), gtk_get_minor_version(), gtk_get_micro_version(),
+    gtk_source_get_major_version(), gtk_source_get_minor_version(),
+    gtk_source_get_micro_version(),
     G_OBJECT_TYPE_NAME(gdk_display_get_default()));
   run("undo replay through the hook", 0);
   run("undo replay with the bracket", 1);

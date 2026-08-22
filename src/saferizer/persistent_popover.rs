@@ -106,22 +106,18 @@ impl PersistentPopover {
 mod gtk_integration_tests {
     use super::*;
 
-    /// Pump the main loop until `cond` holds or `budget` iterations elapse. Uses a
-    /// NON-blocking `iteration(false)` + a short sleep (never a blocking
-    /// `iteration(true)`, which starves forever when `cond` never becomes true on an
-    /// idle Xvfb display — GTK4Rs/AP-79), so a failing condition returns promptly and
-    /// the caller's assertion fires instead of hanging. A popover open/close is
-    /// frame-clock/animation driven, so this cannot be a single event drain.
-    fn pump_until(budget: u32, cond: impl Fn() -> bool) -> bool {
-        let ctx = glib::MainContext::default();
-        for _ in 0..budget {
-            if cond() {
-                return true;
-            }
-            ctx.iteration(false);
-            std::thread::sleep(std::time::Duration::from_millis(4));
-        }
-        cond()
+    /// Pump the main loop until `cond` holds or `budget` turns' worth of wall-clock
+    /// time elapses. A popover open/close is frame-clock/animation driven, so this
+    /// cannot be a single event drain — `crate::testpump::until_or_for` under
+    /// `Clock::Frame` (M31), which blocks on a real timeout SOURCE (GTK4Rs/AP-79)
+    /// rather than this function's old non-blocking-plus-sleep shape; `budget * 4ms`
+    /// keeps the same worst-case ceiling.
+    fn pump_until(budget: u32, cond: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(budget as u64 * 4),
+            cond,
+        )
     }
 
     /// A presented window hosting a child that a popover can be parented to. The

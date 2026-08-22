@@ -615,10 +615,17 @@ pub(crate) fn update_undo_redo_state(window: &ApplicationWindow) {
 /// This is also the file-side half of the no-lone-carriage-return rule
 /// ([`crate::lineendings`]) — the single choke point every file load, live reload,
 /// session restore and crash recovery already funnels through, so none of them has to
-/// know about it. There is deliberately **no clipboard-side half**: the obvious
-/// mechanism for one was written, measured and rejected because it corrupts CRLF on a
-/// same-application paste (ScrAP-312), so lone-CR text arriving by paste is still
-/// mis-rendered until the document is saved and reopened.
+/// know about it.
+///
+/// **There IS a clipboard-side half**, and it is not here: the `insert-text` hook
+/// [`crate::lineendings::new_editor_buffer`] arms at the buffer's birth closes the
+/// paste, drag-and-drop and middle-click PRIMARY route. This comment used to say no
+/// such half existed, which was true when it was written and stopped being true three
+/// commits later in the same merge. The reason the earlier attempt was rejected is
+/// still worth knowing and is no longer a reason it cannot exist: an `insert-text`
+/// repair wired while GTK's rich content was still being published corrupted CRLF on a
+/// same-application paste (ScrAP-312), and `crate::clipboard` landing first — plain
+/// text, so one untagged emission — is what made the hook sound.
 pub(crate) fn load_into_editor(buf: &sourceview::Buffer, text: &str) {
     let text = crate::lineendings::normalize_lone_cr(text);
     buf.begin_irreversible_action();
@@ -626,6 +633,13 @@ pub(crate) fn load_into_editor(buf: &sourceview::Buffer, text: &str) {
     buf.end_irreversible_action();
 }
 /// Re-bind the copy action to the now-active text view after a content swap.
+///
+/// A deliberate one-line pass-through to [`connect_buf_to_copy_action`], kept because
+/// the two names answer different questions: that one says *what* the wiring is and is
+/// called once at construction; this one says *when* a caller needs to redo it, and is
+/// the name a swap site should reach for. Callers at the swap sites reading
+/// `connect_…` would reasonably wonder whether they were double-connecting. Inlining it
+/// would save a line and cost that distinction.
 pub(super) fn rewire_copy_action(window: &ApplicationWindow) {
     connect_buf_to_copy_action(window);
 }

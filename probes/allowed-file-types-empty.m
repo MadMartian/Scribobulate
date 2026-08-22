@@ -46,6 +46,29 @@ int main(void)
         NSSavePanel *p = [[NSSavePanel savePanel] retain];
 
         printf("-[NSSavePanel setAllowedFileTypes:] / setAllowedContentTypes:\n");
+
+        /* POSITIVE CONTROL, and it runs FIRST because everything below depends on it.
+         * The four cases each print "NO exception", which is only evidence if this rig
+         * can print anything else -- a TRY macro whose @catch is unreachable, an
+         * exception model that is off, or a build where these calls cannot raise at all
+         * would produce the identical four lines and read as a clean result. Indexing an
+         * empty NSArray raises NSRangeException unconditionally, so if THIS prints "NO
+         * exception" the instrument is broken and no verdict below is worth reading. */
+        int control_raised = 0;
+        @try {
+            (void)[[NSArray array] objectAtIndex:0];
+            printf("  %-26s NO exception\n", "control (must RAISE)");
+        } @catch (NSException * e) {
+            control_raised = 1;
+            printf("  %-26s RAISED %s (control OK)\n", "control (must RAISE)",
+                   [[e name] UTF8String]);
+        }
+        if (!control_raised) {
+            printf("INVALID: the positive control did not raise, so every \"NO exception\"\n"
+                   "         below is unproven -- this rig cannot report a raise at all.\n");
+            return 2;
+        }
+
         TRY("empty array @[]", [p setAllowedFileTypes:@[]]);
         printf("  %-26s reads back as %s\n", "  after @[]",
                [p allowedFileTypes] ? [[[p allowedFileTypes] description] UTF8String]

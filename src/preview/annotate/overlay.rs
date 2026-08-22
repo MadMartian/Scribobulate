@@ -946,16 +946,16 @@ mod jjj_tests {
             .expect("scroller holds the CodePreviewView")
     }
 
-    fn pump_until(budget: u32, done: impl Fn() -> bool) -> bool {
-        let ctx = glib::MainContext::default();
-        for _ in 0..budget {
-            if done() {
-                return true;
-            }
-            ctx.iteration(false);
-            std::thread::sleep(std::time::Duration::from_millis(4));
-        }
-        done()
+    /// Pump the main loop until `done` reports true, or `budget` turns' worth of
+    /// wall-clock time elapses. `crate::testpump::until_or_for` under
+    /// `Clock::Frame` (M31); `budget * 4ms` matches this function's old
+    /// worst-case ceiling (a fixed 4ms sleep per turn).
+    fn pump_until(budget: u32, done: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(budget as u64 * 4),
+            done,
+        )
     }
 
     fn find_descendant<T: IsA<gtk::Widget>>(root: &impl IsA<gtk::Widget>) -> Option<T> {

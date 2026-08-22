@@ -53,7 +53,7 @@
 #   step      <ord>  <id>                  ordinal fixes the run order
 #   intent    <id>   <what must be true>   the invariant; never a command
 #   verdict   <id>   exit | marker:<text>  how the step is judged
-#   class     <id>   required | informational | review
+#   class     <id>   required | informational | review | packaging
 #   cmd.<plat> <id>  <command line>        how THIS platform satisfies the intent
 #                                          MAY carry leading `NAME=VALUE ` env prefixes;
 #                                          see ENV PREFIXES below — every port must
@@ -123,7 +123,10 @@
 # obligation with no command — announced in the run output so it cannot be silently
 # forgotten, but not something a script can judge. Step 7 is the only `review` step and
 # it is honest about that: pretending a script can decide whether a behaviour change
-# carries its MANUAL-TEST.md check would be a gate that always passes.
+# carries its MANUAL-TEST.md check would be a gate that always passes. `packaging` is
+# `required` that is also OPT-IN — it fails the run when asked for and does not run
+# otherwise; see the paragraph on it below for why that is its own class rather than a
+# flag on `required`.
 #
 # PROVENANCE TRAVELS WITH THE ARTEFACT. A packaging step is allowed to run in a run where
 # a required step was skipped by operator override — `--skip-integration` plus `--package`
@@ -277,6 +280,7 @@ class  integration  required
 cmd.linux   integration  G_DEBUG=fatal-criticals xvfb-run -a cargo test --features gtk-integration-tests
 cmd.macos   integration  cargo test --features gtk-integration-tests --test gtk_suite --test icon_resolution --test macos_dark_mode --test popover_deferred_focus
 cmd.windows integration  G_DEBUG=fatal-criticals cargo test --features gtk-integration-tests -- --test-threads=1
+disarm.macos integration  permanent  G_DEBUG=fatal-criticals is absent from the macOS command above, and this line is why: GDK's Quartz backend freezes a surface once per CONSTRUCTION and thaws once per MAP, and gdk_macos_surface_hide never freezes, so the second map thaws at zero and the suite emits gdk_surface_thaw_updates assertions on every popover open or dismiss. Present 4.22.4 through main; the freeze/thaw pair is private and absent from the gdk4 bindings, so no application-side fix exists. Do NOT arm it by masking Gdk-CRITICAL: that would also silence ScrAP-318, a leaked update-freeze that stops a surface repainting, which is the only signal anybody would get if it happened. See also ScrAP-268 before reaching for a g_log_set_writer_func allowlist.
 
 # ---------------------------------------------------------------------------
 # Step 6 — coverage ratchet

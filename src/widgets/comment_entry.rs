@@ -47,15 +47,12 @@ impl CommentEntry {
     /// still dismiss the card; the Edit path dismisses and skips the write), so it is
     /// deliberately not baked in here.
     pub(crate) fn new(initial: &str, commit: impl Fn(&str) + 'static) -> Self {
-        let entry = gtk::Entry::new();
-        entry.set_text(initial);
-        entry.set_hexpand(true);
-        // Option+Left/Right word navigation (`macwordnav`). Wired here for exactly
-        // the reason this type exists at all: a surface that had to remember it
-        // would be the fourth surface that forgot.
-        #[cfg(target_os = "macos")]
-        crate::macwordnav::wire_field_word_navigation(&entry);
-        crate::a11y::name_field(&entry, "Comment");
+        // Built through the shared constructor, which owns the name + macOS
+        // word-navigation pairing this type used to wire by hand. The sentence that
+        // used to sit here — "a surface that had to remember it would be the fourth
+        // surface that forgot" — was right, and the other three surfaces were still
+        // remembering; `widgets::textfield` is that reasoning applied to all four.
+        let entry = crate::widgets::textfield::named_entry("Comment", initial);
         let save = gtk::Button::with_label("Save");
         save.add_css_class("suggested-action");
 

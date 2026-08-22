@@ -24,7 +24,7 @@
 //! # One pipeline, two sinks
 //!
 //! [`doc`] enters through the conditions the preview enters through — CriticMarkup
-//! extraction, [`crate::renderer::md_options`], `normalize_inline_tabs`, the
+//! extraction, [`crate::renderer::md_options`], `crate::renderer::NormalizedMd`, the
 //! pulldown event stream, plus `scan_script_spans` for the four constructs a second
 //! tokeniser owns — and builds an [`ExportDoc`]. **Both sinks consume that one
 //! model**, so they agree with the preview, and with each other, by construction
@@ -178,14 +178,12 @@ pub(crate) struct ImageRef {
     pub(crate) source: ImageSource,
 }
 
-/// A column alignment from a GFM table's delimiter row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Align {
-    None,
-    Left,
-    Center,
-    Right,
-}
+// `Align` and `align_of` moved to `crate::mdtable` so the PREVIEW can name them too:
+// while they were private to this module the widget half could not read a delimiter
+// row's alignment at all, and the export honoured `---:`/`:---:` while the preview
+// ignored them — a Document Rendering CAM row 17 divergence with the export the richer
+// of the two. Re-exported here so this module's existing consumers are unchanged.
+pub(crate) use crate::mdtable::{align_of, Align};
 
 /// One inline run. The tree mirrors what the preview shows, not what the source
 /// said — the four constructs `scan_script_spans` owns
@@ -294,15 +292,6 @@ pub(super) fn heading_level(level: HeadingLevel) -> u8 {
         HeadingLevel::H4 => 4,
         HeadingLevel::H5 => 5,
         HeadingLevel::H6 => 6,
-    }
-}
-
-pub(super) fn align_of(a: pulldown_cmark::Alignment) -> Align {
-    match a {
-        pulldown_cmark::Alignment::None => Align::None,
-        pulldown_cmark::Alignment::Left => Align::Left,
-        pulldown_cmark::Alignment::Center => Align::Center,
-        pulldown_cmark::Alignment::Right => Align::Right,
     }
 }
 

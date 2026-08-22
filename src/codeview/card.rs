@@ -707,19 +707,19 @@ mod gtk_integration_tests {
             .expect("scroller holds the CodePreviewView")
     }
 
-    /// Pump the main loop until `done` reports true, or `budget` iterations elapse.
-    /// Non-blocking iteration + a short sleep, never `iteration(true)`, which starves
-    /// forever on an idle display when the condition never becomes true (GTK4Rs/AP-79).
-    fn pump_until(budget: u32, done: impl Fn() -> bool) -> bool {
-        let ctx = glib::MainContext::default();
-        for _ in 0..budget {
-            if done() {
-                return true;
-            }
-            ctx.iteration(false);
-            std::thread::sleep(std::time::Duration::from_millis(4));
-        }
-        done()
+    /// Pump the main loop until `done` reports true, or `budget` turns' worth of
+    /// wall-clock time elapses; reports whether it converged. `crate::testpump::until_or_for`
+    /// under `Clock::Frame` (M31) — popover open/close is frame-clock/animation
+    /// driven (see that enum variant's doc), which is why this waits on real elapsed
+    /// time rather than a tight turn count. `budget * 4ms` matches this function's old
+    /// worst-case ceiling (a fixed 4ms sleep per turn) so call sites below keep the
+    /// same margin.
+    fn pump_until(budget: u32, done: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(budget as u64 * 4),
+            done,
+        )
     }
 
     /// Scroll the view the way a HAND does.

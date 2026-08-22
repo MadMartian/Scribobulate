@@ -101,10 +101,11 @@ static int report_toggles(GtkTextBuffer *b, const char *label) {
   return dangerous;
 }
 
-typedef struct { const char *label; const char *doc; gboolean primary; gboolean plaintext; } Case;
+typedef struct { const char *label; const char *doc; gboolean primary; gboolean plaintext; gboolean expect_split; } Case;
 static Case  cases[8];
 static int   ncases = 0, cur = 0;
 static gboolean any_corruption = FALSE;
+static gboolean rig_broken = FALSE;
 
 static gboolean finish_case(gpointer data);
 
@@ -164,6 +165,20 @@ static gboolean finish_case(gpointer data) {
           identical ? "byte-identical" : "*** CORRUPTED ***",
           (!identical && wl == gl) ? "  (SAME LENGTH — a char-count check would have passed)" : "");
   if (!identical) any_corruption = TRUE;
+
+  /* Requirement 3: consume the stashed precondition. A fixture whose story
+   * depends on a toggle splitting the CRLF (expect_split) is not testing
+   * anything if that split never happened — GtkSourceView's tag geometry may
+   * have moved since 5.4.1, and the VERDICT above is then a false negative. */
+  int case_bad = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(dst), "case-bad"));
+  if (c->expect_split && case_bad == 0) {
+    rig_broken = TRUE;
+    g_print("  *** RIG BROKEN: this fixture requires a tag toggle inside the "
+            "CRLF to test anything, but none was found (case-bad=0) — "
+            "GtkSourceView's tag geometry may have moved. The VERDICT above "
+            "is MEANINGLESS. ***\n");
+  }
+
   g_free(hw); g_free(hg); g_free(got);
   g_object_unref(dst);
   cur++;
@@ -179,19 +194,36 @@ int main(int argc, char **argv) {
   apply_repair = (argc > 1 && g_str_equal(argv[1], "repair"));
   run_log = g_string_new(NULL);
 
-  g_print("GTK %d.%d.%d / GtkSourceView %s / backend %s\n",
+  /* Every component MEASURED at runtime -- the GtkSourceView field used to be
+   * the literal "5.20.0" fed to a %s, which reports the author's version rather
+   * than the running one. A banner that looks like evidence and is not is worse
+   * than no banner, since it is exactly what a reader checks the result against. */
+  g_print("GTK %d.%d.%d / GtkSourceView %u.%u.%u / backend %s\n",
           gtk_get_major_version(), gtk_get_minor_version(), gtk_get_micro_version(),
-          "5.20.0", G_OBJECT_TYPE_NAME(gdk_display_get_default()));
+          gtk_source_get_major_version(), gtk_source_get_minor_version(),
+          gtk_source_get_micro_version(),
+          G_OBJECT_TYPE_NAME(gdk_display_get_default()));
 
-  cases[ncases++] = (Case){ "UNCLOSED fence (researcher's repro)", DOC_OPEN,   FALSE, FALSE };
-  cases[ncases++] = (Case){ "CLOSED fence (control)",              DOC_CLOSED, FALSE, FALSE };
-  cases[ncases++] = (Case){ "UNCLOSED fence via PRIMARY",          DOC_OPEN,   TRUE,  FALSE };
-  cases[ncases++] = (Case){ "CLOSED fence via PRIMARY (control)",  DOC_CLOSED, TRUE,  FALSE };
-  cases[ncases++] = (Case){ "UNCLOSED fence, PLAIN-TEXT publication", DOC_OPEN, FALSE, TRUE };
+  /* expect_split: does this fixture's verdict depend on a tag toggle actually
+   * splitting the CRLF? Fixtures 1 and 3 corrupt (under repair) BECAUSE the
+   * toggle splits the pair into separate insert-text chunks — that split is
+   * the whole mechanism under test, so require it. Fixtures 2 and 4 are
+   * controls that must NOT split, by design. Fixture 5 measures the plain-text
+   * remedy, which removes the chunking-by-toggle mechanism itself rather than
+   * relying on the toggle's absence — the README documents it as "robust
+   * against future changes to GtkSourceView's grammar", so its byte-identical
+   * verdict is meaningful whether or not a dangerous toggle is present. */
+  cases[ncases++] = (Case){ "UNCLOSED fence (researcher's repro)", DOC_OPEN,   FALSE, FALSE, TRUE  };
+  cases[ncases++] = (Case){ "CLOSED fence (control)",              DOC_CLOSED, FALSE, FALSE, FALSE };
+  cases[ncases++] = (Case){ "UNCLOSED fence via PRIMARY",          DOC_OPEN,   TRUE,  FALSE, TRUE  };
+  cases[ncases++] = (Case){ "CLOSED fence via PRIMARY (control)",  DOC_CLOSED, TRUE,  FALSE, FALSE };
+  cases[ncases++] = (Case){ "UNCLOSED fence, PLAIN-TEXT publication", DOC_OPEN, FALSE, TRUE,  FALSE };
 
   loop = g_main_loop_new(NULL, FALSE);
   g_idle_add(kick, NULL);
   g_main_loop_run(loop);
-  g_print("\n==== OVERALL: %s ====\n", any_corruption ? "CORRUPTION REPRODUCED" : "no corruption observed");
-  return any_corruption ? 1 : 0;
+  g_print("\n==== OVERALL: %s ====\n",
+          rig_broken ? "RIG BROKEN (precondition unmet — verdict meaningless)"
+          : any_corruption ? "CORRUPTION REPRODUCED" : "no corruption observed");
+  return rig_broken ? 2 : (any_corruption ? 1 : 0);
 }

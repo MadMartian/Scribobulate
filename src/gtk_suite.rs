@@ -67,8 +67,8 @@ mod limits;
 mod lineendings;
 mod links;
 mod logging;
-#[cfg(target_os = "macos")]
 mod macwordnav;
+mod mdtable;
 mod outline;
 mod outline_view;
 mod palette;
@@ -82,6 +82,12 @@ mod suite_registry;
 mod swapfile;
 mod tags;
 mod tasklist;
+// Gated `#[cfg(all(test, feature = "gtk-integration-tests"))]` in `lib.rs`; this root
+// is always built `--cfg test` under that same feature (it only exists to run
+// gtk-integration-tests bodies), so it needs no gate here — but it does need the
+// declaration, or a body reaching `testpump` drops out of this main-thread run with
+// nothing failing (`scripts/lint-references.sh` check 4).
+mod testpump;
 // Test-only in `lib.rs` (`#[cfg(test)]`); this root is always built `--cfg test`, so
 // it needs no gate here — but it does need the declaration, or the suite build breaks
 // the moment a symlink test in it reaches the shared helper.

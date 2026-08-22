@@ -527,8 +527,11 @@ pub(crate) const FORMAT_CMDS: [FmtCmd; 16] = [
 /// otherwise each hand-copy these accelerator strings (QA M-4):
 ///   1. the binding — `setup::register_accelerators` calls `set_accels_for_action`
 ///      from `accels`;
-///   2. the menu-bar hint — `menubar` sets each item's `accel` attribute from
-///      [`inline_accel`];
+///   2. the menu-bar hint — set by GTK itself, from the accelerator surface 1
+///      registered (`gtk_action_muxer_get_primary_accel` returns `accels[0]`). The
+///      menubar model deliberately sets no `accel` attribute of its own; the
+///      context-menu popover, which is hand-built widgets rather than a `GMenu` and so
+///      gets no such fallback, does read [`inline_accel`];
 ///   3. the shortcuts-window display row — `shortcuts::interface_xml` derives its
 ///      rows from this table;
 ///   4. the toolbar tooltip — `window::toolbar` builds tooltips via

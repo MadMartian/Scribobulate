@@ -157,7 +157,11 @@ Before any change is considered valid, run these steps in order:
    run `--list-scan` / `-ListScan` on both platforms and diff the output. A claim of
    parity that nothing checks is worse than no claim, because the next author trusts
    it. It enforces
-   nine rules mechanically — three over citations into the SDD registers, two over
+   its rules mechanically — the script owns the list and **the count is deliberately
+   not restated here**, for the same reason as the coverage floor and the input
+   limits: this sentence said "nine" while the script implemented fourteen, and no
+   reader could tell. The run output enumerates every check by number and title as it
+   executes. The classes are citations into the SDD registers, two over
    the test architecture, both of whose failure modes are silent (that
    `src/gtk_suite.rs`'s duplicated module list has not drifted from `src/lib.rs`'s — a
    module missing there drops every test body inside it from the main-thread run, with
@@ -191,12 +195,12 @@ Before any change is considered valid, run these steps in order:
    held by both registers, cite `ScrAP-N`; this one is always resolvable. ScrAP-231
    records what the previous, laxer version of this rule cost. Checks 4, 5, 6, 7 and 8
    were each mutation-tested when written.
-   The ninth is over **tracked PATH LEGALITY**: `< > : " | ? *` and a trailing dot or
+   One check is over **tracked PATH LEGALITY**: `< > : " | ? *` and a trailing dot or
    space are illegal in a Win32 filename, so **one such path makes `git checkout` refuse
    the entire tree** — not that file, the whole tree — blocking every Windows clone and
    anyone bisecting through the commit. MEASURED: an unquoted `sed -i 's|a|b|'` had its
    `|` eaten by the shell, wrote the replacement half to disk as a filename, and
-   `git add -A` committed it; fmt, clippy, the whole suite and the other eleven checks
+   `git add -A` committed it; fmt, clippy, the whole suite and every other check
    all passed, and only the Windows seat could see it, one fetch later, by being blocked.
    **Its input set is `git ls-files`, deliberately NOT `lint-references.scan`** — the
    offending path landed in the repository root, outside the curated scan, and a check
@@ -675,12 +679,24 @@ full account is ScrAP-225; the rule above is what stops it recurring.
     [`CAM.md`](CAM.md) — the two SSOT rows of those matrices *are* this
     rule, not a second copy of it.
 - **Keyboard accelerators are part of the single-source-of-truth contract.** Each
-  command's accelerator is declared **once** in its descriptor (`Cmd`/`FmtCmd`) and
-  registered from there via `set_accels_for_action`; the *same* string drives the
-  menu/context-menu accel **hint**, so the active binding and its displayed hint can
+  command's accelerator is declared **once** in its descriptor (`Cmd`/`FmtCmd`/
+  `InlineCmd`) and registered from there via `set_accels_for_action`, which is what
+  every displayed hint derives from — so the active binding and its displayed hint can
   never diverge. This holds for both the editor/view actions and the formatting
   actions. Adding or changing a command — or its shortcut — means editing its single
   descriptor, not each surface and not a separate accel-registration list.
+  **The menubar model therefore sets NO `accel` attribute, and adding one is a
+  regression even though it looks like an improvement.** GTK already draws the hint
+  from the registered accelerator (`gtk_menu_tracker_item_get_accel` falls through to
+  `gtk_action_muxer_get_primary_accel`, i.e. `accels[0]`) — on the `GtkPopoverMenuBar`
+  *and* on the macOS system menu bar, which is a different renderer calling the same
+  accessor. So an attribute cannot add a hint; it can only restate one, and where the
+  two disagree **the attribute wins silently**. MEASURED: removing the whole mechanism
+  left the View menu pixel-identical (AE=0), and a build that set `<Primary><Alt>F12`
+  on Zoom In displayed exactly that while `Ctrl++` went on working. `menubar.rs`'s
+  `no_menu_item_declares_its_own_accel_attribute` holds it. The context menu is the
+  deliberate exception — it is hand-built widgets rather than a `GMenu`, gets no
+  fallback, and so reads the descriptor itself.
 - **Prefer extending an existing code path over adding a parallel one.** Before
   introducing a new function, action, save/write path, or render pass, scan the
   codebase for a path that already performs the equivalent work and extend it.
@@ -1039,7 +1055,18 @@ cites ScrAP-209 for that species. **Do not prescribe a flag without wiring it to
 runner.** Windows carries it too, having confirmed its own suite clean **and mutation-tested the
 gate** — reverting one of the three fixes above makes the suite pass with the flag off and
 die with it on, which is the only evidence that distinguishes an armed gate from a quiet
-one. Note the **death code differs by platform**: a promoted critical is `SIGTRAP` (exit
+one.
+
+**LINUX IS NOW MUTATION-TESTED TOO, and it was not when this paragraph first claimed the
+flag was armed here.** That gap is worth naming rather than quietly closing: this document
+states mutation testing to be the only admissible evidence that a gate can fail, Windows
+supplied it, and the CANONICAL platform did not — so the strongest claim in this section
+rested on the platform with the least evidence behind it. MEASURED 2026-08-21, on the
+`a11y` walk's setup: reverting `activate_action(&window, "find-replace", None)` to the
+`change_action_state` call it replaced gives `test result: ok. 13 passed` with the flag
+off, and `signal: 5, SIGTRAP` with `G_DEBUG=fatal-criticals` set. Restored, the same suite
+passes under the flag. Passing, dying, and passing again is the three-state evidence; a
+green run alone would have been the thing this paragraph warns about. Note the **death code differs by platform**: a promoted critical is `SIGTRAP` (exit
 133) on Linux and `0xC0000409 STATUS_STACK_BUFFER_OVERRUN` under MSVC, where the harness
 reports only "test exited abnormally".
 
