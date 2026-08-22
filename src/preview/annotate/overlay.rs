@@ -946,17 +946,31 @@ mod jjj_tests {
             .expect("scroller holds the CodePreviewView")
     }
 
-    /// Pump the main loop until `done` reports true, or `budget` turns' worth of
-    /// wall-clock time elapses. `crate::testpump::until_or_for` under
-    /// `Clock::Frame` (M31); `budget * 4ms` matches this function's old
-    /// worst-case ceiling (a fixed 4ms sleep per turn).
-    fn pump_until(budget: u32, done: impl FnMut() -> bool) -> bool {
-        crate::testpump::until_or_for(
-            crate::testpump::Clock::Frame,
-            std::time::Duration::from_millis(budget as u64 * 4),
-            done,
-        )
+    /// Pump until `done()`, or panic naming `what`. `crate::testpump::until` under
+    /// `Clock::Frame`.
+    ///
+    /// **No turn budget.** This took one and multiplied it by 4 to match "a fixed 4 ms
+    /// sleep per turn", which is the substitution GTK4Rs/AP-261 rejects: the macOS seat
+    /// MEASURED 200 turns at 74 ms with one live toplevel and 610 ms with three more
+    /// alive, so the per-turn cost moves ~8x with load. Use this wherever a timeout is a
+    /// bug, and [`drain`] where the test is asserting that nothing happens.
+    fn settle(what: &str, done: impl FnMut() -> bool) {
+        crate::testpump::until(crate::testpump::Clock::Frame, what, done);
     }
+
+    /// Pump for a fixed span and report whether `done()` came true within it.
+    ///
+    /// For the case [`settle`] cannot serve: a test asserting a dismissal does **not**
+    /// happen. Non-convergence is the expected result there, so the wait must be bounded
+    /// and the bound must be a real duration chosen against the mechanism's own timing —
+    /// never a turn count reinterpreted as milliseconds.
+    fn drain(span: std::time::Duration, done: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(crate::testpump::Clock::Frame, span, done)
+    }
+
+    /// The card's dismissal runs through `schedule`'s debounce; a wait that means to
+    /// outlast it is expressed against that, not against a turn count.
+    const PAST_DISMISS_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
 
     fn find_descendant<T: IsA<gtk::Widget>>(root: &impl IsA<gtk::Widget>) -> Option<T> {
         let mut child = root.as_ref().first_child();
@@ -979,10 +993,9 @@ mod jjj_tests {
         win.set_default_size(700, 400);
         win.set_child(Some(&pane));
         win.present();
-        assert!(
-            pump_until(200, || view.buffer().end_iter().offset() > 0),
-            "precondition: the preview rendered"
-        );
+        settle("the preview to render (precondition)", || {
+            view.buffer().end_iter().offset() > 0
+        });
 
         // A selection is what `win.annotate` acts on.
         let buf = view.buffer();
@@ -1042,8 +1055,10 @@ mod jjj_tests {
         entry.set_text("a comment I do not want to lose");
         // Exactly what Ctrl+A and Shift+Home both do to the entry.
         entry.select_region(0, -1);
-        // The dismissal runs through `schedule`'s ~40 ms debounce, so give it every chance.
-        let dismissed = pump_until(60, || !WidgetExt::is_visible(&entry));
+        // The dismissal runs through `schedule`'s ~40 ms debounce, so give it every
+        // chance: this asserts a NON-event, and a bound too short would manufacture the
+        // pass. `PAST_DISMISS_DEBOUNCE` is an order of magnitude past that debounce.
+        let dismissed = drain(PAST_DISMISS_DEBOUNCE, || !WidgetExt::is_visible(&entry));
 
         assert!(
             !dismissed,
@@ -1074,9 +1089,9 @@ mod jjj_tests {
         let (a, b) = (buf.iter_at_offset(15), buf.iter_at_offset(25));
         buf.select_range(&a, &b);
 
-        assert!(
-            pump_until(60, || !WidgetExt::is_visible(&entry)),
-            "a selection change in the preview must still dismiss the card"
+        settle(
+            "a selection change in the preview to dismiss the card",
+            || !WidgetExt::is_visible(&entry),
         );
         win.destroy();
     }
@@ -1137,10 +1152,9 @@ mod jjj_tests {
         win.present();
 
         let ctx = glib::MainContext::default();
-        assert!(
-            pump_until(200, || view.buffer().end_iter().offset() > 0),
-            "precondition: the preview rendered"
-        );
+        settle("the preview to render (precondition)", || {
+            view.buffer().end_iter().offset() > 0
+        });
         for _ in 0..40 {
             ctx.iteration(false);
             std::thread::sleep(Duration::from_millis(4));
@@ -1174,11 +1188,11 @@ mod jjj_tests {
         buf.select_range(&sel_a, &sel_b);
 
         let pop = action_popover(&view).expect("the action popover is wired + parented");
-        assert!(
-            pump_until(200, || pop.is_mapped()),
-            "after scroll-then-select the Annotate action popover must appear over the \
-             on-viewport selection (GTK4Rs/AP-142: the anchor read must ride the frame clock, \
-             not the wall-clock debounce)"
+        settle(
+            "the Annotate action popover to appear over the on-viewport selection \
+             (GTK4Rs/AP-142: the anchor read must ride the frame clock, not the \
+             wall-clock debounce)",
+            || pop.is_mapped(),
         );
 
         win.destroy();

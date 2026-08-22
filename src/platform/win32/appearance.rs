@@ -224,18 +224,31 @@ mod gtk_integration_tests {
         settings.set_gtk_application_prefer_dark_theme(restore);
     }
 
-    /// Pump the main loop until `cond` holds or `budget` turns' worth of wall-clock
-    /// time elapses. `crate::testpump::until_or_for` under `Clock::Frame` (M31) —
-    /// the repaint this waits on is frame-clock driven, same family as the Linux
-    /// popover-animation copies this replaces; `budget * 4ms` keeps this function's
-    /// old worst-case ceiling.
-    fn pump_until(budget: u32, cond: impl FnMut() -> bool) -> bool {
-        crate::testpump::until_or_for(
-            crate::testpump::Clock::Frame,
-            std::time::Duration::from_millis(budget as u64 * 4),
-            cond,
-        )
+    /// Pump the main loop until `cond` holds, or `span` of wall clock elapses; reports
+    /// whether it converged. `Clock::Frame` — the repaint this waits on is frame-clock
+    /// driven, same family as the Linux popover-animation copies this replaces.
+    ///
+    /// **Takes a DURATION, not a turn budget.** It took one and multiplied it by 4 to
+    /// "keep the old worst-case ceiling", which assumes a turn costs 4 ms. It does not:
+    /// GTK4Rs/AP-261 is the entry, and the macOS seat MEASURED the spread on a sibling
+    /// copy of this helper — the same 200 turns cost 74 ms with one live toplevel and
+    /// 610 ms with three more alive, so the per-turn figure moves ~8x with machine load
+    /// and no constant converts one into the other. Every migrated helper in the tree
+    /// carried the same substitution with a different guessed multiplier.
+    ///
+    /// The tolerant (non-panicking) form is kept here deliberately, unlike most of its
+    /// siblings, because the caller below WANTS to continue on non-convergence: an
+    /// unlaid-out window reports itself as "no render node", which names the real cause
+    /// better than a timeout would.
+    fn pump_until(span: std::time::Duration, cond: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(crate::testpump::Clock::Frame, span, cond)
     }
+
+    /// How long to give a freshly presented window to acquire an allocation.
+    ///
+    /// A real duration chosen as one: generous against a first layout pass on a loaded
+    /// machine, and bounded because the caller degrades gracefully rather than hanging.
+    const LAYOUT_BOUND: std::time::Duration = std::time::Duration::from_millis(2_000);
 
     /// Present a small window, render it through GSK and return its centre pixel —
     /// the app's own painted output, with no screen capture in the loop.
@@ -260,7 +273,7 @@ mod gtk_integration_tests {
         // out. That failure is reported as "no render node" rather than as a wrong
         // colour, which is at least honest.
         window.present();
-        pump_until(100, || content.width() > 0);
+        pump_until(LAYOUT_BOUND, || content.width() > 0);
 
         let paintable = gtk::WidgetPaintable::new(Some(&window));
         let snapshot = gtk::Snapshot::new();

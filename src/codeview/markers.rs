@@ -1320,6 +1320,7 @@ mod marker_tests {
 mod a11y_integration_tests {
     use super::*;
     use crate::codeview::CodePreviewView;
+    use std::time::Duration;
 
     /// Two annotations, far enough apart that the second starts off-screen in a short
     /// window — so the scroll-then-await-paint branch (not just the fast path) runs.
@@ -1343,18 +1344,66 @@ mod a11y_integration_tests {
             .expect("scroller holds the CodePreviewView")
     }
 
-    /// Pump the main loop until `done` reports true, or `budget` turns' worth of
-    /// wall-clock time elapses. Returns whether it converged. A paint is frame-clock
-    /// driven, so this cannot be a single drain of pending events —
-    /// `crate::testpump::until_or_for` under `Clock::Frame` (M31); `budget * 4ms`
-    /// matches this function's old worst-case ceiling.
-    fn pump_until(budget: u32, done: impl FnMut() -> bool) -> bool {
-        crate::testpump::until_or_for(
-            crate::testpump::Clock::Frame,
-            std::time::Duration::from_millis(budget as u64 * 4),
-            done,
-        )
+    /// Pump the main loop until `done` reports true, panicking — and naming `what` — if
+    /// it never does. Every condition waited on in this module is frame-clock driven:
+    /// `marker_hitboxes` and the pending-open dispatch are both repopulated by
+    /// `snapshot_layer`, i.e. by a real PAINT, so none of them can be reached by a single
+    /// drain of the already-pending events. Hence `Clock::Frame`.
+    ///
+    /// **Why there is no budget parameter.** This helper used to take one, counted in
+    /// turns of `MainContext::iteration`, and the M31 migration onto `crate::testpump`
+    /// converted those turns into a millisecond deadline by picking a multiplier
+    /// (`budget * 4ms`). That conversion is not merely imprecise, it is invalid, and
+    /// GTK4Rs/AP-261 says why: turns are not time. The macOS seat MEASURED the same 200
+    /// turns of `iteration(false)` costing **74 ms** with one live toplevel and **610 ms**
+    /// with three more alive — an ~8x spread that moves with machine load and with how
+    /// much other work the loop happens to have to dispatch. No constant converts one
+    /// into the other, so every per-call-site number inherited from the turn era was a
+    /// guess wearing a unit, and two seats hit real failures from exactly that.
+    ///
+    /// What replaces it is not a better number but a different shape: the wait ends when
+    /// `done()` observes the real state, and `Clock::Frame`'s generous default deadline
+    /// in `crate::testpump` is a FAILURE bound (GTK4Rs/AP-122), never the completion
+    /// signal itself. A call site that genuinely tolerates non-convergence keeps a bound
+    /// of its own — but states it as a duration measured against the mechanism it has to
+    /// outlast (see [`FIRST_PAINT_DRAIN`], [`FOCUS_TAKE_IDLE_DRAIN`] and
+    /// [`PENDING_OPEN_DISPATCH_WATCH`]), never as a turn count reinterpreted as ms.
+    fn settle(what: &str, done: impl FnMut() -> bool) {
+        crate::testpump::until(crate::testpump::Clock::Frame, what, done);
     }
+
+    /// How long a test asserting a NO-OP drains the loop before it reads any state.
+    ///
+    /// Measured against the **first paint** of a freshly presented window: it has to
+    /// map, allocate and run at least one frame-clock cycle before `snapshot_layer` has
+    /// had any chance to arm or fire anything, and a drain that ended sooner would let
+    /// the negative pass vacuously. There is no predicate to converge on here — the whole
+    /// claim is that nothing happens — so this span IS the wait, not a bound on one. A
+    /// quarter second is ~15 frames at a 60 Hz clock, many times the single frame
+    /// strictly required, so a loaded machine cannot shorten it below its intent.
+    const FIRST_PAINT_DRAIN: Duration = Duration::from_millis(250);
+
+    /// How long the `CardFocus::Leave` negative drains before reading `has_focus()`.
+    ///
+    /// Measured against the one `glib::idle_add_local_once` that `CardFocus::Take` queues
+    /// after `card.present()` to run `child_focus` — deferred deliberately, because a
+    /// same-tick `child_focus` runs before the popover surface is mapped and silently
+    /// no-ops. The `Leave` path must be shown NOT to do that, so the drain has to outlast
+    /// a present plus that idle; ending sooner would prove only that the read was early.
+    /// The same quarter second as [`FIRST_PAINT_DRAIN`], for the same reason: the
+    /// mechanism needs one frame and one idle turn, and this gives it many of each.
+    const FOCUS_TAKE_IDLE_DRAIN: Duration = Duration::from_millis(250);
+
+    /// How long the expired-request negative watches for a popover that must never open.
+    ///
+    /// Measured against the dispatch chain a WRONG implementation would open one
+    /// through: `snapshot_layer` fires a pending open from a PAINT and defers the actual
+    /// `popup()` to `glib::idle_add_local_once` (GTK4Rs/AP-30), so a frame plus an idle
+    /// turn is all it needs. Half a second is ~30 frames at 60 Hz on top of that idle —
+    /// every opportunity to open the popover, and only then does the test conclude it did
+    /// not. Unlike the two drains above this one CAN stop early, on the very failure it
+    /// is looking for, which is why it is an `until_or_for` and not a `drain_for`.
+    const PENDING_OPEN_DISPATCH_WATCH: Duration = Duration::from_millis(500);
 
     fn hitbox_count(view: &CodePreviewView) -> usize {
         use gtk::subclass::prelude::*;
@@ -1415,10 +1464,8 @@ mod a11y_integration_tests {
         win.set_default_size(700, 400);
         win.set_child(Some(&pane));
         win.present();
-        assert!(
-            pump_until(200, || hitbox_count(&view) > 0),
-            "precondition: chips painted"
-        );
+        // precondition: chips painted
+        settle("the margin chips to paint", || hitbox_count(&view) > 0);
 
         // Edit/Remove controls only appear when a mutation sink is installed.
         let edits: std::rc::Rc<std::cell::RefCell<Vec<AnnotationEdit>>> =
@@ -1432,10 +1479,10 @@ mod a11y_integration_tests {
             view.open_stepped_marker_popover(0, Direction::Next),
             "the fixture has annotations"
         );
-        assert!(
-            pump_until(200, || view.has_open_marker_popover()),
-            "precondition: the marker popover opened"
-        );
+        // precondition: the marker popover opened
+        settle("the marker popover to open", || {
+            view.has_open_marker_popover()
+        });
         let popover: gtk::Popover = view
             .imp()
             .marker_card
@@ -1455,10 +1502,11 @@ mod a11y_integration_tests {
         entry.emit_activate();
 
         // The sink is deferred to an idle (GTK4Rs/AP-30: never re-render inside the gesture).
-        assert!(
-            pump_until(200, || !edits.borrow().is_empty()),
-            "Enter in the Edit popover's entry must commit the annotation — it did nothing \
-             before the shared CommentEntry, while the Save button worked"
+        // Enter in the Edit popover's entry must commit the annotation — it did nothing
+        // before the shared CommentEntry, while the Save button worked.
+        settle(
+            "Enter in the Edit popover's entry to commit the annotation",
+            || !edits.borrow().is_empty(),
         );
         match &edits.borrow()[0] {
             AnnotationEdit::EditComment { text, .. } => {
@@ -1485,11 +1533,12 @@ mod a11y_integration_tests {
         win.set_child(Some(&pane));
         win.present();
 
-        let painted = pump_until(200, || hitbox_count(&view) > 0);
-        assert!(
-            painted,
-            "a presented preview must paint its margin chips; \
-             marker_hitboxes is still empty after pumping the loop"
+        // A presented preview must paint its margin chips. If `marker_hitboxes` is still
+        // empty when this gives up, no popover can ever open and the whole keyboard path
+        // is dead — which is exactly the symptom seen when driving the app by hand.
+        settle(
+            "a presented preview to paint its margin chips into marker_hitboxes",
+            || hitbox_count(&view) > 0,
         );
         win.destroy();
     }
@@ -1504,19 +1553,17 @@ mod a11y_integration_tests {
         win.set_default_size(700, 400);
         win.set_child(Some(&pane));
         win.present();
-        assert!(
-            pump_until(200, || hitbox_count(&view) > 0),
-            "precondition: chips painted"
-        );
+        // precondition: chips painted
+        settle("the margin chips to paint", || hitbox_count(&view) > 0);
 
         assert!(
             view.open_stepped_marker_popover(0, Direction::Next),
             "a document WITH annotations must report a target"
         );
-        assert!(
-            pump_until(200, || view.has_open_marker_popover()),
-            "the first annotation is on screen, so its popover must open"
-        );
+        // The first annotation is on screen, so its popover must open with no scroll.
+        settle("the on-screen annotation's popover to open", || {
+            view.has_open_marker_popover()
+        });
         win.destroy();
     }
 
@@ -1534,10 +1581,8 @@ mod a11y_integration_tests {
         win.set_default_size(700, 400);
         win.set_child(Some(&pane));
         win.present();
-        assert!(
-            pump_until(200, || hitbox_count(&view) > 0),
-            "precondition: chips painted"
-        );
+        // precondition: chips painted
+        settle("the margin chips to paint", || hitbox_count(&view) > 0);
 
         // Target the LAST annotation from a caret just past the first one. In a 400px
         // window the second claim is well below the fold.
@@ -1566,9 +1611,11 @@ mod a11y_integration_tests {
         );
 
         assert!(view.open_stepped_marker_popover(first, Direction::Next));
-        assert!(
-            pump_until(400, || view.has_open_marker_popover()),
-            "the off-screen annotation must be scrolled to and its popover opened              once the paint repopulates the hit-boxes"
+        // The off-screen annotation must be scrolled to and its popover opened once the
+        // paint repopulates the hit-boxes.
+        settle(
+            "the off-screen annotation to be scrolled to and its popover opened",
+            || view.has_open_marker_popover(),
         );
         win.destroy();
     }
@@ -1588,10 +1635,8 @@ mod a11y_integration_tests {
         win.set_default_size(700, 400);
         win.set_child(Some(&pane));
         win.present();
-        assert!(
-            pump_until(200, || hitbox_count(&view) > 0),
-            "precondition: chips painted"
-        );
+        // precondition: chips painted
+        settle("the margin chips to paint", || hitbox_count(&view) > 0);
 
         let anchors: Vec<i32> = view
             .imp()
@@ -1609,10 +1654,10 @@ mod a11y_integration_tests {
         );
 
         assert!(view.open_stepped_marker_popover(first, Direction::Next));
-        assert!(
-            pump_until(400, || view.has_open_marker_popover()),
-            "precondition: the navigation completed"
-        );
+        // precondition: the navigation completed
+        settle("the navigation to complete", || {
+            view.has_open_marker_popover()
+        });
 
         // Where the target's line actually sits, read AFTER convergence (F4: read before
         // and `line_yrange` hands back a stale/0 y).
@@ -1675,10 +1720,8 @@ mod a11y_integration_tests {
         win.set_default_size(700, 400);
         win.set_child(Some(&pane));
         win.present();
-        assert!(
-            pump_until(200, || hitbox_count(&view) > 0),
-            "precondition: chips painted"
-        );
+        // precondition: chips painted
+        settle("the margin chips to paint", || hitbox_count(&view) > 0);
 
         let anchors: Vec<i32> = view
             .imp()
@@ -1689,10 +1732,10 @@ mod a11y_integration_tests {
             .collect();
         let first = anchors.iter().copied().min().expect("two anchors");
         assert!(view.open_stepped_marker_popover(first, Direction::Next));
-        assert!(
-            pump_until(400, || view.has_open_marker_popover()),
-            "precondition: the navigation completed and armed the guard"
-        );
+        // precondition: the navigation completed and armed the guard
+        settle("the navigation to complete and arm the guard", || {
+            view.has_open_marker_popover()
+        });
 
         let vadj = view
             .vadjustment()
@@ -1737,10 +1780,8 @@ mod a11y_integration_tests {
         win.set_default_size(700, 400);
         win.set_child(Some(&pane));
         win.present();
-        assert!(
-            pump_until(200, || hitbox_count(&view) > 0),
-            "precondition: chips painted"
-        );
+        // precondition: chips painted
+        settle("the margin chips to paint", || hitbox_count(&view) > 0);
 
         // Marker 0 is on screen and painted, so a hit-box for it exists RIGHT NOW. The
         // only thing that may stop it opening is the expiry — which is exactly what makes
@@ -1764,7 +1805,11 @@ mod a11y_integration_tests {
         // would assert before that idle has had a chance to run — the negative would pass
         // vacuously. Pumping the full budget on the popover predicate gives a wrong
         // implementation every opportunity to open it, and only then concludes it didn't.
-        let opened = pump_until(200, || view.has_open_marker_popover());
+        let opened = crate::testpump::until_or_for(
+            crate::testpump::Clock::Frame,
+            PENDING_OPEN_DISPATCH_WATCH,
+            || view.has_open_marker_popover(),
+        );
         assert!(
             !opened,
             "an EXPIRED request must not open a popover even though its chip is painted"
@@ -1787,7 +1832,10 @@ mod a11y_integration_tests {
         win.set_default_size(700, 400);
         win.set_child(Some(&pane));
         win.present();
-        pump_until(60, || false);
+        // Nothing here has an observable to converge on — the whole claim is that
+        // NOTHING happens — so drain a fixed span that outlasts the first paint, then
+        // read.
+        crate::testpump::drain_for(crate::testpump::Clock::Frame, FIRST_PAINT_DRAIN);
 
         assert!(
             !view.open_stepped_marker_popover(0, Direction::Next),
@@ -1826,18 +1874,16 @@ mod a11y_integration_tests {
         win.set_default_size(700, 400);
         win.set_child(Some(&pane));
         win.present();
-        assert!(
-            pump_until(200, || hitbox_count(&view) > 0),
-            "precondition: chips painted"
-        );
+        // precondition: chips painted
+        settle("the margin chips to paint", || hitbox_count(&view) > 0);
         assert!(
             view.open_stepped_marker_popover(0, Direction::Next),
             "precondition: the fixture has annotations"
         );
-        assert!(
-            pump_until(200, || view.has_open_marker_popover()),
-            "precondition: the marker popover is open going into teardown"
-        );
+        // precondition: the marker popover is open going into teardown
+        settle("the marker popover to be open going into teardown", || {
+            view.has_open_marker_popover()
+        });
 
         // `closed` fires only on a genuine popdown — it is not emitted by `unparent()`.
         // That makes it the exact discriminator between the fix and the bug.
@@ -1858,16 +1904,15 @@ mod a11y_integration_tests {
         win.set_child(gtk::Widget::NONE);
         drop(view);
         drop(pane);
-        pump_until(200, || closed.get());
-
-        assert!(
-            closed.get(),
-            "dispose must popdown the marker popover before unparenting it. Historically this \
-             prevented a stranded X11 seat grab (an autohide popover unrealized mid-grab left \
-             the app dead to clicks/keys, GTK4Rs/AP-83); the popover is non-autohide now so no \
-             grab exists, but popdown-before-unparent is retained hygiene and the unparent \
-             itself is still mandatory (GTK4Rs/AP-80) and must not become a per-use destroy \
-             (GTK4Rs/AP-117)"
+        // `dispose` must popdown the marker popover before unparenting it. Historically
+        // this prevented a stranded X11 seat grab (an autohide popover unrealized mid-grab
+        // left the app dead to clicks/keys, GTK4Rs/AP-83); the popover is non-autohide now
+        // so no grab exists, but popdown-before-unparent is retained hygiene and the
+        // unparent itself is still mandatory (GTK4Rs/AP-80) and must not become a per-use
+        // destroy (GTK4Rs/AP-117).
+        settle(
+            "dispose to popdown the marker popover (its `closed` signal) before unparenting",
+            || closed.get(),
         );
 
         win.destroy();
@@ -1923,10 +1968,8 @@ mod a11y_integration_tests {
         win.set_default_size(700, 400);
         win.set_child(Some(&pane));
         win.present();
-        assert!(
-            pump_until(200, || hitbox_count(&view) > 0),
-            "precondition: the first chip must paint"
-        );
+        // precondition: the first chip must paint
+        settle("the first chip to paint", || hitbox_count(&view) > 0);
 
         let anchors: Vec<i32> = view
             .imp()
@@ -1947,7 +1990,9 @@ mod a11y_integration_tests {
 
         // Step once from the top: the first annotation opens AND becomes the position.
         assert!(view.open_stepped_marker_popover(caret(&view), Direction::Next));
-        assert!(pump_until(400, || view.has_open_marker_popover()));
+        settle("the first annotation's popover to open", || {
+            view.has_open_marker_popover()
+        });
         let first = anchors.iter().copied().min().expect("two anchors");
         assert_eq!(
             caret(&view),
@@ -1959,7 +2004,10 @@ mod a11y_integration_tests {
         // Step again FROM THE CARET, exactly as the command does. It must reach the
         // other annotation, not the one already open.
         assert!(view.open_stepped_marker_popover(caret(&view), Direction::Next));
-        assert!(pump_until(400, || caret(&view) != first));
+        settle(
+            "the second step to move the caret off the first annotation",
+            || caret(&view) != first,
+        );
         assert_eq!(
             caret(&view),
             anchors.iter().copied().max().expect("two anchors"),
@@ -1969,7 +2017,10 @@ mod a11y_integration_tests {
         // And back: Previous returns to the first, so an overshoot costs one press
         // rather than a lap of the document.
         assert!(view.open_stepped_marker_popover(caret(&view), Direction::Previous));
-        assert!(pump_until(400, || caret(&view) == first));
+        settle(
+            "Previous to bring the caret back to the first annotation",
+            || caret(&view) == first,
+        );
 
         win.destroy();
     }
@@ -1998,23 +2049,27 @@ mod a11y_integration_tests {
         box_.append(&pane);
         win.set_child(Some(&box_));
         win.present();
-        assert!(
-            pump_until(200, || hitbox_count(&view) > 0),
-            "precondition: chips painted"
-        );
-        assert!(
-            pump_until(200, || {
+        // precondition: chips painted
+        settle("the margin chips to paint", || hitbox_count(&view) > 0);
+        // precondition: the stand-in can hold the focus (a mapped, active toplevel).
+        // Deliberately a HARD failure and not a tolerated one: without an active toplevel
+        // `has_focus()` never becomes true (GTK4Rs/AP-119), and letting that slide would
+        // grade both focus claims below against a window nothing can focus at all.
+        settle(
+            "the stand-in button to hold the focus (a mapped, active toplevel)",
+            || {
                 let _ = elsewhere.grab_focus();
                 elsewhere.has_focus()
-            }),
-            "precondition: the stand-in can hold the focus (a mapped, active toplevel)"
+            },
         );
 
         view.open_marker_popover(&[0], CardFocus::Leave);
-        assert!(pump_until(200, || view.has_open_marker_popover()));
+        settle("the CardFocus::Leave card to open", || {
+            view.has_open_marker_popover()
+        });
         // Pump well past the idle the Take path would have used, so this is a real
         // negative and not merely an early read.
-        let _ = pump_until(60, || false);
+        crate::testpump::drain_for(crate::testpump::Clock::Frame, FOCUS_TAKE_IDLE_DRAIN);
         assert!(
             elsewhere.has_focus(),
             "CardFocus::Leave must not move the focus — a viewer row that steals it \
@@ -2023,12 +2078,14 @@ mod a11y_integration_tests {
 
         view.popdown_marker_popover();
         view.open_marker_popover(&[1], CardFocus::Take);
-        assert!(pump_until(200, || view.has_open_marker_popover()));
-        assert!(
-            pump_until(200, || !elsewhere.has_focus()),
-            "CardFocus::Take must move the focus into the card, or Escape and \
-             Tab-to-Edit are dead for every pointer user"
-        );
+        settle("the CardFocus::Take card to open", || {
+            view.has_open_marker_popover()
+        });
+        // CardFocus::Take must move the focus into the card, or Escape and Tab-to-Edit
+        // are dead for every pointer user.
+        settle("CardFocus::Take to move the focus into the card", || {
+            !elsewhere.has_focus()
+        });
 
         win.destroy();
     }

@@ -107,17 +107,18 @@ mod gtk_integration_tests {
     use super::*;
 
     /// Pump the main loop until `cond` holds or `budget` turns' worth of wall-clock
-    /// time elapses. A popover open/close is frame-clock/animation driven, so this
-    /// cannot be a single event drain — `crate::testpump::until_or_for` under
-    /// `Clock::Frame` (M31), which blocks on a real timeout SOURCE (GTK4Rs/AP-79)
-    /// rather than this function's old non-blocking-plus-sleep shape; `budget * 4ms`
-    /// keeps the same worst-case ceiling.
-    fn pump_until(budget: u32, cond: impl FnMut() -> bool) -> bool {
-        crate::testpump::until_or_for(
-            crate::testpump::Clock::Frame,
-            std::time::Duration::from_millis(budget as u64 * 4),
-            cond,
-        )
+    /// A popover open/close is frame-clock/animation driven, so this cannot be a single
+    /// event drain — `crate::testpump::until` under `Clock::Frame`, which blocks on a
+    /// real timeout SOURCE (GTK4Rs/AP-79).
+    ///
+    /// **No turn budget.** This took one and multiplied it by 4 to "keep the same
+    /// worst-case ceiling", which assumes a turn costs 4 ms. GTK4Rs/AP-261 says turns
+    /// are not time, and the macOS seat MEASURED the spread: the same 200 turns cost
+    /// 74 ms with one live toplevel and 610 ms with three more alive, so the true figure
+    /// moves ~8x with load and no constant is the right one. Every timeout here is a
+    /// bug, so the wait is predicate-driven with a generous failure bound instead.
+    fn settle(what: &str, cond: impl FnMut() -> bool) {
+        crate::testpump::until(crate::testpump::Clock::Frame, what, cond);
     }
 
     /// A presented window hosting a child that a popover can be parented to. The
@@ -147,10 +148,7 @@ mod gtk_integration_tests {
         let handle = PersistentPopover::adopt(pop.clone());
 
         handle.popup();
-        assert!(
-            pump_until(200, || pop.is_visible()),
-            "precondition: the popover opened"
-        );
+        settle("the popover to open (precondition)", || pop.is_visible());
 
         let closed = std::rc::Rc::new(std::cell::Cell::new(false));
         pop.connect_closed({
@@ -159,7 +157,9 @@ mod gtk_integration_tests {
         });
 
         handle.teardown();
-        pump_until(200, || closed.get());
+        settle("teardown to fire the popover's closed signal", || {
+            closed.get()
+        });
 
         assert!(
             closed.get(),
@@ -204,10 +204,9 @@ mod gtk_integration_tests {
         );
 
         handle.popup();
-        assert!(
-            pump_until(200, || pop.is_visible()),
-            "precondition: the popover opened on parent b"
-        );
+        settle("the popover to open on parent b (precondition)", || {
+            pop.is_visible()
+        });
         handle.reparent(&b); // already on b → must be a no-op, must NOT popdown
         assert!(
             pop.is_visible(),

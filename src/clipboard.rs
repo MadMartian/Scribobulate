@@ -291,15 +291,21 @@ mod gtk_integration_tests {
     /// machinery a chance to run before it inspects the result with its own
     /// predicate loop. `Clock::Idle`: the work waited on (a `read_text_async`
     /// callback, `insert-text` dispatch) is all posted back to this context, not
-    /// frame-clock or worker-thread driven. `budget * 5ms` matches this function's
-    /// old worst-case ceiling (non-blocking iteration + a 5ms sleep on every turn
-    /// that dispatched nothing) so the call sites below keep the same margin.
-    fn pump(_ctx: &glib::MainContext, budget: u32) {
-        crate::testpump::drain_for(
-            crate::testpump::Clock::Idle,
-            std::time::Duration::from_millis(budget as u64 * 5),
-        );
+    /// frame-clock or worker-thread driven.
+    ///
+    /// **Takes a DURATION, not a turn budget.** It used to take turns and multiply by 5.
+    /// GTK4Rs/AP-261: turns are not time, and the macOS seat MEASURED the same 200 turns
+    /// costing 74 ms alone and 610 ms under load — an ~8x spread with no constant that
+    /// converts one into the other. A drain is a real span of wall clock, so it is
+    /// spelled as one.
+    fn pump(_ctx: &glib::MainContext, span: std::time::Duration) {
+        crate::testpump::drain_for(crate::testpump::Clock::Idle, span);
     }
+
+    /// Long enough for a clipboard round-trip and anything it triggers to settle.
+    const SETTLE: std::time::Duration = std::time::Duration::from_millis(1_000);
+    /// A brief drain, for letting already-queued work run.
+    const BRIEF: std::time::Duration = std::time::Duration::from_millis(50);
 
     fn text_of(buf: &sourceview::Buffer) -> String {
         crate::saferizer::BufferText::of(buf).into_string()
@@ -437,7 +443,7 @@ mod gtk_integration_tests {
 
         view.buffer()
             .select_range(&view.buffer().start_iter(), &view.buffer().end_iter());
-        pump(&ctx, 200);
+        pump(&ctx, SETTLE);
 
         // ⚠ Assert the PROVIDER's own advertised formats, never `Clipboard::formats()`.
         // MEASURED, and it makes the obvious assertion a gate that cannot fail: the
@@ -492,7 +498,7 @@ mod gtk_integration_tests {
         source
             .buffer()
             .select_range(&source.buffer().start_iter(), &source.buffer().end_iter());
-        pump(&ctx, 200);
+        pump(&ctx, SETTLE);
 
         // Non-empty and not at the origin: `iter_at_location` is a glyph hit-test that
         // misses at the left margin and past a short/empty line's end (GTK4Rs/AP-15) —
@@ -500,7 +506,7 @@ mod gtk_integration_tests {
         // click point from a real character's own geometry instead of guessing pixels.
         let (dest_buf, dest_view) = editor("hello world");
         let (dest_win, _) = present(&dest_view);
-        pump(&ctx, 400);
+        pump(&ctx, SETTLE);
         let target = dest_buf.iter_at_offset(6); // just after the space
         let rect = dest_view.iter_location(&target);
         let (wx, wy) = dest_view.buffer_to_window_coords(
@@ -522,7 +528,7 @@ mod gtk_integration_tests {
             if dest_buf.char_count() as usize >= expected.chars().count() {
                 break;
             }
-            pump(&ctx, 1);
+            pump(&ctx, BRIEF);
         }
 
         assert_eq!(
@@ -555,7 +561,7 @@ mod gtk_integration_tests {
 
         buf.select_range(&buf.start_iter(), &buf.end_iter());
         view.emit_copy_clipboard();
-        pump(&ctx, 200);
+        pump(&ctx, SETTLE);
 
         let (dest, dest_view) = editor("");
         let (dest_win, _) = present(&dest_view);
@@ -610,9 +616,9 @@ mod gtk_integration_tests {
         // What a sharing tool's clipboard bridge actually delivers: a plain string.
         view.clipboard()
             .set_text("# Title\rProse.\r\r- alpha\r- beta\r\nkept\r\n");
-        pump(&ctx, 100);
+        pump(&ctx, SETTLE);
         view.emit_paste_clipboard();
-        pump(&ctx, 400);
+        pump(&ctx, SETTLE);
 
         let got = text_of(&view.buffer().downcast::<sourceview::Buffer>().unwrap());
 
@@ -664,7 +670,7 @@ mod gtk_integration_tests {
         let end = buf.iter_at_offset(11);
         buf.select_range(&start, &end);
         view.emit_cut_clipboard();
-        pump(&ctx, 200);
+        pump(&ctx, SETTLE);
 
         assert_eq!(
             text_of(&buf),

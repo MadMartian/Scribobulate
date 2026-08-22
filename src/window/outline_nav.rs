@@ -660,16 +660,29 @@ mod collapse_all_tests {
     /// Total heading rows the fully-open outline should carry: 1 + 20 + 289.
     const TOTAL_HEADINGS: u32 = 1 + 20 + 289;
 
-    /// Pump the main loop until `done` reports true, or `budget` turns' worth of
-    /// wall-clock time elapses. Returns whether it converged.
-    /// `crate::testpump::until_or_for` under `Clock::Idle` (M31); `budget * 5ms`
-    /// matches this function's old worst-case ceiling.
-    fn pump_until(_ctx: &glib::MainContext, budget: u32, done: impl FnMut() -> bool) -> bool {
-        crate::testpump::until_or_for(
-            crate::testpump::Clock::Idle,
-            std::time::Duration::from_millis(budget as u64 * 5),
-            done,
-        )
+    /// Pump the main loop until `done` reports true, or panic naming `what`.
+    /// `crate::testpump::until` under `Clock::Idle` — everything these tests wait on
+    /// (the outline model reaching a row count, a `GtkListView` materialising rows, a
+    /// deferred `items-changed` re-sync, the scroller acquiring its first allocation)
+    /// is driven by a main-context idle, which a blocking pump dispatches as soon as
+    /// it becomes runnable.
+    ///
+    /// **There is deliberately no turn budget.** The `budget` parameter this replaces
+    /// was a TURN count that M31 converted into a millisecond deadline by multiplying
+    /// by 5, which is precisely the substitution GTK4Rs/AP-261 rejects: turns are not
+    /// time. The macOS seat MEASURED the spread on the same 200 turns of
+    /// `iteration(false)` — 74 ms with one live toplevel, 610 ms with three more alive
+    /// — so the per-turn cost moves ~8x with machine load and no constant converts one
+    /// into the other. A ceiling derived that way is a flake on a loaded machine and a
+    /// needlessly slow suite on an idle one, and the call site shows neither.
+    ///
+    /// So the number is gone rather than retuned. A timeout is a test bug at every call
+    /// site in this module, so `until`'s generous per-clock failure bound is the right
+    /// shape (GTK4Rs/AP-122 — a FAILURE bound, never the completion signal): `done()`
+    /// observing real state is what ends the wait, and a timeout panics naming what it
+    /// was waiting FOR rather than letting the next assertion fail for the wrong reason.
+    fn settle(what: &str, done: impl FnMut() -> bool) {
+        crate::testpump::until(crate::testpump::Clock::Idle, what, done);
     }
 
     fn row_doc_indices(model: &gtk::TreeListModel) -> Vec<usize> {
@@ -735,16 +748,15 @@ mod collapse_all_tests {
         let doc = nested_doc();
         let window = crate::window::new_window(&app, "IT", &doc, None);
         window.set_default_size(900, 600);
-        let ctx = glib::MainContext::default();
         // Let the initial outline build + present + allocation settle — until the
         // model actually reaches its fully-expanded row count, not for an arbitrary
         // iteration count (T-9).
-        assert!(
-            pump_until(&ctx, 400, || {
+        settle(
+            &format!("the outline to reach its fully-expanded {TOTAL_HEADINGS} rows"),
+            || {
                 window.is_mapped()
                     && outline_tree_model(&window).is_some_and(|m| m.n_items() == TOTAL_HEADINGS)
-            }),
-            "outline never reached its fully-expanded {TOTAL_HEADINGS} rows"
+            },
         );
 
         let model = outline_tree_model(&window).expect("outline model built");
@@ -770,27 +782,27 @@ mod collapse_all_tests {
             .outline_scroller
             .vadjustment();
         crate::saferizer::scrollpos::jump(&vadj, vadj.upper());
-        assert!(
-            pump_until(&ctx, 200, || {
+        settle(
+            "the ListView to materialise a deep row after scrolling to the bottom",
+            || {
                 materialized_row_labels(&list_view)
                     .iter()
                     .any(|t| t.starts_with("Sub "))
-            }),
-            "the ListView never materialised a deep row after scrolling to the bottom"
+            },
         );
 
         outline_collapse_all(&window);
         // Wait for the deferred items-changed → apply_scroll_spy re-sync, until the
         // model AND the display layer both actually converge on [root] — not for an
         // arbitrary iteration count (T-9).
-        assert!(
-            pump_until(&ctx, 300, || {
+        settle(
+            "collapse-all to converge on the root-only row in both the model and the display",
+            || {
                 outline_tree_model(&window).is_some_and(|m| row_doc_indices(&m) == vec![0])
                     && !materialized_row_labels(&list_view)
                         .iter()
                         .any(|t| t.starts_with("Sub "))
-            }),
-            "collapse-all never converged to the root-only row in both the model and the display"
+            },
         );
 
         let model = outline_tree_model(&window).expect("outline model still present");
@@ -846,23 +858,19 @@ mod collapse_all_tests {
         }
         let window = crate::window::new_window(&app, "IT", &doc, None);
         window.set_default_size(900, 500);
-        let ctx = glib::MainContext::default();
-        assert!(
-            pump_until(&ctx, 400, || {
-                window.is_mapped() && outline_tree_model(&window).is_some_and(|m| m.n_items() >= 81)
-            }),
-            "outline never built its full heading set"
-        );
+        settle("the outline to build its full heading set", || {
+            window.is_mapped() && outline_tree_model(&window).is_some_and(|m| m.n_items() >= 81)
+        });
 
         let st = state(&window).expect("state");
         // Wait for the outline scroller to finish its first layout — reveal is a
         // no-op while page_size is 0 (GTK4Rs/AP-13 class).
-        assert!(
-            pump_until(&ctx, 200, || {
+        settle(
+            "the outline scroller to acquire a non-zero page_size/upper",
+            || {
                 st.chrome().outline_scroller.vadjustment().page_size() > 0.0
                     && st.chrome().outline_scroller.vadjustment().upper() > 0.0
-            }),
-            "outline scroller never acquired a non-zero page_size/upper"
+            },
         );
 
         let list_view = outline_list_view(&window);
@@ -890,12 +898,12 @@ mod collapse_all_tests {
 
         super::super::sidebar::reveal_selected_row(&st.chrome().outline_scroller);
         // Layout retries + `list.scroll-to-item`'s queued allocate: pump until in view.
-        assert!(
-            pump_until(&ctx, 200, || {
+        settle(
+            "reveal_selected_row to scroll the far selection into the list viewport",
+            || {
                 let v = st.chrome().outline_scroller.vadjustment();
                 estimated_row_in_view(&v, selected_pos, n_items)
-            }),
-            "reveal_selected_row must scroll the far selection into the list viewport"
+            },
         );
 
         window.destroy();
@@ -919,32 +927,24 @@ mod collapse_all_tests {
         }
         let window = crate::window::new_window(&app, "IT", &doc, None);
         window.set_default_size(900, 500);
-        let ctx = glib::MainContext::default();
         let st = state(&window).expect("state");
-        assert!(
-            pump_until(&ctx, 400, || {
-                window.is_mapped()
-                    && outline_tree_model(&window).is_some_and(|m| m.n_items() >= 81)
-                    && st.chrome().outline_scroller.vadjustment().page_size() > 0.0
-            }),
-            "outline never settled"
-        );
+        settle("the outline to settle", || {
+            window.is_mapped()
+                && outline_tree_model(&window).is_some_and(|m| m.n_items() >= 81)
+                && st.chrome().outline_scroller.vadjustment().page_size() > 0.0
+        });
 
         // Edit mode: outline spy tracks the caret, not the preview viewport.
         change_action_state(&window, "view-mode", &"edit".to_variant());
-        assert!(
-            pump_until(&ctx, 200, || st.view_mode.get() == ViewMode::Edit),
-            "never entered edit mode"
-        );
+        settle("the window to enter edit mode", || {
+            st.view_mode.get() == ViewMode::Edit
+        });
         // Rebuild outline from the editor buffer and wait for layout again.
         refresh_outline(&window);
-        assert!(
-            pump_until(&ctx, 200, || {
-                outline_tree_model(&window).is_some_and(|m| m.n_items() >= 81)
-                    && st.chrome().outline_scroller.vadjustment().page_size() > 0.0
-            }),
-            "outline never resettled after mode switch"
-        );
+        settle("the outline to resettle after the mode switch", || {
+            outline_tree_model(&window).is_some_and(|m| m.n_items() >= 81)
+                && st.chrome().outline_scroller.vadjustment().page_size() > 0.0
+        });
 
         // Caret at end of buffer → spy selects the last heading.
         let buf = &st.editor_buf;
@@ -981,12 +981,12 @@ mod collapse_all_tests {
 
         // Same idle path a tab switch fires — spy re-confirms selection + reveal.
         wire_scroll_spy(&window);
-        assert!(
-            pump_until(&ctx, 300, || {
+        settle(
+            "the wire_scroll_spy idle to reveal the far selected outline row",
+            || {
                 let v = st.chrome().outline_scroller.vadjustment();
                 sel.selected() == selected_pos && estimated_row_in_view(&v, selected_pos, n_items)
-            }),
-            "wire_scroll_spy idle must reveal the far selected outline row"
+            },
         );
 
         window.destroy();
