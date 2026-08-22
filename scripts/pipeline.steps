@@ -10,11 +10,12 @@
 #
 # DERIVATION, NOT COMPARISON. Every runner must BUILD its step list by reading this file,
 # and `--list-steps` / `-ListSteps` prints exactly that derived list. The distinction is
-# load-bearing and was paid for one level down: `--list-scan` proved the two lint ports
-# agreed WITH EACH OTHER and for a long time proved neither honoured
+# load-bearing and was paid for one level down: the cross-reference gate's scan-set diff
+# proved its two ports agreed WITH EACH OTHER and for a long time proved neither honoured
 # lint-references.scan — it printed a set some checks did not consume (ScrAP-207). It
 # worked only because both ports genuinely read the contract, so agreement and
-# conformance happened to coincide. Where a port RESTATES instead of deriving, a clean
+# conformance happened to coincide. (Those two ports are now one binary, which is the
+# stronger version of the same fix: nothing to compare.) Where a port RESTATES instead of deriving, a clean
 # diff proves only that two restatements match, which two people copying the same wrong
 # list also achieve. Comparison proves agreement; derivation proves conformance.
 #
@@ -327,17 +328,27 @@ cmd.windows diagram  powershell -NoProfile -Command "$d = New-Object System.Xml.
 # ---------------------------------------------------------------------------
 # Step 9 — cross-reference gate
 #
-# A gate is its pattern AND the set of files it runs over, and parity is required in
-# both. The two ports share one pattern, one self-test corpus, and one file enumeration
-# (scripts/lint-references.scan) which both READ rather than restate.
+# ONE COMMAND ON ALL THREE PLATFORMS, which is the whole point of it being a cargo
+# subcommand. This step used to be a bash script plus a hand-synced PowerShell port —
+# ~3,400 lines implementing one rule twice, with a `--list-scan`/`-ListScan` diff as the
+# only available proof they agreed, because "neither platform has the other's shell". One
+# QA round found seven defects that existed ONLY because there were two ports. cargo is on
+# PATH wherever this repository builds, so the interpreter argument that forced the split
+# is gone.
+#
+# The gate's own corpora are ordinary test cases run by step 4, not a bespoke `--self-test`
+# mode — a hand-rolled corpus runner is where that round's defects concentrated.
+#
+# A gate is its pattern AND the set of files it runs over. That set is still a data file,
+# scripts/lint-references.scan, which the binary READS rather than restates.
 # ---------------------------------------------------------------------------
 step   9  references
 intent references  Every cross-reference in the tree resolves, and the citation-form rules hold
 verdict references  exit
 class  references  required
-cmd.linux   references  scripts/lint-references.sh
-cmd.macos   references  scripts/lint-references.sh
-cmd.windows references  powershell -NoProfile -File scripts/lint-references.ps1
+cmd.linux   references  cargo xtask lint-references
+cmd.macos   references  cargo xtask lint-references
+cmd.windows references  cargo xtask lint-references
 
 # ---------------------------------------------------------------------------
 # Step 10 — the installer artefact

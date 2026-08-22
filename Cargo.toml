@@ -1,9 +1,20 @@
-# One workspace member beside the app: `gtktest/`, the registration attribute the
-# main-thread GTK suite needs (`src/gtk_suite.rs`). A proc macro has to be its own
-# crate — it compiles for the host, not the target — so this is not a structural
-# choice so much as the only way to have one.
+# Two workspace members beside the app.
+#
+# `gtktest/` is the registration attribute the main-thread GTK suite needs
+# (`src/gtk_suite.rs`). A proc macro has to be its own crate — it compiles for the host,
+# not the target — so this is not a structural choice so much as the only way to have one.
+#
+# `xtask/` is the build-pipeline gate binary (`cargo xtask lint-references`, contract step
+# 9). It is in `default-members` and `gtktest` is NOT, and the difference is load-bearing:
+# the default set is what a bare `cargo fmt`/`clippy`/`test` in this directory acts on, so
+# a gate crate left out of it is a gate nobody formats, lints or runs — which is how the
+# self-tests of the shell ports it replaced ended up outside every pipeline step. Being in
+# the default set is what makes `cargo test` (step 4) run this gate's own corpora as
+# ordinary test cases. `gtktest` stays out because it has no tests of its own and is
+# compiled anyway, as the app's build dependency.
 [workspace]
-members = [".", "gtktest"]
+members = [".", "gtktest", "xtask"]
+default-members = [".", "xtask"]
 
 [package]
 name = "scribobulate"

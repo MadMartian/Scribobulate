@@ -25,7 +25,6 @@ entry can still be the worst thing in the register.
 | Q | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | R | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | S | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
-| T | Any | Test | The cross-reference gate is TWO implementations of one rule — `scripts/lint-references.sh` and `.ps1`, ~3,400 lines — kept in step by hand. A single `cargo xtask` binary would retire the duplication and the whole parity apparatus with it | Medium |
 
 ## A. Tables are selection islands
 
@@ -604,46 +603,3 @@ here because this entry exists in order to be deleted when the defect is fixed, 
 evidence must outlive it. Do not restate its figures here; several carry caveats that do not
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
-
-## T. The cross-reference gate is two implementations of one rule
-
-**Severity**: Medium. Nothing is broken today and the two ports currently agree; the cost is
-that every change to the gate is made twice, and every divergence between them has been found
-by a human rather than by a gate.
-
-**Symptom**: `scripts/lint-references.sh` (1,669 lines) and `scripts/lint-references.ps1`
-(1,720 lines) implement the same fourteen checks. They hand-sync patterns, six `--self-test`
-corpora, file lists, thresholds and exclusions. POLICY § Build pipeline step 9 requires them
-to share a pattern and a corpus "string-for-string" and to be diffed by hand via
-`--list-scan` / `-ListScan`, because no automated test was thought able to compare them.
-
-**What this has actually cost.** One QA round found seven separate defects that exist only
-because there are two ports: carve-outs announced but never applied, a missing provenance
-warning, a self-test that could not reach its own executor, two check predicates that
-returned opposite verdicts on the same input, an `exclude` prefix matched case-insensitively
-on one side, and a recorded parity proof that had gone stale without saying so. Each was real,
-each was fixed, and none would have existed with one implementation.
-
-**The premise the second port rests on is FALSE, and it was measured.** Step 9 states that
-"neither platform has the other's shell". The Windows seat measured its own box: GNU bash
-5.2.37 and Perl 5.38.2, both bundled with Git for Windows, plus a second independent copy from
-MSYS2 — which `packaging/windows/README.md` already lists as a genuine build prerequisite. The
-existing bash gate runs there **unmodified**: `--self-test` PASS, all checks PASS, exit 0, no
-path-separator or `git ls-files` friction, and byte-identical scan output to the PowerShell
-port on the same box. It also catches a planted path containing a raw newline, and renders it
-more legibly than its twin.
-
-**Decision, operator, 2026-08-21: unify on a `cargo xtask` binary — DEFERRED, not rejected.**
-Not bash and not Perl. `cargo` is already invoked by eighteen contract commands and a Rust
-toolchain is a prerequisite on all three platforms, so an xtask adds no dependency and no
-locate-it step; bash and Perl each add the latter, since none of those tools is on `PATH` on
-Windows even where present. Its self-tests become ordinary `cargo test` cases rather than
-hand-rolled corpus runners — which is where this round's defects concentrated.
-
-**Scope, when it is picked up.** The two LINT ports only. The two PIPELINE RUNNERS are a
-different question and are NOT retired by this: `packaging/windows/pipeline.ps1` exists to set
-MSVC/GTK environment and drive steps on Windows, which is not a shell-parity problem.
-Retiring the lint duplication also retires the parity apparatus built to police it — the
-`--list-scan` diff procedure, the string-for-string corpus rule, and the scan-parity check —
-so those come out in the same change rather than being left to describe a comparison that no
-longer has two things to compare.

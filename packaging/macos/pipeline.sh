@@ -10,8 +10,9 @@
 #
 # This file used to MIRROR the Linux runner rather than share with it — about three hundred
 # duplicated lines, on the stated reasoning that three thin per-platform ports reading one
-# contract was the same shape as lint-references.sh/.ps1. That reasoning held for the
-# PowerShell port, which genuinely cannot share, and did not hold here: the two bash copies
+# contract was the same shape as the cross-reference gate's two hand-synced shell ports
+# (since retired for a single `cargo xtask` binary). That reasoning held for the PowerShell
+# runner, which genuinely cannot share, and did not hold here: the two bash copies
 # had already drifted three times, each drift making one platform quietly the lenient one.
 # The machinery now lives in scripts/pipeline-lib.sh, whose header states what must not move
 # into it and why Windows is still compared by `--list-steps` output rather than by sharing.

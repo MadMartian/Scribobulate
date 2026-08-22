@@ -136,72 +136,68 @@ Before any change is considered valid, run these steps in order:
    diagram as a broken-image placeholder (ScrAP-130). Then check it on a
    light **and** a dark background; most rasterisers — librsvg included — ignore
    `prefers-color-scheme`, so the light defaults must read on their own.
-9. **Cross-reference gate** — `scripts/lint-references.sh` must pass (Windows: the
-   equivalent `scripts/lint-references.ps1`, which `packaging/windows/pipeline.ps1`
-   runs as this same step). **A gate is its pattern *and* the set of files it runs
-   over, and parity is required in both.** The two scripts share (a) one pattern and
-   one `--self-test`/`-SelfTest` corpus, string-for-string, and (b) one file
-   enumeration, `scripts/lint-references.scan`, which both read rather than restate —
-   *one* enumeration, which **every** check consumes and which `--list-scan` prints
-   exactly, ordinal-sorted so a clean parity diff is an empty one. The contract's
-   `maxdepth` is a tripwire, not a filter: a file past the budget makes both gates
-   refuse to run and name it, because a budget that silently truncated the set would
-   make a check leniently incomplete without saying so.
-   Neither half is optional, and (b) is here because it was learned the hard way: this
-   step once claimed the shared corpus alone meant "neither can drift into being the
-   lenient one", while the corpus pinned only the check-1 regex and the two scripts had
-   *already* drifted on enumeration — `.agents/`, `docs/` and `THIRD-PARTY-LICENSES.md`
-   were linted on Linux and invisible on Windows, so a dangling link in any of them
-   failed one gate and passed the other. **No automated test can compare the two**
-   (neither platform has the other's shell), so when either script's scanning changes,
-   run `--list-scan` / `-ListScan` on both platforms and diff the output. A claim of
-   parity that nothing checks is worse than no claim, because the next author trusts
-   it. It enforces
-   its rules mechanically — the script owns the list and **the count is deliberately
-   not restated here**, for the same reason as the coverage floor and the input
-   limits: this sentence said "nine" while the script implemented fourteen, and no
-   reader could tell. The run output enumerates every check by number and title as it
-   executes. The classes are citations into the SDD registers, two over
-   the test architecture, both of whose failure modes are silent (that
-   `src/gtk_suite.rs`'s duplicated module list has not drifted from `src/lib.rs`'s — a
-   module missing there drops every test body inside it from the main-thread run, with
-   nothing failing — and that `#[gtk::test]` has not returned in place of
-   `#[gtktest::test]`, check 5, nor been PRESCRIBED in the documents a developer acts
-   on, check 5b — a lint's input set is source, so until 5b existed nothing in the
-   toolchain could read the prose telling someone to write the banned attribute, and
-   this file did exactly that for as long as check 5 had existed, ScrAP-222), and one
-   over document paths: every file the tree points at must
-   exist. That last is what a plan retirement breaks, since a `PLAN.*.md` is deleted by
-   design once implemented and every pointer written while it existed dangles at once —
-   including the bare `PLAN.<topic>` **section** citations code comments actually write
-   (`PLAN.<topic> D3`, no `.md`), which is the form that let 21 danglers survive a sweep
-   that believed itself complete. It deliberately ignores a bare document name used as a
-   *mention* in prose, which resolves against nothing. The seventh is over the
+9. **Cross-reference gate** — `cargo xtask lint-references` must pass. One command on
+   every platform, and that is the point of it being a `cargo` subcommand: this gate was
+   a bash script plus a hand-synced PowerShell port, ~3,400 lines implementing one rule
+   twice, and the premise that forced the split — "neither platform has the other's
+   shell" — was measured false, while a single QA round found seven defects that existed
+   only because there were two ports. `cargo` is on PATH wherever this repository builds.
+   The gate crate is a workspace **default member**, so steps 1, 2 and 4 format, lint and
+   test it like any other code; its corpora are ordinary `#[test]` cases rather than a
+   bespoke `--self-test` mode, which is where those defects concentrated.
+   **A gate is its pattern *and* the set of files it runs over.** The set is a data file,
+   `scripts/lint-references.scan`, which the binary reads rather than restates — *one*
+   enumeration, which **every** check consumes. Its `maxdepth` is a tripwire, not a
+   filter: a file past the budget makes the gate refuse to run and name it, because a
+   budget that silently truncated the set would make a check leniently incomplete without
+   saying so. That the set is half the gate was learned the hard way — the two ports had
+   drifted on enumeration while POLICY claimed a shared pattern meant neither could be
+   the lenient one, so `.agents/`, `docs/` and `THIRD-PARTY-LICENSES.md` were linted on
+   Linux and invisible on Windows (ScrAP-207).
+   It enforces its rules mechanically — the crate owns the check definitions and **the
+   count is deliberately not restated here**, for the same reason as the coverage floor
+   and the input limits: this sentence said "nine" while the gate implemented fourteen,
+   and no reader could tell. The run output enumerates every check by number and title as
+   it executes. The classes are citations into the SDD registers; two over the test
+   architecture, both of whose failure modes are silent (that `src/gtk_suite.rs`'s
+   duplicated module list has not drifted from `src/lib.rs`'s — a module missing there
+   drops every test body inside it from the main-thread run, with nothing failing — and
+   that `#[gtk::test]` has not returned in place of `#[gtktest::test]`, check 5, nor been
+   PRESCRIBED in the documents a developer acts on, check 5b: a lint's input set is
+   source, so until 5b existed nothing in the toolchain could read the prose telling
+   someone to write the banned attribute, and this file did exactly that for as long as
+   check 5 had existed, ScrAP-222); one over document paths, that every file the tree
+   points at must exist. That last is what a plan retirement breaks, since a `PLAN.*.md`
+   is deleted by design once implemented and every pointer written while it existed
+   dangles at once — including the bare `PLAN.<topic>` **section** citations code
+   comments actually write (no `.md`), which is the form that let 21 danglers survive a
+   sweep that believed itself complete. It deliberately ignores a bare document name used
+   as a *mention* in prose, which resolves against nothing. Another is over the
    **application ID**: `src/icons.rs` is its source of truth and Rust derives it from
    there, but the desktop entry, GResource manifest, `Info.plist` template and the
-   install/uninstall scripts each restate the literal, and a change to one of them
-   fails no build while breaking a different platform's icon or Launch Services
-   registration. The eighth is over the **citation FORM**, and it is the one rule here
-   that bans a spelling rather than checking a target: an entry in
-   `sdd/ANTI-PATTERNS.md` is cited `ScrAP-N`, one in the `gtk4-rs` skill is cited
-   `GTK4Rs/AP-N`, and **a bare `AP-N` is illegal anywhere in the tree** (check 8).
-   Illegal, not "means the skill" — it was this project's spelling historically and the
-   skill's later, so its correct and incorrect uses are textually identical and no
-   reader can tell a deliberate citation from one a sweep missed. Both legal forms are
-   deliberately **single tokens**: a two-word form is split by any Markdown or
-   `rustfmt` wrap, and since a `GTK4Rs/AP-N` can only ever be checked for *form* (the
-   skill need not be installed), its whole value is that a grep can **enumerate** the
-   set a human must audit — which a wrapped citation silently drops. When a lesson is
-   held by both registers, cite `ScrAP-N`; this one is always resolvable. ScrAP-231
-   records what the previous, laxer version of this rule cost. Checks 4, 5, 6, 7 and 8
-   were each mutation-tested when written.
+   install/uninstall scripts each restate the literal, and a change to one of them fails
+   no build while breaking a different platform's icon or Launch Services registration.
+   Another is over the **citation FORM**, and it is the one rule here that bans a
+   spelling rather than checking a target: an entry in `sdd/ANTI-PATTERNS.md` is cited
+   `ScrAP-N`, one in the `gtk4-rs` skill is cited `GTK4Rs/AP-N`, and **a bare `AP-N` is
+   illegal anywhere in the tree** (check 8). Illegal, not "means the skill" — it was this
+   project's spelling historically and the skill's later, so its correct and incorrect
+   uses are textually identical and no reader can tell a deliberate citation from one a
+   sweep missed. Both legal forms are deliberately **single tokens**: a two-word form is
+   split by any Markdown or `rustfmt` wrap, and since a `GTK4Rs/AP-N` can only ever be
+   checked for *form* (the skill need not be installed), its whole value is that a grep
+   can **enumerate** the set a human must audit — which a wrapped citation silently
+   drops. When a lesson is held by both registers, cite `ScrAP-N`; this one is always
+   resolvable. ScrAP-231 records what the previous, laxer version of this rule cost.
+   Checks 4, 5, 6, 7 and 8 were each mutation-tested when written, and so were the
+   corpora that now stand in for the old self-test.
    One check is over **tracked PATH LEGALITY**: `< > : " | ? *` and a trailing dot or
    space are illegal in a Win32 filename, so **one such path makes `git checkout` refuse
    the entire tree** — not that file, the whole tree — blocking every Windows clone and
    anyone bisecting through the commit. MEASURED: an unquoted `sed -i 's|a|b|'` had its
    `|` eaten by the shell, wrote the replacement half to disk as a filename, and
-   `git add -A` committed it; fmt, clippy, the whole suite and every other check
-   all passed, and only the Windows seat could see it, one fetch later, by being blocked.
+   `git add -A` committed it; fmt, clippy, the whole suite and every other check all
+   passed, and only the Windows seat could see it, one fetch later, by being blocked.
    **Its input set is `git ls-files`, deliberately NOT `lint-references.scan`** — the
    offending path landed in the repository root, outside the curated scan, and a check
    whose input is narrower than its hazard is ScrAP-132's species.
@@ -215,11 +211,11 @@ Before any change is considered valid, run these steps in order:
    were found in a single 103-line change *after* fmt, clippy `-D warnings` and 625
    passing tests had all gone green, and the third was found by hand during a
    cross-branch transfer — every other gate passes identically whether the citations
-   are right or wrong. The script owns the check definitions and the
-   PLAN exclusion; do not restate them here. **A PASS does not mean the citations are
-   correct** — check 2 proves an entry exists, never that it is the right one; a real
-   number naming the wrong lesson passes. That residue is a review obligation, and
-   the reason it arises is documented in the script.
+   are right or wrong. The crate owns the check definitions and the PLAN exclusion; do
+   not restate them here. **A PASS does not mean the citations are correct** — check 2
+   proves an entry exists, never that it is the right one; a real number naming the wrong
+   lesson passes. That residue is a review obligation, and the reason it arises is
+   documented at the check.
 
 10. **Installer artefact** — OPT-IN (`--package` / `-Package`), and the only step that is.
     Every other gate answers "is this change valid?" and belongs after every edit; this
@@ -348,7 +344,7 @@ silently returning in a future change.
   test body serialized with a single init, so many GTK-object tests coexist and
   **no `--test-threads=1` is needed**. The test body then needs no `gtk::init()`
   of its own.
-  **Never `#[gtk::test]`** — it is superseded, `lint-references.sh` check 5
+  **Never `#[gtk::test]`** — it is superseded, `cargo xtask lint-references` check 5
   rejects it outright, and the reason it must be the *portable* attribute is in
   [Verifying a change on macOS](#verifying-a-change-on-macos). That section is
   the authority on this rule; it is cross-linked from here because a reader
@@ -449,7 +445,7 @@ libtest's concurrency, not which thread the binding's own pool uses).
 
 Choosing `#[gtk::test]` over `#[gtktest::test]` is **invisibly** wrong: the test
 passes on Linux, so nothing fails, while the body is silently absent from the portable
-run. `lint-references.sh` check 5 therefore rejects the attribute outright — a lint is
+run. `cargo xtask lint-references` check 5 therefore rejects the attribute outright — a lint is
 the strongest available rung, since a clippy `disallowed-methods` ban cannot reach an
 attribute macro. Check 5b rejects *prescribing* it in these documents, which is the
 same failure one level up (ScrAP-222).

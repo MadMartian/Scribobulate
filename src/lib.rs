@@ -27,8 +27,8 @@
 //! is instead a **second crate root**, `src/gtk_suite.rs` — compiled `--cfg test`
 //! from the same sources, beside this file, so it sees the whole `pub(crate)` tree
 //! directly with no widening and no `pub` seam of any kind. Its one real cost is
-//! re-declaring this file's module list (`scripts/lint-references.sh` checks the two
-//! stay in sync) and compiling the tree a second time — paid deliberately, so that
+//! re-declaring this file's module list (`cargo xtask lint-references` check 4 keeps the
+//! two in sync) and compiling the tree a second time — paid deliberately, so that
 //! nothing built for testing ever compiles into the shipped library.
 
 pub(crate) mod a11y;

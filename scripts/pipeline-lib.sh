@@ -16,8 +16,8 @@
 #
 # ── WHAT MUST NOT MOVE INTO THIS FILE ────────────────────────────────────────────────
 #
-# This is a boundary, not a dumping ground, and the same discipline the lint-references
-# rule split follows. Keep out:
+# This is a boundary, not a dumping ground, and the same discipline the cross-reference
+# gate follows. Keep out:
 #
 #   * Anything platform-conditional. No `uname`, no `case $PLATFORM in`, no branch on the
 #     host. The moment a conditional lands here, this file becomes the place the platforms
@@ -102,7 +102,7 @@ step_ordinal() {
 #
 # A garbled contract must fail LOUDLY, never degrade into agreeing on nothing. Two ports
 # that both parse a broken file into an empty step list agree perfectly and prove nothing
-# — the failure mode lint-references.sh guards with the same shape of check.
+# — the failure mode `cargo xtask lint-references` guards with the same shape of check.
 # --------------------------------------------------------------------------------------
 validate_contract() {
     local errs=0
