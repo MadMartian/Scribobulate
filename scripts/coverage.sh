@@ -226,7 +226,19 @@ cd "$(dirname "$0")/.."
 # modules — so the gain is small: measured 80.14% before, 80.22% after. Raised by half
 # the gain rather than to the new measurement, keeping the deliberate margin the
 # 2026-08-20 entry explains.
-FLOOR=79.75
+#
+# 2026-08-22, 79.75 -> 79.95, finding L29: `export/pdf.rs` (1917 lines, ~4x the POLICY
+# soft limit) became `export/pdf/`, and the split was made along the toolkit boundary
+# rather than by line count. Two of the new modules need NO toolkit at all -- `geometry`
+# (page arithmetic: where an indented block starts, how wide it really is) and `decide`
+# (list markers, heading-scale index, column count, image splitting) -- and both had
+# been unreachable from a unit test, because the only route to them was to build a
+# document, build a Pango context, and run the whole measurement pass. They now measure
+# 100.00% and 93.15% on tests that need no display. This is exactly the
+# extraction-raises-the-floor mechanism the scope rule below describes, and the second
+# recorded instance of it after `primarysel.rs`. Measured 80.22% before, 80.64% after.
+# Raised by half the gain, keeping the margin the 2026-08-20 entry explains.
+FLOOR=79.95
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:
