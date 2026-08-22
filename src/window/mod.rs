@@ -749,18 +749,6 @@ pub(crate) mod gtk_integration_tests {
     /// `pub(super)` so every GTK test under `window/` reaches the SAME helper rather than
     /// each re-deriving one. A helper that only its own module can import is a helper the
     /// next module will quietly reimplement, slightly differently (ScrAP-219).
-    /// Pump the main loop until `done` reports true, or `budget` turns' worth of
-    /// wall-clock time elapses; reports whether it converged. Everything waited on
-    /// here is idle-driven (a deferred focus grab), not frame-clock driven
-    /// (GTK4Rs/AP-261) — `crate::testpump::until_or_for` under `Clock::Idle` (M31).
-    fn pump_until(budget: u32, done: impl FnMut() -> bool) -> bool {
-        crate::testpump::until_or_for(
-            crate::testpump::Clock::Idle,
-            std::time::Duration::from_millis(budget as u64),
-            done,
-        )
-    }
-
     // M37's one home for this helper, re-exported at `pub(crate)` because other modules'
     // integration tests need a window built by the PRODUCTION path rather than a stand-in
     // they wired themselves — `clipboard`'s middle-click pair is exactly that distinction.
@@ -1184,14 +1172,14 @@ pub(crate) mod gtk_integration_tests {
         let scroller = st.chrome().annotations_scroller.clone();
 
         change_action_state(&win, "annotations", &true.to_variant());
-        let focused_in_list = pump_until(200, || {
-            sidebar::list_view_of(&scroller)
-                .zip(GtkWindowExt::focus(&win))
-                .is_some_and(|(list, focused)| focused.is_ancestor(&list) || focused == list)
-        });
-        assert!(
-            focused_in_list,
-            "showing the annotations pane must hand the keyboard to its list"
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "the annotations pane to hand the keyboard to its list",
+            || {
+                sidebar::list_view_of(&scroller)
+                    .zip(GtkWindowExt::focus(&win))
+                    .is_some_and(|(list, focused)| focused.is_ancestor(&list) || focused == list)
+            },
         );
     }
 

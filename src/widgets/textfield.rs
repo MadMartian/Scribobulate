@@ -51,7 +51,13 @@ use gtk::prelude::*;
 /// [`crate::a11y::name_field`] and [`crate::macwordnav::wire_field_word_navigation`]
 /// already resolve the delegate themselves (GTK4Rs/AP-301), so the wrapper is the right
 /// thing to hand them.
-fn wire_field(field: &impl IsA<gtk::Widget>, accessible_name: &str) {
+///
+/// **The `IsA<gtk::Editable>` half of the bound is load-bearing off Linux and invisible
+/// on it.** `wire_field_word_navigation` takes an `Editable` — it has to, since it
+/// resolves the `GtkText` delegate through `EditableExt::delegate` — and its call is
+/// `#[cfg(target_os = "macos")]`, so a bound of `IsA<gtk::Widget>` alone compiles
+/// everywhere except the one platform the call exists on. Do not loosen it back.
+fn wire_field(field: &(impl IsA<gtk::Widget> + IsA<gtk::Editable>), accessible_name: &str) {
     crate::a11y::name_field(field, accessible_name);
     #[cfg(target_os = "macos")]
     crate::macwordnav::wire_field_word_navigation(field);
