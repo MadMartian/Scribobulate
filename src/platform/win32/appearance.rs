@@ -192,7 +192,6 @@ mod tests {
 /// Closes the loop between the registry and what the user actually sees.
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
-    use super::*;
     use gtk::prelude::*;
 
     /// Closes the loop between the registry and what the user sees, without
