@@ -100,11 +100,12 @@ const WIN_ILLEGAL: &[&str] = &[
     "deep/a/b/nul/c/x.rs",
     "src/nul.txt/x.rs",
     "src/con.foo/x.rs",
+    // `lpt0` is illegal and `com0` (below, in WIN_LEGAL) is not. The split is git's, MEASURED
+    // on a real NTFS volume — see `device_name_rx` for the table. Keep them in step with that
+    // measurement, not with each other: they LOOK like one shape and are not treated as one.
     "src/lpt0/x.rs",
-    // `com0` sits beside `lpt0` because the predicate treats them alike. Which side the
-    // PAIR belongs on is an open measurement for the Windows seat (see `device_name_rx`);
-    // that they belong on the SAME side is not open, and the corpus used to claim otherwise.
-    "src/com0/x.rs",
+    "lpt0",
+    "LPT0.md",
     "a./b.md",
     "a /b.md",
     // The control character and the newline. Neither survives a heredoc corpus, which is
@@ -128,6 +129,15 @@ const WIN_LEGAL: &[&str] = &[
     "src/a.b/x.rs",
     "src/conin/x.rs",
     "src/conout/x.rs",
+    // The COM0 family, and the reason this list has to carry it explicitly: a tracked `com0`
+    // CHECKS OUT on Windows and a tracked `lpt0` does not, so these four are the negative
+    // half of the one rule in this predicate that is asymmetric on purpose. Without them the
+    // asymmetry reads as a typo and the next reader "fixes" it, which is what happened once
+    // already. `com10` is here for the adjacent reason — the digit class must not be greedy.
+    "com0",
+    "COM0.txt",
+    "src/com0/x.rs",
+    "com10",
 ];
 
 #[test]

@@ -92,42 +92,49 @@ fn legal_ap_rx() -> &'static Regex {
 
 /// The reserved Win32 device names, in any path component, with or without an extension.
 ///
-/// `COM` AND `LPT` TAKE THE SAME DIGIT RANGE, and that symmetry is a correction rather than
-/// a preference. The two shell ports spelled this `COM[0-9]|LPT[0-9]`, this crate inherited
-/// the spelling verbatim, and the corpus inherited its consequence: `src/com0/x.rs` sat in
-/// the LEGAL list while `src/lpt0/x.rs` sat in the ILLEGAL one. Two identically shaped paths
-/// cannot both be right, and a corpus asserting opposite verdicts for one shape is worse
-/// than either answer, because the next reader resolves it in whichever direction they
-/// happen to look first. Found by the macOS seat ratifying this crate.
+/// `COM` TAKES `[1-9]` AND `LPT` TAKES `[0-9]`. The asymmetry reads like a typo and is not:
+/// it is git's own predicate. The two shell ports spelled it this way, this crate inherited
+/// the spelling, the macOS seat read the two corpus entries as a contradiction, and the
+/// Linux seat resolved it toward strict on the documentation's authority — reasonably, since
+/// Microsoft's current "Naming Files, Paths, and Namespaces" lists `COM0`-`COM9` as reserved.
+/// The documentation is not what blocks a clone.
 ///
-/// UNMEASURED, AND DELIBERATELY RESOLVED TOWARD THE STRICT SIDE. Microsoft's current
-/// "Naming Files, Paths, and Namespaces" lists `COM0`-`COM9` and `LPT0`-`LPT9` as reserved;
-/// historically only 1-9 were, and the operative authority is not the documentation but
-/// whether `git checkout` refuses the path, which only a real Windows volume can answer.
-/// Neither this seat nor the macOS one can settle it. The two errors are not symmetric: a
-/// false positive here costs somebody renaming a file called `com0`, which nothing in this
-/// tree is and nobody writes by accident, while a false negative blocks EVERY Windows clone
-/// of the whole tree. So it flags both until the Windows seat measures it.
+/// MEASURED by the Windows seat, 2026-08-23, Windows 10 19045 / NTFS / git 2.49.0.windows.1,
+/// `core.protectNTFS` at its compiled default. Each path was planted with
+/// `git -c core.protectNTFS=false update-index --add --cacheinfo` and checked out into a
+/// FRESH tree, because a shell-created file and a checkout of a tracked path are different
+/// code paths and only the second is the hazard:
 ///
-/// AND THE MEASUREMENT HAS TO BE THE RIGHT ONE (macOS seat, on reading this): a
-/// shell-created `com0` succeeding proves nothing here, because a `New-Item` and a
-/// `git checkout` of a TRACKED path are different code paths and this check's hazard is the
-/// second. What settles it is a checkout of a tracked `com0` on a real NTFS volume, and the
-/// same for `lpt0` so the pair is measured together rather than one inferred from the
-/// other. Only a checkout that SUCCEEDS justifies relaxing this to `[1-9]`; a refusal means
-/// strict was right. The plant recipe is in check 12's own doc comment, including why the
-/// cleanup must name the path explicitly.
+/// | tracked path                                | `git checkout`                            |
+/// |---------------------------------------------|-------------------------------------------|
+/// | `com0` `COM0` `com0.txt` `src/com0/x.rs`    | exit 0, file lands, tree clean            |
+/// | `com1`..`com9`, `lpt1`..`lpt9`              | `error: invalid path`, WHOLE tree refused |
+/// | `lpt0` `LPT0` `lpt0.md` `src/lpt0/x.rs`     | `error: invalid path`, WHOLE tree refused |
+/// | `com10`                                     | exit 0, file lands                        |
+/// | `con` `nul` `aux` `prn`                     | `error: invalid path`, WHOLE tree refused |
 ///
-/// TWO GAPS THIS DOES NOT COVER, both raised by the macOS seat and neither measured by
-/// anyone yet, so neither is guessed at here: the superscript spellings (`COM¹`, `COM²`,
-/// `COM³`, which the same Microsoft page lists), and a literal backslash in a tracked path,
-/// which Win32 reads as a separator so the file silently lands somewhere else rather than
-/// making the checkout refuse. The second is a different hazard class from this check's
-/// (silent divergence, not a blocked tree) and wants its own decision, not a quiet addition
-/// to this pattern.
+/// TWO TRAPS INSIDE THAT MEASUREMENT, and they point in opposite directions. git is STRICTER
+/// than the OS for `lpt0`: `New-Item lpt0` creates a real file that `git checkout` will not
+/// produce — so the shell probe this rule was nearly relaxed on gives the WRONG answer for
+/// the one name where wrong is expensive. And git is LOOSER than the documentation for
+/// `com0`. Probing either source alone gets one of the pair wrong. (A third layer disagrees
+/// with both: PowerShell's `Test-Path` reports `False` for a `com0`/`lpt0` file that
+/// `[System.IO.File]::Exists` reports `True` and that is genuinely on disk.)
+///
+/// TWO NEIGHBOURING HAZARDS, both now measured, NEITHER covered by this pattern:
+/// * The superscripts (`COM¹` `COM²` `COM³` `LPT¹`) break a checkout one layer further out
+///   and one degree weaker: git ACCEPTS the path and the OS refuses the create
+///   (`error: unable to create file COM¹: No such file or directory`). The clone exits
+///   non-zero and the rest of the tree still lands, so it is a broken checkout rather than a
+///   blocked one — a different severity from every row above, which is why folding it in
+///   here would misdescribe what this check reports.
+/// * A literal backslash in a tracked path (`a\b.txt`) is refused exactly like the rows
+///   above: `error: invalid path`, whole tree, nothing applied at all. It was expected to be
+///   a silent-divergence class — the file landing somewhere else — and it is not. It belongs
+///   in this check's class, as its own rule rather than inside a device-name pattern.
 fn device_name_rx() -> &'static Regex {
     static RX: OnceLock<Regex> = OnceLock::new();
-    rx(&RX, r"(?i)^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?$")
+    rx(&RX, r"(?i)^(CON|PRN|AUX|NUL|COM[1-9]|LPT[0-9])(\..*)?$")
 }
 
 /// A reverse-DNS identifier ending in `scribobulate`, for check 7's foreign-ID sweep.
