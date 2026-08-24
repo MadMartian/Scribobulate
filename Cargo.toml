@@ -121,11 +121,30 @@ strip = "symbols"
 #
 # It is also the configuration under which rustc's LLVM backend crashed once, compiling this
 # crate: `rustc-LLVM ERROR: Do not know how to promote this operator!` at
-# `-C opt-level=3 -C lto=thin -C codegen-units=1`, which failed build-pipeline step 3.
-# I could NOT reproduce it (12 targeted rebuilds, 8 full release builds, all clean), so
-# whether this override removes that crash is UNPROVEN and must not be read as fixed —
-# `lto` cannot be overridden per package at all, so thin LTO still applies at link. The
-# override stands on the first paragraph's reasoning, which needs no crash to justify it.
+# `-C opt-level=3 -C lto=thin -C codegen-units=1`, which failed build-pipeline step 3. Not
+# reproduced in 20 subsequent builds (12 targeted, 8 full release), and three clean builds
+# of the same crate at the same profile on the Windows seat's MSVC backend.
+#
+# ⛔ THIS OVERRIDE IS NOT THAT CRASH'S FIX and must never be recast as one. `lto` cannot be
+# overridden per package at all, so thin LTO still applies here. The override stands on the
+# paragraph above, which needs no crash to justify it.
+#
+# RESEARCHED, and the conclusion is to stop carrying it as a defect: the message is LLVM's
+# SelectionDAG `PromoteIntegerResult` falling off its switch, and this manifestation matches
+# no rust-lang/rust ticket — the two that print this exact string need nightly flags
+# (`-Zvirtual-function-elimination`, CFI) that are not set here. The closest LLVM analogue is
+# an AVX-512 intrinsic reaching a function without the target feature, and this dependency
+# graph is AVX2/SSSE3 only (regex → aho-corasick Teddy → memchr). No fixed-in version exists:
+# stable 1.95.0 through 1.98.0 are all LLVM 22, so a toolchain bump is not a remedy. And a
+# 1-in-20+ signature is the opposite of those tickets, which reproduce on demand — the boring
+# bet is that the failing build mixed a doc-comment rebuild against stale cached bitcode.
+#
+# RECURRENCE PROTOCOL, which is all that is worth keeping. If this fatal appears again, the
+# line IMMEDIATELY ABOVE `LLVM ERROR` is `PromoteIntegerResult #N: tX: <type> = <opcode> …`
+# — that line is the diagnosis, and it is what a bug report needs. Capture it with
+# `rustc --version --verbose` and file rust-lang/rust. A second occurrence is by itself
+# enough to stop calling this a one-shot, dump or no dump. Do NOT respond by bumping rustc,
+# pinning rustc, or disabling thin LTO workspace-wide.
 [profile.release.package.xtask]
 opt-level = 1
 codegen-units = 16
