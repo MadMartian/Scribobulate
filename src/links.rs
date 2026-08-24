@@ -103,6 +103,80 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Percent-encode a local filesystem path so it is a valid Markdown destination.
+///
+/// **Only ever applied to a path we produced ourselves** — the Browse button's chosen
+/// file (`relativize_for_insert`), never to whatever the user typed in the URL field.
+/// That restriction is the whole design: the field takes a local path OR a real URL and
+/// nothing can reliably tell them apart, so encoding a typed value would mangle the
+/// `?`, `&` and `:` of a pasted URL, or double-encode one that was already escaped.
+/// Browse has no such ambiguity — it hands us a `PathBuf`.
+///
+/// `/` is left alone (it is the separator, already normalised from `\` by the caller)
+/// and so are non-ASCII bytes, which every consumer here handles raw and which would
+/// otherwise turn a perfectly readable `café.png` into noise in the URL field.
+/// **`%` itself is encoded**, which is what makes the round trip lossless: a file
+/// genuinely named `100%.png` becomes `100%25.png` and decodes back to itself.
+fn percent_encode_path(s: &str) -> String {
+    // Assembled as BYTES, not by pushing `b as char`: that reads each byte as a
+    // Unicode scalar, so a multi-byte character is re-encoded per byte and
+    // `café.png` comes out `cafÃ©.png`. Untouched bytes are copied verbatim, so the
+    // result is still valid UTF-8 by construction (the input was).
+    let mut out: Vec<u8> = Vec::with_capacity(s.len());
+    for b in s.bytes() {
+        // The set that breaks either Markdown's inline destination or URL syntax.
+        // `(` and `)` are in it because they terminate `](…)`; `%` because of the
+        // round trip above; the control range because it cannot survive a line of text.
+        if matches!(
+            b,
+            b' ' | b'%'
+                | b'#'
+                | b'?'
+                | b'('
+                | b')'
+                | b'<'
+                | b'>'
+                | b'"'
+                | b'\\'
+                | b'^'
+                | b'`'
+                | b'{'
+                | b'}'
+                | b'|'
+        ) || b < 0x20
+            || b == 0x7F
+        {
+            out.extend_from_slice(format!("%{b:02X}").as_bytes());
+        } else {
+            out.push(b);
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
+/// The canonicalized on-disk file a Markdown destination denotes, or `None` when
+/// nothing is there. The single place a destination becomes a path, so the image gate,
+/// the unsafe-images branch and the link resolver cannot drift on what one means.
+///
+/// **Decoded first, literal second.** A Markdown destination is a URL, so
+/// `A%20file.svg` denotes `A file.svg` — that is what GitHub renders, and what this
+/// app's own Insert dialog writes since Browse started encoding. The literal retry is
+/// for the genuine collision: a file whose name really does contain something shaped
+/// like an escape. Decoding cannot widen the containment gate, which canonicalizes and
+/// re-checks `starts_with(base)` on whatever comes back — a `%2e%2e%2f` traversal
+/// decodes to `../` and is refused exactly as the literal form is.
+fn canonical_local_target(src: &str, doc_dir: Option<&Path>) -> Option<PathBuf> {
+    let decoded = percent_decode(src);
+    if decoded != src {
+        if let Some(hit) =
+            local_candidate(&decoded, doc_dir).and_then(|c| dunce::canonicalize(c).ok())
+        {
+            return Some(hit);
+        }
+    }
+    local_candidate(src, doc_dir).and_then(|c| dunce::canonicalize(c).ok())
+}
+
 // ── external link opening ──────────────────────────────────────────────────────
 
 /// Schemes a document link is allowed to open via the default handler.  A
@@ -299,8 +373,7 @@ fn local_candidate(src: &str, doc_dir: Option<&Path>) -> Option<PathBuf> {
 pub(crate) fn resolve_contained_image(src: &str, doc_dir: Option<&Path>) -> Option<PathBuf> {
     let doc_dir = doc_dir?;
     let base = dunce::canonicalize(doc_dir).ok()?;
-    let candidate = local_candidate(src, Some(doc_dir))?;
-    let target = dunce::canonicalize(&candidate).ok()?;
+    let target = canonical_local_target(src, Some(doc_dir))?;
     target.starts_with(&base).then_some(target)
 }
 
@@ -347,15 +420,13 @@ fn containment_of(src: &str, doc_dir: Option<&Path>) -> Containment {
         return Containment::Inside(target);
     }
     // Refused or unresolvable? Re-resolve the same candidate the gate just built —
-    // through `local_candidate`, so the tilde expands on the identical path the gate
-    // used (an unexpanded `~/x.png` canonicalizes as `<doc_dir>/~/x.png`, fails, and
-    // would report a file that exists as absent).
-    let Some(candidate) = local_candidate(src, doc_dir) else {
-        return Containment::Absent;
-    };
-    match dunce::canonicalize(&candidate) {
-        Ok(_) => Containment::Escapes,
-        Err(_) => Containment::Absent,
+    // through `canonical_local_target`, so the tilde expands and the destination
+    // percent-decodes on the identical path the gate used (an unexpanded `~/x.png`
+    // canonicalizes as `<doc_dir>/~/x.png`, fails, and would report a file that
+    // exists as absent; an undecoded `A%20b.png` would do the same).
+    match canonical_local_target(src, doc_dir) {
+        Some(_) => Containment::Escapes,
+        None => Containment::Absent,
     }
 }
 
@@ -449,12 +520,9 @@ pub(crate) fn resolve_image(
         // `local_candidate` tilde-expands and supplies doc_dir as the base for a
         // still-relative path — the same preamble the link resolver uses, shared
         // so the two content types agree on what a path means.
-        let Some(candidate) = local_candidate(src, doc_dir) else {
-            return ImageResolution::Missing;
-        };
-        match dunce::canonicalize(&candidate) {
-            Ok(abs) => ImageResolution::Local(abs),
-            Err(_) => ImageResolution::Missing,
+        match canonical_local_target(src, doc_dir) {
+            Some(abs) => ImageResolution::Local(abs),
+            None => ImageResolution::Missing,
         }
     } else {
         // Enforce the containment gate (VULN-002), and report the reason it gave.
@@ -540,12 +608,9 @@ pub(crate) fn resolve_doc_link(
     // resolves to its real target and a genuinely-missing file is still
     // `Missing`, never a phantom `Navigate`) but skip the `starts_with` check.
     let target = if allow_outside_links {
-        let Some(candidate) = local_candidate(path_part, Some(doc_dir)) else {
-            return LinkResolution::Missing;
-        };
-        match dunce::canonicalize(&candidate) {
-            Ok(t) => t,
-            Err(_) => return LinkResolution::Missing,
+        match canonical_local_target(path_part, Some(doc_dir)) {
+            Some(t) => t,
+            None => return LinkResolution::Missing,
         }
     } else {
         // "Exists but escapes the folder" (Refused) and "doesn't exist at all"
@@ -581,18 +646,24 @@ pub(crate) fn resolve_doc_link(
 pub(crate) fn relativize_for_insert(target: &Path, base: &Path) -> String {
     let t = dunce::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
     let b = dunce::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
-    match pathdiff::diff_paths(&t, &b) {
+    let path = match pathdiff::diff_paths(&t, &b) {
         Some(rel) => rel.to_string_lossy().replace('\\', "/"),
         None => t.to_string_lossy().into_owned(),
-    }
+    };
+    // Encode LAST, on the finished path, so the result is a valid Markdown
+    // destination rather than one this app writes and then cannot read back:
+    // Browse used to hand `/some/path/with spaces.svg` straight into the URL field,
+    // the space ended the destination, and `![alt](with spaces.svg)` rendered as
+    // literal text — the app producing broken Markdown from its own file chooser.
+    percent_encode_path(&path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        anchor_target, doc_link_fragment, is_allowed_url, relativize_for_insert,
-        resolve_contained_image, resolve_doc_link, resolve_image, scheme_of, slugify, unique_slug,
-        ImageResolution, LinkResolution,
+        anchor_target, doc_link_fragment, is_allowed_url, percent_decode, percent_encode_path,
+        relativize_for_insert, resolve_contained_image, resolve_doc_link, resolve_image, scheme_of,
+        slugify, unique_slug, ImageResolution, LinkResolution,
     };
     use std::collections::HashMap;
 
@@ -711,6 +782,105 @@ mod tests {
         // not blocked as a "disallowed scheme".
         assert!(!is_allowed_url("report:draft.md"));
         assert!(!is_allowed_url("C:/Users/me/img.png"));
+    }
+
+    /// **The regression the operator reproduced.** Browse used to hand its chosen file
+    /// into the URL field verbatim, so a name with a space produced
+    /// `![alt](/some/path/with spaces.svg)` — the space ends a Markdown destination, so
+    /// the app rendered its own insertion as literal text. Mutation: dropping the
+    /// `percent_encode_path` call in `relativize_for_insert` fails this.
+    #[test]
+    fn browse_inserts_a_destination_markdown_can_actually_parse() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let spaced = base.join("A file.svg");
+        fs::write(&spaced, b"x").unwrap();
+
+        let inserted = relativize_for_insert(&spaced, base);
+        assert_eq!(inserted, "A%20file.svg");
+        assert!(
+            !inserted.contains(' '),
+            "a destination with a raw space does not parse as a link: {inserted}"
+        );
+        // And the round trip closes: what Browse writes is what the resolver reads.
+        assert!(
+            resolve_contained_image(&inserted, Some(base)).is_some(),
+            "the app must be able to read back the destination it just wrote"
+        );
+    }
+
+    /// The encoder touches what breaks Markdown or URL syntax and nothing else — the
+    /// separator and non-ASCII stay readable, so the URL field does not fill with noise.
+    #[test]
+    fn the_insert_encoder_is_narrow_and_round_trips() {
+        assert_eq!(percent_encode_path("sub/dir/a b.png"), "sub/dir/a%20b.png");
+        assert_eq!(percent_encode_path("caf\u{e9}.png"), "caf\u{e9}.png");
+        assert_eq!(percent_encode_path("a(b).png"), "a%28b%29.png");
+        // `%` is encoded, which is what makes the round trip lossless.
+        assert_eq!(percent_encode_path("100%.png"), "100%25.png");
+        for name in [
+            "A file.svg",
+            "100%.png",
+            "a(b) [c].png",
+            "caf\u{e9} \u{2014} notes.png",
+            "with#hash?and.png",
+        ] {
+            assert_eq!(
+                percent_decode(&percent_encode_path(name)),
+                name,
+                "encode/decode must round trip: {name}"
+            );
+        }
+    }
+
+    /// A hand-written or GitHub-authored `%20` destination resolves, and so does the
+    /// pathological file whose name really contains the escape text — the decoded
+    /// candidate is tried first, the literal second.
+    #[test]
+    fn a_percent_encoded_destination_resolves_and_so_does_a_literal_one() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        fs::write(base.join("A file.svg"), b"x").unwrap();
+        assert!(
+            resolve_contained_image("A%20file.svg", Some(base)).is_some(),
+            "an encoded destination must resolve to the spaced file"
+        );
+
+        // A file whose NAME contains the escape text, with no spaced twin: the literal
+        // retry is the only thing that finds it.
+        fs::write(base.join("B%20file.svg"), b"x").unwrap();
+        assert!(
+            resolve_contained_image("B%20file.svg", Some(base)).is_some(),
+            "a file literally named with an escape sequence must still resolve"
+        );
+    }
+
+    /// **Decoding must not widen the containment gate.** An encoded traversal decodes
+    /// to `../` and is refused exactly as the raw form is — the gate canonicalizes
+    /// whatever the decode produced and re-checks it, so escaping is not reachable by
+    /// spelling the path differently.
+    #[test]
+    fn an_encoded_traversal_is_refused_like_a_raw_one() {
+        use std::fs;
+        let outer = tempfile::tempdir().unwrap();
+        let base = outer.path().join("doc");
+        fs::create_dir(&base).unwrap();
+        fs::write(outer.path().join("secret.png"), b"x").unwrap();
+
+        assert!(
+            resolve_contained_image("../secret.png", Some(&base)).is_none(),
+            "raw traversal must be refused (control)"
+        );
+        assert!(
+            resolve_contained_image("%2e%2e%2fsecret.png", Some(&base)).is_none(),
+            "an encoded traversal must be refused too, or decoding is a gate bypass"
+        );
+        assert!(
+            resolve_contained_image("..%2fsecret.png", Some(&base)).is_none(),
+            "a partially encoded traversal must be refused as well"
+        );
     }
 
     #[test]
