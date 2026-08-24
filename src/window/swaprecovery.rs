@@ -296,8 +296,25 @@ async fn apply_recovered_content(window: &ApplicationWindow, tab: &Rc<TabState>,
     // `loading` suppresses the edit-driven machinery (live preview, and the snapshot
     // debounce itself) for a programmatic buffer replacement; the settled dirtiness is
     // applied through the choke point immediately afterwards.
+    // THE FOURTH INGRESS DOOR, and it owes the same repair as the other three.
+    //
+    // `lineendings`' module doc names two doors — `docio`'s readers, and the clipboard's
+    // `insert-text` hook — and records that repairing the BUFFER alone was the first
+    // attempt at this defect and looked convincing while every derived view stayed broken.
+    // Swap recovery is a third arrival point for file-borne text, and it had exactly that
+    // shape: the buffer below is repaired by the hook `new_editor_buffer` arms at birth,
+    // and `tab.source` a few lines down was assigned the decoded body VERBATIM. The editor
+    // would have told the truth while the preview, the outline and the annotations list —
+    // all of which render from `source`, never from the buffer — carried a lone `\r`.
+    //
+    // Repaired once, here, into a local both consumers read, so the two cannot disagree.
+    // Not in `codec::decode`: that returns the body byte-identical on purpose, which is
+    // what makes a swap round trip lossless, and repairing there would break the property
+    // its own tests pin. The substitution is length- and position-preserving, so every
+    // offset either half holds still indexes the same logical position.
+    let body = crate::lineendings::normalize_lone_cr(&swap.body);
     tab.loading.set(true);
-    tab.editor_buf.set_text(&swap.body);
+    tab.editor_buf.set_text(&body);
     // `source` is the text every DERIVED view renders from — the preview, the outline,
     // the annotations list — and it is NOT the editor buffer. Setting only the buffer
     // leaves the preview showing pre-recovery content: the editor tells the truth and
@@ -313,7 +330,7 @@ async fn apply_recovered_content(window: &ApplicationWindow, tab: &Rc<TabState>,
     // because the assertions read `editor_text()` — the half that worked (GTK4Rs/AP-78). It
     // took a live run to see it (GTK4Rs/AP-104). The baseline is deliberately NOT touched:
     // the recovered tab must stay dirty against what is on disk.
-    *tab.source.borrow_mut() = swap.body.clone();
+    tab.set_source(&body);
     tab.loading.set(false);
     // Recovery mutates content the same way a reload does, so it owes the same
     // announcement — a monitor read that went out while recovery was working through
@@ -685,6 +702,52 @@ mod tests {
             assert!(
                 tab.is_dirty(),
                 "and it comes back DIRTY — the pre-crash state, not merely the layout"
+            );
+        });
+    }
+
+    /// **QA M01** — recovery repairs the SOURCE, not only the buffer.
+    ///
+    /// `lineendings`' module doc records that repairing the buffer alone was the first
+    /// attempt at the lone-CR defect, that it looked convincing, and that every derived
+    /// view stayed broken because the preview, the outline and the annotations list render
+    /// from `tab.source` and never from the editor buffer. Swap recovery was a fourth
+    /// ingress door with exactly that shape: the buffer is repaired by the hook armed at
+    /// its birth, and `source` was assigned the decoded body verbatim.
+    ///
+    /// This asserts BOTH halves, because asserting only `editor_text()` is what let the
+    /// original defect survive its own test suite.
+    #[gtktest::test]
+    fn recovery_repairs_the_derived_source_and_not_only_the_editor_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let app =
+                super::super::gtk_integration_tests::test_app("com.extollit.scribobulate.it.reccr");
+            let win = new_window(&app, "IT", "on disk", None);
+            let tab = winstate::state(&win).expect("a tab");
+
+            let doc_id = DocId::generate();
+            tab.adopt_doc_id(doc_id.clone());
+            // A lone CR, which no buffer in this process may hold and which the swap
+            // codec returns byte-identical on purpose.
+            seed_swap(
+                dir.path(),
+                &header(doc_id, None, b"on disk"),
+                "alpha\rbeta\r\ngamma",
+            );
+
+            gtk::glib::MainContext::default().block_on(recover_after_restore(&app));
+
+            assert_eq!(
+                tab.editor_text(),
+                "alpha\nbeta\r\ngamma",
+                "the buffer's lone CR is repaired and the CRLF is left alone"
+            );
+            assert_eq!(
+                *tab.source(),
+                "alpha\nbeta\r\ngamma",
+                "and so is the source every derived view renders from — this is the half \
+                 that used to keep the whole suite green while the preview was broken"
             );
         });
     }
@@ -1110,13 +1173,13 @@ mod tests {
             gtk::glib::MainContext::default().block_on(recover_after_restore(&app));
 
             assert_eq!(
-                *tab.source.borrow(),
+                *tab.source(),
                 "on disk, plus recovered work",
                 "the preview/outline/annotations all render from `source`; leaving it \
                  stale makes every projection of the document disagree with the editor"
             );
             assert_eq!(
-                *tab.source.borrow(),
+                *tab.source(),
                 tab.editor_text(),
                 "and the two must not be allowed to drift apart in the first place"
             );

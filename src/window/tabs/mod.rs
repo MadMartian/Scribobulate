@@ -43,6 +43,13 @@ use switch::*;
 // `crate::window::…` are additionally re-exported at window level there.
 pub(crate) use actions::register_tab_actions;
 pub(crate) use contextmenu::wire_tab_close_and_menu;
+/// The tab context menu's item enumeration. Re-exported so the mnemonics guard can
+/// DERIVE its check from the menu that ships rather than mirror it — see the enum's own
+/// doc comment for what the mirror cost. Test-gated because the builder that walks it
+/// lives in `contextmenu` itself, so the guard is the only consumer out here, and an
+/// ungated re-export is an unused import the `-D warnings` gate rejects.
+#[cfg(test)]
+pub(crate) use contextmenu::TabMenuItem;
 pub(crate) use dnd::{wire_tab_arrival, wire_tab_bar_dnd};
 pub(crate) use documents::{
     badge_tab_label, refresh_active_tab_label, refresh_documents_button, refresh_documents_menu,

@@ -1,9 +1,20 @@
-# One workspace member beside the app: `gtktest/`, the registration attribute the
-# main-thread GTK suite needs (`src/gtk_suite.rs`). A proc macro has to be its own
-# crate — it compiles for the host, not the target — so this is not a structural
-# choice so much as the only way to have one.
+# Two workspace members beside the app.
+#
+# `gtktest/` is the registration attribute the main-thread GTK suite needs
+# (`src/gtk_suite.rs`). A proc macro has to be its own crate — it compiles for the host,
+# not the target — so this is not a structural choice so much as the only way to have one.
+#
+# `xtask/` is the build-pipeline gate binary (`cargo xtask lint-references`, contract step
+# 9). It is in `default-members` and `gtktest` is NOT, and the difference is load-bearing:
+# the default set is what a bare `cargo fmt`/`clippy`/`test` in this directory acts on, so
+# a gate crate left out of it is a gate nobody formats, lints or runs — which is how the
+# self-tests of the shell ports it replaced ended up outside every pipeline step. Being in
+# the default set is what makes `cargo test` (step 4) run this gate's own corpora as
+# ordinary test cases. `gtktest` stays out because it has no tests of its own and is
+# compiled anyway, as the app's build dependency.
 [workspace]
-members = [".", "gtktest"]
+members = [".", "gtktest", "xtask"]
+default-members = [".", "xtask"]
 
 [package]
 name = "scribobulate"
@@ -100,6 +111,43 @@ inventory = { version = "0.3", optional = true }
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# The build-gate crate does not get the shipped binary's optimisation settings.
+#
+# The profile above exists for ONE artefact: the release binary whose footprint and
+# behaviour TDD §6 gates. `xtask` is a lint that runs for a second and is never shipped, so
+# cross-crate inlining and whole-crate codegen buy it nothing and cost every `cargo build
+# --release` the time to do it.
+#
+# It is also the configuration under which rustc's LLVM backend crashed once, compiling this
+# crate: `rustc-LLVM ERROR: Do not know how to promote this operator!` at
+# `-C opt-level=3 -C lto=thin -C codegen-units=1`, which failed build-pipeline step 3. Not
+# reproduced in 20 subsequent builds (12 targeted, 8 full release), and three clean builds
+# of the same crate at the same profile on the Windows seat's MSVC backend.
+#
+# ⛔ THIS OVERRIDE IS NOT THAT CRASH'S FIX and must never be recast as one. `lto` cannot be
+# overridden per package at all, so thin LTO still applies here. The override stands on the
+# paragraph above, which needs no crash to justify it.
+#
+# RESEARCHED, and the conclusion is to stop carrying it as a defect: the message is LLVM's
+# SelectionDAG `PromoteIntegerResult` falling off its switch, and this manifestation matches
+# no rust-lang/rust ticket — the two that print this exact string need nightly flags
+# (`-Zvirtual-function-elimination`, CFI) that are not set here. The closest LLVM analogue is
+# an AVX-512 intrinsic reaching a function without the target feature, and this dependency
+# graph is AVX2/SSSE3 only (regex → aho-corasick Teddy → memchr). No fixed-in version exists:
+# stable 1.95.0 through 1.98.0 are all LLVM 22, so a toolchain bump is not a remedy. And a
+# 1-in-20+ signature is the opposite of those tickets, which reproduce on demand — the boring
+# bet is that the failing build mixed a doc-comment rebuild against stale cached bitcode.
+#
+# RECURRENCE PROTOCOL, which is all that is worth keeping. If this fatal appears again, the
+# line IMMEDIATELY ABOVE `LLVM ERROR` is `PromoteIntegerResult #N: tX: <type> = <opcode> …`
+# — that line is the diagnosis, and it is what a bug report needs. Capture it with
+# `rustc --version --verbose` and file rust-lang/rust. A second occurrence is by itself
+# enough to stop calling this a one-shot, dump or no dump. Do NOT respond by bumping rustc,
+# pinning rustc, or disabling thin LTO workspace-wide.
+[profile.release.package.xtask]
+opt-level = 1
+codegen-units = 16
 
 [dev-dependencies]
 tempfile = "3"

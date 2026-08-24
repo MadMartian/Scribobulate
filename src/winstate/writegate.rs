@@ -80,6 +80,13 @@ impl WriteGate {
     /// context as the pass it is asking about, so the answer cannot change underneath
     /// it. A new caller that does not meet all three of those conditions wants
     /// [`claim`](Self::claim), not this.
+    ///
+    /// **Now enforced by `clippy.toml`'s `disallowed-methods`**, which is what makes the
+    /// paragraph above a rule rather than a wish: the sanctioned caller carries the sole
+    /// `#[allow]`, and `-D warnings` turns a second one into a build failure. Until that
+    /// ban existed this was prose on a `pub(crate)` method — a second caller would have
+    /// cost nothing and broken nothing visibly, which is the only kind of rule that gets
+    /// broken.
     pub(crate) fn is_busy(&self) -> bool {
         self.busy.get()
     }
@@ -92,6 +99,10 @@ impl Drop for WritePass<'_> {
 }
 
 #[cfg(test)]
+// This module's tests are the gate's OWN unit tests: `is_busy` is the observable
+// they assert the state machine through, which is the reading the ban's rule
+// explicitly permits (assert on it, never branch on it to write).
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

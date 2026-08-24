@@ -167,8 +167,15 @@ pub(crate) fn build_tab_editor(md: &str) -> (sourceview::Buffer, sourceview::Vie
     // because they fail differently: CLIPBOARD is written only on an explicit copy/cut,
     // while PRIMARY is republished by GTK on every selection change from `GtkTextView`'s
     // own realize, so it has to be taken over rather than overridden.
-    crate::clipboard::wire_plaintext_clipboard(&sv_view);
-    crate::clipboard::wire_primary_selection(&sv_view);
+    // A screen reader announced this as an unnamed text box: the editor is the primary
+    // control of the whole application and had no accessible name at all. Missed for as
+    // long as it was, because the naming guard's scope was a list of concrete types
+    // (GtkButton/GtkEntry/GtkSearchEntry) that a GtkSourceView is not a member of.
+    // `name_field`, not `name`: a tooltip covering the entire editing surface is not this
+    // application's idiom and would follow the pointer across the document.
+    crate::a11y::name_field(&sv_view, "Document editor");
+
+    crate::clipboard::wire_editor_clipboards(&sv_view);
 
     // Ctrl+Home / Ctrl+End aim past the part of the document GTK has laid out, so
     // they need re-issuing once it has (ScrAP-260). Wired here because this is the
@@ -578,4 +585,88 @@ fn close_other_dirty_tabs(
             _ => close_other_dirty_tabs(w, keep.clone(), Vec::new()),
         },
     );
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod assembly_tests {
+    use super::*;
+
+    /// The middle-click paste gesture `wire_middle_click_paste` installs, if it is there.
+    fn middle_click_gesture(view: &sourceview::View) -> Option<gtk::GestureClick> {
+        let controllers = view.observe_controllers();
+        (0..controllers.n_items())
+            .filter_map(|i| controllers.item(i)?.downcast::<gtk::GestureClick>().ok())
+            .find(|click| click.button() == gtk::gdk::BUTTON_MIDDLE)
+    }
+
+    /// **Every editor this application builds arrives fully wired.**
+    ///
+    /// `build_tab_editor` is the single place an editor view is constructed, and it was
+    /// covered by exactly one test (`farscroll`'s), which asserts only scroll behaviour.
+    /// Every other test in this area builds its OWN editor by hand and reproduces the
+    /// wiring locally — `clipboard`'s `editor()` helper, `lineendings`' direct
+    /// `new_editor_buffer()` call, `window::actions`' deliberately bare
+    /// `sourceview::Buffer::new(None)`. The consequence was that **deleting any one of
+    /// the wiring lines left the whole suite green**: the buffer unarmed, or GTK's rich
+    /// `GtkTextBuffer` back on the CLIPBOARD, and no gate noticed.
+    ///
+    /// That is GTK4Rs/AP-168 exactly — a suite well aimed at three hand-built stand-ins
+    /// and blind to the one representation the user actually gets. This body asserts the
+    /// ASSEMBLY, one assertion per wire, so a mutation names which line died.
+    #[gtktest::test]
+    fn every_editor_this_application_builds_arrives_fully_wired() {
+        // A lone CR and a CRLF in one document: the repair must eat the first and spare
+        // the second, which is the whole of the line-ending contract in one fixture.
+        let (buf, view) = build_tab_editor("alpha\rbeta\r\ngamma");
+
+        // (1) The file-side repair ran on load: the lone CR became a newline, the CRLF
+        //     survived byte-exact.
+        let loaded = crate::saferizer::BufferText::of(&buf).into_string();
+        assert_eq!(
+            loaded, "alpha\nbeta\r\ngamma",
+            "load_into_editor did not repair the lone CR (or ate the CRLF) — \
+             `build_tab_editor` is not calling it"
+        );
+
+        // (2) The buffer is ARMED: a later insertion of a lone CR is repaired too. This
+        //     is `new_editor_buffer`'s paste-normalisation hook, which a plain
+        //     `sourceview::Buffer::new(None)` does not have.
+        buf.set_text("");
+        let mut end = buf.end_iter();
+        buf.insert(&mut end, "one\rtwo");
+        assert_eq!(
+            crate::saferizer::BufferText::of(&buf).into_string(),
+            "one\ntwo",
+            "the editor buffer is not armed with the paste-normalisation hook — \
+             `build_tab_editor` built it with something other than `new_editor_buffer`"
+        );
+
+        // (3) The CLIPBOARD takeover is deliberately NOT asserted here, and the reason
+        //     is worth stating because the obvious assertion looks like it works.
+        //
+        //     MEASURED: emitting `copy-clipboard` on the view by name does NOT reproduce
+        //     the keybinding path. After `view.emit_by_name::<()>("copy-clipboard", &[])`
+        //     the clipboard reports `gchararray GtkTextBuffer text/plain;…` — GTK's
+        //     default handler published its rich content despite
+        //     `wire_plaintext_clipboard`'s `stop_signal_emission_by_name`. A real Ctrl+C
+        //     in the running app does not: driven under Xvfb, the X CLIPBOARD offers
+        //     `UTF8_STRING COMPOUND_TEXT TEXT STRING text/plain;charset=utf-8 text/plain`
+        //     and NO buffer-contents target at all.
+        //
+        //     So an `emit_by_name` assertion here would fail against correct production
+        //     code, and "fixing" it would mean changing the application to satisfy a
+        //     harness artefact. The behaviour is covered where it can be driven honestly:
+        //     `clipboard::a_same_application_paste_arrives_as_a_single_emission` and its
+        //     siblings, plus `tests/MANUAL-TEST.md`'s copy checks.
+
+        // (4) The PRIMARY consumer route is installed. Asserted as the gesture's
+        //     presence rather than by driving a paste: the paste itself is covered in
+        //     `clipboard`, and what this body is for is that the WIRE exists here.
+        assert!(
+            middle_click_gesture(&view).is_some(),
+            "no button-2 gesture on the editor — `wire_middle_click_paste` is not wired \
+             in `build_tab_editor`, so a middle-click paste falls back to GTK's own \
+             rich-buffer route"
+        );
+    }
 }

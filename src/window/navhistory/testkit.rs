@@ -7,15 +7,12 @@
 
 use crate::codeview::CodePreviewView;
 use crate::winstate::{state, TabId};
-use gtk::gio::ApplicationFlags;
 use gtk::prelude::*;
 use gtk::ApplicationWindow;
 
+/// Kept as a name local to these tests; the implementation is the shared one.
 pub(super) fn make_app(name: &str) -> gtk::Application {
-    let app = gtk::Application::new(Some(name), ApplicationFlags::NON_UNIQUE);
-    app.register(gtk::gio::Cancellable::NONE)
-        .expect("register before building a window");
-    app
+    crate::window::testkit::test_app(name)
 }
 
 /// Whether `win.<name>` is currently enabled — read through the action map the

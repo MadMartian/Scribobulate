@@ -199,7 +199,46 @@ cd "$(dirname "$0")/.."
 # not to 79.93: the margin is what absorbs the ordinary drift of unrelated work, and a
 # ratchet pinned to the last measurement is the permanently-red gate the paragraph above
 # was written about.
-FLOOR=79.60
+#
+# 2026-08-21, 79.60 -> 79.70, AND the correction of a ratchet this log never recorded.
+# QA round 1 (F-GATE-007, found by three reviewers independently) established that
+# `b890c9c` moved FLOOR 79.00 -> 79.40 in the SAME commit that added `clipboard` to
+# IGNORE below, with no entry here. Re-measured on this machine: the clipboard exclusion
+# is worth +0.40pt (79.64% with the file in scope, 80.04% with it out), which is the
+# whole of that move. So the floor did not rise against a constant scope — the SCOPE
+# narrowed and the number followed it, which is the one thing a ratchet must never be
+# allowed to do silently. A floor that climbs by exclusion measures nothing and reports
+# progress. The value is not being rolled back (the exclusion is still correct, and its
+# rationale below is now argued honestly rather than from an undercount); what is being
+# corrected is the RECORD, because the next author reading "79.00 -> 79.40" would
+# otherwise credit it to tests that were never written.
+#
+# The +0.10 to 79.70 is a real gain and is separable from the above: `primarysel.rs`
+# extracted the PRIMARY-selection decision out of `clipboard.rs` (QA F-CLIP-001), which
+# is the extraction-raises-the-floor mechanism POLICY's scope rule describes. Measured
+# total 80.04%; the deliberate margin below the measurement is kept, for the reason the
+# 2026-08-20 entry above gives.
+#
+# 2026-08-22, 79.70 -> 79.75, finding M34: `pdftable.rs`'s single-example cross-check
+# against `widgets::table::layout::fit_columns` became a sweep over many shapes/bounds,
+# and both files gained an invariant sweep of their own (floor, bound, determinism). No
+# code moved between files — this is test-only, on already-scoped, already-covered
+# modules — so the gain is small: measured 80.14% before, 80.22% after. Raised by half
+# the gain rather than to the new measurement, keeping the deliberate margin the
+# 2026-08-20 entry explains.
+#
+# 2026-08-22, 79.75 -> 79.95, finding L29: `export/pdf.rs` (1917 lines, ~4x the POLICY
+# soft limit) became `export/pdf/`, and the split was made along the toolkit boundary
+# rather than by line count. Two of the new modules need NO toolkit at all -- `geometry`
+# (page arithmetic: where an indented block starts, how wide it really is) and `decide`
+# (list markers, heading-scale index, column count, image splitting) -- and both had
+# been unreachable from a unit test, because the only route to them was to build a
+# document, build a Pango context, and run the whole measurement pass. They now measure
+# 100.00% and 93.15% on tests that need no display. This is exactly the
+# extraction-raises-the-floor mechanism the scope rule below describes, and the second
+# recorded instance of it after `primarysel.rs`. Measured 80.22% before, 80.64% after.
+# Raised by half the gain, keeping the margin the 2026-08-20 entry explains.
+FLOOR=79.95
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:
@@ -231,6 +270,22 @@ FLOOR=79.60
 #                   decisions the other way, into the GATED `winstate/navhistory/`
 #                   (`decide.rs`, `place.rs`, both 100%), which is the floor-raising
 #                   direction POLICY's scope rule names.
+#   window/editbar/ dialog (a modal GtkWindow + GtkEntry form and the native file
+#                   chooser), edit (GtkTextBuffer splices inside one undo group),
+#                   focusgate (focus-in/out signal tracking), formatbar and overlay
+#                   (widget rows, a GtkMenuButton, a GtkPopover pointed at the caret),
+#                   insert (runs the dialog, then splices), newline (a keystroke
+#                   handler), relabel (retitles live surfaces) — every one of them is
+#                   buffer mutation or widget/signal wiring against a live editor, so
+#                   none is decidable from data. **The decisions were moved out
+#                   wholesale**: `src/format/` holds the pure half — `continuation.rs`
+#                   (what Enter continues), `codeblock`, `heading`, `hr`, `inline`,
+#                   `insert`, `list`, `quote`, `text` — each returning a `format::Edit`
+#                   that these files only apply. That is the floor-raising direction
+#                   POLICY's scope rule names, and it is why this entry is a thin
+#                   application layer rather than a hiding place. Spelled out in the
+#                   regex for the same reason `tabs/` and `navhistory/` are: the
+#                   directory split stopped the path matching `window/[a-z_]+\.rs`.
 #   preview/        annotate.rs (selection→source mapping, entry-card placement
 #                   math) is pure → gated; annotate/overlay.rs (GtkPopover/GtkOverlay
 #                   wiring) → excluded.
@@ -244,9 +299,17 @@ FLOOR=79.60
 #                   module whose failure mode is silence.
 #   clipboard.rs    a `GdkContentProvider` GObject subclass plus two signal handlers
 #                   (`copy-clipboard`, `cut-clipboard`) and a realize/unrealize
-#                   rebalance — GTK wiring end to end, with no decision core to
-#                   extract: its one branch is `selection_bounds().is_some()`, which
-#                   is a buffer read rather than logic. It is NOT untested — all four
+#                   rebalance — GTK wiring end to end. This entry used to argue "no
+#                   decision core to extract: its one branch is
+#                   `selection_bounds().is_some()`", and that was an UNDERCOUNT (the
+#                   file had four branches) which a QA reviewer caught and a live
+#                   defect then proved: the PRIMARY release arm needed an ownership
+#                   test, which is exactly a decision, and it now lives in
+#                   `primarysel.rs` where this gate can see it. The exclusion stands on
+#                   what is LEFT, not on the claim that nothing was ever there — and
+#                   the general lesson is that "no decision core here" is a claim about
+#                   code someone has to keep re-checking, not a property of a file.
+#                   What remains is NOT untested — all four
 #                   of its behaviours are driven by `#[gtktest::test]` bodies in
 #                   pipeline step 5, including a mutation-checked assertion that a
 #                   same-application paste arrives as exactly ONE `insert-text`
@@ -258,6 +321,13 @@ FLOOR=79.60
 #                   (line/cell buffer-Y reads), markers (popover UI) are all
 #                   view-bound → excluded. The one pure piece, group_by_line, keeps
 #                   its unit tests but rides along inside the excluded markers.rs.
+#   outline_view.rs the outline sidebar's GObject subclass (HeadingObject), its
+#                   GtkTreeListModel/GtkSignalListItemFactory wiring, and the
+#                   expand-all TreeListRow walk — all live widget construction and
+#                   signal wiring, on the same terms as codeview/ above → excluded.
+#                   The heading data model and tree-folding it renders live in
+#                   outline.rs, gated and unit-tested — the module's own doc comment
+#                   already states this split; this entry just brings it here too.
 #
 # `gtk_suite` and `suite_registry` are the main-thread GTK suite's own plumbing (a
 # second crate root and the registry `#[gtktest::test]` submits into). Excluding
@@ -271,12 +341,37 @@ FLOOR=79.60
 # GTK-wired, headlessly-unexercisable code under a new name, so it keeps the same
 # scoping decision. Both names stay listed because both files still exist.
 #
+# `logging` bridges glib's structured-log writer into the `log` facade and its
+# `init()` installs PROCESS-GLOBAL state (`glib::log_set_writer_func`,
+# `log::set_logger`) that a running binary can arm exactly once — neither call is
+# something a unit-test run can exercise repeatedly, and both need a live glib
+# runtime besides. The one pure piece, `is_benign_gtk_startup_noise` (the substring
+# match that demotes known-benign GTK startup diagnostics), keeps its own unit test
+# (`demotes_only_the_known_benign_gtk_startup_transients`) but rides along inside
+# the excluded file, the same shape as `codeview/markers.rs`'s group_by_line above.
+#
+# `tags` registers every fixed `GtkTextTag` via direct property setters
+# (`set_scale`, `set_left_margin`, `set_background_rgba`, …) against a live
+# `GtkTextBuffer`'s tag table — GObject construction that needs a live GTK runtime
+# and so cannot run in this unit-only pass. The pure piece, `TagName::name()` /
+# `TagName::is_list_item()` (the fixed-tag-name vocabulary and its totality over
+# every depth, including depths the caller contract says cannot occur), keeps its
+# own unit tests (`list_depth_tests`) but rides along inside the excluded file, the
+# same shape as `logging` and `codeview/markers.rs` above.
+#
 # Every separator below is the class `[/\\]`, not a literal `/`, because llvm-cov
 # reports paths in the host's native form — `src\window\toolbar.rs` on Windows. With
 # a `/`-only regex NOTHING matches there, so the scope silently evaporates and the
 # gate compares the FLOOR against the UNSCOPED total (37.9% vs 71.7%) and fails every
 # run. That reads as "your change tanked coverage" rather than "the filter missed",
 # which is the worst way for a gate to break — keep the class if you edit this.
+# This guards a HAND-RUN invocation of this script on a Windows box (e.g. under Git
+# Bash/WSL), not the pipeline: `scripts/pipeline.steps`' `na.windows coverage
+# permanent` entry means step 6 never runs here through the pipeline at all — a
+# Windows figure would sit below the Linux floor for an unrelated reason
+# (`atomic_io.rs`'s unix-only code not compiled) and POLICY already says never to
+# chase that gap. The class still has to hold for that hand-run case, because
+# `cargo llvm-cov` reports native Windows paths regardless of who invokes it.
 IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app[/\\](appactions|menubar|openbatch|open|setup)|clipboard|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|widgets[/\\](table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
 
 exec cargo llvm-cov --summary-only --fail-under-lines "$FLOOR" --ignore-filename-regex "$IGNORE" "$@"

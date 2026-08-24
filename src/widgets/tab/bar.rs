@@ -467,24 +467,16 @@ mod gtk_integration_tests {
         snapshot.to_node().is_some()
     }
 
-    /// Pump the main loop until `cond` holds, bounded by a timeout SOURCE rather
-    /// than a wall-clock check between iterations — the latter never fires on an
-    /// idle display, so the loop would hang forever (GTK4Rs/AP-79).
-    ///
-    /// This citation said `GTK4Rs/AP-109` until QA round 3. GTK4Rs/AP-109 is a real entry
-    /// about a container-level gesture also firing on a child button — which is
-    /// what the OTHER two `GTK4Rs/AP-109` citations in this file correctly refer to,
-    /// which is why a wrong one hid among them. The pump lesson is `GTK4Rs/AP-79` in the
-    /// gtk4-rs SKILL and #88 in THIS register, and the prefix sweep that
-    /// introduced `ScrAP-` rewrote the prefix without re-resolving the number.
-    fn pump_until(cond: impl Fn() -> bool) -> bool {
-        let expired = std::rc::Rc::new(std::cell::Cell::new(false));
-        let e = expired.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_secs(5), move || e.set(true));
-        while !cond() && !expired.get() {
-            glib::MainContext::default().iteration(true);
-        }
-        cond()
+    /// Pump the main loop until `cond` holds or a 5s deadline elapses; reports
+    /// whether it converged. `crate::testpump::until_or_for` under `Clock::Idle`
+    /// (M31), keeping this module's own 5s deadline rather than `Idle`'s 20s
+    /// default.
+    fn pump_until(cond: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Idle,
+            std::time::Duration::from_secs(5),
+            cond,
+        )
     }
 
     /// A `TabBar` in a presented window, pumped until it has a real allocation.

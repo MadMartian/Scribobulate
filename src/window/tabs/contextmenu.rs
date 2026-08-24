@@ -32,6 +32,65 @@ pub(crate) fn wire_tab_close_and_menu(window: &ApplicationWindow, tab_view: &Tab
     ));
 }
 
+/// The tab context menu's items, in order — **the** enumeration of them.
+///
+/// It exists because the menubar's mnemonic guard was taught (in this same merge) to
+/// derive from the menu it checks rather than from a hand-maintained mirror, and this
+/// menu, which has the identical structure one level down, was left with THREE copies of
+/// its label list: the marked label was spelled twice at each call site (once to build
+/// the button, once to register its access key) and a third time as literals inside the
+/// guard. The guard's copy was already stale — it listed five items against the six that
+/// ship, so `Re_name…`'s access key was checked for collision against nothing at all.
+///
+/// A guard whose input set is a second copy of the thing it checks reports on the copy.
+///
+/// One manual step survives and is worth naming rather than pretending away: a new
+/// variant must be added to [`Self::ALL`] as well. `label` is an exhaustive match, so
+/// the variant cannot be added without deciding its text; `ALL` is what the guard walks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TabMenuItem {
+    Close,
+    CloseOthers,
+    MoveToNewWindow,
+    CopyFullPath,
+    Reload,
+    Rename,
+}
+
+impl TabMenuItem {
+    /// Every item this menu ships, in the order it presents them.
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Close,
+        Self::CloseOthers,
+        Self::MoveToNewWindow,
+        Self::CopyFullPath,
+        Self::Reload,
+        Self::Rename,
+    ];
+
+    /// Whether a separator follows this item, so the menu's grouping is data on the
+    /// enumeration rather than an `append` buried between two call sites.
+    pub(crate) fn separator_after(self) -> bool {
+        matches!(self, Self::CloseOthers | Self::MoveToNewWindow)
+    }
+
+    /// The `_`-marked label: the button's text and its access key, one string.
+    ///
+    /// "Close Tab", "Move to New Window" and "Reload" reuse their menu-bar marks so the
+    /// letters match; "Copy Full Path" uses `F` to match the `win.copy-path`
+    /// accelerator; `C`/`O`/`M`/`F`/`R` being taken is why Rename's is `n`.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Close => "_Close Tab",
+            Self::CloseOthers => "Close _Other Tabs",
+            Self::MoveToNewWindow => "_Move to New Window",
+            Self::CopyFullPath => "Copy _Full Path",
+            Self::Reload => "_Reload",
+            Self::Rename => "Re_name…",
+        }
+    }
+}
+
 /// N2's `GMenu`/`PopoverMenu` was rejected in favor of the codebase's own
 /// established context-menu idiom (a plain `GtkPopover` + `GtkButton` column,
 /// `window/contextmenu.rs`) — a spurious-scrollbar issue with
@@ -52,184 +111,181 @@ fn show_tab_context_menu(
     // `marked` is a `_`-marked label; `access_markup` renders it with the access
     // char underlined (a plain popover never gets mnemonics-visible — ScrAP-70). "Close Tab" reuses the File-menu mark so its `C` matches; the other two
     // are context-only but keep the menu-bar letters (Close Other = O, Move = M).
-    let make_btn = |marked: &str| -> gtk::Button {
-        let lbl = gtk::Label::new(None);
-        lbl.set_markup(&crate::app::access_markup(marked).1);
-        lbl.set_halign(gtk::Align::Start);
-        let btn = gtk::Button::new();
-        btn.set_child(Some(&lbl));
-        btn.add_css_class("flat");
-        btn.set_halign(gtk::Align::Fill);
-        btn
-    };
-
     // Bare-letter access keys (single flat page, so an always-true gate) — the same
     // Capture/Local ShortcutController recipe as the pane context menu (ScrAP-70).
     let key_controller = gtk::ShortcutController::new();
     key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
     key_controller.set_scope(gtk::ShortcutScope::Local);
-    let add_key = {
+
+    // Building the button and registering its access key are ONE call, taking the item
+    // rather than a string. Two things follow, and both were live defects: the label is
+    // spelled once instead of twice per item, and — because `add_key` was a silent no-op
+    // when `access_markup` found no `_` — a label edited to drop its marker can no longer
+    // lose its access key with neither a warning nor a failing test.
+    let make_btn = {
         let ctrl = key_controller.clone();
-        move |btn: &gtk::Button, marked: &str| {
+        move |item: TabMenuItem| -> gtk::Button {
+            let marked = item.label();
+            let lbl = gtk::Label::new(None);
+            lbl.set_markup(&crate::app::access_markup(marked).1);
+            lbl.set_halign(gtk::Align::Start);
+            let btn = gtk::Button::new();
+            btn.set_child(Some(&lbl));
+            btn.add_css_class("flat");
+            btn.set_halign(gtk::Align::Fill);
             if let Some(ch) = crate::app::access_markup(marked).0 {
-                if let Some(sc) = crate::app::access_shortcut(btn, ch, || true) {
+                if let Some(sc) = crate::app::access_shortcut(&btn, ch, || true) {
                     ctrl.add_shortcut(sc);
                 }
             }
+            btn
         }
     };
 
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-    let close_btn = make_btn("_Close Tab");
-    add_key(&close_btn, "_Close Tab");
-    close_btn.connect_clicked(glib::clone!(
-        #[weak(rename_to = po)]
-        popover,
-        #[weak(rename_to = w)]
-        window,
-        #[strong]
-        tab,
-        move |_| {
-            dismiss_context_popover(&po);
-            close_specific_tab(&w, tab.clone());
-        }
-    ));
-    box_.append(&close_btn);
-
+    // THE MENU IS BUILT BY WALKING `TabMenuItem::ALL`, in its order. That is what makes
+    // the enumeration load-bearing rather than decorative: an item missing from `ALL`
+    // does not merely go unchecked by the mnemonics guard — it does not RENDER, which is
+    // the one kind of drift that reports itself. Identity, label, access key and
+    // grouping are shared; sensitivity and the click handler stay per-item.
     let has_others = winstate::tabs_for_window(window)
         .iter()
         .any(|t| t.id != tab.id);
-    let close_others_btn = make_btn("Close _Other Tabs");
-    add_key(&close_others_btn, "Close _Other Tabs");
-    close_others_btn.set_sensitive(has_others);
-    close_others_btn.connect_clicked(glib::clone!(
-        #[weak(rename_to = po)]
-        popover,
-        #[weak(rename_to = w)]
-        window,
-        #[strong]
-        tab,
-        move |_| {
-            dismiss_context_popover(&po);
-            // Close the OTHER tabs, keeping this one. Clean tabs close at once;
-            // dirty tabs prompt sequentially, not N dialogs at once.
-            close_other_tabs(&w, tab.clone());
-        }
-    ));
-    box_.append(&close_others_btn);
-
-    box_.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-
-    let move_btn = make_btn("_Move to New Window");
-    add_key(&move_btn, "_Move to New Window");
-    // Single source of truth (POLICY): "Move to New Window" is one command with
-    // three surfaces (menu bar, toolbar, this tab context menu), all driven by
-    // the `win.move-tab-new-window` GAction. Read the action's own enabled state
-    // rather than recomputing the `tab_count > 1` precondition here — a future
-    // change to the action's gate (e.g. also disabling mid-drag) then can't skip
-    // this surface. (M4)
-    move_btn.set_sensitive(
-        simple_action(window, "move-tab-new-window")
-            .map(|a| a.is_enabled())
-            .unwrap_or(false),
-    );
     let content = tab.content_box.clone();
-    move_btn.connect_clicked(glib::clone!(
-        #[weak(rename_to = po)]
-        popover,
-        #[weak(rename_to = w)]
-        window,
-        #[strong]
-        content,
-        move |_| {
-            dismiss_context_popover(&po);
-            let Some(chrome) = winstate::chrome(&w) else {
-                return;
-            };
-            // Reuse the active-tab path (this menu's tab need not be active).
-            chrome.tabs.focus_page(&content);
-            move_tab_to_new_window(&w);
+    for item in TabMenuItem::ALL {
+        let btn = make_btn(item);
+        match item {
+            TabMenuItem::Close => {
+                btn.connect_clicked(glib::clone!(
+                    #[weak(rename_to = po)]
+                    popover,
+                    #[weak(rename_to = w)]
+                    window,
+                    #[strong]
+                    tab,
+                    move |_| {
+                        dismiss_context_popover(&po);
+                        close_specific_tab(&w, tab.clone());
+                    }
+                ));
+            }
+            TabMenuItem::CloseOthers => {
+                btn.set_sensitive(has_others);
+                btn.connect_clicked(glib::clone!(
+                    #[weak(rename_to = po)]
+                    popover,
+                    #[weak(rename_to = w)]
+                    window,
+                    #[strong]
+                    tab,
+                    move |_| {
+                        dismiss_context_popover(&po);
+                        // Close the OTHER tabs, keeping this one. Clean tabs close at
+                        // once; dirty tabs prompt sequentially, not N dialogs at once.
+                        close_other_tabs(&w, tab.clone());
+                    }
+                ));
+            }
+            TabMenuItem::MoveToNewWindow => {
+                // Single source of truth (POLICY): "Move to New Window" is one command
+                // with three surfaces (menu bar, toolbar, this tab context menu), all
+                // driven by the `win.move-tab-new-window` GAction. Read the action's own
+                // enabled state rather than recomputing the `tab_count > 1` precondition
+                // here — a future change to the action's gate (e.g. also disabling
+                // mid-drag) then can't skip this surface. (M4)
+                btn.set_sensitive(
+                    simple_action(window, "move-tab-new-window")
+                        .map(|a| a.is_enabled())
+                        .unwrap_or(false),
+                );
+                btn.connect_clicked(glib::clone!(
+                    #[weak(rename_to = po)]
+                    popover,
+                    #[weak(rename_to = w)]
+                    window,
+                    #[strong]
+                    content,
+                    move |_| {
+                        dismiss_context_popover(&po);
+                        let Some(chrome) = winstate::chrome(&w) else {
+                            return;
+                        };
+                        // Reuse the active-tab path (this menu's tab need not be active).
+                        chrome.tabs.focus_page(&content);
+                        move_tab_to_new_window(&w);
+                    }
+                ));
+            }
+            // Copy Full Path / Reload / Rename are window-scoped actions
+            // (`win.copy-path` / `win.reload` / `win.rename`) that always act on the
+            // ACTIVE tab — but this menu fires for the RIGHT-CLICKED tab, which need not
+            // be active. Two requirements follow:
+            //
+            // 1. Sensitivity must be read from the CLICKED tab's own predicate, the same
+            //    one that feeds the actions on every switch (`window/tabs/switch.rs`) —
+            //    NOT from `action.is_enabled()`. Unlike `MoveToNewWindow` above (M4,
+            //    correct there because that action's gate is genuinely window-scoped),
+            //    these are per-tab: the action's current `is_enabled()` reflects
+            //    whichever tab is active RIGHT NOW, which is the wrong tab for a
+            //    right-click on an inactive one.
+            // 2. Activation must not just invoke the action — that would silently act on
+            //    the active tab. Follow the Move-to-New-Window precedent: `focus_page`
+            //    the clicked tab first (synchronously resyncing the actions' enabled
+            //    state to match), then drive the action. Reload and Rename also prompt,
+            //    so focusing first means the prompt names the document the user actually
+            //    clicked (TDD 24.6/24.11).
+            TabMenuItem::CopyFullPath => {
+                btn.set_sensitive(tab.has_path());
+                btn.connect_clicked(glib::clone!(
+                    #[weak(rename_to = po)]
+                    popover,
+                    #[weak(rename_to = w)]
+                    window,
+                    #[strong]
+                    tab,
+                    move |_| {
+                        dismiss_context_popover(&po);
+                        copy_full_path_for_tab(&w, &tab);
+                    }
+                ));
+            }
+            TabMenuItem::Reload => {
+                btn.set_sensitive(tab.has_path());
+                btn.connect_clicked(glib::clone!(
+                    #[weak(rename_to = po)]
+                    popover,
+                    #[weak(rename_to = w)]
+                    window,
+                    #[strong]
+                    tab,
+                    move |_| {
+                        dismiss_context_popover(&po);
+                        reload_for_tab(&w, &tab);
+                    }
+                ));
+            }
+            TabMenuItem::Rename => {
+                btn.set_sensitive(rename_enabled_for(tab));
+                btn.connect_clicked(glib::clone!(
+                    #[weak(rename_to = po)]
+                    popover,
+                    #[weak(rename_to = w)]
+                    window,
+                    #[strong]
+                    tab,
+                    move |_| {
+                        dismiss_context_popover(&po);
+                        rename_for_tab(&w, &tab);
+                    }
+                ));
+            }
         }
-    ));
-    box_.append(&move_btn);
-
-    box_.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-
-    // Copy Full Path / Reload are window-scoped actions (`win.copy-path` /
-    // `win.reload`) that always act on the ACTIVE tab — but this menu fires for
-    // the RIGHT-CLICKED tab, which need not be active. Two requirements follow:
-    //
-    // 1. Sensitivity must be read from the CLICKED tab's own `has_path()`, the
-    //    same predicate that feeds the actions on every switch
-    //    (`window/tabs/switch.rs`) — NOT from `action.is_enabled()`. Unlike
-    //    `move_btn` above (M4, correct there because `move-tab-new-window`'s
-    //    gate is genuinely window-scoped), these two actions are per-tab: the
-    //    action's current `is_enabled()` reflects whichever tab is active RIGHT
-    //    NOW, which is the wrong tab for a right-click on an inactive one.
-    // 2. Activation must not just invoke the action — that would silently act
-    //    on the active tab. Follow the Move-to-New-Window precedent below:
-    //    `focus_page` the clicked tab first (synchronously resyncing the
-    //    actions' enabled state to match), then drive the action. Reload also
-    //    prompts on a dirty buffer, so focusing first means the prompt names
-    //    the document the user actually clicked.
-    let copy_path_btn = make_btn("Copy _Full Path");
-    add_key(&copy_path_btn, "Copy _Full Path");
-    copy_path_btn.set_sensitive(tab.has_path());
-    copy_path_btn.connect_clicked(glib::clone!(
-        #[weak(rename_to = po)]
-        popover,
-        #[weak(rename_to = w)]
-        window,
-        #[strong]
-        tab,
-        move |_| {
-            dismiss_context_popover(&po);
-            copy_full_path_for_tab(&w, &tab);
+        box_.append(&btn);
+        if item.separator_after() {
+            box_.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         }
-    ));
-    box_.append(&copy_path_btn);
-
-    let reload_btn = make_btn("_Reload");
-    add_key(&reload_btn, "_Reload");
-    reload_btn.set_sensitive(tab.has_path());
-    reload_btn.connect_clicked(glib::clone!(
-        #[weak(rename_to = po)]
-        popover,
-        #[weak(rename_to = w)]
-        window,
-        #[strong]
-        tab,
-        move |_| {
-            dismiss_context_popover(&po);
-            reload_for_tab(&w, &tab);
-        }
-    ));
-    box_.append(&reload_btn);
-
-    // Rename — the third per-tab command, and it follows the same two rules as the
-    // two above rather than `move_btn`'s: `win.rename` acts on the ACTIVE tab, so
-    // its sensitivity is read from the CLICKED tab's own predicate (not
-    // `action.is_enabled()`, which answers for whichever tab is active now), and
-    // activation focuses the clicked tab first so the dialog names the document the
-    // reader pointed at (TDD 24.6/24.11). `C`/`O`/`M`/`F`/`R` are taken in this
-    // menu, so the access key is `n`.
-    let rename_btn = make_btn("Re_name…");
-    add_key(&rename_btn, "Re_name…");
-    rename_btn.set_sensitive(rename_enabled_for(tab));
-    rename_btn.connect_clicked(glib::clone!(
-        #[weak(rename_to = po)]
-        popover,
-        #[weak(rename_to = w)]
-        window,
-        #[strong]
-        tab,
-        move |_| {
-            dismiss_context_popover(&po);
-            rename_for_tab(&w, &tab);
-        }
-    ));
-    box_.append(&rename_btn);
+    }
 
     popover.set_child(Some(&box_));
     popover.add_controller(key_controller);
@@ -340,7 +396,7 @@ mod gtk_integration_tests {
 
         reload_for_tab(&window, &tab_b);
         assert!(
-            crate::docio::settle(|| *tab_b.source.borrow() == edited_b),
+            crate::docio::settle(|| *tab_b.source() == edited_b),
             "the reload must land: it reads the file off the main thread now"
         );
 
@@ -350,12 +406,12 @@ mod gtk_integration_tests {
             "reload_for_tab must focus the CLICKED tab (B), not leave A active"
         );
         assert_eq!(
-            *tab_b.source.borrow(),
+            *tab_b.source(),
             edited_b,
             "tab B's own file content must be reloaded"
         );
         assert_eq!(
-            *tab_a.source.borrow(),
+            *tab_a.source(),
             "# A original",
             "tab A must be untouched by a reload driven for tab B"
         );

@@ -80,6 +80,10 @@ pub(crate) fn render(
     view.add_css_class("scrib-preview");
     view.set_buffer(Some(&buf));
     view.set_editable(false);
+    // Found by the naming guard once its scope became the accessible ROLE rather than a
+    // list of widget types: this view publishes role TextBox and had no accessible name, so
+    // AT announced the rendered document as an unnamed text box.
+    crate::a11y::name_field(&view, "Rendered preview");
     // Char, NOT WordChar — a screen reader reading this preview aborts the app on
     // GTK 4.6: the AT-SPI text-attribute path casts the raw GtkWrapMode straight to
     // PangoWrapMode (gtkatspitextbuffer.c:77-78, Site A — GetDefaultAttributes), and
@@ -602,6 +606,12 @@ mod gtk_integration_tests {
             .expect("Overlay > ScrolledWindow > CodePreviewView")
     }
 
+    /// Not migrated to `crate::testpump` (M31 inventory): this is called BOTH as a
+    /// predicate wait (`Clock::Idle`-shaped) and, once below, as an unconditional
+    /// fixed-turn drain (`pump_until(&ctx, 200, || false)`) — routing the second
+    /// call through a predicate-driven blocking pump would turn a quick drain into an
+    /// unconditional block to whatever deadline was chosen, changing this test's
+    /// timing rather than just its spelling.
     fn pump_until(ctx: &glib::MainContext, budget: u32, done: impl Fn() -> bool) -> bool {
         for _ in 0..budget {
             if done() {

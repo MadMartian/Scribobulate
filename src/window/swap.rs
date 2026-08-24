@@ -735,22 +735,17 @@ mod tests {
     use super::*;
     use crate::window::new_window;
 
-    /// Pump the main loop until `done` or a bounded number of turns elapse.
-    ///
-    /// A bounded pump, never a wall-clock loop: an unbounded blocking pump hangs forever
-    /// on an idle display, and a wall-clock bound between iterations does not help
-    /// because the loop simply never iterates (GTK4Rs/AP-79). The snapshot write is
-    /// genuinely async — GIO dispatches it to a thread pool — so the completion arrives
-    /// on a later main-context turn and cannot be asserted synchronously.
-    fn pump_until(done: impl Fn() -> bool) -> bool {
-        for _ in 0..2_000 {
-            if done() {
-                return true;
-            }
-            glib::MainContext::default().iteration(false);
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        done()
+    /// Pump the main loop until `done` or a 2s bound elapses; reports whether it
+    /// converged. The snapshot write is genuinely async — GIO dispatches it to a
+    /// thread pool — so the completion arrives on a later main-context turn and
+    /// cannot be asserted synchronously. `crate::testpump::until_or_for` under
+    /// `Clock::Worker` (M31); `2_000 * 1ms` matches this function's old ceiling.
+    fn pump_until(done: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Worker,
+            std::time::Duration::from_millis(2_000),
+            done,
+        )
     }
 
     fn swap_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {

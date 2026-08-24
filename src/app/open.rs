@@ -129,7 +129,7 @@ pub(super) fn load_source_into_window(window: &ApplicationWindow, title: &str, m
         // baseline and latch a spurious "Unsaved changes" status that nothing
         // ever corrected afterward — reproduced live via File ▸ Open reusing
         // a blank window.
-        *st.source.borrow_mut() = md.to_string();
+        st.set_source(md);
         *st.saved_baseline.borrow_mut() = md.to_string();
         st.loading.set(true);
         st.editor_buf.set_text(md);
@@ -181,12 +181,6 @@ pub(crate) fn attach_file_backing(
         return;
     };
 
-    // Store the monitor on the tab (cancelling any prior one — a Save As to a
-    // new path re-points it), so it is kept alive for the tab's lifetime and
-    // stops when the tab's state is dropped.
-    if let Some(old) = tab.file_monitor.replace(Some(monitor)) {
-        old.cancel_and_release();
-    }
     // QA M1 (round 1): a brand-new monitor can never have a legitimate
     // pending self-`Deleted` to swallow — reset the guard unconditionally
     // here, covering every path that (re)points a monitor. Without this, Save
@@ -213,10 +207,13 @@ pub(crate) fn attach_file_backing(
     // on every fire avoids caching either — the same "don't cache a
     // reparent-able context" lesson as GTK4Rs/AP-52.
     let tab_weak = Rc::downgrade(tab);
-    let monitor_ref = tab.file_monitor.borrow();
-    let monitor = monitor_ref
-        .as_ref()
-        .expect("just stored on this tab, one statement above");
+    // Wired on the local binding, BEFORE the monitor is handed to the tab. The
+    // previous order stored it first and then borrowed it back out, which needed an
+    // `expect` to unwrap the `Option` it had just filled — an `expect` in production
+    // code (POLICY § Code style) that existed only to undo the previous statement.
+    // Wiring first removes the unwrap rather than justifying it, and is also the
+    // stricter order: the handler is live before anything else can observe the
+    // monitor.
     monitor.connect_changed(move |event| {
         use gtk::gio::FileMonitorEvent;
         let Some(tab) = tab_weak.upgrade() else {
@@ -257,7 +254,23 @@ pub(crate) fn attach_file_backing(
         // `swallows` covers the surplus. See `SelfDeleteGuard::swallows` for why the
         // short-circuit order is load-bearing to macOS.
         if matches!(event, FileMonitorEvent::Deleted) {
-            if tab.expect_self_delete.swallows(tab.write_gate.is_busy()) {
+            // THE one sanctioned `is_busy` caller (clippy.toml states the rule and
+            // its three conditions). Classifying a deletion that has ALREADY happened,
+            // with no await between the read and the decision, on the same main context
+            // as the pass — not a decision about a future write.
+            #[allow(clippy::disallowed_methods)]
+            let busy = tab.write_gate.is_busy();
+            if let Some(why) = tab.expect_self_delete.swallows(busy) {
+                // Logged because the WriteInFlight arm can suppress a genuinely external
+                // deletion — deliberately, but invisibly, and this is the record someone
+                // debugging "the file vanished and nothing said so" has to work from.
+                log::debug!(
+                    "file monitor: Deleted swallowed ({why:?}) for {}",
+                    tab.path
+                        .borrow()
+                        .as_ref()
+                        .map_or_else(|| "<untitled>".into(), |p| p.display().to_string())
+                );
                 return;
             }
             // The backing file is genuinely gone. Mark the document savable even
@@ -353,6 +366,13 @@ pub(crate) fn attach_file_backing(
         // "whichever tab the window happens to show right now".
         crate::window::check_and_reload_tab(&tab);
     });
+
+    // Store the monitor on the tab (cancelling any prior one — a Save As to a
+    // new path re-points it), so it is kept alive for the tab's lifetime and
+    // stops when the tab's state is dropped.
+    if let Some(old) = tab.file_monitor.replace(Some(monitor)) {
+        old.cancel_and_release();
+    }
 }
 
 #[cfg(test)]

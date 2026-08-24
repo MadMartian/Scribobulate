@@ -182,11 +182,11 @@ fn register_view_mode_action(window: &ApplicationWindow) {
             // D7: flush editor buffer → source when leaving edit or split, so the
             // preview that follows reflects any in-buffer edits.
             if old_mode.is_editor_visible() {
-                *st.source.borrow_mut() = st.editor_text();
+                st.set_source(&st.editor_text());
             }
 
             // Read source text AFTER the flush so the preview reflects edits.
-            let md = st.source.borrow().clone();
+            let md = st.source().clone();
 
             // Capture the reading position BEFORE the swap (content_box still shows
             // the old content) so it can be carried onto the new view.

@@ -86,7 +86,7 @@ fn apply_reload_from_disk(window: &ApplicationWindow, st: &Rc<TabState>, content
     st.loading.set(true);
     load_into_editor(&st.editor_buf, &content);
     st.loading.set(false);
-    *st.source.borrow_mut() = content.clone();
+    st.set_source(&content);
     *st.saved_baseline.borrow_mut() = content;
     // Content and baseline both just changed, so any read still in flight for this
     // document is now describing a document that no longer exists.
@@ -206,7 +206,7 @@ pub(crate) fn check_and_reload_tab(tab: &Rc<TabState>) {
 /// The external-change decision for a tab that is its window's ACTIVE one: apply it
 /// now, because the widgets it would touch are the ones on screen.
 fn decide_for_active(window: &ApplicationWindow, tab: &Rc<TabState>, content: &str) {
-    let differs = content != *tab.source.borrow();
+    let differs = content != *tab.source();
     match winstate::external_change_action(differs, tab.is_dirty(), tab.suppress_conflict.get()) {
         winstate::ExternalChange::Ignore => {}
         winstate::ExternalChange::Toast => show_conflict_toast(window),
@@ -217,7 +217,7 @@ fn decide_for_active(window: &ApplicationWindow, tab: &Rc<TabState>, content: &s
 /// The same decision for a tab in the BACKGROUND: record it and badge the tab, so
 /// the active-tab machinery replays it for real on the next switch.
 fn decide_for_background(tab: &Rc<TabState>, content: &str) {
-    let differs = content != *tab.source.borrow();
+    let differs = content != *tab.source();
     match winstate::external_change_action(differs, tab.is_dirty(), tab.suppress_conflict.get()) {
         winstate::ExternalChange::Ignore => {
             // QA round-1 M3: the badge must be cleared here too, not just the
@@ -291,7 +291,7 @@ pub(crate) fn apply_external_reload(window: &ApplicationWindow, content: &str) {
             .unwrap_or_else(|| "(no path)".to_owned()),
         content.len()
     );
-    *st.source.borrow_mut() = content.to_string();
+    st.set_source(content);
     *st.saved_baseline.borrow_mut() = content.to_string();
     // See `apply_reload_from_disk`: mutations bump, deferred readers check.
     st.doc_epoch.bump();
@@ -484,17 +484,31 @@ mod gtk_integration_tests {
         window.destroy();
     }
 
-    /// Iterate the main loop until `done` or the budget is spent. Frame-count based
-    /// deliberately — never a wall-clock sleep (GTK4Rs/AP-122).
-    fn pump_until(budget: u32, done: impl Fn() -> bool) -> bool {
-        let ctx = glib::MainContext::default();
-        for _ in 0..budget {
-            if done() {
-                return true;
-            }
-            ctx.iteration(false);
-        }
-        done()
+    /// Pump until `done()`, or panic naming `what`.
+    ///
+    /// **No turn budget, deliberately.** This was `pump_until(budget, done)`, whose M31
+    /// migration converted a TURN count into a millisecond ceiling one-for-one and
+    /// called the two equivalent in its own doc comment. They are not, and GTK4Rs/AP-261
+    /// is the entry that says so: MEASURED by the macOS seat on the sibling helper in
+    /// `window/mod.rs`, 200 turns of `iteration(false)` cost 74 ms with one live toplevel
+    /// and 610 ms with three more alive. The ratio moves ~8x with machine load, so no
+    /// constant converts one into the other — which also makes the `* 4` and `* 5`
+    /// multipliers the other migrated sites picked guesses at the same non-equivalence
+    /// rather than corrections of it.
+    ///
+    /// The number is therefore gone rather than retuned. `done()` observing real state is
+    /// what ends the wait; `Clock::Idle`'s generous failure bound costs nothing when it
+    /// converges and names what it was waiting for when it does not.
+    fn settle(what: &str, done: impl FnMut() -> bool) {
+        crate::testpump::until(crate::testpump::Clock::Idle, what, done);
+    }
+
+    /// Pump for a fixed span with no completion predicate — for the cases that are
+    /// deliberately waiting on "nothing more happens", where there is no state to
+    /// observe. Spelled `drain_for` rather than a `|| false` predicate so a reader can
+    /// tell a deliberate drain from a wait whose condition never came true.
+    fn drain(span: std::time::Duration) {
+        crate::testpump::drain_for(crate::testpump::Clock::Idle, span);
     }
 
     /// An external reload in Preview mode must CLOSE an open marker popover before
@@ -539,27 +553,24 @@ mod gtk_integration_tests {
 
         // The popover targets a marker by buffer anchor, but the view must have been
         // through a layout pass first — pump until the open takes.
-        assert!(
-            pump_until(400, || old_view.open_stepped_marker_popover(
-                0,
-                crate::annotations::Direction::Next
-            )),
-            "precondition: the fixture's annotation yields an openable marker"
-        );
-        assert!(
-            pump_until(400, || old_view.has_open_marker_popover()),
-            "precondition: the marker popover is open going into the reload"
-        );
+        // Precondition: the fixture's annotation yields an openable marker.
+        settle("the stepped marker popover to open on the old view", || {
+            old_view.open_stepped_marker_popover(0, crate::annotations::Direction::Next)
+        });
+        // Precondition: the marker popover is open going into the reload.
+        settle("the old view to report an open marker popover", || {
+            old_view.has_open_marker_popover()
+        });
 
         apply_external_reload(&window, "# Changed\n\nthe document was rewritten on disk");
 
-        assert!(
-            pump_until(400, || !old_view.has_open_marker_popover()),
-            "an external reload must popdown the marker popover BEFORE set_preview \
-             drops the view it is parented to: an autohide popover unrealized while \
-             holding a seat grab strands that grab, and the app goes dead to clicks \
-             and keys while hover still works (GTK4Rs/AP-83)"
-        );
+        // An external reload must popdown the marker popover BEFORE `set_preview` drops
+        // the view it is parented to: an autohide popover unrealized while holding a seat
+        // grab strands that grab, and the app goes dead to clicks and keys while hover
+        // still works (GTK4Rs/AP-83).
+        settle("the old view's marker popover to close", || {
+            !old_view.has_open_marker_popover()
+        });
 
         window.destroy();
     }
@@ -679,7 +690,16 @@ mod gtk_integration_tests {
         // fires. Frame-count pumped, never a wall-clock sleep (GTK4Rs/AP-122).
         for n in 0..8 {
             apply_external_reload(&window, &format!("# One\n\n# Two {n}\n\nbody {n}"));
-            if pump_until(256, || weak.upgrade().is_none()) {
+            // The one site here that legitimately TOLERATES non-convergence, so it keeps
+            // an explicit deadline rather than `settle`: a stranded entry never finalizes,
+            // and exhausting the loop is what the assertion below is looking for. The
+            // bound is a real duration chosen as one — generous enough that a healthy
+            // finalization always lands inside it, small enough that eight failing cycles
+            // do not stall the suite — never a turn count reinterpreted as milliseconds.
+            const FINALIZE_BOUND: std::time::Duration = std::time::Duration::from_millis(500);
+            if crate::testpump::until_or_for(crate::testpump::Clock::Idle, FINALIZE_BOUND, || {
+                weak.upgrade().is_none()
+            }) {
                 break;
             }
         }
@@ -759,7 +779,9 @@ mod gtk_integration_tests {
             entry.set_text(comment);
             entry.emit_by_name::<()>("activate", &[]);
             let before = st.editor_text();
-            pump_until(256, || state(window).unwrap().editor_text() != before);
+            settle("the annotation to reach the editor text", || {
+                state(window).unwrap().editor_text() != before
+            });
         }
 
         let doc = "Exhaustive manual verification checklist here. This complements \
@@ -778,7 +800,7 @@ mod gtk_integration_tests {
             let window = crate::window::new_window(&app, "IT", doc, None);
             if mode == "split" {
                 window.change_action_state("view-mode", &"split".to_variant());
-                pump_until(64, || false);
+                drain(std::time::Duration::from_millis(250));
             }
 
             live_annotate(&window, "manual", "first");
@@ -787,7 +809,7 @@ mod gtk_integration_tests {
 
             let final_src = state(&window).unwrap().editor_text();
             apply_external_reload(&window, &final_src);
-            pump_until(64, || false);
+            drain(std::time::Duration::from_millis(250));
             let reloaded = hl_ranges(&window);
 
             assert_eq!(

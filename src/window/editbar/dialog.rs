@@ -56,7 +56,8 @@ pub(in crate::window) struct FieldExtras {
 /// in field order; Cancel or Escape closes without acting. A plain `GtkWindow` (no
 /// `GtkDialog`, which is deprecated ≥ 4.10) keeps `clippy -D warnings` clean. Used
 /// by the Tier-2 Insert Link / Image / Table commands (POLICY single-source-of-truth:
-/// they are `win.format` targets like the inline wraps) and Go To Line —
+/// they are `win.format` targets like the inline wraps), Go To Line, and **Rename**
+/// (`window::rename`, the caller outside this module and so the one enumerations miss) —
 /// `confirm_label` keeps the button's verb accurate for each ("Insert" vs "Go").
 ///
 /// `focus_field` is the index of the field that takes the initial keyboard focus.
@@ -99,15 +100,15 @@ pub(in crate::window) fn input_form(
             lbl.set_xalign(0.0);
             lbl.set_width_chars(9);
             row.append(&lbl);
-            let entry = gtk::Entry::new();
-            entry.set_text(initial);
-            entry.set_hexpand(true);
-            // Option+Left/Right word navigation, on the field's internal GtkText.
-            // Sited here rather than at the three commands that call `input_form`
-            // (Go To Line, Insert Link/Image/Table) because this is the one place
-            // every prompt field is built — see `macwordnav`'s module doc comment.
-            #[cfg(target_os = "macos")]
-            crate::macwordnav::wire_field_word_navigation(&entry);
+            // Named from the row's own label, which is the field's identity here. It
+            // is the visible label AND the accessible name deliberately: the two are
+            // the same string, and this site is why the constructor takes the name as a
+            // required argument rather than an option. It previously wired macOS word
+            // navigation and named nothing, relying on the adjacent `GtkLabel` — a
+            // defensible choice that was nowhere stated and indistinguishable from an
+            // omission, and one the a11y tree-walk guard never sees because it walks
+            // windows, not this dialog.
+            let entry = crate::widgets::textfield::named_entry(label, initial);
             // Enter triggers the default widget (Insert) from any field.
             entry.set_activates_default(true);
             row.append(&entry);
@@ -298,4 +299,71 @@ fn open_file_chooser(
         }
         ch.destroy();
     });
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod tests {
+    use super::*;
+    use crate::window::testkit::test_app;
+
+    /// Collect every `GtkEntry` in `root`'s widget subtree.
+    fn entries_in(root: &gtk::Widget) -> Vec<gtk::Entry> {
+        let mut out = Vec::new();
+        if let Some(e) = root.downcast_ref::<gtk::Entry>() {
+            out.push(e.clone());
+        }
+        let mut child = root.first_child();
+        while let Some(c) = child {
+            out.extend(entries_in(&c));
+            child = c.next_sibling();
+        }
+        out
+    }
+
+    /// Every prompt field announces its own name.
+    ///
+    /// Asserted on the assembled dialog rather than on the constructor, because the
+    /// constructor already has its own test and this site's failure mode was not "the
+    /// constructor is wrong" — it was that this site never called one. The field sits
+    /// beside a visible `GtkLabel`, which is a defensible reason to omit an accessible
+    /// name and is indistinguishable from having forgotten one; and `a11y`'s tree-walk
+    /// guard cannot arbitrate, because it walks WINDOWS and this is a transient dialog.
+    #[gtktest::test]
+    fn every_prompt_field_carries_an_accessible_name() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.promptnames");
+        let window = crate::window::new_window(&app, "IT", "# doc\n", None);
+        input_form(
+            &window,
+            "Insert Link",
+            &[("Text", String::new()), ("URL", String::from("seed"))],
+            FieldExtras::default(),
+            "Insert",
+            0,
+            |_, _| {},
+        );
+
+        // A separate toplevel, and NOT in `app.windows()`: `input_form` builds a plain
+        // `gtk::Window` with only `transient_for` set, so it is never registered with the
+        // GApplication. `gtk::Window::toplevels()` is the list that does contain it.
+        let toplevels = gtk::Window::toplevels();
+        let dialog = (0..toplevels.n_items())
+            .filter_map(|i| toplevels.item(i).and_downcast::<gtk::Window>())
+            .find(|w| w.title().is_some_and(|t| t == "Insert Link"))
+            .expect("the prompt dialog is among the toplevel windows");
+        let fields = entries_in(dialog.upcast_ref::<gtk::Widget>());
+        assert_eq!(fields.len(), 2, "expected the two declared prompt fields");
+        for (i, field) in fields.iter().enumerate() {
+            assert!(
+                crate::a11y::has_name(field),
+                "prompt field {i} has no accessible name — build it with \
+                 `widgets::textfield::named_entry`"
+            );
+        }
+        assert_eq!(
+            fields[1].text(),
+            "seed",
+            "a field's initial text was dropped"
+        );
+        dialog.destroy();
+    }
 }

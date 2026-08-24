@@ -88,6 +88,24 @@ const MENU_MNEMONICS: &[(&str, &str)] = &[
 /// their own source, or a `Heading _{n}` literal that already carries its marker).
 /// Also reused by the context menus (`window/contextmenu.rs`, `window/tabs/`) so
 /// a shared command's access key matches the menubar's.
+/// Escape DYNAMIC text for use as a mnemonic-enabled menu label.
+///
+/// A `_` in a `use-underline` label is a mnemonic marker, so any text that came from
+/// outside this codebase — a filename, a theme name out of a user-editable `themes.toml` —
+/// must have its underscores doubled or it silently acquires an access key, swallowing the
+/// character and colliding with a real one.
+///
+/// **The one rule, in one place.** `window/tabs/documents_item_label` had `.replace('_',
+/// "__")` inline and the reading-theme menu had nothing at all, so one dynamic source was
+/// escaped and the other was not.
+///
+/// Dynamic text must NOT be routed through [`mnem`] either: that table is keyed on static
+/// command labels, so a theme named the same as a command would have a marker injected into
+/// it — a lookup returning a *different string* rather than an escape.
+pub(crate) fn escape_mnemonic(text: &str) -> String {
+    text.replace('_', "__")
+}
+
 pub(crate) fn mnem(label: &str) -> String {
     MENU_MNEMONICS
         .iter()
@@ -219,29 +237,37 @@ mod tests {
         let mut labels: Vec<String> = Vec::new();
         // Sections are flattened into `labels`; submenus are queued as their own
         // popovers and walked after this one, so `out` reads in menu order.
+        //
+        // A section is descended into AT THE INDEX IT APPEARS, which is what makes
+        // that sentence true. This was a `while let Some(m) = stack.pop()` worklist,
+        // i.e. a LIFO walk that emitted a later section's items before an earlier
+        // one's, under this same comment. That ordering is not cosmetic here: these
+        // labels are what an access-key collision report is read against, so a
+        // reader chasing "two items in this popover share Alt+S" was being handed
+        // the popover's contents in an order the menu never displays.
         let mut nested: Vec<(String, gtk::gio::MenuModel)> = Vec::new();
-        let flatten = |model: &gtk::gio::MenuModel,
-                       labels: &mut Vec<String>,
-                       nested: &mut Vec<(String, gtk::gio::MenuModel)>| {
-            let mut stack = vec![model.clone()];
-            while let Some(m) = stack.pop() {
-                for i in 0..m.n_items() {
-                    let label = m
-                        .item_attribute_value(i, "label", None)
-                        .and_then(|v| v.str().map(str::to_string));
-                    if let Some(sec) = m.item_link(i, "section") {
-                        stack.push(sec);
+        fn flatten(
+            path: &str,
+            model: &gtk::gio::MenuModel,
+            labels: &mut Vec<String>,
+            nested: &mut Vec<(String, gtk::gio::MenuModel)>,
+        ) {
+            for i in 0..model.n_items() {
+                let label = model
+                    .item_attribute_value(i, "label", None)
+                    .and_then(|v| v.str().map(str::to_string));
+                if let Some(label) = label {
+                    if let Some(sub) = model.item_link(i, "submenu") {
+                        nested.push((format!("{path} ▸ {}", label.replace('_', "")), sub));
                     }
-                    if let Some(label) = label {
-                        if let Some(sub) = m.item_link(i, "submenu") {
-                            nested.push((format!("{path} ▸ {}", label.replace('_', "")), sub));
-                        }
-                        labels.push(label);
-                    }
+                    labels.push(label);
+                }
+                if let Some(sec) = model.item_link(i, "section") {
+                    flatten(path, &sec, labels, nested);
                 }
             }
-        };
-        flatten(model, &mut labels, &mut nested);
+        }
+        flatten(path, model, &mut labels, &mut nested);
         out.push((path.to_string(), labels));
         for (child_path, child) in nested {
             collect_popovers(&child_path, &child, out);
@@ -251,7 +277,13 @@ mod tests {
     /// Every popover of the REAL menubar model, plus the menubar strip itself
     /// (whose Alt+letter titles are their own namespace).
     fn menubar_popovers() -> Vec<(String, Vec<String>)> {
-        let menus = crate::app::menubar::build_top_level_menus().menus;
+        // BUILTIN themes, not the installed ones: the Reading Theme submenu is built from
+        // whatever `themes.toml` files are on the machine, so deriving from the installed
+        // set made this guard's input — and therefore its verdict — a property of the host's
+        // `~/.config` rather than of the source. A collision could appear or disappear with
+        // no code change, on one machine only.
+        let menus =
+            crate::app::menubar::build_top_level_menus_with(&crate::theme::Themes::builtin()).menus;
         let mut out = vec![(
             "menubar".to_string(),
             menus.iter().map(|(title, _)| title.to_string()).collect(),
@@ -276,6 +308,47 @@ mod tests {
     /// Access letters must be UNIQUE within each open popover — a duplicate makes
     /// GTK cycle focus between the clashes instead of activating.
     ///
+    /// A popover's labels come out in the order the menu DISPLAYS them, sections
+    /// descended into where they appear. Pinned because the enclosing comment
+    /// promises exactly this and nothing else checks it: the walk was previously a
+    /// LIFO worklist that emitted a later section before an earlier one, and every
+    /// uniqueness guard beside this one passed identically either way. These labels
+    /// are what a collision report is read against, so a wrong order misleads the
+    /// one reader who ever looks.
+    #[test]
+    fn a_popovers_labels_read_in_the_order_the_menu_displays_them() {
+        let menu = gtk::gio::Menu::new();
+        menu.append(Some("_Direct"), None::<&str>);
+
+        let first = gtk::gio::Menu::new();
+        first.append(Some("_First section A"), None::<&str>);
+        first.append(Some("First section _B"), None::<&str>);
+        menu.append_section(None, &first);
+
+        let second = gtk::gio::Menu::new();
+        second.append(Some("_Second section"), None::<&str>);
+        menu.append_section(None, &second);
+
+        menu.append(Some("_Trailing"), None::<&str>);
+
+        let mut out = Vec::new();
+        collect_popovers("probe", menu.upcast_ref::<gtk::gio::MenuModel>(), &mut out);
+
+        let (_path, labels) = out.first().expect("one popover was collected");
+        assert_eq!(
+            labels,
+            &[
+                "_Direct",
+                "_First section A",
+                "First section _B",
+                "_Second section",
+                "_Trailing",
+            ],
+            "sections must be flattened where they appear, not after the whole model \
+             and not in reverse"
+        );
+    }
+
     /// The popover grouping is DERIVED from the menu models `build_menubar` ships
     /// (`build_top_level_menus`), never mirrored. The mirror this replaces had gone
     /// eight entries out of date — `Save All`, `Rename…`, `Export`, `PDF`, `HTML`,
@@ -391,41 +464,80 @@ mod tests {
     /// match the `win.copy-path` accelerator's own letter, so it is checked only
     /// for internal uniqueness, not menu-bar agreement.
     #[test]
+    fn dynamic_text_is_escaped_and_never_looked_up_as_a_command() {
+        // QA M10. Two failure modes, one rule.
+        //
+        // A theme name comes from a user-editable `themes.toml`, so an underscore in it is
+        // dynamic content landing in a mnemonic context: unescaped it becomes an access
+        // key, swallowing the character and colliding with a real one.
+        assert_eq!(escape_mnemonic("Solar_Flare"), "Solar__Flare");
+        assert_eq!(escape_mnemonic("a_b_c"), "a__b__c");
+        assert_eq!(escape_mnemonic("no underscores"), "no underscores");
+
+        // And dynamic text must not go through `mnem()`, whose table is keyed on STATIC
+        // command labels — a theme or a file named the same as a command would have a
+        // marker injected rather than being escaped. This asserts the hazard is real: the
+        // lookup does return a different string for a command label, which is exactly what
+        // must not happen to a filename that happens to match one.
+        let a_command = MENU_MNEMONICS[0].0;
+        assert_ne!(
+            mnem(a_command),
+            a_command,
+            "fixture must be a label the table rewrites"
+        );
+        assert_eq!(
+            escape_mnemonic(a_command),
+            a_command,
+            "escaping leaves a marker-free label alone; only `mnem` would rewrite it"
+        );
+    }
+
+    #[test]
     fn tab_context_menu_access_keys_consistent() {
         let key = |m: &str| {
             access_markup(m)
                 .0
                 .expect("marked literal has an access key")
         };
-        let (close, close_others, move_win, copy_path, reload) = (
-            "_Close Tab",
-            "Close _Other Tabs",
-            "_Move to New Window",
-            "Copy _Full Path",
-            "_Reload",
+        // DERIVED, not mirrored. This test used to hold five literals of its own, and
+        // the menu had already grown a sixth item — so `Re_name…` was checked for
+        // collision against nothing, in the guard whose entire job is to find
+        // collisions. That is the same defect this merge removed from the menubar
+        // guard one level up, and the lesson recorded there is the one that applies:
+        // a guard whose input set is a second copy of the thing it checks reports on
+        // the copy.
+        use crate::window::TabMenuItem;
+        let keys: Vec<char> = TabMenuItem::ALL.iter().map(|i| key(i.label())).collect();
+        assert_eq!(
+            keys.len(),
+            TabMenuItem::ALL.len(),
+            "every item must carry an access key"
         );
-        let keys = [
-            key(close),
-            key(close_others),
-            key(move_win),
-            key(copy_path),
-            key(reload),
-        ];
         for i in 0..keys.len() {
             for j in (i + 1)..keys.len() {
-                assert_ne!(keys[i], keys[j], "tab context-menu access-key collision");
+                assert_ne!(
+                    keys[i],
+                    keys[j],
+                    "tab context-menu access-key collision between {:?} and {:?}",
+                    TabMenuItem::ALL[i],
+                    TabMenuItem::ALL[j]
+                );
             }
         }
         assert_eq!(
-            key(close),
+            key(TabMenuItem::Close.label()),
             key(&mnem("Close Tab")),
             "Close Tab key ≠ File menu"
         );
         assert_eq!(
-            key(move_win),
+            key(TabMenuItem::MoveToNewWindow.label()),
             key(&mnem("Move Tab to New Window")),
             "Move to New Window key ≠ View menu"
         );
-        assert_eq!(key(reload), key(&mnem("Reload")), "Reload key ≠ File menu");
+        assert_eq!(
+            key(TabMenuItem::Reload.label()),
+            key(&mnem("Reload")),
+            "Reload key ≠ File menu"
+        );
     }
 }

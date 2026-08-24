@@ -518,41 +518,9 @@ pub(crate) fn restore_preview_scroll(sw: &ScrolledWindow, fraction: f64) {
 mod gtk_integration_tests {
     use super::*;
 
-    /// Watchdog deadline for a `pump_until` loop.
-    const PUMP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
-
-    /// Pump the GTK main loop until `done()` returns true, or panic with `msg` after
-    /// [`PUMP_DEADLINE`]. The watchdog is a real glib TIMEOUT SOURCE, not a
-    /// between-iterations clock check: a blocking `iteration(true)` only returns when
-    /// the context has work, so on a truly idle display an `Instant` comparison after
-    /// the call would never be reached (QA L-1). The timeout source IS dispatchable
-    /// work, so it guarantees `iteration(true)` returns by the deadline, at which
-    /// point the loop sees the flag and asserts instead of hanging. The source is
-    /// removed on the normal (converged) exit so it can't fire into a later test.
-    fn pump_until(ctx: &gtk::glib::MainContext, msg: &str, mut done: impl FnMut() -> bool) {
-        use std::cell::Cell;
-        use std::rc::Rc;
-        let fired = Rc::new(Cell::new(false));
-        let f = fired.clone();
-        let source = gtk::glib::timeout_add_local_once(PUMP_DEADLINE, move || f.set(true));
-        let mut source = Some(source);
-        loop {
-            if done() {
-                break;
-            }
-            assert!(
-                !fired.get(),
-                "pump watchdog ({PUMP_DEADLINE:?}) fired: {msg}"
-            );
-            ctx.iteration(true);
-        }
-        // Converged before the deadline → cancel the still-pending watchdog source.
-        if let Some(id) = source.take() {
-            if !fired.get() {
-                id.remove();
-            }
-        }
-    }
+    // The pump-until-or-panic helper that used to live here now lives at
+    // `crate::testpump::until` under `Clock::Idle` (M31) — this file's copy and the
+    // byte-identical one in `codeview/geometry.rs` are the two it replaces.
 
     /// Huge-buffer robustness (mark placement + no-panic): the fresh far-restore
     /// must run its whole path on a 40k-line buffer without panicking or re-arming
@@ -602,15 +570,16 @@ mod gtk_integration_tests {
         window.set_child(Some(&sw));
         window.present();
 
-        let ctx = gtk::glib::MainContext::default();
         // Pump until the view is mapped + allocated (a display that never maps fails
         // loudly on the watchdog — reads as an env problem — instead of spinning).
         {
             let view = view.clone();
             let sw = sw.clone();
-            pump_until(&ctx, "window never mapped/allocated", move || {
-                view.is_mapped() && sw.vadjustment().upper() > 0.0
-            });
+            crate::testpump::until(
+                crate::testpump::Clock::Idle,
+                "window never mapped/allocated",
+                move || view.is_mapped() && sw.vadjustment().upper() > 0.0,
+            );
         }
 
         let target = 2_000;
@@ -621,10 +590,14 @@ mod gtk_integration_tests {
         {
             let view = view.clone();
             let vadj = vadj.clone();
-            pump_until(&ctx, "viewport never reached the target", move || {
-                let (top, _) = view.line_at_y(vadj.value() as i32);
-                top.line() >= target - 50
-            });
+            crate::testpump::until(
+                crate::testpump::Clock::Idle,
+                "viewport never reached the target",
+                move || {
+                    let (top, _) = view.line_at_y(vadj.value() as i32);
+                    top.line() >= target - 50
+                },
+            );
         }
 
         let (top, _) = view.line_at_y(vadj.value() as i32);
@@ -703,7 +676,11 @@ mod gtk_integration_tests {
         let ctx = gtk::glib::MainContext::default();
         {
             let view = view.clone();
-            pump_until(&ctx, "the view never mapped", move || view.is_mapped());
+            crate::testpump::until(
+                crate::testpump::Clock::Idle,
+                "the view never mapped",
+                move || view.is_mapped(),
+            );
         }
 
         restore_textview_scroll_to_line(&sw, &view, 300);
@@ -814,9 +791,11 @@ mod gtk_integration_tests {
         {
             let view = view.clone();
             let sw = sw.clone();
-            pump_until(&ctx, "window never mapped/allocated", move || {
-                view.is_mapped() && sw.vadjustment().upper() > 0.0
-            });
+            crate::testpump::until(
+                crate::testpump::Clock::Idle,
+                "window never mapped/allocated",
+                move || view.is_mapped() && sw.vadjustment().upper() > 0.0,
+            );
         }
 
         // Schedule the progressive far-restore — installs the persistent mark on A.

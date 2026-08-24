@@ -75,9 +75,12 @@ pub(crate) fn save_enabled(dirty: bool, backing_missing: bool) -> bool {
 ///    be the sole cause of is dead code wearing a guard's clothes — and, being a
 ///    second sufficient mechanism, it would make the other two mutation-proof one at a
 ///    time (ScrAP-254): neuter the dirty veto and the suite stays green.
-/// 2. **The gate is not readable by design.** `WriteGate::is_busy` is `#[cfg(test)]`
-///    precisely so no production caller can branch on the state and act on it a moment
-///    later — the check-then-act race a `WritePass` exists to make unrepresentable.
+/// 2. **The gate is barely readable by design.** `WriteGate::is_busy` has exactly ONE
+///    sanctioned production caller, so no other caller can branch on the state and act
+///    on it a moment later — the check-then-act race a `WritePass` exists to make
+///    unrepresentable. (This used to say `is_busy` was `#[cfg(test)]`, which its
+///    promotion to `pub(crate)` made false; the rule survived the change, the sentence
+///    describing it did not.)
 ///
 /// So the in-flight requirement is met where it is actually decidable: the operation
 /// **claims** the gate, and a refused claim abandons the rename. Sensitivity is a

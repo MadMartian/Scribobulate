@@ -112,9 +112,15 @@ impl Renderer {
                 };
                 self.code = Some((lang, String::new()));
             }
-            Tag::Table(_) => {
+            Tag::Table(aligns) => {
                 self.block_sep();
                 self.table = Some(TableState {
+                    aligns: aligns
+                        .iter()
+                        .copied()
+                        .map(crate::mdtable::align_of)
+                        .collect(),
+                    col: 0,
                     rows: Vec::new(),
                     in_cell: false,
                     in_head: false,
@@ -133,6 +139,7 @@ impl Renderer {
                 if let Some(ts) = &mut self.table {
                     ts.in_head = matches!(tag, Tag::TableHead);
                     ts.rows.push(Vec::new());
+                    ts.col = 0;
                 }
             }
             Tag::TableCell => {
@@ -409,7 +416,7 @@ impl Renderer {
 /// format failing despite an installed loader is a REGISTRATION problem, cf.
 /// ScrAP-146 / GTK4Rs/AP-66, not a `GdkTexture` limitation). `Refused`/
 /// `Missing` never load. Remote fetches block the main thread for the request
-/// (accepted for the opt-in "Show Unsafe Images" path, ScrAP-34a).
+/// (accepted for the opt-in "Show Unsafe Images" path, ScrAP-34, its 34a half).
 ///
 /// **A remote image is fetched by [`crate::imagefetch`], not by GIO** — a
 /// `gio::File::for_uri("https://…")` needs a GVfs backend that claims the scheme,

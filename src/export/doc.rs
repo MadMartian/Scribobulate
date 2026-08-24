@@ -26,11 +26,11 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
     // Normalise inline hard tabs exactly as the preview does, so a tab-separated
     // table row parses as a GFM table here too (ScrAP-75). Length- and
     // position-preserving, so every offset below indexes both texts identically.
-    let normalised = crate::renderer::normalize_inline_tabs(source);
+    let normalised = crate::renderer::NormalizedMd::new(source);
     // Lift CriticMarkup out before pulldown sees it, and render the cleaned text —
     // the same pre-parse pass the preview runs, so the two cannot disagree about
     // what is document content and what is review apparatus.
-    let extraction = crate::annotate::extract(normalised.as_ref());
+    let extraction = crate::annotate::extract(normalised.as_str());
     let cleaned = extraction.cleaned.as_str();
 
     let mut builder = Builder::new(opts);

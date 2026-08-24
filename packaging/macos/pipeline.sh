@@ -2,16 +2,23 @@
 #
 # macOS build pipeline runner.
 #
-# It DERIVES every step from scripts/pipeline.steps rather than restating them — the
-# same design as scripts/pipeline.sh (Linux), which this file mirrors deliberately
-# rather than sourcing: three thin per-platform ports reading one contract, the same
-# shape as lint-references.sh/.ps1. `derived_step_ids` is the ONLY producer of the
-# ordered step list, and BOTH `--list-steps` and the run loop consume it, so there is
-# no second list that could disagree. `--self-test` proves that property still holds
-# after an edit; it does not create it.
+# It DERIVES every step from scripts/pipeline.steps rather than restating them — the same
+# design as scripts/pipeline.sh (Linux). `derived_step_ids` is the ONLY producer of the
+# ordered step list, and BOTH `--list-steps` and the run loop consume it, so there is no
+# second list that could disagree. `--self-test` proves that property still holds after an
+# edit; it does not create it.
 #
-# This runner's per-platform command bodies (cmd.macos.* in the contract) are what
-# differ from Linux, not the parsing/execution logic below:
+# This file used to MIRROR the Linux runner rather than share with it — about three hundred
+# duplicated lines, on the stated reasoning that three thin per-platform ports reading one
+# contract was the same shape as the cross-reference gate's two hand-synced shell ports
+# (since retired for a single `cargo xtask` binary). That reasoning held for the PowerShell
+# runner, which genuinely cannot share, and did not hold here: the two bash copies
+# had already drifted three times, each drift making one platform quietly the lenient one.
+# The machinery now lives in scripts/pipeline-lib.sh, whose header states what must not move
+# into it and why Windows is still compared by `--list-steps` output rather than by sharing.
+#
+# This runner's per-platform command bodies (cmd.macos.* in the contract) are what differ
+# from Linux, not the parsing/execution logic:
 #   - Step 5 runs `--test gtk_suite` plus three standalone targets, never `--lib` —
 #     the dual-harness bodies abort the process off the main thread on Quartz
 #     (ScrAP-171; measured GTK 4.22.4). That difference lives in the contract, not here.
@@ -37,409 +44,104 @@ if [ ! -f "$CONTRACT" ]; then
     exit 2
 fi
 
-# --------------------------------------------------------------------------------------
-# Contract parsing
-#
-# Grammar is `keyword  key  value...` with the value as the remainder of the line, so a
-# value may contain spaces. Uniform arity is deliberate — see the contract header.
-# --------------------------------------------------------------------------------------
+LIB="scripts/pipeline-lib.sh"
+if [ ! -f "$LIB" ]; then
+    echo "pipeline: $LIB not found; this runner is a platform shell around it" >&2
+    exit 2
+fi
+# shellcheck source=scripts/pipeline-lib.sh
+. "$LIB"
 
-# contract_value <keyword> <key> -> the remainder of the line, or empty.
-contract_value() {
-    awk -v kw="$1" -v key="$2" '
-        $1 == kw && $2 == key {
-            $1 = ""; $2 = ""
-            sub(/^[[:space:]]+/, "")
-            print
-            exit
-        }
-    ' "$CONTRACT"
-}
-
-# derived_step_ids -> the ordered step ids, one per line.
-#
-# FILE ORDER IS THE ORDER. The `step` lines' ordinals (1, 2, ... 4b, 5 ...) are POLICY's
-# display labels, not sort keys — a numeric sort cannot order "4b" without a convention
-# every port would have to reimplement identically, which is exactly the class of quiet
-# disagreement this contract exists to remove. The ordinals are validated for
-# non-decreasing order below, so a reorder that forgets to renumber fails loudly.
-derived_step_ids() {
-    awk '$1 == "step" { print $3 }' "$CONTRACT"
-}
-
-step_ordinal() {
-    awk -v id="$1" '$1 == "step" && $3 == id { print $2; exit }' "$CONTRACT"
-}
-
-# --------------------------------------------------------------------------------------
-# Contract validation
-#
-# A garbled contract must fail LOUDLY, never degrade into agreeing on nothing. Two ports
-# that both parse a broken file into an empty step list agree perfectly and prove nothing
-# — the failure mode lint-references.sh guards with the same shape of check.
-# --------------------------------------------------------------------------------------
-validate_contract() {
-    local errs=0
-
-    local bad
-    bad=$(grep -nvE '^[[:space:]]*(#.*)?$|^(platform|step|intent|verdict|class|setup|cmd\.[a-z]+|na\.[a-z]+|carveout\.[a-z]+)[[:space:]]+[^[:space:]]+([[:space:]]+.*)?$' \
-        "$CONTRACT" || true)
-    if [ -n "$bad" ]; then
-        echo "pipeline: $CONTRACT has lines that are neither blank, a comment, nor a" >&2
-        echo "  recognised 'keyword key value' triple:" >&2
-        echo "$bad" >&2
-        errs=$((errs + 1))
-    fi
-
-    local ids
-    ids=$(derived_step_ids)
-    if [ -z "$ids" ]; then
-        echo "pipeline: $CONTRACT defines no steps. An empty step list is a garbled" >&2
-        echo "  contract, not a pipeline with nothing to do." >&2
-        return 1
-    fi
-
-    local dupes
-    dupes=$(echo "$ids" | sort | uniq -d)
-    if [ -n "$dupes" ]; then
-        echo "pipeline: duplicate step id(s) in $CONTRACT: $dupes" >&2
-        errs=$((errs + 1))
-    fi
-
-    local platforms
-    platforms=$(awk '$1 == "platform" { print $2 }' "$CONTRACT")
-    if [ -z "$platforms" ]; then
-        echo "pipeline: $CONTRACT declares no platforms" >&2
-        return 1
-    fi
-
-    # Every step needs intent, verdict and class; and for EVERY declared platform either
-    # a command or a non-applicable declaration — unless it is a review step.
+# The one platform-specific property worth asserting here: the Darwin guard must not gate
+# the two contract-only modes, or the artefact whose entire purpose is cross-port diffing
+# could only be produced on the platform it describes. Asserted rather than trusted to the
+# ordering of the file, because "moved a guard three lines up" is a plausible tidy-up and
+# nothing else would notice it.
+platform_self_test() {
+    # WHAT THIS ASSERTS, AND WHY IT IS A SOURCE CHECK.
     #
-    # THE CONTRACT IS VALIDATED IN FULL FROM EVERY RUNNER, not just for the platform doing
-    # the running. This was found by mutation: validating only `$PLATFORM` let a garbled
-    # `na.windows` line pass from Linux, so a contract defect on the platform nobody
-    # happens to be running would surface only when someone finally ran it there — the
-    # exact "the platform nobody runs is the lenient one" shape that ScrAP-207 records and
-    # that this whole contract exists to prevent. Cross-platform validation makes that
-    # class of gap fail everywhere, immediately, on whichever runner is invoked first.
-    local id
-    for id in $ids; do
-        local intent verdict class
-        intent=$(contract_value intent "$id")
-        verdict=$(contract_value verdict "$id")
-        class=$(contract_value class "$id")
+    # The property is that the Darwin guard sits AFTER the argument-parsing loop, so
+    # `--list-steps` and `--self-test` stay runnable off-platform — they read only the
+    # contract, and the artefact whose whole purpose is cross-port diffing must not be
+    # producible solely on the platform it describes.
+    #
+    # This function used to be an if/else printing one of two messages and then
+    # `return 0`, under a comment claiming the placement was "asserted rather than
+    # trusted to the ordering of the file". Nothing was asserted. It could not go red.
+    #
+    # The behavioural form of the check is UNAVAILABLE HERE, and that is the whole
+    # difficulty: hoist the guard above the loop and, on Darwin, the guard passes,
+    # `self_test` runs, this function prints and returns 0 — green. Only a NON-Darwin
+    # host observes the regression, and no such host runs this file as its gate. So the
+    # seat that owns this runner cannot detect the regression its own comment exists to
+    # prevent.
+    #
+    # The ordering is a fact about the SOURCE, which is platform-independent and therefore
+    # checkable exactly where the behaviour is not. Source-level assertion is an
+    # established tier in this project rather than an exception — `lint-references` check 5
+    # rejects a banned attribute by reading source, and check 3 pins `gtk_suite.rs`'s module
+    # list against `lib.rs`. It also stays on the correct side of the library boundary:
+    # `scripts/pipeline-lib.sh` says the guard's placement is a property of the runner and
+    # not of the library, so a runner-local assertion about its own placement belongs here
+    # and nothing moves into the shared file.
+    local src="${BASH_SOURCE[0]}" loop_start loop_end guard
 
-        [ -n "$intent" ]  || { echo "pipeline: step '$id' has no intent" >&2;  errs=$((errs + 1)); }
-        [ -n "$verdict" ] || { echo "pipeline: step '$id' has no verdict" >&2; errs=$((errs + 1)); }
-        [ -n "$class" ]   || { echo "pipeline: step '$id' has no class" >&2;   errs=$((errs + 1)); }
+    # PATTERNS ARE ANCHORED AT COLUMN 0 BECAUSE THIS FILE CONTAINS THEM.
+    # A check that greps its own source matches its own search string: `grep -n 'macOS only'`
+    # found the line of THIS function that contains the literal `macOS only`, reported the
+    # guard as line 90, and failed the ordering test against a file whose guard was in the
+    # right place. Same family as everything else audited today — the instrument answering
+    # about itself rather than its subject — and it fails toward red here only by luck of
+    # which line came first. The guard and the loop are the only statements in this file
+    # beginning at column 0 with these shapes; every mention of them inside a function is
+    # indented, so the anchors discriminate the subject from the search for it.
+    loop_start=$(grep -n '^for arg in' "$src" | head -1 | cut -d: -f1)
+    loop_end=$(awk -v s="${loop_start:-0}" 'NR > s && $0 == "done" { print NR; exit }' "$src")
+    guard=$(grep -n '^\[\[ "$(uname)"' "$src" | head -1 | cut -d: -f1)
 
-        case "$class" in
-            required|informational|review|packaging) ;;
-            *)
-                echo "pipeline: step '$id' has unknown class '$class'" >&2
-                errs=$((errs + 1))
-                ;;
-        esac
-
-        local plat cmd na
-        for plat in $platforms; do
-            cmd=$(contract_value "cmd.$plat" "$id")
-            na=$(contract_value "na.$plat" "$id")
-
-            if [ "$class" = "review" ]; then
-                if [ -n "$cmd" ]; then
-                    echo "pipeline: review step '$id' must not carry cmd.$plat" >&2
-                    errs=$((errs + 1))
-                fi
-            else
-                if [ -z "$cmd" ] && [ -z "$na" ]; then
-                    echo "pipeline: step '$id' has neither cmd.$plat nor na.$plat." >&2
-                    echo "  A step that does not apply must be DECLARED, never omitted." >&2
-                    errs=$((errs + 1))
-                fi
-                if [ -n "$cmd" ] && [ -n "$na" ]; then
-                    echo "pipeline: step '$id' has BOTH cmd.$plat and na.$plat" >&2
-                    errs=$((errs + 1))
-                fi
-            fi
-
-            # A non-applicable declaration must record its KIND, because the two kinds
-            # are acted on differently and the tooling one is a trap (contract header).
-            if [ -n "$na" ]; then
-                local kind reason
-                kind=$(echo "$na" | awk '{print $1}')
-                case "$kind" in
-                    permanent|tooling) ;;
-                    *)
-                        echo "pipeline: step '$id' na.$plat has kind '$kind'; expected" >&2
-                        echo "  'permanent' or 'tooling'" >&2
-                        errs=$((errs + 1))
-                        ;;
-                esac
-                reason=$(echo "$na" | cut -d' ' -f2-)
-                if [ -z "$reason" ] || [ "$reason" = "$kind" ]; then
-                    echo "pipeline: step '$id' na.$plat has a kind but no reason" >&2
-                    errs=$((errs + 1))
-                fi
-            fi
-
-            # A repo-relative script named in THIS platform's own command must exist.
-            # Only $PLATFORM, never another platform's: a macOS runner cannot verify a
-            # .ps1 is present, and checking it anyway would fail this gate on every
-            # non-Windows machine. Contract ENTRIES stay validated for all three
-            # platforms from everywhere (the loop above); FILES only where they live.
-            if [ "$plat" = "$PLATFORM" ] && [ -n "$cmd" ]; then
-                local first_word
-                first_word=$(echo "$cmd" | awk '{print $1}')
-                case "$first_word" in
-                    */*.sh)
-                        if [ ! -f "$first_word" ]; then
-                            echo "pipeline: step '$id' cmd.$plat names '$first_word', which does not exist" >&2
-                            errs=$((errs + 1))
-                        fi
-                        ;;
-                esac
-            fi
-        done
-    done
-
-    # Ordinals must be non-decreasing in file order, so a reorder that forgets to
-    # renumber is caught rather than silently changing the run order.
-    local prev="" ord
-    for id in $ids; do
-        ord=$(step_ordinal "$id")
-        if [ -n "$prev" ]; then
-            local lower
-            lower=$(printf '%s\n%s\n' "$prev" "$ord" | sort -V | head -1)
-            if [ "$lower" != "$prev" ]; then
-                echo "pipeline: step ordinals are out of order in file order: '$prev' then '$ord'" >&2
-                errs=$((errs + 1))
-            fi
-        fi
-        prev="$ord"
-    done
-
-    [ "$errs" -eq 0 ]
-}
-
-# --------------------------------------------------------------------------------------
-# --list-steps — the parity artefact
-#
-# Prints the DERIVED list, one step per line, as `<ordinal>\t<id>\t<class>`. The setup
-# phase is deliberately absent: it produces environment, has no verdict, and cannot be
-# skipped or reordered, so modelling it as a step would force platforms without one to
-# declare a non-applicable step 0 — noise that dilutes the declarations carrying real
-# information.
-# --------------------------------------------------------------------------------------
-list_steps() {
-    local id
-    for id in $(derived_step_ids); do
-        printf '%s\t%s\t%s\n' "$(step_ordinal "$id")" "$id" "$(contract_value class "$id")"
-    done
-}
-
-# --------------------------------------------------------------------------------------
-# --self-test
-#
-# Proves the derivation property still holds after an edit. It cannot CREATE the property
-# — that comes from `derived_step_ids` being the only producer — but it catches an edit
-# that introduces a second list.
-# --------------------------------------------------------------------------------------
-self_test() {
-    echo ":: validating $CONTRACT"
-    validate_contract || return 1
-    echo "   contract is well-formed"
-
-    # The list --list-steps prints must be the list the run loop iterates. Both call
-    # derived_step_ids, so this compares the artefact against its own source.
-    local printed derived
-    printed=$(list_steps | cut -f2)
-    derived=$(derived_step_ids)
-    if [ "$printed" != "$derived" ]; then
-        echo "pipeline: --list-steps does not print the derived step list" >&2
-        diff <(echo "$derived") <(echo "$printed") >&2 || true
+    # A check that cannot find its subject must FAIL, never quietly succeed. Refactor this
+    # file's argument loop or guard into a shape these patterns miss and the answer is
+    # "inconclusive", which is a red — the alternative is a check that silently stops
+    # checking, which is the defect this function is being repaired for.
+    if [ -z "$loop_start" ] || [ -z "$loop_end" ] || [ -z "$guard" ]; then
+        echo "pipeline: platform self-test INCONCLUSIVE — could not locate the argument" >&2
+        echo "  loop (start=${loop_start:-?}, end=${loop_end:-?}) or the Darwin guard" >&2
+        echo "  (${guard:-?}) in $src. Not reporting success for a check that found no" >&2
+        echo "  subject." >&2
         return 1
     fi
-    echo "   --list-steps prints exactly the derived step list"
 
-    # The setup phase must not leak into the step list.
-    if echo "$derived" | grep -qx "setup"; then
-        echo "pipeline: 'setup' appears as a step; it is a phase, not a step" >&2
+    if [ "$guard" -le "$loop_end" ]; then
+        echo "pipeline: the Darwin guard is at line $guard, which is NOT after the" >&2
+        echo "  argument-parsing loop (ends line $loop_end). In that position it gates" >&2
+        echo "  --list-steps and --self-test behind the platform they exist to be diffed" >&2
+        echo "  ACROSS, so neither other port could check this one's step list." >&2
         return 1
     fi
-    echo "   setup phase is absent from the step list (correct)"
 
-    echo "   $(echo "$derived" | wc -l) steps derived"
+    echo "   platform: Darwin guard at line $guard, after the argument loop (ends $loop_end)"
+
+    if [ "$(uname)" = "Darwin" ]; then
+        # Stated plainly, in the run output, for the same reason a non-applicable step is:
+        # this line sits among lines that ARE checks, so silence about what it does not
+        # cover reads as coverage.
+        echo "   platform: NOT VERIFIED BEHAVIOURALLY on this host — a hoisted guard exits"
+        echo "   before this function is reached, so the ordering above is asserted from"
+        echo "   source and the running form of it is only observable off Darwin."
+    else
+        # Reaching this line off Darwin is itself the behavioural observation: the guard
+        # did not block a contract-only mode on a non-Darwin host.
+        echo "   platform: reached off Darwin, which observes the running form directly —"
+        echo "   the contract-only modes were not gated by the guard."
+    fi
     return 0
-}
-
-# --------------------------------------------------------------------------------------
-# Step execution
-# --------------------------------------------------------------------------------------
-FAILED=""
-
-announce() { printf '\n=== %s ===\n' "$1"; }
-
-run_step() {
-    local id="$1"
-    local ord class intent cmd na
-    ord=$(step_ordinal "$id")
-    class=$(contract_value class "$id")
-    intent=$(contract_value intent "$id")
-    cmd=$(contract_value "cmd.$PLATFORM" "$id")
-    na=$(contract_value "na.$PLATFORM" "$id")
-
-    # A review step is announced, never judged. Pretending a script can decide whether a
-    # behaviour change carries its check would be a gate that always passes.
-    if [ "$class" = "review" ]; then
-        announce "$ord. $id — REVIEW (human obligation, not machine-checkable)"
-        echo "    intent: $intent"
-        return 0
-    fi
-
-    # packaging is opt-in: skipped unless --package is given, required when it runs.
-    # A SKIPPED packaging step is still ANNOUNCED, never omitted — the same reason a
-    # non-applicable step is declared rather than left out: an omission the reader
-    # cannot see is how a step quietly stops existing.
-    if [ "$class" = "packaging" ] && [ "$PACKAGE" -ne 1 ]; then
-        announce "$ord. $id — not run (packaging is opt-in; pass --package)"
-        echo "    intent: $intent"
-        return 0
-    fi
-
-    # A non-applicable step is DECLARED here, in the run output, with its kind and
-    # reason — not omitted, and not left in a source comment where the pipeline's user
-    # cannot see it.
-    if [ -n "$na" ]; then
-        local kind reason
-        kind=$(echo "$na" | awk '{print $1}')
-        reason=$(echo "$na" | cut -d' ' -f2-)
-        announce "$ord. $id — NOT APPLICABLE on $PLATFORM ($kind)"
-        echo "    intent: $intent"
-        echo "    reason: $reason"
-        return 0
-    fi
-
-    local verdict
-    verdict=$(contract_value verdict "$id")
-
-    # A marker verdict never fails the run: its job is to make something VISIBLE that
-    # would otherwise be silent. libtest captures a passing test's output, so a body
-    # announcing "I verified nothing" is silenced exactly when it passes.
-    case "$verdict" in
-        marker:*)
-            local marker="${verdict#marker:}"
-            announce "$ord. $id — informational"
-            echo "    intent: $intent"
-            local out rc=0
-            out=$(eval "$cmd" 2>&1) || rc=$?
-            local hits
-            hits=$(echo "$out" | grep -F "$marker" || true)
-            if [ -n "$hits" ]; then
-                echo "$hits" | sed 's/^/    /'
-            else
-                echo "    no tests reported '$marker'"
-            fi
-            # The re-run's exit code is reported but not fatal: "no marker lines" and
-            # "the re-run itself failed" must not look identical.
-            if [ "$rc" -ne 0 ]; then
-                echo "    NOTE: the informational re-run exited $rc (the required run above already gated this)"
-            fi
-            return 0
-            ;;
-    esac
-
-    announce "$ord. $id"
-    echo "    intent: $intent"
-    # Provenance travels with the artefact. Packaging is ALLOWED to run after an operator
-    # override skipped a required gate, but the run must SAY SO — otherwise an installer
-    # built from an ungated tree looks exactly like one that passed everything. Overrides
-    # only, never contract-declared non-applicable steps: those are always absent on their
-    # platform, so naming them every time is noise rather than news.
-    if [ "$class" = "packaging" ] && [ -n "$OVERRIDDEN_STEPS" ]; then
-        echo "    WARNING: built without${OVERRIDDEN_STEPS%;}"
-        echo "    The artefact below comes from a tree those gates did not check."
-    fi
-    report_carveouts "$id"
-    cmd=$(apply_carveouts "$cmd" "$(carveout_skip_args "$id")")
-    echo "    \$ $cmd"
-    if eval "$cmd"; then
-        echo "    PASS"
-    else
-        echo "    FAIL"
-        FAILED="$FAILED $ord"
-        return 1
-    fi
-}
-
-# Carve-outs are reported even when there are none — that is what lets the statement
-# MEAN something rather than be silence.
-report_carveouts() {
-    local id="$1"
-    local list
-    list=$(awk -v kw="carveout.$PLATFORM" -v key="$id" '
-        $1 == kw && $2 == key { $1=""; $2=""; sub(/^[[:space:]]+/,""); print }
-    ' "$CONTRACT")
-    if [ -z "$list" ]; then
-        case "$id" in
-            integration|test) echo "    carve-outs: none" ;;
-        esac
-    else
-        echo "    carve-outs: $(echo "$list" | wc -l) by name"
-        echo "$list" | sed 's/^/      skipped: /'
-    fi
-}
-
-carveouts_for() {
-    local id="$1" plat="${2:-$PLATFORM}"
-    awk -v kw="carveout.$plat" -v key="$id" '
-        $1 == kw && $2 == key { $1=""; $2=""; sub(/^[[:space:]]+/,""); print }
-    ' "$CONTRACT"
-}
-
-# The libtest arguments that APPLY the carve-outs, so the run does what the announcement
-# says. Announcing without applying is worse than silence: while the list is empty nothing
-# is mis-reported, which is exactly why the gap stays invisible until the first carve-out
-# is added and the run prints `skipped: <test>` for a test it ran.
-carveout_skip_args() {
-    local name args=""
-    while IFS= read -r name; do
-        [ -n "$name" ] || continue
-        args="$args --skip $name"
-    done <<EOF
-$(carveouts_for "$1")
-EOF
-    printf '%s' "$args"
-}
-
-# Append past a `--` separator, reusing one if present: a second `--` reaches libtest as a
-# literal argument rather than a separator.
-apply_carveouts() {
-    local cmd="$1" skips="$2"
-    [ -n "$skips" ] || { printf '%s' "$cmd"; return; }
-    case "$cmd" in
-        *" -- "*) printf '%s%s' "$cmd" "$skips" ;;
-        *)        printf '%s --%s' "$cmd" "$skips" ;;
-    esac
-}
-
-run_setup_phase() {
-    local desc
-    desc=$(contract_value setup "$PLATFORM")
-    announce "setup phase ($PLATFORM)"
-    if [ "$desc" = "none" ]; then
-        echo "    none required on $PLATFORM"
-    else
-        echo "    $desc"
-    fi
 }
 
 # --------------------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------------------
 SKIP_INTEGRATION=0
-PACKAGE=0
+DO_PACKAGE=0
 for arg in "$@"; do
     case "$arg" in
         --list-steps)
@@ -452,7 +154,7 @@ for arg in "$@"; do
             exit 0
             ;;
         --skip-integration) SKIP_INTEGRATION=1 ;;
-        --package) PACKAGE=1 ;;
+        --package)          DO_PACKAGE=1 ;;
         *)
             echo "pipeline: unknown argument '$arg'" >&2
             echo "usage: $0 [--list-steps|--self-test] [--skip-integration] [--package]" >&2
@@ -477,23 +179,5 @@ run_setup_phase
 OVERRIDDEN_STEPS=""
 
 rc=0
-for step_id in $(derived_step_ids); do
-    if [ "$SKIP_INTEGRATION" -eq 1 ] && [ "$step_id" = "integration" ]; then
-        announce "$(step_ordinal "$step_id"). $step_id — SKIPPED (--skip-integration)"
-        echo "    NOTE: this is an operator override, not a contract declaration."
-        OVERRIDDEN_STEPS="$OVERRIDDEN_STEPS step $(step_ordinal "$step_id") ($step_id), skipped by --skip-integration;"
-        continue
-    fi
-    if ! run_step "$step_id"; then
-        rc=1
-        break
-    fi
-done
-
-echo
-if [ "$rc" -eq 0 ]; then
-    echo "=== pipeline PASSED ==="
-else
-    echo "=== pipeline FAILED at step(s):$FAILED ==="
-fi
+run_all_steps || rc=$?
 exit "$rc"

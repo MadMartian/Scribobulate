@@ -223,16 +223,24 @@ impl ScribTableWidget {
         //    makes that cell OVERFLOW its column, so the table ends up a few pixels
         //    wider than the bound → the view goes over-wide → the outer Automatic h-bar
         //    appears and churns → blank (GTK4Rs/AP-23). `fit_columns` never allocates below it.
-        let mut col_min = vec![0i32; ncols];
-        let mut col_nat = vec![0i32; ncols];
+        //    Measured as PAIRS rather than two parallel vectors, so nothing downstream
+        //    can transpose them — see `layout::ColumnWant`.
+        let mut wants = vec![
+            layout::ColumnWant {
+                natural: 0,
+                minimum: 0,
+            };
+            ncols
+        ];
         for cell in cells.iter() {
             let (min_w, nat_w, _, _) = cell.widget.measure(gtk::Orientation::Horizontal, -1);
-            col_min[cell.col] = col_min[cell.col].max(min_w).max(layout::MIN_COL_WIDTH);
-            col_nat[cell.col] = col_nat[cell.col].max(nat_w);
+            let want = &mut wants[cell.col];
+            want.minimum = want.minimum.max(min_w).max(layout::MIN_COL_WIDTH);
+            want.natural = want.natural.max(nat_w);
         }
 
         // 2. Fit the columns into `bound_w` (the three-case water-fill — pure).
-        let col_w = layout::fit_columns(&col_min, &col_nat, bound_w);
+        let col_w = layout::fit_columns(&wants, bound_w);
 
         // 3. Each row's height — the max cell height measured AT that cell's assigned
         //    column width (height-for-width, but done once, here, not at validation).

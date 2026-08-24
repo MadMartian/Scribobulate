@@ -106,7 +106,7 @@ pub(crate) const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
 ///
 /// **Why a cap exists at all.** A remote image is fetched only on the opt-in
 /// "Show Unsafe Images" path, but the URL still comes out of an untrusted
-/// document, and the fetch runs on the GTK main thread (ScrAP-34a). Without a
+/// document, and the fetch runs on the GTK main thread (ScrAP-34, its 34a half). Without a
 /// cap, a `Content-Length`-less response that never ends is an unbounded
 /// allocation *and* an unbounded freeze — the network's version of the character
 /// device [`MAX_DOCUMENT_BYTES`] cannot see. The limit is enforced against the

@@ -48,11 +48,11 @@
 //! **byte-length- and position-preserving**, one ASCII byte for one ASCII byte, so
 //! every source offset the renderer, `copymap`, `source_map` and the scroll sync
 //! capture still indexes the same logical position. That is the same contract
-//! `renderer::normalize_inline_tabs` states, and for the same reason.
+//! `renderer::NormalizedMd`'s pre-pass states, and for the same reason.
 //!
 //! # Where the repair goes: the two doors, not the parse sites
 //!
-//! Normalising inside the parse pre-pass (`renderer::normalize_inline_tabs`) would fix
+//! Normalising inside the parse pre-pass (`renderer::NormalizedMd`) would fix
 //! only what is *parsed*, and arrival is a different moment from parsing: the save
 //! guard, crash recovery and the editor buffer never go through a parse at all, so a
 //! lone `\r` would survive in each of them. (That pre-pass does now cover all four
@@ -129,20 +129,40 @@ pub(crate) fn normalize_lone_cr(text: &str) -> Cow<'_, str> {
     if !has_lone_cr(text) {
         return Cow::Borrowed(text);
     }
-    let mut out = text.as_bytes().to_vec();
-    for i in 0..out.len() {
-        if out[i] == CR && out.get(i + 1) != Some(&LF) {
-            out[i] = LF;
+    // Built as a `String` from the start, so no UTF-8 validity question arises and
+    // there is nothing to assert. This used to substitute over a `Vec<u8>` and end in
+    // `String::from_utf8(..).expect(..)` — an `expect` in production code, which
+    // POLICY § Code style forbids, carrying a comment arguing why it could never fire.
+    // The argument was sound; the point is that a structural impossibility beats a
+    // correct argument, because the argument has to be re-read and re-believed by
+    // whoever edits the loop next.
+    //
+    // `\r` is ASCII, so a lone CR can never be a continuation byte of some other
+    // character and `char_indices` sees exactly the carriage returns a byte scan would.
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    for (i, ch) in text.char_indices() {
+        if ch == '\r' && bytes.get(i + 1) != Some(&LF) {
+            out.push('\n');
+        } else {
+            out.push(ch);
         }
     }
-    // SAFETY-equivalent argument without `unsafe`: the loop replaced ASCII bytes with
-    // ASCII bytes at the same offsets, so the buffer is still valid UTF-8 and this
-    // conversion cannot fail. `expect` rather than `unwrap_or` so a future edit that
-    // broke the invariant would be loud instead of silently lossy.
-    Cow::Owned(String::from_utf8(out).expect("ASCII-for-ASCII substitution preserves UTF-8"))
+    Cow::Owned(out)
 }
 
 /// [`normalize_lone_cr`] for a raw-bytes reader. Same rule, same reason.
+///
+/// # Precondition: the bytes are UTF-8 (or at least ASCII-compatible)
+///
+/// The signature accepts any `Vec<u8>`, but the substitution is only *sound* on an
+/// encoding where a `0x0D` byte can never be part of some other character. That holds
+/// for UTF-8 (continuation bytes are all `>= 0x80`) and for every ASCII superset, and
+/// it does NOT hold for UTF-16 or UTF-32, where `0x0D` occurs inside ordinary code
+/// units and this function would corrupt them. The `&str` twin gets this precondition
+/// from its type; this one cannot, so it is stated. Every caller today is a document
+/// reader, and this application only ever admits UTF-8 documents — the type is wide
+/// because the data arrives as bytes, not because the contract is.
 ///
 /// It exists for the same reason `docio`'s `without_bom_bytes` does: crash recovery
 /// digests the on-disk twin and compares it against a digest of the in-memory
@@ -243,11 +263,50 @@ pub(crate) fn new_editor_buffer() -> sourceview::Buffer {
 ///    [`crate::clipboard`] had to land FIRST, and why its
 ///    `a_same_application_paste_arrives_as_a_single_emission` test is load-bearing for
 ///    this module rather than only for its own.
+///
+///    **The preview pane is the case that looks like a hole and is not, so it is named
+///    here rather than left to be re-derived.** `CodePreviewView` is an ordinary
+///    `GtkTextView` for PRIMARY: nothing removes GTK's own `add_selection_clipboard`
+///    registration, so a preview selection really does publish a rich
+///    `GtkTextBufferContent` (MEASURED —
+///    `clipboard::a_preview_selection_still_publishes_gtks_default_rich_content_to_primary`).
+///    That does not reach this invariant, because the editor's middle-click paste is a
+///    **consumer**-side route: it reads PRIMARY with `read_text_async`, never as
+///    `GTK_TYPE_TEXT_BUFFER`, and GDK satisfies a text read from any publisher's content
+///    whether tagged or not. So `insert_range_not_inside_self`'s per-tag-toggle chunking
+///    is never entered, whichever pane the selection came from (MEASURED —
+///    `clipboard::a_preview_selection_pastes_into_the_editor_as_one_plain_text_emission`,
+///    which selects a CRLF-bearing document in the preview and asserts exactly one
+///    `insert-text` emission with every `\r\n` byte-exact). A review raised this as a live
+///    gap on the strength of a publisher-side takeover that no longer exists; the
+///    protection is real, it simply sits at the other end.
 /// 2. **No code reuses a `TextIter` across a `buffer.insert*()` on a repair-wired
 ///    buffer.** MEASURED: doing so raises `gtk_text_buffer_insert: assertion
 ///    'gtk_text_iter_get_buffer (iter) == buffer' failed` and leaves the iterator at
-///    offset 0. Use a `TextMark` if you need a position to survive an insertion. This is
-///    greppable, which is the only reason it is acceptable as an invariant.
+///    offset 0. Use a `TextMark` if you need a position to survive an insertion.
+///
+///    **CONVENTION-ONLY, declared as such under POLICY § Typed GTK seams — there is no
+///    gate, and this comment used to imply there was.** It said the invariant "is
+///    greppable, which is the only reason it is acceptable", which named an enforcement
+///    that does not exist: nothing greps for it, and a reader was entitled to assume
+///    something did. POLICY requires a promotion to carry its mechanism in the same
+///    change, and permits an explicit convention-only note where neither a ban nor
+///    encapsulation fits. Both were assessed and both were rejected:
+///
+///    - A `clippy.toml` ban cannot express it. The property is "this iterator is used
+///      AFTER that insertion", which is dataflow; the only bannable thing is
+///      `TextBufferExt::insert` itself, and POLICY forbids a ban whose true-positive rate
+///      does not justify it — that one would fire on every legitimate call in the tree.
+///    - Encapsulation would work and is not proportionate here: it means a newtype around
+///      the repair-wired buffer whose insertion methods take and return `TextMark`s, and
+///      routing every caller through it. That is a real seam and it is written down here
+///      rather than left implicit, so whoever next pays for this defect can reach for it
+///      with the reasoning already done.
+///
+///    Until then: this is a rule someone has to remember, and saying so is the point. A
+///    seam whose mechanism is "remember to call it" is a latent regression; a seam that
+///    ADMITS its mechanism is memory at least tells the next reader what they are
+///    relying on.
 ///
 /// Every single-emission route was driven in the real binding with a log handler
 /// counting diagnostics — `set_text`, `insert_at_cursor`, `insert_interactive_at_cursor`,
@@ -274,7 +333,69 @@ fn wire_paste_normalization(buffer: &sourceview::Buffer) {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_lone_cr, normalize_lone_cr};
+    use super::{has_lone_cr, normalize_lone_cr, normalize_lone_cr_bytes};
+
+    /// The bytes twin, tested directly rather than through its `&str` sibling.
+    ///
+    /// It had no direct test at all — including of the ONE property that makes it a
+    /// separate function instead of a `to_string()` and a call to the sibling: it
+    /// accepts bytes that are **not** required to round-trip through `String`. Its
+    /// caller is crash recovery, which digests the on-disk twin, so the case that
+    /// matters is a document whose bytes are not valid UTF-8: the repair must still
+    /// apply and must not panic, truncate, or lossily substitute. Testing it only via
+    /// UTF-8 fixtures would have proven the sibling and called it this function.
+    #[test]
+    fn the_bytes_twin_repairs_input_that_is_not_valid_utf8() {
+        // A lone CR either side of an invalid byte sequence (0xFF is not legal
+        // anywhere in UTF-8), plus a CRLF that must survive untouched.
+        let src: Vec<u8> = vec![b'a', b'\r', 0xFF, 0xFE, b'\r', b'b', b'\r', b'\n', b'c'];
+        let got = normalize_lone_cr_bytes(src.clone());
+
+        assert_eq!(
+            got,
+            vec![b'a', b'\n', 0xFF, 0xFE, b'\n', b'b', b'\r', b'\n', b'c'],
+            "lone CRs become LF, the CRLF pair is untouched, and the invalid bytes \
+             pass through unchanged"
+        );
+        assert_eq!(got.len(), src.len(), "the repair is length-preserving");
+        assert!(
+            String::from_utf8(got).is_err(),
+            "the fixture must really be invalid UTF-8, or this test proves nothing \
+             the `&str` twin's tests do not already prove"
+        );
+    }
+
+    /// A CR at the very end has no following byte to inspect — the `bytes.get(i + 1)`
+    /// bounds case, which is where an off-by-one in either twin would live.
+    #[test]
+    fn a_trailing_carriage_return_is_repaired_in_both_twins() {
+        assert_eq!(
+            normalize_lone_cr_bytes(b"end\r".to_vec()),
+            b"end\n".to_vec()
+        );
+        assert_eq!(normalize_lone_cr("end\r"), "end\n");
+    }
+
+    /// The two twins agree on the same input, which is the contract that lets crash
+    /// recovery digest one side with each and compare the results.
+    #[test]
+    fn the_two_twins_agree_on_utf8_input() {
+        for src in [
+            "a\rb",
+            "a\r\nb",
+            "\r",
+            "\r\n",
+            "a\r\r\nb",
+            "plain\ntext\n",
+            "unicode ☃\rsnow",
+        ] {
+            assert_eq!(
+                normalize_lone_cr_bytes(src.as_bytes().to_vec()),
+                normalize_lone_cr(src).as_bytes().to_vec(),
+                "twins disagreed on {src:?}"
+            );
+        }
+    }
 
     #[test]
     fn leaves_lf_only_text_borrowed() {

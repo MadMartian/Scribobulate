@@ -464,20 +464,17 @@ fn refresh_preview_after_undo_redo(window: &ApplicationWindow) {
 mod gtk_integration_tests {
     use super::*;
 
-    /// Pump the default main context until `cond` holds or a 5s timeout SOURCE fires
-    /// (never a wall-clock check between iterations — that never returns on an idle
-    /// display; GTK4Rs/AP-79). Panics loudly on timeout — a silently-ignored timeout would
-    /// let the following assertion pass or fail for the wrong reason.
-    fn pump_until(cond: impl Fn() -> bool, what: &str) {
-        let deadline = std::rc::Rc::new(std::cell::Cell::new(false));
-        glib::timeout_add_local_once(std::time::Duration::from_secs(5), {
-            let deadline = deadline.clone();
-            move || deadline.set(true)
-        });
-        while !cond() && !deadline.get() {
-            glib::MainContext::default().iteration(true);
-        }
-        assert!(cond(), "timed out waiting for: {what}");
+    /// Pump the default main context until `cond` holds, or panic naming `what`.
+    /// `crate::testpump::until_for` under `Clock::Idle` with this module's own 5s
+    /// deadline (M31), args reordered to `(clock, what, done)` to match every other
+    /// migrated call site.
+    fn pump_until(cond: impl FnMut() -> bool, what: &str) {
+        crate::testpump::until_for(
+            crate::testpump::Clock::Idle,
+            std::time::Duration::from_secs(5),
+            what,
+            cond,
+        );
     }
 
     fn select_all_enabled(window: &ApplicationWindow) -> bool {

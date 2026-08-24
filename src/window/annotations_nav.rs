@@ -17,15 +17,12 @@ use crate::span::OriginalByteOffset;
 /// changes — the SAME call sites as `refresh_outline`: initial build, view-mode switch,
 /// external reload, theme re-render, and the split/edit live-edit debounce (TDD 20.11).
 ///
-/// The source it reads depends on the mode, matching `refresh_outline`: in editor-backed
-/// modes the live buffer is the truth (so the list tracks in-progress edits — TDD 20.15);
-/// in preview mode the stored source is.
+/// Reads the document through [`TabState::shown_source`] — the same call
+/// `refresh_outline` makes, so "matching `refresh_outline`" is now a shared function
+/// rather than a claim in a comment (TDD 20.15).
 pub(crate) fn refresh_annotations(window: &ApplicationWindow) {
     let Some(st) = state(window) else { return };
-    let md = match current_mode(window) {
-        ViewMode::Edit | ViewMode::Split => st.editor_text(),
-        ViewMode::Preview => st.source.borrow().clone(),
-    };
+    let md = st.shown_source(current_mode(window));
     let entries = extract_entries(&md);
     // Re-select the previously activated annotation by IDENTITY (src_span start) if it
     // still exists, so the panel keeps its selection across the rebuild; the initial
@@ -290,5 +287,85 @@ pub(crate) fn reconcile_sidebar_visibility(window: &ApplicationWindow) {
         {
             view.popdown_marker_popover();
         }
+    }
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod shown_source_tests {
+    use super::*;
+    use crate::window::testkit::test_app;
+
+    /// The mode→source rule, asserted where the two arms are DISTINGUISHABLE.
+    ///
+    /// This is the rule `refresh_outline`, `current_heading_levels` and
+    /// `refresh_annotations` each carried as a verbatim two-arm match, held together by
+    /// a comment in one of them saying it "matches `refresh_outline`". Nothing tested
+    /// it, and nothing could have caught one copy being edited — so the test seeds the
+    /// only state that discriminates: an editor buffer whose text differs from the
+    /// stored source. With them equal (the ordinary state) both arms answer the same
+    /// thing and any wiring passes.
+    #[gtktest::test]
+    fn shown_source_reads_the_buffer_in_editor_modes_and_the_stored_source_in_preview() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.shownsource");
+        let window = crate::window::new_window(&app, "IT", "# Stored\n", None);
+        let st = state(&window).expect("tab state");
+        st.editor_buf.set_text("# Buffer\n");
+
+        assert_eq!(st.shown_source(ViewMode::Edit), "# Buffer\n");
+        assert_eq!(st.shown_source(ViewMode::Split), "# Buffer\n");
+        assert_eq!(st.shown_source(ViewMode::Preview), "# Stored\n");
+    }
+
+    /// The outline and the annotations viewer read the SAME document.
+    ///
+    /// The property M-6 is about: two derived views must never disagree about which
+    /// document is on screen. Asserted through the two public refresh entry points
+    /// rather than by calling `shown_source` twice — that would only prove the helper
+    /// is deterministic, not that both consumers reach it (the failure being guarded
+    /// is one consumer keeping its own copy of the rule).
+    #[gtktest::test]
+    fn the_outline_and_the_annotations_viewer_read_one_document() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.derivedagree");
+        let window = crate::window::new_window(
+            &app,
+            "IT",
+            "# Stored\n\nplain text with no annotation\n",
+            None,
+        );
+        let st = state(&window).expect("tab state");
+        // An edit present in the BUFFER only: a new heading and a new annotation. In an
+        // editor-backed mode both views must show it; in preview neither may.
+        st.editor_buf
+            .set_text("# Buffer\n\n{==claim==}{>>note<<}\n");
+
+        let md_edit = st.shown_source(ViewMode::Edit);
+        assert_eq!(
+            crate::outline::extract_headings(&md_edit)
+                .iter()
+                .map(|h| h.text.clone())
+                .collect::<Vec<_>>(),
+            vec!["Buffer".to_string()],
+            "the outline is not reading the live buffer in Edit mode"
+        );
+        assert_eq!(
+            crate::annotations::extract_entries(&md_edit).len(),
+            1,
+            "the annotations viewer is not reading the live buffer in Edit mode"
+        );
+
+        let md_preview = st.shown_source(ViewMode::Preview);
+        assert_eq!(
+            crate::outline::extract_headings(&md_preview)
+                .iter()
+                .map(|h| h.text.clone())
+                .collect::<Vec<_>>(),
+            vec!["Stored".to_string()],
+            "a derived view is reading the buffer in Preview mode"
+        );
+        assert_eq!(
+            crate::annotations::extract_entries(&md_preview).len(),
+            0,
+            "a derived view is reading the buffer in Preview mode"
+        );
     }
 }

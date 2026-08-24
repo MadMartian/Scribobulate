@@ -40,6 +40,8 @@ mod reload;
 mod rename;
 mod save;
 mod scrollsync;
+#[cfg(test)]
+pub(crate) mod testkit;
 mod zoom;
 
 use actions::*;
@@ -98,10 +100,17 @@ pub(crate) use tabs::badge_tab_label;
 pub(crate) use tabs::build_tab_editor;
 pub(crate) use tabs::create_tab_in_window;
 pub(crate) use tabs::start_deferred_prerender_pump;
+/// Test-only at window level: the tab context menu's own builder reaches it through
+/// `tabs`, and the one crate-level consumer is `app::mnemonics`' guard, which derives
+/// its check from this enumeration rather than mirroring it.
+#[cfg(test)]
+pub(crate) use tabs::TabMenuItem;
 pub(crate) use tabs::{host_window, window_of_content_box};
 pub(crate) use toast::sync_recovery_toast;
 pub(crate) use zoom::rerender_preview_from_live_edit;
 pub(crate) use zoom::rerender_tab_preview_in_place;
+#[cfg(test)]
+pub(crate) use zoom::zoom_css_rule_for_test;
 
 // Decomposed window sub-builders (see TECH.md module map).
 mod chrome;
@@ -642,6 +651,8 @@ fn build_window_chrome_state(
         menubar: chrome.menubar.clone(),
         menu_model: chrome.menu_model.clone(),
         format_menu_kind: Cell::new(None),
+        format_menu_pending: Cell::new(None),
+        format_menu_refresh_scheduled: Cell::new(false),
         documents_refresh_scheduled: Cell::new(false),
     })
 }
@@ -725,8 +736,12 @@ fn register_window_destroy_handlers(window: &ApplicationWindow, zoom_provider: g
     window.connect_destroy(winstate::unregister);
 }
 
+/// `pub(crate)` rather than private: `test_app` is the one helper that builds a real
+/// application, and other modules' integration tests need a window assembled by the
+/// PRODUCTION path rather than a stand-in they wired themselves — which is exactly the
+/// distinction a wiring test cannot make about itself (`clipboard`'s middle-click pair).
 #[cfg(all(test, feature = "gtk-integration-tests"))]
-mod gtk_integration_tests {
+pub(crate) mod gtk_integration_tests {
     use super::*;
 
     /// Build a registered, non-unique test app.
@@ -734,27 +749,10 @@ mod gtk_integration_tests {
     /// `pub(super)` so every GTK test under `window/` reaches the SAME helper rather than
     /// each re-deriving one. A helper that only its own module can import is a helper the
     /// next module will quietly reimplement, slightly differently (ScrAP-219).
-    /// Pump the main loop until `done` reports true, or `budget` turns elapse; reports
-    /// whether it converged. A tight pump, deliberately: everything waited on here is
-    /// idle-driven (a deferred focus grab), not frame-clock driven, and inserting a sleep
-    /// between turns stretches an idle settle out of all proportion (GTK4Rs/AP-261).
-    fn pump_until(budget: u32, done: impl Fn() -> bool) -> bool {
-        let ctx = gtk::glib::MainContext::default();
-        for _ in 0..budget {
-            if done() {
-                return true;
-            }
-            ctx.iteration(false);
-        }
-        done()
-    }
-
-    pub(super) fn test_app(id: &str) -> gtk::Application {
-        let app = gtk::Application::new(Some(id), gtk::gio::ApplicationFlags::NON_UNIQUE);
-        app.register(gtk::gio::Cancellable::NONE)
-            .expect("register before building a window");
-        app
-    }
+    // M37's one home for this helper, re-exported at `pub(crate)` because other modules'
+    // integration tests need a window built by the PRODUCTION path rather than a stand-in
+    // they wired themselves — `clipboard`'s middle-click pair is exactly that distinction.
+    pub(crate) use crate::window::testkit::test_app;
 
     /// The four chrome toggles a window owns, as `win.*` action names.
     const CHROME_ACTIONS: [&str; 4] = [
@@ -1174,14 +1172,14 @@ mod gtk_integration_tests {
         let scroller = st.chrome().annotations_scroller.clone();
 
         change_action_state(&win, "annotations", &true.to_variant());
-        let focused_in_list = pump_until(200, || {
-            sidebar::list_view_of(&scroller)
-                .zip(GtkWindowExt::focus(&win))
-                .is_some_and(|(list, focused)| focused.is_ancestor(&list) || focused == list)
-        });
-        assert!(
-            focused_in_list,
-            "showing the annotations pane must hand the keyboard to its list"
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "the annotations pane to hand the keyboard to its list",
+            || {
+                sidebar::list_view_of(&scroller)
+                    .zip(GtkWindowExt::focus(&win))
+                    .is_some_and(|(list, focused)| focused.is_ancestor(&list) || focused == list)
+            },
         );
     }
 

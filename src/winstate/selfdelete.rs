@@ -66,9 +66,32 @@ impl SelfDeleteGuard {
     /// arrive while the pass is held. Linux's arrive ~100 ms *after* the write completes,
     /// so there the one-shot flag still does the work and this clause never fires — and a
     /// backend that delivered two `Deleted`s after release would defeat both.
-    pub(crate) fn swallows(&self, write_in_flight: bool) -> bool {
-        self.consume() || write_in_flight
+    pub(crate) fn swallows(&self, write_in_flight: bool) -> Option<SwallowReason> {
+        if self.consume() {
+            return Some(SwallowReason::OwnArmedWrite);
+        }
+        if write_in_flight {
+            return Some(SwallowReason::WriteInFlight);
+        }
+        None
     }
+}
+
+/// Why a `Deleted` event was suppressed.
+///
+/// Returned rather than a bare `bool` because the two arms are not equivalent and the
+/// difference is invisible in a log otherwise. `OwnArmedWrite` consumes a flag this
+/// application set, so the event is certainly ours. `WriteInFlight` is a FALLBACK for the
+/// Windows surplus event, and it is the one cell where a genuinely external deletion can be
+/// suppressed — deliberately, because our own write re-creates the file microseconds later,
+/// but it is the cell a reader debugging a "my file vanished and nothing said so" report
+/// needs to be able to see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwallowReason {
+    /// A flag this application armed before its own write.
+    OwnArmedWrite,
+    /// A write was in progress; the event is presumed to be its surplus.
+    WriteInFlight,
 }
 
 #[cfg(test)]
@@ -99,11 +122,11 @@ mod tests {
         let g = SelfDeleteGuard::default();
         g.arm();
         assert!(
-            g.swallows(true),
+            g.swallows(true).is_some(),
             "first Deleted: consumed by the one-shot flag"
         );
         assert!(
-            g.swallows(true),
+            g.swallows(true).is_some(),
             "second Deleted of the SAME rename must not read as an external deletion"
         );
     }
@@ -115,10 +138,38 @@ mod tests {
     fn a_lone_delete_consumes_the_flag_even_with_no_write_in_flight() {
         let g = SelfDeleteGuard::default();
         g.arm();
-        assert!(g.swallows(false));
+        assert!(g.swallows(false).is_some());
         assert!(
-            !g.swallows(false),
+            g.swallows(false).is_none(),
             "the flag must not survive the event it explained"
+        );
+    }
+
+    /// **QA M23/M67 — the one cell where a GENUINELY EXTERNAL deletion is suppressed.**
+    ///
+    /// Unarmed guard, write in flight: nothing this application armed explains the event,
+    /// and it is swallowed anyway on the presumption that it is the Windows surplus. That
+    /// is the deliberate trade the doc above describes — our own write re-creates the file
+    /// microseconds later — but it was the only cell of the matrix with no test, and the
+    /// two arms were indistinguishable from outside because `swallows` returned a bool.
+    ///
+    /// It now names WHICH arm fired, which is what makes the suppression visible in a log
+    /// to someone debugging "my file vanished and nothing said so".
+    #[test]
+    fn a_write_in_flight_swallows_an_unexplained_delete_and_says_which_arm_did_it() {
+        let g = SelfDeleteGuard::default();
+        assert_eq!(
+            g.swallows(true),
+            Some(SwallowReason::WriteInFlight),
+            "the fallback arm must fire, and be distinguishable from an armed self-delete"
+        );
+
+        let armed = SelfDeleteGuard::default();
+        armed.arm();
+        assert_eq!(
+            armed.swallows(true),
+            Some(SwallowReason::OwnArmedWrite),
+            "an armed flag is consumed FIRST — the short-circuit order is load-bearing"
         );
     }
 
@@ -127,7 +178,7 @@ mod tests {
     #[test]
     fn an_unarmed_guard_with_no_write_in_flight_surfaces_the_deletion() {
         let g = SelfDeleteGuard::default();
-        assert!(!g.swallows(false));
+        assert!(g.swallows(false).is_none());
     }
 
     #[test]

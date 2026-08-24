@@ -4,63 +4,128 @@
 //! whole `GtkPopoverMenuBar` is assembled here per window rather than once on the
 //! GApplication.
 //!
-//! Built from `FILE_CMDS` / `EDIT_CMDS` / `VIEW_CMDS` / `FORMAT_CMDS` so label and
-//! accel stay in sync with the context menu and `set_accels_for_action`.
+//! Built from `FILE_CMDS` / `EDIT_CMDS` / `VIEW_CMDS` / `FORMAT_CMDS` so labels stay in
+//! sync with the context menu. Accelerator HINTS are not set here at all — GTK derives
+//! each one from `set_accels_for_action`; see [`item`] for why the `accel` attribute
+//! this file used to write was removed rather than tidied.
 
-use super::commands::{
-    inline_accel, Cmd, EDIT_CMDS, FILE_CMDS, FORMAT_CMDS, TBTN_SECTION_IDS, VIEW_CMDS,
-};
+use super::commands::{Cmd, EDIT_CMDS, FILE_CMDS, FORMAT_CMDS, TBTN_SECTION_IDS, VIEW_CMDS};
 use super::mnemonics::mnem;
 use crate::export::ExportTarget;
 use crate::winstate::FmtInsertKind;
 use gtk::gio::{Menu, MenuItem};
 use gtk::prelude::*;
 
-/// Set a menu item's displayed `accel` attribute from a **declared** accelerator
-/// string, re-spelled for the host by [`crate::accel::for_host`] — the same
-/// transform `register_accelerators` applies, so the hint GTK draws beside the
-/// item is the key the app actually binds on this platform.
+/// A menu item: mnemonic-marked label plus the action it drives. **No accelerator
+/// hint is set here, deliberately**, and that is the whole of this file's accel story.
 ///
-/// Every `accel` attribute in this file goes through here. Setting the attribute
-/// from a raw descriptor string is what would silently re-introduce the Ctrl-on-macOS
-/// bug for one menu while the binding moved to Command — a per-surface spelling,
-/// which is exactly what POLICY's accelerator single-source-of-truth rule forbids.
-/// A no-op for an empty accel, so callers need no `is_empty` branch of their own.
-fn set_accel(item: &MenuItem, accel: &str) {
-    if accel.is_empty() {
+/// GTK derives the hint from the accelerators the application registered. The chain is
+/// `gtk_menu_tracker_item_get_accel` → (no `accel` attribute) →
+/// `gtk_action_muxer_get_primary_accel` → `accels[0]` as passed to
+/// `gtk_application_set_accels_for_action`. It is public documented behaviour
+/// (`gtkpopovermenu.c`'s class docs name `set_accels_for_action` as the usual source),
+/// identical at GTK 4.6.9 / 4.12.0 / 4.22.4, and **backend-independent — every file in
+/// that chain is core `gtk/`**. The macOS system menu bar, which
+/// `platform::mac::menubar` feeds via `set_menubar`, is a different renderer but calls
+/// the *same* accessor (`gtkapplication-quartz-menu.c`'s `didChangeAccel`), with a real
+/// `GtkActionMuxer` as its observable, so the fallback is live there too and `<Meta>`
+/// lands on `NSEventModifierFlagCommand`.
+///
+/// **This file used to set the attribute anyway, and that was the defect worth removing.**
+/// [`crate::app::setup::accelerator_bindings_for`] already re-spells every accelerator
+/// for the host *before* `set_accels_for_action`, so the attribute could only ever
+/// restate what GTK was about to say — a second source of truth for the same string,
+/// with nothing comparing the two. And where they disagree the attribute WINS silently:
+/// MEASURED, a build that set `<Primary><Alt>F12` on Zoom In rendered exactly that while
+/// `Ctrl++` went on working. So the mechanism could not add a hint, and could only ever
+/// subtract correctness — POLICY's "a second copy is how the first one silently stops
+/// matching", with the copy losing.
+///
+/// A review (M36/M-4) read the two items that had *never* set the attribute — Previous
+/// Tab and Next Tab — as a live defect showing no key. They were not: two release
+/// binaries driven identically on GTK 4.6.9/X11 both showed `Ctrl+Page Up` /
+/// `Ctrl+Page Down`, and the macOS seat read `⌘PageUp`/`⌘PageDown` off the live system
+/// menu bar through the Accessibility API. Those two items were right and the other
+/// sixteen were carrying redundant weight.
+///
+/// What replaces the mechanism is `every_menu_command_with_a_shortcut_is_registered`:
+/// the fallback fires only for actions the muxer can resolve, so making
+/// `set_accels_for_action` the sole source makes *registration* the thing worth
+/// asserting.
+fn item(label: &str, action: &str) -> MenuItem {
+    MenuItem::new(Some(&mnem(label)), Some(action))
+}
+
+/// Build one `win.format::<target>` menu item. Shared by the menu construction and the
+/// live Insert↔Edit relabel so they cannot drift. The label is routed through `mnem` so
+/// Format items carry their access keys too (including across the Insert↔Edit relabel —
+/// both forms are in `MENU_MNEMONICS`). The accel hint comes from the registered
+/// binding for `win.format::<target>`, as for every item here — see [`item`].
+fn make_format_item(label: &str, target: &str) -> MenuItem {
+    let menu_item = MenuItem::new(Some(&mnem(label)), None);
+    menu_item.set_action_and_target_value(Some("win.format"), Some(&target.to_variant()));
+    menu_item
+}
+
+/// Run `mutate` against `window`'s chrome on the next main-loop idle, coalescing
+/// repeat requests into one run.
+///
+/// **The choke point for mutating a `GMenu` that is bound to a live
+/// `GtkPopoverMenuBar`** (GTK4Rs/AP-76). Such a mutation is synchronous and unsafe from
+/// inside a signal dispatch — worst of all from a menu item's own activation, where GTK
+/// frees the `GtkModelButton` mid-`clicked` because `gtkmenusectionbox.c` refs only the
+/// popover. Deferring to idle puts the mutation outside any dispatch.
+///
+/// It exists as a shared function because the rule had been applied to one of the two
+/// live-bound submenus and not the other. `View ▸ Documents` had the idle machinery and
+/// an emphatic "never call it directly from a signal handler"; `Format ▸`'s insert
+/// section, an equally live-bound child of the same model, was relabelled straight from
+/// three signal handlers. A mitigation that each site has to remember is one the next
+/// site will not, so the two `GMenu` handles are now reached only through here.
+///
+/// `scheduled` selects that menu's own coalescing flag, so the two submenus queue
+/// independently. The closure re-resolves the chrome rather than capturing it: a window
+/// can be gone by the time the idle fires, and a strong capture would keep it alive
+/// (ScrAP-60 / GTK4Rs/AP-128).
+pub(crate) fn defer_live_menu_mutation(
+    window: &gtk::ApplicationWindow,
+    scheduled: fn(&crate::winstate::WindowChrome) -> &std::cell::Cell<bool>,
+    mutate: impl Fn(&gtk::ApplicationWindow, &crate::winstate::WindowChrome) + 'static,
+) {
+    let Some(chrome) = crate::winstate::chrome(window) else {
         return;
+    };
+    if scheduled(&chrome).replace(true) {
+        return; // a run is already queued for this window's menu
     }
-    item.set_attribute_value("accel", Some(&crate::accel::for_host(accel).to_variant()));
-}
-
-/// [`set_accel`] for a command with no Cmd-table row, reading its canonical
-/// accelerator from the single `INLINE_ACCEL_CMDS` table (QA M-4). The menu hint
-/// is thus derived from the SAME string `register_accelerators` binds and the
-/// shortcuts window / toolbar tooltip show — the four can no longer drift.
-/// `panic`s if `action` isn't an inline command (a compile-time wiring invariant).
-fn set_inline_accel(item: &MenuItem, action: &str) {
-    let accel = inline_accel(action)
-        .unwrap_or_else(|| panic!("menu accel: {action} missing from INLINE_ACCEL_CMDS"));
-    set_accel(item, accel);
-}
-
-/// Build one `win.format::<target>` menu item with an optional accel hint. Shared by
-/// the menu construction and the live Insert↔Edit relabel so they cannot drift.
-/// The label is routed through `mnem` so Format items carry their access keys too
-/// (including across the Insert↔Edit relabel — both forms are in `MENU_MNEMONICS`).
-fn make_format_item(label: &str, target: &str, accel: &str) -> MenuItem {
-    let item = MenuItem::new(Some(&mnem(label)), None);
-    item.set_action_and_target_value(Some("win.format"), Some(&target.to_variant()));
-    set_accel(&item, accel);
-    item
+    glib::idle_add_local_once(glib::clone!(
+        #[weak(rename_to = w)]
+        window,
+        move || {
+            let Some(chrome) = crate::winstate::chrome(&w) else {
+                return;
+            };
+            scheduled(&chrome).set(false);
+            mutate(&w, &chrome);
+        }
+    ));
 }
 
 /// Relabel `window`'s OWN Format menu Link/Image items Insert↔Edit for its editor
-/// selection `kind` (`None` = neither). Skips when that window's menu already shows
-/// `kind`. Driven per-window by `window::update_format_edit_surfaces`. Per-window
-/// since the menubar migration (GTK4Rs/AP-76): each window's Format menu now
-/// reflects its OWN selection rather than the last-focused window's leaking across
-/// every menubar.
+/// selection `kind` (`None` = neither). Driven per-window by
+/// `window::update_format_edit_surfaces`. Per-window since the menubar migration
+/// (GTK4Rs/AP-76): each window's Format menu now reflects its OWN selection rather than
+/// the last-focused window's leaking across every menubar.
+///
+/// **The mutation is deferred to idle** through [`defer_live_menu_mutation`], because
+/// this menu is a live-bound child of the window's `GtkPopoverMenuBar` exactly as
+/// `View ▸ Documents` is. All three of this function's callers are signal handlers, and
+/// the `win.format` `notify::enabled` one fires precisely when focus moves into a menu
+/// popover — the mid-activation window the rule is about.
+///
+/// Requested kind and displayed kind are tracked separately so coalescing is correct:
+/// the last request in a turn wins, and a request that returns to what is already shown
+/// costs no mutation at all.
 pub(crate) fn update_format_menu_labels(
     window: &gtk::ApplicationWindow,
     kind: Option<FmtInsertKind>,
@@ -68,20 +133,30 @@ pub(crate) fn update_format_menu_labels(
     let Some(chrome) = crate::winstate::chrome(window) else {
         return;
     };
-    if chrome.format_menu_kind.replace(kind) == kind {
-        return;
+    // Record the request synchronously — cheap, and it is what makes the last writer in
+    // a turn the one the idle honours.
+    chrome.format_menu_pending.set(kind);
+    if chrome.format_menu_kind.get() == kind {
+        return; // the menu already shows this; nothing to schedule
     }
-    let menu = &chrome.format_insert_menu;
-    for (idx, k) in [(0_i32, FmtInsertKind::Link), (1, FmtInsertKind::Image)] {
-        let accel = FORMAT_CMDS
-            .iter()
-            .find(|c| c.target == k.target())
-            .map(|c| c.accel)
-            .unwrap_or("");
-        let item = make_format_item(k.label(kind == Some(k)), k.target(), accel);
-        menu.remove(idx);
-        menu.insert_item(idx, &item);
-    }
+    defer_live_menu_mutation(
+        window,
+        |chrome| &chrome.format_menu_refresh_scheduled,
+        |_, chrome| {
+            let kind = chrome.format_menu_pending.get();
+            // Re-check against what is DISPLAYED: an A→B→A toggle inside one turn
+            // resolves to no mutation at all.
+            if chrome.format_menu_kind.replace(kind) == kind {
+                return;
+            }
+            let menu = &chrome.format_insert_menu;
+            for (idx, k) in [(0_i32, FmtInsertKind::Link), (1, FmtInsertKind::Image)] {
+                let relabelled = make_format_item(k.label(kind == Some(k)), k.target());
+                menu.remove(idx);
+                menu.insert_item(idx, &relabelled);
+            }
+        },
+    );
 }
 
 /// One window's menubar: a self-built `GtkPopoverMenuBar` plus handles to the two
@@ -123,9 +198,7 @@ fn build_command_menu(cmds: &[Cmd]) -> Menu {
             menu.append_section(None, &section);
             section = Menu::new();
         }
-        let item = MenuItem::new(Some(&mnem(cmd.label)), Some(cmd.action));
-        set_accel(&item, cmd.accel);
-        section.append_item(&item);
+        section.append_item(&item(cmd.label, cmd.action));
     }
     if section.n_items() > 0 {
         menu.append_section(None, &section);
@@ -143,28 +216,35 @@ fn build_command_menu(cmds: &[Cmd]) -> Menu {
 /// items with a tick on the active theme, consistent with the other menubar menus; the
 /// STATELESS `app.pick-preview-theme` (toolbar) renders PLAIN items, consistent with the
 /// Heading picker. Both drive the same switch (the shim forwards), so they never diverge.
-fn reading_theme_menu(action: &str) -> Menu {
+///
+/// Takes its themes as an ARGUMENT rather than reading the installed set. This function is
+/// reached by `build_top_level_menus`, which the mnemonics guards derive their access-key
+/// namespaces from — so with an implicit `crate::theme::themes()` the guard's input set
+/// varied with whatever theme files happened to be on the machine running it, and a
+/// collision could appear or vanish with a `~/.config` edit that touched no source. On
+/// macOS this menu model is also handed to the SYSTEM menu bar, so a filesystem-dependent
+/// menu is user-visible behaviour and not only a test-hygiene problem.
+fn reading_theme_menu(action: &str, themes: &crate::theme::Themes) -> Menu {
     let menu = Menu::new();
-    for (id, name, symbol) in crate::theme::themes().chooser_list() {
+    for (id, name, symbol) in themes.chooser_list() {
+        // A theme name comes from a user-editable `themes.toml`, so this is DYNAMIC text
+        // in a mnemonic context: escape it, and do not route it through `mnem()`, whose
+        // table is keyed on static command labels and would inject a marker into any theme
+        // sharing one of them.
         let label = crate::theme::Themes::chooser_label(&name, symbol.as_deref());
-        let item = MenuItem::new(Some(&mnem(&label)), None);
+        let item = MenuItem::new(Some(&crate::app::escape_mnemonic(&label)), None);
         item.set_action_and_target_value(Some(action), Some(&id.to_variant()));
         menu.append_item(&item);
     }
     menu
 }
 
-/// The View ▸ Reading Theme submenu — RADIO items (stateful `app.preview-theme`).
-pub(crate) fn build_reading_theme_menu() -> Menu {
-    reading_theme_menu("app.preview-theme")
-}
-
 /// The toolbar Reading Theme picker menu — PLAIN items (stateless `app.pick-preview-theme`).
 pub(crate) fn build_reading_theme_toolbar_menu() -> Menu {
-    reading_theme_menu("app.pick-preview-theme")
+    reading_theme_menu("app.pick-preview-theme", &crate::theme::themes())
 }
 
-fn build_view_menu() -> (Menu, Menu) {
+fn build_view_menu(themes: &crate::theme::Themes) -> (Menu, Menu) {
     // Back / Forward through this window's document-visit history (TDD §23), in
     // their own leading section — the browser's own placement, above the view
     // modes, so the two navigation commands read as a pair rather than as members
@@ -174,20 +254,17 @@ fn build_view_menu() -> (Menu, Menu) {
     // when it leads nowhere" contract (TDD 23.5, POLICY's single-`GAction` rule).
     let nav_section = Menu::new();
     for (label, action) in [("Back", "win.nav-back"), ("Forward", "win.nav-forward")] {
-        let item = MenuItem::new(Some(&mnem(label)), Some(action));
-        set_inline_accel(&item, action);
-        nav_section.append_item(&item);
+        nav_section.append_item(&item(label, action));
     }
 
     let section = Menu::new();
     for cmd in &VIEW_CMDS {
-        let item = MenuItem::new(Some(&mnem(cmd.label)), None);
-        item.set_action_and_target_value(
+        let mode_item = MenuItem::new(Some(&mnem(cmd.label)), None);
+        mode_item.set_action_and_target_value(
             Some("win.view-mode"),
             Some(&cmd.action_target.to_variant()),
         );
-        set_accel(&item, cmd.accel);
-        section.append_item(&item);
+        section.append_item(&mode_item);
     }
     // Window-management commands that don't touch files (operator decision)
     // — New Window and Move Tab to New Window —
@@ -202,29 +279,16 @@ fn build_view_menu() -> (Menu, Menu) {
     // stays menu/keyboard-only, while Move Tab to New Window gets an
     // explicit toolbar-button exception (`toolbar.rs`, operator decision).
     let tabs_section = Menu::new();
-    let new_window_item = MenuItem::new(Some(&mnem("New Window")), Some("win.new-window"));
-    set_inline_accel(&new_window_item, "win.new-window");
-    tabs_section.append_item(&new_window_item);
-    let move_tab_item = MenuItem::new(
-        Some(&mnem("Move Tab to New Window")),
-        Some("win.move-tab-new-window"),
-    );
-    set_inline_accel(&move_tab_item, "win.move-tab-new-window");
-    tabs_section.append_item(&move_tab_item);
+    tabs_section.append_item(&item("New Window", "win.new-window"));
+    tabs_section.append_item(&item("Move Tab to New Window", "win.move-tab-new-window"));
     // Tab navigation + the Documents submenu (the fast-switch list of THIS
     // window's open tabs, one `win.select-tab::<id>` radio item each). The
     // submenu starts empty — its content is filled/refreshed per window by
     // `window/tabs/refresh_documents_menu` (deferred to idle: mutating a
     // GMenu bound to a live menubar mid-activation is unsafe, GTK4Rs/AP-76). It groups naturally beside Previous/Next Tab.
     let tab_nav_section = Menu::new();
-    tab_nav_section.append_item(&MenuItem::new(
-        Some(&mnem("Previous Tab")),
-        Some("win.previous-tab"),
-    ));
-    tab_nav_section.append_item(&MenuItem::new(
-        Some(&mnem("Next Tab")),
-        Some("win.next-tab"),
-    ));
+    tab_nav_section.append_item(&item("Previous Tab", "win.previous-tab"));
+    tab_nav_section.append_item(&item("Next Tab", "win.next-tab"));
     let documents_menu = Menu::new();
     tab_nav_section.append_submenu(Some(&mnem("Documents")), &documents_menu);
 
@@ -237,18 +301,12 @@ fn build_view_menu() -> (Menu, Menu) {
     // in preview mode and off editor focus (editoractions.rs +
     // editbar.rs's setup_editor_focus_gate).
     let outline_section = Menu::new();
-    let outline_item = MenuItem::new(Some(&mnem("Outline")), Some("win.outline"));
-    set_inline_accel(&outline_item, "win.outline");
-    outline_section.append_item(&outline_item);
+    outline_section.append_item(&item("Outline", "win.outline"));
     // Annotations viewer toggle — a boolean win.annotations action, the sibling of
     // win.outline, sharing the same section (both toggle a sidebar pane). F8, mirroring
     // Outline's F9.
-    let annotations_item = MenuItem::new(Some(&mnem("Annotations")), Some("win.annotations"));
-    set_inline_accel(&annotations_item, "win.annotations");
-    outline_section.append_item(&annotations_item);
-    let go_to_line_item = MenuItem::new(Some(&mnem("Go To Line…")), Some("win.go-to-line"));
-    set_inline_accel(&go_to_line_item, "win.go-to-line");
-    outline_section.append_item(&go_to_line_item);
+    outline_section.append_item(&item("Annotations", "win.annotations"));
+    outline_section.append_item(&item("Go To Line…", "win.go-to-line"));
 
     // View-chrome visibility toggles — boolean `win.show-*` actions render as
     // checkbox items; their own section keeps them apart from the panel toggle.
@@ -265,10 +323,7 @@ fn build_view_menu() -> (Menu, Menu) {
     // so re-showing the bar restores the exact per-section configuration.
     let toolbar_menu = Menu::new();
     let show_section = Menu::new();
-    show_section.append_item(&MenuItem::new(
-        Some(&mnem("Show")),
-        Some("win.show-toolbar"),
-    ));
+    show_section.append_item(&item("Show", "win.show-toolbar"));
     toolbar_menu.append_section(None, &show_section);
     let sections_section = Menu::new();
     for id in TBTN_SECTION_IDS {
@@ -278,10 +333,7 @@ fn build_view_menu() -> (Menu, Menu) {
         if let Some(head) = label.get_mut(0..1) {
             head.make_ascii_uppercase();
         }
-        sections_section.append_item(&MenuItem::new(
-            Some(&mnem(&label)),
-            Some(&format!("win.show-tbtn-{id}")),
-        ));
+        sections_section.append_item(&item(&label, &format!("win.show-tbtn-{id}")));
     }
     toolbar_menu.append_section(None, &sections_section);
     chrome_section.append_submenu(Some(&mnem("Toolbar")), &toolbar_menu);
@@ -293,47 +345,32 @@ fn build_view_menu() -> (Menu, Menu) {
     //
     // Built from the theme registry, never a hardcoded list: adding a theme is a
     // block in themes.toml, and it must appear here without a code change (TDD 18.14).
-    chrome_section.append_submenu(Some(&mnem("Reading Theme")), &build_reading_theme_menu());
-    chrome_section.append_item(&MenuItem::new(
-        Some(&mnem("Status Bar")),
-        Some("win.show-statusbar"),
-    ));
+    chrome_section.append_submenu(
+        Some(&mnem("Reading Theme")),
+        &reading_theme_menu("app.preview-theme", themes),
+    );
+    chrome_section.append_item(&item("Status Bar", "win.show-statusbar"));
 
     // Zoom controls — three one-shot `win.zoom-*` actions; their
     // enabled state encodes both mode and ladder position (see
     // update_zoom_action_state in window.rs). Separated so the GTK
     // menubar draws a rule above them, keeping the View menu tidy.
-    // accel comes from the SSOT INLINE_ACCEL_CMDS table via set_inline_accel (M-4).
-    let make_zoom_item = |label: &str, action: &str| -> MenuItem {
-        let item = MenuItem::new(Some(&mnem(label)), Some(action));
-        set_inline_accel(&item, action);
-        item
-    };
     let zoom_section = Menu::new();
-    zoom_section.append_item(&make_zoom_item("Zoom In", "win.zoom-in"));
-    zoom_section.append_item(&make_zoom_item("Zoom Out", "win.zoom-out"));
-    zoom_section.append_item(&make_zoom_item("Reset Zoom", "win.zoom-reset"));
+    zoom_section.append_item(&item("Zoom In", "win.zoom-in"));
+    zoom_section.append_item(&item("Zoom Out", "win.zoom-out"));
+    zoom_section.append_item(&item("Reset Zoom", "win.zoom-reset"));
 
     // Content safety: opt-in toggle to load remote images and images
     // outside the document folder.  Its own section keeps it visually
     // separate from the chrome visibility toggles above.
     let unsafe_images_section = Menu::new();
-    unsafe_images_section.append_item(&MenuItem::new(
-        Some(&mnem("Show Unsafe Images")),
-        Some("win.show-unsafe-images"),
-    ));
+    unsafe_images_section.append_item(&item("Show Unsafe Images", "win.show-unsafe-images"));
 
     // Split-pane arrangement — only enabled when in split mode (the actions
     // are disabled/greyed in preview/edit by apply_mode_action_state).
     let split_section = Menu::new();
-    split_section.append_item(&MenuItem::new(
-        Some(&mnem("Swap Panes")),
-        Some("win.split-swap"),
-    ));
-    split_section.append_item(&MenuItem::new(
-        Some(&mnem("Vertical Split")),
-        Some("win.split-orientation"),
-    ));
+    split_section.append_item(&item("Swap Panes", "win.split-swap"));
+    split_section.append_item(&item("Vertical Split", "win.split-orientation"));
 
     let outer = Menu::new();
     outer.append_section(None, &nav_section);
@@ -357,9 +394,7 @@ fn build_edit_menu() -> Menu {
     // Annotate — an inline-accel command (Ctrl+Alt+M), menu-only here
     // (its toolbar/overlay button lives in the shared Format row); the accel hint is set
     // from the SSOT inline table, like Go To Line / Outline.
-    let annotate_item = MenuItem::new(Some(&mnem("Annotate")), Some("win.annotate"));
-    set_inline_accel(&annotate_item, "win.annotate");
-    editor_section.append_item(&annotate_item);
+    editor_section.append_item(&item("Annotate", "win.annotate"));
     // The annotation walk, beside the command that creates one. Menu items are how a
     // reader FINDS a keyboard command — a shortcut nobody can discover is reachable
     // only by the people who already knew — and the Action CAM owes every command a
@@ -368,9 +403,7 @@ fn build_edit_menu() -> Menu {
         ("Next Annotation", "win.next-annotation"),
         ("Previous Annotation", "win.prev-annotation"),
     ] {
-        let item = MenuItem::new(Some(&mnem(label)), Some(action));
-        set_inline_accel(&item, action);
-        editor_section.append_item(&item);
+        editor_section.append_item(&item(label, action));
     }
     editor_section.append(Some(&mnem("Insert Emoji")), Some("win.insert-emoji"));
     let change_case = Menu::new();
@@ -406,7 +439,7 @@ fn build_format_menu() -> (Menu, Menu) {
         };
     let append = |menu: &Menu, t: &str| {
         let c = by_target(t);
-        menu.append_item(&make_format_item(c.label, c.target, c.accel));
+        menu.append_item(&make_format_item(c.label, c.target));
     };
 
     let inline = Menu::new();
@@ -420,7 +453,6 @@ fn build_format_menu() -> (Menu, Menu) {
         heading.append_item(&make_format_item(
             &format!("Heading _{n}"),
             &format!("h{n}"),
-            &format!("<Shift>F{n}"),
         ));
     }
     // mnem("Heading") → the _H access key (QA M-3: this site alone shipped the bare
@@ -483,12 +515,8 @@ fn build_file_menu() -> Menu {
     // Rename sits with Close Tab and, like it, is built ad-hoc rather than as a
     // `FILE_CMDS` row: a row auto-generates a toolbar button, and Rename has none
     // (a granted CAM deviation — see CAM.md § Granted CAM exceptions).
-    let rename_item = MenuItem::new(Some(&mnem("Rename…")), Some("win.rename"));
-    set_inline_accel(&rename_item, "win.rename");
-    close_tab_section.append_item(&rename_item);
-    let close_tab_item = MenuItem::new(Some(&mnem("Close Tab")), Some("win.close-tab"));
-    set_inline_accel(&close_tab_item, "win.close-tab");
-    close_tab_section.append_item(&close_tab_item);
+    close_tab_section.append_item(&item("Rename…", "win.rename"));
+    close_tab_section.append_item(&item("Close Tab", "win.close-tab"));
     file_menu.insert_section((file_menu.n_items() - 1).max(0), None, &close_tab_section);
     file_menu
 }
@@ -499,12 +527,7 @@ fn build_help_menu() -> Menu {
     let help_menu = Menu::new();
     // Keyboard Shortcuts opens the GtkShortcutsWindow via the per-window
     // win.show-help-overlay action that `set_help_overlay` installs (TDD 16.1).
-    let shortcuts_item = MenuItem::new(
-        Some(&mnem("Keyboard Shortcuts")),
-        Some("win.show-help-overlay"),
-    );
-    set_inline_accel(&shortcuts_item, "win.show-help-overlay");
-    help_menu.append_item(&shortcuts_item);
+    help_menu.append_item(&item("Keyboard Shortcuts", "win.show-help-overlay"));
     // Markdown Reference — opens the CommonMark syntax reference in the browser
     // (app.markdown-help). CommonMark because that's the syntax the app renders.
     help_menu.append(Some(&mnem("Markdown Reference")), Some("app.markdown-help"));
@@ -535,7 +558,17 @@ pub(crate) struct TopLevelMenus {
 ///
 /// Pure `gio::Menu` models, no widgets, so a caller can build them headlessly.
 pub(crate) fn build_top_level_menus() -> TopLevelMenus {
-    let (view_menu, documents_menu) = build_view_menu();
+    build_top_level_menus_with(&crate::theme::themes())
+}
+
+/// As [`build_top_level_menus`], with the theme set supplied rather than read from disk.
+///
+/// The guard seam. `mnemonics` derives its access-key namespaces from these models, and a
+/// guard whose INPUT varies with the host's installed themes cannot state what it checked:
+/// the same source passes on one machine and fails on another, and the difference is a
+/// config directory. Pass `Themes::builtin()` there and the assertion is about the program.
+pub(crate) fn build_top_level_menus_with(themes: &crate::theme::Themes) -> TopLevelMenus {
+    let (view_menu, documents_menu) = build_view_menu(themes);
     let (format_menu, format_insert_menu) = build_format_menu();
     TopLevelMenus {
         menus: vec![
@@ -586,5 +619,291 @@ pub(crate) fn build_menubar() -> BuiltMenubar {
         model: menubar,
         documents_menu,
         format_insert_menu,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::commands::INLINE_ACCEL_CMDS;
+    use crate::app::setup::accelerator_bindings_for;
+    use std::collections::BTreeSet;
+
+    /// Every `action` a shipped menubar item drives, sections and submenus flattened.
+    /// Derived from [`build_top_level_menus_with`] — the model `build_menubar` actually
+    /// ships — never from a mirror of it, for the reason
+    /// `mnemonics::menu_access_keys_unique_per_popover` records: a guard whose input is
+    /// a second copy of its subject reports on the copy.
+    ///
+    /// Builtin themes, not the installed set, so the walk does not vary with the host's
+    /// `~/.config`. Items driving a parameterised action carry it as
+    /// `action` + `target`, which is spelled `action::target` everywhere else in the
+    /// toolchain (`set_accels_for_action`, the muxer's key), so it is re-joined here.
+    fn menu_actions() -> Vec<String> {
+        let menus = build_top_level_menus_with(&crate::theme::Themes::builtin()).menus;
+        let mut out = Vec::new();
+        let mut stack: Vec<gtk::gio::MenuModel> = menus
+            .iter()
+            .map(|(_, m)| m.clone().upcast::<gtk::gio::MenuModel>())
+            .collect();
+        while let Some(m) = stack.pop() {
+            for i in 0..m.n_items() {
+                for link in ["section", "submenu"] {
+                    if let Some(child) = m.item_link(i, link) {
+                        stack.push(child);
+                    }
+                }
+                let Some(action) = m
+                    .item_attribute_value(i, "action", None)
+                    .and_then(|v| v.str().map(str::to_string))
+                else {
+                    continue;
+                };
+                let target = m
+                    .item_attribute_value(i, "target", None)
+                    .and_then(|v| v.str().map(str::to_string));
+                out.push(match target {
+                    Some(t) => format!("{action}::{t}"),
+                    None => action,
+                });
+            }
+        }
+        out
+    }
+
+    /// Every menu item whose command has a declared accelerator has that accelerator
+    /// **registered**, as the first one for its action.
+    ///
+    /// This is the assertion the menubar earns by NOT setting an `accel` attribute. GTK
+    /// draws each hint from `gtk_action_muxer_get_primary_accel`, which is `accels[0]`
+    /// as handed to `set_accels_for_action` — so registration is now the sole source of
+    /// every hint on every platform, and an action the muxer cannot resolve is the one
+    /// state that produces a genuinely hintless item. Nothing else in the toolchain asks
+    /// this question: the binding works whether or not the command has a menu entry, and
+    /// the menu entry works whether or not the command has a binding.
+    ///
+    /// `accelerator_bindings_for(Other)` rather than the host's, so the check is about
+    /// the program and not about the machine running it.
+    #[test]
+    fn every_menu_command_with_a_shortcut_is_registered() {
+        let bindings = accelerator_bindings_for(crate::accel::Platform::Other);
+        // First-registered wins: `register_accelerators` groups by action preserving
+        // first-seen order, and GTK displays `accels[0]`.
+        let first_accel = |action: &str| -> Option<String> {
+            bindings
+                .iter()
+                .find(|(a, _)| a == action)
+                .map(|(_, accel)| accel.clone())
+        };
+        // What each command DECLARES, from the same tables the bindings are built from.
+        let mut declared: Vec<(String, &str)> = Vec::new();
+        for cmd in FILE_CMDS.iter().chain(EDIT_CMDS.iter()) {
+            if !cmd.accel.is_empty() {
+                declared.push((cmd.action.to_string(), cmd.accel));
+            }
+        }
+        for cmd in VIEW_CMDS.iter().filter(|c| !c.accel.is_empty()) {
+            declared.push((format!("win.view-mode::{}", cmd.action_target), cmd.accel));
+        }
+        for cmd in FORMAT_CMDS.iter().filter(|c| !c.accel.is_empty()) {
+            declared.push((format!("win.format::{}", cmd.target), cmd.accel));
+        }
+        for cmd in INLINE_ACCEL_CMDS {
+            declared.push((cmd.action.to_string(), cmd.accels[0]));
+        }
+
+        let in_menu: BTreeSet<String> = menu_actions().into_iter().collect();
+        // ScrAP-132 guard-against-the-guard: a walk that descends wrongly scans nothing
+        // and passes forever. Pin one item per construction route — a flat Cmd-table
+        // row, a parameterised radio item, a parameterised Format item behind a submenu
+        // link, and an inline command — before trusting the sweep.
+        for action in [
+            "win.save",
+            "win.view-mode::preview",
+            "win.format::bold",
+            "win.previous-tab",
+        ] {
+            assert!(
+                in_menu.contains(action),
+                "the walk did not reach {action:?} — it found {} actions",
+                in_menu.len()
+            );
+        }
+
+        let mut problems: Vec<String> = Vec::new();
+        for (action, accel) in &declared {
+            if !in_menu.contains(action) {
+                continue;
+            }
+            match first_accel(action) {
+                Some(registered) if registered == *accel => {}
+                Some(registered) => problems.push(format!(
+                    "{action}: menu hint will show {registered:?} (first registered), \
+                     but the command declares {accel:?}"
+                )),
+                None => problems.push(format!(
+                    "{action}: declares {accel:?} but nothing registers it — its menu \
+                     item will show NO key hint, on every platform"
+                )),
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
+    /// No menubar item carries an `accel` attribute.
+    ///
+    /// The attribute WINS over the registered accelerator where both exist, silently, so
+    /// one re-introduced here would be a hint that can contradict the binding with
+    /// nothing comparing them — the drift this file removed the mechanism to end. Stated
+    /// as an assertion rather than a comment because the attribute is one method call
+    /// away and reads like an improvement.
+    #[test]
+    fn no_menu_item_declares_its_own_accel_attribute() {
+        let menus = build_top_level_menus_with(&crate::theme::Themes::builtin()).menus;
+        let mut offenders: Vec<String> = Vec::new();
+        let mut stack: Vec<gtk::gio::MenuModel> = menus
+            .iter()
+            .map(|(_, m)| m.clone().upcast::<gtk::gio::MenuModel>())
+            .collect();
+        while let Some(m) = stack.pop() {
+            for i in 0..m.n_items() {
+                for link in ["section", "submenu"] {
+                    if let Some(child) = m.item_link(i, link) {
+                        stack.push(child);
+                    }
+                }
+                if let Some(accel) = m
+                    .item_attribute_value(i, "accel", None)
+                    .and_then(|v| v.str().map(str::to_string))
+                {
+                    let label = m
+                        .item_attribute_value(i, "label", None)
+                        .and_then(|v| v.str().map(str::to_string))
+                        .unwrap_or_default();
+                    offenders.push(format!("{label:?} sets accel={accel:?}"));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "menubar items must take their hint from `set_accels_for_action`, not a \
+             second copy of it: {}",
+            offenders.join("; ")
+        );
+    }
+
+    /// Every inline command reaches the menu bar at all — a keyboard shortcut with no
+    /// menu entry is one nobody discovers, and the Action CAM owes every command a
+    /// menu-bar surface.
+    #[test]
+    fn every_inline_command_has_a_menu_item() {
+        let present: BTreeSet<String> = menu_actions().into_iter().collect();
+        let missing: Vec<&str> = INLINE_ACCEL_CMDS
+            .iter()
+            .map(|c| c.action)
+            .filter(|a| !present.contains(*a))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "inline commands with no menu-bar item: {missing:?}"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod live_menu_tests {
+    use super::*;
+
+    /// The Format insert-section relabel is DEFERRED, not applied in the caller's turn.
+    ///
+    /// The property GTK4Rs/AP-76 is about, and the one this file had for
+    /// `View ▸ Documents` and not for its sibling: a `GMenu` bound to a live
+    /// `GtkPopoverMenuBar` must not be mutated from inside a signal dispatch, and all
+    /// three callers of `update_format_menu_labels` are signal handlers. Asserted as a
+    /// TIMING property — the menu is unchanged immediately after the call and changed
+    /// after the main loop runs — because "it eventually shows the right label" is true
+    /// of the unsafe synchronous version too and cannot tell the two apart.
+    #[gtktest::test]
+    fn the_format_relabel_lands_on_idle_and_not_in_the_callers_turn() {
+        let app =
+            crate::window::testkit::test_app("com.extollit.scribobulate.integrationtest.menudefer");
+        let window = crate::window::new_window(&app, "IT", "# doc\n", None);
+        let chrome = crate::winstate::chrome(&window).expect("chrome");
+        let label_of = |idx: i32| {
+            chrome
+                .format_insert_menu
+                .item_attribute_value(idx, "label", None)
+                .and_then(|v| v.str().map(str::to_string))
+                .unwrap_or_default()
+        };
+        let ctx = glib::MainContext::default();
+        // Settle whatever the window's own construction queued, so the assertion below
+        // is about THIS call and not about a rebuild already in flight.
+        for _ in 0..50 {
+            ctx.iteration(false);
+        }
+        let before = label_of(0);
+        assert!(
+            before.contains("Insert"),
+            "expected the Link item to start in Insert form, got {before:?}"
+        );
+
+        update_format_menu_labels(&window, Some(FmtInsertKind::Link));
+        assert_eq!(
+            label_of(0),
+            before,
+            "the menu was mutated inside the caller's turn — this is the synchronous \
+             mutation of a live-bound GMenu that GTK4Rs/AP-76 forbids"
+        );
+
+        for _ in 0..50 {
+            ctx.iteration(false);
+        }
+        assert!(
+            label_of(0).contains("Edit"),
+            "the deferred relabel never landed; got {:?}",
+            label_of(0)
+        );
+    }
+
+    /// A request that returns to the displayed value inside one turn costs no mutation.
+    ///
+    /// Coalescing correctness, which is why requested and displayed kind are separate
+    /// fields. Folding them into one — the shape before this change — makes an A→B→A
+    /// toggle record B as applied while the menu still shows A.
+    #[gtktest::test]
+    fn a_there_and_back_relabel_in_one_turn_settles_on_what_is_shown() {
+        let app = crate::window::testkit::test_app(
+            "com.extollit.scribobulate.integrationtest.menucoalesce",
+        );
+        let window = crate::window::new_window(&app, "IT", "# doc\n", None);
+        let chrome = crate::winstate::chrome(&window).expect("chrome");
+        let ctx = glib::MainContext::default();
+        for _ in 0..50 {
+            ctx.iteration(false);
+        }
+        let shown = chrome
+            .format_insert_menu
+            .item_attribute_value(0, "label", None)
+            .and_then(|v| v.str().map(str::to_string))
+            .unwrap_or_default();
+
+        update_format_menu_labels(&window, Some(FmtInsertKind::Link));
+        update_format_menu_labels(&window, None);
+        for _ in 0..50 {
+            ctx.iteration(false);
+        }
+
+        let after = chrome
+            .format_insert_menu
+            .item_attribute_value(0, "label", None)
+            .and_then(|v| v.str().map(str::to_string))
+            .unwrap_or_default();
+        assert_eq!(after, shown, "a there-and-back toggle changed the menu");
+        assert_eq!(
+            chrome.format_menu_kind.get(),
+            None,
+            "the DISPLAYED kind must record what the menu shows, not the last request"
+        );
     }
 }
