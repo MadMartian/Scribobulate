@@ -107,9 +107,16 @@ fn legal_ap_rx() -> &'static Regex {
 /// Neither this seat nor the macOS one can settle it. The two errors are not symmetric: a
 /// false positive here costs somebody renaming a file called `com0`, which nothing in this
 /// tree is and nobody writes by accident, while a false negative blocks EVERY Windows clone
-/// of the whole tree. So it flags both until the Windows seat measures `New-Item com0` and
-/// a checkout of a tracked `com0` on a real volume, and relaxes this to `[1-9]` if that is
-/// what the platform actually does.
+/// of the whole tree. So it flags both until the Windows seat measures it.
+///
+/// AND THE MEASUREMENT HAS TO BE THE RIGHT ONE (macOS seat, on reading this): a
+/// shell-created `com0` succeeding proves nothing here, because a `New-Item` and a
+/// `git checkout` of a TRACKED path are different code paths and this check's hazard is the
+/// second. What settles it is a checkout of a tracked `com0` on a real NTFS volume, and the
+/// same for `lpt0` so the pair is measured together rather than one inferred from the
+/// other. Only a checkout that SUCCEEDS justifies relaxing this to `[1-9]`; a refusal means
+/// strict was right. The plant recipe is in check 12's own doc comment, including why the
+/// cleanup must name the path explicitly.
 ///
 /// TWO GAPS THIS DOES NOT COVER, both raised by the macOS seat and neither measured by
 /// anyone yet, so neither is guessed at here: the superscript spellings (`COM¹`, `COM²`,

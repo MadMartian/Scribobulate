@@ -112,6 +112,24 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 
+# The build-gate crate does not get the shipped binary's optimisation settings.
+#
+# The profile above exists for ONE artefact: the release binary whose footprint and
+# behaviour TDD §6 gates. `xtask` is a lint that runs for a second and is never shipped, so
+# cross-crate inlining and whole-crate codegen buy it nothing and cost every `cargo build
+# --release` the time to do it.
+#
+# It is also the configuration under which rustc's LLVM backend crashed once, compiling this
+# crate: `rustc-LLVM ERROR: Do not know how to promote this operator!` at
+# `-C opt-level=3 -C lto=thin -C codegen-units=1`, which failed build-pipeline step 3.
+# I could NOT reproduce it (12 targeted rebuilds, 8 full release builds, all clean), so
+# whether this override removes that crash is UNPROVEN and must not be read as fixed —
+# `lto` cannot be overridden per package at all, so thin LTO still applies at link. The
+# override stands on the first paragraph's reasoning, which needs no crash to justify it.
+[profile.release.package.xtask]
+opt-level = 1
+codegen-units = 16
+
 [dev-dependencies]
 tempfile = "3"
 
