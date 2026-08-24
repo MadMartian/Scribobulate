@@ -105,8 +105,13 @@ fn block_html(block: &Block, doc: &ExportDoc, out: &mut String) {
 }
 
 fn list_html(start: Option<u64>, items: &[ListItem], doc: &ExportDoc, out: &mut String) {
-    // A list whose items carry task markers gets the checkbox class, so its markers
-    // are suppressed and the boxes stand in — the same substitution the preview makes.
+    // The list is CLASSED per list, but the marker is SUPPRESSED per item — the two are
+    // not the same question, and answering the second with the first is what made a
+    // mixed list lose its plain items' bullets. `any()` is correct here: this class is
+    // the semantic "this list contains tasks" (GitHub's markup shape), carrying no
+    // marker rule of its own. The suppression belongs to `li.task-list-item`, because
+    // only an item that draws its own checkbox has anything to stand in for it — which
+    // is exactly the preview's model, where markers are drawn per item in the gutter.
     let is_task = items.iter().any(|i| i.task.is_some());
     let class = if is_task { " class=\"task-list\"" } else { "" };
     match start {
@@ -121,7 +126,13 @@ fn list_html(start: Option<u64>, items: &[ListItem], doc: &ExportDoc, out: &mut 
         }
     }
     for item in items {
-        out.push_str("<li>");
+        // Only a checkbox-bearing item is classed, so a plain item sitting beside one
+        // keeps its bullet in the artefact exactly as the preview draws it.
+        out.push_str(if item.task.is_some() {
+            "<li class=\"task-list-item\">"
+        } else {
+            "<li>"
+        });
         if let Some(checked) = item.task {
             // Disabled: the artefact is a record, and a checkbox a reader could
             // toggle would imply an edit that goes nowhere.
@@ -391,7 +402,7 @@ td.a-r, th.a-r {{ text-align: right; }}
 ul, ol {{ padding-left: {step}px; }}
 li {{ margin-bottom: {li_gap}px; }}
 li::marker {{ color: {marker}; }}
-ul.task-list, ol.task-list {{ list-style: none; padding-left: {step}px; }}
+li.task-list-item {{ list-style: none; }}
 mark {{ background: {mark_bg}; {mark_fg} }}
 sup {{ font-size: {sup}%; vertical-align: super; }}
 sub {{ font-size: {sup}%; vertical-align: sub; }}
@@ -475,6 +486,65 @@ mod html_sink_tests {
         let (palette, theme) = style();
         let d = doc::build(md, &RenderOptions::default());
         render(&d, &palette, &theme)
+    }
+
+    /// **A plain item inside a task list keeps its marker** (TDD 25.3 parity).
+    ///
+    /// The defect this pins had NO on-screen symptom: the preview draws markers per
+    /// item in the gutter, so it was always right, and only an exported file showed
+    /// the plain item with no bullet. Nothing asserted it, which is why it stood.
+    ///
+    /// The oracle is the pair of classes plus the rule that acts on them, because the
+    /// failure was a rule reaching further than the thing it was meant to style:
+    /// suppression on the LIST hits every item; on the ITEM it hits only the ones that
+    /// draw a checkbox. Mutation: moving `list-style: none` back onto `ul.task-list`
+    /// fails this.
+    #[test]
+    fn a_plain_item_beside_a_task_keeps_its_marker_in_the_artefact() {
+        let out = html_of("- A plain item\n- [ ] A task\n- [x] A done task\n");
+
+        // The item that draws a checkbox is the only one whose marker is suppressed.
+        assert_eq!(
+            out.matches("<li class=\"task-list-item\">").count(),
+            2,
+            "exactly the two checkbox items carry the class:\n{out}"
+        );
+        assert!(
+            out.contains("<li>A plain item"),
+            "the plain item must stay unclassed, or the sheet strips its bullet:\n{out}"
+        );
+
+        // And the rule that hides a marker is scoped to the ITEM, never the list.
+        assert!(
+            out.contains("li.task-list-item { list-style: none; }"),
+            "the suppression must be per item:\n{out}"
+        );
+        assert!(
+            !out.contains("ul.task-list { list-style"),
+            "a list-level suppression strips EVERY item's marker — the defect:\n{out}"
+        );
+
+        // The list itself still declares that it contains tasks (GitHub's shape), and
+        // the checkboxes still render disabled.
+        assert!(out.contains("<ul class=\"task-list\">"), "{out}");
+        assert!(out.contains("<input type=\"checkbox\" disabled>"), "{out}");
+        assert!(
+            out.contains("<input type=\"checkbox\" checked disabled>"),
+            "{out}"
+        );
+    }
+
+    /// A list with NO tasks carries none of this markup. Asserted against the emitted
+    /// ELEMENTS, not the whole artefact: the stylesheet states `li.task-list-item`
+    /// unconditionally, so a bare `contains("task-list")` matches the sheet and fails
+    /// on correct output — which is exactly what it did when first written.
+    #[test]
+    fn an_ordinary_list_carries_no_task_markup() {
+        let out = html_of("- one\n- two\n");
+        assert!(!out.contains("<ul class=\"task-list\">"), "{out}");
+        assert!(!out.contains("<li class=\"task-list-item\">"), "{out}");
+        assert!(!out.contains("<input type=\"checkbox\""), "{out}");
+        assert!(out.contains("<li>one"), "{out}");
     }
 
     #[test]
