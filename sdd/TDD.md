@@ -54,20 +54,17 @@
 - **Then** the document renders and the window stays responsive (no indefinite freeze)
 
 ### 1.4c Document file access never freezes the window
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** a document on a slow or unresponsive filesystem (a stalled network share, a spun-down drive, a synced folder)
 - **When** it is opened, saved, reloaded, or re-read because it changed on disk
 - **Then** the window keeps redrawing and responding to input for the whole time the filesystem takes to answer — the operation completes, fails or is refused when the answer arrives, and nothing is lost by waiting
 - **And** this holds for a session restore of many documents too: the windows already on screen stay live while the remaining tabs' files are read
 
 ### 1.4d A document read the application is still waiting on cannot delay a crash-recovery snapshot
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** several open documents whose files are being read at once — a checkout or a sync rewriting a whole tree — on a filesystem that is slow to answer
 - **When** a crash-recovery snapshot of an unsaved document falls due
 - **Then** it is written promptly rather than queued behind the document reads: the application's own file access never occupies enough of the shared I/O capacity to delay the mechanism that protects unsaved work
 
 ### 1.4e A document operation that takes a moment says so
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** an Open, Save, Save As or Reload whose filesystem is slow to answer
 - **When** the operation has been outstanding for about half a second
 - **Then** the status bar reports it ("Saving…", "Reloading…", "Opening…") and stops reporting it the moment the operation ends, however it ends
@@ -117,7 +114,6 @@
 - **And** the file on disk is untouched until the user saves it; an explicit save then writes the buffer, so the mark is not restored — the application holds no per-document encoding state and its own writes are BOM-less UTF-8
 
 ### 1.10 A document containing lone carriage returns
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by the macOS agent 2026-08-20 for the lone-CR ingress repair. -->
 - **Given** text whose lines are separated by a bare `\r` with no `\n` — the classic Mac OS convention, which a keyboard/mouse sharing tool's clipboard bridge still converts to when the receiving machine is a Mac, and which macOS itself abandoned in 2001
 - **When** it arrives by ANY route — a file being opened, reloaded, restored from a session or recovered from a crash snapshot, or text pasted, dropped or middle-click-pasted into the editor
 - **Then** it renders exactly as the same document written with `\n`: headings are headings, blank lines separate blocks, and lists are lists — rather than the whole document collapsing into a single heading in the preview and a single entry in the outline while the editor pane beside it shows the lines laid out correctly
@@ -128,7 +124,6 @@
 - **And** an **undo never puts a lone `\r` back**. On every document reachable in normal use this costs nothing to observe — undo restores exactly the bytes the delete removed, `\r\n` pairs included — because no buffer holds a lone `\r` in the first place. Where the two would differ, the rule wins: a buffer that somehow held one has it repaired on the replay rather than restored verbatim, since byte-exact undo of a sequence no buffer may legally contain is worth less than the rule every derived surface depends on
 
 ### 1.11 What a copy puts on the clipboard
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-20 alongside 1.10, for the clipboard plain-text rework. Marker added 2026-08-22 from a review finding — the sibling rubric written beside it carried one and this did not, which reads as human-authored intent when it is not. -->
 - **Given** a selection in the editor, in a document with syntax highlighting active
 - **When** the reader copies or cuts it, by any route — the keybinding, the Edit menu, the context menu or the selection bubble
 - **Then** what lands on the clipboard is **plain text**, not a rich buffer: pasting it into another application yields the Markdown source, and pasting it back into this one inserts it as a single edit
@@ -137,7 +132,6 @@
 - **And** none of this depends on rich formatting surviving an in-application paste — a Markdown document cannot represent a syntax-highlight tag, so carrying one was never meaningful
 
 ### 1.11a What a middle-click paste inserts
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-21 for the consumer-side middle-click paste fix. -->
 - **Given** a PRIMARY selection on a platform that has one, published by **any** application including this one
 - **When** the reader middle-clicks in the **editor**
 - **Then** the text is inserted as **plain text** at the click position, exactly once, and as a **single** undo step — one Ctrl+Z removes the whole paste
@@ -189,13 +183,11 @@
 - **Then** the header row's cells are **bold on a faint grayish, theme-aware fill** (the `cell-head` CSS class), distinguishing the header from the body rows, which are plain
 
 ### 2.2d A column's delimiter-row alignment reaches the page AND the preview
-*(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-22, from a review finding: GFM column alignment existed only on the export side of a rule that claims parity.)*
 - **Given** a GFM table whose delimiter row states alignments — `|:---|---:|:---:|---|`
 - **When** it is rendered in the preview and exported to PDF and HTML
 - **Then** each column's cells are aligned as its delimiter stated — flush left for `:---` and for a bare `---`, flush right for `---:`, centred for `:---:` — **in all three**, and a cell that is nothing but a link is aligned the same way as a text cell
 - **And** the preview and the export agree column for column: this is Document Rendering CAM row 17, and it was previously broken in the direction that rule does not look — the exports honoured the delimiter row and the preview hardcoded flush-left, so the same document read differently on screen and on the page
 - **And** aligning a link-only cell **moves its text, never its box**: the cell's border still spans the full width of its column, so the table's column rules stay straight down the page (§2.2's "even cell borders"). An alignment that resizes the cell instead shrink-wraps its border to the caption and the rules step in and out row by row — the shape the first fix for this rubric shipped
-*(The clause above is agent-drafted 2026-08-23 from an operator-reported regression — HUMAN-AUTHOR CONFIRM.)*
 
 ### 2.2b Tab-separated tables render as tables
 - **Given** a table whose cells and/or `---` delimiter row are separated by hard tabs (e.g. pasted from a spreadsheet), which GFM alone would reject as a table
@@ -291,7 +283,7 @@
 - **And** when the image renders, its alt text is **not** also shown (the picture stands in for it); when the image **cannot** be shown — blocked by policy, unresolvable path, or a file/URL that fails to decode — a broken-image placeholder icon is shown in its place (never a silent fallback to bare alt text), with the reason in its tooltip (see §14.9)
 - **And** a **destination is a URL, not a raw path**: `![](A%20file.svg)` displays the file named `A file.svg`, as it does on GitHub — and the app's own **Insert Image / Insert Link ▸ Browse** writes that encoded form, so a file chosen from the picker is one the app can read back. A raw space (`![](A file.svg)`) is **not** an image in Markdown and is deliberately not made into one: it renders as literal text, which is what the reader's own Markdown says
 - **And** a contained local image whose **path contains a colon** — a colon in the filename (`assets/notes:v2.png`), or a Windows drive letter (`C:\pics\x.png`) — still renders: the colon is **not** mistaken for a URL scheme and the reference wrongly refused (a genuine `file://`/`smb://` scheme is still blocked; ScrAP-151)
-*(The percent-encoding clause is agent-drafted 2026-08-24 from an operator-reported defect — Browse wrote a raw space into the document and the app then failed to render its own insertion. The "raw space stays literal" half is the operator's explicit decision, recorded so it is not later "fixed" by rewriting the buffer: the pre-pass that would have to do it is contractually length-preserving, ScrAP-75. HUMAN-AUTHOR CONFIRM.)*
+*(The "raw space stays literal" half is a deliberate decision, not an unimplemented case: making it render means rewriting the buffer before parsing, and that pre-pass is contractually length-preserving — `%20` adds two bytes per space and would drift scroll-sync, copy offsets and annotation spans (ScrAP-75).)*
 
 ### 2.21 Wide images fit the preview pane
 - **Given** a document with an image wider than the current preview viewport (a narrow window or a split pane)
@@ -475,14 +467,12 @@
 - **Then** a brief, button-less "File saved." toast appears for ~2.5 s and then auto-dismisses, and "File saved" is announced in the status bar — the same acknowledgement shape a reload gets (5.4), because otherwise a successful save's only feedback is the unsaved indicator *ceasing* to be shown, and an absence is easy to miss. The save and reload notices share one widget, so they can never overlap: whichever happened most recently is the one shown.
 
 ### 4.10 A second Save while one is still being written is dropped, not raced
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** a save of a document that has not finished being written (a slow filesystem)
 - **When** Save is invoked again for the same document
 - **Then** exactly one write happens: the second request is discarded rather than started alongside the first
 - **And** nothing is lost by discarding it — the document is still shown as having unsaved changes and Save is still available, so pressing it again once the first write lands writes the newest text
 
 ### 4.11 A save always writes the document it was invoked for
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** a save that has been invoked for a document
 - **When** the user switches to a different tab before the write completes
 - **Then** the written file, the cleared unsaved-changes state, and the retired recovery data all belong to the document Save was invoked for — not to whichever document is on screen when the write finishes
@@ -527,7 +517,7 @@
 - **And** Save As remains available in every mode regardless of dirty state (it can write a copy of even a clean document to a new path)
 
 ### 4.13 Option+Left/Right moves the caret by a word in every text surface, on macOS
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-20 in response to a reported defect: Option+Left/Right in the editor silently ran GtkSourceView's own `move-words` binding — a word-TRANSPOSITION edit, not navigation — instead of moving the caret, because macOS has no other claim on that key and, ON QUARTZ, GtkSourceView's own class binding wins over the app's Back/Forward accelerator (§23.6) declared on the same keystroke — an ordering measured to be REVERSED on Win32 and X11 (ScrAP-311), so this rubric is macOS-scoped by mechanism and not merely by convention. See accel.rs MAC_RESERVED and macwordnav.rs for the full mechanism, sourced to `gtksourceview.c:953`. -->
+<!-- Why this rubric is macOS-scoped BY MECHANISM rather than by convention: Option+Left/Right in the editor silently ran GtkSourceView's own `move-words` binding — a word-TRANSPOSITION edit, not navigation — instead of moving the caret, because macOS has no other claim on that key and, ON QUARTZ, GtkSourceView's own class binding wins over the app's Back/Forward accelerator (§23.6) declared on the same keystroke — an ordering measured to be REVERSED on Win32 and X11 (ScrAP-311), so this rubric is macOS-scoped by mechanism and not merely by convention. See accel.rs MAC_RESERVED and macwordnav.rs for the full mechanism, sourced to `gtksourceview.c:953`. -->
 - **Given** any of this application's text surfaces has focus, on macOS — the document editor, the find field, the replace field, the annotation comment entry, or the shared prompt field behind Go To Line, Rename and Insert Link/Image/Table
 - **When** the reader presses Option+Left or Option+Right
 - **Then** the caret moves one word back or forward, exactly as Ctrl+Left/Ctrl+Right already do on every platform (Linux/Windows convention) — Option is the macOS spelling of the same movement, not a second, different one
@@ -573,14 +563,12 @@
 ---
 
 ### 5.5 A document that stops being admissible is refused on re-read, not read anyway
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** an open document whose file has since grown past the load limit, or been replaced by something that is not a regular file
 - **When** the application re-reads it — an explicit Reload, a save's check for external changes, or the live-reload watcher noticing it changed
 - **Then** the read is refused rather than attempted: Reload reports why, a save asks before overwriting rather than assuming it is safe, and the watcher does nothing
 - **And** the application never waits on it — the same admission test that guards the first read guards every later one
 
 ### 5.6 Overlapping re-reads of one document never apply an older answer
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** a document being rewritten repeatedly on disk, so several reads of it are outstanding at once
 - **When** those reads complete in an order other than the one they were started in
 - **Then** only the newest read's content is applied; an older one is discarded rather than replacing the buffer with stale text and recording it as the saved baseline
@@ -1396,8 +1384,8 @@
 - **Given** the find bar is open
 - **When** the user switches view mode
 - **Then** the bar stays open (it is not part of the swappable content area)
-- **And** the preview find-match highlights **survive every boundary that rebuilds the preview buffer** — view-mode switch, runtime theme switch, and external reload — re-applied for the active tab rather than left bare until the next match is cycled (Document Rendering CAM row 8; ScrAP-38) *(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-07-19)*
-- **And** a match position is never carried from one pane's occurrence list into the other's: the editor's list and the preview's unified body+cell list are numbered independently, so after a mode switch the counter and the next Next/Prev either resume in the list the visible pane actually owns or start from the top — never at a number that was a position in the *other* list *(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-01)*
+- **And** the preview find-match highlights **survive every boundary that rebuilds the preview buffer** — view-mode switch, runtime theme switch, and external reload — re-applied for the active tab rather than left bare until the next match is cycled (Document Rendering CAM row 8; ScrAP-38)
+- **And** a match position is never carried from one pane's occurrence list into the other's: the editor's list and the preview's unified body+cell list are numbered independently, so after a mode switch the counter and the next Next/Prev either resume in the list the visible pane actually owns or start from the top — never at a number that was a position in the *other* list
 - **And when** the user presses Escape or the close button
 - **Then** the bar hides, match highlighting clears (both body text and inside table cells), and focus returns to the editor
 - **And given** pure-preview mode scrolled to an arbitrary reading position (including within a tall table)
@@ -1412,7 +1400,7 @@
 ### 11.9 Find matches every piece of text the reader can see, links included
 - **Given** pure-preview mode showing a document whose link text appears in each context it can — a body paragraph, a heading, a list item, a blockquote, a table cell **alongside other text**, and a table cell that is **nothing but the link**
 - **When** the user searches for a word that occurs in every one of those link captions
-- **Then** the count includes them all and Next/Prev navigates to each in turn, highlighting it — a link's caption is text on the page, so which widget happens to render it (buffer text, a cell label, or the caption inside a table cell's link button) can never decide whether find sees it (ScrAP-250) *(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-04)*
+- **Then** the count includes them all and Next/Prev navigates to each in turn, highlighting it — a link's caption is text on the page, so which widget happens to render it (buffer text, a cell label, or the caption inside a table cell's link button) can never decide whether find sees it (ScrAP-250)
 
 ### 11.8 Find never acts on a pane the user cannot see
 - **Given** pure-preview mode, and a preview view the application cannot resolve (a widget-tree change has broken the lookup)
@@ -1590,7 +1578,6 @@
 - **Given** the user has scrolled partway through a document in preview or split mode
 - **When** the user changes the zoom level
 - **Then** the viewport stays approximately at the same relative position in the document rather than jumping to the top
-<!-- HUMAN-AUTHOR CONFIRM: clause below added by agent for ScrAP-65. -->
 - **And** this holds for **repeated, rapid** zoom steps (and a zoom taken immediately after a scroll), not only a single well-spaced step — successive zooms do not accumulate an upward drift toward the top
 
 ### 13.8 Zoom is isolated per window (multi-window)
@@ -1604,7 +1591,6 @@
 - **Then** the moved preview re-renders fully at the destination window's zoom — **both** the font and the pixel geometry (heading scale, spacing, and especially table-cell layout) scale together, with no residual garble from the source zoom — and the source window is otherwise unaffected (ScrAP-64)
 
 ### 13.10 The editor stays responsive after switching out of a zoomed preview
-<!-- HUMAN-AUTHOR CONFIRM: added by agent for ScrAP-65. -->
 - **Given** the user changed the zoom level while in preview mode
 - **When** they switch to edit (or split) mode
 - **Then** the editor pane is immediately navigable — the mouse wheel, PageUp/PageDown, and the caret all scroll it normally (the reading position carries over and the scroll range is never left frozen/collapsed)
@@ -1851,7 +1837,6 @@
 - **Then** the change is announced politely (the status region carries an accessible "status" role) without stealing keyboard focus
 
 ### 16.7 Every control assistive technology can reach has a name
-*(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-01)*
 - **Given** a screen reader is active, and a window's toolbar, find bar, sidebars and tab strip
 - **When** the user moves focus through the controls
 - **Then** every icon-only button, dropdown and label-less text field announces a name describing the command it runs — not silence, and not the file path or availability note that a tooltip may separately carry
@@ -1860,13 +1845,12 @@
 - **And** a shortcut is announced as a shortcut rather than as part of the control's name
 
 ### 16.8 A timed status notice clears from the window that showed it
-*(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-02)*
 - **Given** a transient status-bar notice is up in a window (a "File reloaded"/"File saved" announcement, a link-navigation error, or "File deleted on disk"), and it clears itself after a few seconds
 - **When** the tab that raised it is dragged to another window, or closed, before the notice's time is up
 - **Then** the notice still clears from the window it appeared in, leaving that window's persistent status (§4.4) intact underneath — it is never left on screen permanently, and it never appears in the window the tab moved to
 
 ### 16.9 A menu item's shortcut hint is the key that command is bound to
-*(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-21. Drafted for a review finding that measurement refuted, and aimed at what survived. The finding was that two View-menu items set no `accel` attribute and therefore showed no key. They showed the right key: GTK derives the hint from the registered accelerator when the model declares none, MEASURED on two release binaries driven identically (GTK 4.6.9/X11) and read off the live macOS system menu bar by the `mac` seat through the Accessibility API. The attribute was then removed everywhere, since it could only restate the binding or silently contradict it — a third binary proved an attribute WINS over the binding. The reachable defect is therefore a command whose accelerator is never registered, which is the one state that yields a hintless item.)*
+*(Drafted for a review finding that measurement refuted, and aimed at what survived. The finding was that two View-menu items set no `accel` attribute and therefore showed no key. They showed the right key: GTK derives the hint from the registered accelerator when the model declares none, MEASURED on two release binaries driven identically (GTK 4.6.9/X11) and read off the live macOS system menu bar by the `mac` seat through the Accessibility API. The attribute was then removed everywhere, since it could only restate the binding or silently contradict it — a third binary proved an attribute WINS over the binding. The reachable defect is therefore a command whose accelerator is never registered, which is the one state that yields a hintless item.)*
 - **Given** a command that has a keyboard shortcut and a menu-bar item
 - **When** the user opens the menu containing it
 - **Then** that item shows the command's shortcut beside its label, in the platform's own spelling (Cmd on macOS, Ctrl elsewhere), and the key shown is the key that command is actually bound to — agreeing with the shortcuts window (§16.2) and the toolbar tooltip (§16.4), the other two discoverability surfaces
@@ -2687,7 +2671,6 @@ created by an act of navigation, and traversing history is not one of them.**
 - **And** their sensitivity is correct immediately after every event that can change it — a navigation, a traversal, a tab closing, a tab moving to another window — never only after some later unrelated interaction
 
 ### 23.6 The browser's own inputs work
-<!-- HUMAN-AUTHOR CONFIRM: macOS spelling added by agent 2026-08-20, in response to a reported defect — see TDD §4.13. -->
 - **Given** a window with history in both directions
 - **When** the reader presses Alt+Left / Alt+Right (Cmd+[ / Cmd+] on macOS — see below), or the dedicated Back / Forward keys a keyboard may carry (`XF86Back` / `XF86Forward`), or the two thumb buttons a mouse may carry (buttons 8 and 9)
 - **Then** each drives the same navigation as the menu item — one action, several inputs, no per-input behaviour
