@@ -101,6 +101,10 @@ const WIN_ILLEGAL: &[&str] = &[
     "src/nul.txt/x.rs",
     "src/con.foo/x.rs",
     "src/lpt0/x.rs",
+    // `com0` sits beside `lpt0` because the predicate treats them alike. Which side the
+    // PAIR belongs on is an open measurement for the Windows seat (see `device_name_rx`);
+    // that they belong on the SAME side is not open, and the corpus used to claim otherwise.
+    "src/com0/x.rs",
     "a./b.md",
     "a /b.md",
     // The control character and the newline. Neither survives a heredoc corpus, which is
@@ -122,7 +126,6 @@ const WIN_LEGAL: &[&str] = &[
     "src/console/x.rs",
     "src/nullable/x.rs",
     "src/a.b/x.rs",
-    "src/com0/x.rs",
     "src/conin/x.rs",
     "src/conout/x.rs",
 ];

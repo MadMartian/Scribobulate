@@ -91,9 +91,36 @@ fn legal_ap_rx() -> &'static Regex {
 }
 
 /// The reserved Win32 device names, in any path component, with or without an extension.
+///
+/// `COM` AND `LPT` TAKE THE SAME DIGIT RANGE, and that symmetry is a correction rather than
+/// a preference. The two shell ports spelled this `COM[0-9]|LPT[0-9]`, this crate inherited
+/// the spelling verbatim, and the corpus inherited its consequence: `src/com0/x.rs` sat in
+/// the LEGAL list while `src/lpt0/x.rs` sat in the ILLEGAL one. Two identically shaped paths
+/// cannot both be right, and a corpus asserting opposite verdicts for one shape is worse
+/// than either answer, because the next reader resolves it in whichever direction they
+/// happen to look first. Found by the macOS seat ratifying this crate.
+///
+/// UNMEASURED, AND DELIBERATELY RESOLVED TOWARD THE STRICT SIDE. Microsoft's current
+/// "Naming Files, Paths, and Namespaces" lists `COM0`-`COM9` and `LPT0`-`LPT9` as reserved;
+/// historically only 1-9 were, and the operative authority is not the documentation but
+/// whether `git checkout` refuses the path, which only a real Windows volume can answer.
+/// Neither this seat nor the macOS one can settle it. The two errors are not symmetric: a
+/// false positive here costs somebody renaming a file called `com0`, which nothing in this
+/// tree is and nobody writes by accident, while a false negative blocks EVERY Windows clone
+/// of the whole tree. So it flags both until the Windows seat measures `New-Item com0` and
+/// a checkout of a tracked `com0` on a real volume, and relaxes this to `[1-9]` if that is
+/// what the platform actually does.
+///
+/// TWO GAPS THIS DOES NOT COVER, both raised by the macOS seat and neither measured by
+/// anyone yet, so neither is guessed at here: the superscript spellings (`COM¹`, `COM²`,
+/// `COM³`, which the same Microsoft page lists), and a literal backslash in a tracked path,
+/// which Win32 reads as a separator so the file silently lands somewhere else rather than
+/// making the checkout refuse. The second is a different hazard class from this check's
+/// (silent divergence, not a blocked tree) and wants its own decision, not a quiet addition
+/// to this pattern.
 fn device_name_rx() -> &'static Regex {
     static RX: OnceLock<Regex> = OnceLock::new();
-    rx(&RX, r"(?i)^(CON|PRN|AUX|NUL|COM[1-9]|LPT[0-9])(\..*)?$")
+    rx(&RX, r"(?i)^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?$")
 }
 
 /// A reverse-DNS identifier ending in `scribobulate`, for check 7's foreign-ID sweep.
