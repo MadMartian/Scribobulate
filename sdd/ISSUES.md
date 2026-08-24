@@ -25,7 +25,6 @@ entry can still be the worst thing in the register.
 | Q | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | R | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | S | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
-| U | Any | Upstream | Build-pipeline step 3 went red once on `rustc-LLVM ERROR: Do not know how to promote this operator!` compiling the `xtask` gate crate at `-C opt-level=3 -C lto=thin -C codegen-units=1`. Not reproduced in 20 subsequent builds, so the cause is unproven and a re-run is green | Low |
 
 ## A. Tables are selection islands
 
@@ -604,44 +603,3 @@ here because this entry exists in order to be deleted when the defect is fixed, 
 evidence must outlive it. Do not restate its figures here; several carry caveats that do not
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
-
-## U. A release build of the gate crate crashed rustc's LLVM backend, once
-
-**Severity**: Low (nothing shipped is affected, and a re-run is green. It is here because
-a flaky RED is worse than a rare one: build-pipeline step 3 is a required gate, so its
-failure reads as a verdict on whoever's change was in the tree at the time, and the next
-person to see this error will otherwise spend an hour looking for it in their own diff.)
-
-**Scope note**: `Upstream` because the failing component is `rustc`/LLVM's codegen, not
-this repository. There is no fix here to schedule.
-
-**Symptom**: `scripts/pipeline.sh` failed at step 3 with
-
-```text
-rustc-LLVM ERROR: Do not know how to promote this operator!
-error: could not compile `xtask` (bin "xtask")
-```
-
-on rustc 1.95.0 (59807616e), compiling `xtask/src/main.rs` with
-`-C opt-level=3 -C lto=thin -C codegen-units=1` (the application's release profile, which
-the gate crate inherited by being a workspace default member). The immediately preceding
-edit was a doc comment, which cannot change codegen.
-
-**Not reproduced, and that is the finding.** 12 targeted rebuilds of the crate and 8 full
-`cargo build --release` runs, each forced by touching the sources, were all clean; the
-retry of the failing command itself succeeded. So the trigger is unknown. Do not read the
-20 clean builds as evidence the crash is gone: they are evidence only that it is rare,
-which is exactly what makes it expensive.
-
-**What was done about it, and what was NOT.** `Cargo.toml` now gives the crate its own
-`[profile.release.package.xtask]` at `opt-level = 1`, `codegen-units = 16`. That override
-stands on its own reasoning — a lint that runs for a second and is never shipped has no
-business carrying the shipped binary's optimisation settings, and it costs every release
-build the time to do it. **It is not a proven fix**: `lto` cannot be overridden per package
-at all, so thin LTO still applies, and with no reproduction there was nothing to test a fix
-against. If this recurs, the useful next step is to capture the failing invocation and
-report it upstream rather than to keep tuning flags here.
-
-**If you are reading this because step 3 just went red on that error**: re-run it. If it
-passes, the tree is fine and your change is not implicated. If it fails twice on the same
-tree, this entry no longer describes what you have.

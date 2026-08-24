@@ -108,6 +108,11 @@ const WIN_ILLEGAL: &[&str] = &[
     "LPT0.md",
     "a./b.md",
     "a /b.md",
+    // The backslash. Win32 reads it as a separator and git refuses the whole tree over it,
+    // MEASURED rather than assumed — it was expected to be a silent-divergence case and is
+    // not (Windows seat, git 2.49.0.windows.1).
+    "a\\b.txt",
+    "src/dir\\file.rs",
     // The control character and the newline. Neither survives a heredoc corpus, which is
     // why the shell port could not carry them: the first is invisible in a source listing
     // and the second IS the corpus separator there. Both are ordinary string literals here.

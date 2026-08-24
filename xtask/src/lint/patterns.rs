@@ -254,6 +254,16 @@ pub fn win_illegal_path(path: &str) -> bool {
     }) {
         return true;
     }
+    // A LITERAL BACKSLASH, which is its own rule rather than a member of the set above: it
+    // is not an illegal CHARACTER on Win32, it is the separator, and the expectation here
+    // was that a tracked `a\b.txt` would land somewhere else silently — a divergence class
+    // this check does not cover. MEASURED by the Windows seat and that premise is refuted:
+    // git refuses it exactly like a reserved name, `error: invalid path 'a\b.txt'`, whole
+    // tree, nothing applied (verified by a clone directory containing only `.git`). Same
+    // class and same blast radius as every other rule here, so it belongs here.
+    if path.contains('\\') {
+        return true;
+    }
     // PER COMPONENT. `/` is the separator in everything this gate sees (`git ls-files -z`),
     // so splitting on it is exact rather than a guess.
     path.split('/').any(|segment| {
