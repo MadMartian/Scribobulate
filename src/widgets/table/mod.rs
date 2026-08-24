@@ -278,6 +278,70 @@ mod gtk_integration_tests {
     use super::*;
     use gtk::subclass::prelude::*;
 
+    /// **A pure-link cell's border box fills its column** — the live half of the
+    /// regression the operator reported: a link cell's `.cell` border shrink-wrapped to
+    /// its caption and floated inside the column, so the table's vertical rules moved
+    /// from row to row while the text cells beside it stayed flush.
+    ///
+    /// The cause is not decidable from data — it is what GTK does with a non-Fill
+    /// `halign` at allocation time (the widget is given only its natural width), so the
+    /// oracle has to be a real allocation. Mutation: restoring
+    /// `btn.set_halign(Align::Center)` at the cell's construction fails this.
+    #[gtktest::test]
+    fn a_link_cells_border_box_fills_its_column() {
+        // A wide text cell above a narrow link cell in the SAME column, so the column
+        // is fitted much wider than the link caption wants — the only shape in which
+        // a shrink-wrapped box is distinguishable from a filled one.
+        let wide: gtk::Widget = gtk::Label::builder()
+            .label("a deliberately wide header cell")
+            .build()
+            .upcast();
+        let link = crate::widgets::table::link_cell_button(
+            "https://example.com/1",
+            "#295",
+            crate::mdtable::Align::Center,
+        );
+        // Built exactly as the renderer builds it — a framed button carries the
+        // theme's own button chrome, which is not what a table cell is.
+        link.set_has_frame(false);
+        link.add_css_class("cell");
+        let link_w: gtk::Widget = link.clone().upcast();
+        let table = ScribTableWidget::new(vec![vec![wide], vec![link_w]]);
+        table.set_bound_width(600);
+
+        let (total_w, total_h) = table.imp().layout.borrow().total;
+        // The link cell is the only cell in row 1, so its slot IS the column.
+        let col_w = table.imp().layout.borrow().rects[1].width();
+        table.allocate(total_w, total_h, -1, None);
+
+        // Two oracles, because the ambient theme has a say in the second. The table
+        // hands the cell its whole grid slot — that is the decision under test, and it
+        // is exact. What the cell's CSS box then does with that slot includes any
+        // margin the desktop theme puts on a `button` node (14px under the test
+        // environment's fallback theme, 0 under the app's own sheet), so the box is
+        // checked against the caption it must NOT be shrink-wrapped to instead.
+        let (_, nat_w, _, _) = link.measure(gtk::Orientation::Horizontal, -1);
+        assert_eq!(
+            link.allocation().width(),
+            col_w,
+            "the link cell must be allocated its whole grid slot; a non-Fill halign \
+             shrinks it to the caption and the column rule breaks"
+        );
+        assert!(
+            link.width() > nat_w,
+            "the cell's CSS box ({}px) must span more than its caption wants ({nat_w}px) \
+             — a box at the caption's own width IS the shrink-wrapped border",
+            link.width()
+        );
+        // And neither assertion is vacuous: the slot must be genuinely wider than the
+        // caption wants, or a shrink-wrapped box would satisfy them too.
+        assert!(
+            nat_w < col_w,
+            "fixture no longer discriminates: the caption's natural width {nat_w} must \
+             be under the fitted column width {col_w}"
+        );
+    }
+
     /// `set_bound_inset` narrows the fit target: after `set_bound_width(px)` the table's
     /// measured width is `≤ px − inset`, so an indented table fits inside the column its
     /// enclosing list/blockquote leaves it (GTK4Rs/AP-23a). Wide cells force the fit to

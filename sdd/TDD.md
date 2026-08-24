@@ -194,6 +194,8 @@
 - **When** it is rendered in the preview and exported to PDF and HTML
 - **Then** each column's cells are aligned as its delimiter stated — flush left for `:---` and for a bare `---`, flush right for `---:`, centred for `:---:` — **in all three**, and a cell that is nothing but a link is aligned the same way as a text cell
 - **And** the preview and the export agree column for column: this is Document Rendering CAM row 17, and it was previously broken in the direction that rule does not look — the exports honoured the delimiter row and the preview hardcoded flush-left, so the same document read differently on screen and on the page
+- **And** aligning a link-only cell **moves its text, never its box**: the cell's border still spans the full width of its column, so the table's column rules stay straight down the page (§2.2's "even cell borders"). An alignment that resizes the cell instead shrink-wraps its border to the caption and the rules step in and out row by row — the shape the first fix for this rubric shipped
+*(The clause above is agent-drafted 2026-08-23 from an operator-reported regression — HUMAN-AUTHOR CONFIRM.)*
 
 ### 2.2b Tab-separated tables render as tables
 - **Given** a table whose cells and/or `---` delimiter row are separated by hard tabs (e.g. pasted from a spreadsheet), which GFM alone would reject as a table

@@ -29,6 +29,7 @@
 //!   connections delegate to, which cannot return anything else (GTK4Rs/AP-239).
 
 use crate::codeview::CodePreviewView;
+use crate::mdtable::Align;
 use gtk::prelude::*;
 use gtk::{glib, Label, LinkButton};
 
@@ -48,7 +49,18 @@ use gtk::{glib, Label, LinkButton};
 /// overrides bypasses the containment gate, so the one thing that must never be
 /// forgotten is the one thing a caller cannot be trusted to remember. Only the
 /// `.cell` styling classes stay with the render path that knows the cell's context.
-pub(crate) fn link_cell_button(url: &str, caption: &str) -> LinkButton {
+///
+/// **The column's alignment is applied to the caption, never to the button.** The
+/// button keeps GTK's default `halign`/`valign` of `Fill`, so it is allocated the whole
+/// grid slot `ScribTableWidget` computed for it and the `.cell` border it carries spans
+/// that slot — the table's column rules stay continuous down the page. Setting a
+/// non-Fill `halign` instead shrinks the allocation to the caption's natural width, and
+/// the border shrink-wraps the text and floats inside the column, a different width on
+/// every row. That is the same reasoning the plain-cell branch already
+/// applies with `valign(Fill)` + `yalign`, and it is enforced here rather than at the
+/// call site because the alignment and the box-filling invariant are one decision that
+/// was split across two — which is exactly how they came apart.
+pub(crate) fn link_cell_button(url: &str, caption: &str, align: Align) -> LinkButton {
     // This function IS the sanctioned route the clippy ban names.
     #[allow(clippy::disallowed_methods)]
     let btn = LinkButton::with_label(url, caption);
@@ -56,7 +68,12 @@ pub(crate) fn link_cell_button(url: &str, caption: &str) -> LinkButton {
     match link_cell_caption(btn.upcast_ref::<gtk::Widget>()) {
         // `set_markup` sets the text and `use-markup` in one call, so the label is
         // never briefly holding an unescaped string with markup parsing already on.
-        Some(label) => label.set_markup(&glib::markup_escape_text(caption)),
+        // `xalign` — NOT the button's `halign` — carries the column's alignment, for
+        // the reason in this function's doc comment.
+        Some(label) => {
+            label.set_markup(&glib::markup_escape_text(caption));
+            label.set_xalign(align.xalign());
+        }
         // GtkButton has built its label child from `set_label` since GTK4's first
         // release; if that ever changes, the caption is simply unreachable to find,
         // which is the silent failure this module exists to end — so say so loudly.
@@ -224,6 +241,7 @@ mod tests {
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
     use super::{link_cell_button, link_cell_caption};
+    use crate::mdtable::Align;
     use gtk::prelude::*;
 
     /// The builder and the reader agree: what goes in as a caption comes back out as
@@ -231,7 +249,7 @@ mod gtk_integration_tests {
     /// reader sees on screen.
     #[gtktest::test]
     fn a_link_cells_caption_is_readable_back_as_plain_text() {
-        let btn = link_cell_button("https://example.com/h", "Handbook");
+        let btn = link_cell_button("https://example.com/h", "Handbook", Align::None);
         let label = link_cell_caption(btn.upcast_ref::<gtk::Widget>())
             .expect("a pure-link cell exposes its caption label");
         assert_eq!(label.text(), "Handbook");
@@ -243,7 +261,7 @@ mod gtk_integration_tests {
     /// which is what the `text()` assertion below would catch.
     #[gtktest::test]
     fn a_caption_with_markup_metacharacters_renders_literally() {
-        let btn = link_cell_button("https://example.com/h", "R&D <draft> notes");
+        let btn = link_cell_button("https://example.com/h", "R&D <draft> notes", Align::None);
         let label = link_cell_caption(btn.upcast_ref::<gtk::Widget>())
             .expect("a pure-link cell exposes its caption label");
         assert_eq!(
@@ -257,6 +275,44 @@ mod gtk_integration_tests {
              own markup in a transient <span>, which a plain-text label would then \
              show literally or fail to parse (GTK4Rs/AP-45/ScrAP-163)"
         );
+    }
+
+    /// **The column's alignment lands on the caption, and the button stays Fill.**
+    ///
+    /// The button's `.cell` border is the table's column rule, so the button must be
+    /// allocated the whole grid slot; a non-Fill `halign` shrinks it to the caption and
+    /// the rules break up row to row (the live half of this is pinned in
+    /// `widgets::table`'s `a_link_cells_border_box_fills_its_column`). Both halves are
+    /// asserted here because they are one decision: alignment must be expressed in a
+    /// way that does NOT resize the box.
+    #[gtktest::test]
+    fn a_link_cells_alignment_moves_the_caption_not_the_button() {
+        for (align, xalign) in [
+            (Align::None, 0.0_f32),
+            (Align::Left, 0.0),
+            (Align::Center, 0.5),
+            (Align::Right, 1.0),
+        ] {
+            let btn = link_cell_button("https://example.com/h", "#295", align);
+            let caption = link_cell_caption(btn.upcast_ref::<gtk::Widget>())
+                .expect("a pure-link cell exposes its caption label");
+            assert_eq!(
+                caption.xalign(),
+                xalign,
+                "{align:?} must be carried by the caption's xalign"
+            );
+            assert_eq!(
+                btn.halign(),
+                gtk::Align::Fill,
+                "{align:?} must not be expressed as the button's halign: a non-Fill \
+                 halign shrink-wraps the cell's border to the caption"
+            );
+            assert_eq!(
+                btn.valign(),
+                gtk::Align::Fill,
+                "{align:?} must leave the button filling its row height"
+            );
+        }
     }
 
     /// The reader answers `None` for a cell that is not a pure-link cell, so a walk

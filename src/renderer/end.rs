@@ -127,25 +127,14 @@ impl Renderer {
                             // caption is installed and how it is read back — a walk
                             // over a table's cells must be able to reach this text
                             // (ScrAP-250).
-                            let btn = link_cell_button(&url, &ts.cell_plain);
+                            // The cell seam takes the column's alignment and applies
+                            // it to the CAPTION, leaving the button at its default
+                            // `halign`/`valign` of Fill so its `.cell` border spans the
+                            // whole grid slot — see `link_cell_button`. A non-Fill
+                            // `halign` here instead shrink-wraps the border to the
+                            // caption and breaks the column's rules row to row.
+                            let btn = link_cell_button(&url, &ts.cell_plain, align);
                             btn.set_has_frame(false);
-                            // A GtkButton fills its cell, so the column's alignment has
-                            // to move the BUTTON within the cell rather than the text
-                            // within the button — `xalign` on the inner caption label
-                            // would leave the button's own box flush left.
-                            //
-                            // Setting it also fixes an inconsistency nobody had
-                            // reported: with no `halign` a GtkLinkButton defaults to
-                            // Fill and centres its own caption, so a pure-link cell
-                            // rendered CENTRED while the text cells beside it in the
-                            // same column rendered flush left — one table disagreeing
-                            // with itself. MEASURED against a pre-change binary on a
-                            // four-column fixture.
-                            btn.set_halign(match align {
-                                crate::mdtable::Align::Center => gtk::Align::Center,
-                                crate::mdtable::Align::Right => gtk::Align::End,
-                                _ => gtk::Align::Start,
-                            });
                             btn.add_css_class("cell");
                             if ts.in_head {
                                 btn.add_css_class("cell-head");
