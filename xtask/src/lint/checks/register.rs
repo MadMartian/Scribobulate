@@ -198,7 +198,7 @@ const ENTRY_FAIL: u64 = 15_000;
 pub fn growth(tree: &Tree) -> bool {
     header("11", "register growth (bytes, not lines)");
     let text = tree.text(REGISTER).unwrap_or_default();
-    let register_bytes = text.len() as u64;
+    let register_bytes = normalised_bytes(text);
     let mut failed = false;
 
     if register_bytes > REGISTER_FAIL {
@@ -298,6 +298,22 @@ pub fn body_without_toc_row(tree: &Tree) -> bool {
             "entry absent from it is unreachable by the path meant to find it.",
         ],
     )
+}
+
+/// The size of a text in bytes AS THE REPOSITORY STORES IT — one newline per line,
+/// whatever the working copy materialised.
+///
+/// This is not pedantry, it is the difference between a gate and a platform split.
+/// `.gitattributes` sets `* text=auto`, so a Windows checkout of the register is CRLF and a
+/// Linux one is LF; a raw byte count therefore reads ~4,300 bytes larger on Windows for
+/// identical content. MEASURED at the time of writing: 645,326B on Linux against 649,617B
+/// on Windows, with the ceiling at 650,000. Nothing was failing — and the next few
+/// paragraphs added to the register would have failed the gate on Windows alone, for a
+/// reason that has nothing to do with growth, in the one gate whose whole purpose is that
+/// no platform is the lenient one. The per-entry figures were already line-based and so
+/// already immune; this makes the total agree with them.
+pub fn normalised_bytes(text: &str) -> u64 {
+    text.lines().map(|line| line.len() as u64 + 1).sum()
 }
 
 /// Each entry's body size in bytes — the lines below its heading, up to the next one. The

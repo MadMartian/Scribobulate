@@ -317,6 +317,23 @@ fn a_paragraph_naming_both_attributes_is_a_contrast_not_an_instruction() {
     );
 }
 
+// ── Check 11: the growth ratchet does not depend on the checkout ──────────────
+
+/// A Windows checkout of the register is CRLF and a Linux one is LF (`.gitattributes` sets
+/// `* text=auto`), so a raw byte count makes the same commit measure ~4,300 bytes larger on
+/// one platform. That is a lenient/strict platform split in the gate that exists to prevent
+/// exactly those, and it was 383 bytes from firing when this was written.
+#[test]
+fn the_growth_ratchet_measures_the_same_on_either_line_ending() {
+    let lf = "## 1. A heading\n**Symptom**: something\n**Scribobulate**: somewhere\n";
+    let crlf = lf.replace('\n', "\r\n");
+    assert_eq!(
+        crate::lint::checks::register::normalised_bytes(lf),
+        crate::lint::checks::register::normalised_bytes(&crlf),
+        "the ratchet reads a CRLF working copy as a bigger register than an LF one"
+    );
+}
+
 // ── The scan set ──────────────────────────────────────────────────────────────
 
 fn repo() -> PathBuf {

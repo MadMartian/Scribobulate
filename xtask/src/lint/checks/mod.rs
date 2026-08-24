@@ -7,7 +7,7 @@
 
 mod architecture;
 pub mod references;
-mod register;
+pub mod register;
 
 use crate::lint::Tree;
 
