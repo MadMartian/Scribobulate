@@ -151,18 +151,6 @@ heading_font  = 'Orbitron, Michroma, Jura, "Exo 2", sans-serif'
 # and both stacks fall through to Jura/Exo 2 identically.
 heading_colors = ["#ff3caf", "", "", "", ""]
 heading_fonts  = ['Michroma, Orbitron, Jura, sans-serif', "", "", "", ""]
-# A neon HORIZON under every heading — the one outrun motif a text attribute can
-# actually draw, and the cheapest real flare available: `underline` on a heading is a
-# Pango tag property the preview never set before. Magenta rather than the heading's own
-# gold so the line reads as furniture rather than as part of the letterforms (5.59:1 on
-# this page — well clear of the 3:1 floor a non-text graphic answers to).
-#
-# The rule is BELOW rather than above because that is the side a theme can colour:
-# `heading_overline` exists and is drawn in the heading's own ink, and there is no
-# `heading_overline_rgba` key, because GTK 4.6 double-frees a run carrying both a
-# coloured overline and a coloured underline (see src/theme.rs, `HeadingRule`).
-heading_underline      = "single"
-heading_underline_rgba = "#ff3caf"
 # A BAND behind the top two heading levels — the outrun sunset behind the title, and the
 # first decoration in the vocabulary that is a drawn thing in its own right rather than a
 # property of something already painted. Per level, and only h1/h2 are stated: banding
@@ -174,6 +162,14 @@ heading_underline_rgba = "#ff3caf"
 heading_band_bg          = ["#2b1152", "#221046", "", "", ""]
 heading_band_gradient_to = "#1a1033"
 heading_band_radius      = 6
+# Operator's call 2026-08-26: the per-level colour and the band stay — no heading rule
+# though. `heading_underline`/`heading_underline_rgba` (TDD 18.22) were tried here too;
+# dropped by preference, independently of the colour/band decision above (these three
+# keys are independent knobs, not a package — TDD 18.21/18.22/18.25 are three separate
+# rubrics for a reason). `heading_space_above` below is kept regardless — it is its own
+# taste of breathing room above a heading, not exclusively "room for the rule to sit in".
+heading_space_above = [18, 14, 10, 8, 8]
+#
 # The outrun pairing, applied to links and to struck text: cyan ink over a magenta line,
 # and a magenta strike that reads as a deliberate mark rather than as the lavender body
 # ink with a scratch through it. The link underline's colour is stated INDEPENDENTLY of
@@ -181,10 +177,6 @@ heading_band_radius      = 6
 # them to match simply omits it.
 link_underline_rgba = "#ff3caf"
 strikethrough_rgba  = "#ff3caf"
-# …and room for it to sit in. A rule flush under the previous paragraph looks like that
-# paragraph's underline, so the space above is part of the decoration, not a separate
-# taste choice; it tapers with the level exactly as heading_space_below does.
-heading_space_above   = [18, 14, 10, 8, 8]
 syntect_theme = "base16-eighties.dark"   # a literal 80s palette for fenced code
 
 # Neon highlights — the amber/yellow defaults are wrong on a neon-dark page, and an

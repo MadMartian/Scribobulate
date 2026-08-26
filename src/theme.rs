@@ -1834,30 +1834,41 @@ mod tests {
         assert!(sys.heading_colors.iter().all(Option::is_none));
         assert!(sys.heading_fonts.iter().all(Option::is_none));
 
-        // Synthwave states h1 only; h2..h5 fall back to its singular keys.
-        let sw = themes.resolve("synthwave");
+        // A synthetic theme states h1 only; h2..h5 fall back to its singular keys.
+        // Synthetic rather than a built-in theme's own content on purpose — content
+        // (which theme demonstrates which key) is free to change, this contract is not.
+        let mut synth = Themes::builtin();
+        synth.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nheading_color = \"#334455\"\nheading_font = \"Georgia, serif\"\n\
+                 heading_colors = [\"#ff3caf\"]\n\
+                 heading_fonts = [\"Michroma, sans-serif\"]\n",
+            )
+            .unwrap(),
+        );
+        let t = synth.resolve("sepia");
         assert_eq!(
-            crate::palette::to_hex(sw.heading_colors[0].expect("h1 is stated")),
+            crate::palette::to_hex(t.heading_colors[0].expect("h1 is stated")),
             "#ff3caf"
         );
-        let gold = crate::palette::to_hex(sw.heading_color.expect("synthwave sets one"));
+        let base = crate::palette::to_hex(t.heading_color.expect("theme sets one"));
         for level in 1..5 {
             assert_eq!(
-                crate::palette::to_hex(sw.heading_colors[level].expect("falls back")),
-                gold,
+                crate::palette::to_hex(t.heading_colors[level].expect("falls back")),
+                base,
                 "h{} did not fall back to heading_color",
                 level + 1
             );
         }
-        assert!(sw.heading_fonts[0]
+        assert!(t.heading_fonts[0]
             .as_ref()
             .expect("h1 face is stated")
             .as_str()
             .starts_with("\"Michroma\""));
         for level in 1..5 {
             assert_eq!(
-                sw.heading_fonts[level].as_ref().map(|f| f.as_str()),
-                sw.heading_font.as_ref().map(|f| f.as_str()),
+                t.heading_fonts[level].as_ref().map(|f| f.as_str()),
+                t.heading_font.as_ref().map(|f| f.as_str()),
                 "h{} did not fall back to heading_font",
                 level + 1
             );
@@ -1951,15 +1962,26 @@ mod tests {
     /// to silently drop every user override).
     #[test]
     fn a_theme_states_each_heading_rule_side_independently_and_merges() {
-        let sw = Themes::builtin().resolve("synthwave");
-        assert_eq!(sw.heading_rule.underline, LineStyle::Single);
-        assert_eq!(
-            crate::palette::to_hex(sw.heading_rule.underline_rgba.expect("stated")),
-            "#ff3caf"
+        // Synthetic rather than a built-in theme's own content on purpose — content is
+        // free to change, this contract is not.
+        let mut synth = Themes::builtin();
+        synth.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nheading_underline = \"single\"\n\
+                 heading_underline_rgba = \"#3e6fa0\"\n\
+                 heading_space_above = [16, 12, 8, 6, 6]\n",
+            )
+            .unwrap(),
         );
-        // Synthwave states no overline, so that side stays off.
-        assert_eq!(sw.heading_rule.overline, LineStyle::None);
-        assert_eq!(sw.metrics.heading_space_above, [18, 14, 10, 8, 8]);
+        let t = synth.resolve("sepia");
+        assert_eq!(t.heading_rule.underline, LineStyle::Single);
+        assert_eq!(
+            crate::palette::to_hex(t.heading_rule.underline_rgba.expect("stated")),
+            "#3e6fa0"
+        );
+        // This theme states no overline, so that side stays off.
+        assert_eq!(t.heading_rule.overline, LineStyle::None);
+        assert_eq!(t.metrics.heading_space_above, [16, 12, 8, 6, 6]);
 
         let mut themes = Themes::builtin();
         themes.merge_over(
@@ -2173,21 +2195,31 @@ mod tests {
     /// (the `take!`-list guard once more), and an unstated level carries no band.
     #[test]
     fn a_theme_bands_the_levels_it_names_and_no_others() {
-        let sw = Themes::builtin().resolve("synthwave");
-        assert!(!sw.heading_band.is_absent());
+        // Synthetic rather than a built-in theme's own content on purpose — content is
+        // free to change, this contract is not.
+        let mut synth = Themes::builtin();
+        synth.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nheading_band_bg = [\"#6c2a92\", \"#9e1449\"]\n\
+                 heading_band_gradient_to = \"#101a4d\"\nheading_band_radius = 8\n",
+            )
+            .unwrap(),
+        );
+        let t = synth.resolve("sepia");
+        assert!(!t.heading_band.is_absent());
         assert_eq!(
-            crate::palette::to_hex(sw.heading_band.fills[0].expect("h1 is banded")),
-            "#2b1152"
+            crate::palette::to_hex(t.heading_band.fills[0].expect("h1 is banded")),
+            "#6c2a92"
         );
         assert_eq!(
-            crate::palette::to_hex(sw.heading_band.fills[1].expect("h2 is banded")),
-            "#221046"
+            crate::palette::to_hex(t.heading_band.fills[1].expect("h2 is banded")),
+            "#9e1449"
         );
         // h3..h5 are left empty on purpose — banding every level is a stack of stripes.
-        assert!(sw.heading_band.fills[2].is_none());
-        assert!(sw.heading_band.fills[4].is_none());
-        assert!(sw.heading_band.gradient_to.is_some());
-        assert_eq!(sw.metrics.heading_band_radius, 6);
+        assert!(t.heading_band.fills[2].is_none());
+        assert!(t.heading_band.fills[4].is_none());
+        assert!(t.heading_band.gradient_to.is_some());
+        assert_eq!(t.metrics.heading_band_radius, 8);
 
         let mut themes = Themes::builtin();
         themes.merge_over(
