@@ -162,12 +162,12 @@ pub(crate) fn list_marker_sprite(
     start: Option<u64>,
     depth: u32,
     sprites: &crate::theme::Sprites,
-) -> Option<&std::path::Path> {
+) -> Option<&crate::sprite::SpriteRef> {
     match (task, start) {
-        (Some(true), _) => sprites.list_task_checked.as_deref(),
-        (Some(false), _) => sprites.list_task.as_deref(),
-        (None, Some(_)) => sprites.list_ordered.as_deref(),
-        (None, None) => sprites.list_bullet[crate::theme::depth_tier(depth as usize)].as_deref(),
+        (Some(true), _) => sprites.list_task_checked.as_ref(),
+        (Some(false), _) => sprites.list_task.as_ref(),
+        (None, Some(_)) => sprites.list_ordered.as_ref(),
+        (None, None) => sprites.list_bullet[crate::theme::depth_tier(depth as usize)].as_ref(),
     }
 }
 
@@ -341,23 +341,24 @@ mod tests {
     #[test]
     fn a_bullet_sprite_is_selected_by_depth() {
         let mut sprites = crate::theme::Sprites::default();
-        sprites.list_bullet[0] = Some(std::path::PathBuf::from("/x/1.png"));
-        sprites.list_bullet[1] = Some(std::path::PathBuf::from("/x/2.png"));
-        sprites.list_bullet[2] = Some(std::path::PathBuf::from("/x/3.png"));
-        sprites.list_ordered = Some(std::path::PathBuf::from("/x/o.png"));
+        let at_path = |n: &str| crate::sprite::SpriteRef::File(std::path::PathBuf::from(n));
+        sprites.list_bullet[0] = Some(at_path("/x/1.png"));
+        sprites.list_bullet[1] = Some(at_path("/x/2.png"));
+        sprites.list_bullet[2] = Some(at_path("/x/3.png"));
+        sprites.list_ordered = Some(at_path("/x/o.png"));
         let at = |d: u32| {
             list_marker_sprite(None, None, d, &sprites)
-                .unwrap()
-                .to_owned()
+                .expect("a bullet sprite at every tier")
+                .clone()
         };
-        assert_eq!(at(1), std::path::Path::new("/x/1.png"));
-        assert_eq!(at(2), std::path::Path::new("/x/2.png"));
-        assert_eq!(at(9), std::path::Path::new("/x/3.png"));
+        assert_eq!(at(1), at_path("/x/1.png"));
+        assert_eq!(at(2), at_path("/x/2.png"));
+        assert_eq!(at(9), at_path("/x/3.png"));
         // The ordered arm ignores depth entirely.
         for d in [1u32, 2, 9] {
             assert_eq!(
                 list_marker_sprite(None, Some(1), d, &sprites),
-                Some(std::path::Path::new("/x/o.png"))
+                Some(&at_path("/x/o.png"))
             );
         }
     }
@@ -398,11 +399,9 @@ mod tests {
     fn a_sprite_is_selected_per_marker_kind() {
         let mut sprites = crate::theme::Sprites::default();
         assert!(list_marker_sprite(None, None, 1, &sprites).is_none());
-        sprites.list_bullet[0] = Some(std::path::PathBuf::from("/x/b.png"));
-        assert_eq!(
-            list_marker_sprite(None, None, 1, &sprites),
-            Some(std::path::Path::new("/x/b.png"))
-        );
+        let bullet = crate::sprite::SpriteRef::File(std::path::PathBuf::from("/x/b.png"));
+        sprites.list_bullet[0] = Some(bullet.clone());
+        assert_eq!(list_marker_sprite(None, None, 1, &sprites), Some(&bullet));
         // …and only that kind.
         assert!(list_marker_sprite(None, Some(1), 1, &sprites).is_none());
         assert!(list_marker_sprite(Some(true), None, 1, &sprites).is_none());

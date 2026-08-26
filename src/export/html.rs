@@ -528,12 +528,7 @@ fn heading_band_css(t: &Theme, level_index: usize) -> String {
     // A sprite outranks the fill and the gradient, the same precedence the drawn gutter
     // applies to a marker — and it TILES at natural size here too, so the artefact and
     // the screen show the same picture rather than the same file scaled differently.
-    if let Some((uri, _, _)) = t
-        .sprites
-        .heading_band
-        .as_ref()
-        .and_then(|p| sprite_data_uri(p))
-    {
+    if let Some((uri, _, _)) = t.sprites.heading_band.as_ref().and_then(sprite_data_uri) {
         let _ = write!(out, " background: url({uri}) repeat;");
     } else if let Some(to) = t.heading_band.gradient_to {
         let _ = write!(
@@ -577,8 +572,8 @@ fn task_marker_html(t: &Theme, checked: bool) -> Option<String> {
     } else {
         (&t.sprites.list_task, &t.list_glyphs.task)
     };
-    if let Some(path) = sprite {
-        if let Some((uri, w, h)) = sprite_data_uri(path) {
+    if let Some(sprite) = sprite {
+        if let Some((uri, w, h)) = sprite_data_uri(sprite) {
             return Some(format!(
                 "<img class=\"task-marker\" src=\"{uri}\" width=\"{w}\" height=\"{h}\" alt=\"\">"
             ));
@@ -611,12 +606,7 @@ fn task_marker_html(t: &Theme, checked: bool) -> Option<String> {
 /// transparent, which is this sink's explicit statement that the sprite outranks the
 /// flat colour — the same branch the drawn bar and the PDF each make for themselves.
 fn blockquote_bar_sprite_css(t: &Theme) -> String {
-    let Some((uri, _, _)) = t
-        .sprites
-        .blockquote_bar
-        .as_ref()
-        .and_then(|p| sprite_data_uri(p))
-    else {
+    let Some((uri, _, _)) = t.sprites.blockquote_bar.as_ref().and_then(sprite_data_uri) else {
         return String::new();
     };
     let bar_w = t.metrics.blockquote_bar_width;
@@ -691,7 +681,7 @@ fn list_marker_css(t: &Theme) -> String {
         // on the item with the marker suppressed — the same picture, by the only route
         // CSS offers. `list-style: none` is on the same rule so the two can never be
         // applied apart.
-        if let Some((uri, w, h)) = sprite.as_ref().and_then(|p| sprite_data_uri(p)) {
+        if let Some((uri, w, h)) = sprite.as_ref().and_then(sprite_data_uri) {
             let item = selector.trim_end_matches("::marker");
             let _ = writeln!(
                 css,
@@ -732,13 +722,13 @@ const BULLET_TIER_SELECTORS: [&str; crate::theme::BULLET_TIERS] =
 fn emit_marker_rule(
     css: &mut String,
     item: &str,
-    sprite: &Option<std::path::PathBuf>,
+    sprite: &Option<crate::sprite::SpriteRef>,
     glyph: &Option<crate::theme::MarkerGlyph>,
 ) {
     // A `::marker` cannot carry an image, so a sprite marker becomes a background on the
     // item with the marker suppressed — the same picture, by the only route CSS offers.
     // `list-style: none` is on the same rule so the two can never be applied apart.
-    if let Some((uri, w, h)) = sprite.as_ref().and_then(|p| sprite_data_uri(p)) {
+    if let Some((uri, w, h)) = sprite.as_ref().and_then(sprite_data_uri) {
         let _ = writeln!(
             css,
             "{item} {{ list-style: none; background: url({uri}) no-repeat left \
@@ -892,8 +882,8 @@ fn annotation_chip_css(t: &Theme) -> String {
     // A sprite REPLACES the flat fill (same rule the preview's gutter chip follows) —
     // sized to its own aspect so a non-square chip does not distort, embedded as a
     // data URI so the artefact stays one self-contained file (TDD §25).
-    if let Some(path) = t.sprites.annotation_chip.as_deref() {
-        if let Some((uri, w, h)) = sprite_data_uri(path) {
+    if let Some(sprite) = t.sprites.annotation_chip.as_ref() {
+        if let Some((uri, w, h)) = sprite_data_uri(sprite) {
             let aspect = if h > 0 { w as f64 / h as f64 } else { 1.0 };
             let _ = write!(
                 decl,
@@ -914,16 +904,15 @@ fn annotation_chip_css(t: &Theme) -> String {
 /// trusting a bound set for a different budget.
 const SPRITE_EMBED_CAP: usize = 512 * 1024;
 
-/// A sprite as `(data URI, natural width, natural height)`. Display-free: the
-/// dimensions come from `Pixbuf::file_info`, which reads the header only and decodes
-/// no pixels — required for an export sink, which must run with no display.
-fn sprite_data_uri(path: &std::path::Path) -> Option<(String, i32, i32)> {
+/// A sprite as `(data URI, natural width, natural height)`. Display-free, and source-
+/// agnostic: the bytes come from `crate::sprite::bytes`, so a theme's own file and a
+/// compiled-in sprite reach the artefact by the same route and embed identically.
+fn sprite_data_uri(sprite: &crate::sprite::SpriteRef) -> Option<(String, i32, i32)> {
     use gtk::prelude::TextureExt;
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::sprite::bytes(sprite)?;
     if bytes.is_empty() || bytes.len() > SPRITE_EMBED_CAP {
         log::warn!(
-            "export: sprite {} is {} bytes (cap {SPRITE_EMBED_CAP}) — not embedded",
-            path.display(),
+            "export: sprite {sprite} is {} bytes (cap {SPRITE_EMBED_CAP}) — not embedded",
             bytes.len()
         );
         return None;
@@ -932,14 +921,9 @@ fn sprite_data_uri(path: &std::path::Path) -> Option<(String, i32, i32)> {
     // else, rather than a second image-loading path — `GdkTexture` decodes with no
     // live display (the PDF sink's own `decode` already proves this), so it is safe
     // in an export sink that must run display-free.
-    let tex = crate::sprite::texture(path)?;
+    let tex = crate::sprite::texture(sprite)?;
     let (w, h) = (tex.width(), tex.height());
-    let mime = match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
+    let mime = match sprite.extension().as_deref() {
         Some("png") => "image/png",
         Some("webp") => "image/webp",
         Some("jpg") | Some("jpeg") => "image/jpeg",
@@ -995,7 +979,7 @@ mod html_sink_tests {
         let path = dir.path().join("chip.png");
         std::fs::write(&path, ONE_PIXEL_PNG).unwrap();
         let (_, mut theme) = style();
-        theme.sprites.annotation_chip = Some(path);
+        theme.sprites.annotation_chip = Some(crate::sprite::SpriteRef::File(path));
         let css = super::annotation_chip_css(&theme);
         assert!(css.contains("url(data:image/png;base64,"), "{css}");
         assert!(css.contains("image-rendering: pixelated"), "{css}");
@@ -1438,7 +1422,7 @@ mod html_sink_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bar.png");
         std::fs::write(&path, ONE_PIXEL_PNG).unwrap();
-        theme.sprites.blockquote_bar = Some(path);
+        theme.sprites.blockquote_bar = Some(crate::sprite::SpriteRef::File(path));
         theme.metrics.blockquote_bar_width = 24;
 
         let css = super::stylesheet(&palette, &theme);
@@ -1459,6 +1443,28 @@ mod html_sink_tests {
         );
     }
 
+    /// TDD 18.19/18.24/18.25/18.28 — a **compiled-in** sprite embeds too.
+    ///
+    /// This sink used to reach the bytes with `std::fs::read` on the resolved path,
+    /// which for a built-in theme was a bare theme-relative string: it resolved
+    /// against the process's working directory, so an export ran from a different
+    /// directory silently dropped the decoration and one run from the source tree
+    /// would have "proved" it worked. The sink now reads through
+    /// `crate::sprite::bytes`, which answers for either source, so the assertion is
+    /// that the artefact carries the picture with no file anywhere.
+    #[test]
+    fn a_compiled_in_sprite_is_embedded_by_the_html_sink() {
+        let (palette, mut theme) = style();
+        theme.sprites.blockquote_bar = crate::theme::Themes::builtin()
+            .resolve("pixelquest")
+            .sprites
+            .blockquote_bar;
+        theme.metrics.blockquote_bar_width = 24;
+        let css = super::stylesheet(&palette, &theme);
+        assert!(css.contains("blockquote::before"), "{css}");
+        assert!(css.contains("url(data:image/png;base64,"), "{css}");
+    }
+
     /// TDD 18.24 — a marker SPRITE is embedded, so the artefact stays one self-contained
     /// file (the same rule and the same technique 18.19's chip sprite established).
     #[test]
@@ -1467,8 +1473,13 @@ mod html_sink_tests {
         let path = dir.path().join("dot.png");
         std::fs::write(&path, ONE_PIXEL_PNG).unwrap();
         let (palette, mut theme) = style();
-        theme.sprites.list_bullet = [Some(path.clone()), Some(path.clone()), Some(path.clone())];
-        theme.sprites.list_task = Some(path.clone());
+        let sprite = crate::sprite::SpriteRef::File(path);
+        theme.sprites.list_bullet = [
+            Some(sprite.clone()),
+            Some(sprite.clone()),
+            Some(sprite.clone()),
+        ];
+        theme.sprites.list_task = Some(sprite);
         // A sprite OUTRANKS a glyph for the same marker — the precedence the drawn
         // gutter applies, asserted here so the two sinks cannot drift from it.
         let mut themes = crate::theme::Themes::builtin();
@@ -1541,7 +1552,7 @@ mod html_sink_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("band.png");
         std::fs::write(&path, ONE_PIXEL_PNG).unwrap();
-        theme.sprites.heading_band = Some(path);
+        theme.sprites.heading_band = Some(crate::sprite::SpriteRef::File(path));
         let sprite = super::stylesheet(&palette, &theme);
         let h1 = sprite.lines().find(|l| l.starts_with("h1 ")).expect("h1");
         assert!(h1.contains("url(data:image/png;base64,"), "{h1}");

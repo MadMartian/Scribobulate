@@ -72,6 +72,15 @@ stage_payload() {
     # this copy is an override rather than a requirement.
     install -Dm644 "data/themes.toml" "$root/usr/share/$PKG/themes.toml"
 
+# The sprites that themes.toml's shipped themes name. NOT what makes those themes
+# work -- a built-in theme's sprite is compiled into the binary (`include_bytes!`,
+# src/sprite.rs) precisely so no install step can take a shipped decoration away.
+# This copy exists because the installed themes.toml is itself read as a themes file
+# (search-path row 3), and its own sprite references resolve against its own
+# directory; without the sprites beside it every launch would log a resolution
+# failure for a decoration that is in fact rendering perfectly from the binary.
+    install -Dm644 -t "$root/usr/share/$PKG/sprites" data/sprites/*
+
     # A binary on $PATH with no `man` entry is an incomplete install on a system where
     # `man` is how you ask. Generated rather than carried as a source file: everything
     # in it is already stated in Cargo.toml or the desktop entry, and a second

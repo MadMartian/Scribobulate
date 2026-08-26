@@ -26,7 +26,6 @@ use crate::renderer::ListMarkerKind;
 use crate::theme::{ListGlyphs, MarkerGlyph, Metrics, Sprites};
 use gtk::prelude::*;
 use gtk::{cairo, gdk, graphene};
-use std::path::Path;
 
 /// The per-level step / inter-item gap for one paint, as floats.
 ///
@@ -139,7 +138,7 @@ pub(crate) struct MarkerPaint<'a> {
 /// then only has to know how to render each of the three.
 #[derive(Debug, PartialEq)]
 pub(crate) enum MarkerSubstitute<'a> {
-    Sprite(&'a Path),
+    Sprite(&'a crate::sprite::SpriteRef),
     Glyph(&'a MarkerGlyph),
     /// No substitution: the bullet arc, the ordered numeral, or the drawn checkbox.
     Drawn,
@@ -178,7 +177,7 @@ pub(crate) fn marker_substitute<'a>(
         ListMarkerKind::Task { checked: false, .. } => (&sprites.list_task, &glyphs.task),
     };
     if let Some(p) = sprite {
-        return MarkerSubstitute::Sprite(p.as_path());
+        return MarkerSubstitute::Sprite(p);
     }
     if let Some(g) = glyph {
         return MarkerSubstitute::Glyph(g);
@@ -248,7 +247,7 @@ pub(crate) fn draw_list_marker(
     // paint vector: the gutter already runs for every render, so nothing here touches
     // `snapshot_layer`'s early-return gate and there is no new span vector to install.
     match marker_substitute(kind, paint.depth, paint.glyphs, paint.sprites) {
-        MarkerSubstitute::Sprite(path) => {
+        MarkerSubstitute::Sprite(sprite) => {
             // The SAME box the checkbox uses — themed step, zoom-correct, already the
             // marker column's shared geometry — so bullet, numeral and checkbox sprites
             // all land in one place rather than each inventing a size.
@@ -259,7 +258,7 @@ pub(crate) fn draw_list_marker(
             // takes one is 4.10, above this floor and a link/runtime failure if reached
             // — GTK4Rs/AP-114), so handing it an already-correct texture is the only way
             // pixel art stays crisp at any zoom. `sprite::scaled` caches per size.
-            if let Some(tex) = crate::sprite::scaled(path, w, h) {
+            if let Some(tex) = crate::sprite::scaled(sprite, w, h) {
                 snapshot.append_texture(&tex, &rect);
             }
             return;
@@ -726,7 +725,9 @@ mod substitute_tests {
         // Set the resolved path directly: `resolve` never touches the filesystem, and
         // this test is about the PRECEDENCE, not about sprite validation (which
         // `sprite.rs` owns and `rewrite_sprite_paths` exercises).
-        t.sprites.list_bullet[0] = Some(std::path::PathBuf::from("/x/bullet.png"));
+        t.sprites.list_bullet[0] = Some(crate::sprite::SpriteRef::File(std::path::PathBuf::from(
+            "/x/bullet.png",
+        )));
         assert!(matches!(
             marker_substitute(&ListMarkerKind::Bullet, 1, &t.list_glyphs, &t.sprites),
             MarkerSubstitute::Sprite(_)

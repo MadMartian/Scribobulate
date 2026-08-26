@@ -135,8 +135,8 @@ impl Layouter<'_> {
             .theme
             .sprites
             .heading_band
-            .as_deref()
-            .and_then(|p| std::fs::read(p).ok())
+            .as_ref()
+            .and_then(crate::sprite::bytes)
             .and_then(|bytes| decode(&bytes))
             .map(|(surface, _, _)| surface);
         Some(HeadingBandInk {
@@ -465,7 +465,7 @@ impl Layouter<'_> {
             // line (see `Line::marker`). When one applies, the text run carries NO marker
             // prefix — the same substitution the drawn gutter makes, in this sink's terms.
             let mut sprite = list_marker_sprite(item.task, start, list_depth, &self.theme.sprites)
-                .and_then(|p| std::fs::read(p).ok())
+                .and_then(crate::sprite::bytes)
                 .and_then(|bytes| decode(&bytes));
             let marker = if sprite.is_some() {
                 String::new()

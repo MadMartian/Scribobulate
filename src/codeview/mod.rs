@@ -634,7 +634,7 @@ mod imp {
                     let sprite = band
                         .sprites
                         .heading_band
-                        .as_deref()
+                        .as_ref()
                         .and_then(crate::sprite::texture);
                     for h in heading_spans.iter() {
                         if h.span.is_empty() || h.span.is_outside(vis_start, vis_end) {
@@ -762,7 +762,7 @@ mod imp {
                 let bar_sprite = bqm
                     .sprites
                     .blockquote_bar
-                    .as_deref()
+                    .as_ref()
                     .and_then(crate::sprite::texture);
                 for &quote in blockquotes.iter() {
                     if quote.is_empty() {
@@ -993,11 +993,11 @@ mod imp {
                         let sprite_drawn = chip_th
                             .sprites
                             .annotation_chip
-                            .as_deref()
-                            .and_then(|path| {
+                            .as_ref()
+                            .and_then(|sprite| {
                                 let w = marker_w.round().max(1.0) as i32;
                                 let h = chip_h.round().max(1.0) as i32;
-                                crate::sprite::scaled(path, w, h).map(|tex| (tex, w, h))
+                                crate::sprite::scaled(sprite, w, h).map(|tex| (tex, w, h))
                             })
                             .map(|(tex, w, h)| {
                                 snapshot.append_texture(
@@ -1843,7 +1843,7 @@ mod gtk_integration_tests {
         // Set the resolved path directly: `resolve` never touches the filesystem, and
         // this test is about the PAINT, not about sprite validation (`sprite.rs` owns
         // that, and `rewrite_sprite_paths` exercises it).
-        theme.sprites.blockquote_bar = Some(path.clone());
+        theme.sprites.blockquote_bar = Some(crate::sprite::SpriteRef::File(path.clone()));
         crate::theme::set_active_for_test(theme);
         crate::sprite::clear_cache();
 

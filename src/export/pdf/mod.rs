@@ -414,6 +414,26 @@ mod paper_resolution_tests {
         );
     }
 
+    /// TDD 18.19/18.24/18.25/18.28 — a **compiled-in** sprite decodes for this sink.
+    ///
+    /// Both PDF sprite sites (`ink`'s blockquote bar and heading band, `measure`'s list
+    /// marker) are `crate::sprite::bytes` followed by this `decode`, so pinning the
+    /// pair pins the precondition every one of them rests on. Worth its own case
+    /// because those sites used to be `std::fs::read` on the resolved path, and a
+    /// built-in theme's path was a bare theme-relative string — read against whatever
+    /// directory the export happened to run from.
+    #[test]
+    fn a_compiled_in_sprite_decodes_for_the_pdf_sink() {
+        let bar = Themes::builtin()
+            .resolve("pixelquest")
+            .sprites
+            .blockquote_bar
+            .expect("Pixel Quest states a bar sprite");
+        let bytes = crate::sprite::bytes(&bar).expect("compiled-in bytes");
+        let (_, w, h) = super::decode(&bytes).expect("the sink must be able to decode it");
+        assert!(w > 0.0 && h > 0.0);
+    }
+
     #[test]
     fn a_theme_that_states_its_own_light_page_keeps_it() {
         // Sepia's warm page is already a paper colour; forcing white would discard a

@@ -56,8 +56,8 @@ pub(crate) fn draw_page(
     let bar_sprite = theme
         .sprites
         .blockquote_bar
-        .as_deref()
-        .and_then(|p| std::fs::read(p).ok())
+        .as_ref()
+        .and_then(crate::sprite::bytes)
         .and_then(|bytes| decode(&bytes))
         .map(|(surface, _, _)| surface);
     let rule_ink = theme.rule.unwrap_or(palette.rule);

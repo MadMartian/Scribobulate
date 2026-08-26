@@ -8,6 +8,7 @@
 #              (from data/icons/scalable/apps/, the same file bundled in-binary)
 #   desktop -> ~/.local/share/applications/scribobulate.desktop
 #   themes  -> ~/.local/share/scribobulate/themes.toml
+#              (plus data/sprites/ beside it, for that copy's own references)
 #
 # Then registers Scribobulate as the default handler for Markdown files so a
 # double-click in Dolphin (or any file manager) opens it here.
@@ -40,6 +41,14 @@ install -Dm644 "$REPO_DIR/data/icons/scalable/apps/$APP_ID.svg" "$ICON_DIR/$APP_
 # XCompose workaround). A user override goes in ~/.config/scribobulate/themes.toml
 # and is merged over this one per theme id.
 install -Dm644 "$REPO_DIR/data/themes.toml" "$THEME_DIR/themes.toml"
+# The sprites that themes.toml's shipped themes name. NOT what makes those themes
+# work -- a built-in theme's sprite is compiled into the binary (`include_bytes!`,
+# src/sprite.rs) precisely so no install step can take a shipped decoration away.
+# This copy exists because the installed themes.toml is itself read as a themes file
+# (search-path row 2), and its own sprite references resolve against its own
+# directory; without the sprites beside it every launch would log a resolution
+# failure for a decoration that is in fact rendering perfectly from the binary.
+install -Dm644 -t "$THEME_DIR/sprites" "$REPO_DIR"/data/sprites/*
 
 # Copy the desktop entry, pinning Exec/TryExec to the absolute binary path so it
 # launches regardless of whether $BIN_DIR is on the launcher's PATH.

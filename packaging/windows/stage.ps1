@@ -143,6 +143,15 @@ if (Test-Path "$GtkPrefix\share\gtksourceview-5") {
 New-Item -ItemType Directory -Force -Path "$OutDir\share\scribobulate" | Out-Null
 Copy-Item "$RepoRoot\data\themes.toml" "$OutDir\share\scribobulate\"
 
+# The sprites that themes.toml's shipped themes name. NOT what makes those themes
+# work -- a built-in theme's sprite is compiled into the binary (`include_bytes!`,
+# src/sprite.rs) precisely so no install step can take a shipped decoration away.
+# This copy exists because the installed themes.toml is itself read as a themes file
+# (search-path row 3), and its own sprite references resolve against its own
+# directory; without the sprites beside it every launch would log a resolution
+# failure for a decoration that is in fact rendering perfectly from the binary.
+Copy-Item "$RepoRoot\data\sprites" "$OutDir\share\scribobulate\" -Recurse -Force
+
 $files = Get-ChildItem $OutDir -Recurse -File
 $size  = ($files | Measure-Object Length -Sum).Sum
 Write-Host ("Staged {0} files, {1:N1} MB -> {2}" -f $files.Count, ($size / 1MB), (Resolve-Path $OutDir))

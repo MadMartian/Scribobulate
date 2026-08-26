@@ -176,10 +176,21 @@ rather than one plus a copy that drifts. Validation refuses rather than truncate
 over-long glyph: cutting at a `char` boundary can split a grapheme cluster and leave a
 lone combining mark, which renders worse than the marker the theme was replacing.
 
-The **blockquote bar** may likewise be filled by a tiled sprite (`sprite_blockquote_bar`) instead of its flat `blockquote_bar` colour. Every sprite-vs-flat pair in this vocabulary resolves the same way — the sprite outranks the colour — and every path states that with an explicit branch rather than leaving it to composition: painting the fill and then the tile over it looks identical for an opaque tile and lets the flat colour bleed through a transparent one, which is a defect only the sprites nobody tested would reveal. The tile is clipped to the bar's own width, so a theme using one sizes `blockquote_bar_width` to the tile.\n\n**A theme may also name a sprite file** (`sdd/PLAN.preview-decoration.md`'s closed
-decoration vocabulary) — a materially different risk than a colour or a font stack,
-because it names something on disk rather than a value re-emitted from a parse.
-`crate::sprite::resolve` is the one place a sprite path is turned into bytes:
+The **blockquote bar** may likewise be filled by a tiled sprite (`sprite_blockquote_bar`) instead of its flat `blockquote_bar` colour. Every sprite-vs-flat pair in this vocabulary resolves the same way — the sprite outranks the colour — and every path states that with an explicit branch rather than leaving it to composition: painting the fill and then the tile over it looks identical for an opaque tile and lets the flat colour bleed through a transparent one, which is a defect only the sprites nobody tested would reveal. The tile is clipped to the bar's own width, so a theme using one sizes `blockquote_bar_width` to the tile.\n\n**A theme may also name a sprite** (`sdd/PLAN.preview-decoration.md`'s closed
+decoration vocabulary), and **which source that name resolves to is decided by the
+file that states it, not by the key** — the full table is [SCHEMA.md's "How a
+`sprite_*` key resolves"](SCHEMA.md#how-a-sprite_-key-resolves). A **built-in**
+theme's sprite is compiled into the binary (`include_bytes!`), so it needs no file,
+no install step and no validation: the bytes are this project's own. That is not an
+optimisation — a built-in theme is compiled in so it renders on a host with nothing
+on disk, and a shipped decoration resolved against an installed asset would be absent
+on every fresh install, developer build and macOS bundle, silently, because an
+unresolved sprite is inert by design.
+
+A sprite named by a `themes.toml` **on disk** is the untrusted case, and a materially
+different risk than a colour or a font stack, because it names something on disk
+rather than a value re-emitted from a parse. `crate::sprite::resolve` is the one place
+such a path is turned into bytes:
 relative-only (no absolute path), every component checked to refuse `..`/root/prefix
 (no traversal to interpret), canonicalised and checked to stay inside the theme
 file's own directory (a symlink cannot point out), an allowlisted extension

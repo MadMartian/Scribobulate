@@ -574,11 +574,11 @@ pub(crate) struct ThemeSpec {
     /// A theme using one wants `blockquote_bar_width` at the tile's own width — the bar
     /// keeps its geometry and the tile is clipped to it, so a 24px tile in a 4px bar is
     /// a 4px slice of a tile, not a tile.
-    pub sprite_blockquote_bar: Option<String>,
+    pub sprite_blockquote_bar: Option<crate::sprite::SpriteRef>,
     /// A sprite TILED across the band, in place of its fill. Theme-relative and validated
     /// like every sprite key. Outranks the fill and the gradient, the same way a marker
     /// sprite outranks a marker glyph.
-    pub sprite_heading_band: Option<String>,
+    pub sprite_heading_band: Option<crate::sprite::SpriteRef>,
     pub link: Option<String>,
     /// A link's underline style: `"single"` (the default, and what the app drew before
     /// this key existed), `"double"`, `"wavy"`, or `"none"` for a coloured link with no
@@ -643,13 +643,13 @@ pub(crate) struct ThemeSpec {
     /// `crate::sprite::resolve` at load time, exactly as `sprite_annotation_chip` is.
     /// A sprite WINS over a glyph for the same marker — it is the more specific and the
     /// dearer opt-in, so stating both is answered by the one the theme paid more for.
-    pub sprite_list_bullet: Option<String>,
+    pub sprite_list_bullet: Option<crate::sprite::SpriteRef>,
     /// The bullet sprite at depth 2 / depth 3-and-deeper, folding the same way.
-    pub sprite_list_bullet_2: Option<String>,
-    pub sprite_list_bullet_3: Option<String>,
-    pub sprite_list_ordered: Option<String>,
-    pub sprite_list_task: Option<String>,
-    pub sprite_list_task_checked: Option<String>,
+    pub sprite_list_bullet_2: Option<crate::sprite::SpriteRef>,
+    pub sprite_list_bullet_3: Option<crate::sprite::SpriteRef>,
+    pub sprite_list_ordered: Option<crate::sprite::SpriteRef>,
+    pub sprite_list_task: Option<crate::sprite::SpriteRef>,
+    pub sprite_list_task_checked: Option<crate::sprite::SpriteRef>,
 
     /// The colour of the line struck through `~~text~~`. Omitted ⇒ the line follows the
     /// struck text's own foreground, which is what a `GtkTextTag` does when
@@ -711,7 +711,7 @@ pub(crate) struct ThemeSpec {
     /// (`sdd/PLAN.preview-decoration.md` — "a theme naming a FILE" is the dearest of
     /// the three untrusted-input classes, so this key alone does not loosen the
     /// "no icon, no arbitrary path" rule the rest of the theme model holds).
-    pub sprite_annotation_chip: Option<String>,
+    pub sprite_annotation_chip: Option<crate::sprite::SpriteRef>,
 }
 
 #[derive(serde::Deserialize, Default, Debug)]
@@ -727,12 +727,33 @@ pub(crate) struct Themes {
 }
 
 impl Themes {
-    /// Parse a themes file. Pure — no filesystem, no environment, no display.
-    /// A malformed file yields `None` so the caller can fall back rather than
-    /// surface a broken app (the same discipline `Config::parse` follows).
-    fn parse(text: &str) -> Option<BTreeMap<String, ThemeSpec>> {
+    /// Parse a themes file and resolve every sprite reference in it against
+    /// `origin`. A malformed file yields `None` so the caller can fall back rather
+    /// than surface a broken app (the same discipline `Config::parse` follows).
+    ///
+    /// **Resolution happens HERE, not in the caller, and that is what makes it
+    /// total.** This is the sole constructor of a `ThemeSpec`, so a spec that has
+    /// escaped this function has had every sprite slot answered — a reference this
+    /// origin cannot supply is already `None`, and no `SpriteRef::Named` survives.
+    /// `Theme::resolve` therefore stays pure (no filesystem) while still seeing real
+    /// sources, and the built-in and user-file paths cannot diverge on when
+    /// resolution runs: they call the same function.
+    ///
+    /// The origin is a parameter rather than a property of the text because the two
+    /// callers genuinely differ: a file on disk resolves against its own directory, a
+    /// compiled-in file against the compiled-in table (`crate::sprite`).
+    fn parse(
+        text: &str,
+        origin: crate::sprite::SpriteOrigin<'_>,
+    ) -> Option<BTreeMap<String, ThemeSpec>> {
         match toml::from_str::<ThemesFile>(text) {
-            Ok(f) => Some(f.themes),
+            Ok(f) => {
+                let mut themes = f.themes;
+                for spec in themes.values_mut() {
+                    resolve_sprite_refs(spec, origin);
+                }
+                Some(themes)
+            }
             Err(e) => {
                 log::warn!("theme: themes.toml parse error: {e} — ignoring this file");
                 None
@@ -744,9 +765,17 @@ impl Themes {
     /// ever failed to parse, every key would still resolve through the floor
     /// consts, so the app renders rather than dies. `builtin_parses` catches that
     /// at test time, where it belongs.
+    ///
+    /// Its sprites resolve against the **compiled-in table**, not against any
+    /// directory. A built-in theme is compiled in so that it renders with nothing on
+    /// disk; resolving its sprites against a themes-file directory would have made
+    /// each of them contingent on an installed asset instead — present on a packaged
+    /// host, absent on every fresh install, developer build and `.app` bundle, and
+    /// silent either way, because an unresolved sprite is inert by design.
     pub(crate) fn builtin() -> Self {
         Themes {
-            specs: Themes::parse(BUILTIN_THEMES_TOML).unwrap_or_default(),
+            specs: Themes::parse(BUILTIN_THEMES_TOML, crate::sprite::SpriteOrigin::Compiled)
+                .unwrap_or_default(),
         }
     }
 
@@ -764,12 +793,23 @@ impl Themes {
         }
     }
 
+    /// Parse a fragment the way the compiled-in file is parsed. Test-only convenience
+    /// so the many parse-and-resolve tests below state only the TOML they are about —
+    /// and `Compiled` rather than a directory because a fragment written inline has no
+    /// directory to resolve against, while the compiled-in sprite table is reachable
+    /// from any test without a fixture on disk.
+    #[cfg(test)]
+    fn parse_compiled(text: &str) -> Option<BTreeMap<String, ThemeSpec>> {
+        Themes::parse(text, crate::sprite::SpriteOrigin::Compiled)
+    }
+
     /// Merge an inline themes-file fragment over these, as a user file would.
     /// Test-only seam so a test elsewhere in the crate can exercise a themed value
     /// end-to-end without writing a file or touching the search path.
     #[cfg(test)]
     pub(crate) fn merge_over_for_test(&mut self, toml_text: &str) {
-        let user = Themes::parse(toml_text).expect("test theme fragment must parse");
+        let user = Themes::parse(toml_text, crate::sprite::SpriteOrigin::Compiled)
+            .expect("test theme fragment must parse");
         self.merge_over(user);
     }
 
@@ -1202,10 +1242,10 @@ pub(crate) struct Theme {
     pub annotation_chip_bg: Option<gdk::RGBA>,
     /// Annotation chip ink; `None` ⇒ the hardcoded white.
     pub annotation_chip_fg: Option<gdk::RGBA>,
-    /// Every sprite this theme names, already validated to an absolute, existing,
-    /// contained path (`crate::sprite::resolve` ran at load time — see `load()`).
-    /// Empty for every shipped theme: the vocabulary is opt-in per theme, not a
-    /// feature that appears unasked.
+    /// Every sprite this theme names, already resolved to the source it comes from —
+    /// a validated, contained file for a theme read off disk, compiled-in bytes for a
+    /// built-in one (`Themes::parse` resolved it against that file's origin). Opt-in
+    /// per theme: a decoration the theme did not ask for is absent, never guessed.
     pub sprites: Sprites,
 }
 
@@ -1218,15 +1258,15 @@ pub(crate) struct Theme {
 /// theme that sets nothing, never a partial or broken render.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Sprites {
-    pub annotation_chip: Option<std::path::PathBuf>,
+    pub annotation_chip: Option<crate::sprite::SpriteRef>,
     /// The bullet's sprite by nesting-depth tier (TDD 18.26), already folded — a tier
-    /// the theme left unset carries the next shallower tier's file.
-    pub list_bullet: [Option<std::path::PathBuf>; BULLET_TIERS],
-    pub list_ordered: Option<std::path::PathBuf>,
-    pub list_task: Option<std::path::PathBuf>,
-    pub list_task_checked: Option<std::path::PathBuf>,
-    pub heading_band: Option<std::path::PathBuf>,
-    pub blockquote_bar: Option<std::path::PathBuf>,
+    /// the theme left unset carries the next shallower tier's sprite.
+    pub list_bullet: [Option<crate::sprite::SpriteRef>; BULLET_TIERS],
+    pub list_ordered: Option<crate::sprite::SpriteRef>,
+    pub list_task: Option<crate::sprite::SpriteRef>,
+    pub list_task_checked: Option<crate::sprite::SpriteRef>,
+    pub heading_band: Option<crate::sprite::SpriteRef>,
+    pub blockquote_bar: Option<crate::sprite::SpriteRef>,
 }
 
 impl Theme {
@@ -1309,11 +1349,13 @@ impl Theme {
         let glyph = |a: &Option<String>, b: &Option<String>| {
             pick(a, b).as_deref().and_then(MarkerGlyph::parse)
         };
-        // Already-validated absolute paths: `rewrite_sprite_paths` ran in `load()` before
-        // this function ever sees the spec, so `Theme::resolve` itself stays pure (no
-        // filesystem) — matching every other field here.
-        let sprite =
-            |a: &Option<String>, b: &Option<String>| pick(a, b).map(std::path::PathBuf::from);
+        // Already-resolved sources: `Themes::parse` answered every sprite slot against
+        // its file's origin before this function ever sees the spec, so `Theme::resolve`
+        // itself stays pure (no filesystem) — matching every other field here.
+        let sprite = |a: &Option<crate::sprite::SpriteRef>,
+                      b: &Option<crate::sprite::SpriteRef>| {
+            a.clone().or_else(|| b.clone())
+        };
 
         // The BULLET's three nesting-depth tiers (TDD 18.26), folded HERE so every
         // consumer indexes and none of them re-derives the fallback — the same discipline
@@ -1514,7 +1556,7 @@ impl Theme {
             },
             annotation_chip_bg: color(&selected.annotation_chip_bg, &system.annotation_chip_bg),
             annotation_chip_fg: color(&selected.annotation_chip_fg, &system.annotation_chip_fg),
-            // Already-validated absolute paths: `rewrite_sprite_paths` ran in `load()`
+            // Already-resolved sources: `Themes::parse` ran before this function
             // before this function ever sees the spec, so `Theme::resolve` itself stays
             // pure (no filesystem) — matching every other field here.
             sprites: Sprites {
@@ -1581,28 +1623,30 @@ fn fit5_i32(v: &[i32], floor: [i32; 5], range: (i32, i32)) -> [i32; 5] {
 fn load() -> Themes {
     let mut themes = Themes::builtin();
     if let Some((text, dir)) = find_themes_file() {
-        if let Some(mut user) = Themes::parse(&text) {
-            // The one place sprite paths touch the filesystem: rewrite each spec's
-            // theme-relative sprite reference to a validated absolute path (or drop
-            // it) BEFORE `Theme::resolve` ever runs, so `resolve` itself stays pure —
-            // matching every other field it produces.
-            for spec in user.values_mut() {
-                rewrite_sprite_paths(spec, &dir);
-            }
+        // A file on disk resolves its sprites against its OWN directory — never the
+        // current working directory, and never the compiled-in table, which would let
+        // any theme file on the search path claim this project's own artwork.
+        if let Some(user) = Themes::parse(&text, crate::sprite::SpriteOrigin::Directory(&dir)) {
             themes.merge_over(user);
         }
     }
     themes
 }
 
-/// Rewrite one spec's sprite keys from theme-relative to validated absolute,
-/// dropping (to `None`) any `crate::sprite::resolve` refuses.
-fn rewrite_sprite_paths(spec: &mut ThemeSpec, dir: &std::path::Path) {
-    // Every sprite key goes through this ONE loop rather than a line each: a new sprite
-    // key that is added to the spec and forgotten here compiles, works for a built-in
-    // theme (which states no sprite), and silently ignores every user reference — the
-    // `take!` failure mode one layer over.
-    for slot in [
+/// How many sprite keys a spec has — the length of [`sprite_slots`], stated so the
+/// array's type says it rather than a reader counting the literal.
+const SPRITE_SLOTS: usize = 9;
+
+/// Every sprite key of one spec, as one enumeration.
+///
+/// **This is the single list, and everything that must visit every sprite key reads
+/// it** — the resolver below, and the guard that checks the compiled-in themes
+/// against the compiled-in sprite table. A new sprite key added to `ThemeSpec` and
+/// forgotten here compiles and then silently ignores every reference to itself (the
+/// `take!` failure mode one layer over), and a guard that kept its own second list
+/// would go on passing while it did.
+fn sprite_slots(spec: &mut ThemeSpec) -> [&mut Option<crate::sprite::SpriteRef>; SPRITE_SLOTS] {
+    [
         &mut spec.sprite_annotation_chip,
         &mut spec.sprite_list_bullet,
         &mut spec.sprite_list_bullet_2,
@@ -1612,10 +1656,18 @@ fn rewrite_sprite_paths(spec: &mut ThemeSpec, dir: &std::path::Path) {
         &mut spec.sprite_list_task_checked,
         &mut spec.sprite_heading_band,
         &mut spec.sprite_blockquote_bar,
-    ] {
-        *slot = slot.as_deref().and_then(|rel| {
-            crate::sprite::resolve(dir, rel).map(|p| p.to_string_lossy().into_owned())
-        });
+    ]
+}
+
+/// Resolve one spec's sprite keys against the file's origin, dropping (to `None`)
+/// any that origin refuses.
+///
+/// Origin-agnostic on purpose, so a key cannot be wired up for a user file and
+/// forgotten for the built-in one — that asymmetry is exactly how a shipped theme's
+/// sprite came to be resolved nowhere at all.
+fn resolve_sprite_refs(spec: &mut ThemeSpec, origin: crate::sprite::SpriteOrigin<'_>) {
+    for slot in sprite_slots(spec) {
+        *slot = slot.as_ref().and_then(|r| origin.resolve(r));
     }
 }
 
@@ -1753,7 +1805,7 @@ mod tests {
     }
 
     fn builtin_system() -> ThemeSpec {
-        Themes::parse(BUILTIN_THEMES_TOML)
+        Themes::parse_compiled(BUILTIN_THEMES_TOML)
             .expect("shipped themes.toml must parse")
             .get(SYSTEM_ID)
             .cloned()
@@ -1899,7 +1951,7 @@ mod tests {
         // (which theme demonstrates which key) is free to change, this contract is not.
         let mut synth = Themes::builtin();
         synth.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nheading_color = \"#334455\"\nheading_font = \"Georgia, serif\"\n\
                  heading_colors = [\"#ff3caf\"]\n\
                  heading_fonts = [\"Michroma, sans-serif\"]\n",
@@ -1944,7 +1996,7 @@ mod tests {
         // The `take!`-list guard: a user override of a theme that ships no array.
         let mut user = Themes::builtin();
         user.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nheading_colors = [\"\", \"#123456\"]\n\
                  heading_fonts = [\"\", \"Georgia, serif\"]\n",
             )
@@ -1971,7 +2023,7 @@ mod tests {
     fn an_unparseable_heading_level_slot_falls_back_to_the_singular_key() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.synthwave]\nheading_colors = [\"not a colour\"]\n\
                  heading_fonts = [\"}} * {{ color: red; }}\"]\n",
             )
@@ -2026,7 +2078,7 @@ mod tests {
         // free to change, this contract is not.
         let mut synth = Themes::builtin();
         synth.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nheading_underline = \"single\"\n\
                  heading_underline_rgba = \"#3e6fa0\"\n\
                  heading_space_above = [16, 12, 8, 6, 6]\n",
@@ -2045,7 +2097,7 @@ mod tests {
 
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nheading_overline = \"double\"\n\
                  heading_underline = \"wavy\"\n\
                  heading_underline_rgba = \"#222222\"\nheading_space_above = [7]\n",
@@ -2081,8 +2133,9 @@ mod tests {
         assert_eq!(LineStyle::parse("  SINGLE "), Some(LineStyle::Single));
         assert_eq!(LineStyle::parse("squiggle"), None);
         let mut themes = Themes::builtin();
-        themes
-            .merge_over(Themes::parse("[themes.sepia]\nheading_underline = \"zigzag\"\n").unwrap());
+        themes.merge_over(
+            Themes::parse_compiled("[themes.sepia]\nheading_underline = \"zigzag\"\n").unwrap(),
+        );
         assert_eq!(
             themes.resolve("sepia").heading_rule.underline,
             F_HEADING_UNDERLINE
@@ -2129,7 +2182,7 @@ mod tests {
 
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nstrikethrough_rgba = \"#654321\"\n\
                  link_underline = \"wavy\"\nlink_underline_rgba = \"#abcdef\"\n",
             )
@@ -2147,7 +2200,9 @@ mod tests {
         );
         // A link with NO line at all is expressible, and is not the floor.
         let mut off = Themes::builtin();
-        off.merge_over(Themes::parse("[themes.sepia]\nlink_underline = \"none\"\n").unwrap());
+        off.merge_over(
+            Themes::parse_compiled("[themes.sepia]\nlink_underline = \"none\"\n").unwrap(),
+        );
         assert_eq!(off.resolve("sepia").link_underline, LineStyle::None);
     }
 
@@ -2220,7 +2275,9 @@ mod tests {
         );
 
         let mut themes = Themes::builtin();
-        themes.merge_over(Themes::parse("[themes.sepia]\nlist_bullet_glyph = \"❧\"\n").unwrap());
+        themes.merge_over(
+            Themes::parse_compiled("[themes.sepia]\nlist_bullet_glyph = \"❧\"\n").unwrap(),
+        );
         assert_eq!(
             themes.resolve("sepia").list_glyphs.bullet[0]
                 .as_ref()
@@ -2242,7 +2299,7 @@ mod tests {
 
         let mut shape_only = Themes::builtin();
         shape_only.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nheading_band_radius = 12\n\
                  heading_band_gradient_to = \"#ffffff\"\n",
             )
@@ -2259,7 +2316,7 @@ mod tests {
         // free to change, this contract is not.
         let mut synth = Themes::builtin();
         synth.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nheading_band_bg = [\"#6c2a92\", \"#9e1449\"]\n\
                  heading_band_gradient_to = \"#101a4d\"\nheading_band_radius = 8\n",
             )
@@ -2283,7 +2340,7 @@ mod tests {
 
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nheading_band_bg = [\"\", \"#abcdef\"]\n\
                  heading_band_radius = 999\n",
             )
@@ -2324,8 +2381,10 @@ mod tests {
     fn every_bullet_tier_inherits_the_unsuffixed_key_by_default() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse("[themes.sepia]\nlist_marker = \"#112233\"\nlist_bullet_glyph = \"a\"\n")
-                .unwrap(),
+            Themes::parse_compiled(
+                "[themes.sepia]\nlist_marker = \"#112233\"\nlist_bullet_glyph = \"a\"\n",
+            )
+            .unwrap(),
         );
         let t = themes.resolve("sepia");
         for tier in 0..BULLET_TIERS {
@@ -2355,7 +2414,7 @@ mod tests {
     fn an_unstated_tier_falls_back_to_the_next_shallower_one() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n\
                  list_bullet_glyph = \"a\"\nlist_bullet_glyph_2 = \"b\"\n",
             )
@@ -2379,7 +2438,7 @@ mod tests {
         // base — the fallback runs one way, downward.
         let mut only3 = Themes::builtin();
         only3.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nlist_marker = \"#111111\"\nlist_marker_3 = \"#333333\"\n",
             )
             .unwrap(),
@@ -2406,7 +2465,7 @@ mod tests {
     fn the_depth_keys_do_not_reach_the_ordered_or_task_markers() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n",
             )
             .unwrap(),
@@ -2424,7 +2483,7 @@ mod tests {
     fn a_user_file_can_override_a_bullet_depth_key() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.terminal]\nlist_marker_2 = \"#abcdef\"\n\
                  list_bullet_glyph_2 = \"·\"\nlist_bullet_glyph_3 = \"‧\"\n",
             )
@@ -2453,7 +2512,9 @@ mod tests {
         // Stated `list_marker` alone: the task marker follows it, which is today's
         // behaviour and what makes the new key inert until asked for.
         let mut shared = Themes::builtin();
-        shared.merge_over(Themes::parse("[themes.sepia]\nlist_marker = \"#111111\"\n").unwrap());
+        shared.merge_over(
+            Themes::parse_compiled("[themes.sepia]\nlist_marker = \"#111111\"\n").unwrap(),
+        );
         assert_eq!(
             crate::palette::to_hex(shared.resolve("sepia").list_task_color.unwrap()),
             "#111111"
@@ -2463,7 +2524,7 @@ mod tests {
         // shared key is untouched — that independence IS the rubric.
         let mut split = Themes::builtin();
         split.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.sepia]\nlist_marker = \"#111111\"\nlist_task_marker = \"#ff00ff\"\n",
             )
             .unwrap(),
@@ -2481,11 +2542,207 @@ mod tests {
         );
     }
 
+    /// **Every sprite a compiled-in theme names is compiled in too.**
+    ///
+    /// The general guard, and the one that would have caught the defect it was written
+    /// for: Pixel Quest's `sprite_blockquote_bar` was resolved against a themes-file
+    /// DIRECTORY that only a user file has, so it stayed unresolved forever and the
+    /// bar rendered flat navy on every fresh install — with no warning, no crash and a
+    /// green suite, because an unresolved sprite is inert by design and every existing
+    /// sprite test used a synthetic path of its own.
+    ///
+    /// Deliberately keyed off the RAW deserialization rather than a resolved `Themes`:
+    /// after resolution a refused reference and a key nobody set are both `None`, so a
+    /// resolved theme cannot tell you which one it is. This reads what the file
+    /// actually says, through `sprite_slots` — the same enumeration the resolver walks,
+    /// so a tenth sprite key cannot be covered here and missed there or the reverse.
+    #[test]
+    fn every_built_in_theme_sprite_reference_is_embedded() {
+        let mut raw: ThemesFile =
+            toml::from_str(BUILTIN_THEMES_TOML).expect("the shipped themes file must parse");
+        let mut checked = 0usize;
+        for (id, spec) in raw.themes.iter_mut() {
+            for slot in sprite_slots(spec) {
+                let Some(crate::sprite::SpriteRef::Named(rel)) = slot else {
+                    continue;
+                };
+                checked += 1;
+                assert!(
+                    crate::sprite::builtin(rel).is_some(),
+                    "built-in theme {id:?} names sprite {rel:?}, which is not in \
+                     crate::sprite::BUILTIN_SPRITES — add it there with include_bytes!, \
+                     or the decoration is silently absent on every host"
+                );
+            }
+        }
+        // A guard that iterates an empty set passes vacuously and reads exactly like one
+        // that checked something, so pin that the shipped file names at least one.
+        assert!(
+            checked > 0,
+            "no built-in theme names a sprite — this guard is now vacuous"
+        );
+    }
+
+    /// `sprite_slots` enumerates EVERY sprite key the spec has — checked structurally,
+    /// because nothing else can.
+    ///
+    /// A key added to `ThemeSpec` and forgotten in `sprite_slots` compiles, and then
+    /// silently ignores every reference to itself in every theme file. The two guards
+    /// below it both drive the list, so neither can see a key that is missing FROM the
+    /// list; this one asks the struct instead. `Debug` on a defaulted spec names every
+    /// field, which is the only enumeration of them Rust hands out without a macro.
+    #[test]
+    fn the_sprite_slot_list_covers_every_sprite_key_the_spec_has() {
+        let named = format!("{:?}", ThemeSpec::default())
+            .matches("sprite_")
+            .count();
+        assert_eq!(
+            named, SPRITE_SLOTS,
+            "ThemeSpec has {named} sprite keys but sprite_slots enumerates {SPRITE_SLOTS} — \
+             a key missing from that list is resolved by nothing and silently never appears"
+        );
+    }
+
+    /// The compiled-in source is a property of the SLOT LIST, not of one decoration.
+    ///
+    /// The bug that prompted it was found through the blockquote bar, and a fix proved
+    /// only through the blockquote bar would be evidence about one arm of a nine-arm
+    /// loop. Every slot is driven here from a built-in-shaped fragment naming the one
+    /// sprite this binary embeds, so the mechanism is shown to be slot-agnostic — and
+    /// the two paths a slot can reach the screen by (a `Sprites` field the drawn
+    /// decorations read, and `bytes`, which both export sinks read) are both exercised.
+    #[test]
+    fn a_compiled_in_sprite_reaches_every_slot_it_can_be_named_in() {
+        let key = "sprites/copper-plate.png";
+        let mut themes = Themes::builtin();
+        themes.merge_over_for_test(&format!(
+            "[themes.embedded]\n\
+             sprite_annotation_chip = \"{key}\"\n\
+             sprite_list_bullet = \"{key}\"\n\
+             sprite_list_bullet_2 = \"{key}\"\n\
+             sprite_list_bullet_3 = \"{key}\"\n\
+             sprite_list_ordered = \"{key}\"\n\
+             sprite_list_task = \"{key}\"\n\
+             sprite_list_task_checked = \"{key}\"\n\
+             sprite_heading_band = \"{key}\"\n\
+             sprite_blockquote_bar = \"{key}\"\n"
+        ));
+        let s = themes.resolve("embedded").sprites;
+        let expected = crate::sprite::SpriteRef::Compiled(key);
+        let every: Vec<&Option<crate::sprite::SpriteRef>> = vec![
+            &s.annotation_chip,
+            &s.list_bullet[0],
+            &s.list_bullet[1],
+            &s.list_bullet[2],
+            &s.list_ordered,
+            &s.list_task,
+            &s.list_task_checked,
+            &s.heading_band,
+            &s.blockquote_bar,
+        ];
+        assert_eq!(every.len(), SPRITE_SLOTS);
+        for (i, slot) in every.iter().enumerate() {
+            assert_eq!(
+                slot.as_ref(),
+                Some(&expected),
+                "sprite slot {i} did not resolve to the compiled-in sprite"
+            );
+            // …and it is readable, which is the half that reaches an export sink. A
+            // reference that resolves but yields no bytes is the same blank decoration
+            // one step later.
+            assert!(
+                !crate::sprite::bytes(slot.as_ref().unwrap())
+                    .expect("compiled-in bytes")
+                    .is_empty(),
+                "sprite slot {i} resolved but carries no bytes"
+            );
+        }
+    }
+
+    /// Pixel Quest is the first shipped theme to name a sprite, and the one the defect
+    /// was found through — so it is pinned by name as well as by the general guard
+    /// above, since the general guard would still pass if the key were simply deleted
+    /// from the theme.
+    #[test]
+    fn pixel_quests_blockquote_bar_resolves_to_a_compiled_in_sprite() {
+        let bar = Themes::builtin()
+            .resolve("pixelquest")
+            .sprites
+            .blockquote_bar
+            .expect("Pixel Quest states sprite_blockquote_bar");
+        assert!(
+            matches!(bar, crate::sprite::SpriteRef::Compiled(_)),
+            "a built-in theme's sprite must come from the binary, not from a path: {bar}"
+        );
+        assert!(crate::sprite::bytes(&bar).is_some_and(|b| !b.is_empty()));
+    }
+
+    /// **An installed copy of the shipped themes file cannot take a built-in
+    /// decoration away.**
+    ///
+    /// `themes.toml` is installed on the search path (`/usr/share/scribobulate`,
+    /// `%APPDATA%`, …), so the app reads its own shipped file back as an ordinary
+    /// themes FILE, with its sprite references resolving against that directory. Two
+    /// outcomes, and both must be right: with the sprites installed beside it the
+    /// reference resolves to that file, and with them absent — a packaging omission,
+    /// or a platform like the macOS bundle that installs no themes file's assets at
+    /// all — the merge must leave the compiled-in sprite standing rather than
+    /// overwriting it with the refusal.
+    ///
+    /// The second half is why the fix does not merely move the problem: it makes a
+    /// packaging mistake cost a log line instead of a decoration.
+    #[test]
+    fn an_installed_themes_file_cannot_unship_a_compiled_in_sprite() {
+        let key = "sprites/copper-plate.png";
+        let fragment = format!("[themes.pixelquest]\nsprite_blockquote_bar = \"{key}\"\n");
+
+        // (a) sprites installed beside the file — it resolves to the installed file.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sprites")).unwrap();
+        std::fs::write(dir.path().join(key), b"not a real png, just bytes").unwrap();
+        let mut with_assets = Themes::builtin();
+        with_assets.merge_over(
+            Themes::parse(
+                &fragment,
+                crate::sprite::SpriteOrigin::Directory(dir.path()),
+            )
+            .expect("parses"),
+        );
+        assert!(matches!(
+            with_assets
+                .resolve("pixelquest")
+                .sprites
+                .blockquote_bar
+                .expect("resolved"),
+            crate::sprite::SpriteRef::File(_)
+        ));
+
+        // (b) sprites NOT installed — the reference is refused, and the compiled-in
+        // sprite the built-in theme already carries survives the merge untouched.
+        let bare = tempfile::tempdir().unwrap();
+        let mut without_assets = Themes::builtin();
+        without_assets.merge_over(
+            Themes::parse(
+                &fragment,
+                crate::sprite::SpriteOrigin::Directory(bare.path()),
+            )
+            .expect("parses"),
+        );
+        assert_eq!(
+            without_assets
+                .resolve("pixelquest")
+                .sprites
+                .blockquote_bar
+                .expect("the compiled-in sprite must survive a refused override"),
+            crate::sprite::SpriteRef::Compiled(key)
+        );
+    }
+
     /// TDD 18.28 — the bar sprite is opt-in, and it goes through the SAME
     /// theme-relative validation every other sprite key does. The second half is the
-    /// one worth pinning: `rewrite_sprite_paths` iterates a list, and a key added to the
-    /// spec but forgotten there compiles, works for every built-in theme (none names a
-    /// sprite) and silently ignores every user reference.
+    /// one worth pinning: `resolve_sprite_refs` iterates a list, and a key added to the
+    /// spec but forgotten there compiles and silently ignores every reference to
+    /// itself.
     #[test]
     fn the_blockquote_bar_sprite_is_opt_in_and_validated_like_every_other() {
         assert!(Themes::builtin()
@@ -2496,19 +2753,25 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("bar.png"), b"not a real png, just bytes").unwrap();
+        let origin = crate::sprite::SpriteOrigin::Directory(dir.path());
         let mut good = ThemeSpec {
-            sprite_blockquote_bar: Some("bar.png".to_string()),
+            sprite_blockquote_bar: Some(crate::sprite::SpriteRef::Named("bar.png".to_string())),
             ..Default::default()
         };
-        rewrite_sprite_paths(&mut good, dir.path());
-        let got = good.sprite_blockquote_bar.expect("resolved");
-        assert!(std::path::Path::new(&got).is_absolute());
+        resolve_sprite_refs(&mut good, origin);
+        let crate::sprite::SpriteRef::File(got) = good.sprite_blockquote_bar.expect("resolved")
+        else {
+            panic!("a directory origin must resolve to a file");
+        };
+        assert!(got.is_absolute());
 
         let mut escaping = ThemeSpec {
-            sprite_blockquote_bar: Some("../escape.png".to_string()),
+            sprite_blockquote_bar: Some(crate::sprite::SpriteRef::Named(
+                "../escape.png".to_string(),
+            )),
             ..Default::default()
         };
-        rewrite_sprite_paths(&mut escaping, dir.path());
+        resolve_sprite_refs(&mut escaping, origin);
         assert_eq!(escaping.sprite_blockquote_bar, None);
     }
 
@@ -2650,7 +2913,7 @@ mod tests {
     fn a_user_file_can_add_a_whole_new_theme() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse("[themes.slate]\nname = \"Slate\"\nbackground = \"#222222\"\nforeground = \"#dddddd\"\n")
+            Themes::parse_compiled("[themes.slate]\nname = \"Slate\"\nbackground = \"#222222\"\nforeground = \"#dddddd\"\n")
                 .unwrap(),
         );
         assert!(themes.contains("slate"));
@@ -2670,7 +2933,9 @@ mod tests {
     #[test]
     fn a_user_file_overrides_one_key_of_a_shipped_theme() {
         let mut themes = Themes::builtin();
-        themes.merge_over(Themes::parse("[themes.sepia]\nbackground = \"#fffbe6\"\n").unwrap());
+        themes.merge_over(
+            Themes::parse_compiled("[themes.sepia]\nbackground = \"#fffbe6\"\n").unwrap(),
+        );
         let t = themes.resolve("sepia");
         assert_eq!(crate::palette::to_hex(t.background.unwrap()), "#fffbe6");
         // Every other Sepia key survives the override.
@@ -2699,7 +2964,9 @@ mod tests {
 
         // The `take!`-list guard: a user override of a theme that ships no value.
         let mut themes = Themes::builtin();
-        themes.merge_over(Themes::parse("[themes.sepia]\nselection_fg = \"#abcdef\"\n").unwrap());
+        themes.merge_over(
+            Themes::parse_compiled("[themes.sepia]\nselection_fg = \"#abcdef\"\n").unwrap(),
+        );
         assert_eq!(
             crate::palette::to_hex(themes.resolve("sepia").selection_fg.expect("merged")),
             "#abcdef"
@@ -2721,7 +2988,8 @@ mod tests {
         );
 
         let mut themes = Themes::builtin();
-        themes.merge_over(Themes::parse("[themes.sepia]\nmark_fg = \"#123456\"\n").unwrap());
+        themes
+            .merge_over(Themes::parse_compiled("[themes.sepia]\nmark_fg = \"#123456\"\n").unwrap());
         assert_eq!(
             crate::palette::to_hex(themes.resolve("sepia").mark_fg.expect("merged")),
             "#123456"
@@ -2736,7 +3004,9 @@ mod tests {
     fn a_user_file_can_override_list_marker() {
         let mut themes = Themes::builtin();
         // Sepia ships no list_marker (stays None); a user file adds one.
-        themes.merge_over(Themes::parse("[themes.sepia]\nlist_marker = \"#abcdef\"\n").unwrap());
+        themes.merge_over(
+            Themes::parse_compiled("[themes.sepia]\nlist_marker = \"#abcdef\"\n").unwrap(),
+        );
         assert_eq!(
             crate::palette::to_hex(themes.resolve("sepia").list_marker.expect("merged")),
             "#abcdef"
@@ -2757,7 +3027,7 @@ mod tests {
     fn a_user_file_can_theme_the_annotation_chip_colours() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.system]\nannotation_chip_bg = \"#112233\"\nannotation_chip_fg = \"#ffffff\"\n",
             )
             .unwrap(),
@@ -2773,30 +3043,37 @@ mod tests {
         );
     }
 
-    /// `rewrite_sprite_paths` is the ONE filesystem-touching step for a sprite key —
-    /// proves it accepts a contained relative reference and drops one that fails
-    /// `crate::sprite::resolve`'s checks, independent of the XDG search path.
+    /// `resolve_sprite_refs` is the ONE step that answers a sprite key — proves that
+    /// against a DIRECTORY origin it accepts a contained relative reference and drops
+    /// one that fails `crate::sprite::resolve`'s checks, independent of the XDG search
+    /// path.
     #[test]
-    fn rewrite_sprite_paths_resolves_a_contained_reference_and_drops_a_bad_one() {
+    fn resolve_sprite_refs_resolves_a_contained_reference_and_drops_a_bad_one() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("chip.png"), b"not a real png, just bytes").unwrap();
+        let origin = crate::sprite::SpriteOrigin::Directory(dir.path());
 
         let mut good = ThemeSpec {
-            sprite_annotation_chip: Some("chip.png".to_string()),
+            sprite_annotation_chip: Some(crate::sprite::SpriteRef::Named("chip.png".to_string())),
             ..Default::default()
         };
-        rewrite_sprite_paths(&mut good, dir.path());
+        resolve_sprite_refs(&mut good, origin);
         // `resolve` only checks extension/containment/size, not that the bytes
         // decode — decoding is `sprite::texture`'s job, exercised in `sprite.rs`.
-        let got = good.sprite_annotation_chip.expect("resolved");
-        assert!(std::path::Path::new(&got).is_absolute());
+        let crate::sprite::SpriteRef::File(got) = good.sprite_annotation_chip.expect("resolved")
+        else {
+            panic!("a directory origin must resolve to a file");
+        };
+        assert!(got.is_absolute());
         assert!(got.ends_with("chip.png"));
 
         let mut bad = ThemeSpec {
-            sprite_annotation_chip: Some("../escape.png".to_string()),
+            sprite_annotation_chip: Some(crate::sprite::SpriteRef::Named(
+                "../escape.png".to_string(),
+            )),
             ..Default::default()
         };
-        rewrite_sprite_paths(&mut bad, dir.path());
+        resolve_sprite_refs(&mut bad, origin);
         assert_eq!(bad.sprite_annotation_chip, None);
     }
 
@@ -2806,7 +3083,8 @@ mod tests {
     fn a_user_file_overrides_the_system_theme_itself() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse("[themes.system]\nfind_hl_all = \"#00ff00\"\nlist_step = 40\n").unwrap(),
+            Themes::parse_compiled("[themes.system]\nfind_hl_all = \"#00ff00\"\nlist_step = 40\n")
+                .unwrap(),
         );
         let sys = themes.resolve(SYSTEM_ID);
         assert_eq!(sys.find_hl_all.hex(), "#00ff00");
@@ -2818,9 +3096,9 @@ mod tests {
     /// TDD 18.11 — a malformed file is ignored, not fatal.
     #[test]
     fn a_malformed_user_file_is_ignored_and_the_builtin_survives() {
-        assert!(Themes::parse("this is not = = valid toml").is_none());
+        assert!(Themes::parse_compiled("this is not = = valid toml").is_none());
         let mut themes = Themes::builtin();
-        if let Some(user) = Themes::parse("this is not = = valid toml") {
+        if let Some(user) = Themes::parse_compiled("this is not = = valid toml") {
             themes.merge_over(user);
         }
         assert!(themes.contains("sepia"));
@@ -2832,7 +3110,7 @@ mod tests {
     fn hostile_geometry_is_clamped() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.evil]\nlist_step = -5\nblockquote_bar_width = 10000\n\
                  heading_weight = 99999\nsupsub_scale = -3.0\nsuperscript_rise = 9999\n",
             )
@@ -2851,7 +3129,7 @@ mod tests {
     fn malformed_arrays_fit_to_five_entries() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse(
+            Themes::parse_compiled(
                 "[themes.short]\nheading_scale = [3.0]\n\
                  [themes.long]\nheading_space_below = [1, 2, 3, 4, 5, 6]\n\
                  [themes.nan]\nheading_scale = [nan, inf, 1.0, 1.0]\n",
@@ -2878,7 +3156,8 @@ mod tests {
     fn a_hostile_colour_string_cannot_inject_css() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse("[themes.evil]\nbackground = \"#fff; } * { color: red; }\"\n").unwrap(),
+            Themes::parse_compiled("[themes.evil]\nbackground = \"#fff; } * { color: red; }\"\n")
+                .unwrap(),
         );
         // Unparseable → falls through to the desktop probe; nothing is interpolated.
         assert!(themes.resolve("evil").background.is_none());

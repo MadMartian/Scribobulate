@@ -261,6 +261,31 @@ The desktop probe (the third source) reads these base Adwaita named colours via
 The libadwaita-only names (`view_bg_color`, `accent_bg_color`, `card_bg_color`) are
 used only as fallback-chain entries where the active theme defines them.
 
+### How a `sprite_*` key resolves
+
+A sprite key names an image, and **where that image comes from is decided by which
+file states the key** — not by the key and not by the theme:
+
+| The key is stated in… | It names… |
+|---|---|
+| a `themes.toml` **on disk** (any search-path row) | a file **relative to that file's own directory**, admitted only if it passes every check in `crate::sprite::resolve`: no absolute path, no `..`/root/prefix component, canonicalised and contained (a symlink cannot point out), an allowlisted extension (`png`/`webp`/`jpg`), and under the size cap |
+| the **compiled-in** `data/themes.toml` (a built-in theme) | an image **compiled into the binary** (`include_bytes!`, `src/sprite.rs`'s embedded table). No file, no install step, no search path — and no validation, because the bytes are this project's own and were fixed at build time |
+
+The split exists because a built-in theme is compiled in precisely so it renders on
+a host with nothing on disk; a shipped decoration that needed an installed asset
+would be present on a packaged host and absent on every fresh install, developer
+build and macOS bundle, **silently**, since an unresolved sprite is inert by design.
+
+Two consequences worth stating, both load-bearing:
+
+- A built-in theme **cannot** name an image that is not in the embedded table — a
+  reference the table does not carry is refused and logged, exactly like a user
+  theme naming a missing file. A theme file on disk, conversely, cannot reach the
+  embedded table; it may only name files beside itself.
+- The installed copy of `themes.toml` is itself read as a themes file on disk, so a
+  packaging omission of `data/sprites/` costs a log line and nothing else: the
+  refused override leaves the compiled-in sprite standing.
+
 ### `[themes.<id>]` keys
 
 Every key is optional; omitting one means "derive or inherit it". Colours are
@@ -285,8 +310,8 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `heading_band_bg` | `[string; 5]` | — | The band drawn behind a heading's text, per level (h1 · h2 · h3 · h4 · h5-and-deeper). An empty or absent slot ⇒ that level carries no band. The band spans the **content column**, and survives soft-wrap as one continuous band. |
 | `heading_band_gradient_to` | colour | — | A second stop: the band becomes a vertical gradient from the level's own fill down to this colour. Ignored where no level states a fill. |
 | `heading_band_padding` (above) | | | Space between the band's edge and the heading text inside it, each side. ⚠️ Non-zero by default, unlike every other decoration key: padding is part of drawing a band correctly rather than a flourish. Applied **only to a level that carries a band**, so a theme that bands nothing is untouched by it whatever its value. |
-| `sprite_blockquote_bar` | `string` | — | A sprite **tiled at its natural size** down the blockquote's accent bar, in place of the flat `blockquote_bar` colour. Theme-relative and validated like every sprite key. ⚠️ The tile is clipped to the bar, so a theme using one wants `blockquote_bar_width` at the tile's own width — a 24px tile in a 4px bar is a 4px slice of a tile. |
-| `sprite_heading_band` | `string` | — | A sprite **tiled at its natural size** across the band, in place of its fill. Theme-relative and validated like every sprite key; outranks the fill and the gradient. |
+| `sprite_blockquote_bar` | `string` | — | A sprite **tiled at its natural size** down the blockquote's accent bar, in place of the flat `blockquote_bar` colour. Resolved like every sprite key (see above). ⚠️ The tile is clipped to the bar, so a theme using one wants `blockquote_bar_width` at the tile's own width — a 24px tile in a 4px bar is a 4px slice of a tile. |
+| `sprite_heading_band` | `string` | — | A sprite **tiled at its natural size** across the band, in place of its fill. Resolved like every sprite key (see above); outranks the fill and the gradient. |
 | `link` | colour | derived | Link colour. |
 | `link_underline` | `"none"` \| `"single"` \| `"double"` \| `"wavy"` | `"single"` | A link's underline style. Defaults to the single line the app has always drawn, not to `"none"`. |
 | `link_underline_rgba` | colour | the link colour | The link underline's colour, stated independently of the link's ink. Omitted, the line follows the ink. |
@@ -310,7 +335,7 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `list_ordered_glyph` | `string` | — | A glyph drawn in place of the ordered numeral. ⚠️ This DISCARDS the ordinal — deliberate, and inert unless a theme asks for it. |
 | `list_task_glyph` | `string` | — | A glyph drawn in place of the unchecked task box. |
 | `list_task_checked_glyph` | `string` | — | A glyph drawn in place of the checked task box. Resolves independently of the unchecked one, so a theme may state either alone. |
-| `sprite_list_bullet` | `string` | — | A sprite image drawn in place of the bullet dot. Theme-relative and validated like every sprite key (no absolute path, no traversal, symlink-contained, allowlisted extension, size-capped). **A sprite outranks a glyph for the same marker.** |
+| `sprite_list_bullet` | `string` | — | A sprite image drawn in place of the bullet dot. Resolved like every sprite key (see above). **A sprite outranks a glyph for the same marker.** |
 | `sprite_list_bullet_2` | `string` | `sprite_list_bullet` | The bullet's sprite at nesting depth 2. |
 | `sprite_list_bullet_3` | `string` | `sprite_list_bullet_2` | The bullet's sprite at depth 3 and deeper. |
 | `sprite_list_ordered` | `string` | — | A sprite drawn in place of the ordered numeral. |
@@ -320,7 +345,7 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `annotation_hl` | colour | `#FFD133_61` | Annotation highlight overlay. |
 | `annotation_chip_bg` | colour | hardcoded amber | CriticMarkup comment gutter chip's fill. Omitted, the chip stays the exact hardcoded amber/white it always was (TDD 18.2). |
 | `annotation_chip_fg` | colour | hardcoded white | Ink for the chip's overflow-count numeral. |
-| `sprite_annotation_chip` | `string` | — | A sprite image drawn in place of the flat chip fill, path relative to this theme file's own directory. Validated at load time (no absolute path, no `..` traversal, symlink-contained, allowlisted extension, size-capped — `crate::sprite::resolve`). No expression in the PDF's inline Pango markup — a stated scope limit (TDD 18.19). |
+| `sprite_annotation_chip` | `string` | — | A sprite image drawn in place of the flat chip fill. Resolved like every sprite key (see above). No expression in the PDF's inline Pango markup — a stated scope limit (TDD 18.19). |
 | `find_hl_all` | colour | `#f6d32d` | Highlight for all find matches. |
 | `find_hl_current` | colour | derived | Highlight for the current find match. |
 
