@@ -167,6 +167,12 @@ heading_fonts  = ['Michroma, Orbitron, Jura, sans-serif', "", "", "", ""]
 heading_band_bg          = ["#2b1152", "#221046", "", "", ""]
 heading_band_gradient_to = "#1a1033"
 heading_band_radius      = 6
+# Operator's call 2026-08-26: flush left, no inset. `heading_band_padding` (TDD
+# 18.25's fix) defaults to a non-zero 12px everywhere else because padding is part
+# of drawing a band correctly, not a flourish — but it is a normal per-theme metric
+# like any other, and this theme's title reads better flush against the band's own
+# edge than indented from it.
+heading_band_padding = 0
 # Operator's call 2026-08-26: the per-level colour and the band stay — no heading rule
 # though. `heading_underline`/`heading_underline_rgba` (TDD 18.22) were tried here too;
 # dropped by preference, independently of the colour/band decision above (these three
