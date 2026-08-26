@@ -19,7 +19,7 @@
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.9 |
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.53 |
-| 18 | Preview reading themes | 18.1 – 18.26 |
+| 18 | Preview reading themes | 18.1 – 18.28 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.18 |
 | 21 | Crash forensics | 21.1 – 21.12 |
@@ -2312,6 +2312,18 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** a document with a bullet list nested three-or-more levels deep is rendered, and separately exported to HTML and PDF
 - **Then** each depth paints with its own resolved colour/glyph/sprite in the gutter
 - **And** it reaches the HTML export via a depth-scoped `::marker` selector, and the PDF export via a themed colour on the marker text — closing a pre-existing gap where the PDF sink coloured no marker at all, of any kind, at any depth
+
+### 18.27 A theme can colour task checkboxes independently of bullets and numerals
+- **Given** a theme setting a task-marker colour distinct from `list_marker`
+- **When** a document with a checked and an unchecked task item is rendered, and separately exported to HTML and PDF
+- **Then** both checkbox states take the stated colour while bullets and ordered numerals in the same document keep `list_marker`'s colour
+- **And** omitted, task markers fall back to `list_marker` exactly as today (TDD 18.2)
+
+### 18.28 A theme can tile a sprite behind the blockquote bar
+- **Given** a theme setting a sprite image for the blockquote accent bar (theme-relative, validated the same way every sprite key is)
+- **When** a blockquoted document is rendered, and separately exported to HTML and PDF
+- **Then** the bar fills with the sprite tiled at its natural size in place of the flat `blockquote_bar` colour
+- **And** omitted, the bar stays the flat themed colour exactly as today
 
 ## 19. Local document-link navigation
 

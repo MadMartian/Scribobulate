@@ -2065,6 +2065,54 @@ mod gtk_integration_tests {
         crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
+    /// TDD 18.25's padding fix — a BANDED heading's text is inset from the band's edge,
+    /// and an UNBANDED one is not touched at all.
+    ///
+    /// The second half is the whole reason the inset is conditional: an unconditional
+    /// heading margin would re-indent every heading in every theme, System's included,
+    /// which 18.2 forbids. Asserted on `is_left_margin_set` rather than on the value,
+    /// because a tag that sets the margin to the view's own number is a different tag
+    /// from one that never set it — and only the second is what the preview registered
+    /// before the band existed.
+    #[gtktest::test]
+    fn only_a_banded_heading_level_is_inset_from_its_band() {
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.oneband]\nheading_band_bg = [\"#334455\", \"\", \"\", \"\", \"\"]\n\
+             heading_band_padding = 14\n",
+        );
+        crate::theme::set_active_for_test(themes.resolve("oneband"));
+        for zoom in [1.0, 2.0] {
+            let products = build_render_products("# one\n\n## two\n", None, zoom, false);
+            let tt = products.buf.tag_table();
+            let h1 = tt.lookup("h1").unwrap();
+            let h2 = tt.lookup("h2").unwrap();
+            // h1 is banded: inset from the view's own margin by the themed padding, and
+            // symmetric, and zoom-scaled like every other pixel metric.
+            let view_lm =
+                (f64::from(crate::config::config().view.left_margin) * zoom).round() as i32;
+            let view_rm =
+                (f64::from(crate::config::config().view.right_margin) * zoom).round() as i32;
+            let pad = (14.0 * zoom).round() as i32;
+            assert!(h1.is_left_margin_set(), "zoom {zoom}");
+            assert_eq!(h1.left_margin(), view_lm + pad, "zoom {zoom}");
+            assert_eq!(h1.right_margin(), view_rm + pad, "zoom {zoom}");
+            // h2 carries no band, so it sets no margin at all and inherits the view's —
+            // byte-identical to the tag registered before any of this existed.
+            assert!(
+                !h2.is_left_margin_set(),
+                "an unbanded level must not be re-indented (zoom {zoom})"
+            );
+            assert!(!h2.is_right_margin_set(), "zoom {zoom}");
+        }
+        // …and under System, which bands nothing, no level is touched.
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+        let products = build_render_products("# one\n", None, 1.0, false);
+        let h1 = products.buf.tag_table().lookup("h1").unwrap();
+        assert!(!h1.is_left_margin_set());
+        assert!(!h1.is_right_margin_set());
+    }
+
     /// TDD 18.25 — the heading spans the drawn band is measured from are collected on
     /// every render, cover the heading's CONTENT (not the newline after it), and carry
     /// the same h6-folds-to-h5 level index the heading tags use.

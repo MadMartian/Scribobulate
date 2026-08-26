@@ -259,7 +259,15 @@ cd "$(dirname "$0")/.."
 # `ed0f7c3`, in a clean worktree), 81.67% after. Raised by half the gain, per the
 # 2026-08-20 entry above. The ~1pt standing margin the 2026-08-25 entry names is
 # unchanged and still deliberate.
-FLOOR=80.30
+#
+# 2026-08-26, 80.30 -> 80.33, TDD 18.27/18.28 plus 18.25's band-padding fix. The SMALLEST
+# move this log records, and deliberately made rather than skipped: the work added about
+# as much code as it did test (three decorations across the theme model, the gutter and
+# both sinks), so measured 81.68% before (at `51caea6`, clean worktree) and 81.74% after.
+# Half the gain is +0.03. Skipping a move because it is small is how a ratchet quietly
+# stops tracking; the ~1.4pt standing margin the 2026-08-25 entry names absorbs it either
+# way.
+FLOOR=80.33
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

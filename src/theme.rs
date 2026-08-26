@@ -67,6 +67,13 @@ const F_HEADING_SPACE_ABOVE: [i32; 5] = [0, 0, 0, 0, 0];
 /// No heading carries a band until a theme states a fill for its level, so the radius
 /// is only ever consulted for a band that exists.
 const F_HEADING_BAND_RADIUS: i32 = 0;
+/// NON-ZERO, unlike every other decoration default here, and deliberately so: a band's
+/// padding is not an opt-in flourish but part of drawing a band correctly. It is inert
+/// anyway on a theme that bands nothing, because the inset is applied per level and only
+/// where that level HAS a band — the gate, not the value, is what keeps System
+/// byte-identical (TDD 18.2), and every theme that already ships a band gets the fix
+/// with no content edit.
+const F_HEADING_BAND_PADDING: i32 = 12;
 /// No heading rule is drawn today, on either side.
 const F_HEADING_OVERLINE: LineStyle = LineStyle::None;
 const F_HEADING_UNDERLINE: LineStyle = LineStyle::None;
@@ -551,6 +558,23 @@ pub(crate) struct ThemeSpec {
     pub heading_band_gradient_to: Option<String>,
     /// Corner radius of the band, design-time px at zoom 1.0.
     pub heading_band_radius: Option<i32>,
+    /// Space between the band's edge and the heading text inside it, left and right,
+    /// design-time px at zoom 1.0. Applied ONLY to a level that carries a band, so a
+    /// theme that bands nothing is untouched by it whatever its value.
+    pub heading_band_padding: Option<i32>,
+    /// A sprite TILED at its natural size down the blockquote's accent bar, in place of
+    /// its flat `blockquote_bar` colour (TDD 18.28). Theme-relative and validated like
+    /// every other sprite key.
+    ///
+    /// A sprite OUTRANKS the flat colour, and every path states that with an explicit
+    /// branch rather than leaving it to composition: painting the fill and then the tile
+    /// over it looks identical for an opaque tile and lets the flat colour bleed through
+    /// a transparent one, which is a bug that only appears for the sprites nobody tested.
+    ///
+    /// A theme using one wants `blockquote_bar_width` at the tile's own width — the bar
+    /// keeps its geometry and the tile is clipped to it, so a 24px tile in a 4px bar is
+    /// a 4px slice of a tile, not a tile.
+    pub sprite_blockquote_bar: Option<String>,
     /// A sprite TILED across the band, in place of its fill. Theme-relative and validated
     /// like every sprite key. Outranks the fill and the gradient, the same way a marker
     /// sprite outranks a marker glyph.
@@ -592,6 +616,14 @@ pub(crate) struct ThemeSpec {
     /// dot is the one whose whole job is to say which level you are on.
     pub list_marker_2: Option<String>,
     pub list_marker_3: Option<String>,
+    /// The TASK checkbox's colour, both states, independent of `list_marker` (TDD 18.27).
+    /// Omitted ⇒ task markers fall back to `list_marker` exactly as before this key.
+    ///
+    /// ONE key, not one per state: a checked and an unchecked box are the same control in
+    /// two positions, and colouring them apart would say they are two different things.
+    /// Their GLYPHS split (`list_task_glyph`/`_checked_glyph`) because the glyph is what
+    /// carries the state; the colour is what carries the identity.
+    pub list_task_marker: Option<String>,
     /// Glyph strings that stand in for the DRAWN list markers — the bullet dot, the
     /// ordered numeral, and the task checkbox in each of its two states. Validated by
     /// [`MarkerGlyph::parse`]; unset (or refused) ⇒ the drawn default, unchanged.
@@ -821,6 +853,8 @@ impl ThemeSpec {
             heading_band_bg,
             heading_band_gradient_to,
             heading_band_radius,
+            heading_band_padding,
+            sprite_blockquote_bar,
             sprite_heading_band,
             link,
             link_underline,
@@ -837,6 +871,7 @@ impl ThemeSpec {
             list_marker,
             list_marker_2,
             list_marker_3,
+            list_task_marker,
             list_bullet_glyph,
             list_bullet_glyph_2,
             list_bullet_glyph_3,
@@ -1070,6 +1105,10 @@ pub(crate) struct Metrics {
     pub heading_space_above: [i32; 5],
     /// Corner radius of the heading band. Only consulted where a band exists.
     pub heading_band_radius: i32,
+    /// The band's internal horizontal padding: the heading TEXT is inset from the band's
+    /// edge by this much on each side, while the band itself keeps the content column it
+    /// shares with both export sinks. Only consulted where a band exists.
+    pub heading_band_padding: i32,
     pub blockquote_bar_width: i32,
     pub blockquote_text_gap: i32,
     /// The ONE definition both the `li-{depth}` tag's `left_margin` and the drawn
@@ -1142,6 +1181,10 @@ pub(crate) struct Theme {
     /// consumer indexes rather than re-deriving the fallback. Bullet only: the ordered
     /// numeral and the task box read `list_marker` at every depth.
     pub list_bullet_colors: [Option<gdk::RGBA>; BULLET_TIERS],
+    /// The TASK checkbox's colour, both states (TDD 18.27), already folded with
+    /// `list_marker` — so a theme that states neither leaves this `None` and the marker
+    /// takes the widget foreground, exactly as before.
+    pub list_task_color: Option<gdk::RGBA>,
     /// Glyphs standing in for the drawn list markers; each `None` ⇒ that marker is
     /// drawn as it always was. A sprite for the same marker outranks the glyph.
     pub list_glyphs: ListGlyphs,
@@ -1183,6 +1226,7 @@ pub(crate) struct Sprites {
     pub list_task: Option<std::path::PathBuf>,
     pub list_task_checked: Option<std::path::PathBuf>,
     pub heading_band: Option<std::path::PathBuf>,
+    pub blockquote_bar: Option<std::path::PathBuf>,
 }
 
 impl Theme {
@@ -1279,6 +1323,10 @@ impl Theme {
         // depth-3 takes depth 2's value and an unstated depth-2 takes depth 1's — which
         // is the un-suffixed key, i.e. exactly today's behaviour when neither is stated.
         let list_marker = color(&selected.list_marker, &system.list_marker);
+        // Folded here, like every other per-kind and per-tier value, so the gutter and
+        // both export sinks index rather than each spelling the fallback.
+        let list_task_color =
+            color(&selected.list_task_marker, &system.list_task_marker).or(list_marker);
         let tier2 = color(&selected.list_marker_2, &system.list_marker_2);
         let tier3 = color(&selected.list_marker_3, &system.list_marker_3);
         let list_bullet_colors = [
@@ -1380,6 +1428,7 @@ impl Theme {
             rule: color(&selected.rule, &system.rule),
             list_marker,
             list_bullet_colors,
+            list_task_color,
             list_glyphs: ListGlyphs {
                 bullet: bullet_glyphs,
                 ordered: glyph(&selected.list_ordered_glyph, &system.list_ordered_glyph),
@@ -1414,6 +1463,12 @@ impl Theme {
                 heading_band_radius: num!(
                     heading_band_radius,
                     F_HEADING_BAND_RADIUS,
+                    METRIC_RANGE,
+                    clamp_i32
+                ),
+                heading_band_padding: num!(
+                    heading_band_padding,
+                    F_HEADING_BAND_PADDING,
                     METRIC_RANGE,
                     clamp_i32
                 ),
@@ -1475,6 +1530,10 @@ impl Theme {
                     &system.sprite_list_task_checked,
                 ),
                 heading_band: sprite(&selected.sprite_heading_band, &system.sprite_heading_band),
+                blockquote_bar: sprite(
+                    &selected.sprite_blockquote_bar,
+                    &system.sprite_blockquote_bar,
+                ),
             },
         }
     }
@@ -1552,6 +1611,7 @@ fn rewrite_sprite_paths(spec: &mut ThemeSpec, dir: &std::path::Path) {
         &mut spec.sprite_list_task,
         &mut spec.sprite_list_task_checked,
         &mut spec.sprite_heading_band,
+        &mut spec.sprite_blockquote_bar,
     ] {
         *slot = slot.as_deref().and_then(|rel| {
             crate::sprite::resolve(dir, rel).map(|p| p.to_string_lossy().into_owned())
@@ -2379,6 +2439,77 @@ mod tests {
         assert_eq!(t.list_glyphs.bullet[2].as_ref().unwrap().as_plain(), "‧");
         // Terminal's own depth-1 glyph survives the override of the deeper tiers.
         assert_eq!(t.list_glyphs.bullet[0].as_ref().unwrap().as_plain(), "▸");
+    }
+
+    /// TDD 18.27 / 18.2 — the task colour is opt-in and folds to `list_marker`, so a
+    /// theme that states neither leaves it `None` and the marker takes the widget
+    /// foreground exactly as before the key existed.
+    #[test]
+    fn the_task_marker_colour_is_opt_in_and_folds_to_the_shared_key() {
+        let sys = Themes::builtin().resolve(SYSTEM_ID);
+        assert!(sys.list_task_color.is_none());
+        assert!(sys.list_marker.is_none());
+
+        // Stated `list_marker` alone: the task marker follows it, which is today's
+        // behaviour and what makes the new key inert until asked for.
+        let mut shared = Themes::builtin();
+        shared.merge_over(Themes::parse("[themes.sepia]\nlist_marker = \"#111111\"\n").unwrap());
+        assert_eq!(
+            crate::palette::to_hex(shared.resolve("sepia").list_task_color.unwrap()),
+            "#111111"
+        );
+
+        // Stated separately: the task marker leaves the shared key behind, and the
+        // shared key is untouched — that independence IS the rubric.
+        let mut split = Themes::builtin();
+        split.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nlist_marker = \"#111111\"\nlist_task_marker = \"#ff00ff\"\n",
+            )
+            .unwrap(),
+        );
+        let t = split.resolve("sepia");
+        assert_eq!(
+            crate::palette::to_hex(t.list_task_color.unwrap()),
+            "#ff00ff"
+        );
+        assert_eq!(crate::palette::to_hex(t.list_marker.unwrap()), "#111111");
+        // …and the BULLET tiers keep reading the shared key, not the task one.
+        assert_eq!(
+            crate::palette::to_hex(t.list_bullet_colors[0].unwrap()),
+            "#111111"
+        );
+    }
+
+    /// TDD 18.28 — the bar sprite is opt-in, and it goes through the SAME
+    /// theme-relative validation every other sprite key does. The second half is the
+    /// one worth pinning: `rewrite_sprite_paths` iterates a list, and a key added to the
+    /// spec but forgotten there compiles, works for every built-in theme (none names a
+    /// sprite) and silently ignores every user reference.
+    #[test]
+    fn the_blockquote_bar_sprite_is_opt_in_and_validated_like_every_other() {
+        assert!(Themes::builtin()
+            .resolve(SYSTEM_ID)
+            .sprites
+            .blockquote_bar
+            .is_none());
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("bar.png"), b"not a real png, just bytes").unwrap();
+        let mut good = ThemeSpec {
+            sprite_blockquote_bar: Some("bar.png".to_string()),
+            ..Default::default()
+        };
+        rewrite_sprite_paths(&mut good, dir.path());
+        let got = good.sprite_blockquote_bar.expect("resolved");
+        assert!(std::path::Path::new(&got).is_absolute());
+
+        let mut escaping = ThemeSpec {
+            sprite_blockquote_bar: Some("../escape.png".to_string()),
+            ..Default::default()
+        };
+        rewrite_sprite_paths(&mut escaping, dir.path());
+        assert_eq!(escaping.sprite_blockquote_bar, None);
     }
 
     /// TDD 18.8 / 18.17 — a decoration LINE (a heading rule, a link underline, a strike)

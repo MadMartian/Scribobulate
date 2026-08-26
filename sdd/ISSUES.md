@@ -31,6 +31,7 @@ entry can still be the worst thing in the register.
 | W | Any | Project | `sprite::scaled`'s per-`(path, width, height)` texture cache has no eviction policy | Low |
 | X | Any | Production | A long heading overflows the preview pane horizontally instead of wrapping to it | Low |
 | Y | Any | Project | The design-time-px-to-device-px rounding function (`px()`) exists as three separate copies rather than one shared definition | Low |
+| Z | Any | Production | A multi-paragraph blockquote's accent bar draws as one continuous rect per span, unconfirmed for every span shape a blockquote can produce | Low |
 
 ## A. Tables are selection islands
 
@@ -735,3 +736,21 @@ uses.
 - Accept the limitation — the three copies have not drifted and each is a one-line
   formula, so the risk is theoretical until a fourth definition or an actual bug
   in one copy surfaces.
+
+## Z. A multi-paragraph blockquote's bar continuity is unconfirmed for every span shape
+
+**Severity**: Low. A flat colour never made a discontinuity visible; TDD 18.28's
+textured bar (a tiled sprite) would.
+
+The blockquote accent bar is drawn as one rect per recorded span
+(`codeview/mod.rs`), which is correct for the common case, but it was not
+re-verified against every shape a blockquote's span can take (nested quotes,
+a quote interrupted by a non-quote block, quotes separated by a blank line)
+while adding the sprite-tile option. A flat-colour bar hides a small vertical
+gap between two spans that should read as one continuous quote; a tiled
+texture would show a visible seam or restart.
+
+**Mitigation options**:
+- Render each of the span shapes above under a sprite-backed `blockquote_bar`
+  and confirm the tile continues (or deliberately restarts) consistently.
+- Accept the limitation until a real document surfaces a visible seam.

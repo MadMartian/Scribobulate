@@ -216,6 +216,20 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // run, sharing the run's own ink unless the theme colours it — NOT a drawn divider;
     // a column-width band is a different, tier-K+D decoration.
     let rule = theme.heading_rule;
+    // The heading text's inset from its BAND (TDD 18.25's padding fix). The band's rect
+    // stays the full content column — that extent is what both export sinks match
+    // against — so the text moves in, through the tag's own margins: the identical lever
+    // `code-block` and `blockquote` already use to sit their text inside the decoration
+    // drawn behind it (GTK4Rs/AP-21 — a drawn rect and a tag margin are the only two
+    // halves available, and the rect cannot pad).
+    //
+    // ⚠️ CONDITIONAL PER LEVEL, and that is what keeps System byte-identical (TDD 18.2)
+    // rather than the metric's value: an unconditional heading margin would re-indent
+    // every heading in every theme, System's included. A level with no band sets no
+    // margin at all and inherits the view's, exactly as before.
+    let band_pad = px(metrics.heading_band_padding);
+    let view_lm_for_band = px(config().view.left_margin);
+    let view_rm_for_band = px(config().view.right_margin);
     for (i, level) in [
         TagName::H1,
         TagName::H2,
@@ -232,11 +246,16 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
         let above = px(metrics.heading_space_above[i]);
         let heading_color = theme.heading_colors[i];
         let hfont = theme.heading_fonts[i].clone();
+        let banded = theme.heading_band.fills[i].is_some();
         add(level.name(), &move |t| {
             t.set_scale(scale);
             t.set_weight(weight);
             t.set_pixels_below_lines(below);
             t.set_pixels_above_lines(above);
+            if banded {
+                t.set_left_margin(view_lm_for_band + band_pad);
+                t.set_right_margin(view_rm_for_band + band_pad);
+            }
             // Set only when the theme asks. Calling the setter with `None`/`NONE` would
             // still mark the property SET on the tag, which is a different tag from the
             // one this code registered before the key existed — and 18.2 is a claim

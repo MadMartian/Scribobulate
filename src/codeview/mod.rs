@@ -754,6 +754,16 @@ mod imp {
                 let bqm = crate::theme::active();
                 let zoom_now = self.gutter_zoom.get();
                 let bar_w = (bqm.metrics.blockquote_bar_width as f64 * zoom_now).round() as f32;
+                // A theme may tile a sprite down the bar instead of filling it (TDD
+                // 18.28), at the sprite's NATURAL size — `texture`, not `scaled`: 1:1
+                // pixels need no filter, and GSK 4.6's `append_texture` offers no filter
+                // choice (GTK4Rs/AP-114). The tile is clipped to the bar's own rect, so a
+                // theme using one wants `blockquote_bar_width` at the tile's width.
+                let bar_sprite = bqm
+                    .sprites
+                    .blockquote_bar
+                    .as_deref()
+                    .and_then(crate::sprite::texture);
                 for &quote in blockquotes.iter() {
                     if quote.is_empty() {
                         continue;
@@ -772,7 +782,25 @@ mod imp {
                     );
                     if bottom > top {
                         let rect = graphene::Rect::new(lm, top, bar_w, bottom - top);
-                        snapshot.append_color(&bar_color, &rect);
+                        // The sprite OUTRANKS the flat colour, and this is an `else`
+                        // rather than a paint-over on purpose: filling first and tiling
+                        // on top looks identical for an opaque tile and lets the flat
+                        // colour bleed through a transparent one — a bug reachable only
+                        // by the sprites nobody happened to test.
+                        match &bar_sprite {
+                            Some(tex) => {
+                                let tile = graphene::Rect::new(
+                                    rect.x(),
+                                    rect.y(),
+                                    tex.width() as f32,
+                                    tex.height() as f32,
+                                );
+                                snapshot.push_repeat(&rect, Some(&tile));
+                                snapshot.append_texture(tex, &tile);
+                                snapshot.pop();
+                            }
+                            None => snapshot.append_color(&bar_color, &rect),
+                        }
                     }
                 }
 
@@ -1779,6 +1807,90 @@ mod gtk_integration_tests {
              snapshot_layer's early-return gate"
         );
         crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// TDD 18.28 — a themed sprite TILES down the blockquote bar and REPLACES the flat
+    /// colour rather than painting over it.
+    ///
+    /// A pixel assertion, and the second half is why: filling first and tiling on top
+    /// looks identical for an opaque tile, so a paint-over would pass any check that only
+    /// asks whether the sprite is there. This asserts the flat colour is GONE — the case
+    /// that separates the two, and the one that would otherwise surface as a stray tint
+    /// bleeding through the first transparent tile anybody ships.
+    #[gtktest::test]
+    fn a_blockquote_bar_sprite_tiles_and_replaces_the_flat_colour() {
+        const FLAT: (u8, u8, u8) = (0x00, 0xff, 0x00);
+        const TILE: (u8, u8, u8) = (0xff, 0x00, 0xff);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tile.png");
+        // HALF TRANSPARENT, and that is the whole discriminating power of this test. An
+        // opaque tile hides an over-paint completely — the first version of this fixture
+        // was opaque, and the mutation it was written to catch passed. With the right
+        // half of every tile clear, a bar that filled before it tiled shows the flat
+        // colour through, and a bar that replaced shows the page.
+        let pb = gtk::gdk_pixbuf::Pixbuf::new(gtk::gdk_pixbuf::Colorspace::Rgb, true, 8, 8, 8)
+            .expect("allocate pixbuf");
+        pb.fill(0x00_00_00_00);
+        pb.new_subpixbuf(0, 0, 4, 8).fill(0xff_00_ff_ff);
+        pb.savev(&path, "png", &[]).expect("save png");
+
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.barred]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
+             blockquote_bar = \"#00ff00\"\nblockquote_bar_width = 24\n",
+        );
+        let mut theme = themes.resolve("barred");
+        // Set the resolved path directly: `resolve` never touches the filesystem, and
+        // this test is about the PAINT, not about sprite validation (`sprite.rs` owns
+        // that, and `rewrite_sprite_paths` exercises it).
+        theme.sprites.blockquote_bar = Some(path.clone());
+        crate::theme::set_active_for_test(theme);
+        crate::sprite::clear_cache();
+
+        let view = CodePreviewView::new();
+        view.buffer().set_text("A quoted line\n");
+        view.set_blockquotes(
+            vec![crate::span::BufferSpan::new(0, 13)],
+            gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
+        );
+
+        let window = gtk::Window::new();
+        window.set_default_size(400, 200);
+        window.set_child(Some(&view));
+        window.present();
+        crate::testpump::until(crate::testpump::Clock::Frame, "the preview maps", || {
+            view.width() > 0
+        });
+        let paintable = gtk::WidgetPaintable::new(Some(&view));
+        let snapshot = gtk::Snapshot::new();
+        paintable.snapshot(snapshot.upcast_ref::<gdk::Snapshot>(), 400.0, 200.0);
+        let node = snapshot
+            .to_node()
+            .expect("the preview snapshots to something");
+        let renderer = gsk::CairoRenderer::new();
+        renderer
+            .realize(None::<&gdk::Surface>)
+            .expect("the Cairo renderer realizes without a surface");
+        let texture = renderer.render_texture(&node, None);
+        let (w, h) = (texture.width() as usize, texture.height() as usize);
+        let mut data = vec![0u8; w * h * 4];
+        texture.download(&mut data, w * 4);
+        // Realized explicitly, so unrealized explicitly (GTK4Rs/AP-272).
+        renderer.unrealize();
+        window.destroy();
+
+        let found = |want: (u8, u8, u8)| {
+            // Cairo ARGB32 on a little-endian host: B, G, R, A.
+            data.chunks_exact(4).any(|px| (px[2], px[1], px[0]) == want)
+        };
+        assert!(found(TILE), "the bar sprite never reached the framebuffer");
+        assert!(
+            !found(FLAT),
+            "the flat bar colour is still painted under the sprite — the sprite must \
+             REPLACE the fill, not sit on top of it"
+        );
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+        crate::sprite::clear_cache();
     }
 
     /// TDD 13.7 / ScrAP-65 regression (area-1 automated test): a

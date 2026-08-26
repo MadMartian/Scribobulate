@@ -73,6 +73,11 @@ heading_space_below  = [4, 4, 2, 2, 2]  # h1..h5 space below the heading line
 heading_space_above  = [0, 0, 0, 0, 0]  # h1..h5 space ABOVE it — zero, because the
                                         # heading tags set no pixels_above_lines before
                                         # this key existed
+heading_band_padding = 12               # band edge → heading text, each side. NON-ZERO
+                                        # unlike the other decoration defaults: padding is
+                                        # part of drawing a band correctly, not a flourish.
+                                        # Inert here regardless — the inset is applied only
+                                        # to a level that HAS a band, and System bands none
 blockquote_bar_width = 3             # the quote's left accent bar
 blockquote_text_gap  = 10            # bar → quoted text
 list_step            = 28            # per-nesting-level list indent
@@ -472,14 +477,26 @@ rule_space    = 6
 # decoration here is a colour, a font stack, or a Unicode glyph, which is what keeps
 # it clear of the copyrighted-idiom trap this plan's own deleted spike walked into
 # (see the plan's header note — that spike is not revived, and this theme is an
-# independent design, not a sanitised copy of it).
+# independent design, not a sanitised copy of it). The page background is the one
+# deliberate exception to "independent design": it reuses the specific saturated sky
+# blue widely associated with a certain classic platformer's daylight levels. A bare
+# hue carries no copyrightable expression and this project asserts no trademark claim
+# over "sky blue" — the operator's call, on the same reasoning that ruled out reusing
+# imagery (bricks, pipes, character art) but never ruled out a colour. Reusing that
+# exact hue as the PAGE rather than an accent forced a page-wide contrast re-tuning:
+# it is a mid-luminance blue (L≈0.30), not the pale tint a light reading theme usually
+# picks, so every ink below is SHADED (hue kept, lightness dropped) rather than the
+# lighter versions an airier page would have allowed — see each key's own contrast
+# note.
 [themes.pixelquest]
 name       = "Pixel Quest"
 symbol     = "🕹️"
-background = "#cdeefb"   # daylight sky blue
-foreground = "#17263b"   # near-navy ink — 12.51:1 on the page (WCAG AAA)
+background = "#5c94fc"   # saturated daylight sky blue — mid-luminance (L≈0.30), not pale
+foreground = "#17263b"   # near-navy ink — unchanged from the page's first draft; already
+                          # dark enough to clear the new, harder page: 5.15:1 (was 12.51:1
+                          # on the original paler blue)
 accent     = "#b23a2e"   # warm brick-red — seeds blockquote_bar/selection where not overridden below
-link       = "#0f5b33"   # forest green — 6.71:1
+link       = "#09361f"   # forest green, SHADED darker for the new page (was #0f5b33) — 4.55:1
 
 # Rounded, friendly display faces — illegible as body text, exactly what a heading
 # wants. Neither is packaged on a stock Linux box; both stacks fall through to the
@@ -493,8 +510,12 @@ heading_font = 'Fredoka, "Baloo 2", Quicksand, Cantarell, "Noto Sans", sans-seri
 # the heading_font stack above where absent); h2/h3 take their own inks; h4 and h5
 # fall back to the singular heading_color below (also the table header's ink), so
 # the hierarchy has four distinct voices, not five competing ones.
-heading_color  = "#7a1414"                                    # h4/h5 + table header text — 8.89:1 on the page
-heading_colors = ["#ffd400", "#fff3c4", "#0e3e86", "", ""]     # h1 gold, h2 cream, h3 deep blue
+heading_color  = "#5f1010"                                    # h4/h5 + table header text — SHADED darker
+                                                               # for the new page (was #7a1414) — 4.53:1
+heading_colors = ["#ffd400", "#fff3c4", "#0a2d62", "", ""]     # h1 gold, h2 cream, h3 deep blue (h3 SHADED
+                                                                # darker for the new page, was #0e3e86 — 4.54:1;
+                                                                # h1/h2 ink is unchanged, checked against their
+                                                                # BAND fill below, not the page)
 heading_fonts  = ['"Titan One", "Luckiest Guy", sans-serif', "", "", "", ""]
 
 # A level-title BAND behind h1/h2 (TDD 18.25) — solid fills only, deliberately no
@@ -507,19 +528,20 @@ heading_band_bg     = ["#2b2d6b", "#5b2e1c", "", "", ""]
 heading_band_radius = 10
 
 # A furniture-blue rule under every heading (band or not) and taper the space above
-# it with the level, same shape Synthwave uses. 3E6FA0 clears the 3:1 non-text floor
-# (4.32:1) — a decoration line is graphic, not text, so it answers to the lower bar.
+# it with the level, same shape Synthwave uses. SHADED darker for the new page (was
+# #3e6fa0) to keep clearing the 3:1 non-text floor with margin — 3.30:1 — a decoration
+# line is graphic, not text, so it answers to the lower bar, not the 4.5:1 text one.
 heading_underline      = "single"
-heading_underline_rgba = "#3e6fa0"
+heading_underline_rgba = "#274665"
 heading_space_above    = [16, 12, 8, 6, 6]
 
 # Strikethrough and the link underline theme independently of their ink (TDD 18.23).
 # A DOUBLE line under links, in a colour distinct from the green ink so the two read
-# as separate decisions rather than one blurred stroke; both clear 3:1 (4.87:1,
-# 4.01:1).
-strikethrough_rgba  = "#b23a2e"
+# as separate decisions rather than one blurred stroke; both SHADED darker for the new
+# page (were #b23a2e, #c24a1e) and both clear 3:1 with margin (3.32:1, 3.32:1).
+strikethrough_rgba  = "#79281f"
 link_underline      = "double"
-link_underline_rgba = "#c24a1e"
+link_underline_rgba = "#752d12"
 
 # GLYPH list markers (TDD 18.24) — a diamond bullet and a star/filled-star task pair
 # read as "collectible" furniture without drawing anything. The ordered numeral is
@@ -528,35 +550,58 @@ link_underline_rgba = "#c24a1e"
 # `list_marker` is ONE key for bullet, numeral AND task-checkbox alike (SCHEMA.md) —
 # there is no per-kind colour, so "the bullets" pop the whole marker family. A bright
 # primary blue, not the link's green: markers are furniture, links are content, and
-# giving them the same hue was reading as one undifferentiated family.
-list_marker              = "#2962ff"
+# giving them the same hue was reading as one undifferentiated family. SHADED darker
+# for the new page (was #2962ff) — a marker is a graphic, no automated floor governs
+# it, but the old value all but vanished against the new, much closer-valued page.
+list_marker              = "#0035c9"
 # DEPTH-TIERED bullets (TDD 18.26). A nested list reads as a route through the level,
 # and a sub-branch in a second colour is the cheapest way to say "this hangs off that".
-# Bright fire-engine red — 4.32:1 on this pale sky page, so it clears the 3:1 floor a
-# non-text graphic answers to with room to spare, and it is deliberately NOT the brick
-# `accent` (#b23a2e) the strikethrough uses or the dark `heading_color` (#7a1414): three
-# reds on one page have to be tellable apart, and value is what tells them.
+# SHADED darker for the new page (was #d32011) — 3.01:1, clearing the 3:1 floor a
+# non-text graphic answers to — and it is deliberately NOT the brick `accent`
+# (#b23a2e), the strikethrough ink (#79281f), or the dark `heading_color` (#5f1010):
+# four reds now share this page and value is what tells them apart.
 #
 # Depth 3 is left UNSET on purpose. It inherits depth 2's red — which is the half of the
 # fold worth having visible in a shipped theme, since "the next SHALLOWER tier, not the
 # base" is the part a reader would otherwise have to take on trust. A third distinct
 # shade was considered and dropped: the only unclaimed bright hue here is the gold, and
 # gold already means "level title / collectible" everywhere else in this theme.
-list_marker_2            = "#d32011"
+list_marker_2            = "#93160c"
 list_bullet_glyph        = "◆"
 list_task_glyph          = "☆"
 list_task_checked_glyph  = "★"
+# The task stars get their OWN colour (TDD 18.27) — collectibles are a different family
+# from route furniture, and this is the key that lets a theme say so without moving the
+# bullets. ONE colour for both states: a checked and an unchecked star are the same
+# collectible, taken or not, and the GLYPH already carries which.
+#
+# A full-saturation magenta at reduced value, not `#ff00ff`. This page is mid-luminance
+# (L≈0.30) and bright magenta lands at L≈0.285 — 1.06:1, a colour told apart from the
+# page by hue alone and effectively invisible. Every other ink here was shaded down for
+# the same reason when the page changed; this one arrives already shaded. 3.37:1 on the
+# page (clearing the 3:1 floor a non-text graphic answers to) and 6.96:1 against the gold
+# h1 it commonly sits under.
+list_task_marker         = "#7a007a"
 
-blockquote_bar       = "#0e3e86"
-blockquote_bar_width = 4
+blockquote_bar       = "#0a2d62"   # matches the new h3 shade (was #0e3e86). KEPT beside the
+                                   # sprite below, not replaced: the sprite outranks it, and
+                                   # this is what the bar falls back to if the file is ever
+                                   # missing, unreadable or refused by `sprite::resolve`
+# A riveted copper plate tiled down the quote bar (TDD 18.28) — the one piece of the
+# arcade idiom this theme draws rather than states, and an original seamless tile.
+# Tiled at its NATURAL size and clipped to the bar, so the bar has to be as wide as the
+# tile or a 24px plate shows up as a 4px slice of one: `blockquote_bar_width` is 24 here
+# for that reason and no other, and a theme swapping the tile must resize with it.
+sprite_blockquote_bar = "sprites/copper-plate.png"
+blockquote_bar_width = 24
 blockquote_text_gap  = 12
 list_item_gap        = 10
-rule                 = "#3e6fa0"
+rule                 = "#274665"   # matches the new heading-rule shade (was #3e6fa0)
 rule_space           = 6
-table_border         = "#3e6fa0"   # a border carries no text, so it is free of the header-text trap
+table_border         = "#274665"   # a border carries no text, so it is free of the header-text trap
                                     # below — `table_head_bg` is deliberately left UNSET (derived):
-                                    # this theme's singular `heading_color` (#7a1414, dark red) reads
-                                    # 1.15:1 on the indigo band colour, so reusing that band as the
+                                    # this theme's singular `heading_color` (#5f1010, dark red) reads
+                                    # 1.08:1 on the indigo band colour, so reusing that band as the
                                     # table header fill would have made the header text unreadable.
                                     # Left to derive, the header fill stays legible against whatever
                                     # ink the table actually uses.

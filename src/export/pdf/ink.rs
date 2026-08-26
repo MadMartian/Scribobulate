@@ -15,7 +15,7 @@
 
 use super::super::pdftable;
 use super::geometry::{pango_to_pt, MIN_PRINTABLE_PT};
-use super::{Laid, LineKind, PageDrawn, TableCell, RULE_THICKNESS_PT};
+use super::{decode, Laid, LineKind, PageDrawn, TableCell, RULE_THICKNESS_PT};
 use crate::palette::Palette;
 use crate::theme::Theme;
 use gtk::cairo;
@@ -51,6 +51,15 @@ pub(crate) fn draw_page(
     // POLICY § One theme key rule wants it: a reader checking that a surface is themed
     // consistently should not have to find every draw site to be sure.
     let bar_ink = theme.blockquote_bar.unwrap_or(palette.blockquote_bar);
+    // Decoded ONCE for the page rather than per quoted line: the surface is cheap to
+    // hold and re-reading the file for every line of a long quote is not.
+    let bar_sprite = theme
+        .sprites
+        .blockquote_bar
+        .as_deref()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|bytes| decode(&bytes))
+        .map(|(surface, _, _)| surface);
     let rule_ink = theme.rule.unwrap_or(palette.rule);
     set_ink(cr, fg);
     let mut y = margin_pt;
@@ -67,10 +76,28 @@ pub(crate) fn draw_page(
         // The quote bar, at the metric the theme states.
         if line.quote_depth > 0 {
             cr.save().ok();
-            set_ink(cr, bar_ink);
             let w = f64::from(theme.metrics.blockquote_bar_width);
-            cr.rectangle(margin_pt + line.indent - w * 2.0, y, w, line.height);
-            cr.fill().ok();
+            let x = margin_pt + line.indent - w * 2.0;
+            // A theme may tile a sprite down the bar instead of filling it (TDD 18.28),
+            // at natural size, the same picture the preview tiles. An `else` rather than
+            // a paint-over for the reason the drawn bar states: an opaque tile hides the
+            // difference and a transparent one lets the flat colour bleed through.
+            match &bar_sprite {
+                Some(surface) => {
+                    let pattern = cairo::SurfacePattern::create(surface);
+                    pattern.set_extend(cairo::Extend::Repeat);
+                    cr.translate(x, y);
+                    if cr.set_source(&pattern).is_ok() {
+                        cr.rectangle(0.0, 0.0, w, line.height);
+                        cr.fill().ok();
+                    }
+                }
+                None => {
+                    set_ink(cr, bar_ink);
+                    cr.rectangle(x, y, w, line.height);
+                    cr.fill().ok();
+                }
+            }
             cr.restore().ok();
             set_ink(cr, fg);
         }
@@ -78,8 +105,12 @@ pub(crate) fn draw_page(
         // it. Spans the printable column — the same extent the preview draws it at, and
         // the widest thing this medium offers without restructuring the page.
         if let Some(band) = &line.band {
-            let width = (laid.printable_width_pt - line.indent).max(MIN_PRINTABLE_PT);
-            let x = margin_pt + line.indent;
+            // Back OUT by the padding the line was laid out inside: the text moved in,
+            // the band did not (TDD 18.25's padding fix), so the band keeps the exact
+            // printable column the preview and the HTML sink match against.
+            let left = (line.indent - band.padding).max(0.0);
+            let width = (laid.printable_width_pt - left).max(MIN_PRINTABLE_PT);
+            let x = margin_pt + left;
             cr.save().ok();
             cr.rectangle(x, y, width, line.height);
             match (&band.sprite, band.gradient_to) {

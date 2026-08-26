@@ -422,7 +422,7 @@ pre {{ background: {code_block}; padding: {cell_pv}px {cell_ph}px; border-radius
 pre code {{ background: none; padding: 0; }}
 blockquote {{ border-left: {bar_w}px solid {bar}; margin-left: 0;
   padding-left: {bar_gap}px; }}
-hr {{ border: 0; border-top: 1px solid {rule}; margin: {rule_space}px 0; }}
+{bar_sprite_css}hr {{ border: 0; border-top: 1px solid {rule}; margin: {rule_space}px 0; }}
 table {{ border-collapse: collapse; }}
 th, td {{ border: {tbw}px solid {tb}; padding: {cell_pv}px {cell_ph}px; }}
 th {{ background: {thead}; }}
@@ -433,7 +433,7 @@ ul, ol {{ padding-left: {step}px; }}
 li {{ margin-bottom: {li_gap}px; }}
 li::marker {{ color: {marker}; }}
 {marker_depths}li.task-list-item {{ list-style: none; }}
-mark {{ background: {mark_bg}; {mark_fg} }}
+{task_marker_css}mark {{ background: {mark_bg}; {mark_fg} }}
 sup {{ font-size: {sup}%; vertical-align: super; }}
 sub {{ font-size: {sup}%; vertical-align: sub; }}
 strong {{ font-weight: {bold}; }}
@@ -457,6 +457,7 @@ img {{ max-width: 100%; height: auto; }}
         code_block = to_hex(p.code_block_bg),
         bar = to_hex(p.blockquote_bar),
         bar_w = m.blockquote_bar_width,
+        bar_sprite_css = blockquote_bar_sprite_css(t),
         bar_gap = m.blockquote_text_gap,
         rule = to_hex(p.rule),
         rule_space = m.rule_space,
@@ -470,6 +471,7 @@ img {{ max-width: 100%; height: auto; }}
         li_gap = m.list_item_gap,
         marker = list_marker,
         marker_depths = list_marker_depth_css(t, &list_marker),
+        task_marker_css = task_marker_css(t),
         mark_bg = t.mark_bg.hex(),
         mark_fg = mark_fg,
         strike = t
@@ -546,6 +548,16 @@ fn heading_band_css(t: &Theme, level_index: usize) -> String {
     if radius > 0 {
         let _ = write!(out, " border-radius: {radius}px;");
     }
+    // The band's internal padding, and `box-sizing` is half the fix rather than a tidy-up:
+    // CSS padding grows the box OUTWARDS by default, so a bare `padding` would widen the
+    // band past the content column and leave the text exactly where it was — the opposite
+    // of the intent. `border-box` makes the padding eat into the column instead, which is
+    // the preview's behaviour (band at the content column, text inset from it) and what
+    // keeps all three renderings agreeing on the band's extent (TDD 25.3).
+    let pad = t.metrics.heading_band_padding;
+    if pad > 0 {
+        let _ = write!(out, " box-sizing: border-box; padding: 0 {pad}px;");
+    }
     out
 }
 
@@ -577,7 +589,64 @@ fn task_marker_html(t: &Theme, checked: bool) -> Option<String> {
     // constraint 2 — a single `markup_escape_text` is not sufficient once both sinks
     // are involved, and what leaves this application is opened by software this project
     // does not control).
-    glyph.as_ref().map(|g| g.escaped_for_html())
+    // Classed rather than inline-styled, so its colour lives in the sheet with every
+    // other themed value (TDD 25.9) — see `task_marker_css`.
+    glyph.as_ref().map(|g| {
+        format!(
+            "<span class=\"task-marker\">{}</span>",
+            g.escaped_for_html()
+        )
+    })
+}
+
+/// The blockquote bar's sprite (TDD 18.28), tiled at its natural size. Empty unless the
+/// theme names one, so a theme without it emits the flat `border-left` rule alone,
+/// byte-identical to before this key existed.
+///
+/// Drawn on a `::before` rather than as a background on the blockquote itself, because
+/// only a positioned box can be clipped to exactly `blockquote_bar_width`: a background
+/// with `repeat-y` would make the strip the SPRITE's natural width instead of the bar's,
+/// so a theme whose tile is wider than its bar would silently get a wider bar in the
+/// artefact than on screen. The border stays for the indent it reserves and goes
+/// transparent, which is this sink's explicit statement that the sprite outranks the
+/// flat colour — the same branch the drawn bar and the PDF each make for themselves.
+fn blockquote_bar_sprite_css(t: &Theme) -> String {
+    let Some((uri, _, _)) = t
+        .sprites
+        .blockquote_bar
+        .as_ref()
+        .and_then(|p| sprite_data_uri(p))
+    else {
+        return String::new();
+    };
+    let bar_w = t.metrics.blockquote_bar_width;
+    format!(
+        "blockquote {{ position: relative; border-left-color: transparent; }}\n\
+         blockquote::before {{ content: \"\"; position: absolute; left: -{bar_w}px; top: 0; \
+         bottom: 0; width: {bar_w}px; background: url({uri}) repeat; }}\n"
+    )
+}
+
+/// The task marker's own colour (TDD 18.27), for both the themed glyph and the
+/// `<input type="checkbox">` this sink falls back to. Empty unless the theme resolves one.
+///
+/// Two rules because the marker is two different things here depending on the theme, and
+/// a colour that reached one of them would be the drift the parity rule exists to stop.
+/// `accent-color` is how a checkbox is themed at all — `color` does not reach it.
+///
+/// This also closes a quiet gap: the sheet's shared `li::marker` rule cannot reach a task
+/// item, because that item suppresses its marker box (`list-style: none`) to draw its own
+/// checkbox. So before this key, a theme's `list_marker` coloured the preview's drawn
+/// checkbox and left the artefact's on the reader's default — visible only side by side.
+fn task_marker_css(t: &Theme) -> String {
+    let Some(c) = t.list_task_color else {
+        return String::new();
+    };
+    let hex = to_hex(c);
+    format!(
+        ".task-marker {{ color: {hex}; }}\n\
+         li.task-list-item input[type=\"checkbox\"] {{ accent-color: {hex}; }}\n"
+    )
 }
 
 /// `::marker` rules for the bullet and ordered list markers when the theme stands a
@@ -1257,10 +1326,17 @@ mod html_sink_tests {
         assert!(!css.contains("content: \"<b>\""), "{css}");
 
         let checked = super::task_marker_html(&theme, true).expect("a checked glyph");
-        assert_eq!(checked, "✔");
+        // Classed so the sheet can colour it (TDD 18.27) rather than inline-styled.
+        assert_eq!(checked, "<span class=\"task-marker\">✔</span>");
         let unchecked = super::task_marker_html(&theme, false).expect("an unchecked glyph");
-        assert!(!unchecked.contains('"'), "{unchecked}");
-        assert!(unchecked.contains("&quot;"), "{unchecked}");
+        // Assert on the glyph INSIDE the wrapper — the wrapper's own `class="…"` carries
+        // quotes of its own, so a bare "contains no quote" check would now be measuring
+        // this sink's markup rather than the theme's glyph.
+        let inner = unchecked
+            .trim_start_matches("<span class=\"task-marker\">")
+            .trim_end_matches("</span>");
+        assert!(!inner.contains('"'), "{inner}");
+        assert_eq!(inner, "&quot;t&quot;");
     }
 
     /// TDD 18.26 — the bullet's depth tiers reach the artefact as depth-SCOPED selectors,
@@ -1323,6 +1399,66 @@ mod html_sink_tests {
         assert!(!css.contains("li li ul > li::marker { color"), "{css}");
     }
 
+    /// TDD 18.27 — the task marker's colour reaches the artefact for BOTH shapes it
+    /// takes here: a themed glyph, and the `<input type="checkbox">` this sink falls back
+    /// to. `accent-color` is how a checkbox is themed at all — `color` does not reach it,
+    /// so styling only the glyph would leave every un-glyphed theme's checkbox on the
+    /// reader's default.
+    #[test]
+    fn the_task_markers_colour_reaches_both_shapes_it_takes() {
+        let (palette, mut theme) = style();
+        assert!(
+            super::task_marker_css(&theme).is_empty(),
+            "no colour stated must emit nothing"
+        );
+        theme.list_task_color = Some(gtk::gdk::RGBA::new(1.0, 0.0, 1.0, 1.0));
+        let css = super::stylesheet(&palette, &theme);
+        assert!(css.contains(".task-marker { color: #ff00ff; }"), "{css}");
+        assert!(
+            css.contains("li.task-list-item input[type=\"checkbox\"] { accent-color: #ff00ff; }"),
+            "{css}"
+        );
+        // The shared marker rule is untouched — a bullet and a numeral keep their colour.
+        assert!(css.contains("li::marker { color: "), "{css}");
+    }
+
+    /// TDD 18.28 — the blockquote bar's sprite reaches the artefact, embedded, tiled,
+    /// and REPLACING the flat colour rather than sitting over it.
+    ///
+    /// The transparent border is that replacement, stated: leaving the border coloured
+    /// would put the flat fill under a tile whose transparent pixels let it through, and
+    /// it would only ever show for a theme whose tile has some.
+    #[test]
+    fn a_blockquote_bar_sprite_is_embedded_and_replaces_the_flat_border() {
+        let (palette, mut theme) = style();
+        assert!(
+            super::blockquote_bar_sprite_css(&theme).is_empty(),
+            "no sprite stated must emit nothing"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bar.png");
+        std::fs::write(&path, ONE_PIXEL_PNG).unwrap();
+        theme.sprites.blockquote_bar = Some(path);
+        theme.metrics.blockquote_bar_width = 24;
+
+        let css = super::stylesheet(&palette, &theme);
+        assert!(css.contains("blockquote::before"), "{css}");
+        assert!(css.contains("data:image/png;base64,"), "{css}");
+        // Tiled, matching the preview, not stretched to the strip.
+        assert!(css.contains(") repeat;"), "{css}");
+        // Clipped to the BAR's width, not the sprite's: a background with `repeat-y`
+        // would make the strip as wide as the tile, so a theme whose tile is wider than
+        // its bar would get a wider bar here than on screen.
+        assert!(css.contains("width: 24px;"), "{css}");
+        assert!(css.contains("border-left-color: transparent;"), "{css}");
+        // The flat rule is still emitted — it reserves the indent, and it is what the
+        // artefact falls back to if the file is ever missing or refused.
+        assert!(
+            css.contains("blockquote { border-left: 24px solid"),
+            "{css}"
+        );
+    }
+
     /// TDD 18.24 — a marker SPRITE is embedded, so the artefact stays one self-contained
     /// file (the same rule and the same technique 18.19's chip sprite established).
     #[test]
@@ -1381,6 +1517,14 @@ mod html_sink_tests {
         let h2 = flat.lines().find(|l| l.starts_with("h2 ")).expect("h2");
         assert!(h1.contains("background: #336699;"), "{h1}");
         assert!(h1.contains("border-radius: 8px;"), "{h1}");
+        // The band's internal padding, and the `box-sizing` that makes it inset the TEXT
+        // rather than widen the band past the content column — without it the rule reads
+        // right and renders as the bug it was meant to fix.
+        assert!(h1.contains("box-sizing: border-box;"), "{h1}");
+        assert!(h1.contains("padding: 0 12px;"), "{h1}");
+        // An unbanded level gets neither — a padded box with no fill in it.
+        assert!(!h2.contains("padding"), "{h2}");
+        assert!(!h2.contains("box-sizing"), "{h2}");
         // A level the theme did not band carries nothing — including no radius, which
         // would otherwise round a box with no fill in it.
         assert!(!h2.contains("background"), "{h2}");

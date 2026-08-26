@@ -779,3 +779,48 @@ fn a_nested_bullet_reaches_its_own_depth_tier_through_the_layout_walk() {
         "each nesting level must read its own tier, and level 4 shares level 3's"
     );
 }
+
+/// TDD 18.25's padding fix, in the sink where the inset and the band are computed from
+/// the same number and have to move in OPPOSITE directions: the text goes in, the band
+/// stays on the printable column both other renderings match against.
+///
+/// Asserted on the two edges together, because getting one right and the other wrong is
+/// the failure — insetting the text without backing the band out shrinks the band, and
+/// backing the band out without insetting the text is the bug.
+#[test]
+fn a_banded_headings_text_is_inset_while_its_band_keeps_the_column() {
+    let mut t = theme();
+    let mut themes = crate::theme::Themes::builtin();
+    themes.merge_over_for_test(
+        "[themes.banded]\nheading_band_bg = [\"#334455\", \"\", \"\", \"\", \"\"]\n\
+         heading_band_padding = 16\n",
+    );
+    let banded = themes.resolve("banded");
+    t.heading_band = banded.heading_band;
+    t.metrics.heading_band_padding = banded.metrics.heading_band_padding;
+
+    let d = doc::build("# banded\n\n## plain\n", &RenderOptions::default());
+    let laid = lay_out(&d, &ctx(), 468.0, 684.0, &t);
+    let banded_line = laid
+        .lines
+        .iter()
+        .find(|l| l.band.is_some())
+        .expect("the h1 carries a band");
+    // The TEXT sits one padding in from the column…
+    assert_eq!(banded_line.indent, 16.0);
+    // …and the band backs out to the column itself, so its extent is unchanged from a
+    // theme that states no padding at all.
+    assert_eq!(banded_line.band.as_ref().unwrap().padding, 16.0);
+    assert_eq!(
+        banded_line.indent - banded_line.band.as_ref().unwrap().padding,
+        0.0
+    );
+
+    // The unbanded h2 is untouched: same indent it had before any of this.
+    let plain = laid
+        .lines
+        .iter()
+        .find(|l| l.band.is_none() && matches!(l.kind, crate::export::pdf::LineKind::Text { .. }))
+        .expect("the h2 and the body carry none");
+    assert_eq!(plain.indent, 0.0);
+}

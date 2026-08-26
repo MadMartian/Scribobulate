@@ -22,7 +22,8 @@ use super::decide::{
     Seg,
 };
 use super::geometry::{
-    indent_on_page, pango_to_pt, printable_width, pt_to_pango, INDENT_PT, PT_PER_PX,
+    indent_on_page, pango_to_pt, printable_width, pt_to_pango, INDENT_PT, MIN_PRINTABLE_PT,
+    PT_PER_PX,
 };
 use super::{
     decode, HeadingBandInk, Laid, LayoutSpec, Line, LineKind, MarkerImage, BASE_PT, BLOCK_GAP_PT,
@@ -59,6 +60,23 @@ pub(crate) fn lay_out(
         fragments: b.fragments,
         printable_width_pt: width_pt,
     }
+}
+
+/// Everything [`Layouter::paragraph`] needs about a block other than its markup,
+/// gathered so the function takes a subject rather than six positional arguments — the
+/// shape `LayoutSpec` and `TableRowInk` already use in this sink, and what makes a
+/// seventh (`right_inset`) an added field rather than an arity problem.
+///
+/// `indent` positions the block and, on its own, would also fix its width; `right_inset`
+/// is what lets the two differ, which a banded heading needs and nothing else does.
+struct ParagraphSpec {
+    size_pt: f64,
+    weight: i32,
+    indent: f64,
+    quote_depth: u32,
+    keep_with_next: bool,
+    /// Taken off the wrap width only. `0.0` everywhere but a banded heading.
+    right_inset: f64,
 }
 
 struct Layouter<'a> {
@@ -112,6 +130,7 @@ impl Layouter<'_> {
     /// for every row of a wrapped heading.
     fn heading_band_ink(&self, level_index: usize) -> Option<HeadingBandInk> {
         let fill = self.theme.heading_band.fills[level_index]?;
+        let padding = f64::from(self.theme.metrics.heading_band_padding);
         let sprite = self
             .theme
             .sprites
@@ -121,6 +140,7 @@ impl Layouter<'_> {
             .and_then(|bytes| decode(&bytes))
             .map(|(surface, _, _)| surface);
         Some(HeadingBandInk {
+            padding,
             fill,
             gradient_to: self.theme.heading_band.gradient_to,
             sprite,
@@ -209,13 +229,26 @@ impl Layouter<'_> {
                 // A heading keeps its first body line company where it can — the
                 // paginator honours it only when the pair actually fits.
                 let first = self.lines.len();
+                // A banded heading's text is inset from its band on BOTH sides (TDD
+                // 18.25's padding fix): the left through the block's own indent, the
+                // right through the wrap width, so the band keeps the printable column
+                // that both other renderings match against and only the text moves in.
+                // Zero where the level carries no band, which is every level of a theme
+                // that bands nothing.
+                let pad = band
+                    .as_ref()
+                    .map(|_| f64::from(self.theme.metrics.heading_band_padding))
+                    .unwrap_or(0.0);
                 self.paragraph(
                     &markup,
-                    BASE_PT * scale,
-                    self.theme.typography.heading_weight,
-                    indent,
-                    quote_depth,
-                    true,
+                    ParagraphSpec {
+                        size_pt: BASE_PT * scale,
+                        weight: self.theme.typography.heading_weight,
+                        indent: indent + pad,
+                        quote_depth,
+                        keep_with_next: true,
+                        right_inset: pad,
+                    },
                 );
                 // EVERY line of the heading, not just the first: a heading that wrapped
                 // is several abutting rects, which is one continuous band (TDD 18.25).
@@ -236,11 +269,14 @@ impl Layouter<'_> {
                             if !markup.trim().is_empty() {
                                 self.paragraph(
                                     &markup,
-                                    BASE_PT,
-                                    PANGO_WEIGHT_NORMAL,
-                                    indent,
-                                    quote_depth,
-                                    false,
+                                    ParagraphSpec {
+                                        size_pt: BASE_PT,
+                                        weight: PANGO_WEIGHT_NORMAL,
+                                        indent,
+                                        quote_depth,
+                                        keep_with_next: false,
+                                        right_inset: 0.0,
+                                    },
                                 );
                             }
                         }
@@ -256,11 +292,14 @@ impl Layouter<'_> {
                 );
                 self.paragraph(
                     &markup,
-                    BASE_PT,
-                    PANGO_WEIGHT_NORMAL,
-                    indent,
-                    quote_depth,
-                    false,
+                    ParagraphSpec {
+                        size_pt: BASE_PT,
+                        weight: PANGO_WEIGHT_NORMAL,
+                        indent,
+                        quote_depth,
+                        keep_with_next: false,
+                        right_inset: 0.0,
+                    },
                 );
             }
             Block::BlockQuote(inner) => {
@@ -346,30 +385,39 @@ impl Layouter<'_> {
         );
         self.paragraph(
             &markup,
-            BASE_PT,
-            PANGO_WEIGHT_NORMAL,
-            indent,
-            quote_depth,
-            false,
+            ParagraphSpec {
+                size_pt: BASE_PT,
+                weight: PANGO_WEIGHT_NORMAL,
+                indent,
+                quote_depth,
+                keep_with_next: false,
+                right_inset: 0.0,
+            },
         );
     }
 
     /// Lay a marked-up run out as one Pango paragraph and split it into per-line
     /// fragments — which is what makes "a page break never splits a line" structural
     /// rather than a rule someone has to remember (TDD 25.16).
-    fn paragraph(
-        &mut self,
-        markup: &str,
-        size_pt: f64,
-        weight: i32,
-        indent: f64,
-        quote_depth: u32,
-        keep_with_next: bool,
-    ) {
+    fn paragraph(&mut self, markup: &str, spec: ParagraphSpec) {
+        let ParagraphSpec {
+            size_pt,
+            weight,
+            indent,
+            quote_depth,
+            keep_with_next,
+            right_inset,
+        } = spec;
         let layout = self.layout_of(
             markup,
             LayoutSpec {
-                width_pt: Some(self.printable_width(indent)),
+                // `right_inset` is taken off the WRAP width without moving the block's
+                // left edge, which is the only way to inset a banded heading's text from
+                // both sides of its band: a position and a width derived from one
+                // `indent` are locked to each other, so the right side is unreachable
+                // without decoupling them. Floored, because a hostile theme's padding
+                // must not be able to drive a column negative.
+                width_pt: Some((self.printable_width(indent) - right_inset).max(MIN_PRINTABLE_PT)),
                 size_pt,
                 weight,
                 align: pango::Alignment::Left,
@@ -444,11 +492,14 @@ impl Layouter<'_> {
                         let first = self.lines.len();
                         self.paragraph(
                             &markup,
-                            BASE_PT,
-                            PANGO_WEIGHT_NORMAL,
-                            indent + INDENT_PT,
-                            quote_depth,
-                            false,
+                            ParagraphSpec {
+                                size_pt: BASE_PT,
+                                weight: PANGO_WEIGHT_NORMAL,
+                                indent: indent + INDENT_PT,
+                                quote_depth,
+                                keep_with_next: false,
+                                right_inset: 0.0,
+                            },
                         );
                         // Attach the sprite to the FIRST line the paragraph produced —
                         // the item's own first row, which is where every other marker

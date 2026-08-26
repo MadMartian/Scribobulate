@@ -62,6 +62,16 @@ all, of any kind, before this landed.
 
 **RATIFIED 2026-08-26 — both.** (18.24/18.25's glyph-vs-sprite decision.)
 
+**Further post-plan extensions, TDD 18.27/18.28**: a task-checkbox colour
+independent of `list_marker`, and a sprite-tiled blockquote bar. The vocabulary
+now has three sprite-bearing decorations (the annotation chip, the heading
+band, the blockquote bar) plus glyph and depth tiers, and every one resolves
+"a sprite outranks its flat-value sibling" via an explicit branch per
+renderer — not something that falls out of the paint code for free (18.28
+specifically had to add that branch in the preview, the PDF sink, and the
+HTML sink). That precedence is now a property of the closed decoration
+vocabulary itself, not a one-off decision each new decoration re-derives.
+
 **Requested by**: the operator, to give custom themes more flare — glyphs,
 graphics, background colours, shapes on headings and other Markdown-rendered
 elements.

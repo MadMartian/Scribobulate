@@ -204,6 +204,11 @@ pub(crate) fn marker_ink(
 ) -> Option<gdk::RGBA> {
     match kind {
         ListMarkerKind::Bullet => theme.list_bullet_colors[crate::theme::depth_tier(depth)],
+        // Both task states share one colour (TDD 18.27) — a checked and an unchecked box
+        // are the same control in two positions. Already folded with `list_marker`, so a
+        // theme that states no task colour is answered by this arm identically to the
+        // one below it.
+        ListMarkerKind::Task { .. } => theme.list_task_color,
         _ => theme.list_marker,
     }
 }
@@ -685,6 +690,30 @@ mod substitute_tests {
         // caller answers with the widget foreground — the pre-theming default.
         let bare = Themes::builtin().resolve(crate::theme::SYSTEM_ID);
         assert!(super::marker_ink(&ListMarkerKind::Bullet, 2, &bare).is_none());
+    }
+
+    /// TDD 18.27 — the task checkbox takes its own colour while bullets and numerals in
+    /// the same document keep `list_marker`, and BOTH task states take the same one: a
+    /// checked and an unchecked box are the same control in two positions.
+    #[test]
+    fn a_task_checkbox_takes_its_own_colour_and_both_states_share_it() {
+        let mut themes = Themes::builtin();
+        themes.merge_over_for_test(
+            "[themes.split]\nlist_marker = \"#111111\"\nlist_task_marker = \"#ff00ff\"\n",
+        );
+        let t = themes.resolve("split");
+        let hex = |kind: &ListMarkerKind| {
+            crate::palette::to_hex(super::marker_ink(kind, 1, &t).expect("stated"))
+        };
+        assert_eq!(hex(&task(false)), "#ff00ff");
+        assert_eq!(hex(&task(true)), "#ff00ff");
+        assert_eq!(hex(&ListMarkerKind::Bullet), "#111111");
+        assert_eq!(hex(&ListMarkerKind::Ordered(3)), "#111111");
+        // Depth does not reach the task marker — it is one colour wherever it sits.
+        assert_eq!(
+            crate::palette::to_hex(super::marker_ink(&task(true), 3, &t).unwrap()),
+            "#ff00ff"
+        );
     }
 
     /// A SPRITE outranks a glyph for the same marker — stated once here so the gutter

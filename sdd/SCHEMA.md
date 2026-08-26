@@ -284,6 +284,8 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `heading_underline_rgba` | colour | heading ink | The below-rule's colour. Omitted, the line follows the heading's own foreground. |
 | `heading_band_bg` | `[string; 5]` | — | The band drawn behind a heading's text, per level (h1 · h2 · h3 · h4 · h5-and-deeper). An empty or absent slot ⇒ that level carries no band. The band spans the **content column**, and survives soft-wrap as one continuous band. |
 | `heading_band_gradient_to` | colour | — | A second stop: the band becomes a vertical gradient from the level's own fill down to this colour. Ignored where no level states a fill. |
+| `heading_band_padding` (above) | | | Space between the band's edge and the heading text inside it, each side. ⚠️ Non-zero by default, unlike every other decoration key: padding is part of drawing a band correctly rather than a flourish. Applied **only to a level that carries a band**, so a theme that bands nothing is untouched by it whatever its value. |
+| `sprite_blockquote_bar` | `string` | — | A sprite **tiled at its natural size** down the blockquote's accent bar, in place of the flat `blockquote_bar` colour. Theme-relative and validated like every sprite key. ⚠️ The tile is clipped to the bar, so a theme using one wants `blockquote_bar_width` at the tile's own width — a 24px tile in a 4px bar is a 4px slice of a tile. |
 | `sprite_heading_band` | `string` | — | A sprite **tiled at its natural size** across the band, in place of its fill. Theme-relative and validated like every sprite key; outranks the fill and the gradient. |
 | `link` | colour | derived | Link colour. |
 | `link_underline` | `"none"` \| `"single"` \| `"double"` \| `"wavy"` | `"single"` | A link's underline style. Defaults to the single line the app has always drawn, not to `"none"`. |
@@ -301,6 +303,7 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `mark_bg` | colour | `#fff59d_88` | Background band behind `==marked==` text. |
 | `list_marker_2` | colour | `list_marker` | The **bullet's** colour at nesting depth 2. ⚠️ Bullet only, unlike the un-suffixed `list_marker` beside it, which colours all three marker kinds: a nested numeral is still a numeral and a nested task box still a box, where a bullet dot's whole job is to say which level you are on. |
 | `list_marker_3` | colour | `list_marker_2` | The bullet's colour at depth 3 **and deeper**. Unset falls back to the next *shallower* tier, not to the base — so stating only `list_marker_2` colours every depth from 2 down. |
+| `list_task_marker` | colour | `list_marker` | The **task checkbox's** colour, both states. Bullets and ordered numerals keep `list_marker`. One key rather than one per state: a checked and an unchecked box are the same control in two positions, and the glyph is what carries the state. |
 | `list_bullet_glyph` | `string` | — | A glyph drawn in place of the bullet dot. Trimmed; refused (falling back to the drawn marker) if empty, over 8 characters, or carrying a control character — over-long is refused rather than cut, since a cut can split a grapheme cluster. |
 | `list_bullet_glyph_2` | `string` | `list_bullet_glyph` | The bullet's glyph at nesting depth 2. |
 | `list_bullet_glyph_3` | `string` | `list_bullet_glyph_2` | The bullet's glyph at depth 3 and deeper. |
@@ -350,6 +353,7 @@ value cannot carry punctuation into a generated CSS rule.
 | `heading_space_below` | `[i32; 5]` | `[4, 4, 2, 2, 2]` | each `0`–`400` |
 | `heading_space_above` | `[i32; 5]` | `[0, 0, 0, 0, 0]` | each `0`–`400` |
 | `heading_band_radius` | `i32` | `0` | `0`–`400` |
+| `heading_band_padding` | `i32` | `12` | `0`–`400` |
 | `blockquote_bar_width` | `i32` | `3` | `0`–`400` |
 | `blockquote_text_gap` | `i32` | `10` | `0`–`400` |
 | `list_step` | `i32` | `28` | `4`–`400` |

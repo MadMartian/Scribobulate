@@ -118,6 +118,10 @@ pub(crate) struct Line {
 /// colour, gradient and sprite all reach the page, the corners do not.
 #[derive(Clone)]
 struct HeadingBandInk {
+    /// The band's internal padding in points: the LINE was laid out this far inside the
+    /// band on each side, so the band draws back OUT by it to keep the printable column
+    /// both other renderings match against (TDD 18.25's padding fix).
+    padding: f64,
     fill: gtk::gdk::RGBA,
     gradient_to: Option<gtk::gdk::RGBA>,
     sprite: Option<cairo::ImageSurface>,

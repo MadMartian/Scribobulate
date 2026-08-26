@@ -187,6 +187,10 @@ pub(crate) fn list_marker_ink(
 ) -> Option<gtk::gdk::RGBA> {
     match (task, start) {
         (None, None) => theme.list_bullet_colors[crate::theme::depth_tier(depth as usize)],
+        // Both task states share one colour (TDD 18.27), already folded with
+        // `list_marker`. The task arms come FIRST for the same reason they do in
+        // `list_marker_markup`: `1. [x] done` is a checkbox, not a number.
+        (Some(_), _) => theme.list_task_color,
         _ => theme.list_marker,
     }
 }
@@ -356,6 +360,35 @@ mod tests {
                 Some(std::path::Path::new("/x/o.png"))
             );
         }
+    }
+
+    /// TDD 18.27 — the PDF sink colours the task checkbox from its own key while the
+    /// bullet and the numeral in the same document keep `list_marker`, and both task
+    /// states share the one colour.
+    #[test]
+    fn the_task_marker_carries_its_own_ink_in_the_artefact() {
+        let mut themes = crate::theme::Themes::builtin();
+        themes.merge_over_for_test(
+            "[themes.split]\nlist_marker = \"#111111\"\nlist_task_marker = \"#ff00ff\"\n",
+        );
+        let t = themes.resolve("split");
+        let markup = |task: Option<bool>, start: Option<u64>| {
+            list_marker_markup(
+                task,
+                start,
+                0,
+                1,
+                &t.list_glyphs,
+                list_marker_ink(task, start, 1, &t),
+            )
+        };
+        assert!(markup(Some(false), None).contains("#ff00ff"));
+        assert!(markup(Some(true), None).contains("#ff00ff"));
+        // A task item inside an ORDERED list is still a checkbox — the task arm comes
+        // first, the same ordering `list_marker_markup` relies on for its glyph.
+        assert!(markup(Some(true), Some(1)).contains("#ff00ff"));
+        assert!(markup(None, None).contains("#111111"));
+        assert!(markup(None, Some(1)).contains("#111111"));
     }
 
     /// The sprite precedence is resolved HERE for the PDF, from the same per-kind
