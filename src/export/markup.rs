@@ -13,6 +13,7 @@
 
 use super::{ExportDoc, ImageSource, Inline};
 use crate::theme::Theme;
+use std::fmt::Write as _;
 
 /// Pango markup for an inline run, every string escaped.
 ///
@@ -34,10 +35,44 @@ fn emit_markup(inlines: &[Inline], doc: &ExportDoc, theme: &Theme, out: &mut Str
                 out.push_str("</span>");
             }
             Inline::Emphasis(v) => tag(out, "i", "", v, doc, theme),
-            Inline::Strong(v) => tag(out, "b", "", v, doc, theme),
-            Inline::Strikethrough(v) => tag(out, "s", "", v, doc, theme),
-            Inline::Superscript(v) => tag(out, "sup", "", v, doc, theme),
-            Inline::Subscript(v) => tag(out, "sub", "", v, doc, theme),
+            // Themed: `bold_weight` / `supsub_scale` + rise — the SAME `Typography`
+            // methods the table cell uses (`renderer::bold_open` etc.), called
+            // directly here because this sink resolves against an EXPLICIT `Theme`
+            // (System-light for the PDF, TDD 25.9), never `crate::theme::active()`
+            // (TDD 18.18 / plan constraint 1 — now a three-way parity, not two).
+            Inline::Strong(v) => tag(out, "span", &theme.typography.bold_attr(), v, doc, theme),
+            // Themed: `strikethrough_rgba` — the same key the body tag and the table
+            // cell read (TDD 18.23). Unset ⇒ the bare `<s>` this sink always emitted.
+            Inline::Strikethrough(v) => match theme.strikethrough_rgba {
+                None => tag(out, "s", "", v, doc, theme),
+                Some(c) => tag(
+                    out,
+                    "span",
+                    &format!(
+                        " strikethrough=\"true\" strikethrough_color=\"{}\"",
+                        crate::palette::to_hex(c)
+                    ),
+                    v,
+                    doc,
+                    theme,
+                ),
+            },
+            Inline::Superscript(v) => tag(
+                out,
+                "span",
+                &theme.typography.supsub_attr(true),
+                v,
+                doc,
+                theme,
+            ),
+            Inline::Subscript(v) => tag(
+                out,
+                "span",
+                &theme.typography.supsub_attr(false),
+                v,
+                doc,
+                theme,
+            ),
             Inline::Highlight(v) => {
                 // The SAME theme key the body tag and the table cell read, in this
                 // path's own representation — one source, three spellings (POLICY
@@ -64,10 +99,25 @@ fn emit_markup(inlines: &[Inline], doc: &ExportDoc, theme: &Theme, out: &mut Str
                 // loop is the product thesis, and an export that drops the review is
                 // the wrong document (TDD 25.13).
                 if let Some(ann) = doc.annotations.get(*idx) {
+                    // TDD 18.19: the chip's colour keys, applied to the note's
+                    // background/ink. Empty unless the theme sets at least one, so a
+                    // theme that sets neither renders this BYTE-IDENTICAL to before
+                    // the chip could be themed at all — a sprite has no expression
+                    // here (Pango markup carries no inline image), which is a scope
+                    // limit stated once here rather than silently absent.
+                    let mut chip_attrs = String::new();
+                    if let Some(bg) = theme.annotation_chip_bg {
+                        let _ =
+                            write!(chip_attrs, " background=\"{}\"", crate::palette::to_hex(bg));
+                    }
+                    if let Some(fg) = theme.annotation_chip_fg {
+                        let _ =
+                            write!(chip_attrs, " foreground=\"{}\"", crate::palette::to_hex(fg));
+                    }
                     let _ = std::fmt::Write::write_fmt(
                         out,
                         format_args!(
-                            " <span size=\"small\" style=\"italic\">[{}]</span>",
+                            " <span size=\"small\" style=\"italic\"{chip_attrs}>[{}]</span>",
                             escape_pango(&ann.comment)
                         ),
                     );
@@ -80,11 +130,16 @@ fn emit_markup(inlines: &[Inline], doc: &ExportDoc, theme: &Theme, out: &mut Str
                 let colour = theme.link.map(crate::palette::to_hex).unwrap_or_else(|| {
                     theme.accent.map(crate::palette::to_hex).unwrap_or_default()
                 });
-                let attr = if colour.is_empty() {
-                    " underline=\"single\"".to_string()
-                } else {
-                    format!(" underline=\"single\" foreground=\"{colour}\"")
-                };
+                // The underline is a themed STYLE with its own optional colour
+                // (TDD 18.23), from the same two keys the body tag reads; floored at
+                // `single`, which is what this sink always spelled.
+                let mut attr = format!(" underline=\"{}\"", theme.link_underline.pango_markup());
+                if let Some(c) = theme.link_underline_rgba {
+                    let _ = write!(attr, " underline_color=\"{}\"", crate::palette::to_hex(c));
+                }
+                if !colour.is_empty() {
+                    let _ = write!(attr, " foreground=\"{colour}\"");
+                }
                 tag(out, "span", &attr, inner, doc, theme);
                 let label = super::plain_text(inner);
                 if !href.is_empty() && *href != label {
@@ -107,6 +162,44 @@ fn emit_markup(inlines: &[Inline], doc: &ExportDoc, theme: &Theme, out: &mut Str
             Inline::Break => out.push('\n'),
         }
     }
+}
+
+/// The Pango span that carries a theme's heading rule (TDD 18.22), as an
+/// `(open, close)` pair. `("", "")` when the theme draws no rule, so the heading run a
+/// PDF measures and inks is byte-identical to before the key existed (TDD 18.2).
+///
+/// Wrapping is the whole mechanism: the rule is a text decoration over the heading's
+/// glyph run, so it is spelled as attributes on a span around that run and never as a
+/// separate drawn line. `overline`/`overline_color` reached Pango markup in 1.46; this
+/// project's GTK 4.6 floor requires 1.50, so the attribute is always understood — which
+/// matters more than it looks, because an attribute Pango does not recognise fails the
+/// whole `pango_parse_markup` and renders the run EMPTY, silently (ScrAP-163).
+pub(super) fn heading_rule_span(theme: &Theme) -> (String, &'static str) {
+    let rule = &theme.heading_rule;
+    if rule.is_absent() {
+        return (String::new(), "");
+    }
+    let mut attrs = String::new();
+    if !rule.overline.is_none() {
+        // Pango's overline vocabulary is none/single, which `LineStyle::overline`
+        // already clamped to; spell what it resolved to, not what the theme typed.
+        let spelled = match rule.overline.overline() {
+            gtk::pango::Overline::Single => "single",
+            _ => "none",
+        };
+        // No `overline_color`: the overline takes the run's own ink on every path,
+        // because the preview cannot colour it (see `theme::HeadingRule`) and an
+        // artefact that coloured it would be showing something the reader's preview
+        // does not (TDD 25.3).
+        let _ = write!(attrs, " overline=\"{spelled}\"");
+    }
+    if !rule.underline.is_none() {
+        let _ = write!(attrs, " underline=\"{}\"", rule.underline.pango_markup());
+        if let Some(c) = rule.underline_rgba {
+            let _ = write!(attrs, " underline_color=\"{}\"", crate::palette::to_hex(c));
+        }
+    }
+    (format!("<span{attrs}>"), "</span>")
 }
 
 fn tag(out: &mut String, name: &str, attrs: &str, v: &[Inline], doc: &ExportDoc, theme: &Theme) {
@@ -142,7 +235,150 @@ pub(super) fn escape_pango(s: &str) -> String {
 
 #[cfg(test)]
 mod markup_tests {
-    use super::escape_pango;
+    use super::{escape_pango, inline_markup};
+    use crate::export::{doc, Block, RenderOptions};
+
+    fn themed_fixture() -> (crate::export::ExportDoc, crate::theme::Theme) {
+        let mut theme = crate::theme::Themes::builtin().resolve("system");
+        theme.typography.bold_weight = 650;
+        theme.typography.supsub_scale = 0.75;
+        theme.typography.superscript_rise = 4;
+        theme.typography.subscript_rise = -2;
+        let d = doc::build(
+            "A **bold** word, H~2~O, and x^2^.\n",
+            &RenderOptions::default(),
+        );
+        (d, theme)
+    }
+
+    /// TDD 18.19 / 25.13: an annotated claim's `[comment]` note carries the chip's
+    /// colour keys when set. Sprites have no expression here — Pango markup carries
+    /// no inline image — so this covers only the colour half by design.
+    #[test]
+    fn a_claims_comment_note_carries_the_themed_chip_colours() {
+        let mut theme = crate::theme::Themes::builtin().resolve("system");
+        theme.annotation_chip_bg = Some(gtk::gdk::RGBA::new(0.1, 0.2, 0.3, 1.0));
+        theme.annotation_chip_fg = Some(gtk::gdk::RGBA::WHITE);
+        let d = doc::build("{==claim==}{>>my note<<}\n", &RenderOptions::default());
+        let Some(Block::Paragraph(inlines)) = d.blocks.first() else {
+            panic!("expected one paragraph: {:?}", d.blocks);
+        };
+        let out = inline_markup(inlines, &d, &theme);
+        assert!(out.contains("background=\"#1a334d\""), "{out}");
+        assert!(out.contains("foreground=\"#ffffff\""), "{out}");
+        assert!(out.contains("[my note]"), "{out}");
+    }
+
+    /// TDD 18.18: the PDF/HTML export markup sink is the THIRD representation of
+    /// `bold_weight`/`supsub_scale` (body tag, table cell, this one) — resolved
+    /// against the sink's own EXPLICIT `Theme`, never `crate::theme::active()`
+    /// (`sdd/PLAN.preview-decoration.md` constraint 1's three-way parity).
+    #[test]
+    fn bold_and_supsub_carry_the_themed_attributes_into_export_markup() {
+        let (d, theme) = themed_fixture();
+        let Some(Block::Paragraph(inlines)) = d.blocks.first() else {
+            panic!("expected one paragraph: {:?}", d.blocks);
+        };
+        let out = inline_markup(inlines, &d, &theme);
+        assert!(out.contains("weight=\"650\""), "{out}");
+        assert!(out.contains("size=\"75%\""), "{out}");
+        // Rise, in Pango units — same `value * pango::SCALE` the body tag and the
+        // table cell both use, so the number here is comparable across all three.
+        assert!(
+            out.contains(&format!("rise=\"{}\"", 4 * gtk::pango::SCALE)),
+            "superscript rise: {out}"
+        );
+        assert!(
+            out.contains(&format!("rise=\"{}\"", -2 * gtk::pango::SCALE)),
+            "subscript rise: {out}"
+        );
+    }
+
+    /// TDD 18.22 / 25.3 — the heading rule reaches the PDF's Pango markup, and the
+    /// markup it produces actually PARSES.
+    ///
+    /// The parse half is the load-bearing one. Pango rejects an attribute it does not
+    /// know by failing `pango_parse_markup` outright, and this sink's answer to a failed
+    /// parse is a run rendered EMPTY, silently (ScrAP-163) — so a spelling test that only
+    /// compares strings would pass on markup that blanks every heading in the document.
+    #[test]
+    fn the_heading_rule_reaches_export_markup_and_the_markup_parses() {
+        let mut theme = crate::theme::Themes::builtin().resolve("system");
+        // Absent by default: a theme with no rule wraps nothing at all.
+        let (open, close) = super::heading_rule_span(&theme);
+        assert!(open.is_empty() && close.is_empty());
+
+        theme.heading_rule = crate::theme::HeadingRule {
+            overline: crate::theme::LineStyle::Single,
+            underline: crate::theme::LineStyle::Wavy,
+            underline_rgba: Some(gtk::gdk::RGBA::new(0.0, 0.0, 1.0, 1.0)),
+        };
+        let (open, close) = super::heading_rule_span(&theme);
+        assert!(open.contains("overline=\"single\""), "{open}");
+        // …and NEVER an `overline_color`: see `theme::HeadingRule`.
+        assert!(!open.contains("overline_color"), "{open}");
+        // `wavy` is Pango's ERROR underline — the theme's word, Pango's spelling.
+        assert!(open.contains("underline=\"error\""), "{open}");
+        assert!(open.contains("underline_color=\"#0000ff\""), "{open}");
+        gtk::pango::parse_markup(&format!("{open}Heading{close}"), '\0')
+            .expect("the heading-rule span must parse as Pango markup");
+    }
+
+    /// Every spelling in the vocabulary parses, not just the one a shipped theme uses —
+    /// a value only reachable from a user file is exactly the one nobody renders before
+    /// shipping, and its penalty here is a blank heading rather than an error.
+    #[test]
+    fn every_heading_rule_spelling_parses_as_pango_markup() {
+        use crate::theme::LineStyle::{Double, None as NoLine, Single, Wavy};
+        let mut theme = crate::theme::Themes::builtin().resolve("system");
+        for over in [NoLine, Single, Double, Wavy] {
+            for under in [NoLine, Single, Double, Wavy] {
+                theme.heading_rule = crate::theme::HeadingRule {
+                    overline: over,
+                    underline: under,
+                    underline_rgba: Some(gtk::gdk::RGBA::new(0.4, 0.5, 0.6, 1.0)),
+                };
+                let (open, close) = super::heading_rule_span(&theme);
+                gtk::pango::parse_markup(&format!("{open}H{close}"), '\0')
+                    .unwrap_or_else(|e| panic!("{over:?}/{under:?} → {open:?} failed: {e}"));
+            }
+        }
+    }
+
+    /// TDD 18.23 / 25.3 — the strike colour and the link underline reach the PDF's
+    /// markup, and the markup PARSES (an attribute Pango does not know renders the whole
+    /// run EMPTY — ScrAP-163 — so spelling alone is not evidence).
+    #[test]
+    fn the_strike_and_link_underline_reach_export_markup_and_parse() {
+        let mut theme = crate::theme::Themes::builtin().resolve("system");
+        let d = doc::build(
+            "~~gone~~ and [a link](https://example.com/x)\n",
+            &RenderOptions::default(),
+        );
+        let Some(Block::Paragraph(inlines)) = d.blocks.first() else {
+            panic!("expected one paragraph: {:?}", d.blocks);
+        };
+
+        // Unset ⇒ byte-identical to what this sink always emitted.
+        let plain = inline_markup(inlines, &d, &theme);
+        assert!(plain.contains("<s>gone</s>"), "{plain}");
+        assert!(plain.contains("underline=\"single\""), "{plain}");
+        assert!(!plain.contains("strikethrough_color"), "{plain}");
+        assert!(!plain.contains("underline_color"), "{plain}");
+
+        theme.strikethrough_rgba = Some(gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 1.0));
+        theme.link_underline = crate::theme::LineStyle::Wavy;
+        theme.link_underline_rgba = Some(gtk::gdk::RGBA::new(0.0, 1.0, 0.0, 1.0));
+        let themed = inline_markup(inlines, &d, &theme);
+        assert!(
+            themed.contains("strikethrough=\"true\" strikethrough_color=\"#ff0000\""),
+            "{themed}"
+        );
+        assert!(themed.contains("underline=\"error\""), "{themed}");
+        assert!(themed.contains("underline_color=\"#00ff00\""), "{themed}");
+        gtk::pango::parse_markup(&themed, '\0').expect("themed inline markup must parse");
+        gtk::pango::parse_markup(&plain, '\0').expect("plain inline markup must parse");
+    }
 
     #[test]
     fn every_pango_metacharacter_is_escaped() {

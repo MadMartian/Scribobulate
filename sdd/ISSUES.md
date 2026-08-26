@@ -25,6 +25,12 @@ entry can still be the worst thing in the register.
 | Q | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | R | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | S | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
+| T | Any | Project | The PDF export ignores `heading_color`/`heading_font`/`heading_space_above`/`heading_space_below` entirely — headings print in the body face and ink, spaced by a fixed constant | Low |
+| U | Any | Project | The PDF export's body-font measurement passes the CSS-quoted font stack straight to Pango's `set_family`, the same quoting bug `tags.rs` strips for the on-screen path — a multi-word themed `font_family` likely drops to the default sans in the artefact | Low |
+| V | Windows | Test | A `platform::win32::appearance` test helper realizes a `gsk::CairoRenderer` and never unrealizes it | Low |
+| W | Any | Project | `sprite::scaled`'s per-`(path, width, height)` texture cache has no eviction policy | Low |
+| X | Any | Production | A long heading overflows the preview pane horizontally instead of wrapping to it | Low |
+| Y | Any | Project | The design-time-px-to-device-px rounding function (`px()`) exists as three separate copies rather than one shared definition | Low |
 
 ## A. Tables are selection islands
 
@@ -603,3 +609,129 @@ here because this entry exists in order to be deleted when the defect is fixed, 
 evidence must outlive it. Do not restate its figures here; several carry caveats that do not
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
+
+## T. The PDF export ignores several heading theme keys
+
+**Severity**: Low. The PDF still renders every heading, correctly leveled and readable; it
+simply does not carry the theme's heading styling the way the screen and the HTML export do.
+
+`src/export/pdf/measure.rs`'s `Block::Heading` arm and its `layout_of` font-description builder
+never read `theme.heading_color`, `theme.heading_font`, `theme.heading_font_colors`/
+`heading_fonts` (TDD 18.21), or `theme.metrics.heading_space_above`/`heading_space_below` (TDD
+18.22) — headings measure and ink in the plain body face and colour, spaced by the fixed
+`BLOCK_GAP_PT` constant (`measure.rs:223,270,333`) rather than a themed gap. TDD 25.9 requires
+every colour, typeface and decoration metric in an exported artefact to resolve through the
+theme engine; nothing asserts a key is *used*, so this gap does not fail any current rubric —
+it is a completeness gap surfaced while scoping `sdd/PLAN.preview-decoration.md`'s Phase 1, not
+a regression from it.
+
+**Mitigation options**:
+- Thread `theme.heading_color`/`heading_font` (falling back through the per-level slots the
+  same way `tags.rs` does) into `layout_of` for `Block::Heading`, and replace the fixed
+  `BLOCK_GAP_PT` with a themed `space_before`/`space_after` derived from
+  `heading_space_above`/`heading_space_below` for that heading's level.
+- Accept the limitation: the PDF already resolves at System-light by design (TDD 25.9), so a
+  reader who wants themed headings has the HTML export.
+
+## U. The PDF export's font measurement re-quotes a CSS-safe font stack for Pango
+
+**Severity**: Low. Reproduces only when a themed `font_family` is a multi-word name (e.g.
+`"Times New Roman"`); every built-in theme today either leaves it unset or uses a bare/generic
+family, so no shipped theme currently shows the symptom.
+
+`src/export/pdf/measure.rs:90-91` passes `theme.font_family`'s `CssSafeFontStack::as_str()`
+straight to `pango::FontDescription::set_family`. That string is CSS-quoted
+(`sanitize_font_family` double-quotes multi-word names for the CSS cascade — `theme.rs:253-`).
+Pango's own family parsing is a comma-separated list it fallback-walks itself and does not
+expect CSS quoting; `tags.rs:239` already strips the quotes for exactly this reason before
+calling `set_family` on a themed heading font, with a comment explaining why. `pdf/measure.rs`
+does not, so a themed multi-word body family likely silently drops to the default sans in the
+exported PDF rather than raising an error — the same failure shape `tags.rs`'s comment warns
+about, just in the one call site that doesn't yet apply the fix.
+
+**Mitigation options**:
+- Strip the quotes the same way `tags.rs:239` does before calling `set_family` in
+  `pdf/measure.rs`; one-line fix, same shape as the existing precedent.
+- Give `CssSafeFontStack` a second accessor (e.g. `as_pango_str`) that returns the
+  quote-stripped form, so every future Pango call site gets the correct string without
+  restating the strip inline.
+
+## V. A win32 appearance test leaks a `gsk::CairoRenderer`
+
+**Severity**: Low. Windows-only, and confined to `#[cfg(test)]` code — the module is
+`#[cfg(windows)]`-gated so it neither compiles nor runs on this seat's own platform.
+
+`src/platform/win32/appearance.rs`'s `painted_centre_pixel` test helper (used by
+`the_window_actually_paints_the_desktop_lightness`) calls
+`gtk::gsk::CairoRenderer::realize` to sample a rendered window's centre pixel, but
+never calls `unrealize` before the renderer drops — GTK4Rs/AP-272's exact shape,
+which on a build with assertions enabled hard-aborts rather than merely warning.
+Surfaced while auditing the codebase during TDD 18.24/18.25's own pixel-probe test,
+which does unrealize its renderer correctly.
+
+**Mitigation options**:
+- Call `renderer.unrealize()` before the function returns (or wrap it in a guard
+  that unrealizes on drop, if the function grows more early-return paths). One line;
+  needs a Windows build to verify, so it is `windows` seat's to land.
+
+## W. `sprite::scaled`'s texture cache has no eviction policy
+
+**Severity**: Low. Inert today — every current call site (list-marker sprites, the
+heading-band tiled sprite) resolves at a small, bounded set of sizes per document —
+but the cache itself does not know that, and would silently misbehave for a future
+caller that doesn't share the property.
+
+`sprite::scaled`'s `RESAMPLED` thread-local (`src/sprite.rs:113-114`) is keyed by
+`(PathBuf, width, height)` and only ever grows — nothing evicts an entry or bounds
+the cache's size. The first decoration that scales a sprite to a *continuously
+variable* dimension (a rect that tracks a resizable pane width, for instance, rather
+than a marker size or a tile's natural size) would mint a new cached texture on
+every intermediate width during a drag, retaining all of them for the process's
+life.
+
+**Mitigation options**:
+- Bound the cache (LRU with a small cap) before any call site scales to a
+  window-derived or otherwise continuously-variable dimension.
+- Accept the limitation until such a call site actually exists — nothing today
+  triggers it — and note the constraint at `sprite::scaled`'s call sites as they're
+  added, so a future author checks before assuming any size is safe to pass.
+
+## X. A long heading overflows the preview pane horizontally instead of wrapping
+
+**Severity**: Low. Reproduces identically under System with no theme keys set, so it
+predates all theming work — surfaced incidentally while driving TDD 18.25's heading
+band, not caused by it.
+
+At a narrow pane width (measured at 700×1000 with the outline sidebar open), a
+sufficiently long heading extends past the preview pane's right edge instead of
+soft-wrapping to it, while body paragraphs at the same width wrap correctly. Not
+investigated further — possibly related to the outline/split-pane sizing
+interaction named in ScrAP-23a's neighbourhood, but that is a guess, not a finding.
+
+**Mitigation options**:
+- Reproduce deliberately (a document whose only content is one long heading, at a
+  matrix of pane widths and outline-open/closed states) to isolate whether it is
+  heading-specific or a wrap-mode/minimum-width issue shared with any single
+  long unbreakable run.
+- Accept the limitation until reproduced deliberately — a control run is not yet a
+  diagnosis.
+
+## Y. `px()` exists as three separate copies
+
+**Severity**: Low. Purely a duplication cost — the three copies compute the same
+rounding and have not drifted.
+
+The design-time-px-at-zoom-1.0-to-device-px rounding a themed pixel metric needs
+(`sdd/PLAN.preview-decoration.md` named this while scoping the decoration work) is
+defined independently at `theme.rs:122` (a named `fn`), `tags.rs:192` (a local
+closure), and `preview/build.rs:596` (another local closure) — three definitions of
+`(n as f64 * zoom).round() as i32` rather than one shared function every call site
+uses.
+
+**Mitigation options**:
+- Make `theme::px` `pub(crate)` (it already is) and have `tags.rs`/`preview/build.rs`
+  call it instead of defining their own closures — a mechanical replacement, no
+  behaviour change.
+- Accept the limitation — the three copies have not drifted and each is a one-line
+  formula, so the risk is theoretical until a fourth definition or an actual bug
+  in one copy surfaces.

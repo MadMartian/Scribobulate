@@ -238,7 +238,28 @@ cd "$(dirname "$0")/.."
 # extraction-raises-the-floor mechanism the scope rule below describes, and the second
 # recorded instance of it after `primarysel.rs`. Measured 80.22% before, 80.64% after.
 # Raised by half the gain, keeping the margin the 2026-08-20 entry explains.
-FLOOR=79.95
+#
+# 2026-08-25, 79.95 -> 80.20, TDD 18.21-18.23 (the Phase 1 decoration keys). No code
+# moved between files this time — every gain is test-side, on already-scoped modules:
+# `theme.rs` picked up the per-level heading fold, the line-style vocabulary and their
+# clamp/merge/floor cases; `export/html.rs`, `export/markup.rs` and `preview/css.rs`
+# each gained sink tests for the new keys, including two that assert the generated Pango
+# markup PARSES rather than merely spelling right. Measured 80.97% before (at `35aab05`,
+# in a clean worktree), 81.46% after. Raised by half the gain, per the 2026-08-20 entry.
+# Worth noting for whoever reads this next: the floor was already ~1pt behind the tree
+# at 79.95, and this entry does not close that gap — closing it is a deliberate decision
+# about how much margin the ratchet should carry, not something a feature commit should
+# make on the way past.
+#
+# 2026-08-26, 80.20 -> 80.30, TDD 18.26 (depth-tiered bullet colour/glyph/sprite, plus the
+# PDF marker-ink prerequisite). Test-only again, on already-scoped modules: `theme.rs`
+# picked up the tier map and the shallower-tier fallback cases, `codeview/gutter.rs` the
+# per-depth substitution and ink, `export/pdf/decide.rs` the marker ink and the per-depth
+# arms, and `export/html.rs` the depth-scoped selectors. Measured 81.45% before (at
+# `ed0f7c3`, in a clean worktree), 81.67% after. Raised by half the gain, per the
+# 2026-08-20 entry above. The ~1pt standing margin the 2026-08-25 entry names is
+# unchanged and still deliberate.
+FLOOR=80.30
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

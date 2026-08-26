@@ -157,7 +157,9 @@ impl Renderer {
             Tag::Strong => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("<b>");
+                        // Themed: `bold_weight`, not a bare `<b>` — TDD 18.18.
+                        let open = super::bold_open();
+                        ts.cell_markup.push_str(&open);
                     }
                 } else {
                     self.inline_tags.push(crate::tags::TagName::Bold);
@@ -174,8 +176,12 @@ impl Renderer {
             }
             Tag::Strikethrough => {
                 if self.in_table_cell() {
+                    // Themed: `strikethrough_rgba` — the cell twin of the body
+                    // `TagName::Strike` tag (TDD 18.23). `</s>` vs `</span>` is decided
+                    // by the same call in `end.rs`; see `strike_tags`.
+                    let (open, _close) = super::strike_tags();
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("<s>");
+                        ts.cell_markup.push_str(&open);
                     }
                 } else {
                     self.inline_tags.push(crate::tags::TagName::Strike);
@@ -184,7 +190,9 @@ impl Renderer {
             Tag::Superscript => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("<sup>");
+                        // Themed: `supsub_scale` + `superscript_rise` — TDD 18.18.
+                        let open = super::superscript_open();
+                        ts.cell_markup.push_str(&open);
                     }
                 } else {
                     self.inline_tags.push(crate::tags::TagName::Superscript);
@@ -193,7 +201,9 @@ impl Renderer {
             Tag::Subscript => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("<sub>");
+                        // Themed: `supsub_scale` + `subscript_rise` — TDD 18.18.
+                        let open = super::subscript_open();
+                        ts.cell_markup.push_str(&open);
                     }
                 } else {
                     self.inline_tags.push(crate::tags::TagName::Subscript);
@@ -398,6 +408,10 @@ impl Renderer {
         let icon = gtk::Image::from_icon_name(crate::icons::Icon::ImageMissing.name());
         icon.set_pixel_size(32);
         icon.set_halign(gtk::Align::Start);
+        // TDD 18.20: reachable by the generated theme sheet (`preview/css.rs`), where
+        // it was previously invisible to mechanism C — no class meant no theme could
+        // reach it, so it sat on desktop colours under every reading theme.
+        icon.add_css_class("scrib-broken-image");
         crate::a11y::name(&icon, tooltip);
         self.anchored.push((anchor, icon.upcast()));
         self.trailing_newlines = 0;

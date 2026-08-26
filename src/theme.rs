@@ -31,6 +31,7 @@
 //! `palette::Palette::resolve`.
 
 use gtk::gdk;
+use gtk::glib;
 use std::collections::BTreeMap;
 
 /// The shipped theme data, compiled in. This is the SAME file `install.sh`
@@ -58,6 +59,21 @@ const F_SUPSUB_SCALE: f64 = 0.72;
 const F_SUPERSCRIPT_RISE: i32 = 4;
 const F_SUBSCRIPT_RISE: i32 = -2;
 const F_HEADING_SPACE_BELOW: [i32; 5] = [4, 4, 2, 2, 2];
+/// Zero, because the heading tags set no `pixels_above_lines` at all before this key
+/// existed — the floor IS today's rendering, which is what keeps System byte-identical
+/// (TDD 18.2). Not symmetric with the below-floor by accident: only space-below was
+/// ever expressed.
+const F_HEADING_SPACE_ABOVE: [i32; 5] = [0, 0, 0, 0, 0];
+/// No heading carries a band until a theme states a fill for its level, so the radius
+/// is only ever consulted for a band that exists.
+const F_HEADING_BAND_RADIUS: i32 = 0;
+/// No heading rule is drawn today, on either side.
+const F_HEADING_OVERLINE: LineStyle = LineStyle::None;
+const F_HEADING_UNDERLINE: LineStyle = LineStyle::None;
+/// A body link has been underlined with a single line since before themes existed, so
+/// unlike the heading rule's floor this one is NOT "none" — it is the shipped look, and
+/// changing it would move System (TDD 18.2).
+const F_LINK_UNDERLINE: LineStyle = LineStyle::Single;
 const F_BQ_BAR_WIDTH: i32 = 3;
 const F_BQ_TEXT_GAP: i32 = 10;
 const F_LIST_STEP: i32 = 28;
@@ -256,6 +272,212 @@ pub(crate) fn sanitize_font_family(s: &str) -> Option<CssSafeFontStack> {
     ))
 }
 
+// ── decoration lines ──────────────────────────────────────────────────────────
+
+/// The line styles a theme may state for a **decoration line** — a heading's rule, a
+/// link's underline. A closed vocabulary parsed ONCE at the file boundary, so no
+/// consumer ever matches on a string (POLICY "No magic numbers or magic strings"): the
+/// tag path, the generated CSS and the export sinks each ask this type for their own
+/// spelling of the same choice.
+///
+/// Four values, because that is what the *underline* attribute can express. Pango's
+/// OVERLINE has only none/single, so [`LineStyle::overline`] clamps `Double`/`Wavy` down
+/// to a single line rather than rejecting the theme — the same clamp-don't-reject
+/// discipline every geometry key follows (TDD 18.11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum LineStyle {
+    #[default]
+    None,
+    Single,
+    Double,
+    /// Pango spells this one `ERROR` (it is the spell-checker squiggle), which is a
+    /// name about its *origin* rather than its appearance — a theme says `wavy`.
+    Wavy,
+}
+
+impl LineStyle {
+    /// Parse a theme's spelling. `None` (the `Option`) for anything unrecognised, so an
+    /// unknown value falls back to the key's floor instead of failing the theme.
+    fn parse(s: &str) -> Option<LineStyle> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(LineStyle::None),
+            "single" => Some(LineStyle::Single),
+            "double" => Some(LineStyle::Double),
+            "wavy" => Some(LineStyle::Wavy),
+            _ => {
+                log::warn!("theme: unknown line style {s:?} — falling back to the default");
+                None
+            }
+        }
+    }
+
+    pub(crate) fn is_none(self) -> bool {
+        self == LineStyle::None
+    }
+
+    /// The `GtkTextTag` underline attribute.
+    pub(crate) fn underline(self) -> gtk::pango::Underline {
+        match self {
+            LineStyle::None => gtk::pango::Underline::None,
+            LineStyle::Single => gtk::pango::Underline::Single,
+            LineStyle::Double => gtk::pango::Underline::Double,
+            LineStyle::Wavy => gtk::pango::Underline::Error,
+        }
+    }
+
+    /// The `GtkTextTag` overline attribute — CLAMPED, see the type docs.
+    pub(crate) fn overline(self) -> gtk::pango::Overline {
+        match self {
+            LineStyle::None => gtk::pango::Overline::None,
+            _ => gtk::pango::Overline::Single,
+        }
+    }
+
+    /// The Pango **markup** value, for the export sinks that spell attributes rather
+    /// than set properties.
+    pub(crate) fn pango_markup(self) -> &'static str {
+        match self {
+            LineStyle::None => "none",
+            LineStyle::Single => "single",
+            LineStyle::Double => "double",
+            LineStyle::Wavy => "error",
+        }
+    }
+
+    /// The CSS `text-decoration-style` value, or `None` where the line is absent (the
+    /// caller then states `text-decoration-line: none` instead — CSS separates the two
+    /// where Pango does not).
+    pub(crate) fn css_style(self) -> Option<&'static str> {
+        match self {
+            LineStyle::None => None,
+            LineStyle::Single => Some("solid"),
+            LineStyle::Double => Some("double"),
+            LineStyle::Wavy => Some("wavy"),
+        }
+    }
+}
+
+// ── theme-supplied glyphs ─────────────────────────────────────────────────────
+
+/// The most characters a theme's marker glyph may carry. Generous enough for a
+/// composed emoji (a ZWJ family sequence with variation selectors runs to seven), tight
+/// enough that a "glyph" cannot be a paragraph — an unbounded string here is an
+/// unbounded Pango layout in the paint path, on every list item, every frame.
+const MAX_GLYPH_CHARS: usize = 8;
+
+/// A theme-supplied decoration glyph, validated at the file boundary and — this is the
+/// point of the type — reachable only through a projection **named for the grammar it
+/// is going into**.
+///
+/// A glyph is the first theme-supplied TEXT to reach an exported artefact, and it
+/// arrives in three different grammars: a plain `PangoLayout` in the drawn gutter, a
+/// Pango *markup* string in the PDF sink, and HTML in the export sink. A single escape
+/// is not sufficient for all three and a raw interpolation is wrong in two of them — an
+/// un-escaped `&` fails `pango_parse_markup`, which renders the whole run EMPTY with no
+/// warning (ScrAP-163), and an un-escaped `<` in HTML is an injection into a file this
+/// project hands to a browser it does not control (TDD §25's untrusted-content rule,
+/// which is stricter here, never looser).
+///
+/// So the inner string is private, and the only ways out are the three below. There is
+/// no `Display`, no `Deref`, and no constructor but [`MarkerGlyph::parse`] — the same
+/// proof-of-sanitisation shape [`CssSafeFontStack`] uses for the other free-form key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MarkerGlyph(String);
+
+impl MarkerGlyph {
+    /// Validate one authored glyph. `None` — meaning "this theme states no glyph" — for
+    /// anything empty, over-long, or carrying a control character.
+    ///
+    /// **Over-long is REFUSED, never truncated.** Cutting a string at N `char`s can slice
+    /// a grapheme cluster in half and leave a lone combining mark or half a ZWJ sequence,
+    /// which is a worse rendering than the default marker the theme was trying to
+    /// replace — and it would make the clamp's correctness depend on a grapheme
+    /// segmenter this project does not carry. Refusing falls back to the drawn default,
+    /// which is the same inert-by-default answer every other unset key gets.
+    fn parse(s: &str) -> Option<MarkerGlyph> {
+        let g = s.trim();
+        if g.is_empty() {
+            return None;
+        }
+        if g.chars().any(|c| c.is_control()) {
+            log::warn!("theme: marker glyph {s:?} carries a control character — ignored");
+            return None;
+        }
+        let n = g.chars().count();
+        if n > MAX_GLYPH_CHARS {
+            log::warn!(
+                "theme: marker glyph {s:?} is {n} chars (cap {MAX_GLYPH_CHARS}) — ignored \
+                 rather than cut, which could split a grapheme cluster"
+            );
+            return None;
+        }
+        Some(MarkerGlyph(g.to_string()))
+    }
+
+    /// The glyph as PLAIN TEXT.
+    ///
+    /// Legitimate destinations are exactly two, and both are why this projection exists
+    /// rather than a `Deref`: a plain-text API that performs no markup parsing
+    /// (`GtkTextView::create_pango_layout`, the drawn gutter), and a caller that escapes
+    /// the string it builds through its own sink-wide funnel (`export/pdf`'s marker,
+    /// which `measure.rs` hands to `escape_pango` along with everything else it
+    /// assembles). Anything else wants one of the two projections below.
+    pub(crate) fn as_plain(&self) -> &str {
+        &self.0
+    }
+
+    /// The glyph escaped for a **Pango markup** string.
+    pub(crate) fn escaped_for_pango_markup(&self) -> String {
+        glib::markup_escape_text(&self.0).to_string()
+    }
+
+    /// The glyph escaped for **HTML**, through the export sink's own escaper — so this
+    /// project has one HTML escaper rather than one plus a copy that drifts.
+    pub(crate) fn escaped_for_html(&self) -> String {
+        crate::export::html::escape(&self.0)
+    }
+}
+
+/// How many nesting-depth tiers a BULLET's decoration is stated in: depth 1, depth 2,
+/// and depth 3-and-deeper (TDD 18.26).
+///
+/// Three rather than "one per depth" because a list nests arbitrarily and a theme cannot
+/// state a value for every depth it might meet — so the deepest tier is a catch-all, and
+/// `depth_tier` is the one function that says so.
+pub(crate) const BULLET_TIERS: usize = 3;
+
+/// The tier a 1-based list nesting `depth` reads: depth 1 → 0, depth 2 → 1, depth 3 and
+/// anything deeper → 2.
+///
+/// **The single definition of "which tier is this?"**, called by the drawn gutter, the
+/// HTML sink and the PDF sink alike. A depth of 0 cannot arise from the renderer (the
+/// outermost list is depth 1) but is answered anyway rather than underflowing, on the
+/// same reasoning as `heading_scale_index`: a caller contract enforced by a clamp
+/// somewhere else is exactly the arrangement that fails when the somewhere else moves.
+pub(crate) fn depth_tier(depth: usize) -> usize {
+    depth.saturating_sub(1).min(BULLET_TIERS - 1)
+}
+
+/// Every list-marker glyph a theme may state, one per marker kind. Each is `None`
+/// unless the theme set it AND [`MarkerGlyph::parse`] accepted it, so a rejected glyph
+/// degrades to the drawn default — never a partial or broken marker.
+///
+/// The task marker gets TWO, because it has two states and they must stay tellable
+/// apart; they resolve independently, so a theme may state either alone (a "tick or
+/// nothing" look) as deliberately as it may state both.
+///
+/// The BULLET gets [`BULLET_TIERS`], by nesting depth (TDD 18.26) — already folded, so a
+/// tier the theme left unset carries the next shallower tier's value and every consumer
+/// indexes rather than re-deriving the fallback. Only the bullet: an ordered numeral at
+/// depth 3 is still a numeral and a task box is still a box, so those stay single-valued.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ListGlyphs {
+    pub bullet: [Option<MarkerGlyph>; BULLET_TIERS],
+    pub ordered: Option<MarkerGlyph>,
+    pub task: Option<MarkerGlyph>,
+    pub task_checked: Option<MarkerGlyph>,
+}
+
 // ── the file model ────────────────────────────────────────────────────────────
 
 /// One theme exactly as authored. Every key is optional: a theme states only what
@@ -289,7 +511,58 @@ pub(crate) struct ThemeSpec {
     /// while the body keeps a readable one — the honest fix for "one family, two scales".
     /// A CSS stack, sanitised and generic-terminated exactly like `font_family`.
     pub heading_font: Option<String>,
+    /// Per-level heading colours, h1 · h2 · h3 · h4 · h5-and-deeper. FIVE slots, the
+    /// same shape and the same fold as `heading_scale` (h6 maps onto the h5 tag before
+    /// a tag is ever chosen, so no theme can differentiate them). A slot left EMPTY
+    /// (`""`) — or absent, because the array is short — falls back to the single
+    /// `heading_color`, so a theme states only the levels it wants to distinguish.
+    /// The table header is NOT a level and keeps reading `heading_color`.
+    pub heading_colors: Option<Vec<String>>,
+    /// Per-level heading font stacks, same five slots and same empty-means-inherit rule
+    /// as `heading_colors`, falling back to `heading_font`. Each slot is sanitised and
+    /// generic-terminated exactly like `font_family`.
+    pub heading_fonts: Option<Vec<String>>,
+    /// A rule ABOVE the heading text: `"none"` (the default — no rule, exactly as
+    /// before this key existed) or `"single"`. Pango's overline has no other values, so
+    /// `"double"`/`"wavy"` are accepted and clamped to a single line.
+    ///
+    /// ⚠️ **There is deliberately no `heading_overline_rgba` key**, so this rule always
+    /// takes the heading's own ink. GTK 4.6 DOUBLE-FREES a text run that carries both a
+    /// coloured overline and a coloured underline — see [`HeadingRule`] for the
+    /// measurement and why the key's absence, rather than a rule about it, is the fix.
+    pub heading_overline: Option<String>,
+    /// A rule BELOW the heading text: `"none"` (the default), `"single"`, `"double"` or
+    /// `"wavy"`. This is the text-decoration line under the glyph run, not a
+    /// column-width divider.
+    pub heading_underline: Option<String>,
+    /// The underline's colour. Omitted ⇒ the line follows the heading's own foreground,
+    /// which is what a `GtkTextTag` does when `underline-rgba` is never set.
+    pub heading_underline_rgba: Option<String>,
+    /// The BAND behind a heading's text, per level (h1 · h2 · h3 · h4 · h5-and-deeper),
+    /// the same five slots and the same empty-means-unset rule as `heading_colors`. A
+    /// level with no fill carries no band, which is every level of every theme until one
+    /// asks — so the decoration is absent rather than defaulted (TDD 18.2).
+    ///
+    /// Per level because "band the h1 only" is the ordinary want; the band's SHAPE
+    /// (radius, gradient, sprite) is one description shared by every level that has one.
+    pub heading_band_bg: Option<Vec<String>>,
+    /// A second stop. Stated, the band is a vertical linear gradient from the level's own
+    /// fill down to this colour; omitted, it is a flat fill.
+    pub heading_band_gradient_to: Option<String>,
+    /// Corner radius of the band, design-time px at zoom 1.0.
+    pub heading_band_radius: Option<i32>,
+    /// A sprite TILED across the band, in place of its fill. Theme-relative and validated
+    /// like every sprite key. Outranks the fill and the gradient, the same way a marker
+    /// sprite outranks a marker glyph.
+    pub sprite_heading_band: Option<String>,
     pub link: Option<String>,
+    /// A link's underline style: `"single"` (the default, and what the app drew before
+    /// this key existed), `"double"`, `"wavy"`, or `"none"` for a coloured link with no
+    /// line at all.
+    pub link_underline: Option<String>,
+    /// The link underline's colour, independent of the link's ink. Omitted ⇒ the line
+    /// follows the link colour, exactly as before this key existed.
+    pub link_underline_rgba: Option<String>,
     pub code_inline_bg: Option<String>,
     pub code_block_bg: Option<String>,
     pub blockquote_bar: Option<String>,
@@ -308,6 +581,48 @@ pub(crate) struct ThemeSpec {
     /// MARKER ONLY; the item's text keeps the body foreground. Omit ⇒ markers inherit
     /// the widget foreground (the pre-theming default). One key for all three kinds.
     pub list_marker: Option<String>,
+    /// The BULLET's colour at nesting depth 2, and at depth 3-and-deeper (TDD 18.26).
+    /// Each optional; unset falls back to the next shallower tier, so an unstated
+    /// `list_marker_3` takes `list_marker_2`'s value and an unstated `list_marker_2`
+    /// takes `list_marker`'s — which is exactly today's behaviour when neither is set.
+    ///
+    /// ⚠️ **Bullet only**, unlike the un-suffixed `list_marker` beside them, which
+    /// colours all three marker kinds. A nested ordered list's numeral and a nested task
+    /// box keep the shared colour: they are the same marker at any depth, where a bullet
+    /// dot is the one whose whole job is to say which level you are on.
+    pub list_marker_2: Option<String>,
+    pub list_marker_3: Option<String>,
+    /// Glyph strings that stand in for the DRAWN list markers — the bullet dot, the
+    /// ordered numeral, and the task checkbox in each of its two states. Validated by
+    /// [`MarkerGlyph::parse`]; unset (or refused) ⇒ the drawn default, unchanged.
+    ///
+    /// Replacing the ordered numeral DISCARDS the ordinal, which is a deliberate theme
+    /// choice rather than an oversight: the key is inert unless a theme asks for it, and
+    /// a theme that wants numbers simply does not state it.
+    pub list_bullet_glyph: Option<String>,
+    /// The bullet glyph at depth 2 / depth 3-and-deeper, folding to the shallower tier
+    /// exactly as `list_marker_2`/`_3` do (TDD 18.26).
+    pub list_bullet_glyph_2: Option<String>,
+    pub list_bullet_glyph_3: Option<String>,
+    pub list_ordered_glyph: Option<String>,
+    pub list_task_glyph: Option<String>,
+    pub list_task_checked_glyph: Option<String>,
+    /// Sprite files that stand in for the same four markers. Resolved and validated by
+    /// `crate::sprite::resolve` at load time, exactly as `sprite_annotation_chip` is.
+    /// A sprite WINS over a glyph for the same marker — it is the more specific and the
+    /// dearer opt-in, so stating both is answered by the one the theme paid more for.
+    pub sprite_list_bullet: Option<String>,
+    /// The bullet sprite at depth 2 / depth 3-and-deeper, folding the same way.
+    pub sprite_list_bullet_2: Option<String>,
+    pub sprite_list_bullet_3: Option<String>,
+    pub sprite_list_ordered: Option<String>,
+    pub sprite_list_task: Option<String>,
+    pub sprite_list_task_checked: Option<String>,
+
+    /// The colour of the line struck through `~~text~~`. Omitted ⇒ the line follows the
+    /// struck text's own foreground, which is what a `GtkTextTag` does when
+    /// `strikethrough-rgba` is never set — and what every theme did before this key.
+    pub strikethrough_rgba: Option<String>,
 
     /// Ink for `==marked==` text. Omit ⇒ the marked text keeps the body foreground and
     /// only its background changes, which is how a highlighter behaves on paper and is
@@ -337,6 +652,10 @@ pub(crate) struct ThemeSpec {
 
     // Decoration geometry — design-time px at zoom 1.0, scaled on apply.
     pub heading_space_below: Option<Vec<i32>>,
+    /// Space ABOVE each heading, h1..h5. The counterpart `heading_space_below` has
+    /// always existed; this side never did, so its floor is `[0, 0, 0, 0, 0]` — the
+    /// heading tags set no `pixels_above_lines` before this key.
+    pub heading_space_above: Option<Vec<i32>>,
     pub blockquote_bar_width: Option<i32>,
     pub blockquote_text_gap: Option<i32>,
     pub list_step: Option<i32>,
@@ -346,6 +665,21 @@ pub(crate) struct ThemeSpec {
     pub table_cell_padding_h: Option<i32>,
     pub table_border_width: Option<i32>,
     pub table_cell_radius: Option<i32>,
+
+    // Annotation chip — closes a hardcoded-styling deviation (`codeview/mod.rs`),
+    // and the first entry in the closed decoration vocabulary. `None` on every
+    // key ⇒ the chip stays exactly the hardcoded amber/white it always was
+    // (TDD 18.2).
+    /// Chip fill colour.
+    pub annotation_chip_bg: Option<String>,
+    /// Chip ink (the overflow count's numeral).
+    pub annotation_chip_fg: Option<String>,
+    /// A sprite drawn in place of the flat chip fill. Relative to this file's
+    /// directory; resolved and validated by `crate::sprite::resolve` at load time
+    /// (`sdd/PLAN.preview-decoration.md` — "a theme naming a FILE" is the dearest of
+    /// the three untrusted-input classes, so this key alone does not loosen the
+    /// "no icon, no arbitrary path" rule the rest of the theme model holds).
+    pub sprite_annotation_chip: Option<String>,
 }
 
 #[derive(serde::Deserialize, Default, Debug)]
@@ -479,7 +813,19 @@ impl ThemeSpec {
             syntect_theme,
             heading_color,
             heading_font,
+            heading_colors,
+            heading_fonts,
+            heading_overline,
+            heading_underline,
+            heading_underline_rgba,
+            heading_band_bg,
+            heading_band_gradient_to,
+            heading_band_radius,
+            sprite_heading_band,
             link,
+            link_underline,
+            link_underline_rgba,
+            strikethrough_rgba,
             code_inline_bg,
             code_block_bg,
             blockquote_bar,
@@ -489,6 +835,20 @@ impl ThemeSpec {
             table_head_bg,
             rule,
             list_marker,
+            list_marker_2,
+            list_marker_3,
+            list_bullet_glyph,
+            list_bullet_glyph_2,
+            list_bullet_glyph_3,
+            list_ordered_glyph,
+            list_task_glyph,
+            list_task_checked_glyph,
+            sprite_list_bullet,
+            sprite_list_bullet_2,
+            sprite_list_bullet_3,
+            sprite_list_ordered,
+            sprite_list_task,
+            sprite_list_task_checked,
             mark_fg,
             annotation_hl,
             find_hl_all,
@@ -501,6 +861,7 @@ impl ThemeSpec {
             superscript_rise,
             subscript_rise,
             heading_space_below,
+            heading_space_above,
             blockquote_bar_width,
             blockquote_text_gap,
             list_step,
@@ -510,6 +871,9 @@ impl ThemeSpec {
             table_cell_padding_h,
             table_border_width,
             table_cell_radius,
+            annotation_chip_bg,
+            annotation_chip_fg,
+            sprite_annotation_chip,
         );
     }
 }
@@ -560,12 +924,152 @@ pub(crate) struct Typography {
     pub subscript_rise: i32,
 }
 
+impl Typography {
+    /// Pango markup attribute fragment for themed bold — e.g. ` weight="600"`, leading
+    /// space included so a caller can splice it straight into a `<span…>` open tag.
+    ///
+    /// Shared by every representation OUTSIDE the buffer (table-cell `GtkLabel`
+    /// markup, PDF/HTML export markup) so `bold_weight` cannot silently apply on the
+    /// body `GtkTextTag` alone and drift from a bold word in a table or an exported
+    /// document (TDD 18.18 — the prerequisite the whole decoration plan is gated on,
+    /// `sdd/PLAN.preview-decoration.md` constraint 1).
+    pub(crate) fn bold_attr(&self) -> String {
+        format!(" weight=\"{}\"", self.bold_weight)
+    }
+
+    /// Pango markup attribute fragment for themed super/subscript — `size` AND
+    /// `rise` together, the same two properties `tags.rs` applies to the body tag via
+    /// `set_scale`/`set_rise`. `superscript` selects which rise; `subscript_rise`'s
+    /// own floor is already negative (`F_SUBSCRIPT_RISE = -2`), so no sign flip
+    /// happens here — the raw theme value is exactly what `tags.rs` feeds `set_rise`,
+    /// just re-expressed as Pango markup's `rise` (also Pango units) instead of the
+    /// tag property.
+    pub(crate) fn supsub_attr(&self, superscript: bool) -> String {
+        let pct = (self.supsub_scale * 100.0).round().max(1.0) as i32;
+        let rise = if superscript {
+            self.superscript_rise
+        } else {
+            self.subscript_rise
+        };
+        format!(" size=\"{pct}%\" rise=\"{}\"", rise * gtk::pango::SCALE)
+    }
+}
+
+/// The optional rule a theme may draw above and/or below a heading's text (TDD 18.22).
+///
+/// Both sides default to [`LineStyle::None`], so a theme that states neither leaves the
+/// heading tags byte-identical to before this decoration existed (TDD 18.2). A colour
+/// left `None` means "do not set the property", which is how a `GtkTextTag` line follows
+/// the run's own foreground — NOT a derived default we would have to keep in step.
+///
+/// # Why only ONE of the two sides carries a colour
+///
+/// **GTK 4.6.9 double-frees a text run that carries a coloured overline AND a coloured
+/// underline.** MEASURED here, minimal: build a `GtkTextTag`, set `overline-rgba` and
+/// `underline-rgba`, drop it — valgrind reports `Invalid free()` of a 16-byte block (a
+/// `GdkRGBA`) freed twice inside GTK's own finalize path, and a few repetitions poison
+/// the heap until an unrelated `gtk::Box::new` SIGSEGVs somewhere else entirely.
+/// Characterised against a positive control: either colour ALONE avoids the invalid
+/// free; the same colour on both still corrupts; every other `*-rgba` pair (foreground,
+/// strikethrough) is clean; and **splitting the two across two tags applied to the same
+/// range does not escape it** — the invariant is per RUN, not per tag. That last part is
+/// what decides the design: a link inside a heading carries the heading's tag and the
+/// link's tag at once, and the link tag colours an underline.
+///
+/// **ROOT CAUSE, confirmed against `gtk 4.6.9-5-g492b44f20c` source
+/// (`gtk/gtktextattributes.c`, `gtk_text_attributes_unref`) — NOT an aliasing bug, a
+/// one-line copy-paste typo in the destructor**:
+/// ```c
+/// if (values->appearance.underline_rgba)
+///     gdk_rgba_free (values->appearance.underline_rgba);
+/// if (values->appearance.overline_rgba)
+///     gdk_rgba_free (values->appearance.underline_rgba);   /* guard says overline, free says underline */
+/// ```
+/// Every copy path (`copy_values`, the run-merge in `_gtk_text_attributes_fill_from_tags`)
+/// deep-copies each field independently — no pointer is ever shared. The corruption is
+/// this one destructor: with both fields set, `underline_rgba` is freed twice and
+/// `overline_rgba` leaks; with only `overline_rgba` set, nothing is double-freed but that
+/// 16 B still leaks on every tag/attributes destruction, which is why the theme vocabulary
+/// has no `heading_overline_rgba` key at all rather than merely warning against combining
+/// it with `heading_underline_rgba`. Fixed upstream by commit
+/// `86e962929bf2be13a721053141b33e4381f0312` ("gtktextattributes: Make sure to free the
+/// right color", found by Coverity CID 1621077, GitLab MR !8137) in GTK **4.16.13** and
+/// **4.18.0**; never backported to any earlier stable branch, so nothing short of raising
+/// this project's floor past 4.16.13 makes the key safe.
+///
+/// So the project sets `underline-rgba` and **never** `overline-rgba`, anywhere — a
+/// `clippy.toml` ban makes that a build failure rather than a thing to remember. The
+/// overline is expressible, and takes the heading's ink; the theme vocabulary simply has
+/// no key that could ask for the combination GTK cannot survive. `paragraph-background-rgba`
+/// is unaffected (its guard/free pair is correctly matched at every call site audited) and
+/// safe to combine with anything, including this pair, for a future heading band (TDD
+/// 18.25). When the toolkit floor moves past 4.16.13, `heading_overline_rgba` can be added
+/// and nothing else changes.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct HeadingRule {
+    /// The rule above the text. Always drawn in the heading's own ink — see the type
+    /// docs; there is no colour key for this side and adding one is a heap bug.
+    pub overline: LineStyle,
+    pub underline: LineStyle,
+    pub underline_rgba: Option<gdk::RGBA>,
+}
+
+impl HeadingRule {
+    /// Whether this theme draws any heading rule at all — the one gate every consumer
+    /// asks before emitting a rule, so "absent" is one decision rather than four.
+    pub(crate) fn is_absent(&self) -> bool {
+        self.overline.is_none() && self.underline.is_none()
+    }
+}
+
+/// The band drawn behind a heading's text (TDD 18.25) — the plan's marquee decoration,
+/// and the first entry in the vocabulary that is a genuinely NEW drawn thing rather than
+/// a property of something already painted.
+///
+/// Absent by default on every level: `fills` is all-`None` until a theme states one, so a
+/// theme that says nothing leaves the paint path byte-identical to before the decoration
+/// existed. `is_absent` is the one gate every consumer asks, so "no band" is one decision
+/// rather than five.
+///
+/// **The band spans the CONTENT COLUMN**, the same extent the code-block card uses — not
+/// the text column a `paragraph_background_rgba` tag would pin it to, and not the widget
+/// edge. Two reasons, and the second is the load-bearing one: a tag band follows the
+/// *tag's* margins, so a heading inside a blockquote or a list item would carry a band of
+/// a different width from its siblings; and the content column is the one extent all
+/// three renderings can agree on (the HTML sink's `<h1>` fills its own column, the PDF's
+/// printable width is its column), which is what keeps 25.3's "as the preview shows it"
+/// true rather than nearly true.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct HeadingBand {
+    /// Per level, h1 · h2 · h3 · h4 · h5-and-deeper. `None` ⇒ that level carries no band.
+    pub fills: [Option<gdk::RGBA>; 5],
+    /// A second stop, making the band a vertical gradient from the level's fill.
+    pub gradient_to: Option<gdk::RGBA>,
+}
+
+impl HeadingBand {
+    /// Whether any level carries a band at all — the single gate, so the paint path, the
+    /// span scan and both export sinks ask one question rather than five.
+    ///
+    /// Keyed on the FILLS alone, deliberately: a sprite or a gradient describes what a
+    /// band looks like and cannot conjure one, so a theme that states a sprite and no
+    /// fill has stated the shape of a decoration it never asked for.
+    pub(crate) fn is_absent(&self) -> bool {
+        self.fills.iter().all(Option::is_none)
+    }
+}
+
 /// Decoration metrics: design-time px at zoom 1.0. Every consumer scales these
 /// through the existing `px(n) = round(n * zoom)` path; a theme never expresses
 /// pixels at the current zoom.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Metrics {
     pub heading_space_below: [i32; 5],
+    /// Space above each heading. Zero on every level until a theme says otherwise, so
+    /// the heading tag's `pixels_above_lines` stays at the view default (TDD 18.2).
+    pub heading_space_above: [i32; 5],
+    /// Corner radius of the heading band. Only consulted where a band exists.
+    pub heading_band_radius: i32,
     pub blockquote_bar_width: i32,
     pub blockquote_text_gap: i32,
     /// The ONE definition both the `li-{depth}` tag's `left_margin` and the drawn
@@ -602,7 +1106,25 @@ pub(crate) struct Theme {
     /// Heading font family (a [`CssSafeFontStack`], sanitised + generic-terminated by
     /// construction); `None` ⇒ headings use the body font.
     pub heading_font: Option<CssSafeFontStack>,
+    /// Per-level heading colours (h1 · h2 · h3 · h4 · h5-and-deeper), already folded
+    /// with the singular `heading_color`: a slot the theme left unset carries that
+    /// fallback here, so every consumer indexes and no consumer re-implements the
+    /// fold. `None` in a slot still means "inherit the body foreground".
+    pub heading_colors: [Option<gdk::RGBA>; 5],
+    /// Per-level heading font stacks, folded with `heading_font` the same way.
+    pub heading_fonts: [Option<CssSafeFontStack>; 5],
+    /// The rule drawn above and/or below a heading; absent unless a theme asks for it.
+    pub heading_rule: HeadingRule,
+    /// The band behind a heading's text; absent unless a theme states a fill for a level.
+    pub heading_band: HeadingBand,
     pub link: Option<gdk::RGBA>,
+    /// A link's underline style; `LineStyle::Single` unless a theme says otherwise,
+    /// which is the line the app has always drawn.
+    pub link_underline: LineStyle,
+    /// The link underline's colour; `None` ⇒ it follows the link's own ink.
+    pub link_underline_rgba: Option<gdk::RGBA>,
+    /// The strike line's colour; `None` ⇒ it follows the struck text's own foreground.
+    pub strikethrough_rgba: Option<gdk::RGBA>,
     pub code_inline_bg: Option<gdk::RGBA>,
     pub code_block_bg: Option<gdk::RGBA>,
     pub blockquote_bar: Option<gdk::RGBA>,
@@ -615,6 +1137,14 @@ pub(crate) struct Theme {
     /// List-marker glyph colour (bullet/numeral/checkbox); `None` ⇒ inherit the widget
     /// foreground. Marker glyph only — never the item text.
     pub list_marker: Option<gdk::RGBA>,
+    /// The BULLET's colour by nesting-depth tier (TDD 18.26), already folded with
+    /// `list_marker` — so slot 0 IS `list_marker` unless a theme says otherwise, and a
+    /// consumer indexes rather than re-deriving the fallback. Bullet only: the ordered
+    /// numeral and the task box read `list_marker` at every depth.
+    pub list_bullet_colors: [Option<gdk::RGBA>; BULLET_TIERS],
+    /// Glyphs standing in for the drawn list markers; each `None` ⇒ that marker is
+    /// drawn as it always was. A sprite for the same marker outranks the glyph.
+    pub list_glyphs: ListGlyphs,
     /// Ink for `==marked==` text, over `mark_bg`; `None` ⇒ the marked text keeps the
     /// body foreground, which is what every theme did before this key existed.
     pub mark_fg: Option<gdk::RGBA>,
@@ -624,6 +1154,35 @@ pub(crate) struct Theme {
     pub mark_bg: ThemeColor,
     pub typography: Typography,
     pub metrics: Metrics,
+    /// Annotation chip fill; `None` ⇒ the hardcoded amber, exactly as before themes
+    /// could touch it.
+    pub annotation_chip_bg: Option<gdk::RGBA>,
+    /// Annotation chip ink; `None` ⇒ the hardcoded white.
+    pub annotation_chip_fg: Option<gdk::RGBA>,
+    /// Every sprite this theme names, already validated to an absolute, existing,
+    /// contained path (`crate::sprite::resolve` ran at load time — see `load()`).
+    /// Empty for every shipped theme: the vocabulary is opt-in per theme, not a
+    /// feature that appears unasked.
+    pub sprites: Sprites,
+}
+
+/// Every sprite a theme may name, one field per decoration. A decoration's sprite lives
+/// HERE rather than inside that decoration's own struct, so "what files does this theme
+/// name?" is one question with one answer — which is also what `rewrite_sprite_paths`
+/// iterates, and therefore what keeps a new sprite key from being validated nowhere. Each is `None` unless
+/// the theme both set the key AND `crate::sprite::resolve` accepted it — a theme
+/// that sets a broken reference gets the SAME "decoration absent" fallback as a
+/// theme that sets nothing, never a partial or broken render.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Sprites {
+    pub annotation_chip: Option<std::path::PathBuf>,
+    /// The bullet's sprite by nesting-depth tier (TDD 18.26), already folded — a tier
+    /// the theme left unset carries the next shallower tier's file.
+    pub list_bullet: [Option<std::path::PathBuf>; BULLET_TIERS],
+    pub list_ordered: Option<std::path::PathBuf>,
+    pub list_task: Option<std::path::PathBuf>,
+    pub list_task_checked: Option<std::path::PathBuf>,
+    pub heading_band: Option<std::path::PathBuf>,
 }
 
 impl Theme {
@@ -654,6 +1213,121 @@ impl Theme {
             .or_else(|| system.heading_space_below.clone())
             .map(|v| fit5_i32(&v, F_HEADING_SPACE_BELOW, METRIC_RANGE))
             .unwrap_or(F_HEADING_SPACE_BELOW);
+        let heading_space_above = selected
+            .heading_space_above
+            .clone()
+            .or_else(|| system.heading_space_above.clone())
+            .map(|v| fit5_i32(&v, F_HEADING_SPACE_ABOVE, METRIC_RANGE))
+            .unwrap_or(F_HEADING_SPACE_ABOVE);
+
+        // Per-level heading colour/face (18.21). The array comes from ONE link — the
+        // selected theme's if it states one, else `[themes.system]`'s — exactly as
+        // `heading_scale` does; then each slot folds down to the singular key. The fold
+        // happens HERE, once, so `tags.rs`, the table header and the export sinks all
+        // index a value that is already correct rather than each re-deriving the
+        // fallback (POLICY "One theme key, every application path").
+        //
+        // An empty or unparseable slot IS the "unset" spelling: TOML arrays cannot hold
+        // a null, and a colour that fails to parse must fall back rather than reject the
+        // theme (TDD 18.11's clamp-don't-reject discipline, applied to a slot).
+        let heading_color = color(&selected.heading_color, &system.heading_color);
+        let heading_font = pick(&selected.heading_font, &system.heading_font)
+            .as_deref()
+            .and_then(sanitize_font_family);
+        let level_slots = |sel: &Option<Vec<String>>, sys: &Option<Vec<String>>| {
+            let authored = sel.clone().or_else(|| sys.clone()).unwrap_or_default();
+            let mut out: [Option<String>; 5] = Default::default();
+            for (slot, s) in out.iter_mut().zip(authored.iter()) {
+                if !s.trim().is_empty() {
+                    *slot = Some(s.clone());
+                }
+            }
+            out
+        };
+        let heading_colors = level_slots(&selected.heading_colors, &system.heading_colors)
+            .map(|s| s.as_deref().and_then(parse_color).or(heading_color));
+        let heading_fonts = level_slots(&selected.heading_fonts, &system.heading_fonts).map(|s| {
+            s.as_deref()
+                .and_then(sanitize_font_family)
+                .or_else(|| heading_font.clone())
+        });
+
+        // The heading rule (18.22). An unrecognised style falls back to the floor —
+        // "no rule" — rather than failing the theme, and each colour left unset stays
+        // `None` so the tag never sets `*-rgba` at all and the line follows the
+        // heading's own ink.
+        let style = |a: &Option<String>, b: &Option<String>, floor: LineStyle| {
+            pick(a, b)
+                .as_deref()
+                .and_then(LineStyle::parse)
+                .unwrap_or(floor)
+        };
+        let glyph = |a: &Option<String>, b: &Option<String>| {
+            pick(a, b).as_deref().and_then(MarkerGlyph::parse)
+        };
+        // Already-validated absolute paths: `rewrite_sprite_paths` ran in `load()` before
+        // this function ever sees the spec, so `Theme::resolve` itself stays pure (no
+        // filesystem) — matching every other field here.
+        let sprite =
+            |a: &Option<String>, b: &Option<String>| pick(a, b).map(std::path::PathBuf::from);
+
+        // The BULLET's three nesting-depth tiers (TDD 18.26), folded HERE so every
+        // consumer indexes and none of them re-derives the fallback — the same discipline
+        // the per-level heading fold above follows, and for the same reason: three
+        // consumers each spelling `tier_2.or(tier_1)` is three chances to spell it
+        // differently. Each tier falls back to the next SHALLOWER one, so an unstated
+        // depth-3 takes depth 2's value and an unstated depth-2 takes depth 1's — which
+        // is the un-suffixed key, i.e. exactly today's behaviour when neither is stated.
+        let list_marker = color(&selected.list_marker, &system.list_marker);
+        let tier2 = color(&selected.list_marker_2, &system.list_marker_2);
+        let tier3 = color(&selected.list_marker_3, &system.list_marker_3);
+        let list_bullet_colors = [
+            list_marker,
+            tier2.or(list_marker),
+            tier3.or(tier2).or(list_marker),
+        ];
+        let g1 = glyph(&selected.list_bullet_glyph, &system.list_bullet_glyph);
+        let g2 = glyph(&selected.list_bullet_glyph_2, &system.list_bullet_glyph_2);
+        let g3 = glyph(&selected.list_bullet_glyph_3, &system.list_bullet_glyph_3);
+        let bullet_glyphs = [
+            g1.clone(),
+            g2.clone().or_else(|| g1.clone()),
+            g3.or(g2).or(g1),
+        ];
+        let s1 = sprite(&selected.sprite_list_bullet, &system.sprite_list_bullet);
+        let s2 = sprite(&selected.sprite_list_bullet_2, &system.sprite_list_bullet_2);
+        let s3 = sprite(&selected.sprite_list_bullet_3, &system.sprite_list_bullet_3);
+        let bullet_sprites = [
+            s1.clone(),
+            s2.clone().or_else(|| s1.clone()),
+            s3.or(s2).or(s1),
+        ];
+
+        let heading_band = HeadingBand {
+            fills: level_slots(&selected.heading_band_bg, &system.heading_band_bg)
+                .map(|slot| slot.as_deref().and_then(parse_color)),
+            gradient_to: color(
+                &selected.heading_band_gradient_to,
+                &system.heading_band_gradient_to,
+            ),
+        };
+
+        let heading_rule = HeadingRule {
+            overline: style(
+                &selected.heading_overline,
+                &system.heading_overline,
+                F_HEADING_OVERLINE,
+            ),
+            underline: style(
+                &selected.heading_underline,
+                &system.heading_underline,
+                F_HEADING_UNDERLINE,
+            ),
+            underline_rgba: color(
+                &selected.heading_underline_rgba,
+                &system.heading_underline_rgba,
+            ),
+        };
 
         macro_rules! num {
             ($f:ident, $floor:expr, $range:expr, $clamp:ident) => {
@@ -682,11 +1356,20 @@ impl Theme {
                 .as_deref()
                 .and_then(sanitize_font_family),
             syntect_theme: pick(&selected.syntect_theme, &system.syntect_theme),
-            heading_color: color(&selected.heading_color, &system.heading_color),
-            heading_font: pick(&selected.heading_font, &system.heading_font)
-                .as_deref()
-                .and_then(sanitize_font_family),
+            heading_color,
+            heading_font,
+            heading_colors,
+            heading_fonts,
+            heading_rule,
+            heading_band,
             link: color(&selected.link, &system.link),
+            link_underline: style(
+                &selected.link_underline,
+                &system.link_underline,
+                F_LINK_UNDERLINE,
+            ),
+            link_underline_rgba: color(&selected.link_underline_rgba, &system.link_underline_rgba),
+            strikethrough_rgba: color(&selected.strikethrough_rgba, &system.strikethrough_rgba),
             code_inline_bg: color(&selected.code_inline_bg, &system.code_inline_bg),
             code_block_bg: color(&selected.code_block_bg, &system.code_block_bg),
             blockquote_bar: color(&selected.blockquote_bar, &system.blockquote_bar),
@@ -695,7 +1378,17 @@ impl Theme {
             table_border: color(&selected.table_border, &system.table_border),
             table_head_bg: color(&selected.table_head_bg, &system.table_head_bg),
             rule: color(&selected.rule, &system.rule),
-            list_marker: color(&selected.list_marker, &system.list_marker),
+            list_marker,
+            list_bullet_colors,
+            list_glyphs: ListGlyphs {
+                bullet: bullet_glyphs,
+                ordered: glyph(&selected.list_ordered_glyph, &system.list_ordered_glyph),
+                task: glyph(&selected.list_task_glyph, &system.list_task_glyph),
+                task_checked: glyph(
+                    &selected.list_task_checked_glyph,
+                    &system.list_task_checked_glyph,
+                ),
+            },
             mark_fg: color(&selected.mark_fg, &system.mark_fg),
             annotation_hl: overlay(&selected.annotation_hl, &system.annotation_hl, "#FFD133_61"),
             find_hl_all: overlay(&selected.find_hl_all, &system.find_hl_all, "#f6d32d"),
@@ -717,6 +1410,13 @@ impl Theme {
             },
             metrics: Metrics {
                 heading_space_below,
+                heading_space_above,
+                heading_band_radius: num!(
+                    heading_band_radius,
+                    F_HEADING_BAND_RADIUS,
+                    METRIC_RANGE,
+                    clamp_i32
+                ),
                 blockquote_bar_width: num!(
                     blockquote_bar_width,
                     F_BQ_BAR_WIDTH,
@@ -756,6 +1456,25 @@ impl Theme {
                     METRIC_RANGE,
                     clamp_i32
                 ),
+            },
+            annotation_chip_bg: color(&selected.annotation_chip_bg, &system.annotation_chip_bg),
+            annotation_chip_fg: color(&selected.annotation_chip_fg, &system.annotation_chip_fg),
+            // Already-validated absolute paths: `rewrite_sprite_paths` ran in `load()`
+            // before this function ever sees the spec, so `Theme::resolve` itself stays
+            // pure (no filesystem) — matching every other field here.
+            sprites: Sprites {
+                annotation_chip: sprite(
+                    &selected.sprite_annotation_chip,
+                    &system.sprite_annotation_chip,
+                ),
+                list_bullet: bullet_sprites,
+                list_ordered: sprite(&selected.sprite_list_ordered, &system.sprite_list_ordered),
+                list_task: sprite(&selected.sprite_list_task, &system.sprite_list_task),
+                list_task_checked: sprite(
+                    &selected.sprite_list_task_checked,
+                    &system.sprite_list_task_checked,
+                ),
+                heading_band: sprite(&selected.sprite_heading_band, &system.sprite_heading_band),
             },
         }
     }
@@ -802,15 +1521,47 @@ fn fit5_i32(v: &[i32], floor: [i32; 5], range: (i32, i32)) -> [i32; 5] {
 /// helpers are correct and order-independent for those.
 fn load() -> Themes {
     let mut themes = Themes::builtin();
-    if let Some(text) = find_themes_file() {
-        if let Some(user) = Themes::parse(&text) {
+    if let Some((text, dir)) = find_themes_file() {
+        if let Some(mut user) = Themes::parse(&text) {
+            // The one place sprite paths touch the filesystem: rewrite each spec's
+            // theme-relative sprite reference to a validated absolute path (or drop
+            // it) BEFORE `Theme::resolve` ever runs, so `resolve` itself stays pure —
+            // matching every other field it produces.
+            for spec in user.values_mut() {
+                rewrite_sprite_paths(spec, &dir);
+            }
             themes.merge_over(user);
         }
     }
     themes
 }
 
-fn find_themes_file() -> Option<String> {
+/// Rewrite one spec's sprite keys from theme-relative to validated absolute,
+/// dropping (to `None`) any `crate::sprite::resolve` refuses.
+fn rewrite_sprite_paths(spec: &mut ThemeSpec, dir: &std::path::Path) {
+    // Every sprite key goes through this ONE loop rather than a line each: a new sprite
+    // key that is added to the spec and forgotten here compiles, works for a built-in
+    // theme (which states no sprite), and silently ignores every user reference — the
+    // `take!` failure mode one layer over.
+    for slot in [
+        &mut spec.sprite_annotation_chip,
+        &mut spec.sprite_list_bullet,
+        &mut spec.sprite_list_bullet_2,
+        &mut spec.sprite_list_bullet_3,
+        &mut spec.sprite_list_ordered,
+        &mut spec.sprite_list_task,
+        &mut spec.sprite_list_task_checked,
+        &mut spec.sprite_heading_band,
+    ] {
+        *slot = slot.as_deref().and_then(|rel| {
+            crate::sprite::resolve(dir, rel).map(|p| p.to_string_lossy().into_owned())
+        });
+    }
+}
+
+/// Returns the file's text and the directory it was read from — sprite references
+/// resolve against that directory, never against the current working directory.
+fn find_themes_file() -> Option<(String, std::path::PathBuf)> {
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     // 1. user override — from the config path snapshotted before the redirect.
     if let Some(dir) = crate::config::user_config_dir() {
@@ -830,7 +1581,11 @@ fn find_themes_file() -> Option<String> {
     for p in paths {
         if let Ok(text) = std::fs::read_to_string(&p) {
             log::debug!("theme: loaded themes from {}", p.display());
-            return Some(text);
+            let dir = p
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            return Some((text, dir));
         }
     }
     None
@@ -874,6 +1629,11 @@ pub(crate) fn active() -> std::rc::Rc<Theme> {
 /// An unknown id resolves as the system theme (see [`Themes::resolve`]).
 pub(crate) fn set_active(id: &str) -> std::rc::Rc<Theme> {
     let resolved = std::rc::Rc::new(themes().resolve(id));
+    // Decoded sprites are cached by PATH, not by theme id, so a swap away from a
+    // sprite-using theme would otherwise keep its textures resident for the rest of
+    // the process — and a path a new theme no longer names could, in principle, be
+    // served stale to a caller asking about the new one.
+    crate::sprite::clear_cache();
     ACTIVE.with(|a| *a.borrow_mut() = Some(resolved.clone()));
     resolved
 }
@@ -895,6 +1655,42 @@ pub(crate) fn set_active_for_test(theme: Theme) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bold_attr_carries_the_themed_weight() {
+        let typo = Typography {
+            heading_scale: [1.0; 5],
+            heading_weight: 700,
+            bold_weight: 650,
+            supsub_scale: 0.75,
+            superscript_rise: 4,
+            subscript_rise: -2,
+        };
+        assert_eq!(typo.bold_attr(), " weight=\"650\"");
+    }
+
+    #[test]
+    fn supsub_attr_selects_the_matching_rise_and_shares_the_scale() {
+        let typo = Typography {
+            heading_scale: [1.0; 5],
+            heading_weight: 700,
+            bold_weight: 600,
+            supsub_scale: 0.75,
+            superscript_rise: 4,
+            subscript_rise: -2,
+        };
+        // 0.75 -> "75%"; rise is in Pango units, the SAME `value * pango::SCALE`
+        // `tags.rs` feeds `set_rise` — one raw theme number, two representations.
+        assert_eq!(
+            typo.supsub_attr(true),
+            format!(" size=\"75%\" rise=\"{}\"", 4 * gtk::pango::SCALE)
+        );
+        // subscript_rise's own floor is already negative — no sign flip here.
+        assert_eq!(
+            typo.supsub_attr(false),
+            format!(" size=\"75%\" rise=\"{}\"", -2 * gtk::pango::SCALE)
+        );
+    }
 
     fn builtin_system() -> ThemeSpec {
         Themes::parse(BUILTIN_THEMES_TOML)
@@ -925,6 +1721,9 @@ mod tests {
         assert_eq!(r.typography.superscript_rise, F_SUPERSCRIPT_RISE);
         assert_eq!(r.typography.subscript_rise, F_SUBSCRIPT_RISE);
         assert_eq!(r.metrics.heading_space_below, F_HEADING_SPACE_BELOW);
+        assert_eq!(r.metrics.heading_space_above, F_HEADING_SPACE_ABOVE);
+        assert_eq!(r.heading_rule.overline, F_HEADING_OVERLINE);
+        assert_eq!(r.heading_rule.underline, F_HEADING_UNDERLINE);
         assert_eq!(r.metrics.blockquote_bar_width, F_BQ_BAR_WIDTH);
         assert_eq!(r.metrics.blockquote_text_gap, F_BQ_TEXT_GAP);
         assert_eq!(r.metrics.list_step, F_LIST_STEP);
@@ -1018,6 +1817,106 @@ mod tests {
         assert!(t.blockquote_bar.is_none());
     }
 
+    /// TDD 18.21 — per-level heading colour/face. Three claims in one place, because
+    /// they are one contract: a stated slot wins, an EMPTY or absent slot falls back to
+    /// the theme's singular key, and the array merges from a user file.
+    ///
+    /// The merge half is not decoration. A new key has to reach `overlay`'s `take!`
+    /// list, and omitting it compiles, leaves every built-in theme working, and silently
+    /// drops EVERY user override — the shipped `list_marker` bug, pinned below.
+    #[test]
+    fn per_level_heading_colour_and_face_fall_back_and_merge() {
+        let themes = Themes::builtin();
+
+        // System states neither, so every level is `None` — the tag sets no foreground
+        // and headings inherit the page's `color`, exactly as before 18.21 (TDD 18.2).
+        let sys = themes.resolve(SYSTEM_ID);
+        assert!(sys.heading_colors.iter().all(Option::is_none));
+        assert!(sys.heading_fonts.iter().all(Option::is_none));
+
+        // Synthwave states h1 only; h2..h5 fall back to its singular keys.
+        let sw = themes.resolve("synthwave");
+        assert_eq!(
+            crate::palette::to_hex(sw.heading_colors[0].expect("h1 is stated")),
+            "#ff3caf"
+        );
+        let gold = crate::palette::to_hex(sw.heading_color.expect("synthwave sets one"));
+        for level in 1..5 {
+            assert_eq!(
+                crate::palette::to_hex(sw.heading_colors[level].expect("falls back")),
+                gold,
+                "h{} did not fall back to heading_color",
+                level + 1
+            );
+        }
+        assert!(sw.heading_fonts[0]
+            .as_ref()
+            .expect("h1 face is stated")
+            .as_str()
+            .starts_with("\"Michroma\""));
+        for level in 1..5 {
+            assert_eq!(
+                sw.heading_fonts[level].as_ref().map(|f| f.as_str()),
+                sw.heading_font.as_ref().map(|f| f.as_str()),
+                "h{} did not fall back to heading_font",
+                level + 1
+            );
+        }
+
+        // A theme that states NEITHER the array nor the singular leaves the level unset.
+        assert!(themes
+            .resolve("sepia")
+            .heading_colors
+            .iter()
+            .all(Option::is_none));
+
+        // The `take!`-list guard: a user override of a theme that ships no array.
+        let mut user = Themes::builtin();
+        user.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nheading_colors = [\"\", \"#123456\"]\n\
+                 heading_fonts = [\"\", \"Georgia, serif\"]\n",
+            )
+            .unwrap(),
+        );
+        let sep = user.resolve("sepia");
+        assert_eq!(
+            crate::palette::to_hex(sep.heading_colors[1].expect("h2 override merged")),
+            "#123456"
+        );
+        assert_eq!(
+            sep.heading_fonts[1].as_ref().map(|f| f.as_str()),
+            Some("\"Georgia\", serif")
+        );
+        // An empty slot and a slot past the array's end both stay unset (sepia states
+        // no singular heading colour either).
+        assert!(sep.heading_colors[0].is_none());
+        assert!(sep.heading_colors[4].is_none());
+    }
+
+    /// A slot a theme fills with nonsense must FALL BACK, never reject the theme —
+    /// the same clamp-don't-reject discipline every geometry key follows (TDD 18.11).
+    #[test]
+    fn an_unparseable_heading_level_slot_falls_back_to_the_singular_key() {
+        let mut themes = Themes::builtin();
+        themes.merge_over(
+            Themes::parse(
+                "[themes.synthwave]\nheading_colors = [\"not a colour\"]\n\
+                 heading_fonts = [\"}} * {{ color: red; }}\"]\n",
+            )
+            .unwrap(),
+        );
+        let sw = themes.resolve("synthwave");
+        assert_eq!(
+            crate::palette::to_hex(sw.heading_colors[0].expect("fell back")),
+            crate::palette::to_hex(sw.heading_color.unwrap())
+        );
+        assert_eq!(
+            sw.heading_fonts[0].as_ref().map(|f| f.as_str()),
+            sw.heading_font.as_ref().map(|f| f.as_str())
+        );
+    }
+
     /// TDD 18.8 — the legibility floor. Every theme that states its own page must
     /// clear WCAG AA for body text; this is what stops a later "warm it up a bit"
     /// tweak from quietly degrading readability.
@@ -1034,6 +1933,489 @@ mod tests {
                 c >= 4.5,
                 "theme {id}: body contrast {c:.2} is below WCAG AA"
             );
+        }
+    }
+
+    /// TDD 18.22 / 18.2 — the heading rule is INERT until a theme asks for it, and the
+    /// space above it is zero, so System registers exactly the heading tag it always did.
+    #[test]
+    fn the_heading_rule_and_space_above_are_absent_under_system() {
+        let sys = Themes::builtin().resolve(SYSTEM_ID);
+        assert!(sys.heading_rule.is_absent());
+        assert!(sys.heading_rule.underline_rgba.is_none());
+        assert_eq!(sys.metrics.heading_space_above, [0; 5]);
+    }
+
+    /// TDD 18.22 — both sides resolve independently, each with its own colour, and both
+    /// merge from a user file (the `take!`-list guard again — four new keys, four ways
+    /// to silently drop every user override).
+    #[test]
+    fn a_theme_states_each_heading_rule_side_independently_and_merges() {
+        let sw = Themes::builtin().resolve("synthwave");
+        assert_eq!(sw.heading_rule.underline, LineStyle::Single);
+        assert_eq!(
+            crate::palette::to_hex(sw.heading_rule.underline_rgba.expect("stated")),
+            "#ff3caf"
+        );
+        // Synthwave states no overline, so that side stays off.
+        assert_eq!(sw.heading_rule.overline, LineStyle::None);
+        assert_eq!(sw.metrics.heading_space_above, [18, 14, 10, 8, 8]);
+
+        let mut themes = Themes::builtin();
+        themes.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nheading_overline = \"double\"\n\
+                 heading_underline = \"wavy\"\n\
+                 heading_underline_rgba = \"#222222\"\nheading_space_above = [7]\n",
+            )
+            .unwrap(),
+        );
+        let sep = themes.resolve("sepia");
+        // The overline CLAMPS: Pango's attribute has only none/single, so a theme asking
+        // for a double rule above gets a single one rather than a rejected theme.
+        assert_eq!(sep.heading_rule.overline, LineStyle::Double);
+        assert_eq!(
+            sep.heading_rule.overline.overline(),
+            gtk::pango::Overline::Single
+        );
+        assert_eq!(sep.heading_rule.underline, LineStyle::Wavy);
+        assert_eq!(
+            sep.heading_rule.underline.underline(),
+            gtk::pango::Underline::Error
+        );
+        assert_eq!(
+            crate::palette::to_hex(sep.heading_rule.underline_rgba.expect("merged")),
+            "#222222"
+        );
+        // A short array extends from the floor rather than panicking (TDD 18.11).
+        assert_eq!(sep.metrics.heading_space_above, [7, 0, 0, 0, 0]);
+    }
+
+    /// TDD 18.11 — an unknown line style falls back to the key's floor. A theme file is
+    /// data from disk: a typo must cost the decoration, never the theme.
+    #[test]
+    fn an_unknown_line_style_falls_back_to_the_floor() {
+        assert_eq!(LineStyle::parse("wavy"), Some(LineStyle::Wavy));
+        assert_eq!(LineStyle::parse("  SINGLE "), Some(LineStyle::Single));
+        assert_eq!(LineStyle::parse("squiggle"), None);
+        let mut themes = Themes::builtin();
+        themes
+            .merge_over(Themes::parse("[themes.sepia]\nheading_underline = \"zigzag\"\n").unwrap());
+        assert_eq!(
+            themes.resolve("sepia").heading_rule.underline,
+            F_HEADING_UNDERLINE
+        );
+    }
+
+    /// TDD 18.23 / 18.2 — the strike colour and the link-underline colour are absent
+    /// under System, and the link underline floors at the SINGLE line the app has always
+    /// drawn (not at "none", unlike the heading rule — that difference is the whole of
+    /// what keeps System's links looking as they did).
+    #[test]
+    fn strike_and_link_underline_default_to_todays_rendering() {
+        let sys = Themes::builtin().resolve(SYSTEM_ID);
+        assert!(sys.strikethrough_rgba.is_none());
+        assert!(sys.link_underline_rgba.is_none());
+        assert_eq!(sys.link_underline, LineStyle::Single);
+        assert_eq!(
+            sys.link_underline.underline(),
+            gtk::pango::Underline::Single
+        );
+        // Sepia states none of them either, so it inherits the same.
+        let sep = Themes::builtin().resolve("sepia");
+        assert!(sep.strikethrough_rgba.is_none());
+        assert_eq!(sep.link_underline, LineStyle::Single);
+    }
+
+    /// TDD 18.23 — both resolve, and both merge from a user file (`take!`-list guard).
+    #[test]
+    fn a_theme_states_the_strike_and_link_underline_colours_independently() {
+        let sw = Themes::builtin().resolve("synthwave");
+        assert_eq!(
+            crate::palette::to_hex(sw.strikethrough_rgba.expect("stated")),
+            "#ff3caf"
+        );
+        // Stated independently of the link's own ink — that separation IS the key.
+        assert_eq!(
+            crate::palette::to_hex(sw.link_underline_rgba.expect("stated")),
+            "#ff3caf"
+        );
+        assert_ne!(
+            crate::palette::to_hex(sw.link.expect("synthwave sets a link colour")),
+            crate::palette::to_hex(sw.link_underline_rgba.unwrap())
+        );
+
+        let mut themes = Themes::builtin();
+        themes.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nstrikethrough_rgba = \"#654321\"\n\
+                 link_underline = \"wavy\"\nlink_underline_rgba = \"#abcdef\"\n",
+            )
+            .unwrap(),
+        );
+        let sep = themes.resolve("sepia");
+        assert_eq!(
+            crate::palette::to_hex(sep.strikethrough_rgba.expect("merged")),
+            "#654321"
+        );
+        assert_eq!(sep.link_underline, LineStyle::Wavy);
+        assert_eq!(
+            crate::palette::to_hex(sep.link_underline_rgba.expect("merged")),
+            "#abcdef"
+        );
+        // A link with NO line at all is expressible, and is not the floor.
+        let mut off = Themes::builtin();
+        off.merge_over(Themes::parse("[themes.sepia]\nlink_underline = \"none\"\n").unwrap());
+        assert_eq!(off.resolve("sepia").link_underline, LineStyle::None);
+    }
+
+    /// TDD 18.24 — a marker glyph is validated at the file boundary, and everything it
+    /// refuses falls back to the drawn default rather than failing the theme.
+    #[test]
+    fn a_marker_glyph_is_validated_and_refuses_rather_than_truncates() {
+        assert_eq!(MarkerGlyph::parse("▸").unwrap().as_plain(), "▸");
+        // Trimmed, because a TOML author's trailing space is not part of the glyph.
+        assert_eq!(MarkerGlyph::parse("  ✓ ").unwrap().as_plain(), "✓");
+        // A composed emoji is inside the cap on purpose — this is the case the cap
+        // exists to admit, not the one it exists to reject.
+        assert!(MarkerGlyph::parse("👨\u{200d}👩\u{200d}👧").is_some());
+        // Empty / whitespace-only IS "unset".
+        assert!(MarkerGlyph::parse("").is_none());
+        assert!(MarkerGlyph::parse("   ").is_none());
+        // A control character would break the layout it is dropped into.
+        assert!(MarkerGlyph::parse("a\nb").is_none());
+        assert!(MarkerGlyph::parse("\u{0007}").is_none());
+        // Over-long is REFUSED, not cut: truncating at a char boundary can split a
+        // grapheme cluster and leave a lone combining mark, which renders worse than
+        // the default the theme was replacing.
+        assert!(MarkerGlyph::parse("123456789").is_none());
+        assert!(MarkerGlyph::parse("12345678").is_some());
+    }
+
+    /// TDD 18.24 — the escaping seam. ONE validated glyph, THREE grammars, and the
+    /// projections are the only way out of the type.
+    ///
+    /// A single `markup_escape_text` is not sufficient once both export sinks are
+    /// involved (`sdd/PLAN.preview-decoration.md` constraint 2): an un-escaped `&`
+    /// fails `pango_parse_markup` and renders the whole run EMPTY with no warning
+    /// (ScrAP-163), and an un-escaped `<` in HTML is an injection into a file this
+    /// project hands to a browser. The plain projection is deliberately NOT escaped —
+    /// it goes to a plain-text API — which is exactly why it has its own name.
+    #[test]
+    fn a_hostile_glyph_is_inert_in_every_grammar_it_reaches() {
+        let g = MarkerGlyph::parse("<&\"x\"").expect("within the cap, no control chars");
+        assert_eq!(g.as_plain(), "<&\"x\"");
+        let pango = g.escaped_for_pango_markup();
+        assert!(!pango.contains('<'), "{pango}");
+        assert!(!pango.contains('&') || pango.contains("&amp;"), "{pango}");
+        gtk::pango::parse_markup(&format!("<span>{pango}</span>"), '\0')
+            .expect("an escaped glyph must not break the markup it lands in");
+        let html = g.escaped_for_html();
+        assert!(!html.contains('<'), "{html}");
+        assert!(html.contains("&amp;"), "{html}");
+    }
+
+    /// TDD 18.24 / 18.2 — every marker key is absent under System, and resolves and
+    /// merges from a user file (the `take!`-list guard, eight keys' worth).
+    #[test]
+    fn list_marker_glyphs_and_sprites_are_opt_in_and_merge() {
+        let sys = Themes::builtin().resolve(SYSTEM_ID);
+        assert_eq!(sys.list_glyphs, ListGlyphs::default());
+        assert!(sys.sprites.list_bullet.iter().all(Option::is_none));
+        assert!(sys.sprites.list_ordered.is_none());
+        assert!(sys.sprites.list_task.is_none());
+        assert!(sys.sprites.list_task_checked.is_none());
+
+        // Terminal states all four glyphs — including both task states, so a ticked
+        // glyph never sits beside a drawn box.
+        let term = Themes::builtin().resolve("terminal");
+        assert_eq!(term.list_glyphs.bullet[0].as_ref().unwrap().as_plain(), "▸");
+        assert_eq!(term.list_glyphs.ordered.as_ref().unwrap().as_plain(), "$");
+        assert_eq!(term.list_glyphs.task.as_ref().unwrap().as_plain(), "[ ]");
+        assert_eq!(
+            term.list_glyphs.task_checked.as_ref().unwrap().as_plain(),
+            "[x]"
+        );
+
+        let mut themes = Themes::builtin();
+        themes.merge_over(Themes::parse("[themes.sepia]\nlist_bullet_glyph = \"❧\"\n").unwrap());
+        assert_eq!(
+            themes.resolve("sepia").list_glyphs.bullet[0]
+                .as_ref()
+                .unwrap()
+                .as_plain(),
+            "❧"
+        );
+    }
+
+    /// TDD 18.25 / 18.2 — the heading band is absent on every level under System, and
+    /// `is_absent` keys on the FILLS: a theme that describes a band's shape without
+    /// stating a fill has described a decoration it never asked for.
+    #[test]
+    fn the_heading_band_is_absent_until_a_theme_states_a_fill() {
+        let sys = Themes::builtin().resolve(SYSTEM_ID);
+        assert!(sys.heading_band.is_absent());
+        assert_eq!(sys.metrics.heading_band_radius, F_HEADING_BAND_RADIUS);
+        assert!(sys.sprites.heading_band.is_none());
+
+        let mut shape_only = Themes::builtin();
+        shape_only.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nheading_band_radius = 12\n\
+                 heading_band_gradient_to = \"#ffffff\"\n",
+            )
+            .unwrap(),
+        );
+        assert!(shape_only.resolve("sepia").heading_band.is_absent());
+    }
+
+    /// TDD 18.25 — per-level fills, a gradient stop and a radius all resolve and merge
+    /// (the `take!`-list guard once more), and an unstated level carries no band.
+    #[test]
+    fn a_theme_bands_the_levels_it_names_and_no_others() {
+        let sw = Themes::builtin().resolve("synthwave");
+        assert!(!sw.heading_band.is_absent());
+        assert_eq!(
+            crate::palette::to_hex(sw.heading_band.fills[0].expect("h1 is banded")),
+            "#2b1152"
+        );
+        assert_eq!(
+            crate::palette::to_hex(sw.heading_band.fills[1].expect("h2 is banded")),
+            "#221046"
+        );
+        // h3..h5 are left empty on purpose — banding every level is a stack of stripes.
+        assert!(sw.heading_band.fills[2].is_none());
+        assert!(sw.heading_band.fills[4].is_none());
+        assert!(sw.heading_band.gradient_to.is_some());
+        assert_eq!(sw.metrics.heading_band_radius, 6);
+
+        let mut themes = Themes::builtin();
+        themes.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nheading_band_bg = [\"\", \"#abcdef\"]\n\
+                 heading_band_radius = 999\n",
+            )
+            .unwrap(),
+        );
+        let sep = themes.resolve("sepia");
+        assert!(sep.heading_band.fills[0].is_none());
+        assert_eq!(
+            crate::palette::to_hex(sep.heading_band.fills[1].expect("merged")),
+            "#abcdef"
+        );
+        // A hostile radius is CLAMPED into the metric range, never rejected (TDD 18.11).
+        assert_eq!(sep.metrics.heading_band_radius, METRIC_RANGE.1);
+    }
+
+    /// TDD 18.26 — the tier map. A depth of 0 cannot arise from the renderer (the
+    /// outermost list is depth 1) and is answered anyway rather than underflowing: a
+    /// caller contract enforced by a clamp somewhere else is the arrangement that fails
+    /// when the somewhere else moves.
+    #[test]
+    fn a_nesting_depth_maps_to_its_bullet_tier() {
+        assert_eq!(depth_tier(1), 0);
+        assert_eq!(depth_tier(2), 1);
+        assert_eq!(depth_tier(3), 2);
+        // Three-AND-DEEPER: every deeper level shares the last tier rather than
+        // indexing past it.
+        assert_eq!(depth_tier(4), 2);
+        assert_eq!(depth_tier(99), 2);
+        assert_eq!(depth_tier(usize::MAX), 2);
+        // Total for the depth that cannot happen.
+        assert_eq!(depth_tier(0), 0);
+    }
+
+    /// TDD 18.26 / 18.2 — with no depth key stated, every tier carries the un-suffixed
+    /// key's value, which is what makes the feature inert: a theme that says nothing
+    /// paints exactly as it did before the tiers existed.
+    #[test]
+    fn every_bullet_tier_inherits_the_unsuffixed_key_by_default() {
+        let mut themes = Themes::builtin();
+        themes.merge_over(
+            Themes::parse("[themes.sepia]\nlist_marker = \"#112233\"\nlist_bullet_glyph = \"a\"\n")
+                .unwrap(),
+        );
+        let t = themes.resolve("sepia");
+        for tier in 0..BULLET_TIERS {
+            assert_eq!(
+                crate::palette::to_hex(t.list_bullet_colors[tier].expect("inherited")),
+                "#112233",
+                "tier {tier}"
+            );
+            assert_eq!(
+                t.list_glyphs.bullet[tier].as_ref().map(|g| g.as_plain()),
+                Some("a"),
+                "tier {tier}"
+            );
+        }
+        // System states none of them at all, so every tier is None and the drawn
+        // default stands.
+        let sys = Themes::builtin().resolve(SYSTEM_ID);
+        assert!(sys.list_bullet_colors.iter().all(Option::is_none));
+        assert!(sys.list_glyphs.bullet.iter().all(Option::is_none));
+    }
+
+    /// TDD 18.26 — each tier falls back to the next SHALLOWER one, not to the base and
+    /// not to the deepest. The half-stated case is the one that distinguishes a real
+    /// cascade from a two-way `or`: with depth 2 stated and depth 3 unset, depth 3 must
+    /// take depth 2's value, NOT the un-suffixed key's.
+    #[test]
+    fn an_unstated_tier_falls_back_to_the_next_shallower_one() {
+        let mut themes = Themes::builtin();
+        themes.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n\
+                 list_bullet_glyph = \"a\"\nlist_bullet_glyph_2 = \"b\"\n",
+            )
+            .unwrap(),
+        );
+        let t = themes.resolve("sepia");
+        let hex = |i: usize| crate::palette::to_hex(t.list_bullet_colors[i].unwrap());
+        assert_eq!(hex(0), "#111111");
+        assert_eq!(hex(1), "#222222");
+        assert_eq!(
+            hex(2),
+            "#222222",
+            "depth 3 must inherit depth 2, not depth 1"
+        );
+        let g = |i: usize| t.list_glyphs.bullet[i].as_ref().unwrap().as_plain();
+        assert_eq!(g(0), "a");
+        assert_eq!(g(1), "b");
+        assert_eq!(g(2), "b");
+
+        // And a theme that states ONLY the deepest tier leaves the two above it on the
+        // base — the fallback runs one way, downward.
+        let mut only3 = Themes::builtin();
+        only3.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nlist_marker = \"#111111\"\nlist_marker_3 = \"#333333\"\n",
+            )
+            .unwrap(),
+        );
+        let t3 = only3.resolve("sepia");
+        assert_eq!(
+            crate::palette::to_hex(t3.list_bullet_colors[0].unwrap()),
+            "#111111"
+        );
+        assert_eq!(
+            crate::palette::to_hex(t3.list_bullet_colors[1].unwrap()),
+            "#111111"
+        );
+        assert_eq!(
+            crate::palette::to_hex(t3.list_bullet_colors[2].unwrap()),
+            "#333333"
+        );
+    }
+
+    /// TDD 18.26 — the depth keys are BULLET-only. A nested ordered numeral and a nested
+    /// task box keep the shared `list_marker`, which is the asymmetry the un-suffixed
+    /// key's kind-blindness makes easy to get wrong in the other direction.
+    #[test]
+    fn the_depth_keys_do_not_reach_the_ordered_or_task_markers() {
+        let mut themes = Themes::builtin();
+        themes.merge_over(
+            Themes::parse(
+                "[themes.sepia]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n",
+            )
+            .unwrap(),
+        );
+        let t = themes.resolve("sepia");
+        // The shared key is untouched by the depth keys — every non-bullet marker reads
+        // it at every depth.
+        assert_eq!(crate::palette::to_hex(t.list_marker.unwrap()), "#111111");
+    }
+
+    /// The `take!`-list guard, six keys' worth: a user file's depth override must merge
+    /// over a shipped theme. Omitting a key there compiles, leaves every built-in theme
+    /// working, and silently drops EVERY user override.
+    #[test]
+    fn a_user_file_can_override_a_bullet_depth_key() {
+        let mut themes = Themes::builtin();
+        themes.merge_over(
+            Themes::parse(
+                "[themes.terminal]\nlist_marker_2 = \"#abcdef\"\n\
+                 list_bullet_glyph_2 = \"·\"\nlist_bullet_glyph_3 = \"‧\"\n",
+            )
+            .unwrap(),
+        );
+        let t = themes.resolve("terminal");
+        assert_eq!(
+            crate::palette::to_hex(t.list_bullet_colors[1].expect("merged")),
+            "#abcdef"
+        );
+        assert_eq!(t.list_glyphs.bullet[1].as_ref().unwrap().as_plain(), "·");
+        assert_eq!(t.list_glyphs.bullet[2].as_ref().unwrap().as_plain(), "‧");
+        // Terminal's own depth-1 glyph survives the override of the deeper tiers.
+        assert_eq!(t.list_glyphs.bullet[0].as_ref().unwrap().as_plain(), "▸");
+    }
+
+    /// TDD 18.8 / 18.17 — a decoration LINE (a heading rule, a link underline, a strike)
+    /// is a graphic, not text, so it answers to WCAG's 3:1 non-text floor rather than
+    /// body prose's 4.5:1. Stated separately from the ink check below because reading a
+    /// rule at the text floor would rule out every legitimate hairline accent, and a
+    /// rule nobody can see is the other failure.
+    #[test]
+    fn every_theme_decoration_line_clears_the_non_text_contrast_floor() {
+        let themes = Themes::builtin();
+        for (id, _name, _sym) in themes.chooser_list() {
+            let t = themes.resolve(&id);
+            let Some(bg) = t.background else { continue };
+            // Every decoration LINE a theme may colour. The heading rule's overline has
+            // no colour key at all (see `HeadingRule`), so it is absent here by
+            // construction — its ink is the heading's, already held to the stricter text
+            // floor below.
+            for (what, ink) in [
+                ("heading rule", t.heading_rule.underline_rgba),
+                ("link underline", t.link_underline_rgba),
+                ("strikethrough", t.strikethrough_rgba),
+            ] {
+                let Some(ink) = ink else { continue };
+                let c = crate::palette::contrast(ink, bg);
+                assert!(
+                    c >= 3.0,
+                    "theme {id}: {what} {} on page {} is {c:.2}:1, below the \
+                     3:1 non-text floor",
+                    crate::palette::to_hex(ink),
+                    crate::palette::to_hex(bg)
+                );
+            }
+        }
+    }
+
+    /// TDD 18.8 / 18.21 — the legibility floor reaches HEADING ink, per level.
+    ///
+    /// A heading is text, so it takes the same 4.5:1 floor body prose does, and the
+    /// resolved per-level array is what the tag, the table header and the HTML sink all
+    /// read — so asserting on it covers the singular `heading_color` too (a level the
+    /// theme left unset carries that value here). Before 18.21 nothing checked heading
+    /// ink at all: `heading_color` could be set to anything and only the body pair was
+    /// gated, which is exactly the "warm it up a bit" hole 18.8 exists to close.
+    #[test]
+    fn every_theme_heading_contrast_clears_the_legibility_floor() {
+        let themes = Themes::builtin();
+        for (id, _name, _sym) in themes.chooser_list() {
+            let t = themes.resolve(&id);
+            let Some(bg) = t.background else {
+                continue; // derives from the desktop; the desktop owns its own contrast
+            };
+            for (level, ink) in t.heading_colors.iter().enumerate() {
+                // Unset ⇒ the heading inherits the body foreground, which the body
+                // check above already gates.
+                let Some(ink) = ink else { continue };
+                // Heading text sits ON its band where the theme states one (TDD 18.25),
+                // so the pair that decides legibility is ink-on-BAND, not ink-on-page —
+                // a band dark enough to look good behind a pale heading is exactly the
+                // kind of change that would sail past a page-only check.
+                let behind = t.heading_band.fills[level].unwrap_or(bg);
+                let c = crate::palette::contrast(*ink, behind);
+                assert!(
+                    c >= 4.5,
+                    "theme {id}: h{} ink {} on {} is {c:.2}:1, below WCAG AA",
+                    level + 1,
+                    crate::palette::to_hex(*ink),
+                    crate::palette::to_hex(behind)
+                );
+            }
         }
     }
 
@@ -1196,6 +2578,63 @@ mod tests {
             crate::palette::to_hex(themes.resolve("sepia").list_marker.expect("merged")),
             "#abcdef"
         );
+    }
+
+    /// TDD 18.19 / 18.2 — the new chip keys default to absent, so the hardcoded
+    /// amber/white fallback at the draw site is unaffected until a theme opts in.
+    #[test]
+    fn annotation_chip_keys_default_to_absent() {
+        let system = Themes::builtin().resolve(SYSTEM_ID);
+        assert_eq!(system.annotation_chip_bg, None);
+        assert_eq!(system.annotation_chip_fg, None);
+        assert_eq!(system.sprites.annotation_chip, None);
+    }
+
+    #[test]
+    fn a_user_file_can_theme_the_annotation_chip_colours() {
+        let mut themes = Themes::builtin();
+        themes.merge_over(
+            Themes::parse(
+                "[themes.system]\nannotation_chip_bg = \"#112233\"\nannotation_chip_fg = \"#ffffff\"\n",
+            )
+            .unwrap(),
+        );
+        let sys = themes.resolve(SYSTEM_ID);
+        assert_eq!(
+            crate::palette::to_hex(sys.annotation_chip_bg.expect("set")),
+            "#112233"
+        );
+        assert_eq!(
+            crate::palette::to_hex(sys.annotation_chip_fg.expect("set")),
+            "#ffffff"
+        );
+    }
+
+    /// `rewrite_sprite_paths` is the ONE filesystem-touching step for a sprite key —
+    /// proves it accepts a contained relative reference and drops one that fails
+    /// `crate::sprite::resolve`'s checks, independent of the XDG search path.
+    #[test]
+    fn rewrite_sprite_paths_resolves_a_contained_reference_and_drops_a_bad_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("chip.png"), b"not a real png, just bytes").unwrap();
+
+        let mut good = ThemeSpec {
+            sprite_annotation_chip: Some("chip.png".to_string()),
+            ..Default::default()
+        };
+        rewrite_sprite_paths(&mut good, dir.path());
+        // `resolve` only checks extension/containment/size, not that the bytes
+        // decode — decoding is `sprite::texture`'s job, exercised in `sprite.rs`.
+        let got = good.sprite_annotation_chip.expect("resolved");
+        assert!(std::path::Path::new(&got).is_absolute());
+        assert!(got.ends_with("chip.png"));
+
+        let mut bad = ThemeSpec {
+            sprite_annotation_chip: Some("../escape.png".to_string()),
+            ..Default::default()
+        };
+        rewrite_sprite_paths(&mut bad, dir.path());
+        assert_eq!(bad.sprite_annotation_chip, None);
     }
 
     /// A user may also override what the app hardcodes, by overriding

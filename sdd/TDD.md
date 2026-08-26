@@ -19,7 +19,7 @@
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.9 |
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.53 |
-| 18 | Preview reading themes | 18.1 – 18.16 |
+| 18 | Preview reading themes | 18.1 – 18.26 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.18 |
 | 21 | Crash forensics | 21.1 – 21.12 |
@@ -2262,6 +2262,56 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** the selected text is drawn in a colour the THEME owns — never the desktop's selected-text ink — and its contrast against that theme's selection fill clears the same legibility floor as body text (18.8), on both the body and the in-cell path
 - **And** a theme may state that ink outright (`selection_fg`); omitted, it is derived from the page and its own ink, so a theme that states only a fill still cannot strand its selected text
 - **And** under System, where no page is stated, both paths keep the desktop's own selection colours together, exactly as before themes existed (18.2)
+
+### 18.18 A table cell and the export sinks render themed emphasis identically to the body
+- **Given** a document with bold, superscript, or subscript both in body prose and inside a table cell, under a theme setting `bold_weight` and `supsub_scale`
+- **When** it is rendered, and separately exported to PDF and HTML
+- **Then** the table cell matches the body exactly, and the PDF's Pango markup carries the same weight/size/rise the body tag applied — closing the prerequisite `sdd/PLAN.preview-decoration.md` names for every later theme key
+
+### 18.19 A theme can restyle the annotation chip by colour or by sprite
+- **Given** a theme setting `annotation_chip_bg`/`annotation_chip_fg`, or a `sprite_annotation_chip` file (theme-relative, validated the same way every sprite key is — no absolute path, no traversal, symlink-contained, allowlisted extension, size-capped)
+- **When** a document with a CriticMarkup comment is rendered
+- **Then** the gutter chip shows the theme's colours, or the sprite in place of the flat fill — with the overflow-count numeral still legible on top
+- **And** under System, where no chip key is set, the chip stays the exact hardcoded amber/white it always was (18.2)
+- **And** the HTML export's claim-back-link takes the same colours (or the sprite, embedded so the artefact stays self-contained); the PDF export's comment note takes the same colours — a sprite has no expression in the PDF's inline Pango markup, which is a stated scope limit, not a silent gap
+
+### 18.20 A broken image is never left on desktop colours
+- **Given** a document referencing a missing or refused image, under a non-System reading theme
+- **When** it is rendered
+- **Then** the placeholder's fill and border resolve from the theme, closing the one construct 18.4 currently misses
+
+### 18.21 A theme can give headings per-level colour and face
+- **Given** a theme setting distinct colours and/or faces for h1–h5
+- **When** a document with headings at every level is rendered
+- **Then** each level shows its own colour/face; a link inside a heading still wins over it (existing priority); and a level the theme leaves unset falls back to the theme's single `heading_color`/`heading_font`, unchanged from today
+
+### 18.22 A theme can decorate a heading with a rule and control the space above it
+- **Given** a theme setting a heading overline and/or underline rule, and `heading_space_above`
+- **When** headings are rendered
+- **Then** the rule(s) appear on the stated side and the stated space above is honoured — closing the asymmetry where only space-*below* existed before
+
+### 18.23 A theme can style strikethrough and link underline independently of colour
+- **Given** a theme setting `strikethrough_rgba`, and a link-underline style (`none`/`double`/`wavy`) with its own colour
+- **When** struck-through text and a link are rendered
+- **Then** both apply without perturbing bold, italic, or mark, which stay themed exactly as today
+
+### 18.24 A theme can replace list markers with a glyph string, or a sprite
+- **Given** a theme setting bullet/ordered/task glyphs (sanitised, length-clamped), or bullet/ordered/task sprite files (theme-relative, validated the same way every sprite key is — no absolute path, no traversal, symlink-contained, allowlisted extension, size-capped)
+- **When** a document with all three list kinds is rendered, and separately exported to HTML and PDF
+- **Then** the gutter draws the glyph, or the sprite, in place of the dot/numeral/checkbox
+- **And** the same glyph reaches the HTML export HTML-escaped, and the PDF export Pango-escaped; a sprite reaches the HTML export embedded (the artefact stays self-contained) and the PDF export drawn as an image — one key, three renderings (TDD §25's completeness rule)
+
+### 18.25 A theme can band a heading, with a fill or a sprite
+- **Given** a theme setting a heading band (fill, and optionally radius/gradient within the closed decoration vocabulary), or a sprite image as the band's fill (theme-relative, validated the same way every sprite key is)
+- **When** a heading — including one that soft-wraps — is rendered, and separately exported to HTML and PDF
+- **Then** the band spans the stated extent and survives soft-wrap as one continuous band, whichever fill it carries
+- **And** the band appears in both export sinks, the PDF resolving at System-light per 25.9, a sprite embedded in the HTML sink and drawn as an image in the PDF sink
+
+### 18.26 A theme can vary a bullet's colour, glyph and sprite by nesting depth
+- **Given** a theme setting a bullet colour/glyph/sprite for depth 1, and distinct overrides for depth 2 and depth 3-and-deeper (each optional, unset falling back to the shallower depth)
+- **When** a document with a bullet list nested three-or-more levels deep is rendered, and separately exported to HTML and PDF
+- **Then** each depth paints with its own resolved colour/glyph/sprite in the gutter
+- **And** it reaches the HTML export via a depth-scoped `::marker` selector, and the PDF export via a themed colour on the marker text — closing a pre-existing gap where the PDF sink coloured no marker at all, of any kind, at any depth
 
 ## 19. Local document-link navigation
 

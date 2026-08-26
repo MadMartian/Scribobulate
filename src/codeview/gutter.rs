@@ -23,9 +23,10 @@
 //! the widget foreground (research §7 — deliberately libadwaita-free, no accent tint).
 
 use crate::renderer::ListMarkerKind;
-use crate::theme::Metrics;
+use crate::theme::{ListGlyphs, MarkerGlyph, Metrics, Sprites};
 use gtk::prelude::*;
 use gtk::{cairo, gdk, graphene};
+use std::path::Path;
 
 /// The per-level step / inter-item gap for one paint, as floats.
 ///
@@ -118,6 +119,93 @@ pub(crate) struct MarkerPaint<'a> {
     pub fg: &'a gdk::RGBA,
     pub hover: Option<&'a gdk::RGBA>,
     pub metrics: &'a Metrics,
+    /// The item's 1-based nesting depth. Only the BULLET's decoration varies by it
+    /// (TDD 18.26); it rides in this bundle rather than as an argument for the reason
+    /// the bundle exists at all — a new paint input must not change the call arity.
+    pub depth: usize,
+    /// Glyph strings standing in for the drawn markers (TDD 18.24); empty on a theme
+    /// that states none, which is every shipped theme unless one opts in.
+    pub glyphs: &'a ListGlyphs,
+    /// Sprite files standing in for the drawn markers. A sprite outranks a glyph for
+    /// the same marker — see [`marker_substitute`].
+    pub sprites: &'a Sprites,
+}
+
+/// What actually gets painted in a marker's column: the theme's sprite, the theme's
+/// glyph, or the primitive this gutter has always drawn.
+///
+/// Kept as its own value, from a PURE function, because the precedence is the whole of
+/// the decision and it is worth being able to test without a display — the paint site
+/// then only has to know how to render each of the three.
+#[derive(Debug, PartialEq)]
+pub(crate) enum MarkerSubstitute<'a> {
+    Sprite(&'a Path),
+    Glyph(&'a MarkerGlyph),
+    /// No substitution: the bullet arc, the ordered numeral, or the drawn checkbox.
+    Drawn,
+}
+
+/// Resolve what to paint for `kind` under this theme's glyph and sprite keys.
+///
+/// **A sprite outranks a glyph for the same marker.** Both are opt-in and independent,
+/// so a theme may state either or both; when it states both, the answer is the one it
+/// paid more for — a sprite carries a file, its validation and a per-size resample,
+/// where a glyph is a string. Stating that here, once, is what keeps the gutter, the
+/// HTML sink and the PDF sink from each inventing their own precedence.
+///
+/// The task marker's two states resolve independently, so a theme that states only the
+/// checked glyph gets a drawn empty box beside a ticked glyph — deliberate, and visible
+/// the moment it is rendered, rather than a rule that silently suppresses one of them.
+pub(crate) fn marker_substitute<'a>(
+    kind: &ListMarkerKind,
+    depth: usize,
+    glyphs: &'a ListGlyphs,
+    sprites: &'a Sprites,
+) -> MarkerSubstitute<'a> {
+    // Only the BULLET varies by nesting depth (TDD 18.26); `depth_tier` is the one
+    // definition of which tier a depth reads, shared with both export sinks. An ordered
+    // numeral at depth 3 is still a numeral and a task box is still a box, so those arms
+    // ignore it — which is why the tier index is applied here rather than by the caller
+    // picking a value: the decision about WHICH kinds are depth-varying belongs with the
+    // decision about which key wins.
+    let tier = crate::theme::depth_tier(depth);
+    let (sprite, glyph) = match kind {
+        ListMarkerKind::Bullet => (&sprites.list_bullet[tier], &glyphs.bullet[tier]),
+        ListMarkerKind::Ordered(_) => (&sprites.list_ordered, &glyphs.ordered),
+        ListMarkerKind::Task { checked: true, .. } => {
+            (&sprites.list_task_checked, &glyphs.task_checked)
+        }
+        ListMarkerKind::Task { checked: false, .. } => (&sprites.list_task, &glyphs.task),
+    };
+    if let Some(p) = sprite {
+        return MarkerSubstitute::Sprite(p.as_path());
+    }
+    if let Some(g) = glyph {
+        return MarkerSubstitute::Glyph(g);
+    }
+    MarkerSubstitute::Drawn
+}
+
+/// The ink one marker is drawn in: the BULLET's depth-tiered colour where the theme
+/// states one (TDD 18.26), the shared `list_marker` otherwise, and `None` where the
+/// theme states neither — which the caller answers with the widget foreground, the
+/// pre-theming default.
+///
+/// Pure, so the depth fold's *consumption* is testable without a display. The fold
+/// itself happened once in `Theme::resolve`; this only picks the tier and answers the
+/// kind question, which is the same shape [`marker_substitute`] answers for the glyph
+/// and the sprite. The PDF sink has a four-line twin of this over the same array,
+/// because its marker kind is a `(task, start)` pair rather than a [`ListMarkerKind`] —
+/// the FOLD is shared, the kind dispatch cannot be.
+pub(crate) fn marker_ink(
+    kind: &ListMarkerKind,
+    depth: usize,
+    theme: &crate::theme::Theme,
+) -> Option<gdk::RGBA> {
+    match kind {
+        ListMarkerKind::Bullet => theme.list_bullet_colors[crate::theme::depth_tier(depth)],
+        _ => theme.list_marker,
+    }
 }
 
 /// Draw one list item's marker in the gutter left of `content_margin`, aligned to the
@@ -149,6 +237,51 @@ pub(crate) fn draw_list_marker(
     // Bullets/checkboxes center in the band half a step left of the content margin
     // (Word's hanging-indent gutter is half the per-level step).
     let col_cx = content_margin - (step_f(m) / 2.0) * z;
+
+    // A theme may stand a sprite or a glyph in for any of the three drawn primitives
+    // (TDD 18.24). Both are substitutions WITHIN this existing marker paint, not a new
+    // paint vector: the gutter already runs for every render, so nothing here touches
+    // `snapshot_layer`'s early-return gate and there is no new span vector to install.
+    match marker_substitute(kind, paint.depth, paint.glyphs, paint.sprites) {
+        MarkerSubstitute::Sprite(path) => {
+            // The SAME box the checkbox uses — themed step, zoom-correct, already the
+            // marker column's shared geometry — so bullet, numeral and checkbox sprites
+            // all land in one place rather than each inventing a size.
+            let rect = checkbox_rect(content_margin, line, zoom, m);
+            let (w, h) = (rect.width().round() as i32, rect.height().round() as i32);
+            // Pre-resampled to EXACTLY the drawn size with nearest-neighbour. GSK 4.6's
+            // `append_texture` filters linearly with no filter choice (the variant that
+            // takes one is 4.10, above this floor and a link/runtime failure if reached
+            // — GTK4Rs/AP-114), so handing it an already-correct texture is the only way
+            // pixel art stays crisp at any zoom. `sprite::scaled` caches per size.
+            if let Some(tex) = crate::sprite::scaled(path, w, h) {
+                snapshot.append_texture(&tex, &rect);
+            }
+            return;
+        }
+        MarkerSubstitute::Glyph(glyph) => {
+            // CENTRED in the marker column, like the bullet — not right-aligned like the
+            // numeral it may be replacing. A glyph is a fixed shape rather than a
+            // variable-width ordinal, so there is no period to line up, and centring is
+            // what makes bullet/ordered/task glyphs agree with each other down the page.
+            //
+            // `create_pango_layout` takes PLAIN TEXT and parses no markup, which is why
+            // `as_plain()` is the right projection here and the only place it is (see
+            // `MarkerGlyph`). The layout uses the view's own CSS-zoomed font, so the
+            // glyph tracks the item text's size for free.
+            let layout = view.create_pango_layout(Some(glyph.as_plain()));
+            let (lw, lh) = layout.pixel_size();
+            snapshot.save();
+            snapshot.translate(&graphene::Point::new(
+                col_cx - lw as f32 / 2.0,
+                text_cy - lh as f32 / 2.0,
+            ));
+            snapshot.append_layout(&layout, fg);
+            snapshot.restore();
+            return;
+        }
+        MarkerSubstitute::Drawn => {}
+    }
 
     match kind {
         ListMarkerKind::Bullet => {
@@ -403,6 +536,176 @@ mod tests {
         assert_eq!(
             marker_gap_px(&m, 2.0),
             (m.list_item_gap as f32 * 2.0).round()
+        );
+    }
+}
+
+#[cfg(test)]
+mod substitute_tests {
+    use super::{marker_substitute, MarkerSubstitute};
+    use crate::renderer::ListMarkerKind;
+    use crate::theme::{ListGlyphs, Sprites, Themes};
+
+    fn task(checked: bool) -> ListMarkerKind {
+        ListMarkerKind::Task { checked, src: 0..1 }
+    }
+
+    /// TDD 18.24 / 18.2 — a theme that states nothing gets the drawn primitives, which
+    /// is what keeps System byte-identical.
+    #[test]
+    fn nothing_stated_means_the_drawn_marker() {
+        let (g, s) = (ListGlyphs::default(), Sprites::default());
+        for kind in [
+            ListMarkerKind::Bullet,
+            ListMarkerKind::Ordered(3),
+            task(false),
+            task(true),
+        ] {
+            assert_eq!(marker_substitute(&kind, 1, &g, &s), MarkerSubstitute::Drawn);
+        }
+    }
+
+    /// Each kind reads its OWN key — the failure this pins is a match arm that answers
+    /// one marker's question with another's, which renders plausibly and is wrong on
+    /// exactly the document that has more than one list kind in it.
+    #[test]
+    fn each_marker_kind_reads_its_own_glyph_and_the_task_states_are_separate() {
+        let mut themes = Themes::builtin();
+        themes.merge_over_for_test(
+            "[themes.marks]\nlist_bullet_glyph = \"b\"\nlist_ordered_glyph = \"o\"\n\
+             list_task_glyph = \"t\"\nlist_task_checked_glyph = \"c\"\n",
+        );
+        let t = themes.resolve("marks");
+        let plain = |k: &ListMarkerKind| match marker_substitute(k, 1, &t.list_glyphs, &t.sprites) {
+            MarkerSubstitute::Glyph(g) => g.as_plain().to_string(),
+            other => panic!("expected a glyph, got {other:?}"),
+        };
+        assert_eq!(plain(&ListMarkerKind::Bullet), "b");
+        assert_eq!(plain(&ListMarkerKind::Ordered(7)), "o");
+        assert_eq!(plain(&task(false)), "t");
+        assert_eq!(plain(&task(true)), "c");
+    }
+
+    /// A theme may state only ONE task state; the other keeps its drawn box. Deliberate
+    /// and visible, rather than a rule that silently suppresses the glyph it was given.
+    #[test]
+    fn one_task_state_may_be_stated_alone() {
+        let mut themes = Themes::builtin();
+        themes.merge_over_for_test("[themes.half]\nlist_task_checked_glyph = \"✔\"\n");
+        let t = themes.resolve("half");
+        assert!(matches!(
+            marker_substitute(&task(true), 1, &t.list_glyphs, &t.sprites),
+            MarkerSubstitute::Glyph(_)
+        ));
+        assert_eq!(
+            marker_substitute(&task(false), 1, &t.list_glyphs, &t.sprites),
+            MarkerSubstitute::Drawn
+        );
+    }
+
+    /// TDD 18.26 — the bullet's glyph and sprite vary by nesting depth, and the tier a
+    /// depth reads is the shared `depth_tier`. Depth 3 and anything deeper share a tier.
+    #[test]
+    fn a_bullet_reads_its_depth_tier_and_deeper_levels_share_the_last_one() {
+        let mut themes = Themes::builtin();
+        themes.merge_over_for_test(
+            "[themes.tiered]\nlist_bullet_glyph = \"1\"\nlist_bullet_glyph_2 = \"2\"\n\
+             list_bullet_glyph_3 = \"3\"\n",
+        );
+        let t = themes.resolve("tiered");
+        let at = |depth: usize| match marker_substitute(
+            &ListMarkerKind::Bullet,
+            depth,
+            &t.list_glyphs,
+            &t.sprites,
+        ) {
+            MarkerSubstitute::Glyph(g) => g.as_plain().to_string(),
+            other => panic!("depth {depth}: expected a glyph, got {other:?}"),
+        };
+        assert_eq!(at(1), "1");
+        assert_eq!(at(2), "2");
+        assert_eq!(at(3), "3");
+        // Three-and-deeper: a six-level list does not index past the last tier.
+        assert_eq!(at(6), "3");
+        assert_eq!(at(60), "3");
+    }
+
+    /// Depth is a BULLET question. A nested ordered numeral and a nested task box read
+    /// their own single-valued keys at every depth — the array is indexed only on the
+    /// arm that has one.
+    #[test]
+    fn depth_does_not_reach_the_ordered_or_task_markers() {
+        let mut themes = Themes::builtin();
+        themes.merge_over_for_test(
+            "[themes.tiered]\nlist_bullet_glyph_2 = \"deep\"\nlist_ordered_glyph = \"o\"\n\
+             list_task_glyph = \"t\"\n",
+        );
+        let t = themes.resolve("tiered");
+        for depth in [1usize, 2, 5] {
+            let ordered = marker_substitute(
+                &ListMarkerKind::Ordered(1),
+                depth,
+                &t.list_glyphs,
+                &t.sprites,
+            );
+            let task = marker_substitute(&task(false), depth, &t.list_glyphs, &t.sprites);
+            assert!(
+                matches!(ordered, MarkerSubstitute::Glyph(g) if g.as_plain() == "o"),
+                "depth {depth}: {ordered:?}"
+            );
+            assert!(
+                matches!(task, MarkerSubstitute::Glyph(g) if g.as_plain() == "t"),
+                "depth {depth}: {task:?}"
+            );
+        }
+    }
+
+    /// TDD 18.26 — the marker's INK by depth, and the two properties every consumer of
+    /// this fold depends on: a bullet reads its tier, everything else reads the shared
+    /// key at every depth.
+    #[test]
+    fn marker_ink_follows_the_bullets_depth_and_nothing_elses() {
+        let mut themes = Themes::builtin();
+        themes.merge_over_for_test(
+            "[themes.tiered]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n",
+        );
+        let t = themes.resolve("tiered");
+        let hex = |kind: &ListMarkerKind, depth: usize| {
+            crate::palette::to_hex(super::marker_ink(kind, depth, &t).expect("stated"))
+        };
+        assert_eq!(hex(&ListMarkerKind::Bullet, 1), "#111111");
+        assert_eq!(hex(&ListMarkerKind::Bullet, 2), "#222222");
+        // Depth 3 inherited depth 2, so the bullet stays on the deeper colour.
+        assert_eq!(hex(&ListMarkerKind::Bullet, 3), "#222222");
+        // …while a numeral and a checkbox stay on the shared key wherever they sit.
+        assert_eq!(hex(&ListMarkerKind::Ordered(2), 2), "#111111");
+        assert_eq!(hex(&task(true), 3), "#111111");
+
+        // A theme that states no marker colour at all resolves to `None`, which the
+        // caller answers with the widget foreground — the pre-theming default.
+        let bare = Themes::builtin().resolve(crate::theme::SYSTEM_ID);
+        assert!(super::marker_ink(&ListMarkerKind::Bullet, 2, &bare).is_none());
+    }
+
+    /// A SPRITE outranks a glyph for the same marker — stated once here so the gutter
+    /// and both export sinks cannot each invent their own precedence.
+    #[test]
+    fn a_sprite_outranks_a_glyph_for_the_same_marker() {
+        let mut themes = Themes::builtin();
+        themes.merge_over_for_test("[themes.both]\nlist_bullet_glyph = \"b\"\n");
+        let mut t = themes.resolve("both");
+        // Set the resolved path directly: `resolve` never touches the filesystem, and
+        // this test is about the PRECEDENCE, not about sprite validation (which
+        // `sprite.rs` owns and `rewrite_sprite_paths` exercises).
+        t.sprites.list_bullet[0] = Some(std::path::PathBuf::from("/x/bullet.png"));
+        assert!(matches!(
+            marker_substitute(&ListMarkerKind::Bullet, 1, &t.list_glyphs, &t.sprites),
+            MarkerSubstitute::Sprite(_)
+        ));
+        // …and the OTHER markers are untouched by it.
+        assert_eq!(
+            marker_substitute(&ListMarkerKind::Ordered(1), 1, &t.list_glyphs, &t.sprites),
+            MarkerSubstitute::Drawn
         );
     }
 }

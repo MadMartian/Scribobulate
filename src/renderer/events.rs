@@ -34,10 +34,19 @@ impl Renderer {
                             // the cell twin of the `TagName::Mark` body tag, Document
                             // Rendering CAM row 12), so `open` is a `Cow`; the rest
                             // are static Pango tags.
+                            // Superscript/highlight are theme-generated (TDD 18.18,
+                            // 18.6) — `open` is a `Cow` for exactly those two branches.
                             let (open, close): (std::borrow::Cow<str>, &str) = match script {
-                                Script::Superscript => ("<sup>".into(), "</sup>"),
-                                Script::Subscript => ("<sub>".into(), "</sub>"),
-                                Script::Strikethrough => ("<s>".into(), "</s>"),
+                                Script::Superscript => {
+                                    (super::superscript_open().into(), super::SUPERSCRIPT_CLOSE)
+                                }
+                                Script::Subscript => {
+                                    (super::subscript_open().into(), super::SUBSCRIPT_CLOSE)
+                                }
+                                Script::Strikethrough => {
+                                    let (open, close) = super::strike_tags();
+                                    (open.into(), close)
+                                }
                                 Script::Highlight => (super::mark_open().into(), super::MARK_CLOSE),
                                 Script::None => ("".into(), ""),
                             };

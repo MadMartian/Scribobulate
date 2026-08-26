@@ -59,8 +59,20 @@ supsub_scale     = 0.72
 superscript_rise = 4              # points, up
 subscript_rise   = -2             # points, down
 
+# Decoration lines the app draws today — i.e. none of them, on either side of a
+# heading. Stated here rather than omitted because [themes.system] is the register of
+# what the app would otherwise hardcode, and "no heading rule" IS the hardcoded answer.
+# Vocabulary: "none" | "single" | "double" | "wavy"; the OVERLINE has only none/single
+# (Pango's attribute does), so a bolder value there is clamped to a single line.
+heading_overline  = "none"
+heading_underline = "none"
+link_underline    = "single"   # what the body `link` tag has always drawn
+
 # Decoration geometry that is literal in the source today (design-time px @ zoom 1.0).
 heading_space_below  = [4, 4, 2, 2, 2]  # h1..h5 space below the heading line
+heading_space_above  = [0, 0, 0, 0, 0]  # h1..h5 space ABOVE it — zero, because the
+                                        # heading tags set no pixels_above_lines before
+                                        # this key existed
 blockquote_bar_width = 3             # the quote's left accent bar
 blockquote_text_gap  = 10            # bar → quoted text
 list_step            = 28            # per-nesting-level list indent
@@ -129,6 +141,50 @@ font_family   = 'Jura, "Exo 2", "Chakra Petch", Cantarell, "Noto Sans", "Liberat
 # fallbacks; generic-terminated. `apt install fonts-orbitron`? — not packaged on Debian,
 # so on a stock box headings fall through to Exo 2/Jura/sans like the body.
 heading_font  = 'Orbitron, Michroma, Jura, "Exo 2", sans-serif'
+# PER-LEVEL heading overrides. Five slots — h1 · h2 · h3 · h4 · h5-and-deeper — and an
+# EMPTY slot means "use the single heading_color/heading_font above", which is why only
+# the first entry is filled: the h1 alone takes the signature neon magenta (5.59:1 on
+# this page) and every deeper level stays sunset-gold, so the document gains a title
+# colour without turning into a rainbow. The face override is the same idea one notch
+# further: Michroma is the wider, more monumental of the two outrun display faces, which
+# reads well at h1's 2.2x and badly at h4's 1.2x — on a stock box neither is installed
+# and both stacks fall through to Jura/Exo 2 identically.
+heading_colors = ["#ff3caf", "", "", "", ""]
+heading_fonts  = ['Michroma, Orbitron, Jura, sans-serif', "", "", "", ""]
+# A neon HORIZON under every heading — the one outrun motif a text attribute can
+# actually draw, and the cheapest real flare available: `underline` on a heading is a
+# Pango tag property the preview never set before. Magenta rather than the heading's own
+# gold so the line reads as furniture rather than as part of the letterforms (5.59:1 on
+# this page — well clear of the 3:1 floor a non-text graphic answers to).
+#
+# The rule is BELOW rather than above because that is the side a theme can colour:
+# `heading_overline` exists and is drawn in the heading's own ink, and there is no
+# `heading_overline_rgba` key, because GTK 4.6 double-frees a run carrying both a
+# coloured overline and a coloured underline (see src/theme.rs, `HeadingRule`).
+heading_underline      = "single"
+heading_underline_rgba = "#ff3caf"
+# A BAND behind the top two heading levels — the outrun sunset behind the title, and the
+# first decoration in the vocabulary that is a drawn thing in its own right rather than a
+# property of something already painted. Per level, and only h1/h2 are stated: banding
+# every level turns a document into a stack of stripes, and "band the title" is the want.
+# The gradient runs from each level's own fill down to the deep indigo of the page, so the
+# band dissolves into the page instead of ending on a hard edge. Both fills clear the
+# heading INK against them (the ink is checked against the band, not the page, wherever a
+# band exists — see theme.rs).
+heading_band_bg          = ["#2b1152", "#221046", "", "", ""]
+heading_band_gradient_to = "#1a1033"
+heading_band_radius      = 6
+# The outrun pairing, applied to links and to struck text: cyan ink over a magenta line,
+# and a magenta strike that reads as a deliberate mark rather than as the lavender body
+# ink with a scratch through it. The link underline's colour is stated INDEPENDENTLY of
+# the link's own colour — that separation is the point of the key; a theme that wants
+# them to match simply omits it.
+link_underline_rgba = "#ff3caf"
+strikethrough_rgba  = "#ff3caf"
+# …and room for it to sit in. A rule flush under the previous paragraph looks like that
+# paragraph's underline, so the space above is part of the decoration, not a separate
+# taste choice; it tapers with the level exactly as heading_space_below does.
+heading_space_above   = [18, 14, 10, 8, 8]
 syntect_theme = "base16-eighties.dark"   # a literal 80s palette for fenced code
 
 # Neon highlights — the amber/yellow defaults are wrong on a neon-dark page, and an
@@ -199,6 +255,23 @@ heading_color = "#f6e94f"   # lemon headings — 12.8:1, the palette's brightest
                             # darkest, which is the most contrast the palette can offer
 link          = "#61c7c9"   # turquoise links — 8.1:1
 list_marker   = "#fb6f92"   # hot-pink bullets/numerals/checkboxes — 6.0:1
+
+# A BAND behind h1/h2 (TDD 18.25) — only the top two, same restraint Synthwave uses:
+# banding every level turns a document into a stack of stripes. Both fills are
+# swatches already vetted elsewhere in this theme, so a band introduces no new hue:
+# h1 takes GRAPE — otherwise the one swatch with no role on this page (see the
+# luminance table above) — and h2 reuses the exact hot-pink SHADE `table_head_bg`
+# already stands on, so a heading banner and a table header read as the same
+# surface. Lemon ink clears 4.5:1 on both (7.00:1, 6.30:1) — the singular
+# `heading_color` above is what the automated floor checks here since this theme
+# has no per-level override. The gradient is safe to fade all the way to the PAGE,
+# unlike a light theme would be: Candy's page is dark (#101a4d), so lemon's contrast
+# only ever improves along the gradient (12.8:1 at the page end) — the opposite risk
+# a light-page theme has to guard against.
+heading_band_bg          = ["#6c2a92", "#9e1449", "", "", ""]
+heading_band_gradient_to = "#101a4d"
+heading_band_radius      = 8
+
 font_family   = 'Comfortaa, Quicksand, Dosis, Cantarell, "Noto Sans", sans-serif'
 heading_font  = 'Comfortaa, "M PLUS Rounded 1c", Quicksand, Dosis, sans-serif'
 syntect_theme = "base16-ocean.dark"
@@ -272,6 +345,16 @@ accent        = "#00aaaa"   # ANSI 6 cyan base (link/bar/selection overridden be
 link          = "#55ffff"   # ANSI 14 bright cyan links
 heading_color = "#ffff55"   # ANSI bright yellow headings (+ table header text)
 list_marker   = "#55ff55"   # ANSI 10 bright green — the phosphor-prompt bullet/numeral/checkbox
+# GLYPH markers, in place of the drawn dot/numeral/checkbox — the one theme where a
+# terminal's own furniture IS the look. Note the ordered glyph replaces the NUMERAL, so
+# a numbered list here reads as a run of prompts rather than as 1., 2., 3.: that is the
+# point of a terminal theme and it is why the key is inert unless a theme asks for it.
+# Both task states are stated, because an unstated one keeps the drawn box and a glyph
+# tick beside a drawn box reads as a bug rather than a choice.
+list_bullet_glyph       = "▸"
+list_ordered_glyph      = "$"
+list_task_glyph         = "[ ]"
+list_task_checked_glyph = "[x]"
 # JetBrains Mono is packaged on Debian AND Fedora; Share Tech Mono is the retro-CRT
 # aspirational face; DejaVu Sans Mono is the universal fallback. Generic-terminated.
 font_family   = '"JetBrains Mono", "Share Tech Mono", "DejaVu Sans Mono", monospace'
@@ -386,3 +469,118 @@ mark_fg         = "#A9CE99"   # light green ink for marked text — 3.70:1 on th
 # omitted and therefore inherited from [themes.system].
 list_item_gap = 10
 rule_space    = 6
+
+# ── Pixel Quest ──────────────────────────────────────────────────────────────────
+# A bright, cheerful arcade-platformer reading theme: dark ink on a daylight sky-blue
+# page, playful rounded type, and level-title BANDS behind the top two heading levels
+# — the first theme to lean on every key `sdd/PLAN.preview-decoration.md` Phase 1/2
+# added (per-level heading colour/face, the heading band, glyph list markers, themed
+# strikethrough and a styled link underline). Deliberately GENERIC: no franchise
+# names, no reproduced character/block art, no image sprites at all — every
+# decoration here is a colour, a font stack, or a Unicode glyph, which is what keeps
+# it clear of the copyrighted-idiom trap this plan's own deleted spike walked into
+# (see the plan's header note — that spike is not revived, and this theme is an
+# independent design, not a sanitised copy of it).
+[themes.pixelquest]
+name       = "Pixel Quest"
+symbol     = "🕹️"
+background = "#cdeefb"   # daylight sky blue
+foreground = "#17263b"   # near-navy ink — 12.51:1 on the page (WCAG AAA)
+accent     = "#b23a2e"   # warm brick-red — seeds blockquote_bar/selection where not overridden below
+link       = "#0f5b33"   # forest green — 6.71:1
+
+# Rounded, friendly display faces — illegible as body text, exactly what a heading
+# wants. Neither is packaged on a stock Linux box; both stacks fall through to the
+# same rounded sans the body uses, so the theme still reads as "playful" with zero
+# fonts installed. Generic-terminated.
+font_family  = 'Quicksand, "Baloo 2", Nunito, Cantarell, "Noto Sans", sans-serif'
+heading_font = 'Fredoka, "Baloo 2", Quicksand, Cantarell, "Noto Sans", sans-serif'
+
+# PER-LEVEL heading colour/face (TDD 18.21). h1 takes its own bold display face
+# ("Titan One"/"Luckiest Guy" — aspirational arcade-title faces, falling through to
+# the heading_font stack above where absent); h2/h3 take their own inks; h4 and h5
+# fall back to the singular heading_color below (also the table header's ink), so
+# the hierarchy has four distinct voices, not five competing ones.
+heading_color  = "#7a1414"                                    # h4/h5 + table header text — 8.89:1 on the page
+heading_colors = ["#ffd400", "#fff3c4", "#0e3e86", "", ""]     # h1 gold, h2 cream, h3 deep blue
+heading_fonts  = ['"Titan One", "Luckiest Guy", sans-serif', "", "", "", ""]
+
+# A level-title BAND behind h1/h2 (TDD 18.25) — solid fills only, deliberately no
+# `heading_band_gradient_to`: fading a dark band down to this page's bright sky blue
+# would drag the ink's contrast down wherever the gradient runs light, and nothing
+# here needs to prove that is safe to ship. Ink is checked against the BAND, not the
+# page, since heading text sits on it: h1 gold-on-indigo 8.68:1, h2 cream-on-brown
+# 10.19:1.
+heading_band_bg     = ["#2b2d6b", "#5b2e1c", "", "", ""]
+heading_band_radius = 10
+
+# A furniture-blue rule under every heading (band or not) and taper the space above
+# it with the level, same shape Synthwave uses. 3E6FA0 clears the 3:1 non-text floor
+# (4.32:1) — a decoration line is graphic, not text, so it answers to the lower bar.
+heading_underline      = "single"
+heading_underline_rgba = "#3e6fa0"
+heading_space_above    = [16, 12, 8, 6, 6]
+
+# Strikethrough and the link underline theme independently of their ink (TDD 18.23).
+# A DOUBLE line under links, in a colour distinct from the green ink so the two read
+# as separate decisions rather than one blurred stroke; both clear 3:1 (4.87:1,
+# 4.01:1).
+strikethrough_rgba  = "#b23a2e"
+link_underline      = "double"
+link_underline_rgba = "#c24a1e"
+
+# GLYPH list markers (TDD 18.24) — a diamond bullet and a star/filled-star task pair
+# read as "collectible" furniture without drawing anything. The ordered numeral is
+# left alone: overriding it discards the ordinal, and a numbered list staying
+# numbered is worth more here than one more glyph.
+# `list_marker` is ONE key for bullet, numeral AND task-checkbox alike (SCHEMA.md) —
+# there is no per-kind colour, so "the bullets" pop the whole marker family. A bright
+# primary blue, not the link's green: markers are furniture, links are content, and
+# giving them the same hue was reading as one undifferentiated family.
+list_marker              = "#2962ff"
+# DEPTH-TIERED bullets (TDD 18.26). A nested list reads as a route through the level,
+# and a sub-branch in a second colour is the cheapest way to say "this hangs off that".
+# Bright fire-engine red — 4.32:1 on this pale sky page, so it clears the 3:1 floor a
+# non-text graphic answers to with room to spare, and it is deliberately NOT the brick
+# `accent` (#b23a2e) the strikethrough uses or the dark `heading_color` (#7a1414): three
+# reds on one page have to be tellable apart, and value is what tells them.
+#
+# Depth 3 is left UNSET on purpose. It inherits depth 2's red — which is the half of the
+# fold worth having visible in a shipped theme, since "the next SHALLOWER tier, not the
+# base" is the part a reader would otherwise have to take on trust. A third distinct
+# shade was considered and dropped: the only unclaimed bright hue here is the gold, and
+# gold already means "level title / collectible" everywhere else in this theme.
+list_marker_2            = "#d32011"
+list_bullet_glyph        = "◆"
+list_task_glyph          = "☆"
+list_task_checked_glyph  = "★"
+
+blockquote_bar       = "#0e3e86"
+blockquote_bar_width = 4
+blockquote_text_gap  = 12
+list_item_gap        = 10
+rule                 = "#3e6fa0"
+rule_space           = 6
+table_border         = "#3e6fa0"   # a border carries no text, so it is free of the header-text trap
+                                    # below — `table_head_bg` is deliberately left UNSET (derived):
+                                    # this theme's singular `heading_color` (#7a1414, dark red) reads
+                                    # 1.15:1 on the indigo band colour, so reusing that band as the
+                                    # table header fill would have made the header text unreadable.
+                                    # Left to derive, the header fill stays legible against whatever
+                                    # ink the table actually uses.
+table_cell_radius    = 6
+table_border_width   = 2
+table_cell_padding_v = 6
+table_cell_padding_h = 12
+
+# A collectible-gold annotation chip — 10.65:1 for the overflow numeral on it.
+annotation_chip_bg = "#ffd400"
+annotation_chip_fg = "#17263b"
+
+# Four distinct hue families, one per overlay, same discipline every theme here
+# follows: green wash for annotations, gold wash for ==marks==, pale lavender for
+# every find match, undiluted orange for the current one.
+annotation_hl   = "#4fae6e_61"
+mark_bg         = "#ffd400_66"
+find_hl_all     = "#d9c6f5"
+find_hl_current = "#ff6a3d"

@@ -301,10 +301,42 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     // theme *did* underline (MEASURED on Breeze-dark: the two cell shapes disagreed
     // while the body agreed with neither — GTK4Rs/AP-102's "your art, not the user's" in
     // reverse). Three paths, one appearance, none of them the desktop's opinion.
+    //
+    // The underline's STYLE and COLOUR are themed too (TDD 18.23), from the same two
+    // keys the body `link` tag reads — so a `wavy` or a magenta underline reaches all
+    // three link shapes or none of them. `text-decoration-line` states `none` rather
+    // than being omitted when the theme turns the line off, because omitting it would
+    // hand the decision back to the desktop theme, which is the drift these rules exist
+    // to prevent.
     let link_fg = to_hex(palette.link_fg);
-    for selector in ["scribtable .cell link", "scribtable button.cell.link"] {
+    let link_line = match theme.link_underline.css_style() {
+        None => "none".to_string(),
+        // `solid` is CSS's own initial value, so stating it would only make these rules
+        // differ from the ones this sheet emitted before the key existed (TDD 18.2).
+        Some("solid") => "underline".to_string(),
+        Some(style) => format!("underline; text-decoration-style: {style}"),
+    };
+    let link_line_color = theme
+        .link_underline_rgba
+        .map(|c| format!(" text-decoration-color: {};", to_hex(c)))
+        .unwrap_or_default();
+    // THREE selectors, not two. `color` inherits to a `GtkLinkButton`'s caption label,
+    // but `text-decoration-*` does not — GTK registers those unhinherited and builds the
+    // Pango attributes from the node that OWNS the text, and a button owns none. So a
+    // rule on the button node styles nothing, the caption keeps whatever underline the
+    // desktop theme drew on the label, and a pure-link cell reads differently from the
+    // mixed cell beside it. MEASURED on a driven render (a wavy green underline in body
+    // prose and in a mixed cell, a solid cyan one in the pure-link cell) — and invisible
+    // to any test that asserts on the generated rule TEXT rather than on the pixels,
+    // which is why this needed a look and not another assertion. The button rule stays:
+    // it is what the desktop theme's own `button.link` styling has to lose against.
+    for selector in [
+        "scribtable .cell link",
+        "scribtable button.cell.link",
+        "scribtable button.cell.link label",
+    ] {
         out.push_str(&format!(
-            "{selector} {{ color: {link_fg}; text-decoration-line: underline; }}\n"
+            "{selector} {{ color: {link_fg}; text-decoration-line: {link_line};{link_line_color} }}\n"
         ));
     }
 
@@ -326,6 +358,22 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     out.push_str(&format!(
         ".scrib-image-sel {{ background-color: {}; border-radius: 3px; }}\n",
         rgba_css(palette.selection_bg, 0.40)
+    ));
+
+    // ── the broken-image placeholder ──────────────────────────────────────────
+    //
+    // TDD 18.20. Unreachable by mechanism A/B (it is a plain `GtkImage`, no tag and
+    // no drawn decoration) and previously unreachable by C too — it carried no CSS
+    // class at all, so it sat on desktop colours under every theme (the hole TDD
+    // 18.4's "no grey island" claim had). Same treatment `export/html.rs`'s
+    // `.missing-image` already gives the export's own broken-image marker — a
+    // dashed border in the theme's `rule` colour — so the two renderings agree
+    // rather than one being themed and the other not.
+    out.push_str(&format!(
+        ".scrib-broken-image {{ border: 1px dashed {}; border-radius: 3px; \
+         padding: 4px; background-color: {}; }}\n",
+        to_hex(palette.rule),
+        rgba_css(palette.code_inline_bg, 0.60)
     ));
 
     // ── preview-floating cards ────────────────────────────────────────────────
@@ -469,6 +517,60 @@ mod tests {
     /// under Bedtime, that painted every selected glyph `#000000` on the themed fill.
     /// So the foreground is asserted here beside the background, and for the same
     /// parity reason: the two paths must agree on it too.
+    /// TDD 18.23 — a themed link underline reaches BOTH cell link shapes, and under a
+    /// theme that states neither key the rules are byte-identical to what they always
+    /// were (a solid underline, no stated colour).
+    ///
+    /// Both shapes are asserted because they are two different widgets — a mixed cell's
+    /// `GtkLabel` `link` node and a pure-link cell's `GtkLinkButton` — and a host theme
+    /// that decorates one and not the other is exactly what made two links in one table
+    /// look different before these rules existed.
+    #[test]
+    fn a_themed_link_underline_reaches_both_cell_link_shapes() {
+        // THREE selectors: a `GtkLinkButton`'s caption label needs its own, because
+        // `text-decoration-*` does not inherit from the button node the way `color`
+        // does. ⚠️ This assertion is over the generated rule TEXT, which is what it can
+        // reach — it CANNOT see whether the rule matched anything on screen, and the
+        // missing third selector was found by looking at a driven render, not here.
+        let prefixes = [
+            "scribtable .cell link",
+            "scribtable button.cell.link",
+            "scribtable button.cell.link label",
+        ];
+        let sys = css_for(crate::theme::SYSTEM_ID);
+        for prefix in prefixes {
+            let rule = sys
+                .lines()
+                .find(|l| l.starts_with(prefix))
+                .unwrap_or_else(|| panic!("no `{prefix}` rule:\n{sys}"));
+            assert!(rule.contains("text-decoration-line: underline;"), "{rule}");
+            assert!(!rule.contains("text-decoration-style"), "{rule}");
+            assert!(!rule.contains("text-decoration-color"), "{rule}");
+        }
+
+        let mut themes = Themes::builtin();
+        themes.merge_over_for_test(
+            "[themes.sepia]\nlink_underline = \"double\"\nlink_underline_rgba = \"#00ff00\"\n",
+        );
+        let theme = themes.resolve("sepia");
+        let palette = Palette::from_base(
+            theme.background.unwrap(),
+            theme.foreground.unwrap(),
+            theme.foreground.unwrap(),
+            theme.accent.unwrap(),
+            &theme,
+        );
+        let themed = theme_css(&theme, &palette);
+        for prefix in prefixes {
+            let rule = themed
+                .lines()
+                .find(|l| l.starts_with(prefix))
+                .unwrap_or_else(|| panic!("no `{prefix}` rule:\n{themed}"));
+            assert!(rule.contains("text-decoration-style: double;"), "{rule}");
+            assert!(rule.contains("text-decoration-color: #00ff00;"), "{rule}");
+        }
+    }
+
     #[test]
     fn cell_selection_matches_the_body_selection_and_gates_with_it() {
         let prop_of = |line: &str, prop: &str| {
@@ -557,7 +659,11 @@ mod tests {
             let c = theme_css(&theme, &palette);
             // The one key the body's `link` GtkTextTag is set from.
             let expected = crate::preview::css::to_hex(palette.link_fg);
-            for prefix in ["scribtable .cell link", "scribtable button.cell.link"] {
+            for prefix in [
+                "scribtable .cell link",
+                "scribtable button.cell.link",
+                "scribtable button.cell.link label",
+            ] {
                 let rule = c
                     .lines()
                     .find(|l| l.starts_with(prefix))
@@ -624,6 +730,7 @@ mod tests {
             "scribtable .cell-head",
             "separator.scrib-rule",
             ".scrib-image-sel",
+            ".scrib-broken-image",
             ".annotation-entry.scrib-preview-card",
             ".conflict-toast",
         ] {
@@ -648,6 +755,10 @@ mod tests {
                 "{id} lost its rule colour"
             );
             assert!(c.contains(".scrib-image-sel"), "{id} lost its image tint");
+            assert!(
+                c.contains(".scrib-broken-image"),
+                "{id} lost its broken-image styling"
+            );
         }
     }
 

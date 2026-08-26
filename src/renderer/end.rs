@@ -14,11 +14,28 @@ use pulldown_cmark::TagEnd;
 impl Renderer {
     pub(super) fn end_tag(&mut self, end: TagEnd) {
         match end {
-            TagEnd::Heading(_) => {
+            TagEnd::Heading(level) => {
                 // Compute this heading's GitHub-style anchor slug and record its
                 // position so `#slug` links can scroll here.
                 let slug = unique_slug(&slugify(&self.heading_text), &mut self.slug_seen);
                 self.headings.push((slug, self.heading_start));
+                // …and its EXTENT, for the drawn band (TDD 18.25). Recorded BEFORE the
+                // terminating newline, so the span covers the heading's content only —
+                // the same content-not-separator discipline the blockquote range below
+                // follows, and what keeps a band from reaching into the blank line after
+                // the heading.
+                self.heading_spans.push(crate::renderer::HeadingSpan {
+                    span: crate::span::BufferSpan::new(self.heading_start, self.end_offset()),
+                    // h5 and h6 share the deepest slot, the same fold `emit.rs` applies
+                    // when it picks the heading's tag.
+                    level_index: match level {
+                        pulldown_cmark::HeadingLevel::H1 => 0,
+                        pulldown_cmark::HeadingLevel::H2 => 1,
+                        pulldown_cmark::HeadingLevel::H3 => 2,
+                        pulldown_cmark::HeadingLevel::H4 => 3,
+                        _ => 4,
+                    },
+                });
                 self.newline();
                 self.heading = None;
             }
@@ -208,7 +225,7 @@ impl Renderer {
             TagEnd::Strong => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</b>");
+                        ts.cell_markup.push_str(super::BOLD_CLOSE);
                     }
                 } else {
                     self.inline_tags
@@ -227,8 +244,9 @@ impl Renderer {
             }
             TagEnd::Strikethrough => {
                 if self.in_table_cell() {
+                    let (_open, close) = super::strike_tags();
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</s>");
+                        ts.cell_markup.push_str(close);
                     }
                 } else {
                     self.inline_tags
@@ -238,7 +256,7 @@ impl Renderer {
             TagEnd::Superscript => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</sup>");
+                        ts.cell_markup.push_str(super::SUPERSCRIPT_CLOSE);
                     }
                 } else {
                     self.inline_tags
@@ -248,7 +266,7 @@ impl Renderer {
             TagEnd::Subscript => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</sub>");
+                        ts.cell_markup.push_str(super::SUBSCRIPT_CLOSE);
                     }
                 } else {
                     self.inline_tags

@@ -764,9 +764,20 @@ full account is ScrAP-225; the rule above is what stops it recurring.
   where an otherwise-hardcoded value lives, and it is an ordinary theme — **no key
   is system-only and no theme is second-class**. The rule covers geometry
   deliberately: a value that is hardcoded is hardcoded regardless of its type, and
-  exempting geometry would make this rule mean less than it says. Bounds: a theme
-  sets the *metric of a decoration*; it does not change *what is drawn* or *how
-  layout is computed* (a bounded/centred "measure" is layout behaviour, and out).
+  exempting geometry would make this rule mean less than it says. **Bounds (amended
+  2026-08-24 on ratification of [`PLAN.preview-decoration.md`](PLAN.preview-decoration.md)):
+  a theme selects from a closed vocabulary of decorations the engine already knows
+  how to draw, and states their appearance and metric. It does not describe new
+  drawing, and it does not change how layout is computed** (a bounded/centred
+  "measure" is layout behaviour, and out). Two invariants make the wider bound safe,
+  and a decoration that breaks either is out of the vocabulary regardless of how it
+  is spelled: the engine holds **no per-theme knowledge** (TDD 18.14 — a new theme
+  needs no code change), and every decoration is either **inert** (absent unless a
+  theme asks for it, leaving System byte-identical — TDD 18.2) or occupies space the
+  engine reserves for it **unconditionally**. An unset key means *not present*, never
+  *guess*. The previous, narrower bound — "a theme sets the metric of a decoration;
+  it does not change what is drawn" — is superseded; it is recorded here because
+  code and comments written under it are still correct, just no longer the limit.
   Themed geometry is a **design-time value at zoom 1.0**, applied through the
   existing `px(n) = (n * zoom).round()` path — pixel metrics are widget/Pango
   properties and do **not** follow the CSS `font-size` rule, so they must be scaled

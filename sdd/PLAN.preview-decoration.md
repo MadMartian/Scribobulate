@@ -1,9 +1,66 @@
 # Plan: Externalising preview *decoration* to the theme model
 
-**Status**: **SCOPED, NOT APPROVED** — 2026-08-18. Nothing implemented, no theme
-key added, no TDD rubric landed. This file is the scope answer to "how far could
-the theme model go?", and it stops at one decision only the operator can make
-(§ "The blocking decision").
+**Status**: **RATIFIED 2026-08-24 — approach 2, in implementation** on
+`feature/decor`. The operator ratified the closed decoration vocabulary after seeing a
+throwaway spike, and [`POLICY.md`](POLICY.md) § Architecture rules now carries the
+amended bound. § "The blocking decision" is kept as the record of what was settled and
+why, not as an open question.
+
+The spike itself is **deleted and must not be revived** — its art was drawn in a
+copyrighted idiom and is deliberately absent from this history. What it established is
+in § "What the spike measured"; what outlives it is in § "Technical details preserved".
+Nothing else about it is recoverable, by design.
+
+## Current status — read this first
+
+**Shipped, on `feature/decor`** (each independently tested/documented; see the
+commit and its TDD rubric, not this list, for detail):
+
+- **18.18** — `bold_weight`/`supsub_scale` reach the table cell and the PDF export,
+  not the body tag alone. Found the same gap in a second producer (`scan_scripts`)
+  while there and fixed it in the same commit.
+- **18.19** — annotation chip, themed by colour or by a sprite file. First
+  production use of `src/sprite.rs` (theme-relative resolution, `..` refusal,
+  symlink containment, extension allowlist, 512 KiB cap). Reaches all three
+  renderings, honestly: the PDF gets colour only — Pango markup carries no inline
+  image, stated as a scope limit, not a silent gap.
+- **18.20** — broken-image placeholder is theme-reachable (mirrors the export
+  sink's existing `.missing-image` treatment).
+- **18.21** — per-level heading colour/face (`heading_colors`/`heading_fonts`,
+  five slots each, empty/absent/unparseable falls back to the singular
+  `heading_color`/`heading_font`). A link inside a heading still wins.
+- **18.22** — heading rule + `heading_space_above`. **One deviation from the
+  original K+P sketch**: there is no `heading_overline_rgba` key at all — GTK
+  4.6.9 double-frees a text run carrying both a coloured overline and a coloured
+  underline at once (a link inside a heading is such a run), MEASURED with
+  valgrind and characterised against positive/negative controls. The overline is
+  drawn, always in the heading's own ink; only the underline side carries its own
+  colour. `clippy.toml` bans `set_overline_rgba` outright (no `#[allow]`
+  anywhere) and `theme::HeadingRule`'s rustdoc carries the finding. Routed to
+  the gtk4-rs skill as **GTK4Rs/AP-308** — see § "Register and skill follow-up"
+  below.
+- **18.23** — themed `strikethrough_rgba` and link underline style/colour
+  (`link_underline`, `link_underline_rgba`), including the table-cell path.
+
+**Phases 1 and 2 are both now fully shipped.** 18.24 (list-marker glyph/sprite)
+and 18.25 (heading band) landed per the "RATIFIED 2026-08-26 — both" decision
+below: each construct got a glyph key *and* a sprite key, the same dual shape
+18.19 already proved for the annotation chip — a glyph the cheap default, a
+sprite an opt-in for a theme willing to pay the file-validation and
+pre-resample cost (§ "What the spike measured", point 1). Every rubric this
+plan set out to deliver, TDD 18.18-18.25, is built.
+
+**Post-plan extension, same vocabulary: TDD 18.26** — bullet markers (only;
+numerals and task checkboxes stay single-valued) can vary colour, glyph and
+sprite across three nesting-depth tiers, unset falling back to the next
+shallower tier. Operator-requested after the plan's own scope closed, built
+under the same closed-decoration-vocabulary bound (no new drawing, no new
+paint vector — depth was already available at 18.24's existing marker
+substitution point) and the same K+P cost shape. It also closed an unrelated
+pre-existing gap the work surfaced: the PDF export coloured no list marker at
+all, of any kind, before this landed.
+
+**RATIFIED 2026-08-26 — both.** (18.24/18.25's glyph-vs-sprite decision.)
 
 **Requested by**: the operator, to give custom themes more flare — glyphs,
 graphics, background colours, shapes on headings and other Markdown-rendered
@@ -64,7 +121,7 @@ coordinated edits). That single fact sets the entire cost table below; it is not
 an implementation detail that a refactor could soften, because widgetising the
 body to reach it is itself closed (§ "Approach 4").
 
-## ⛔ The blocking decision — read before designing anything
+## The blocking decision — settled
 
 [`POLICY.md`](POLICY.md) § Architecture rules bounds the theme model:
 
@@ -124,8 +181,8 @@ renderer.
 | **Task checkbox** | B | marker colour | Everything else hardcoded: box 13px, radius 3px, stroke widths, checkmark path fractions (`gutter.rs:188-231`). **K**: size, radius, stroke, checked fill. **K+D-lite**: a glyph check (✓/✗) instead of the drawn polyline. |
 | **Horizontal rule** | C | colour, space above/below | **K**: height, gradient, dashed/double via border properties. A centred-glyph rule is **K+R**. |
 | **Images** | C | selection tint only (`css.rs:326-329`) | **K**: frame, radius, shadow on the overlay box. Rounded clipping of the picture *itself* needs proof — `push_mask` is 4.10 (§ "Open questions"). |
-| **Broken-image placeholder** | widget | **nothing — carries no theme class**, so mechanism C cannot reach it (`renderer/start.rs:383-395`) | **K**: add a class, then style it. |
-| **Annotation highlight** | A + B | the wash (`annotation_hl`) | The **gutter chip is hardcoded amber `RGBA(0.90, 0.62, 0.10, 0.95)` with white ink and unzoomed literal geometry** (`codeview/mod.rs:756-757`, `codeview/geometry.rs:187-193`). **K**: chip colour/ink/size — and doing it closes a live POLICY deviation. |
+| **Broken-image placeholder** | widget | ✅ **Shipped (18.20)** — was: nothing, no theme class, mechanism C unreachable | ~~**K**: add a class, then style it.~~ Done. |
+| **Annotation highlight** | A + B | the wash (`annotation_hl`) | ✅ **Chip colour/sprite shipped (18.19)**. Chip *size* stays unzoomed literal geometry, deliberately out of that rubric's scope — still open if anyone wants it. |
 | **Find highlights** | A + Pango | both colours themed | Nothing missing. |
 
 ## What each tier costs
@@ -172,23 +229,19 @@ a construct the preview decorates and it cannot.
 
 ## Cross-cutting constraints
 
-1. **Body / cell / export parity is a tax on every inline key.** [`POLICY.md`](POLICY.md)
-   requires one key to feed every path. Table cells are Pango markup and today use
-   shorthand `<b>`, `<i>`, `<s>`, `<sup>`, `<sub>`, `<tt>` (`renderer/start.rs:152-188`),
-   which **cannot express** `bold_weight: 600` or `supsub_scale`. So those keys
-   already silently do not apply inside tables, and every new inline key inherits
-   the drift. The fix is contained — move the cell path to `<span weight=… size=…
-   letter_spacing=…>` fed from the same theme values — but it is a **prerequisite**,
-   not a follow-up.
-   **And it is now a three-way parity, with a reuse opportunity that did not exist
-   before.** `export/markup.rs` is already a second producer of Pango markup from
-   themed values, and it already emits long-form `<span>` attributes rather than the
-   shorthand. So the cell-path fix should **converge on that emitter rather than
-   hand-rolling a third copy** — three independent Pango-markup producers reading the
-   same theme is the drift this constraint exists to prevent, arriving by a different
-   door. Check before writing: whichever way it lands, one inline key must reach the
-   body tag, the cell markup, the HTML sink and the PDF sink, or it is themed in some
-   renderings of the document and not others.
+1. ✅ **Resolved (18.18) for `bold_weight`/`supsub_scale`; the same shape applies to
+   any later inline key.** `Typography::bold_attr`/`supsub_attr` (theme.rs) are the
+   one shared formatting source: `renderer::bold_open`/`superscript_open`/
+   `subscript_open` wrap them with `crate::theme::active()` for the table-cell path,
+   `export/markup.rs` calls them directly on its own explicit `Theme` (never
+   `active()` — the PDF resolves at System-light regardless of the screen, TDD 25.9).
+   Not literally "converge on `export/markup.rs`'s emitter" as first suggested below —
+   the renderer's cell-markup builder is a streaming pulldown-cmark consumer, a
+   different data model from the export walker's pre-built `Inline` tree, so a shared
+   *pure formatting* layer underneath both was the real convergence point, not a
+   shared *emitter*. `export/html.rs` needed no change — it already themes both
+   through CSS (`strong { font-weight }`, `sup/sub { font-size }`). Any new inline
+   key added under 18.21-18.23 follows this exact shape.
 2. **Glyph strings are a new class of untrusted theme input.** Today the only
    free-form string is `font_family`, behind a type-enforced sanitiser
    (`CssSafeFontStack`, `theme.rs:177-257`). A glyph reaches a Pango *layout* in
@@ -215,6 +268,13 @@ a construct the preview decorates and it cannot.
    Text glyphs are cheap and safe; icons are new plumbing — the preview paint path
    contains **no** texture or icon rendering at all today, only Pango layouts
    (`gutter.rs:177-185`, `codeview/mod.rs:769-773`).
+   **A theme naming a FILE is a third case, and the spike measured it as the dearest
+   of the three.** It is not an icon name and not a path the engine chooses, but it
+   still needs relative-only resolution, `..` refusal, symlink containment, an
+   extension allowlist and a size cap before the bytes are touched — and then a
+   separate answer in the export sink, where a `file://` reference would break the
+   artefact's self-containment (TDD §25) and embedding makes theme data part of the
+   exported file. Prefer a glyph wherever a glyph will do.
 3. **Zoom.** Every new metric is a design-time px at zoom 1.0 through
    `theme::px` ([`THEMING.md` § Pixel metrics and zoom](THEMING.md#pixel-metrics-and-zoom)).
    Note the chip path never reads zoom at all today (`gutter_zoom` is consulted only
@@ -285,29 +345,81 @@ Real today, independent of whether this feature is built. Register entries are
 **not** allocated here — [`POLICY.md`](POLICY.md) § SDD register writes gives the
 registers one writer.
 
-- **The annotation chip is hardcoded styling in rendering code** — amber
-  `RGBA(0.90, 0.62, 0.10, 0.95)`, white ink, and unzoomed literal geometry
-  (`codeview/mod.rs:756-757`, `codeview/geometry.rs:187-193`). A direct deviation
-  from "No hard-coded styling", and it is *not* covered by `annotation_hl`, which
-  themes the text wash only. **Export widened this one**: TDD 25.13 puts annotations
-  in both artefacts — the claim highlight plus an aside in HTML and a margin note in
-  PDF — so the chip's appearance is now a question in three renderings, and the wash
-  it does *not* cover already resolves from `annotation_hl` in `export/markup.rs`.
-  Whoever themes the chip should settle what the artefacts draw at the same time.
-- **The broken-image placeholder carries no theme class** — unreachable by the
-  generated sheet, so it stays on desktop colours on every theme (TDD 18.4's
-  "no grey island" claim has a hole here).
+- ✅ **Shipped** — the annotation chip's *colour* was hardcoded (amber/white) and
+  the broken-image placeholder carried no theme class at all; both are now themed
+  (TDD 18.19, 18.20 — `feature/decor`). **Still live**: the chip's *geometry* in
+  `codeview/geometry.rs::chip_rect` is unzoomed literal px, deliberately left alone —
+  themeing the fill was in scope, themeing the geometry was not, and conflating them
+  would have grown 18.19 into a second rubric.
 - **The code face and its padding are `config`, not theme** (`config.rs:174-175`),
   as are the view's left/right margins baked into the `code-block` and `blockquote`
-  tag margins (`tags.rs:327-332`). A theme cannot state the code face.
-- **`px()` exists in three copies** — `tags.rs:192`, `theme.rs:106`,
-  `preview/build.rs:588`.
-- **Headings have `heading_space_below` but no `heading_space_above`**, and one
-  colour/face for all five levels.
+  tag margins (`tags.rs:327-332`). A theme cannot state the code face — a deliberate
+  boundary, documented at `tags.rs`'s own comment (a machine-local font-availability
+  choice, not a look), not a gap this plan leaves open.
+- ✅ **Filed** — `px()`'s three copies are ISSUES.md **Y**.
+- ✅ **Shipped** — headings now have `heading_space_above` alongside
+  `heading_space_below`, and per-level colour/face (TDD 18.21, 18.22).
+
+## What the spike measured
+
+*MEASURED* on a throwaway spike, since deleted — three decorations built end to end and
+rendered: a tiled brick `<hr>` (mechanism C), a capped pipe blockquote gutter
+(mechanism B), and a sprite after a heading's last glyph (a construct with no drawn
+decoration today). Sprites are external files a theme names, resolved relative to its
+`themes.toml`. Every claim below was rendered and looked at.
+
+**1. The decoration vocabulary works as scoped, and sprite files are the awkward
+part — not the drawing.** The B-path decoration cost exactly the five coordinated
+edits § "What each tier costs" predicts, the empty gate included. What the scoping did
+not price is that a theme naming an *image file* adds a path-validation seam of its
+own: relative-only, no `..`, symlink containment, extension allowlist, a size cap, and
+in the export sink a decision about embedding. That is a second untrusted-input
+surface beside the glyph-sanitisation one in constraint 2, and it is the reason a
+glyph key is genuinely cheaper than a sprite key rather than merely smaller.
+
+**2. Export is not just cheaper than the preview — it is a different order of
+cost, and the plan understated it.** § "Export is two more application paths"
+predicts sink D is richer; the measured gap is wider than "richer" conveys. The
+three decorations that cost the preview a new paint vector, a viewport clamp, an
+empty-gate entry and a cloned Pango measurement are, in `export/html.rs`, **three
+CSS rules**:
+
+| Decoration | Preview (mechanism B/C) | HTML sink (mechanism D) |
+|---|---|---|
+| Rule | tiled background on the real `GtkSeparator` — the one cheap case | `hr { background: url(…) repeat-x }` |
+| Blockquote gutter | draw the cap, then tile the shaft, clipped to a viewport-clamped rect | two stacked backgrounds: cap `no-repeat` over shaft `repeat-y` |
+| Heading trailing sprite | **no validation-free way to obtain the position at all** (§ "Technical details preserved") | `h1::after { content: "" }` — correct on a wrapped heading for free |
+
+The heading case is the one to weigh: the artefact gets, from one declarative rule,
+the exact placement the preview cannot obtain on its paint path at 4.6. **So "the
+export can do it" is positive evidence about the artefact and no evidence at all
+about the preview** — the trap § "Export is two more application paths" names,
+now with a measured instance of it.
+
+**3. Two decorations of the same theme can legitimately disagree about zoom.** The
+brick rule goes through generated CSS and draws at its natural size, so it does *not*
+follow the preview's zoom; the pipe and heading sprites are self-drawn and do. Nothing
+is wrong in either path — the mechanisms simply have different relationships to zoom
+(constraint 3) — but a theme that decorates via both mechanisms will look
+inconsistent when zoomed, and no single key can reconcile it. Any decoration
+vocabulary needs to state, per decoration, whether it scales.
+
+**4. A sprite theme's appearance depends on a filter choice GTK 4.6 does not
+offer.** Pixel art blurred at every zoom ≠ 1.0 and every tile join painted a visible
+seam, until each sprite was pre-resampled to its exact drawn size (§ "Technical
+details preserved"). The HTML sink has `image-rendering: pixelated` and needs none of
+this. This is a *quality floor* question, not an optimisation: without the
+pre-resample, the feature looks broken at the first zoom step.
+
+**What the spike does not answer**: it touches neither export sink from the preview's
+own path, it proposes no keys for ratification, and it makes no claim about how the
+key set should be shaped. It also does not settle whether sprites belong in the
+vocabulary at all — text glyphs remain cheaper and safer on every count
+(constraint 2), and nothing measured here changes that.
 
 ## Possible approaches
 
-### 1. Keys only, current policy (tiers K and K+P)
+### ❌ 1. Keys only, current policy (tiers K and K+P)
 
 Richer text attributes and metrics; no new decorations.
 
@@ -317,7 +429,7 @@ and letter-spacing are visible wins for one key each.
 **Cons**: delivers none of "glyphs, graphics, shapes"; headings still cannot carry
 a band or a mark.
 
-### 2. Closed decoration vocabulary (adds K+D / K+R)
+### ✅ 2. Closed decoration vocabulary (adds K+D / K+R)
 
 Amend the policy as drafted, then add decorations one at a time, each inert by
 default: heading band, heading gutter glyph, list-marker glyphs, checkbox glyph,
@@ -331,7 +443,7 @@ with headless tests.
 edits with one silent trap (the empty gate); grows the mechanism-B paint path,
 whose every addition sits on the ScrAP-22 hazard.
 
-### 3. A drawing DSL in the theme file
+### ❌ 3. A drawing DSL in the theme file
 
 Let a theme describe shapes (paths, gradients, offsets) that the engine
 interprets.
@@ -343,7 +455,7 @@ longer be *clamped* into safety, which is the property [`THEMING.md` § Untruste
 input](THEMING.md#untrusted-input) is built on; and it discards the "theme states
 nothing the engine cannot already draw" invariant that keeps TDD 18.14 true.
 
-### 4. Widgetise more of the preview so CSS can reach it
+### ❌ 4. Widgetise more of the preview so CSS can reach it
 
 Anchor headings, quotes and code as real widgets to inherit the full CSS surface.
 
@@ -355,7 +467,7 @@ content column and re-arms the horizontal-scrollbar churn (ScrAP-23a), and an
 overlay child's minimum feeds the view's own minimum with no opt-out
 (GTK4Rs/AP-189). This route has already cost this project a rendering rewrite once.
 
-### 5. Do nothing
+### ❌ 5. Do nothing
 
 **Pros**: zero risk. **Cons**: six themes that differ only in palette.
 
@@ -469,10 +581,11 @@ So the two options are genuinely distinct, and neither dominates:
 
 ## TDD rubrics
 
-None drafted. Per [`POLICY.md`](POLICY.md) and the SDD plan-kickoff rule, rubrics
-for the chosen phase are proposed **before** implementation begins, not at
-debrief. The existing §18 rubrics already constrain the shape of them: 18.2
-(System byte-identical), 18.4 (nothing left on desktop colours), 18.8/18.17
+**Drafted and landed**: `sdd/TDD.md` §18.18-18.25, per the SDD plan-kickoff rule —
+proposed before implementation began, confirmed by the operator, written in ahead
+of (18.18) or alongside (18.19-18.20) their implementing code. § "Current status"
+above tracks which are built. The existing §18 rubrics constrained their shape:
+18.2 (System byte-identical), 18.4 (nothing left on desktop colours), 18.8/18.17
 (contrast floors), 18.10 (verify themed geometry by resolved on-screen position,
 never by the key having been read), 18.14 (a new theme needs no code change).
 
@@ -507,6 +620,41 @@ sub-agent. **ScrAP-21's own stub in this tree stays as written** — it describe
 code-block case, where the horizontal pin is exactly the point, and it needs no
 edit for this. Nothing here blocks the plan; it is recorded so the finding is not
 re-derived by the next person to measure it.
+
+**A second, unrelated finding from 18.22 is queued for the same routing**: GTK
+4.6.9 double-frees a `GtkTextTag` text run carrying both a coloured overline and a
+coloured underline (§ "Current status" — 18.22's deviation; the finding and the
+production workaround live in `src/theme.rs`'s `HeadingRule` rustdoc and
+`clippy.toml`'s `set_overline_rgba` ban). This is squarely about GTK's own tag-
+attribute code, not this project, so — same rule — it does not belong in this
+tree's `sdd/ANTI-PATTERNS.md`; it goes to `gtk4skiller`.
+
+**ROOT CAUSE CONFIRMED 2026-08-25** (researcher, verified independently against
+this machine's `/opt/dev/oss/gtk` checkout, `4.6.9-5-g492b44f20c`): not an
+aliasing bug — a one-line copy-paste typo in `gtk_text_attributes_unref`
+(`gtk/gtktextattributes.c`), whose `overline_rgba` guard frees `underline_rgba`
+instead. Every copy/merge path is a correct deep copy; the destructor alone
+misfires, which is why splitting the two properties across two tags applied to
+one range does not escape it — the run-merge still produces one
+`GtkTextAttributes`, and that struct's own destructor is the one with the typo.
+Fixed upstream by commit `86e962929bf2be13a721053141b33e4381f0312` (Coverity CID
+1621077, GitLab MR !8137) in GTK **4.16.13** and **4.18.0**, never backported to
+an earlier stable branch — so nothing short of raising this project's GTK floor
+past 4.16.13 makes `heading_overline_rgba` safe to add. `overline_rgba` set
+*alone* still leaks 16 B per destruction (not double-freed, but never freed
+either), which is why the theme vocabulary omits the key outright rather than
+merely warning against pairing it with the underline colour.
+**`paragraph-background-rgba` is unaffected** — audited against every
+`gdk_rgba_free` call site in `gtktextattributes.c`/`gtktexttag.c` at this
+version; its guard/free pair is correctly matched everywhere, so 18.25's heading
+band may combine it with anything, including this pair, with no equivalent risk.
+One live trap for that later work: `*-rgba-set = FALSE` does not free or NULL
+the pointer (`gtktexttag.c:1981` is a bare boolean write) — the destructor keys
+off the pointer, so a property "cleared" that way still double-frees if both are
+non-NULL; only `set_*_rgba(None)` actually clears it.
+**Routed 2026-08-25** — woven into the gtk4-rs skill as **GTK4Rs/AP-308**
+(`references/textview-layout-and-drawing.md`). `clippy.toml`'s ban cites it by
+that number.
 
 ## Technical details preserved
 
@@ -554,6 +702,43 @@ contiguous regions — cards `:530-557`, bars `:559-596`, gutter `:598-718`, chi
 (`gutter.rs:117-121`) specifically so new inputs do not change call-site arity;
 marker kinds dispatch on a `match` over `ListMarkerKind` (`gutter.rs:153`,
 `renderer/mod.rs:220-231`), which is where a glyph swap goes.
+
+**Display-line X during `snapshot_layer` — there is none, at 4.6.** *MEASURED*
+(researcher, GTK 4.6.9, gtk4-rs 0.10.3): no public API yields a display line's X on
+the paint path without a `GtkTextLayout` side effect. `get_iter_location` does **not**
+validate the btree — the older "it writes btree heights" wording is too strong — but a
+cache miss builds a full `PangoLayout` and inserts it into the line-display sequence
+(the freed-line dereference of ScrAP-105), and a paragraph with children is
+size-allocated mid-snapshot. It is a cache *hit* for an on-screen childless paragraph
+in the `AboveText` pass, so calling it and seeing nothing break proves nothing. Safe
+on the paint path: `line_yrange`, `line_at_y`, `forward_to_line_end`,
+`get_bytes_in_line` — all btree-only, and none of them knows about wrapping, because
+display-line X is a Pango number and the btree only holds paragraph Y. Two viable
+routes: measure off the paint path (on heading-list rebuild and on every wrap-width
+change) and cache the rect for the paint to read — the correct one; or clone the
+measurement into a standalone `PangoLayout` (same text, font, and wrap width =
+`width − left_margin − right_margin`), which touches no GTK layout and carries drift
+from any attribute the clone does not reproduce. `buffer_to_window_coords` is safe but
+wrong here: `snapshot_layer` is already in buffer coordinates.
+
+**GTK's CSS `font-size` is an ABSOLUTE Pango size.** *MEASURED*. So
+`font_description().size()` → `set_size()` re-interprets a device-pixel size as
+points and inflates the font by 96/72. Use `is_size_absolute()` and
+`set_absolute_size()`. The failure is silent and misleading: measured text comes out
+~⅓ too wide, so anything positioned after it drifts *proportionally to the text's
+length*, which reads as a badly-chosen gap constant rather than a unit error.
+
+**`append_texture` filters linearly at 4.6, with no filter choice.**
+`append_scaled_texture` (which takes a `GskScalingFilter`) is 4.10, above the floor —
+and a wrapper above the floor compiles and fails at run time (GTK4Rs/AP-114). Two
+consequences for any image decoration: art drawn into a rect that is not its natural
+size is interpolated, and *tiling* a scaled texture makes each tile sample past its
+own edge into the clamped border, painting a visible seam at every join. Rounding
+tile rects to whole pixels reduces the seams and does not remove them. The fix is to
+resample through `gdk_pixbuf` with `InterpType::Nearest` to the exact drawn size and
+hand GSK a 1:1 texture, cached per size. The HTML sink needs none of it —
+`image-rendering: pixelated` is a filter choice the CSS engine has and GSK 4.6 does
+not.
 
 **Where the CSS happens**: `preview/css.rs::theme_css` (`:164-364`), twelve rules,
 pure `fn(&Theme, &Palette) -> String`, installed app-wide at

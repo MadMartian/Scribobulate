@@ -74,6 +74,72 @@ pub(crate) fn draw_page(
             cr.restore().ok();
             set_ink(cr, fg);
         }
+        // The heading band (TDD 18.25), FIRST so the heading's own glyphs land on top of
+        // it. Spans the printable column — the same extent the preview draws it at, and
+        // the widest thing this medium offers without restructuring the page.
+        if let Some(band) = &line.band {
+            let width = (laid.printable_width_pt - line.indent).max(MIN_PRINTABLE_PT);
+            let x = margin_pt + line.indent;
+            cr.save().ok();
+            cr.rectangle(x, y, width, line.height);
+            match (&band.sprite, band.gradient_to) {
+                // TILED at natural size, like the preview's `push_repeat` — the same
+                // picture on the page as on the screen, rather than the same file
+                // stretched to a different box in each medium.
+                (Some(surface), _) => {
+                    let pattern = cairo::SurfacePattern::create(surface);
+                    pattern.set_extend(cairo::Extend::Repeat);
+                    cr.save().ok();
+                    cr.translate(x, y);
+                    if cr.set_source(&pattern).is_ok() {
+                        cr.rectangle(0.0, 0.0, width, line.height);
+                        cr.fill().ok();
+                    }
+                    cr.restore().ok();
+                }
+                (None, Some(to)) => {
+                    let g = cairo::LinearGradient::new(x, y, x, y + line.height);
+                    for (offset, c) in [(0.0, band.fill), (1.0, to)] {
+                        g.add_color_stop_rgba(
+                            offset,
+                            f64::from(c.red()),
+                            f64::from(c.green()),
+                            f64::from(c.blue()),
+                            f64::from(c.alpha()),
+                        );
+                    }
+                    if cr.set_source(&g).is_ok() {
+                        cr.fill().ok();
+                    }
+                }
+                (None, None) => {
+                    set_ink(cr, band.fill);
+                    cr.fill().ok();
+                }
+            }
+            cr.restore().ok();
+            set_ink(cr, fg);
+        }
+        // A themed list-marker SPRITE, in the gutter LEFT of this line's own indent —
+        // out of the text run, exactly as the preview's drawn gutter puts it, which is
+        // also why the text carries no marker prefix when one applies (TDD 18.24/25.3).
+        if let Some(mk) = &line.marker {
+            let (nat_w, nat_h) = mk.natural;
+            cr.save().ok();
+            // Half the marker's own side as the gap to the text: derived from the thing
+            // being drawn rather than stated, so it tracks the row height at any page
+            // size and adds no literal to a file POLICY forbids them in.
+            let gap = mk.size / 2.0;
+            cr.translate(margin_pt + line.indent - mk.size - gap, y);
+            if nat_w > 0.0 && nat_h > 0.0 {
+                cr.scale(mk.size / nat_w, mk.size / nat_h);
+            }
+            if cr.set_source_surface(&mk.surface, 0.0, 0.0).is_ok() {
+                cr.paint().ok();
+            }
+            cr.restore().ok();
+            set_ink(cr, fg);
+        }
         match &line.kind {
             LineKind::Rule => {
                 cr.save().ok();

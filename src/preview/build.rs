@@ -39,6 +39,7 @@ pub(super) struct RenderProducts {
     pub(super) code_blocks: Vec<crate::span::BufferSpan>,
     pub(super) code_block_bg: gtk::gdk::RGBA,
     pub(super) blockquote_ranges: Vec<crate::span::BufferSpan>,
+    pub(super) heading_spans: Vec<crate::renderer::HeadingSpan>,
     pub(super) blockquote_bar: gtk::gdk::RGBA,
     pub(super) heading_offsets: Vec<i32>,
     pub(super) heading_slugs: Vec<String>,
@@ -346,6 +347,7 @@ pub(super) fn build_render_products_into(
         code_blocks: r.code_blocks,
         code_block_bg: palette.code_block_bg,
         blockquote_ranges: r.blockquote_ranges,
+        heading_spans: r.heading_spans,
         blockquote_bar: palette.blockquote_bar,
         heading_offsets,
         heading_slugs,
@@ -550,6 +552,7 @@ pub(super) fn install_products_into_view(
     code_block_bg: gtk::gdk::RGBA,
     blockquote_ranges: Vec<crate::span::BufferSpan>,
     blockquote_bar: gtk::gdk::RGBA,
+    heading_spans: Vec<crate::renderer::HeadingSpan>,
     anchored: &[(TextChildAnchor, gtk::Widget)],
     width_bounded: Vec<(gtk::Widget, i32)>,
     image_bounded: Vec<(gtk::Widget, i32, i32)>,
@@ -565,6 +568,11 @@ pub(super) fn install_products_into_view(
     view.bump_render_generation();
     view.set_code_blocks(code_blocks, code_block_bg);
     view.set_blockquotes(blockquote_ranges, blockquote_bar);
+    // The heading band's spans (TDD 18.25). Installed HERE, at the deliberate single
+    // choke point both render routes pass through, for the same reason everything else
+    // is: a decoration installed at one route and not the other is absent on whichever
+    // path the person testing it did not take.
+    view.set_heading_spans(heading_spans);
     // Drawn list-marker gutter. `zoom` travels with the markers
     // so their drawn x matches the `li-{depth}` content margin (`px(depth*28)`).
     view.set_list_markers(list_markers, zoom);
@@ -1859,6 +1867,261 @@ mod gtk_integration_tests {
         crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
+    /// TDD 18.21 — per-level heading colour and face reach the real `GtkTextTag`s, and
+    /// a level the theme leaves EMPTY falls back to its singular `heading_color` /
+    /// `heading_font`. Asserted on the live tag rather than on the resolved `Theme`,
+    /// because the resolved value being right proves nothing about the tag it never
+    /// reached (POLICY "One theme key, every application path").
+    #[gtktest::test]
+    fn per_level_heading_colour_and_face_reach_the_heading_tags() {
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.tiers]\nheading_color = \"#0000ff\"\nheading_font = \"Georgia, serif\"\n\
+             heading_colors = [\"#ff0000\", \"\", \"\", \"\", \"\"]\n\
+             heading_fonts = [\"Courier, monospace\", \"\", \"\", \"\", \"\"]\n",
+        );
+        crate::theme::set_active_for_test(themes.resolve("tiers"));
+        let products = build_render_products("# one\n\n## two\n", None, 1.0, false);
+        let tt = products.buf.tag_table();
+        let h1 = tt.lookup("h1").unwrap();
+        let h2 = tt.lookup("h2").unwrap();
+        assert_eq!(
+            crate::palette::to_hex(h1.foreground_rgba().unwrap()),
+            "#ff0000"
+        );
+        // h2's slot is empty, so it takes the theme's single heading_color.
+        assert_eq!(
+            crate::palette::to_hex(h2.foreground_rgba().unwrap()),
+            "#0000ff"
+        );
+        // The family reaches Pango UNQUOTED — `sanitize_font_family` emits CSS quoting,
+        // which Pango's own family-list parser does not accept (it would silently drop
+        // to the default sans instead of walking the stack).
+        assert_eq!(h1.family().as_deref(), Some("Courier, monospace"));
+        assert_eq!(h2.family().as_deref(), Some("Georgia, serif"));
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// TDD 18.22 — the heading rule and the space above it reach the real heading tags,
+    /// and are ABSENT on a theme that states neither.
+    ///
+    /// The absent half is asserted on the tag's `*-set` properties rather than on its
+    /// values, because a `GtkTextTag` whose `underline` is `None` *and set* is a
+    /// different tag from one that never set it — and 18.2 is a claim about the tag the
+    /// preview registers, not only about the pixels it happens to produce today.
+    #[gtktest::test]
+    fn a_themed_heading_rule_and_space_above_reach_the_heading_tags() {
+        let system = build_render_products("# one\n", None, 1.0, false);
+        let plain = system.buf.tag_table().lookup("h1").unwrap();
+        assert!(
+            !plain.is_underline_set(),
+            "System sets no heading underline"
+        );
+        assert!(!plain.is_overline_set(), "System sets no heading overline");
+        assert_eq!(plain.pixels_above_lines(), 0);
+        drop(system);
+
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.ruled]\nheading_overline = \"single\"\n\
+             heading_underline = \"wavy\"\nheading_underline_rgba = \"#0000ff\"\n\
+             heading_space_above = [20, 10]\n",
+        );
+        crate::theme::set_active_for_test(themes.resolve("ruled"));
+        for zoom in [1.0, 2.0] {
+            let products = build_render_products("# one\n\n## two\n", None, zoom, false);
+            let tt = products.buf.tag_table();
+            let h1 = tt.lookup("h1").unwrap();
+            let h2 = tt.lookup("h2").unwrap();
+            assert_eq!(h1.overline(), gtk::pango::Overline::Single);
+            assert_eq!(h1.underline(), gtk::pango::Underline::Error);
+            assert_eq!(
+                crate::palette::to_hex(h1.underline_rgba().unwrap()),
+                "#0000ff"
+            );
+            // A pixel metric is a DESIGN-TIME value at zoom 1.0, scaled on apply —
+            // unlike the Pango scale beside it, which GTK multiplies for us.
+            assert_eq!(h1.pixels_above_lines(), (20.0 * zoom).round() as i32);
+            assert_eq!(h2.pixels_above_lines(), (10.0 * zoom).round() as i32);
+        }
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// TDD 18.23 — the strike colour and the themed link underline reach the real tags,
+    /// and are absent under a theme that states neither.
+    ///
+    /// The absent half is asserted on `*-set`, not on the value: a tag whose
+    /// `strikethrough-rgba` is unset is a different tag from one that set it to the
+    /// body ink, and only the first is what the preview registered before 18.23.
+    #[gtktest::test]
+    fn a_themed_strike_and_link_underline_reach_the_tags() {
+        let system = build_render_products("~~gone~~ [x](https://e.com)\n", None, 1.0, false);
+        let tt = system.buf.tag_table();
+        assert!(!tt.lookup("strike").unwrap().is_strikethrough_rgba_set());
+        let link = tt.lookup("link").unwrap();
+        assert!(!link.is_underline_rgba_set());
+        assert_eq!(link.underline(), gtk::pango::Underline::Single);
+        drop(system);
+
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.marked]\nstrikethrough_rgba = \"#ff0000\"\n\
+             link_underline = \"wavy\"\nlink_underline_rgba = \"#00ff00\"\n",
+        );
+        crate::theme::set_active_for_test(themes.resolve("marked"));
+        let products = build_render_products("~~gone~~ [x](https://e.com)\n", None, 1.0, false);
+        let tt = products.buf.tag_table();
+        let strike = tt.lookup("strike").unwrap();
+        assert!(strike.is_strikethrough());
+        assert_eq!(
+            crate::palette::to_hex(strike.strikethrough_rgba().unwrap()),
+            "#ff0000"
+        );
+        let link = tt.lookup("link").unwrap();
+        assert_eq!(link.underline(), gtk::pango::Underline::Error);
+        assert_eq!(
+            crate::palette::to_hex(link.underline_rgba().unwrap()),
+            "#00ff00"
+        );
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// TDD 18.23 + 18.22 together, on the run that carries BOTH — a link inside a
+    /// heading that is itself ruled. Two tags each colouring an underline is the
+    /// arrangement measured CLEAN; the one measured fatal (a coloured overline beside
+    /// a coloured underline) is unrepresentable, and the walk below re-proves it on
+    /// exactly this document.
+    #[gtktest::test]
+    fn a_link_inside_a_ruled_heading_carries_two_underline_colours_safely() {
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.both]\nheading_overline = \"single\"\n\
+             heading_underline = \"single\"\nheading_underline_rgba = \"#ff0000\"\n\
+             link_underline = \"double\"\nlink_underline_rgba = \"#00ff00\"\n",
+        );
+        crate::theme::set_active_for_test(themes.resolve("both"));
+        let products =
+            build_render_products("# see [the docs](https://e.com) first\n", None, 1.0, false);
+        let tt = products.buf.tag_table();
+        assert_eq!(
+            crate::palette::to_hex(tt.lookup("h1").unwrap().underline_rgba().unwrap()),
+            "#ff0000"
+        );
+        assert_eq!(
+            crate::palette::to_hex(tt.lookup("link").unwrap().underline_rgba().unwrap()),
+            "#00ff00"
+        );
+        let mut offenders: Vec<String> = Vec::new();
+        tt.foreach(|tag| {
+            if tag.is_overline_rgba_set() {
+                offenders.push(tag.name().map(|n| n.to_string()).unwrap_or_default());
+            }
+        });
+        assert!(offenders.is_empty(), "overline-rgba set on {offenders:?}");
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// The heap-safety invariant `theme::HeadingRule` documents, pinned on the LIVE tag
+    /// table: **no tag may set `overline-rgba`**, because a run carrying a coloured
+    /// overline and a coloured underline is double-freed by GTK 4.6 and a link inside a
+    /// heading is exactly such a run.
+    ///
+    /// The `clippy.toml` ban is the primary enforcement and this is the backstop, and
+    /// they are NOT redundant: the ban cannot see a builder spelling or a
+    /// `set_property("overline-rgba", …)`, and this walk cannot fail at compile time.
+    /// Driven under a theme that turns on every decoration line the vocabulary has, so
+    /// the walk sees the worst case rather than the default one.
+    #[gtktest::test]
+    fn no_preview_tag_ever_carries_an_overline_colour() {
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.everything]\nheading_overline = \"single\"\n\
+             heading_underline = \"double\"\nheading_underline_rgba = \"#0000ff\"\n",
+        );
+        crate::theme::set_active_for_test(themes.resolve("everything"));
+        let products = build_render_products(
+            "# a [link](https://example.com) in a heading\n\nbody ~~struck~~ text\n",
+            None,
+            1.0,
+            false,
+        );
+        // Collect, then assert OUTSIDE the walk: `TextTagTable::foreach` runs the
+        // closure from C, and a panic across that frame is a non-unwinding abort — the
+        // guard would still be red, but with a stack instead of its own message.
+        let mut checked = 0;
+        let mut offenders: Vec<String> = Vec::new();
+        products.buf.tag_table().foreach(|tag| {
+            checked += 1;
+            if tag.is_overline_rgba_set() {
+                offenders.push(tag.name().map(|n| n.to_string()).unwrap_or_default());
+            }
+        });
+        assert!(checked > 0, "the walk saw no tags at all");
+        assert!(
+            offenders.is_empty(),
+            "these tags set overline-rgba, which double-frees on GTK 4.6 \
+             (see theme::HeadingRule): {offenders:?}"
+        );
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// TDD 18.25 — the heading spans the drawn band is measured from are collected on
+    /// every render, cover the heading's CONTENT (not the newline after it), and carry
+    /// the same h6-folds-to-h5 level index the heading tags use.
+    ///
+    /// Collected unconditionally, whatever the theme says: the band's presence is
+    /// decided at paint time, so selecting a theme repaints rather than re-renders. A
+    /// scan gated on a theme key would make the render's OUTPUT theme-dependent and turn
+    /// every theme switch into a full rebuild.
+    #[gtktest::test]
+    fn heading_spans_are_collected_for_every_heading_and_stop_at_its_content() {
+        let products = build_render_products(
+            "# one\n\nbody\n\n### three\n\n###### six\n",
+            None,
+            1.0,
+            false,
+        );
+        let spans = &products.heading_spans;
+        assert_eq!(spans.len(), 3, "{spans:?}");
+        assert_eq!(spans[0].level_index, 0);
+        assert_eq!(spans[1].level_index, 2);
+        // h6 shares h5's slot, the same fold the heading TAGS apply.
+        assert_eq!(spans[2].level_index, 4);
+        // The span covers the heading's text and stops there: `slice` over it is the
+        // heading, with no trailing newline to stretch a band into the gap below.
+        let text = products.buf.slice(
+            &products.buf.iter_at_offset(spans[0].span.start),
+            &products.buf.iter_at_offset(spans[0].span.end),
+            false,
+        );
+        assert_eq!(text.as_str(), "one");
+    }
+
+    /// The K+D trap `sdd/PLAN.preview-decoration.md` names, pinned: a new drawn vector
+    /// that is not added to `snapshot_layer`'s early-return gate paints on a document
+    /// that happens to contain a code block or a list and silently never paints on one
+    /// that does not.
+    ///
+    /// A headings-ONLY document is therefore the whole point of this test — every other
+    /// vector is empty on it, so the gate is the only thing standing between the band
+    /// and never being drawn. Asserted as "the paint ran to completion over a document
+    /// whose sole decoration is a band", which is what the gate decides.
+    #[gtktest::test]
+    fn a_headings_only_document_still_reaches_the_paint_path() {
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.banded]\nheading_band_bg = [\"#334455\", \"\", \"\", \"\", \"\"]\n",
+        );
+        crate::theme::set_active_for_test(themes.resolve("banded"));
+        let products = build_render_products("# only a heading\n", None, 1.0, false);
+        // Nothing else is present — this is the document the gate would have skipped.
+        assert!(products.code_blocks.is_empty());
+        assert!(products.blockquote_ranges.is_empty());
+        assert!(products.list_markers.is_empty());
+        assert_eq!(products.heading_spans.len(), 1);
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
     /// TDD 2.1a — the preview has FIVE heading tiers, and h6 folds onto the h5 tag:
     /// there is no distinct `h6` tag, and a `######` line carries the same `h5` tag
     /// as a `#####` line, so the two render identically. (`emit.rs` `_ => H5`.)
@@ -1943,6 +2206,72 @@ mod gtk_integration_tests {
                 );
             });
         }
+    }
+
+    /// TDD 18.18. Same shape as the annotation-highlight test above, one rung wider:
+    /// `bold_weight` and `supsub_scale` (+ rise) are the two keys that applied ONLY on
+    /// the body `GtkTextTag` before this fix — a table cell's `<b>`/`<sup>`/`<sub>`
+    /// silently ignored both, and nothing caught it (`sdd/PLAN.preview-decoration.md`
+    /// constraint 1).
+    #[test]
+    fn bold_and_supsub_match_between_body_and_cell_under_every_theme() {
+        for id in ["system", "sepia"] {
+            with_theme(id, || {
+                let theme = crate::theme::active();
+                let bold = crate::renderer::bold_open();
+                assert!(
+                    bold.contains(&format!("weight=\"{}\"", theme.typography.bold_weight)),
+                    "{id}: bold cell markup: {bold}"
+                );
+                let sup = crate::renderer::superscript_open();
+                let sub = crate::renderer::subscript_open();
+                let pct = (theme.typography.supsub_scale * 100.0).round() as i32;
+                for (open, rise, label) in [
+                    (&sup, theme.typography.superscript_rise, "sup"),
+                    (&sub, theme.typography.subscript_rise, "sub"),
+                ] {
+                    assert!(
+                        open.contains(&format!("size=\"{pct}%\"")),
+                        "{id} {label}: {open}"
+                    );
+                    assert!(
+                        open.contains(&format!("rise=\"{}\"", rise * gtk::pango::SCALE)),
+                        "{id} {label}: {open}"
+                    );
+                }
+            });
+        }
+    }
+
+    /// TDD 18.23 / 18.6. The cell twin of the body `strike` tag, in the shape 18.18
+    /// established: `strikethrough_rgba` must reach the table-cell Pango markup from the
+    /// SAME key the tag reads, or a struck word is one colour in prose and another in a
+    /// table — the drift the parity rule exists to prevent.
+    ///
+    /// Under a theme that states no strike colour the markup is the bare `<s>`/`</s>`
+    /// this path always emitted, which is the byte-identity half (18.2). Both halves of
+    /// the pair come from one call, so they cannot disagree about whether to close with
+    /// `</s>` or `</span>` — a mismatch renders the whole cell EMPTY (ScrAP-163).
+    #[test]
+    fn the_strike_colour_matches_between_body_and_cell() {
+        with_theme("sepia", || {
+            let (open, close) = crate::renderer::strike_tags();
+            assert_eq!(open, "<s>", "no strike colour stated");
+            assert_eq!(close, "</s>");
+        });
+
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test("[themes.sepia]\nstrikethrough_rgba = \"#654321\"\n");
+        crate::theme::set_active_for_test(themes.resolve("sepia"));
+        let (open, close) = crate::renderer::strike_tags();
+        assert!(
+            open.contains("strikethrough_color=\"#654321\""),
+            "cell strike markup: {open}"
+        );
+        assert_eq!(close, "</span>", "a span open must close as a span");
+        gtk::pango::parse_markup(&format!("{open}gone{close}"), '\0')
+            .expect("the themed cell strike markup must parse");
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
     /// Write a real 4×4 PNG into `dir` and return its path — a decodable local

@@ -196,16 +196,26 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // h1–h5. FIVE tags, not six: `emit.rs` maps h6-and-deeper onto "h5" before a tag
     // is ever chosen, so `heading_scale`/`heading_space_below` are 5-element by
     // design — a theme could not differentiate h6 from h5 however it were keyed.
-    // A theme may colour headings; omitted, they inherit the body foreground (the
-    // tag sets no foreground, so it falls through to the page's `color`). A link
-    // inside a heading is added later ⇒ higher priority, so its colour still wins.
-    let heading_color = theme.heading_color;
-    // A theme may also give headings their own font FAMILY. GTK merges a tag's font
-    // description onto the CSS base with replace_existing=TRUE, so `set_family` overrides
-    // ONLY the family — the CSS-driven size/zoom and the tag's own `set_scale` both
-    // survive the merge (researcher-verified). So a display heading face composes with
-    // the body font and zoom for free.
-    let heading_font = theme.heading_font.clone();
+    // A theme may colour headings PER LEVEL; omitted, a level takes the theme's single
+    // `heading_color`, and omitting that too leaves the tag with no foreground so it
+    // falls through to the page's `color` (TDD 18.21 — the fold is done once in
+    // `Theme::resolve`, so this only indexes). A link inside a heading is added later
+    // ⇒ higher priority, so its colour still wins over any of them.
+    //
+    // A theme may also give headings their own font FAMILY, per level the same way. GTK
+    // merges a tag's font description onto the CSS base with replace_existing=TRUE, so
+    // `set_family` overrides ONLY the family — the CSS-driven size/zoom and the tag's own
+    // `set_scale` both survive the merge (researcher-verified). So a display heading face
+    // composes with the body font and zoom for free.
+    //
+    // A theme may also draw a RULE above and/or below the heading text, and open space
+    // above it (TDD 18.22). Both are inert until asked for: `heading_rule` is
+    // `LineStyle::None` on both sides and `heading_space_above` is 0 on every level
+    // unless a theme states otherwise, so an untouched theme registers the same tag it
+    // always did. The rule is `overline`/`underline` — a decoration line over the glyph
+    // run, sharing the run's own ink unless the theme colours it — NOT a drawn divider;
+    // a column-width band is a different, tier-K+D decoration.
+    let rule = theme.heading_rule;
     for (i, level) in [
         TagName::H1,
         TagName::H2,
@@ -219,11 +229,33 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
         let scale = typo.heading_scale[i];
         let weight = typo.heading_weight;
         let below = px(metrics.heading_space_below[i]);
-        let hfont = heading_font.clone();
+        let above = px(metrics.heading_space_above[i]);
+        let heading_color = theme.heading_colors[i];
+        let hfont = theme.heading_fonts[i].clone();
         add(level.name(), &move |t| {
             t.set_scale(scale);
             t.set_weight(weight);
             t.set_pixels_below_lines(below);
+            t.set_pixels_above_lines(above);
+            // Set only when the theme asks. Calling the setter with `None`/`NONE` would
+            // still mark the property SET on the tag, which is a different tag from the
+            // one this code registered before the key existed — and 18.2 is a claim
+            // about the tag, not only about the pixels it happens to produce today.
+            // The overline is deliberately UNCOLOURED — it takes the heading's own ink.
+            // A run carrying a coloured overline AND a coloured underline double-frees
+            // inside GTK 4.6 (measured; `theme::HeadingRule` carries the whole finding),
+            // and a link inside a heading is exactly such a run, since the link tag
+            // colours an underline. `set_overline_rgba` is clippy-banned so this cannot
+            // be "improved" back into a heap bug.
+            if !rule.overline.is_none() {
+                t.set_overline(rule.overline.overline());
+            }
+            if !rule.underline.is_none() {
+                t.set_underline(rule.underline.underline());
+                if let Some(c) = rule.underline_rgba {
+                    t.set_underline_rgba(Some(&c));
+                }
+            }
             if let Some(c) = heading_color {
                 t.set_foreground_rgba(Some(&c));
             }
@@ -256,9 +288,20 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     add(TagName::Italic.name(), &|t| {
         t.set_style(gtk::pango::Style::Italic)
     });
-    add(TagName::Strike.name(), &|t| t.set_strikethrough(true));
-    // `strikethrough_rgba` is deliberately left unset: the line then follows the
-    // body foreground, which is already themed via the page's `color` rule.
+    // A theme may give the strike line its OWN colour (TDD 18.23). Omitted — the case
+    // for every theme that has not asked — the property stays UNSET and the line follows
+    // the struck text's foreground, which is already themed via the page's `color` rule;
+    // that used to be the whole story here, and is now the default rather than the only
+    // behaviour. The SAME key feeds the table-cell Pango path (`renderer::strike_tags`)
+    // and both export sinks, so a struck word cannot be one colour in prose and another
+    // in a table (POLICY "One theme key, every application path").
+    let strike_rgba = theme.strikethrough_rgba;
+    add(TagName::Strike.name(), &move |t| {
+        t.set_strikethrough(true);
+        if let Some(c) = strike_rgba {
+            t.set_strikethrough_rgba(Some(&c));
+        }
+    });
     // `==highlight==` (mark): a translucent background wash behind the marked text,
     // theme-sourced (`mark_bg`, per-theme — the toxic green on Synthwave, a warm wash
     // on Sepia). `background_rgba` (not `background`) so the alpha lets the body text
@@ -339,8 +382,23 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     add(TagName::CodeBlockBottom.name(), &|t| {
         t.set_pixels_below_lines(code_pad)
     });
-    add(TagName::Link.name(), &|t| {
-        t.set_underline(gtk::pango::Underline::Single);
+    // The link's underline is a themed STYLE with its own optional colour (TDD 18.23),
+    // not the hardcoded single line it was — `none`/`single`/`double`/`wavy`, floored at
+    // `single`, which is what the app has always drawn. The colour is independent of the
+    // link's ink: omitted, the line follows the ink, exactly as before.
+    //
+    // This tag is why the heading rule's overline carries no colour of its own: a link
+    // inside a heading is ONE RUN wearing both tags, and a run with a coloured overline
+    // and a coloured underline is double-freed by GTK 4.6 (`theme::HeadingRule`). Two
+    // tags both setting `underline-rgba` — this one and a heading rule — is measured
+    // clean, which is what makes the below-side rule colourable.
+    let link_underline = theme.link_underline;
+    let link_underline_rgba = theme.link_underline_rgba;
+    add(TagName::Link.name(), &move |t| {
+        t.set_underline(link_underline.underline());
+        if let Some(c) = link_underline_rgba {
+            t.set_underline_rgba(Some(&c));
+        }
         t.set_foreground(Some(&link_fg));
     });
     // Blockquote: an indent that leaves room on the left for the accent bar + gap

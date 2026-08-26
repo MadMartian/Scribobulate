@@ -17,11 +17,17 @@
 use super::super::markup::{escape_pango, inline_markup};
 use super::super::paginate::Fragment;
 use super::super::{Block, ExportDoc, ImageRef, ImageSource, Inline, ListItem};
-use super::decide::{heading_scale_index, list_marker, split_on_images, Seg};
+use super::decide::{
+    heading_scale_index, list_marker_ink, list_marker_markup, list_marker_sprite, split_on_images,
+    Seg,
+};
 use super::geometry::{
     indent_on_page, pango_to_pt, printable_width, pt_to_pango, INDENT_PT, PT_PER_PX,
 };
-use super::{decode, Laid, LayoutSpec, Line, LineKind, BASE_PT, BLOCK_GAP_PT, PANGO_WEIGHT_NORMAL};
+use super::{
+    decode, HeadingBandInk, Laid, LayoutSpec, Line, LineKind, MarkerImage, BASE_PT, BLOCK_GAP_PT,
+    PANGO_WEIGHT_NORMAL,
+};
 use crate::theme::Theme;
 use gtk::pango;
 
@@ -46,7 +52,7 @@ pub(crate) fn lay_out(
         fragments: Vec::new(),
     };
     for block in &doc.blocks {
-        b.block(block, doc, 0.0, 0);
+        b.block(block, doc, 0.0, 0, 0);
     }
     Laid {
         lines: b.lines,
@@ -97,6 +103,30 @@ impl Layouter<'_> {
         layout
     }
 
+    /// The band ink for a heading at `level_index`, or `None` where the theme bands no
+    /// such level — resolved from the same per-level fills the preview reads, so the
+    /// artefact bands exactly the levels the screen does (TDD 25.3).
+    ///
+    /// The sprite is decoded here, once per heading, rather than per line: the surface is
+    /// cheap to clone (cairo refcounts it) and decoding per line would re-read the file
+    /// for every row of a wrapped heading.
+    fn heading_band_ink(&self, level_index: usize) -> Option<HeadingBandInk> {
+        let fill = self.theme.heading_band.fills[level_index]?;
+        let sprite = self
+            .theme
+            .sprites
+            .heading_band
+            .as_deref()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|bytes| decode(&bytes))
+            .map(|(surface, _, _)| surface);
+        Some(HeadingBandInk {
+            fill,
+            gradient_to: self.theme.heading_band.gradient_to,
+            sprite,
+        })
+    }
+
     /// Where a block indented `indent` points actually starts on the page.
     ///
     /// Bounded by the page, because `indent` is not: it grows `INDENT_PT` per nesting
@@ -139,17 +169,46 @@ impl Layouter<'_> {
             indent: self.indent_on_page(indent),
             height,
             quote_depth,
+            // Both attached afterwards by the one caller that can have them — see
+            // `list` and the `Heading` arm. Not `push_line` arguments: every other call
+            // site would pass `None`, and positional arguments reading `None` at five of
+            // six sites is how the pairing invariant this function exists to hold gets
+            // diluted.
+            marker: None,
+            band: None,
         });
     }
 
-    /// Lay one block out at `indent` points, inside `quote_depth` block quotes.
-    fn block(&mut self, block: &Block, doc: &ExportDoc, indent: f64, quote_depth: u32) {
+    /// Lay one block out at `indent` points, inside `quote_depth` block quotes and
+    /// `list_depth` enclosing lists.
+    ///
+    /// `list_depth` is threaded exactly as `quote_depth` already is, and for the same
+    /// reason: a bullet's decoration varies by nesting depth (TDD 18.26), and this walk
+    /// is the only place that knows how deep it currently is. It counts the LIST it is
+    /// inside, so the outermost list's items are depth 1.
+    fn block(
+        &mut self,
+        block: &Block,
+        doc: &ExportDoc,
+        indent: f64,
+        quote_depth: u32,
+        list_depth: u32,
+    ) {
         match block {
             Block::Heading { level, inlines, .. } => {
                 let scale = self.theme.typography.heading_scale[heading_scale_index(*level)];
-                let markup = inline_markup(inlines, doc, self.theme);
+                let band = self.heading_band_ink(heading_scale_index(*level));
+                // The theme's heading rule (TDD 18.22/25.3) wraps the whole run, so the
+                // artefact carries the same overline/underline the preview's heading tag
+                // does. Empty unless the theme states one.
+                let (rule_open, rule_close) = super::super::markup::heading_rule_span(self.theme);
+                let markup = format!(
+                    "{rule_open}{}{rule_close}",
+                    inline_markup(inlines, doc, self.theme)
+                );
                 // A heading keeps its first body line company where it can — the
                 // paginator honours it only when the pair actually fits.
+                let first = self.lines.len();
                 self.paragraph(
                     &markup,
                     BASE_PT * scale,
@@ -158,6 +217,13 @@ impl Layouter<'_> {
                     quote_depth,
                     true,
                 );
+                // EVERY line of the heading, not just the first: a heading that wrapped
+                // is several abutting rects, which is one continuous band (TDD 18.25).
+                if let Some(band) = band {
+                    for line in &mut self.lines[first..] {
+                        line.band = Some(band.clone());
+                    }
+                }
             }
             Block::Paragraph(inlines) => {
                 // A paragraph may hold images, and an image is not text: it becomes its
@@ -199,10 +265,12 @@ impl Layouter<'_> {
             }
             Block::BlockQuote(inner) => {
                 for b in inner {
-                    self.block(b, doc, indent + INDENT_PT, quote_depth + 1);
+                    self.block(b, doc, indent + INDENT_PT, quote_depth + 1, list_depth);
                 }
             }
-            Block::List { start, items } => self.list(*start, items, doc, indent, quote_depth),
+            Block::List { start, items } => {
+                self.list(*start, items, doc, indent, quote_depth, list_depth + 1)
+            }
             Block::Table { aligns, head, rows } => {
                 self.table(aligns, head, rows, doc, indent, quote_depth)
             }
@@ -341,19 +409,39 @@ impl Layouter<'_> {
         doc: &ExportDoc,
         indent: f64,
         quote_depth: u32,
+        list_depth: u32,
     ) {
         for (n, item) in items.iter().enumerate() {
-            let marker = list_marker(item.task, start, n);
+            // A sprite marker is a PICTURE, so unlike a glyph or a numeral it cannot ride
+            // inside the item's own text run: it is drawn in the gutter beside the first
+            // line (see `Line::marker`). When one applies, the text run carries NO marker
+            // prefix — the same substitution the drawn gutter makes, in this sink's terms.
+            let mut sprite = list_marker_sprite(item.task, start, list_depth, &self.theme.sprites)
+                .and_then(|p| std::fs::read(p).ok())
+                .and_then(|bytes| decode(&bytes));
+            let marker = if sprite.is_some() {
+                String::new()
+            } else {
+                list_marker_markup(
+                    item.task,
+                    start,
+                    n,
+                    list_depth,
+                    &self.theme.list_glyphs,
+                    list_marker_ink(item.task, start, list_depth, self.theme),
+                )
+            };
             for (i, block) in item.blocks.iter().enumerate() {
                 // The marker joins the item's FIRST line; everything after it hangs at
                 // the item's own indent.
                 if i == 0 {
                     if let Block::Paragraph(inlines) | Block::Heading { inlines, .. } = block {
-                        let markup = format!(
-                            "{}{}",
-                            escape_pango(&marker),
-                            inline_markup(inlines, doc, self.theme)
-                        );
+                        // The marker arrives as MARKUP, already escaped for this
+                        // grammar by the projection that knows it — so it is spliced in
+                        // rather than run through `escape_pango` a second time, which
+                        // would put a literal `&amp;` on the page for a themed glyph.
+                        let markup = format!("{marker}{}", inline_markup(inlines, doc, self.theme));
+                        let first = self.lines.len();
                         self.paragraph(
                             &markup,
                             BASE_PT,
@@ -362,10 +450,27 @@ impl Layouter<'_> {
                             quote_depth,
                             false,
                         );
+                        // Attach the sprite to the FIRST line the paragraph produced —
+                        // the item's own first row, which is where every other marker
+                        // goes. A paragraph that produced no line (empty item) has
+                        // nothing to hang it on and simply gets no marker.
+                        if let (Some((surface, nw, nh)), Some(line)) =
+                            (sprite.take(), self.lines.get_mut(first))
+                        {
+                            // A square at the row's own height, so the marker tracks the
+                            // text size with no metric of its own — the same relationship
+                            // the drawn gutter's marker box has to its row.
+                            let size = line.height.max(1.0);
+                            line.marker = Some(MarkerImage {
+                                surface,
+                                natural: (nw, nh),
+                                size,
+                            });
+                        }
                         continue;
                     }
                 }
-                self.block(block, doc, indent + INDENT_PT, quote_depth);
+                self.block(block, doc, indent + INDENT_PT, quote_depth, list_depth);
             }
         }
     }

@@ -91,6 +91,7 @@ mod testpump;
 // Test-only in `lib.rs` (`#[cfg(test)]`); this root is always built `--cfg test`, so
 // it needs no gate here — but it does need the declaration, or the suite build breaks
 // the moment a symlink test in it reaches the shared helper.
+mod sprite;
 mod testsymlink;
 mod theme;
 mod widgets;

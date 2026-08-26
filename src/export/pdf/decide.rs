@@ -96,14 +96,98 @@ pub(crate) fn contains_image(inline: &Inline) -> bool {
 /// to Pango as one markup run, so an ordinary space would let the wrap algorithm break
 /// between the bullet and the word it introduces, stranding a lone `•` at the end of a
 /// line. It is easy to "tidy" and the damage only shows on a narrow column.
-pub(crate) fn list_marker(task: Option<bool>, start: Option<u64>, n: usize) -> String {
+pub(crate) fn list_marker_markup(
+    task: Option<bool>,
+    start: Option<u64>,
+    n: usize,
+    depth: u32,
+    glyphs: &crate::theme::ListGlyphs,
+    ink: Option<gtk::gdk::RGBA>,
+) -> String {
+    // A theme may stand its own glyph in for any of the four (TDD 18.24), which is the
+    // same substitution — and the same per-state independence for the task marker — the
+    // drawn gutter makes.
+    //
+    // The return is **Pango MARKUP**, which is why the name says so: the glyph goes
+    // through `MarkerGlyph`'s Pango projection HERE rather than being escaped by the
+    // caller, because that projection is the one place that knows this grammar. The
+    // default markers below carry no metacharacter, so they are literal by inspection.
+    // Escaping it twice would render `&amp;` on the page; escaping it never would fail
+    // `pango_parse_markup` and render the whole run EMPTY, with no warning (ScrAP-163).
+    // The HTML sink takes the same key through its OWN projection — one key, one
+    // validation, a different escape per grammar.
+    let themed = match (task, start) {
+        (Some(true), _) => glyphs.task_checked.as_ref(),
+        (Some(false), _) => glyphs.task.as_ref(),
+        (None, Some(_)) => glyphs.ordered.as_ref(),
+        // The BULLET alone varies by nesting depth (TDD 18.26), through the tier index
+        // every path shares. Its array was folded once in `Theme::resolve`, so an
+        // unstated tier already carries the shallower one's glyph.
+        (None, None) => glyphs.bullet[crate::theme::depth_tier(depth as usize)].as_ref(),
+    };
+    let glyph = match themed {
+        Some(g) => g.escaped_for_pango_markup(),
+        None => match (task, start) {
+            (Some(true), _) => "\u{2611}".to_string(),
+            (Some(false), _) => "\u{2610}".to_string(),
+            // A task item keeps its checkbox even inside an ordered list, which is why
+            // the task arms come first: `1. [x] done` is a checkbox, not a number.
+            (None, Some(s)) => format!("{}.", s + n as u64),
+            (None, None) => "\u{2022}".to_string(),
+        },
+    };
+    // The marker's own INK, which this sink carried for nothing before: the marker was
+    // prepended to the item's first line and inherited that line's body colour, so a
+    // theme's `list_marker` reached the drawn gutter and the HTML sink and stopped at
+    // the page (TDD 18.26's last clause). Unset ⇒ no span at all, which is the body ink
+    // and therefore byte-identical to what this sink emitted before (TDD 18.2).
+    //
+    // The span wraps the GLYPH only, never the trailing no-break space: colouring a
+    // space is invisible, and keeping it outside means the coloured run on the page is
+    // exactly the marker a reader sees.
+    match ink {
+        None => format!("{glyph}\u{00a0}"),
+        Some(c) => format!(
+            "<span foreground=\"{}\">{glyph}</span>\u{00a0}",
+            crate::palette::to_hex(c)
+        ),
+    }
+}
+
+/// The list-marker SPRITE a theme states for this item's kind, if any — resolved by
+/// exactly the precedence the drawn gutter uses, from the one function that owns it, so
+/// the artefact and the preview cannot disagree about which key wins.
+pub(crate) fn list_marker_sprite(
+    task: Option<bool>,
+    start: Option<u64>,
+    depth: u32,
+    sprites: &crate::theme::Sprites,
+) -> Option<&std::path::Path> {
     match (task, start) {
-        (Some(true), _) => "\u{2611}\u{00a0}".to_string(),
-        (Some(false), _) => "\u{2610}\u{00a0}".to_string(),
-        // A task item keeps its checkbox even inside an ordered list, which is why the
-        // task arms come first: `1. [x] done` is a checkbox, not a number.
-        (None, Some(s)) => format!("{}.\u{00a0}", s + n as u64),
-        (None, None) => "\u{2022}\u{00a0}".to_string(),
+        (Some(true), _) => sprites.list_task_checked.as_deref(),
+        (Some(false), _) => sprites.list_task.as_deref(),
+        (None, Some(_)) => sprites.list_ordered.as_deref(),
+        (None, None) => sprites.list_bullet[crate::theme::depth_tier(depth as usize)].as_deref(),
+    }
+}
+
+/// The ink one list marker is drawn in: the BULLET's depth-tiered colour where the theme
+/// states one (TDD 18.26), the shared `list_marker` otherwise.
+///
+/// The four-line twin of `codeview::gutter::marker_ink`, and deliberately not a shared
+/// call: the FOLD is shared (it happened once, in `Theme::resolve`, over the array both
+/// read) and so is `depth_tier`, but this sink's marker kind is a `(task, start)` pair
+/// where the gutter's is a `ListMarkerKind`, and the module that owns the gutter's
+/// version draws with GTK — which this display-free module must not reach into.
+pub(crate) fn list_marker_ink(
+    task: Option<bool>,
+    start: Option<u64>,
+    depth: u32,
+    theme: &crate::theme::Theme,
+) -> Option<gtk::gdk::RGBA> {
+    match (task, start) {
+        (None, None) => theme.list_bullet_colors[crate::theme::depth_tier(depth as usize)],
+        _ => theme.list_marker,
     }
 }
 
@@ -121,6 +205,175 @@ pub(crate) fn heading_scale_index(level: u8) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A theme that states no marker glyph — the shape every assertion below about the
+    /// DEFAULT markers is written against.
+    fn plain() -> crate::theme::ListGlyphs {
+        crate::theme::ListGlyphs::default()
+    }
+
+    /// TDD 18.24 — a themed glyph stands in for each of the four markers, and the task
+    /// states resolve independently (a theme may state one alone).
+    #[test]
+    fn a_themed_glyph_stands_in_for_each_default_marker() {
+        let mut themes = crate::theme::Themes::builtin();
+        themes.merge_over_for_test(
+            "[themes.marks]\nlist_bullet_glyph = \"b\"\nlist_ordered_glyph = \"o\"\n\
+             list_task_checked_glyph = \"c\"\n",
+        );
+        let g = themes.resolve("marks").list_glyphs;
+        assert_eq!(list_marker_markup(None, None, 0, 1, &g, None), "b\u{00a0}");
+        assert_eq!(
+            list_marker_markup(None, Some(1), 4, 1, &g, None),
+            "o\u{00a0}"
+        );
+        assert_eq!(
+            list_marker_markup(Some(true), None, 0, 1, &g, None),
+            "c\u{00a0}"
+        );
+        // Unstated: the drawn default's own glyph, unchanged.
+        assert_eq!(
+            list_marker_markup(Some(false), None, 0, 1, &g, None),
+            "\u{2610}\u{00a0}"
+        );
+        // The NO-BREAK space is part of the contract for a themed marker too — a glyph
+        // that wrapped away from its item text would be the same defect in new clothes.
+        assert!(list_marker_markup(None, None, 0, 1, &g, None).ends_with('\u{00a0}'));
+    }
+
+    /// TDD 18.26's last clause — the PDF sink coloured NO marker, of any kind, at any
+    /// depth: the marker was prepended to the item's first line and inherited that
+    /// line's body ink, so a theme's `list_marker` reached the drawn gutter and the HTML
+    /// sink and stopped at the page.
+    ///
+    /// Unset ⇒ no span at all, so the markup is byte-identical to what this sink emitted
+    /// before the key could reach it (TDD 18.2) — asserted, because "no colour stated"
+    /// and "the colour happens to be the body ink" produce the same PAGE and very
+    /// different markup, and only one of them is this sink leaving the default alone.
+    #[test]
+    fn the_marker_carries_the_themes_ink_and_nothing_when_it_states_none() {
+        let ink = gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 1.0);
+        // Every kind, not just the bullet: the gap was total.
+        for (task, start) in [
+            (None, None),
+            (None, Some(1)),
+            (Some(true), None),
+            (Some(false), None),
+        ] {
+            let bare = list_marker_markup(task, start, 0, 1, &plain(), None);
+            assert!(!bare.contains("<span"), "unset must add nothing: {bare}");
+            let inked = list_marker_markup(task, start, 0, 1, &plain(), Some(ink));
+            assert!(
+                inked.starts_with("<span foreground=\"#ff0000\">"),
+                "task={task:?} start={start:?}: {inked}"
+            );
+            // The no-break space stays OUTSIDE the span — see `list_marker_markup`.
+            assert!(inked.ends_with("</span>\u{00a0}"), "{inked}");
+            // …and it is still there, so Pango cannot wrap the marker away from its
+            // item text. Colouring the marker must not cost that.
+            assert!(inked.ends_with('\u{00a0}'));
+        }
+    }
+
+    /// A themed GLYPH is escaped once and once only, then coloured — the two operations
+    /// compose rather than one undoing the other. `&` escaped twice renders `&amp;` on
+    /// the page; escaped never fails `pango_parse_markup` and renders the whole run
+    /// EMPTY, with no warning (ScrAP-163).
+    #[test]
+    fn a_themed_glyph_is_escaped_once_inside_its_colour_span() {
+        let mut themes = crate::theme::Themes::builtin();
+        themes.merge_over_for_test("[themes.amp]\nlist_bullet_glyph = \"&\"\n");
+        let g = themes.resolve("amp").list_glyphs;
+        let out = list_marker_markup(None, None, 0, 1, &g, Some(gtk::gdk::RGBA::BLACK));
+        assert!(out.contains(">&amp;<"), "{out}");
+        assert!(!out.contains("&amp;amp;"), "double-escaped: {out}");
+        gtk::pango::parse_markup(&out, '\0').expect("the marker markup must parse");
+    }
+
+    /// TDD 18.26 — the bullet's glyph, sprite and ink all follow the nesting depth this
+    /// sink now threads, through the SAME tier map the drawn gutter uses; ordered and
+    /// task markers are untouched by it at every depth.
+    #[test]
+    fn a_bullets_marker_follows_its_nesting_depth_and_no_other_kinds_does() {
+        let mut themes = crate::theme::Themes::builtin();
+        themes.merge_over_for_test(
+            "[themes.tiered]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n\
+             list_bullet_glyph = \"1\"\nlist_bullet_glyph_2 = \"2\"\n\
+             list_ordered_glyph = \"o\"\n",
+        );
+        let t = themes.resolve("tiered");
+        let bullet = |depth: u32| {
+            list_marker_markup(
+                None,
+                None,
+                0,
+                depth,
+                &t.list_glyphs,
+                list_marker_ink(None, None, depth, &t),
+            )
+        };
+        assert!(bullet(1).contains(">1<"), "{}", bullet(1));
+        assert!(bullet(1).contains("#111111"), "{}", bullet(1));
+        assert!(bullet(2).contains(">2<"), "{}", bullet(2));
+        assert!(bullet(2).contains("#222222"), "{}", bullet(2));
+        // Depth 3 inherited depth 2 in both properties.
+        assert!(bullet(3).contains(">2<"), "{}", bullet(3));
+        assert!(bullet(3).contains("#222222"), "{}", bullet(3));
+
+        // A nested ORDERED item keeps its own glyph and the shared ink at any depth.
+        let ordered = list_marker_markup(
+            None,
+            Some(1),
+            0,
+            3,
+            &t.list_glyphs,
+            list_marker_ink(None, Some(1), 3, &t),
+        );
+        assert!(ordered.contains(">o<"), "{ordered}");
+        assert!(ordered.contains("#111111"), "{ordered}");
+    }
+
+    /// The bullet's SPRITE reads the tier too, and only the bullet's arm does.
+    #[test]
+    fn a_bullet_sprite_is_selected_by_depth() {
+        let mut sprites = crate::theme::Sprites::default();
+        sprites.list_bullet[0] = Some(std::path::PathBuf::from("/x/1.png"));
+        sprites.list_bullet[1] = Some(std::path::PathBuf::from("/x/2.png"));
+        sprites.list_bullet[2] = Some(std::path::PathBuf::from("/x/3.png"));
+        sprites.list_ordered = Some(std::path::PathBuf::from("/x/o.png"));
+        let at = |d: u32| {
+            list_marker_sprite(None, None, d, &sprites)
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(at(1), std::path::Path::new("/x/1.png"));
+        assert_eq!(at(2), std::path::Path::new("/x/2.png"));
+        assert_eq!(at(9), std::path::Path::new("/x/3.png"));
+        // The ordered arm ignores depth entirely.
+        for d in [1u32, 2, 9] {
+            assert_eq!(
+                list_marker_sprite(None, Some(1), d, &sprites),
+                Some(std::path::Path::new("/x/o.png"))
+            );
+        }
+    }
+
+    /// The sprite precedence is resolved HERE for the PDF, from the same per-kind
+    /// mapping the drawn gutter uses — so the artefact cannot answer a different key
+    /// than the screen does.
+    #[test]
+    fn a_sprite_is_selected_per_marker_kind() {
+        let mut sprites = crate::theme::Sprites::default();
+        assert!(list_marker_sprite(None, None, 1, &sprites).is_none());
+        sprites.list_bullet[0] = Some(std::path::PathBuf::from("/x/b.png"));
+        assert_eq!(
+            list_marker_sprite(None, None, 1, &sprites),
+            Some(std::path::Path::new("/x/b.png"))
+        );
+        // …and only that kind.
+        assert!(list_marker_sprite(None, Some(1), 1, &sprites).is_none());
+        assert!(list_marker_sprite(Some(true), None, 1, &sprites).is_none());
+    }
 
     /// Every list marker shape, including the ones that only differ by an argument the
     /// other arms ignore. Table-driven because the function IS a table.
@@ -141,7 +394,7 @@ mod tests {
         ];
         for &(task, start, n, want) in cases {
             assert_eq!(
-                list_marker(task, start, n),
+                list_marker_markup(task, start, n, 1, &plain(), None),
                 want,
                 "task={task:?} start={start:?} n={n}"
             );
@@ -159,7 +412,7 @@ mod tests {
             (Some(true), None),
             (Some(false), Some(3)),
         ] {
-            let marker = list_marker(task, start, 0);
+            let marker = list_marker_markup(task, start, 0, 1, &plain(), None);
             assert!(
                 marker.ends_with('\u{00a0}'),
                 "task={task:?} start={start:?} produced {marker:?}, which Pango may \
@@ -176,7 +429,7 @@ mod tests {
     /// `u64` straight out of the parser, so this is reachable from a document.
     #[test]
     fn an_absurd_ordered_start_does_not_panic() {
-        let marker = list_marker(None, Some(u64::MAX), 0);
+        let marker = list_marker_markup(None, Some(u64::MAX), 0, 1, &plain(), None);
         assert!(marker.starts_with(&u64::MAX.to_string()));
     }
 

@@ -92,6 +92,8 @@ pub(crate) mod renderer;
 pub(crate) mod saferizer;
 pub(crate) mod session;
 pub(crate) mod span;
+/// Sprite decoration: a theme naming an image file (`sdd/PLAN.preview-decoration.md`).
+pub(crate) mod sprite;
 /// The registry `#[gtktest::test]` submits into. Gated on `test` as well as the
 /// feature so it never reaches the shipped library: a `harness = false` target is
 /// built `--cfg test`, so this one gate covers both the lib-test target and the

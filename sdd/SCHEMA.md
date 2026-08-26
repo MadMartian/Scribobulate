@@ -277,7 +277,18 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `syntect_theme` | `string` | by page luminance | Syntax-highlighting theme for code blocks. |
 | `heading_color` | colour | body foreground | Heading colour (h1–h6). |
 | `heading_font` | `string` | `font_family` | Heading font stack. Same sanitisation as `font_family`. |
+| `heading_colors` | `[string; 5]` | `heading_color` | Per-level heading colours, h1 · h2 · h3 · h4 · h5-and-deeper. An empty (`""`), absent or unparseable slot falls back to `heading_color`. The table header is not a level and keeps reading `heading_color`. |
+| `heading_fonts` | `[string; 5]` | `heading_font` | Per-level heading font stacks, same five slots and same empty-means-inherit rule, falling back to `heading_font`. Each slot is sanitised like `font_family`. |
+| `heading_overline` | `"none"` \| `"single"` | `"none"` | A rule ABOVE the heading text, drawn in the heading's own ink. `"double"`/`"wavy"` are accepted and clamped to a single line (Pango's overline has no other value). ⚠️ There is deliberately **no** `heading_overline_rgba`: GTK 4.6 double-frees a text run carrying both a coloured overline and a coloured underline, and a link inside a heading is such a run (`src/theme.rs`, `HeadingRule`). |
+| `heading_underline` | `"none"` \| `"single"` \| `"double"` \| `"wavy"` | `"none"` | A rule BELOW the heading text — the decoration line under the glyph run, not a column-width divider. |
+| `heading_underline_rgba` | colour | heading ink | The below-rule's colour. Omitted, the line follows the heading's own foreground. |
+| `heading_band_bg` | `[string; 5]` | — | The band drawn behind a heading's text, per level (h1 · h2 · h3 · h4 · h5-and-deeper). An empty or absent slot ⇒ that level carries no band. The band spans the **content column**, and survives soft-wrap as one continuous band. |
+| `heading_band_gradient_to` | colour | — | A second stop: the band becomes a vertical gradient from the level's own fill down to this colour. Ignored where no level states a fill. |
+| `sprite_heading_band` | `string` | — | A sprite **tiled at its natural size** across the band, in place of its fill. Theme-relative and validated like every sprite key; outranks the fill and the gradient. |
 | `link` | colour | derived | Link colour. |
+| `link_underline` | `"none"` \| `"single"` \| `"double"` \| `"wavy"` | `"single"` | A link's underline style. Defaults to the single line the app has always drawn, not to `"none"`. |
+| `link_underline_rgba` | colour | the link colour | The link underline's colour, stated independently of the link's ink. Omitted, the line follows the ink. |
+| `strikethrough_rgba` | colour | the struck text's ink | The colour of the line through `~~text~~`. Omitted, it follows the struck text's own foreground. Reaches the body tag, the table-cell span and both export sinks alike. |
 | `code_inline_bg` | colour | derived | Inline code-span background. |
 | `code_block_bg` | colour | derived | Fenced code-block background. |
 | `blockquote_bar` | colour | derived | Blockquote indicator bar. |
@@ -288,8 +299,25 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `rule` | colour | derived | Horizontal-rule colour. |
 | `list_marker` | colour | widget foreground | Bullet, numeral and task-checkbox colour. Marker only; item text keeps the body foreground. |
 | `mark_bg` | colour | `#fff59d_88` | Background band behind `==marked==` text. |
+| `list_marker_2` | colour | `list_marker` | The **bullet's** colour at nesting depth 2. ⚠️ Bullet only, unlike the un-suffixed `list_marker` beside it, which colours all three marker kinds: a nested numeral is still a numeral and a nested task box still a box, where a bullet dot's whole job is to say which level you are on. |
+| `list_marker_3` | colour | `list_marker_2` | The bullet's colour at depth 3 **and deeper**. Unset falls back to the next *shallower* tier, not to the base — so stating only `list_marker_2` colours every depth from 2 down. |
+| `list_bullet_glyph` | `string` | — | A glyph drawn in place of the bullet dot. Trimmed; refused (falling back to the drawn marker) if empty, over 8 characters, or carrying a control character — over-long is refused rather than cut, since a cut can split a grapheme cluster. |
+| `list_bullet_glyph_2` | `string` | `list_bullet_glyph` | The bullet's glyph at nesting depth 2. |
+| `list_bullet_glyph_3` | `string` | `list_bullet_glyph_2` | The bullet's glyph at depth 3 and deeper. |
+| `list_ordered_glyph` | `string` | — | A glyph drawn in place of the ordered numeral. ⚠️ This DISCARDS the ordinal — deliberate, and inert unless a theme asks for it. |
+| `list_task_glyph` | `string` | — | A glyph drawn in place of the unchecked task box. |
+| `list_task_checked_glyph` | `string` | — | A glyph drawn in place of the checked task box. Resolves independently of the unchecked one, so a theme may state either alone. |
+| `sprite_list_bullet` | `string` | — | A sprite image drawn in place of the bullet dot. Theme-relative and validated like every sprite key (no absolute path, no traversal, symlink-contained, allowlisted extension, size-capped). **A sprite outranks a glyph for the same marker.** |
+| `sprite_list_bullet_2` | `string` | `sprite_list_bullet` | The bullet's sprite at nesting depth 2. |
+| `sprite_list_bullet_3` | `string` | `sprite_list_bullet_2` | The bullet's sprite at depth 3 and deeper. |
+| `sprite_list_ordered` | `string` | — | A sprite drawn in place of the ordered numeral. |
+| `sprite_list_task` | `string` | — | A sprite drawn in place of the unchecked task box. |
+| `sprite_list_task_checked` | `string` | — | A sprite drawn in place of the checked task box. |
 | `mark_fg` | colour | body foreground | Ink for `==marked==` text. Omitted, marked text keeps the body foreground and only its background changes — how a highlighter behaves on paper, and right for any `mark_bg` that is a translucent wash. State it when the band is opaque enough to need its own ink. Reaches the body tag and the table-cell span alike. |
 | `annotation_hl` | colour | `#FFD133_61` | Annotation highlight overlay. |
+| `annotation_chip_bg` | colour | hardcoded amber | CriticMarkup comment gutter chip's fill. Omitted, the chip stays the exact hardcoded amber/white it always was (TDD 18.2). |
+| `annotation_chip_fg` | colour | hardcoded white | Ink for the chip's overflow-count numeral. |
+| `sprite_annotation_chip` | `string` | — | A sprite image drawn in place of the flat chip fill, path relative to this theme file's own directory. Validated at load time (no absolute path, no `..` traversal, symlink-contained, allowlisted extension, size-capped — `crate::sprite::resolve`). No expression in the PDF's inline Pango markup — a stated scope limit (TDD 18.19). |
 | `find_hl_all` | colour | `#f6d32d` | Highlight for all find matches. |
 | `find_hl_current` | colour | derived | Highlight for the current find match. |
 
@@ -300,7 +328,8 @@ desktop's).
 ### Typography
 
 Pango attributes, so inherently zoom-safe. Out-of-range values are clamped, not
-rejected.
+rejected — and so is an unrecognised *line style*: a `heading_underline = "zigzag"`
+falls back to that key's default rather than failing the theme.
 
 | Key | Type | Default | Range |
 |-----|------|---------|-------|
@@ -319,6 +348,8 @@ value cannot carry punctuation into a generated CSS rule.
 | Key | Type | Default | Range |
 |-----|------|---------|-------|
 | `heading_space_below` | `[i32; 5]` | `[4, 4, 2, 2, 2]` | each `0`–`400` |
+| `heading_space_above` | `[i32; 5]` | `[0, 0, 0, 0, 0]` | each `0`–`400` |
+| `heading_band_radius` | `i32` | `0` | `0`–`400` |
 | `blockquote_bar_width` | `i32` | `3` | `0`–`400` |
 | `blockquote_text_gap` | `i32` | `10` | `0`–`400` |
 | `list_step` | `i32` | `28` | `4`–`400` |

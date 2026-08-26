@@ -102,6 +102,59 @@ pub(crate) fn mark_open() -> String {
 }
 pub(crate) const MARK_CLOSE: &str = "</span>";
 
+/// Opening Pango span for themed BOLD inside a table-cell label — the cell twin of
+/// the `TagName::Bold` body tag's `bold_weight`. Without this, `bold_weight` applied
+/// only on the buffer; a table cell's `<b>` ignored it (TDD 18.18).
+pub(crate) fn bold_open() -> String {
+    format!("<span{}>", crate::theme::active().typography.bold_attr())
+}
+pub(crate) const BOLD_CLOSE: &str = "</span>";
+
+/// Opening and closing Pango tags for themed STRIKETHROUGH inside a table-cell label —
+/// the cell twin of the `TagName::Strike` body tag's `strikethrough_rgba` (TDD 18.23).
+///
+/// `("<s>", "</s>")` when the theme states no strike colour, so a theme without the key
+/// produces the byte-identical markup this path always emitted (TDD 18.2).
+///
+/// **Both halves come from one call** because they are not independent: the plain form
+/// closes with `</s>` and the themed form with `</span>`, and a mismatched pair fails
+/// `pango_parse_markup`, which renders the whole cell EMPTY with no warning (ScrAP-163).
+/// The open and the close are pushed from different walk callbacks, so each calls this
+/// and takes its half; they cannot disagree, because a render is one synchronous walk
+/// and the active theme cannot change inside it.
+pub(crate) fn strike_tags() -> (String, &'static str) {
+    match crate::theme::active().strikethrough_rgba {
+        None => ("<s>".to_string(), "</s>"),
+        Some(c) => (
+            format!(
+                "<span strikethrough=\"true\" strikethrough_color=\"{}\">",
+                crate::palette::to_hex(c)
+            ),
+            "</span>",
+        ),
+    }
+}
+
+/// Opening Pango span for themed SUPERSCRIPT inside a table-cell label — the cell
+/// twin of `TagName::Superscript`'s `supsub_scale` + `superscript_rise` (TDD 18.18).
+pub(crate) fn superscript_open() -> String {
+    format!(
+        "<span{}>",
+        crate::theme::active().typography.supsub_attr(true)
+    )
+}
+pub(crate) const SUPERSCRIPT_CLOSE: &str = "</span>";
+
+/// Opening Pango span for themed SUBSCRIPT inside a table-cell label — the cell twin
+/// of `TagName::Subscript`'s `supsub_scale` + `subscript_rise` (TDD 18.18).
+pub(crate) fn subscript_open() -> String {
+    format!(
+        "<span{}>",
+        crate::theme::active().typography.supsub_attr(false)
+    )
+}
+pub(crate) const SUBSCRIPT_CLOSE: &str = "</span>";
+
 /// Wrap half-open **char** ranges of `plain` in the amber annotation highlight span.
 /// `highlights` are char offsets into `plain` (cell-local, as from
 /// [`crate::annotate::map_cleaned_highlight_to_local`]); they are sorted and
@@ -242,6 +295,17 @@ pub(crate) enum ListMarkerKind {
     },
 }
 
+/// One heading's extent in the preview buffer, plus the theme slot its level reads.
+///
+/// `level_index` is 0..=4 — the SAME h6-folds-to-h5 collapse `emit.rs` applies when it
+/// chooses a heading tag, computed once here so the paint path indexes rather than
+/// re-deriving a fold that would then have two definitions to disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HeadingSpan {
+    pub span: crate::span::BufferSpan,
+    pub level_index: usize,
+}
+
 /// One list item's marker for the drawn gutter.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ListMarker {
@@ -301,6 +365,11 @@ pub(crate) struct Renderer {
     /// to churn — GTK4Rs/AP-23); the preview view draws the left accent bar over each
     /// range in `snapshot_layer`, the same proven pattern as code-block backgrounds.
     pub blockquote_ranges: Vec<crate::span::BufferSpan>,
+    /// Every heading's buffer extent, for the drawn heading band (TDD 18.25). Collected
+    /// unconditionally — the scan is a push per heading, and gating it on a theme key
+    /// would make the render's OUTPUT depend on the theme, so a theme switch would need
+    /// a re-render rather than a repaint.
+    pub heading_spans: Vec<HeadingSpan>,
     link_start: Option<(i32, String)>,
     pub links: Vec<(i32, i32, String)>,
     pub anchored: Vec<(TextChildAnchor, gtk::Widget)>,
@@ -399,6 +468,7 @@ impl Renderer {
             blockquote_depth: 0,
             blockquote_start: None,
             blockquote_ranges: Vec::new(),
+            heading_spans: Vec::new(),
             link_start: None,
             links: Vec::new(),
             anchored: Vec::new(),

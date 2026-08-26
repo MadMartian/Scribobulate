@@ -85,8 +85,8 @@ application path").
 
 | Mechanism | Covers | Notes |
 |---|---|---|
-| **A — `GtkTextTag`** | headings, bold/italic/strike, links, inline code, sub/superscript, list indents, the annotation highlight, find-all | Pango attributes, not CSS nodes: **GTK cannot style a `GtkTextTag` with CSS**, which is why themes are TOML and not a stylesheet. |
-| **B — self-drawn** | code-block panel, blockquote accent bar, list-marker gutter (bullet / numeral / task checkbox) | `CodePreviewView::snapshot_layer`, from `Palette` + `theme.metrics`. The marker *glyph* takes the optional `list_marker` colour key (one key for all three kinds; unset ⇒ the widget foreground); it colours the glyph only — the item text is buffer content, unaffected. |
+| **A — `GtkTextTag`** | headings, bold/italic/strike, links, inline code, sub/superscript, list indents, the annotation highlight, find-all | Pango attributes, not CSS nodes: **GTK cannot style a `GtkTextTag` with CSS**, which is why themes are TOML and not a stylesheet. Heading colour and face are stated **per level** (`heading_colors`/`heading_fonts`, five slots h1 · h2 · h3 · h4 · h5-and-deeper); an empty slot folds down to the single `heading_color`/`heading_font`, and that fold happens **once, in `Theme::resolve`**, so the tag, the table header and the export sinks all index an already-correct value rather than each re-deriving the fallback. A heading may also carry a **rule** (`heading_overline`/`heading_underline` + `heading_underline_rgba`) and open space above itself (`heading_space_above`); ⚠️ only the UNDERLINE side takes a colour, because GTK 4.6 double-frees a text run carrying a coloured overline *and* a coloured underline — measured, and a link inside a heading is exactly such a run, so the invariant is per RUN and splitting the two across two tags does not escape it. Nothing in this tree may set `overline-rgba`; a `clippy.toml` ban and a live tag-table walk hold it, and `src/theme.rs`'s `HeadingRule` carries the measurement. Two tags each colouring an UNDERLINE — a ruled heading with a link in it — is measured clean, which is what makes both `heading_underline_rgba` and `link_underline_rgba` safe together. A link's underline is a themed style + colour (`link_underline`/`link_underline_rgba`), floored at the single line the app has always drawn rather than at `none`; the strike line takes `strikethrough_rgba`, and the body tag, the table-cell span and both export sinks read that one key. |
+| **B — self-drawn** | code-block panel, blockquote accent bar, list-marker gutter (bullet / numeral / task checkbox), the annotation chip, the heading band | `CodePreviewView::snapshot_layer`, from `Palette` + `theme.metrics`. The marker *glyph* takes the optional `list_marker` colour key (one key for all three kinds; unset ⇒ the widget foreground); it colours the glyph only — the item text is buffer content, unaffected. A theme may also stand its own **glyph string** or a **sprite** in for any of the drawn markers (`list_*_glyph`, `sprite_list_*`); a sprite outranks a glyph for the same marker, and the precedence is decided in ONE pure function (`codeview::gutter::marker_substitute`) that the drawn gutter and both export sinks read, so the screen and the artefacts cannot answer different keys. The **bullet** — and only the bullet — states its colour, glyph and sprite in three **nesting-depth tiers** (depth 1, depth 2, depth 3-and-deeper: `list_marker_2`/`_3`, `list_bullet_glyph_2`/`_3`, `sprite_list_bullet_2`/`_3`). Each tier falls back to the next *shallower* one, so stating only the depth-2 key colours every depth from 2 down, and stating none leaves every tier on the un-suffixed key — which is exactly the behaviour that existed before the tiers did. As with the per-level heading fold, the fold happens **once, in `Theme::resolve`**, and `theme::depth_tier` is the single definition of which tier a depth reads; the gutter, the HTML sink and the PDF sink each index, none re-derives the fallback. An ordered numeral and a task box stay single-valued at every depth: they are the same marker wherever they sit, where a bullet dot's job is to say which level you are on. In the HTML sink the tiers become depth-scoped selectors (`ul > li`, `li ul > li`, `li li ul > li`) and CSS specificity does the depth arithmetic — bullet-scoped deliberately, since a bare `li li` would catch a nested numbered item too. A marker glyph is the first theme-supplied TEXT to reach an exported artefact, so it carries its own escaping seam — see below. The **heading band** (`heading_band_bg` per level, `heading_band_gradient_to`, `heading_band_radius`, `sprite_heading_band`) spans the CONTENT COLUMN — the same extent the code-block card uses, not the text column a `paragraph_background_rgba` tag would pin it to: a tag band follows the TAG's margins, so a heading inside a quote or a list would band at a different width from its siblings, and the content column is the one extent all three renderings can agree on. A soft-wrapped heading gets one continuous band for free, because the extent comes from `line_yrange`, which spans every display row of the logical line — no display-line X is needed, which matters because at GTK 4.6 there is no way to obtain one on the paint path without a line-display cache insert (ScrAP-105). ⚠️ Its span vector is in `snapshot_layer`'s early-return gate; a drawn vector left out of that gate paints only on documents that happen to carry some OTHER decoration, silently. The annotation chip is the FIRST decoration in the closed vocabulary (`sdd/PLAN.preview-decoration.md`): `annotation_chip_bg`/`_fg`, or a `sprite_annotation_chip` file that replaces the flat fill outright. Every key unset ⇒ the exact hardcoded amber/white the chip always used (TDD 18.2). |
 | **C — generated CSS** | the page (background/`color`/`font-family`), table cells, the rule separator, the image-selection tint, the preview's floating cards | GTK4 removed the GTK3 widget style overrides, so a widget's background/font is **CSS-only**. CSS is a *generated artifact* here, never a source of truth — `preview/css.rs::theme_css` `format!`s it from the theme, as `zoom_css_rule` already did. |
 
 Mechanism C's page rule must style **both** the widget node (`color`,
@@ -159,6 +159,37 @@ one free-form string, `font_family`, is sanitised, and is **guaranteed to end in
 generic family**: fontconfig resolves an unknown family to the SANS default, not
 serif, so a stack without a generic terminator silently lands on sans and defeats
 the theme (`fc-match Charter` → Noto Sans).
+
+**A glyph key is theme-supplied TEXT, and it reaches three different grammars.** The
+drawn gutter hands it to a `PangoLayout` (plain text, no parsing), the PDF sink puts it
+in a Pango *markup* string, the HTML sink puts it in HTML — and, inside the HTML sink, in
+a CSS `content:` string literal, whose metacharacters are `"` and `\` rather than `<`
+and `&`. **A single `markup_escape_text` is not sufficient**: an un-escaped `&` fails
+`pango_parse_markup`, which renders the whole run EMPTY with no warning (ScrAP-163), and
+an un-escaped `<` in HTML is an injection into a file this project hands to a browser it
+does not control (TDD §25's untrusted-content rule is stricter here, never looser). So a
+validated glyph is a `theme::MarkerGlyph` — private inner string, no `Display`, no
+`Deref`, one constructor — reachable only through projections named for the grammar they
+are going into (`as_plain`, `escaped_for_pango_markup`, `escaped_for_html`), and the HTML
+one delegates to the export sink's own escaper so this project has one HTML escaper
+rather than one plus a copy that drifts. Validation refuses rather than truncates an
+over-long glyph: cutting at a `char` boundary can split a grapheme cluster and leave a
+lone combining mark, which renders worse than the marker the theme was replacing.
+
+**A theme may also name a sprite file** (`sdd/PLAN.preview-decoration.md`'s closed
+decoration vocabulary) — a materially different risk than a colour or a font stack,
+because it names something on disk rather than a value re-emitted from a parse.
+`crate::sprite::resolve` is the one place a sprite path is turned into bytes:
+relative-only (no absolute path), every component checked to refuse `..`/root/prefix
+(no traversal to interpret), canonicalised and checked to stay inside the theme
+file's own directory (a symlink cannot point out), an allowlisted extension
+(`png`/`webp`/`jpg`), and size-capped before anything decodes it. A reference that
+fails any check is dropped to "this decoration is absent" — the same inert-by-default
+behaviour an unset key gets — never a partial render and never a path outside the
+theme's own directory. The export HTML sink re-checks its OWN embed size cap
+independently rather than trusting `resolve`'s, since a base64 embed inflates by
+roughly a third on top of the decoded size and the two caps protect different
+budgets.
 
 ## Syntax palette: page luminance vs desktop luminance
 

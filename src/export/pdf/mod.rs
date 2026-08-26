@@ -95,6 +95,41 @@ pub(crate) struct Line {
     height: f64,
     /// A quote bar to draw down the left of this line, when it is inside a quote.
     quote_depth: u32,
+    /// The themed heading BAND to draw behind this line (TDD 18.25), present on every
+    /// line of a banded heading. Per LINE rather than per paragraph because that is the
+    /// unit this sink lays out and paginates in — consecutive lines produce abutting
+    /// rects, which is one continuous band for a heading that wrapped.
+    band: Option<HeadingBandInk>,
+    /// A themed list-marker SPRITE to draw in the gutter left of this line (TDD 18.24).
+    /// A glyph marker needs nothing here — it is text, so it rides inside the line's own
+    /// Pango markup like the bullet and numeral it replaces. An image cannot, which is
+    /// the whole reason this field exists rather than a fourth `LineKind`: the line is
+    /// still ordinary text, with a picture beside it.
+    marker: Option<MarkerImage>,
+}
+
+/// The heading band's ink for one line: its fill, an optional second gradient stop, and
+/// an optional sprite tiled across it.
+///
+/// **No radius.** This sink lays out and draws line by line, so a wrapped heading is
+/// several rects that abut; rounding each of them individually would pinch the band at
+/// every interior join, and there is no whole-paragraph box here to round instead
+/// (pagination can put the halves on different pages). A stated scope limit, not a gap:
+/// colour, gradient and sprite all reach the page, the corners do not.
+#[derive(Clone)]
+struct HeadingBandInk {
+    fill: gtk::gdk::RGBA,
+    gradient_to: Option<gtk::gdk::RGBA>,
+    sprite: Option<cairo::ImageSurface>,
+}
+
+/// A decoded list-marker sprite, already sized for the page.
+struct MarkerImage {
+    surface: cairo::ImageSurface,
+    /// Natural size in device pixels, for the draw-time scale factor.
+    natural: (f64, f64),
+    /// The square side it is drawn at, in points.
+    size: f64,
 }
 
 /// What a drawable line actually is.

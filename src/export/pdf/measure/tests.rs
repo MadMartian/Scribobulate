@@ -685,3 +685,97 @@ fn a_table_never_reaches_past_the_printable_width() {
         }
     }
 }
+
+/// TDD 18.25 / 25.3 — a banded heading level reaches EVERY line of the heading, and only
+/// the levels the theme bands.
+///
+/// Per line rather than per paragraph because that is the unit this sink paginates in:
+/// consecutive lines produce abutting rects, which is one continuous band for a heading
+/// that wrapped — so a wrapped heading whose second row carried no band would show as a
+/// band that stops half-way, and that is what this asserts against.
+#[test]
+fn a_banded_heading_carries_its_band_on_every_line_it_occupies() {
+    let mut t = theme();
+    t.heading_band.fills[0] = Some(gtk::gdk::RGBA::new(0.2, 0.4, 0.6, 1.0));
+    // Long enough to wrap in a narrow column, at h1's scale.
+    let d = doc::build(
+        "# a deliberately long heading that will not fit on one line at this width\n\n\
+         ## an unbanded second level\n\nbody\n",
+        &RenderOptions::default(),
+    );
+    let laid = lay_out(&d, &ctx(), 200.0, 684.0, &t);
+    let banded = laid.lines.iter().filter(|l| l.band.is_some()).count();
+    assert!(
+        banded > 1,
+        "the h1 wrapped but only {banded} line(s) carry the band — a band that stops \
+         half-way down its own heading"
+    );
+    // The h2 and the body carry none: the fill is per level, and only h1 is stated.
+    let unbanded = laid.lines.len() - banded;
+    assert!(
+        unbanded > 0,
+        "every line was banded, including the h2 and the body"
+    );
+
+    // And with no fill stated at all, nothing is banded — the System case (18.2).
+    let plain = lay_out(&d, &ctx(), 200.0, 684.0, &theme());
+    assert!(plain.lines.iter().all(|l| l.band.is_none()));
+}
+
+/// TDD 18.26 — the `list_depth` counter this sink threads actually COUNTS: a bullet three
+/// levels down reaches the deepest tier, and one at the top reaches the first.
+///
+/// Asserted on the laid-out page rather than on `list_marker_markup` in isolation,
+/// because the thing that can be wrong here is the THREADING — `decide.rs`'s arms are
+/// unit-tested against a depth handed to them, and a walk that always hands them `1`
+/// would pass every one of those tests while painting one colour down the whole list.
+#[test]
+fn a_nested_bullet_reaches_its_own_depth_tier_through_the_layout_walk() {
+    let mut t = theme();
+    let mut themes = crate::theme::Themes::builtin();
+    themes.merge_over_for_test(
+        "[themes.tiered]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n\
+         list_marker_3 = \"#333333\"\n",
+    );
+    let tiered = themes.resolve("tiered");
+    t.list_marker = tiered.list_marker;
+    t.list_bullet_colors = tiered.list_bullet_colors;
+
+    let d = doc::build(
+        "- one\n    - two\n        - three\n            - four\n",
+        &RenderOptions::default(),
+    );
+    let laid = lay_out(&d, &ctx(), 468.0, 684.0, &t);
+    // Read the colours back off the LAYOUT's attributes rather than off a markup string:
+    // this asserts that the span survived `set_markup` and landed on a real run, which
+    // is a stronger claim than "the string we built contained a hex code".
+    let colours: Vec<String> = laid
+        .lines
+        .iter()
+        .filter_map(|l| match &l.kind {
+            crate::export::pdf::LineKind::Text { layout, .. } => Some(layout.clone()),
+            _ => None,
+        })
+        .filter_map(|layout| {
+            let attrs = layout.attributes()?;
+            attrs
+                .attributes()
+                .into_iter()
+                .find_map(|a| a.downcast::<gtk::pango::AttrColor>().ok())
+                .map(|c| {
+                    let c = c.color();
+                    format!(
+                        "#{:02x}{:02x}{:02x}",
+                        c.red() >> 8,
+                        c.green() >> 8,
+                        c.blue() >> 8
+                    )
+                })
+        })
+        .collect();
+    assert_eq!(
+        colours,
+        vec!["#111111", "#222222", "#333333", "#333333"],
+        "each nesting level must read its own tier, and level 4 shares level 3's"
+    );
+}
