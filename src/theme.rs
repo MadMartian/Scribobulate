@@ -2165,19 +2165,29 @@ mod tests {
     /// TDD 18.23 — both resolve, and both merge from a user file (`take!`-list guard).
     #[test]
     fn a_theme_states_the_strike_and_link_underline_colours_independently() {
-        let sw = Themes::builtin().resolve("synthwave");
+        // Synthetic rather than a built-in theme's own content on purpose — content is
+        // free to change, this contract is not.
+        let mut synth = Themes::builtin();
+        synth.merge_over(
+            Themes::parse_compiled(
+                "[themes.sepia]\nlink = \"#2de1ff\"\nstrikethrough_rgba = \"#ff3caf\"\n\
+                 link_underline_rgba = \"#ff3caf\"\n",
+            )
+            .unwrap(),
+        );
+        let t = synth.resolve("sepia");
         assert_eq!(
-            crate::palette::to_hex(sw.strikethrough_rgba.expect("stated")),
+            crate::palette::to_hex(t.strikethrough_rgba.expect("stated")),
             "#ff3caf"
         );
         // Stated independently of the link's own ink — that separation IS the key.
         assert_eq!(
-            crate::palette::to_hex(sw.link_underline_rgba.expect("stated")),
+            crate::palette::to_hex(t.link_underline_rgba.expect("stated")),
             "#ff3caf"
         );
         assert_ne!(
-            crate::palette::to_hex(sw.link.expect("synthwave sets a link colour")),
-            crate::palette::to_hex(sw.link_underline_rgba.unwrap())
+            crate::palette::to_hex(t.link.expect("theme sets a link colour")),
+            crate::palette::to_hex(t.link_underline_rgba.unwrap())
         );
 
         let mut themes = Themes::builtin();

@@ -181,12 +181,12 @@ heading_band_padding = 0
 # taste of breathing room above a heading, not exclusively "room for the rule to sit in".
 heading_space_above = [18, 14, 10, 8, 8]
 #
-# The outrun pairing, applied to links and to struck text: cyan ink over a magenta line,
-# and a magenta strike that reads as a deliberate mark rather than as the lavender body
-# ink with a scratch through it. The link underline's colour is stated INDEPENDENTLY of
-# the link's own colour — that separation is the point of the key; a theme that wants
-# them to match simply omits it.
-link_underline_rgba = "#ff3caf"
+# Operator's call 2026-08-26: link underline back to the link's OWN cyan ink, the plain
+# pre-18.23 look — `link_underline_rgba` omitted on purpose (the line then follows
+# `link`'s colour, exactly as every link on this page did before that key existed).
+# The strike keeps its own magenta, independent of the (now unstated) underline colour —
+# a mark that reads as deliberate rather than as the lavender body ink with a scratch
+# through it.
 strikethrough_rgba  = "#ff3caf"
 syntect_theme = "base16-eighties.dark"   # a literal 80s palette for fenced code
 
