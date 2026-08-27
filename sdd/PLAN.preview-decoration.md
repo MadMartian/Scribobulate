@@ -26,11 +26,11 @@ commit and its TDD rubric, not this list, for detail):
   image, stated as a scope limit, not a silent gap.
 - **18.20** — broken-image placeholder is theme-reachable (mirrors the export
   sink's existing `.missing-image` treatment).
-- **18.21** — per-level heading colour/face (`heading_colors`/`heading_fonts`,
+- **18.21** — per-level heading colour/face (`heading_color_hN`/`heading_font_hN`,
   five slots each, empty/absent/unparseable falls back to the singular
   `heading_color`/`heading_font`). A link inside a heading still wins.
 - **18.22** — heading rule + `heading_space_above`. **One deviation from the
-  original K+P sketch**: there is no `heading_overline_rgba` key at all — GTK
+  original K+P sketch**: there is no a heading overline colour key key at all — GTK
   4.6.9 double-frees a text run carrying both a coloured overline and a coloured
   underline at once (a link inside a heading is such a run), MEASURED with
   valgrind and characterised against positive/negative controls. The overline is
@@ -39,8 +39,8 @@ commit and its TDD rubric, not this list, for detail):
   anywhere) and `theme::HeadingRule`'s rustdoc carries the finding. Routed to
   the gtk4-rs skill as **GTK4Rs/AP-308** — see § "Register and skill follow-up"
   below.
-- **18.23** — themed `strikethrough_rgba` and link underline style/colour
-  (`link_underline`, `link_underline_rgba`), including the table-cell path.
+- **18.23** — themed `strikethrough_color` and link underline style/colour
+  (`link_underline`, `link_underline_color`), including the table-cell path.
 
 **Phases 1 and 2 are both now fully shipped.** 18.24 (list-marker glyph/sprite)
 and 18.25 (heading band) landed per the "RATIFIED 2026-08-26 — both" decision
@@ -87,6 +87,18 @@ block's own margin cannot also carry its ink, because margin-priority and
 ink-priority pull in opposite directions on one tag — `blockquote`'s ink now
 rides a second, separately-prioritised tag for exactly that reason.
 
+**Vocabulary regularised after the plan's scope closed (operator's call).** Every
+key now states its type in its own name — `_color` for a colour, `_sprite` for an
+image, `_glyph` for a character, `_bg`/`_fg` only for a text surface's fill and ink —
+no key takes an array, and anything that varies by heading level or bullet depth is a
+suffixed key (`heading_color_h2`, `list_marker_color_3`) rather than a slot in one. The
+key set moved from a struct with a field per key to a **registry** (`theme::keys`), which
+is what makes the ~150 spellings cost no per-key code and what closed the `take!` trap
+this plan documents at § "What each tier costs": the merge is now a map merge. It also
+bought an unknown-key warning, which the arrays could never have (TDD 18.32-18.35).
+Names in this plan below are the pre-rename ones except where corrected; the current
+vocabulary is [`SCHEMA.md`](SCHEMA.md#themesid-keys).
+
 **Requested by**: the operator, to give custom themes more flare — glyphs,
 graphics, background colours, shapes on headings and other Markdown-rendered
 elements.
@@ -99,8 +111,8 @@ its **cost model is**: a themed value no longer has three application paths, it 
 and the export PDF sink**. Both sinks already resolve real theme values today
 (`export/html.rs` builds a stylesheet from the resolved `Palette` + `Theme`;
 `export/pdf.rs` reads `heading_scale`, `heading_weight`, `bold_weight`, `rule_space`,
-`blockquote_bar`, `blockquote_bar_width`, `rule`, `font_family`; `export/markup.rs`
-reads `mark_bg`, `annotation_hl` and the link colour). Every tier below gets more
+`blockquote_bar_color`, `blockquote_bar_width`, `rule`, `font_family`; `export/markup.rs`
+reads `mark_bg`, `annotation_hl_color` and the link colour). Every tier below gets more
 expensive, tier K+D gets a new failure mode that did not exist when this was scoped,
 and the glyph-sanitisation seam gains a third escape context. The affected sections
 each carry the correction inline; § "Export is two more application paths" is the
@@ -193,7 +205,7 @@ renderer.
 |---|---|---|---|
 | **h1–h5** (h6 folds to h5) | A | scale, weight, space-below, colour, family — *one* colour and *one* face for all five levels (`tags.rs:209-242`) | **K+P**: per-level colour/face; `overline`+`overline_rgba` (a rule *above* the heading — the cheapest real flare in the list); `underline`/`underline_rgba` (rule below); `letter_spacing`; `variant`/`text_transform` small-caps; `line_height`. **`heading_space_above` does not exist at all** — only space-below (`theme.rs:566-581`). **K+P**: a background **band** via `paragraph_background_rgba` — spans the text column, takes vertical padding from `pixels_above/below_lines`, survives soft-wrap as one band (*MEASURED*, § "Heading bands"). **K+D**: edge-to-edge band, rounded panel, gradient, border; a gutter glyph (§, ❧, level pips) drawn exactly as list markers are. |
 | **Body paragraph** | — | **nothing — body text carries no tag at all** (`renderer/emit.rs:78-107`) | **K**: paragraph spacing, `letter_spacing`, `line_height` — but with no body tag these go on the view or need one created. |
-| **Bold / italic / strike** | A | `bold_weight` only (`tags.rs:254-261`) | **K+P**: italic style, `strikethrough_rgba`, bold colour. |
+| **Bold / italic / strike** | A | `bold_weight` only (`tags.rs:254-261`) | **K+P**: italic style, `strikethrough_color`, bold colour. |
 | **Mark `==…==`** | A | `mark_bg`, `mark_fg` | **K+P**: highlighter underline, letter-spacing. **K+D**: a rounded or rough highlighter band — a tag background cannot have a radius or padding (ScrAP-21). |
 | **Sup / sub** | A | scale, rise | Nothing material missing. |
 | **Inline code** | A | background only | **Face and padding come from `config`, not the theme** (`tags.rs:301-302` → `config.rs:174-175`) — a theme cannot set the code face. **K+P**: foreground key, letter-spacing, `font_features`. A padded rounded chip is impossible as a tag → **K+D**. |
@@ -223,7 +235,7 @@ const → `theme.rs:77-85` clamp range → `ThemeSpec` field (`theme.rs:264-349`
 `:150-271`) → the use site → [`THEMING.md`](THEMING.md) mechanism table.
 ⚠️ The `take!` step is the silent one: omitting it compiles, and built-in themes
 still work while **every user-file override of that key is dropped** — the shipped
-`list_marker` bug, pinned at `theme.rs:1190-1199`.
+`list_marker_color` bug, pinned at `theme.rs:1190-1199`.
 ⚠️ **Since export landed, eleven steps are thirteen**: the key must also reach
 `export/html.rs`'s stylesheet and, where it is a value the page sink draws or measures,
 `export/pdf.rs` / `export/markup.rs`. This has the same silent-failure shape as `take!`
@@ -508,7 +520,7 @@ if option 1 is chosen instead.**
    broken-image placeholder a class.
 3. The cheap text-attribute keys, in descending visibility: link underline style +
    colour, per-level heading colour, heading `overline`/`underline` rule,
-   `heading_space_above`, heading small-caps and letter-spacing, `strikethrough_rgba`.
+   `heading_space_above`, heading small-caps and letter-spacing, `strikethrough_color`.
 
 **Phase 2 — needs the amended policy.** Two decorations first, chosen because
 they exercise both K+D shapes and prove the vocabulary before it grows:
@@ -665,7 +677,7 @@ one range does not escape it — the run-merge still produces one
 Fixed upstream by commit `86e962929bf2be13a721053141b33e4381f0312` (Coverity CID
 1621077, GitLab MR !8137) in GTK **4.16.13** and **4.18.0**, never backported to
 an earlier stable branch — so nothing short of raising this project's GTK floor
-past 4.16.13 makes `heading_overline_rgba` safe to add. `overline_rgba` set
+past 4.16.13 makes a heading overline colour key safe to add. `overline_rgba` set
 *alone* still leaks 16 B per destruction (not double-freed, but never freed
 either), which is why the theme vocabulary omits the key outright rather than
 merely warning against pairing it with the underline colour.
@@ -689,7 +701,7 @@ that number.
 **Mechanism A — `GtkTextTag` properties available at 4.6.** All of these are
 callable today: `background_rgba`, `background_full_height`,
 `paragraph_background_rgba`, `foreground_rgba`, `underline` + `underline_rgba`,
-`overline` + `overline_rgba`, `strikethrough` + `strikethrough_rgba`, `weight`,
+`overline` + `overline_rgba`, `strikethrough` + `strikethrough_color`, `weight`,
 `style`, `stretch`, `variant`, `text_transform`, `letter_spacing`, `line_height`,
 `font_features`, `family`/`font_desc`, `scale`, `size`, `rise`, `left_margin`,
 `right_margin`, `indent`, `accumulative_margin`, `pixels_above_lines`,
@@ -702,7 +714,7 @@ callable today: `background_rgba`, `background_full_height`,
 `wrap_mode`, `accumulative_margin`, `priority`.
 **Entirely unused, therefore free headroom**: `letter_spacing`, `line_height`,
 `text_transform`, `variant`, `font_features`, `stretch`, `overline`,
-`overline_rgba`, `underline_rgba`, `strikethrough_rgba`,
+`overline_rgba`, `underline_rgba`, `strikethrough_color`,
 `paragraph_background_rgba`, `background_full_height`, `tabs`.
 
 **Mechanism B — `Snapshot` primitives at 4.6.** Available: `append_color`,

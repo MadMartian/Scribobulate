@@ -43,7 +43,7 @@ fn emit_markup(inlines: &[Inline], doc: &ExportDoc, theme: &Theme, out: &mut Str
             Inline::Strong(v) => tag(out, "span", &theme.typography.bold_attr(), v, doc, theme),
             // Themed: `strikethrough_rgba` — the same key the body tag and the table
             // cell read (TDD 18.23). Unset ⇒ the bare `<s>` this sink always emitted.
-            Inline::Strikethrough(v) => match theme.strikethrough_rgba {
+            Inline::Strikethrough(v) => match theme.strikethrough_color {
                 None => tag(out, "s", "", v, doc, theme),
                 Some(c) => tag(
                     out,
@@ -89,8 +89,8 @@ fn emit_markup(inlines: &[Inline], doc: &ExportDoc, theme: &Theme, out: &mut Str
             Inline::Claim(idx, v) => {
                 let open = format!(
                     "<span background=\"{}\" bgalpha=\"{}\">",
-                    theme.annotation_hl.hex(),
-                    theme.annotation_hl.alpha_pct()
+                    theme.annotation_hl_color.hex(),
+                    theme.annotation_hl_color.alpha_pct()
                 );
                 out.push_str(&open);
                 emit_markup(v, doc, theme, out);
@@ -127,14 +127,20 @@ fn emit_markup(inlines: &[Inline], doc: &ExportDoc, theme: &Theme, out: &mut Str
                 // Underlined in the theme's link colour, and the destination shown
                 // where it differs from the text — a printed page cannot be clicked,
                 // so a bare link label loses the only thing it carried.
-                let colour = theme.link.map(crate::palette::to_hex).unwrap_or_else(|| {
-                    theme.accent.map(crate::palette::to_hex).unwrap_or_default()
-                });
+                let colour = theme
+                    .link_color
+                    .map(crate::palette::to_hex)
+                    .unwrap_or_else(|| {
+                        theme
+                            .accent_color
+                            .map(crate::palette::to_hex)
+                            .unwrap_or_default()
+                    });
                 // The underline is a themed STYLE with its own optional colour
                 // (TDD 18.23), from the same two keys the body tag reads; floored at
                 // `single`, which is what this sink always spelled.
                 let mut attr = format!(" underline=\"{}\"", theme.link_underline.pango_markup());
-                if let Some(c) = theme.link_underline_rgba {
+                if let Some(c) = theme.link_underline_color {
                     let _ = write!(attr, " underline_color=\"{}\"", crate::palette::to_hex(c));
                 }
                 if !colour.is_empty() {
@@ -174,16 +180,17 @@ fn emit_markup(inlines: &[Inline], doc: &ExportDoc, theme: &Theme, out: &mut Str
 /// project's GTK 4.6 floor requires 1.50, so the attribute is always understood — which
 /// matters more than it looks, because an attribute Pango does not recognise fails the
 /// whole `pango_parse_markup` and renders the run EMPTY, silently (ScrAP-163).
-pub(super) fn heading_rule_span(theme: &Theme) -> (String, &'static str) {
+pub(super) fn heading_rule_span(theme: &Theme, level_index: usize) -> (String, &'static str) {
     let rule = &theme.heading_rule;
-    if rule.is_absent() {
+    if rule.is_absent_at(level_index) {
         return (String::new(), "");
     }
+    let (overline, underline) = (rule.overline[level_index], rule.underline[level_index]);
     let mut attrs = String::new();
-    if !rule.overline.is_none() {
+    if !overline.is_none() {
         // Pango's overline vocabulary is none/single, which `LineStyle::overline`
         // already clamped to; spell what it resolved to, not what the theme typed.
-        let spelled = match rule.overline.overline() {
+        let spelled = match overline.overline() {
             gtk::pango::Overline::Single => "single",
             _ => "none",
         };
@@ -193,9 +200,9 @@ pub(super) fn heading_rule_span(theme: &Theme) -> (String, &'static str) {
         // does not (TDD 25.3).
         let _ = write!(attrs, " overline=\"{spelled}\"");
     }
-    if !rule.underline.is_none() {
-        let _ = write!(attrs, " underline=\"{}\"", rule.underline.pango_markup());
-        if let Some(c) = rule.underline_rgba {
+    if !underline.is_none() {
+        let _ = write!(attrs, " underline=\"{}\"", underline.pango_markup());
+        if let Some(c) = rule.underline_color[level_index] {
             let _ = write!(attrs, " underline_color=\"{}\"", crate::palette::to_hex(c));
         }
     }
@@ -305,15 +312,13 @@ mod markup_tests {
     fn the_heading_rule_reaches_export_markup_and_the_markup_parses() {
         let mut theme = crate::theme::Themes::builtin().resolve("system");
         // Absent by default: a theme with no rule wraps nothing at all.
-        let (open, close) = super::heading_rule_span(&theme);
+        let (open, close) = super::heading_rule_span(&theme, 0);
         assert!(open.is_empty() && close.is_empty());
 
-        theme.heading_rule = crate::theme::HeadingRule {
-            overline: crate::theme::LineStyle::Single,
-            underline: crate::theme::LineStyle::Wavy,
-            underline_rgba: Some(gtk::gdk::RGBA::new(0.0, 0.0, 1.0, 1.0)),
-        };
-        let (open, close) = super::heading_rule_span(&theme);
+        theme.heading_rule.overline[0] = crate::theme::LineStyle::Single;
+        theme.heading_rule.underline[0] = crate::theme::LineStyle::Wavy;
+        theme.heading_rule.underline_color[0] = Some(gtk::gdk::RGBA::new(0.0, 0.0, 1.0, 1.0));
+        let (open, close) = super::heading_rule_span(&theme, 0);
         assert!(open.contains("overline=\"single\""), "{open}");
         // …and NEVER an `overline_color`: see `theme::HeadingRule`.
         assert!(!open.contains("overline_color"), "{open}");
@@ -333,12 +338,11 @@ mod markup_tests {
         let mut theme = crate::theme::Themes::builtin().resolve("system");
         for over in [NoLine, Single, Double, Wavy] {
             for under in [NoLine, Single, Double, Wavy] {
-                theme.heading_rule = crate::theme::HeadingRule {
-                    overline: over,
-                    underline: under,
-                    underline_rgba: Some(gtk::gdk::RGBA::new(0.4, 0.5, 0.6, 1.0)),
-                };
-                let (open, close) = super::heading_rule_span(&theme);
+                theme.heading_rule.overline[0] = over;
+                theme.heading_rule.underline[0] = under;
+                theme.heading_rule.underline_color[0] =
+                    Some(gtk::gdk::RGBA::new(0.4, 0.5, 0.6, 1.0));
+                let (open, close) = super::heading_rule_span(&theme, 0);
                 gtk::pango::parse_markup(&format!("{open}H{close}"), '\0')
                     .unwrap_or_else(|e| panic!("{over:?}/{under:?} → {open:?} failed: {e}"));
             }
@@ -366,9 +370,9 @@ mod markup_tests {
         assert!(!plain.contains("strikethrough_color"), "{plain}");
         assert!(!plain.contains("underline_color"), "{plain}");
 
-        theme.strikethrough_rgba = Some(gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 1.0));
+        theme.strikethrough_color = Some(gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 1.0));
         theme.link_underline = crate::theme::LineStyle::Wavy;
-        theme.link_underline_rgba = Some(gtk::gdk::RGBA::new(0.0, 1.0, 0.0, 1.0));
+        theme.link_underline_color = Some(gtk::gdk::RGBA::new(0.0, 1.0, 0.0, 1.0));
         let themed = inline_markup(inlines, &d, &theme);
         assert!(
             themed.contains("strikethrough=\"true\" strikethrough_color=\"#ff0000\""),

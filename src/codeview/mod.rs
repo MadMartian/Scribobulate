@@ -691,20 +691,23 @@ mod imp {
                     // the list gutter that first needed it, not scoped to it, and every
                     // pixel metric painted here scales by it. A design-time px at zoom
                     // 1.0, scaled explicitly, like every other themed metric.
-                    let radius = (band.metrics.heading_band_radius as f64 * self.gutter_zoom.get())
-                        .round() as f32;
-                    let sprite = band
-                        .sprites
-                        .heading_band
-                        .as_ref()
-                        .and_then(crate::sprite::texture);
                     for h in heading_spans.iter() {
                         if h.span.is_empty() || h.span.is_outside(vis_start, vis_end) {
                             continue;
                         }
-                        let Some(fill) = band.heading_band.fills[h.level_index.min(4)] else {
+                        // Every band property is stated per level (TDD 18.32), so all
+                        // three are read at the level this heading is — not once for
+                        // the document.
+                        let level = h.level_index.min(crate::theme::HEADING_LEVELS - 1);
+                        let Some(fill) = band.heading_band.fills[level] else {
                             continue;
                         };
+                        let radius = (f64::from(band.metrics.heading_band_radius[level])
+                            * self.gutter_zoom.get())
+                        .round() as f32;
+                        let sprite = band.sprites.heading_band[level]
+                            .as_ref()
+                            .and_then(crate::sprite::texture);
                         let (top, bottom) = span_card_y_extent(
                             &*view,
                             &buffer,
@@ -724,7 +727,7 @@ mod imp {
                                 radius.min(card_w / 2.0).min((bottom - top) / 2.0),
                             ));
                         }
-                        match (&sprite, band.heading_band.gradient_to) {
+                        match (&sprite, band.heading_band.gradient_to[level]) {
                             // A sprite TILES at its natural size rather than stretching
                             // to the band: 1:1 pixels need no filter, and GSK 4.6's
                             // `append_texture` filters linearly with no choice (the
@@ -1806,7 +1809,7 @@ mod gtk_integration_tests {
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test(
             "[themes.banded]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
-             heading_band_bg = [\"#336699\", \"\", \"\", \"\", \"\"]\n",
+             heading_band_color_h1 = \"#336699\"\n",
         );
         crate::theme::set_active_for_test(themes.resolve("banded"));
 
@@ -1885,7 +1888,7 @@ mod gtk_integration_tests {
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test(
             "[themes.barred]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
-             blockquote_bar = \"#00ff00\"\nblockquote_bar_width = 24\n",
+             blockquote_bar_color = \"#00ff00\"\nblockquote_bar_width = 24\n",
         );
         let mut theme = themes.resolve("barred");
         // Set the resolved path directly: `resolve` never touches the filesystem, and
@@ -1972,7 +1975,7 @@ mod gtk_integration_tests {
             let mut themes = crate::theme::themes();
             themes.merge_over_for_test(&format!(
                 "[themes.panelled]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
-                 blockquote_bar = \"#00ff00\"\nblockquote_bar_width = 8\n{panel_key}"
+                 blockquote_bar_color = \"#00ff00\"\nblockquote_bar_width = 8\n{panel_key}"
             ));
             crate::theme::set_active_for_test(themes.resolve("panelled"));
 

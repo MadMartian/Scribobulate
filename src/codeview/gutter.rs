@@ -208,7 +208,7 @@ pub(crate) fn marker_ink(
         // theme that states no task colour is answered by this arm identically to the
         // one below it.
         ListMarkerKind::Task { .. } => theme.list_task_color,
-        _ => theme.list_marker,
+        _ => theme.list_marker_color,
     }
 }
 
@@ -671,7 +671,7 @@ mod substitute_tests {
     fn marker_ink_follows_the_bullets_depth_and_nothing_elses() {
         let mut themes = Themes::builtin();
         themes.merge_over_for_test(
-            "[themes.tiered]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n",
+            "[themes.tiered]\nlist_marker_color = \"#111111\"\nlist_marker_color_2 = \"#222222\"\n",
         );
         let t = themes.resolve("tiered");
         let hex = |kind: &ListMarkerKind, depth: usize| {
@@ -698,7 +698,7 @@ mod substitute_tests {
     fn a_task_checkbox_takes_its_own_colour_and_both_states_share_it() {
         let mut themes = Themes::builtin();
         themes.merge_over_for_test(
-            "[themes.split]\nlist_marker = \"#111111\"\nlist_task_marker = \"#ff00ff\"\n",
+            "[themes.split]\nlist_marker_color = \"#111111\"\nlist_task_marker_color = \"#ff00ff\"\n",
         );
         let t = themes.resolve("split");
         let hex = |kind: &ListMarkerKind| {

@@ -165,7 +165,7 @@ fn preview_hl_tag(buf: &gtk::TextBuffer) -> gtk::TextTag {
         return t;
     }
     let tag = gtk::TextTag::new(Some(PREVIEW_HL_TAG));
-    tag.set_background_rgba(Some(&crate::theme::active().find_hl_all.rgba()));
+    tag.set_background_rgba(Some(&crate::theme::active().find_hl_all_color.rgba()));
     table.add(&tag);
     tag
 }
@@ -183,10 +183,10 @@ fn preview_hl_tag(buf: &gtk::TextBuffer) -> gtk::TextTag {
 // independent literals, each free to drift from its body twin (TDD 18.6; POLICY
 // "One theme key, every application path").
 fn cell_hl_all() -> (u16, u16, u16) {
-    crate::theme::active().find_hl_all.u16_triple()
+    crate::theme::active().find_hl_all_color.u16_triple()
 }
 fn cell_hl_current() -> (u16, u16, u16) {
-    crate::theme::active().find_hl_current.u16_triple()
+    crate::theme::active().find_hl_current_color.u16_triple()
 }
 
 /// One occurrence of the search term in the preview, in document order. Body

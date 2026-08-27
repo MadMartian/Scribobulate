@@ -1980,7 +1980,7 @@ mod gtk_integration_tests {
     #[gtktest::test]
     fn a_themed_heading_scale_reaches_the_tag_and_leaves_font_size_alone() {
         let mut themes = crate::theme::themes();
-        themes.merge_over_for_test("[themes.big]\nheading_scale = [3.0, 2.0, 1.5, 1.0]\n");
+        themes.merge_over_for_test("[themes.big]\nheading_scale_h1 = 3.0\nheading_scale_h2 = 2.0\nheading_scale_h3 = 1.5\nheading_scale_h4 = 1.0\n");
         crate::theme::set_active_for_test(themes.resolve("big"));
         for zoom in [1.0, 2.0] {
             let products = build_render_products("# H1\n\n## H2\n\nbody", None, zoom, false);
@@ -2009,8 +2009,8 @@ mod gtk_integration_tests {
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test(
             "[themes.tiers]\nheading_color = \"#0000ff\"\nheading_font = \"Georgia, serif\"\n\
-             heading_colors = [\"#ff0000\", \"\", \"\", \"\", \"\"]\n\
-             heading_fonts = [\"Courier, monospace\", \"\", \"\", \"\", \"\"]\n",
+             heading_color_h1 = \"#ff0000\"\n\
+             heading_font_h1 = \"Courier, monospace\"\n",
         );
         crate::theme::set_active_for_test(themes.resolve("tiers"));
         let products = build_render_products("# one\n\n## two\n", None, 1.0, false);
@@ -2056,8 +2056,8 @@ mod gtk_integration_tests {
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test(
             "[themes.ruled]\nheading_overline = \"single\"\n\
-             heading_underline = \"wavy\"\nheading_underline_rgba = \"#0000ff\"\n\
-             heading_space_above = [20, 10]\n",
+             heading_underline = \"wavy\"\nheading_underline_color = \"#0000ff\"\n\
+             heading_space_above_h1 = 20\nheading_space_above_h2 = 10\n",
         );
         crate::theme::set_active_for_test(themes.resolve("ruled"));
         for zoom in [1.0, 2.0] {
@@ -2097,8 +2097,8 @@ mod gtk_integration_tests {
 
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test(
-            "[themes.marked]\nstrikethrough_rgba = \"#ff0000\"\n\
-             link_underline = \"wavy\"\nlink_underline_rgba = \"#00ff00\"\n",
+            "[themes.marked]\nstrikethrough_color = \"#ff0000\"\n\
+             link_underline = \"wavy\"\nlink_underline_color = \"#00ff00\"\n",
         );
         crate::theme::set_active_for_test(themes.resolve("marked"));
         let products = build_render_products("~~gone~~ [x](https://e.com)\n", None, 1.0, false);
@@ -2128,8 +2128,8 @@ mod gtk_integration_tests {
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test(
             "[themes.both]\nheading_overline = \"single\"\n\
-             heading_underline = \"single\"\nheading_underline_rgba = \"#ff0000\"\n\
-             link_underline = \"double\"\nlink_underline_rgba = \"#00ff00\"\n",
+             heading_underline = \"single\"\nheading_underline_color = \"#ff0000\"\n\
+             link_underline = \"double\"\nlink_underline_color = \"#00ff00\"\n",
         );
         crate::theme::set_active_for_test(themes.resolve("both"));
         let products =
@@ -2168,7 +2168,7 @@ mod gtk_integration_tests {
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test(
             "[themes.everything]\nheading_overline = \"single\"\n\
-             heading_underline = \"double\"\nheading_underline_rgba = \"#0000ff\"\n",
+             heading_underline = \"double\"\nheading_underline_color = \"#0000ff\"\n",
         );
         crate::theme::set_active_for_test(themes.resolve("everything"));
         let products = build_render_products(
@@ -2210,7 +2210,7 @@ mod gtk_integration_tests {
     fn only_a_banded_heading_level_is_inset_from_its_band() {
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test(
-            "[themes.oneband]\nheading_band_bg = [\"#334455\", \"\", \"\", \"\", \"\"]\n\
+            "[themes.oneband]\nheading_band_color_h1 = \"#334455\"\n\
              heading_band_padding = 14\n",
         );
         crate::theme::set_active_for_test(themes.resolve("oneband"));
@@ -2289,9 +2289,7 @@ mod gtk_integration_tests {
     #[gtktest::test]
     fn a_headings_only_document_still_reaches_the_paint_path() {
         let mut themes = crate::theme::themes();
-        themes.merge_over_for_test(
-            "[themes.banded]\nheading_band_bg = [\"#334455\", \"\", \"\", \"\", \"\"]\n",
-        );
+        themes.merge_over_for_test("[themes.banded]\nheading_band_color_h1 = \"#334455\"\n");
         crate::theme::set_active_for_test(themes.resolve("banded"));
         let products = build_render_products("# only a heading\n", None, 1.0, false);
         // Nothing else is present — this is the document the gate would have skipped.
@@ -2371,17 +2369,17 @@ mod gtk_integration_tests {
                 let theme = crate::theme::active();
                 assert_eq!(
                     tag_rgba,
-                    theme.annotation_hl.rgba(),
+                    theme.annotation_hl_color.rgba(),
                     "{id}: body tag colour"
                 );
                 // The cell path decomposes the same key into Pango attributes.
                 let cell = crate::renderer::ann_hl_open();
                 assert!(
-                    cell.contains(&theme.annotation_hl.hex()),
+                    cell.contains(&theme.annotation_hl_color.hex()),
                     "{id}: cell markup: {cell}"
                 );
                 assert!(
-                    cell.contains(&theme.annotation_hl.alpha_pct()),
+                    cell.contains(&theme.annotation_hl_color.alpha_pct()),
                     "{id}: {cell}"
                 );
             });
@@ -2441,7 +2439,7 @@ mod gtk_integration_tests {
         });
 
         let mut themes = crate::theme::themes();
-        themes.merge_over_for_test("[themes.sepia]\nstrikethrough_rgba = \"#654321\"\n");
+        themes.merge_over_for_test("[themes.sepia]\nstrikethrough_color = \"#654321\"\n");
         crate::theme::set_active_for_test(themes.resolve("sepia"));
         let (open, close) = crate::renderer::strike_tags();
         assert!(

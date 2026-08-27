@@ -30,6 +30,13 @@
 //! are all unit-tested without a GTK display; the GTK probe stays at the edge in
 //! `palette::Palette::resolve`.
 
+pub(crate) mod keys;
+mod spec;
+
+pub(crate) use keys::{BULLET_TIERS, HEADING_LEVELS};
+use spec::Sources;
+pub(crate) use spec::ThemeSpec;
+
 use gtk::gdk;
 use gtk::glib;
 use std::collections::BTreeMap;
@@ -52,28 +59,28 @@ pub(crate) const SYSTEM_ID: &str = "system";
 // one equals the shipped `data/themes.toml` `[themes.system]` value, so the data
 // file stays the place a human reads and edits, and drift is a test failure.
 
-const F_HEADING_SCALE: [f64; 5] = [2.2, 1.8, 1.48, 1.2, 1.0];
-const F_HEADING_WEIGHT: i32 = 700;
+const F_HEADING_SCALE: [f64; HEADING_LEVELS] = [2.2, 1.8, 1.48, 1.2, 1.0];
+const F_HEADING_WEIGHT: [i32; HEADING_LEVELS] = [700; HEADING_LEVELS];
 const F_BOLD_WEIGHT: i32 = 700;
 const F_SUPSUB_SCALE: f64 = 0.72;
 const F_SUPERSCRIPT_RISE: i32 = 4;
 const F_SUBSCRIPT_RISE: i32 = -2;
-const F_HEADING_SPACE_BELOW: [i32; 5] = [4, 4, 2, 2, 2];
+const F_HEADING_SPACE_BELOW: [i32; HEADING_LEVELS] = [4, 4, 2, 2, 2];
 /// Zero, because the heading tags set no `pixels_above_lines` at all before this key
 /// existed — the floor IS today's rendering, which is what keeps System byte-identical
 /// (TDD 18.2). Not symmetric with the below-floor by accident: only space-below was
 /// ever expressed.
-const F_HEADING_SPACE_ABOVE: [i32; 5] = [0, 0, 0, 0, 0];
+const F_HEADING_SPACE_ABOVE: [i32; HEADING_LEVELS] = [0, 0, 0, 0, 0];
 /// No heading carries a band until a theme states a fill for its level, so the radius
 /// is only ever consulted for a band that exists.
-const F_HEADING_BAND_RADIUS: i32 = 0;
+const F_HEADING_BAND_RADIUS: [i32; HEADING_LEVELS] = [0; HEADING_LEVELS];
 /// NON-ZERO, unlike every other decoration default here, and deliberately so: a band's
 /// padding is not an opt-in flourish but part of drawing a band correctly. It is inert
 /// anyway on a theme that bands nothing, because the inset is applied per level and only
 /// where that level HAS a band — the gate, not the value, is what keeps System
 /// byte-identical (TDD 18.2), and every theme that already ships a band gets the fix
 /// with no content edit.
-const F_HEADING_BAND_PADDING: i32 = 12;
+const F_HEADING_BAND_PADDING: [i32; HEADING_LEVELS] = [12; HEADING_LEVELS];
 /// No heading rule is drawn today, on either side.
 const F_HEADING_OVERLINE: LineStyle = LineStyle::None;
 const F_HEADING_UNDERLINE: LineStyle = LineStyle::None;
@@ -445,14 +452,6 @@ impl MarkerGlyph {
     }
 }
 
-/// How many nesting-depth tiers a BULLET's decoration is stated in: depth 1, depth 2,
-/// and depth 3-and-deeper (TDD 18.26).
-///
-/// Three rather than "one per depth" because a list nests arbitrarily and a theme cannot
-/// state a value for every depth it might meet — so the deepest tier is a catch-all, and
-/// `depth_tier` is the one function that says so.
-pub(crate) const BULLET_TIERS: usize = 3;
-
 /// The tier a 1-based list nesting `depth` reads: depth 1 → 0, depth 2 → 1, depth 3 and
 /// anything deeper → 2.
 ///
@@ -485,280 +484,12 @@ pub(crate) struct ListGlyphs {
     pub task_checked: Option<MarkerGlyph>,
 }
 
-// ── the file model ────────────────────────────────────────────────────────────
-
-/// One theme exactly as authored. Every key is optional: a theme states only what
-/// makes it distinctive, and anything it omits resolves through `[themes.system]`
-/// and then the desktop GTK theme.
-#[derive(serde::Deserialize, Default, Clone, Debug, PartialEq)]
-#[serde(default)]
-pub(crate) struct ThemeSpec {
-    /// Display name for the chooser. Falls back to the theme's id.
-    pub name: Option<String>,
-    /// Optional colour-emoji / unicode symbol shown to the LEFT of the theme's name in
-    /// the picker (menu + toolbar). Pure decoration; omit for no symbol.
-    pub symbol: Option<String>,
-
-    // Base colours. A named theme injects these instead of probing the desktop;
-    // every derived colour follows for free, because the derivation is already a
-    // pure function of exactly these three (see `palette::Palette::from_base`).
-    pub background: Option<String>,
-    pub foreground: Option<String>,
-    pub accent: Option<String>,
-    pub font_family: Option<String>,
-    pub syntect_theme: Option<String>,
-
-    // Derived colours — omit to derive, set to override.
-    /// Heading foreground (h1–h6). Omit ⇒ headings inherit the body foreground
-    /// (the default — the heading tags set only scale/weight). Set ⇒ all headings
-    /// take this colour (a link inside a heading still wins, being higher priority).
-    pub heading_color: Option<String>,
-    /// Heading font family (h1–h6 + the table header). Omit ⇒ headings use the body
-    /// `font_family`. Set ⇒ a distinct heading face (e.g. a display font like Orbitron)
-    /// while the body keeps a readable one — the honest fix for "one family, two scales".
-    /// A CSS stack, sanitised and generic-terminated exactly like `font_family`.
-    pub heading_font: Option<String>,
-    /// Per-level heading colours, h1 · h2 · h3 · h4 · h5-and-deeper. FIVE slots, the
-    /// same shape and the same fold as `heading_scale` (h6 maps onto the h5 tag before
-    /// a tag is ever chosen, so no theme can differentiate them). A slot left EMPTY
-    /// (`""`) — or absent, because the array is short — falls back to the single
-    /// `heading_color`, so a theme states only the levels it wants to distinguish.
-    /// The table header is NOT a level: it reads `table_head_fg`, which falls back to
-    /// the singular `heading_color` and never to a per-level slot.
-    pub heading_colors: Option<Vec<String>>,
-    /// Per-level heading font stacks, same five slots and same empty-means-inherit rule
-    /// as `heading_colors`, falling back to `heading_font`. Each slot is sanitised and
-    /// generic-terminated exactly like `font_family`.
-    pub heading_fonts: Option<Vec<String>>,
-    /// A rule ABOVE the heading text: `"none"` (the default — no rule, exactly as
-    /// before this key existed) or `"single"`. Pango's overline has no other values, so
-    /// `"double"`/`"wavy"` are accepted and clamped to a single line.
-    ///
-    /// ⚠️ **There is deliberately no `heading_overline_rgba` key**, so this rule always
-    /// takes the heading's own ink. GTK 4.6 DOUBLE-FREES a text run that carries both a
-    /// coloured overline and a coloured underline — see [`HeadingRule`] for the
-    /// measurement and why the key's absence, rather than a rule about it, is the fix.
-    pub heading_overline: Option<String>,
-    /// A rule BELOW the heading text: `"none"` (the default), `"single"`, `"double"` or
-    /// `"wavy"`. This is the text-decoration line under the glyph run, not a
-    /// column-width divider.
-    pub heading_underline: Option<String>,
-    /// The underline's colour. Omitted ⇒ the line follows the heading's own foreground,
-    /// which is what a `GtkTextTag` does when `underline-rgba` is never set.
-    pub heading_underline_rgba: Option<String>,
-    /// The BAND behind a heading's text, per level (h1 · h2 · h3 · h4 · h5-and-deeper),
-    /// the same five slots and the same empty-means-unset rule as `heading_colors`. A
-    /// level with no fill carries no band, which is every level of every theme until one
-    /// asks — so the decoration is absent rather than defaulted (TDD 18.2).
-    ///
-    /// Per level because "band the h1 only" is the ordinary want; the band's SHAPE
-    /// (radius, gradient, sprite) is one description shared by every level that has one.
-    pub heading_band_bg: Option<Vec<String>>,
-    /// A second stop. Stated, the band is a vertical linear gradient from the level's own
-    /// fill down to this colour; omitted, it is a flat fill.
-    pub heading_band_gradient_to: Option<String>,
-    /// Corner radius of the band, design-time px at zoom 1.0.
-    pub heading_band_radius: Option<i32>,
-    /// Space between the band's edge and the heading text inside it, left and right,
-    /// design-time px at zoom 1.0. Applied ONLY to a level that carries a band, so a
-    /// theme that bands nothing is untouched by it whatever its value.
-    pub heading_band_padding: Option<i32>,
-    /// A sprite TILED at its natural size down the blockquote's accent bar, in place of
-    /// its flat `blockquote_bar` colour (TDD 18.28). Theme-relative and validated like
-    /// every other sprite key.
-    ///
-    /// A sprite OUTRANKS the flat colour, and every path states that with an explicit
-    /// branch rather than leaving it to composition: painting the fill and then the tile
-    /// over it looks identical for an opaque tile and lets the flat colour bleed through
-    /// a transparent one, which is a bug that only appears for the sprites nobody tested.
-    ///
-    /// A theme using one wants `blockquote_bar_width` at the tile's own width — the bar
-    /// keeps its geometry and the tile is clipped to it, so a 24px tile in a 4px bar is
-    /// a 4px slice of a tile, not a tile.
-    pub sprite_blockquote_bar: Option<crate::sprite::SpriteRef>,
-    /// A sprite TILED across the band, in place of its fill. Theme-relative and validated
-    /// like every sprite key. Outranks the fill and the gradient, the same way a marker
-    /// sprite outranks a marker glyph.
-    pub sprite_heading_band: Option<crate::sprite::SpriteRef>,
-    /// A sprite TILED horizontally across the `---` horizontal rule, in place of its flat
-    /// `rule` colour (TDD 18.31). Theme-relative and validated like every sprite key,
-    /// and it outranks the colour the same way every other sprite-vs-flat pair does.
-    ///
-    /// ⚠️ The rule is the one decoration in this vocabulary drawn as a real anchored
-    /// WIDGET (a `GtkSeparator`), so a sprite here does not colour that widget — it
-    /// replaces it with one that tiles the texture (`widgets::rule`). A GTK CSS `url()`
-    /// cannot reach a sprite that is compiled into the binary, which every built-in
-    /// theme's is.
-    pub sprite_rule: Option<crate::sprite::SpriteRef>,
-    pub link: Option<String>,
-    /// A link's underline style: `"single"` (the default, and what the app drew before
-    /// this key existed), `"double"`, `"wavy"`, or `"none"` for a coloured link with no
-    /// line at all.
-    pub link_underline: Option<String>,
-    /// The link underline's colour, independent of the link's ink. Omitted ⇒ the line
-    /// follows the link colour, exactly as before this key existed.
-    pub link_underline_rgba: Option<String>,
-    pub code_inline_bg: Option<String>,
-    pub code_block_bg: Option<String>,
-    pub blockquote_bar: Option<String>,
-    /// The PANEL behind quoted text, and the ink on it (TDD 18.29) — both optional and
-    /// both independent of `blockquote_bar`, which stays the accent bar's own colour. A
-    /// theme may state either alone: a panel with no ink override, or re-inked quoted
-    /// text on the page background.
-    ///
-    /// The two halves reach the screen by DIFFERENT mechanisms, which is worth knowing
-    /// before moving either. The INK is a `GtkTextTag` property (below). The FILL is a
-    /// rect drawn over the quote's own `BufferSpan`, beside its accent bar
-    /// (`codeview`'s `snapshot_layer`) — it began as a `paragraph_background_rgba` on the
-    /// `blockquote` tag, which buys vertical padding and a soft-wrap-continuous band for
-    /// free, but GTK fills that background PER PARAGRAPH: a quote holding an intro
-    /// paragraph plus a nested list came out as disconnected rectangles with the page
-    /// showing between them, beside a bar drawn continuously from the one span. Drawn
-    /// from that same span the two can no longer disagree, and the padding and the
-    /// soft-wrap band survive because both come from `line_yrange`.
-    pub blockquote_bg: Option<String>,
-    /// See [`ThemeSpec::blockquote_bg`]. Carried by its OWN tag, registered before every
-    /// other ink-setting tag, so a link, a heading or a `==mark==` inside a quote keeps
-    /// its own colour — the panel re-inks the quote's BODY text, not everything in it.
-    pub blockquote_fg: Option<String>,
-    pub selection_bg: Option<String>,
-    /// The ink SELECTED text is drawn in, over `selection_bg`. Omit ⇒ derived from the
-    /// page and its ink (see `palette::Palette::from_base`), which is right often enough
-    /// that no shipped theme but Bedtime states it. State it when the derived answer is
-    /// merely *legible* rather than *good*: Bedtime's sand ink clears 5.3:1 on its violet
-    /// selection and still looks wrong there, which is a judgement no contrast ratio makes.
-    pub selection_fg: Option<String>,
-    pub table_border: Option<String>,
-    pub table_head_bg: Option<String>,
-    /// The table HEADER ROW's text colour (TDD 18.30), independent of `heading_color`.
-    /// Omitted ⇒ the header text falls back to `heading_color` exactly as before this
-    /// key existed, and omitting that too leaves it on the body ink.
-    ///
-    /// It exists because "a table header IS a heading" is true of the typography and not
-    /// of the FILL underneath it: a theme that bands its headings in one colour and
-    /// fills its table header in another had no way to say so, and had to leave
-    /// `table_head_bg` derived to keep the header text legible on it.
-    pub table_head_fg: Option<String>,
-    pub rule: Option<String>,
-    /// List-marker glyph colour — the unordered bullet dot, the ordered numeral, and
-    /// the task checkbox outline+tick (all three drawn in the left gutter). Colours the
-    /// MARKER ONLY; the item's text keeps the body foreground. Omit ⇒ markers inherit
-    /// the widget foreground (the pre-theming default). One key for all three kinds.
-    pub list_marker: Option<String>,
-    /// The BULLET's colour at nesting depth 2, and at depth 3-and-deeper (TDD 18.26).
-    /// Each optional; unset falls back to the next shallower tier, so an unstated
-    /// `list_marker_3` takes `list_marker_2`'s value and an unstated `list_marker_2`
-    /// takes `list_marker`'s — which is exactly today's behaviour when neither is set.
-    ///
-    /// ⚠️ **Bullet only**, unlike the un-suffixed `list_marker` beside them, which
-    /// colours all three marker kinds. A nested ordered list's numeral and a nested task
-    /// box keep the shared colour: they are the same marker at any depth, where a bullet
-    /// dot is the one whose whole job is to say which level you are on.
-    pub list_marker_2: Option<String>,
-    pub list_marker_3: Option<String>,
-    /// The TASK checkbox's colour, both states, independent of `list_marker` (TDD 18.27).
-    /// Omitted ⇒ task markers fall back to `list_marker` exactly as before this key.
-    ///
-    /// ONE key, not one per state: a checked and an unchecked box are the same control in
-    /// two positions, and colouring them apart would say they are two different things.
-    /// Their GLYPHS split (`list_task_glyph`/`_checked_glyph`) because the glyph is what
-    /// carries the state; the colour is what carries the identity.
-    pub list_task_marker: Option<String>,
-    /// Glyph strings that stand in for the DRAWN list markers — the bullet dot, the
-    /// ordered numeral, and the task checkbox in each of its two states. Validated by
-    /// [`MarkerGlyph::parse`]; unset (or refused) ⇒ the drawn default, unchanged.
-    ///
-    /// Replacing the ordered numeral DISCARDS the ordinal, which is a deliberate theme
-    /// choice rather than an oversight: the key is inert unless a theme asks for it, and
-    /// a theme that wants numbers simply does not state it.
-    pub list_bullet_glyph: Option<String>,
-    /// The bullet glyph at depth 2 / depth 3-and-deeper, folding to the shallower tier
-    /// exactly as `list_marker_2`/`_3` do (TDD 18.26).
-    pub list_bullet_glyph_2: Option<String>,
-    pub list_bullet_glyph_3: Option<String>,
-    pub list_ordered_glyph: Option<String>,
-    pub list_task_glyph: Option<String>,
-    pub list_task_checked_glyph: Option<String>,
-    /// Sprite files that stand in for the same four markers. Resolved and validated by
-    /// `crate::sprite::resolve` at load time, exactly as `sprite_annotation_chip` is.
-    /// A sprite WINS over a glyph for the same marker — it is the more specific and the
-    /// dearer opt-in, so stating both is answered by the one the theme paid more for.
-    pub sprite_list_bullet: Option<crate::sprite::SpriteRef>,
-    /// The bullet sprite at depth 2 / depth 3-and-deeper, folding the same way.
-    pub sprite_list_bullet_2: Option<crate::sprite::SpriteRef>,
-    pub sprite_list_bullet_3: Option<crate::sprite::SpriteRef>,
-    pub sprite_list_ordered: Option<crate::sprite::SpriteRef>,
-    pub sprite_list_task: Option<crate::sprite::SpriteRef>,
-    pub sprite_list_task_checked: Option<crate::sprite::SpriteRef>,
-
-    /// The colour of the line struck through `~~text~~`. Omitted ⇒ the line follows the
-    /// struck text's own foreground, which is what a `GtkTextTag` does when
-    /// `strikethrough-rgba` is never set — and what every theme did before this key.
-    pub strikethrough_rgba: Option<String>,
-
-    /// Ink for `==marked==` text. Omit ⇒ the marked text keeps the body foreground and
-    /// only its background changes, which is how a highlighter behaves on paper and is
-    /// right for every theme whose `mark_bg` is a wash. State it when the band is opaque
-    /// enough to need its own ink — it reaches BOTH the body tag and the table-cell
-    /// Pango path, like `mark_bg` itself.
-    pub mark_fg: Option<String>,
-
-    // Overlay colours. Each of these reaches BOTH the body path and the
-    // table-cell path (TDD 18.6) — the representations differ, the source is one key.
-    pub annotation_hl: Option<String>,
-    pub find_hl_all: Option<String>,
-    pub find_hl_current: Option<String>,
-    /// `==highlight==` (mark) background wash. Like the three above it reaches BOTH
-    /// the body tag and the table-cell Pango span from this one key. Per-theme,
-    /// because the right highlighter colour varies with the page (a warm wash on
-    /// cream, a neon wash on a dark page) — themes that omit it take the floor.
-    pub mark_bg: Option<String>,
-
-    // Typography — Pango attributes, so all inherently zoom-safe.
-    pub heading_scale: Option<Vec<f64>>,
-    pub heading_weight: Option<i32>,
-    pub bold_weight: Option<i32>,
-    pub supsub_scale: Option<f64>,
-    pub superscript_rise: Option<i32>,
-    pub subscript_rise: Option<i32>,
-
-    // Decoration geometry — design-time px at zoom 1.0, scaled on apply.
-    pub heading_space_below: Option<Vec<i32>>,
-    /// Space ABOVE each heading, h1..h5. The counterpart `heading_space_below` has
-    /// always existed; this side never did, so its floor is `[0, 0, 0, 0, 0]` — the
-    /// heading tags set no `pixels_above_lines` before this key.
-    pub heading_space_above: Option<Vec<i32>>,
-    pub blockquote_bar_width: Option<i32>,
-    pub blockquote_text_gap: Option<i32>,
-    pub list_step: Option<i32>,
-    pub list_item_gap: Option<i32>,
-    pub rule_space: Option<i32>,
-    pub table_cell_padding_v: Option<i32>,
-    pub table_cell_padding_h: Option<i32>,
-    pub table_border_width: Option<i32>,
-    pub table_cell_radius: Option<i32>,
-
-    // Annotation chip — closes a hardcoded-styling deviation (`codeview/mod.rs`),
-    // and the first entry in the closed decoration vocabulary. `None` on every
-    // key ⇒ the chip stays exactly the hardcoded amber/white it always was
-    // (TDD 18.2).
-    /// Chip fill colour.
-    pub annotation_chip_bg: Option<String>,
-    /// Chip ink (the overflow count's numeral).
-    pub annotation_chip_fg: Option<String>,
-    /// A sprite drawn in place of the flat chip fill. Relative to this file's
-    /// directory; resolved and validated by `crate::sprite::resolve` at load time
-    /// (`sdd/PLAN.preview-decoration.md` — "a theme naming a FILE" is the dearest of
-    /// the three untrusted-input classes, so this key alone does not loosen the
-    /// "no icon, no arbitrary path" rule the rest of the theme model holds).
-    pub sprite_annotation_chip: Option<crate::sprite::SpriteRef>,
-}
-
-#[derive(serde::Deserialize, Default, Debug)]
-struct ThemesFile {
-    #[serde(default)]
-    themes: BTreeMap<String, ThemeSpec>,
-}
+// ── the file model ──────────────────────────────────────────────────────────
+//
+// One theme exactly as authored lives in `spec::ThemeSpec`, and the vocabulary it
+// may state lives in `keys`. Neither is a struct with a field per key: the key set
+// is data, so the merge, the sprite walk and the per-level fallback are each one
+// piece of code rather than one line per key.
 
 /// Every installed theme, keyed by id.
 #[derive(Debug, Clone)]
@@ -767,17 +498,18 @@ pub(crate) struct Themes {
 }
 
 impl Themes {
-    /// Parse a themes file and resolve every sprite reference in it against
-    /// `origin`. A malformed file yields `None` so the caller can fall back rather
-    /// than surface a broken app (the same discipline `Config::parse` follows).
+    /// Parse a themes file, validating every key and resolving every sprite
+    /// reference in it against `origin`. A malformed *file* yields `None` so the
+    /// caller can fall back rather than surface a broken app (the same discipline
+    /// `Config::parse` follows); a malformed *key* costs only itself.
     ///
-    /// **Resolution happens HERE, not in the caller, and that is what makes it
-    /// total.** This is the sole constructor of a `ThemeSpec`, so a spec that has
-    /// escaped this function has had every sprite slot answered — a reference this
-    /// origin cannot supply is already `None`, and no `SpriteRef::Named` survives.
+    /// **Validation and sprite resolution happen HERE, not in the caller, and that
+    /// is what makes them total.** This is the sole constructor of a `ThemeSpec`, so
+    /// a spec that has escaped this function states only keys this build knows and
+    /// has had every sprite reference answered — no `SpriteRef::Named` survives.
     /// `Theme::resolve` therefore stays pure (no filesystem) while still seeing real
-    /// sources, and the built-in and user-file paths cannot diverge on when
-    /// resolution runs: they call the same function.
+    /// sources, and the built-in and user-file paths cannot diverge on when either
+    /// step runs: they call the same function.
     ///
     /// The origin is a parameter rather than a property of the text because the two
     /// callers genuinely differ: a file on disk resolves against its own directory, a
@@ -786,19 +518,7 @@ impl Themes {
         text: &str,
         origin: crate::sprite::SpriteOrigin<'_>,
     ) -> Option<BTreeMap<String, ThemeSpec>> {
-        match toml::from_str::<ThemesFile>(text) {
-            Ok(f) => {
-                let mut themes = f.themes;
-                for spec in themes.values_mut() {
-                    resolve_sprite_refs(spec, origin);
-                }
-                Some(themes)
-            }
-            Err(e) => {
-                log::warn!("theme: themes.toml parse error: {e} — ignoring this file");
-                None
-            }
-        }
+        ThemeSpec::parse_file(text, origin)
     }
 
     /// The compiled-in themes. Total by construction: if the shipped data file
@@ -860,8 +580,10 @@ impl Themes {
         let entry = |id: &String, s: &ThemeSpec| {
             (
                 id.clone(),
-                s.name.clone().unwrap_or_else(|| id.clone()),
-                s.symbol.clone(),
+                s.own_text(&keys::NAME)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| id.clone()),
+                s.own_text(&keys::SYMBOL).map(str::to_string),
             )
         };
         let mut rest: Vec<(String, String, Option<String>)> = self
@@ -907,96 +629,6 @@ impl Themes {
     }
 }
 
-impl ThemeSpec {
-    /// Overlay `other`'s set keys onto self, leaving self's value wherever `other`
-    /// is silent. This is the per-key half of both the user-file merge and the
-    /// selected→system resolution.
-    fn overlay(&mut self, other: ThemeSpec) {
-        macro_rules! take {
-            ($($f:ident),+ $(,)?) => { $( if other.$f.is_some() { self.$f = other.$f; } )+ };
-        }
-        take!(
-            name,
-            symbol,
-            background,
-            foreground,
-            accent,
-            font_family,
-            syntect_theme,
-            heading_color,
-            heading_font,
-            heading_colors,
-            heading_fonts,
-            heading_overline,
-            heading_underline,
-            heading_underline_rgba,
-            heading_band_bg,
-            heading_band_gradient_to,
-            heading_band_radius,
-            heading_band_padding,
-            sprite_blockquote_bar,
-            sprite_heading_band,
-            sprite_rule,
-            link,
-            link_underline,
-            link_underline_rgba,
-            strikethrough_rgba,
-            code_inline_bg,
-            code_block_bg,
-            blockquote_bar,
-            blockquote_bg,
-            blockquote_fg,
-            selection_bg,
-            selection_fg,
-            table_border,
-            table_head_bg,
-            table_head_fg,
-            rule,
-            list_marker,
-            list_marker_2,
-            list_marker_3,
-            list_task_marker,
-            list_bullet_glyph,
-            list_bullet_glyph_2,
-            list_bullet_glyph_3,
-            list_ordered_glyph,
-            list_task_glyph,
-            list_task_checked_glyph,
-            sprite_list_bullet,
-            sprite_list_bullet_2,
-            sprite_list_bullet_3,
-            sprite_list_ordered,
-            sprite_list_task,
-            sprite_list_task_checked,
-            mark_fg,
-            annotation_hl,
-            find_hl_all,
-            find_hl_current,
-            mark_bg,
-            heading_scale,
-            heading_weight,
-            bold_weight,
-            supsub_scale,
-            superscript_rise,
-            subscript_rise,
-            heading_space_below,
-            heading_space_above,
-            blockquote_bar_width,
-            blockquote_text_gap,
-            list_step,
-            list_item_gap,
-            rule_space,
-            table_cell_padding_v,
-            table_cell_padding_h,
-            table_border_width,
-            table_cell_radius,
-            annotation_chip_bg,
-            annotation_chip_fg,
-            sprite_annotation_chip,
-        );
-    }
-}
-
 // ── the resolved theme ────────────────────────────────────────────────────────
 
 /// A theme colour that carries its own alpha, resolved once and decomposed on
@@ -1034,8 +666,8 @@ pub(crate) struct Typography {
     /// h6-and-deeper to the h5 tag before a tag is ever chosen, so no theme can
     /// differentiate h6 from h5 however it is keyed. Honest to the renderer — h6 is
     /// a deliberate fold-into-deepest on every surface.
-    pub heading_scale: [f64; 5],
-    pub heading_weight: i32,
+    pub heading_scale: [f64; HEADING_LEVELS],
+    pub heading_weight: [i32; HEADING_LEVELS],
     pub bold_weight: i32,
     pub supsub_scale: f64,
     /// Points, converted to Pango units at apply time.
@@ -1126,18 +758,23 @@ impl Typography {
 /// and nothing else changes.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) struct HeadingRule {
-    /// The rule above the text. Always drawn in the heading's own ink — see the type
-    /// docs; there is no colour key for this side and adding one is a heap bug.
-    pub overline: LineStyle,
-    pub underline: LineStyle,
-    pub underline_rgba: Option<gdk::RGBA>,
+    /// The rule above the text, per level. Always drawn in the heading's own ink —
+    /// see the type docs; there is no colour key for this side at any level, and
+    /// adding one is a heap bug.
+    pub overline: [LineStyle; HEADING_LEVELS],
+    pub underline: [LineStyle; HEADING_LEVELS],
+    pub underline_color: [Option<gdk::RGBA>; HEADING_LEVELS],
 }
 
 impl HeadingRule {
-    /// Whether this theme draws any heading rule at all — the one gate every consumer
-    /// asks before emitting a rule, so "absent" is one decision rather than four.
-    pub(crate) fn is_absent(&self) -> bool {
-        self.overline.is_none() && self.underline.is_none()
+    /// Whether the heading at `level` carries a rule — the one gate every consumer
+    /// asks before emitting one, so "absent" is a single decision rather than four.
+    ///
+    /// Per level rather than per theme: each side is stated per level (TDD 18.32), so
+    /// a theme that rules its h1 alone must not make every other level emit an empty
+    /// decoration.
+    pub(crate) fn is_absent_at(&self, level: usize) -> bool {
+        self.overline[level].is_none() && self.underline[level].is_none()
     }
 }
 
@@ -1161,9 +798,9 @@ impl HeadingRule {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct HeadingBand {
     /// Per level, h1 · h2 · h3 · h4 · h5-and-deeper. `None` ⇒ that level carries no band.
-    pub fills: [Option<gdk::RGBA>; 5],
+    pub fills: [Option<gdk::RGBA>; HEADING_LEVELS],
     /// A second stop, making the band a vertical gradient from the level's fill.
-    pub gradient_to: Option<gdk::RGBA>,
+    pub gradient_to: [Option<gdk::RGBA>; HEADING_LEVELS],
 }
 
 impl HeadingBand {
@@ -1183,16 +820,17 @@ impl HeadingBand {
 /// pixels at the current zoom.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Metrics {
-    pub heading_space_below: [i32; 5],
+    pub heading_space_below: [i32; HEADING_LEVELS],
     /// Space above each heading. Zero on every level until a theme says otherwise, so
     /// the heading tag's `pixels_above_lines` stays at the view default (TDD 18.2).
-    pub heading_space_above: [i32; 5],
-    /// Corner radius of the heading band. Only consulted where a band exists.
-    pub heading_band_radius: i32,
+    pub heading_space_above: [i32; HEADING_LEVELS],
+    /// Corner radius of the heading band, per level. Only consulted where a band
+    /// exists.
+    pub heading_band_radius: [i32; HEADING_LEVELS],
     /// The band's internal horizontal padding: the heading TEXT is inset from the band's
     /// edge by this much on each side, while the band itself keeps the content column it
     /// shares with both export sinks. Only consulted where a band exists.
-    pub heading_band_padding: i32,
+    pub heading_band_padding: [i32; HEADING_LEVELS],
     pub blockquote_bar_width: i32,
     pub blockquote_text_gap: i32,
     /// The ONE definition both the `li-{depth}` tag's `left_margin` and the drawn
@@ -1218,7 +856,7 @@ pub(crate) struct Theme {
     pub symbol: Option<String>,
     pub background: Option<gdk::RGBA>,
     pub foreground: Option<gdk::RGBA>,
-    pub accent: Option<gdk::RGBA>,
+    pub accent_color: Option<gdk::RGBA>,
     /// The body font stack. A [`CssSafeFontStack`], so the type itself proves it was
     /// sanitised and generic-terminated — safe to interpolate into CSS. `None` ⇒
     /// fall through to the system font.
@@ -1233,24 +871,24 @@ pub(crate) struct Theme {
     /// with the singular `heading_color`: a slot the theme left unset carries that
     /// fallback here, so every consumer indexes and no consumer re-implements the
     /// fold. `None` in a slot still means "inherit the body foreground".
-    pub heading_colors: [Option<gdk::RGBA>; 5],
+    pub heading_colors: [Option<gdk::RGBA>; HEADING_LEVELS],
     /// Per-level heading font stacks, folded with `heading_font` the same way.
-    pub heading_fonts: [Option<CssSafeFontStack>; 5],
+    pub heading_fonts: [Option<CssSafeFontStack>; HEADING_LEVELS],
     /// The rule drawn above and/or below a heading; absent unless a theme asks for it.
     pub heading_rule: HeadingRule,
     /// The band behind a heading's text; absent unless a theme states a fill for a level.
     pub heading_band: HeadingBand,
-    pub link: Option<gdk::RGBA>,
+    pub link_color: Option<gdk::RGBA>,
     /// A link's underline style; `LineStyle::Single` unless a theme says otherwise,
     /// which is the line the app has always drawn.
     pub link_underline: LineStyle,
     /// The link underline's colour; `None` ⇒ it follows the link's own ink.
-    pub link_underline_rgba: Option<gdk::RGBA>,
+    pub link_underline_color: Option<gdk::RGBA>,
     /// The strike line's colour; `None` ⇒ it follows the struck text's own foreground.
-    pub strikethrough_rgba: Option<gdk::RGBA>,
+    pub strikethrough_color: Option<gdk::RGBA>,
     pub code_inline_bg: Option<gdk::RGBA>,
     pub code_block_bg: Option<gdk::RGBA>,
-    pub blockquote_bar: Option<gdk::RGBA>,
+    pub blockquote_bar_color: Option<gdk::RGBA>,
     /// The quote panel's fill and the ink on it (TDD 18.29); each `None` ⇒ that half is
     /// absent and quoted text keeps the page background / the body foreground, exactly
     /// as before these keys existed. Independent of `blockquote_bar` in both directions.
@@ -1259,7 +897,7 @@ pub(crate) struct Theme {
     pub selection_bg: Option<gdk::RGBA>,
     /// Selected-text ink; `None` ⇒ `palette` derives it from the page and its ink.
     pub selection_fg: Option<gdk::RGBA>,
-    pub table_border: Option<gdk::RGBA>,
+    pub table_border_color: Option<gdk::RGBA>,
     pub table_head_bg: Option<gdk::RGBA>,
     /// The table header row's ink (TDD 18.30), already folded with `heading_color` — so
     /// this slot IS `heading_color` unless the theme says otherwise, and a consumer
@@ -1267,10 +905,10 @@ pub(crate) struct Theme {
     /// `heading_colors` and `list_task_color` follow). `None` ⇒ the header text inherits
     /// the body foreground, which is what a theme stating neither key always did.
     pub table_head_fg: Option<gdk::RGBA>,
-    pub rule: Option<gdk::RGBA>,
+    pub rule_color: Option<gdk::RGBA>,
     /// List-marker glyph colour (bullet/numeral/checkbox); `None` ⇒ inherit the widget
     /// foreground. Marker glyph only — never the item text.
-    pub list_marker: Option<gdk::RGBA>,
+    pub list_marker_color: Option<gdk::RGBA>,
     /// The BULLET's colour by nesting-depth tier (TDD 18.26), already folded with
     /// `list_marker` — so slot 0 IS `list_marker` unless a theme says otherwise, and a
     /// consumer indexes rather than re-deriving the fallback. Bullet only: the ordered
@@ -1286,9 +924,9 @@ pub(crate) struct Theme {
     /// Ink for `==marked==` text, over `mark_bg`; `None` ⇒ the marked text keeps the
     /// body foreground, which is what every theme did before this key existed.
     pub mark_fg: Option<gdk::RGBA>,
-    pub annotation_hl: ThemeColor,
-    pub find_hl_all: ThemeColor,
-    pub find_hl_current: ThemeColor,
+    pub annotation_hl_color: ThemeColor,
+    pub find_hl_all_color: ThemeColor,
+    pub find_hl_current_color: ThemeColor,
     pub mark_bg: ThemeColor,
     pub typography: Typography,
     pub metrics: Metrics,
@@ -1320,7 +958,7 @@ pub(crate) struct Sprites {
     pub list_ordered: Option<crate::sprite::SpriteRef>,
     pub list_task: Option<crate::sprite::SpriteRef>,
     pub list_task_checked: Option<crate::sprite::SpriteRef>,
-    pub heading_band: Option<crate::sprite::SpriteRef>,
+    pub heading_band: [Option<crate::sprite::SpriteRef>; HEADING_LEVELS],
     pub blockquote_bar: Option<crate::sprite::SpriteRef>,
     /// The horizontal rule's tile (TDD 18.31). Unlike every other entry here, this one
     /// is read by a WIDGET rather than by a drawing pass or an export sink alone — see
@@ -1332,342 +970,178 @@ impl Theme {
     /// Apply resolution links 1 (selected) and 2 (`[themes.system]`), clamping and
     /// sanitising as it goes. Pure and total: every geometry/typography key lands
     /// on a value, and any colour still unresolved is left `None` for link 3.
+    ///
+    /// Every read goes through a [`keys`] constant rather than a field or a string,
+    /// and every per-level value is folded HERE — so `tags.rs`, the table header and
+    /// both export sinks index a value that is already correct instead of each
+    /// re-deriving the fallback (POLICY "One theme key, every application path").
     fn resolve(id: &str, selected: &ThemeSpec, system: &ThemeSpec) -> Theme {
-        // Link 1, then link 2 — for each key independently.
-        let pick = |a: &Option<String>, b: &Option<String>| a.clone().or_else(|| b.clone());
-        let color =
-            |a: &Option<String>, b: &Option<String>| pick(a, b).as_deref().and_then(parse_color);
-        // An overlay colour must always resolve, so it walks all the way to the floor.
-        let overlay = |a: &Option<String>, b: &Option<String>, floor: &str| {
+        let src = Sources { selected, system };
+
+        // An overlay colour must always resolve, so it walks all the way to a floor.
+        let overlay = |key: &keys::Key, floor: &str| {
             ThemeColor(
-                color(a, b).unwrap_or_else(|| parse_color(floor).unwrap_or(gdk::RGBA::BLACK)),
+                src.color(key)
+                    .unwrap_or_else(|| parse_color(floor).unwrap_or(gdk::RGBA::BLACK)),
             )
         };
 
-        let heading_scale = selected
-            .heading_scale
-            .clone()
-            .or_else(|| system.heading_scale.clone())
-            .map(|v| fit5_f64(&v, F_HEADING_SCALE, SCALE_RANGE))
-            .unwrap_or(F_HEADING_SCALE);
-        let heading_space_below = selected
-            .heading_space_below
-            .clone()
-            .or_else(|| system.heading_space_below.clone())
-            .map(|v| fit5_i32(&v, F_HEADING_SPACE_BELOW, METRIC_RANGE))
-            .unwrap_or(F_HEADING_SPACE_BELOW);
-        let heading_space_above = selected
-            .heading_space_above
-            .clone()
-            .or_else(|| system.heading_space_above.clone())
-            .map(|v| fit5_i32(&v, F_HEADING_SPACE_ABOVE, METRIC_RANGE))
-            .unwrap_or(F_HEADING_SPACE_ABOVE);
+        // The bare heading ink and face: what the theme said about headings as a
+        // whole, which is what the table header reads when it states nothing of its
+        // own (TDD 18.30). The per-level arrays beside them have already folded each
+        // level down to these.
+        let heading_color = src.color(&keys::HEADING_COLOR);
+        let heading_font = src.font(&keys::HEADING_FONT);
 
-        // Per-level heading colour/face (18.21). The array comes from ONE link — the
-        // selected theme's if it states one, else `[themes.system]`'s — exactly as
-        // `heading_scale` does; then each slot folds down to the singular key. The fold
-        // happens HERE, once, so `tags.rs`, the table header and the export sinks all
-        // index a value that is already correct rather than each re-deriving the
-        // fallback (POLICY "One theme key, every application path").
-        //
-        // An empty or unparseable slot IS the "unset" spelling: TOML arrays cannot hold
-        // a null, and a colour that fails to parse must fall back rather than reject the
-        // theme (TDD 18.11's clamp-don't-reject discipline, applied to a slot).
-        let heading_color = color(&selected.heading_color, &system.heading_color);
-        let heading_font = pick(&selected.heading_font, &system.heading_font)
-            .as_deref()
-            .and_then(sanitize_font_family);
-        let level_slots = |sel: &Option<Vec<String>>, sys: &Option<Vec<String>>| {
-            let authored = sel.clone().or_else(|| sys.clone()).unwrap_or_default();
-            let mut out: [Option<String>; 5] = Default::default();
-            for (slot, s) in out.iter_mut().zip(authored.iter()) {
-                if !s.trim().is_empty() {
-                    *slot = Some(s.clone());
-                }
-            }
-            out
-        };
-        let heading_colors = level_slots(&selected.heading_colors, &system.heading_colors)
-            .map(|s| s.as_deref().and_then(parse_color).or(heading_color));
-        let heading_fonts = level_slots(&selected.heading_fonts, &system.heading_fonts).map(|s| {
-            s.as_deref()
-                .and_then(sanitize_font_family)
-                .or_else(|| heading_font.clone())
-        });
-
-        // The heading rule (18.22). An unrecognised style falls back to the floor —
-        // "no rule" — rather than failing the theme, and each colour left unset stays
-        // `None` so the tag never sets `*-rgba` at all and the line follows the
-        // heading's own ink.
-        let style = |a: &Option<String>, b: &Option<String>, floor: LineStyle| {
-            pick(a, b)
-                .as_deref()
-                .and_then(LineStyle::parse)
-                .unwrap_or(floor)
-        };
-        let glyph = |a: &Option<String>, b: &Option<String>| {
-            pick(a, b).as_deref().and_then(MarkerGlyph::parse)
-        };
-        // Already-resolved sources: `Themes::parse` answered every sprite slot against
-        // its file's origin before this function ever sees the spec, so `Theme::resolve`
-        // itself stays pure (no filesystem) — matching every other field here.
-        let sprite = |a: &Option<crate::sprite::SpriteRef>,
-                      b: &Option<crate::sprite::SpriteRef>| {
-            a.clone().or_else(|| b.clone())
-        };
-
-        // The BULLET's three nesting-depth tiers (TDD 18.26), folded HERE so every
-        // consumer indexes and none of them re-derives the fallback — the same discipline
-        // the per-level heading fold above follows, and for the same reason: three
-        // consumers each spelling `tier_2.or(tier_1)` is three chances to spell it
-        // differently. Each tier falls back to the next SHALLOWER one, so an unstated
-        // depth-3 takes depth 2's value and an unstated depth-2 takes depth 1's — which
-        // is the un-suffixed key, i.e. exactly today's behaviour when neither is stated.
-        let list_marker = color(&selected.list_marker, &system.list_marker);
-        // Folded here, like every other per-kind and per-tier value, so the gutter and
-        // both export sinks index rather than each spelling the fallback.
-        let list_task_color =
-            color(&selected.list_task_marker, &system.list_task_marker).or(list_marker);
-        // The table header's ink, folded ONCE here (TDD 18.30) — the same shape as the
-        // task marker's fold to `list_marker` directly above. Every consumer (the
-        // preview's generated CSS and both export sinks) then reads one resolved value
-        // instead of three copies of the same `or`.
-        let table_head_fg = color(&selected.table_head_fg, &system.table_head_fg).or(heading_color);
-        let tier2 = color(&selected.list_marker_2, &system.list_marker_2);
-        let tier3 = color(&selected.list_marker_3, &system.list_marker_3);
-        let list_bullet_colors = [
-            list_marker,
-            tier2.or(list_marker),
-            tier3.or(tier2).or(list_marker),
-        ];
-        let g1 = glyph(&selected.list_bullet_glyph, &system.list_bullet_glyph);
-        let g2 = glyph(&selected.list_bullet_glyph_2, &system.list_bullet_glyph_2);
-        let g3 = glyph(&selected.list_bullet_glyph_3, &system.list_bullet_glyph_3);
-        let bullet_glyphs = [
-            g1.clone(),
-            g2.clone().or_else(|| g1.clone()),
-            g3.or(g2).or(g1),
-        ];
-        let s1 = sprite(&selected.sprite_list_bullet, &system.sprite_list_bullet);
-        let s2 = sprite(&selected.sprite_list_bullet_2, &system.sprite_list_bullet_2);
-        let s3 = sprite(&selected.sprite_list_bullet_3, &system.sprite_list_bullet_3);
-        let bullet_sprites = [
-            s1.clone(),
-            s2.clone().or_else(|| s1.clone()),
-            s3.or(s2).or(s1),
-        ];
-
-        let heading_band = HeadingBand {
-            fills: level_slots(&selected.heading_band_bg, &system.heading_band_bg)
-                .map(|slot| slot.as_deref().and_then(parse_color)),
-            gradient_to: color(
-                &selected.heading_band_gradient_to,
-                &system.heading_band_gradient_to,
-            ),
-        };
-
-        let heading_rule = HeadingRule {
-            overline: style(
-                &selected.heading_overline,
-                &system.heading_overline,
-                F_HEADING_OVERLINE,
-            ),
-            underline: style(
-                &selected.heading_underline,
-                &system.heading_underline,
-                F_HEADING_UNDERLINE,
-            ),
-            underline_rgba: color(
-                &selected.heading_underline_rgba,
-                &system.heading_underline_rgba,
-            ),
-        };
-
-        macro_rules! num {
-            ($f:ident, $floor:expr, $range:expr, $clamp:ident) => {
-                $clamp(selected.$f.or(system.$f).unwrap_or($floor), $range)
-            };
-        }
+        let list_marker_color = src.color(&keys::LIST_MARKER_COLOR);
 
         Theme {
             id: id.to_string(),
-            symbol: pick(&selected.symbol, &system.symbol),
+            // A theme's name and symbol are its own: `own_text` rather than the
+            // two-source walk, or every unnamed theme would be called "System".
             name: selected
-                .name
-                .clone()
+                .own_text(&keys::NAME)
                 .or_else(|| {
-                    if id == SYSTEM_ID {
-                        system.name.clone()
-                    } else {
-                        None
-                    }
+                    (id == SYSTEM_ID)
+                        .then(|| system.own_text(&keys::NAME))
+                        .flatten()
                 })
+                .map(str::to_string)
                 .unwrap_or_else(|| id.to_string()),
-            background: color(&selected.background, &system.background),
-            foreground: color(&selected.foreground, &system.foreground),
-            accent: color(&selected.accent, &system.accent),
-            font_family: pick(&selected.font_family, &system.font_family)
-                .as_deref()
-                .and_then(sanitize_font_family),
-            syntect_theme: pick(&selected.syntect_theme, &system.syntect_theme),
+            symbol: src.text(&keys::SYMBOL),
+            background: src.color(&keys::BACKGROUND),
+            foreground: src.color(&keys::FOREGROUND),
+            accent_color: src.color(&keys::ACCENT_COLOR),
+            font_family: src.font(&keys::FONT_FAMILY),
+            syntect_theme: src.text(&keys::SYNTECT_THEME),
             heading_color,
             heading_font,
-            heading_colors,
-            heading_fonts,
-            heading_rule,
-            heading_band,
-            link: color(&selected.link, &system.link),
-            link_underline: style(
-                &selected.link_underline,
-                &system.link_underline,
-                F_LINK_UNDERLINE,
-            ),
-            link_underline_rgba: color(&selected.link_underline_rgba, &system.link_underline_rgba),
-            strikethrough_rgba: color(&selected.strikethrough_rgba, &system.strikethrough_rgba),
-            code_inline_bg: color(&selected.code_inline_bg, &system.code_inline_bg),
-            code_block_bg: color(&selected.code_block_bg, &system.code_block_bg),
-            blockquote_bar: color(&selected.blockquote_bar, &system.blockquote_bar),
-            blockquote_bg: color(&selected.blockquote_bg, &system.blockquote_bg),
-            blockquote_fg: color(&selected.blockquote_fg, &system.blockquote_fg),
-            selection_bg: color(&selected.selection_bg, &system.selection_bg),
-            selection_fg: color(&selected.selection_fg, &system.selection_fg),
-            table_border: color(&selected.table_border, &system.table_border),
-            table_head_bg: color(&selected.table_head_bg, &system.table_head_bg),
-            table_head_fg,
-            rule: color(&selected.rule, &system.rule),
-            list_marker,
-            list_bullet_colors,
-            list_task_color,
-            list_glyphs: ListGlyphs {
-                bullet: bullet_glyphs,
-                ordered: glyph(&selected.list_ordered_glyph, &system.list_ordered_glyph),
-                task: glyph(&selected.list_task_glyph, &system.list_task_glyph),
-                task_checked: glyph(
-                    &selected.list_task_checked_glyph,
-                    &system.list_task_checked_glyph,
-                ),
+            heading_colors: src.colors(&keys::HEADING_COLOR),
+            heading_fonts: src.fonts(&keys::HEADING_FONT),
+            heading_rule: HeadingRule {
+                overline: src.lines(&keys::HEADING_OVERLINE, F_HEADING_OVERLINE),
+                underline: src.lines(&keys::HEADING_UNDERLINE, F_HEADING_UNDERLINE),
+                underline_color: src.colors(&keys::HEADING_UNDERLINE_COLOR),
             },
-            mark_fg: color(&selected.mark_fg, &system.mark_fg),
-            annotation_hl: overlay(&selected.annotation_hl, &system.annotation_hl, "#FFD133_61"),
-            find_hl_all: overlay(&selected.find_hl_all, &system.find_hl_all, "#f6d32d"),
-            find_hl_current: overlay(
-                &selected.find_hl_current,
-                &system.find_hl_current,
-                "#ff7800",
-            ),
+            heading_band: HeadingBand {
+                fills: src.colors(&keys::HEADING_BAND_COLOR),
+                gradient_to: src.colors(&keys::HEADING_BAND_GRADIENT_TO_COLOR),
+            },
+            link_color: src.color(&keys::LINK_COLOR),
+            link_underline: src.line(&keys::LINK_UNDERLINE, F_LINK_UNDERLINE),
+            link_underline_color: src.color(&keys::LINK_UNDERLINE_COLOR),
+            strikethrough_color: src.color(&keys::STRIKETHROUGH_COLOR),
+            code_inline_bg: src.color(&keys::CODE_INLINE_BG),
+            code_block_bg: src.color(&keys::CODE_BLOCK_BG),
+            blockquote_bar_color: src.color(&keys::BLOCKQUOTE_BAR_COLOR),
+            blockquote_bg: src.color(&keys::BLOCKQUOTE_BG),
+            blockquote_fg: src.color(&keys::BLOCKQUOTE_FG),
+            selection_bg: src.color(&keys::SELECTION_BG),
+            selection_fg: src.color(&keys::SELECTION_FG),
+            table_border_color: src.color(&keys::TABLE_BORDER_COLOR),
+            table_head_bg: src.color(&keys::TABLE_HEAD_BG),
+            // Folded once here, like every other fallback: the header's ink is the
+            // heading's until the theme says otherwise.
+            table_head_fg: src.color(&keys::TABLE_HEAD_FG).or(heading_color),
+            rule_color: src.color(&keys::RULE_COLOR),
+            list_marker_color,
+            list_bullet_colors: src.colors(&keys::LIST_MARKER_COLOR),
+            list_task_color: src
+                .color(&keys::LIST_TASK_MARKER_COLOR)
+                .or(list_marker_color),
+            list_glyphs: ListGlyphs {
+                bullet: src.glyphs(&keys::LIST_BULLET_GLYPH),
+                ordered: src.glyph(&keys::LIST_ORDERED_GLYPH),
+                task: src.glyph(&keys::LIST_TASK_GLYPH),
+                task_checked: src.glyph(&keys::LIST_TASK_CHECKED_GLYPH),
+            },
+            mark_fg: src.color(&keys::MARK_FG),
+            annotation_hl_color: overlay(&keys::ANNOTATION_HL_COLOR, "#FFD133_61"),
+            find_hl_all_color: overlay(&keys::FIND_HL_ALL_COLOR, "#f6d32d"),
+            find_hl_current_color: overlay(&keys::FIND_HL_CURRENT_COLOR, "#ff7800"),
             // Neutral highlighter yellow as the last-resort floor; each bundled
             // theme overrides it with a page-appropriate wash (data/themes.toml).
-            mark_bg: overlay(&selected.mark_bg, &system.mark_bg, "#fff59d_88"),
+            mark_bg: overlay(&keys::MARK_BG, "#fff59d_88"),
             typography: Typography {
-                heading_scale,
-                heading_weight: num!(heading_weight, F_HEADING_WEIGHT, WEIGHT_RANGE, clamp_i32),
-                bold_weight: num!(bold_weight, F_BOLD_WEIGHT, WEIGHT_RANGE, clamp_i32),
-                supsub_scale: num!(supsub_scale, F_SUPSUB_SCALE, SCALE_RANGE, clamp_f64),
-                superscript_rise: num!(superscript_rise, F_SUPERSCRIPT_RISE, RISE_RANGE, clamp_i32),
-                subscript_rise: num!(subscript_rise, F_SUBSCRIPT_RISE, RISE_RANGE, clamp_i32),
+                heading_scale: src.floats(&keys::HEADING_SCALE, F_HEADING_SCALE, SCALE_RANGE),
+                heading_weight: src.ints(&keys::HEADING_WEIGHT, F_HEADING_WEIGHT, WEIGHT_RANGE),
+                bold_weight: src.int(&keys::BOLD_WEIGHT, F_BOLD_WEIGHT, WEIGHT_RANGE),
+                supsub_scale: src.float(&keys::SUPSUB_SCALE, F_SUPSUB_SCALE, SCALE_RANGE),
+                superscript_rise: src.int(&keys::SUPERSCRIPT_RISE, F_SUPERSCRIPT_RISE, RISE_RANGE),
+                subscript_rise: src.int(&keys::SUBSCRIPT_RISE, F_SUBSCRIPT_RISE, RISE_RANGE),
             },
             metrics: Metrics {
-                heading_space_below,
-                heading_space_above,
-                heading_band_radius: num!(
-                    heading_band_radius,
+                heading_space_below: src.ints(
+                    &keys::HEADING_SPACE_BELOW,
+                    F_HEADING_SPACE_BELOW,
+                    METRIC_RANGE,
+                ),
+                heading_space_above: src.ints(
+                    &keys::HEADING_SPACE_ABOVE,
+                    F_HEADING_SPACE_ABOVE,
+                    METRIC_RANGE,
+                ),
+                heading_band_radius: src.ints(
+                    &keys::HEADING_BAND_RADIUS,
                     F_HEADING_BAND_RADIUS,
                     METRIC_RANGE,
-                    clamp_i32
                 ),
-                heading_band_padding: num!(
-                    heading_band_padding,
+                heading_band_padding: src.ints(
+                    &keys::HEADING_BAND_PADDING,
                     F_HEADING_BAND_PADDING,
                     METRIC_RANGE,
-                    clamp_i32
                 ),
-                blockquote_bar_width: num!(
-                    blockquote_bar_width,
+                blockquote_bar_width: src.int(
+                    &keys::BLOCKQUOTE_BAR_WIDTH,
                     F_BQ_BAR_WIDTH,
                     METRIC_RANGE,
-                    clamp_i32
                 ),
-                blockquote_text_gap: num!(
-                    blockquote_text_gap,
+                blockquote_text_gap: src.int(
+                    &keys::BLOCKQUOTE_TEXT_GAP,
                     F_BQ_TEXT_GAP,
                     METRIC_RANGE,
-                    clamp_i32
                 ),
-                list_step: num!(list_step, F_LIST_STEP, LIST_STEP_RANGE, clamp_i32),
-                list_item_gap: num!(list_item_gap, F_LIST_ITEM_GAP, METRIC_RANGE, clamp_i32),
-                rule_space: num!(rule_space, F_RULE_SPACE, METRIC_RANGE, clamp_i32),
-                table_cell_padding_v: num!(
-                    table_cell_padding_v,
+                list_step: src.int(&keys::LIST_STEP, F_LIST_STEP, LIST_STEP_RANGE),
+                list_item_gap: src.int(&keys::LIST_ITEM_GAP, F_LIST_ITEM_GAP, METRIC_RANGE),
+                rule_space: src.int(&keys::RULE_SPACE, F_RULE_SPACE, METRIC_RANGE),
+                table_cell_padding_v: src.int(
+                    &keys::TABLE_CELL_PADDING_V,
                     F_TABLE_CELL_PADDING_V,
                     METRIC_RANGE,
-                    clamp_i32
                 ),
-                table_cell_padding_h: num!(
-                    table_cell_padding_h,
+                table_cell_padding_h: src.int(
+                    &keys::TABLE_CELL_PADDING_H,
                     F_TABLE_CELL_PADDING_H,
                     METRIC_RANGE,
-                    clamp_i32
                 ),
-                table_border_width: num!(
-                    table_border_width,
+                table_border_width: src.int(
+                    &keys::TABLE_BORDER_WIDTH,
                     F_TABLE_BORDER_WIDTH,
                     METRIC_RANGE,
-                    clamp_i32
                 ),
-                table_cell_radius: num!(
-                    table_cell_radius,
+                table_cell_radius: src.int(
+                    &keys::TABLE_CELL_RADIUS,
                     F_TABLE_CELL_RADIUS,
                     METRIC_RANGE,
-                    clamp_i32
                 ),
             },
-            annotation_chip_bg: color(&selected.annotation_chip_bg, &system.annotation_chip_bg),
-            annotation_chip_fg: color(&selected.annotation_chip_fg, &system.annotation_chip_fg),
-            // Already-resolved sources: `Themes::parse` ran before this function
-            // before this function ever sees the spec, so `Theme::resolve` itself stays
-            // pure (no filesystem) — matching every other field here.
+            annotation_chip_bg: src.color(&keys::ANNOTATION_CHIP_BG),
+            annotation_chip_fg: src.color(&keys::ANNOTATION_CHIP_FG),
+            // Already-resolved sources: `Themes::parse` answered every sprite
+            // reference against its file's origin before this function ever sees the
+            // spec, so `Theme::resolve` itself stays pure (no filesystem).
             sprites: Sprites {
-                annotation_chip: sprite(
-                    &selected.sprite_annotation_chip,
-                    &system.sprite_annotation_chip,
-                ),
-                list_bullet: bullet_sprites,
-                list_ordered: sprite(&selected.sprite_list_ordered, &system.sprite_list_ordered),
-                list_task: sprite(&selected.sprite_list_task, &system.sprite_list_task),
-                list_task_checked: sprite(
-                    &selected.sprite_list_task_checked,
-                    &system.sprite_list_task_checked,
-                ),
-                heading_band: sprite(&selected.sprite_heading_band, &system.sprite_heading_band),
-                blockquote_bar: sprite(
-                    &selected.sprite_blockquote_bar,
-                    &system.sprite_blockquote_bar,
-                ),
-                rule: sprite(&selected.sprite_rule, &system.sprite_rule),
+                annotation_chip: src.sprite(&keys::ANNOTATION_CHIP_SPRITE),
+                list_bullet: src.sprites(&keys::LIST_BULLET_SPRITE),
+                list_ordered: src.sprite(&keys::LIST_ORDERED_SPRITE),
+                list_task: src.sprite(&keys::LIST_TASK_SPRITE),
+                list_task_checked: src.sprite(&keys::LIST_TASK_CHECKED_SPRITE),
+                heading_band: src.sprites(&keys::HEADING_BAND_SPRITE),
+                blockquote_bar: src.sprite(&keys::BLOCKQUOTE_BAR_SPRITE),
+                rule: src.sprite(&keys::RULE_SPRITE),
             },
         }
     }
-}
-
-/// Coerce an authored array to exactly 5 entries: short arrays extend from the
-/// floor, long ones truncate. A theme is data from disk — the length is no more
-/// trustworthy than the values, and a resolution that panicked on a 3-entry array
-/// would let a theme file kill the app.
-fn fit5_f64(v: &[f64], floor: [f64; 5], range: (f64, f64)) -> [f64; 5] {
-    let mut out = floor;
-    // `zip` gives both bounds for free: a short array leaves the floor's remaining
-    // entries in place, a long one stops at 5.
-    for (slot, &x) in out.iter_mut().zip(v.iter()) {
-        *slot = clamp_f64(x, range);
-    }
-    out
-}
-fn fit5_i32(v: &[i32], floor: [i32; 5], range: (i32, i32)) -> [i32; 5] {
-    let mut out = floor;
-    for (slot, &x) in out.iter_mut().zip(v.iter()) {
-        *slot = clamp_i32(x, range);
-    }
-    out
 }
 
 // ── loading (the only impure part) ────────────────────────────────────────────
@@ -1699,45 +1173,6 @@ fn load() -> Themes {
         }
     }
     themes
-}
-
-/// How many sprite keys a spec has — the length of [`sprite_slots`], stated so the
-/// array's type says it rather than a reader counting the literal.
-const SPRITE_SLOTS: usize = 10;
-
-/// Every sprite key of one spec, as one enumeration.
-///
-/// **This is the single list, and everything that must visit every sprite key reads
-/// it** — the resolver below, and the guard that checks the compiled-in themes
-/// against the compiled-in sprite table. A new sprite key added to `ThemeSpec` and
-/// forgotten here compiles and then silently ignores every reference to itself (the
-/// `take!` failure mode one layer over), and a guard that kept its own second list
-/// would go on passing while it did.
-fn sprite_slots(spec: &mut ThemeSpec) -> [&mut Option<crate::sprite::SpriteRef>; SPRITE_SLOTS] {
-    [
-        &mut spec.sprite_annotation_chip,
-        &mut spec.sprite_list_bullet,
-        &mut spec.sprite_list_bullet_2,
-        &mut spec.sprite_list_bullet_3,
-        &mut spec.sprite_list_ordered,
-        &mut spec.sprite_list_task,
-        &mut spec.sprite_list_task_checked,
-        &mut spec.sprite_heading_band,
-        &mut spec.sprite_blockquote_bar,
-        &mut spec.sprite_rule,
-    ]
-}
-
-/// Resolve one spec's sprite keys against the file's origin, dropping (to `None`)
-/// any that origin refuses.
-///
-/// Origin-agnostic on purpose, so a key cannot be wired up for a user file and
-/// forgotten for the built-in one — that asymmetry is exactly how a shipped theme's
-/// sprite came to be resolved nowhere at all.
-fn resolve_sprite_refs(spec: &mut ThemeSpec, origin: crate::sprite::SpriteOrigin<'_>) {
-    for slot in sprite_slots(spec) {
-        *slot = slot.as_ref().and_then(|r| origin.resolve(r));
-    }
 }
 
 /// Returns the file's text and the directory it was read from — sprite references
@@ -1837,11 +1272,20 @@ pub(crate) fn set_active_for_test(theme: Theme) {
 mod tests {
     use super::*;
 
+    /// Parse a one-theme fragment against a directory origin and resolve it, so a
+    /// sprite test drives the same path a user file does — parse, validate, resolve
+    /// against the file's own directory — rather than reaching past it.
+    #[cfg(test)]
+    fn resolved_from(fragment: &str, origin: crate::sprite::SpriteOrigin<'_>) -> Theme {
+        let specs = ThemeSpec::parse_file(fragment, origin).expect("the fragment parses");
+        Theme::resolve("t", &specs["t"], &ThemeSpec::default())
+    }
+
     #[test]
     fn bold_attr_carries_the_themed_weight() {
         let typo = Typography {
-            heading_scale: [1.0; 5],
-            heading_weight: 700,
+            heading_scale: [1.0; HEADING_LEVELS],
+            heading_weight: [700; HEADING_LEVELS],
             bold_weight: 650,
             supsub_scale: 0.75,
             superscript_rise: 4,
@@ -1853,8 +1297,8 @@ mod tests {
     #[test]
     fn supsub_attr_selects_the_matching_rise_and_shares_the_scale() {
         let typo = Typography {
-            heading_scale: [1.0; 5],
-            heading_weight: 700,
+            heading_scale: [1.0; HEADING_LEVELS],
+            heading_weight: [700; HEADING_LEVELS],
             bold_weight: 600,
             supsub_scale: 0.75,
             superscript_rise: 4,
@@ -1903,8 +1347,14 @@ mod tests {
         assert_eq!(r.typography.subscript_rise, F_SUBSCRIPT_RISE);
         assert_eq!(r.metrics.heading_space_below, F_HEADING_SPACE_BELOW);
         assert_eq!(r.metrics.heading_space_above, F_HEADING_SPACE_ABOVE);
-        assert_eq!(r.heading_rule.overline, F_HEADING_OVERLINE);
-        assert_eq!(r.heading_rule.underline, F_HEADING_UNDERLINE);
+        assert_eq!(
+            r.heading_rule.overline,
+            [F_HEADING_OVERLINE; HEADING_LEVELS]
+        );
+        assert_eq!(
+            r.heading_rule.underline,
+            [F_HEADING_UNDERLINE; HEADING_LEVELS]
+        );
         assert_eq!(r.metrics.blockquote_bar_width, F_BQ_BAR_WIDTH);
         assert_eq!(r.metrics.blockquote_text_gap, F_BQ_TEXT_GAP);
         assert_eq!(r.metrics.list_step, F_LIST_STEP);
@@ -1924,14 +1374,14 @@ mod tests {
         assert_eq!(t.id, SYSTEM_ID);
         assert!(t.background.is_none());
         assert!(t.foreground.is_none());
-        assert!(t.accent.is_none());
+        assert!(t.accent_color.is_none());
         assert!(t.font_family.is_none());
         assert!(t.syntect_theme.is_none());
         assert!(t.heading_color.is_none());
-        assert!(t.list_marker.is_none());
-        assert!(t.link.is_none());
+        assert!(t.list_marker_color.is_none());
+        assert!(t.link_color.is_none());
         assert!(t.code_inline_bg.is_none());
-        assert!(t.blockquote_bar.is_none());
+        assert!(t.blockquote_bar_color.is_none());
     }
 
     /// A theme can colour its headings; omitted, `heading_color` stays `None` so
@@ -1952,16 +1402,22 @@ mod tests {
     /// inherit the widget foreground (System byte-identical). One key, all three kinds.
     #[test]
     fn list_marker_is_opt_in() {
-        assert!(Themes::builtin().resolve(SYSTEM_ID).list_marker.is_none());
-        assert!(Themes::builtin().resolve("sepia").list_marker.is_none());
+        assert!(Themes::builtin()
+            .resolve(SYSTEM_ID)
+            .list_marker_color
+            .is_none());
+        assert!(Themes::builtin()
+            .resolve("sepia")
+            .list_marker_color
+            .is_none());
         let term = Themes::builtin().resolve("terminal");
         assert_eq!(
-            crate::palette::to_hex(term.list_marker.expect("terminal sets it")),
+            crate::palette::to_hex(term.list_marker_color.expect("terminal sets it")),
             "#55ff55"
         );
         let sw = Themes::builtin().resolve("synthwave");
         assert_eq!(
-            crate::palette::to_hex(sw.list_marker.expect("synthwave sets it")),
+            crate::palette::to_hex(sw.list_marker_color.expect("synthwave sets it")),
             "#ff3caf"
         );
     }
@@ -1993,9 +1449,9 @@ mod tests {
         assert!(fg.red() > fg.blue());
         assert!(t.font_family.as_deref().unwrap().ends_with("serif"));
         // Derived keys stay unset so they follow background/foreground/accent.
-        assert!(t.link.is_none());
+        assert!(t.link_color.is_none());
         assert!(t.code_inline_bg.is_none());
-        assert!(t.blockquote_bar.is_none());
+        assert!(t.blockquote_bar_color.is_none());
     }
 
     /// TDD 18.21 — per-level heading colour/face. Three claims in one place, because
@@ -2022,8 +1478,8 @@ mod tests {
         synth.merge_over(
             Themes::parse_compiled(
                 "[themes.sepia]\nheading_color = \"#334455\"\nheading_font = \"Georgia, serif\"\n\
-                 heading_colors = [\"#ff3caf\"]\n\
-                 heading_fonts = [\"Michroma, sans-serif\"]\n",
+                 heading_color_h1 = \"#ff3caf\"\n\
+                 heading_font_h1 = \"Michroma, sans-serif\"\n",
             )
             .unwrap(),
         );
@@ -2066,8 +1522,8 @@ mod tests {
         let mut user = Themes::builtin();
         user.merge_over(
             Themes::parse_compiled(
-                "[themes.sepia]\nheading_colors = [\"\", \"#123456\"]\n\
-                 heading_fonts = [\"\", \"Georgia, serif\"]\n",
+                "[themes.sepia]\nheading_color_h2 = \"#123456\"\n\
+                 heading_font_h2 = \"Georgia, serif\"\n",
             )
             .unwrap(),
         );
@@ -2080,21 +1536,21 @@ mod tests {
             sep.heading_fonts[1].as_ref().map(|f| f.as_str()),
             Some("\"Georgia\", serif")
         );
-        // An empty slot and a slot past the array's end both stay unset (sepia states
-        // no singular heading colour either).
+        // A level the user narrowed nothing for stays unset (sepia states no bare
+        // heading colour either).
         assert!(sep.heading_colors[0].is_none());
         assert!(sep.heading_colors[4].is_none());
     }
 
-    /// A slot a theme fills with nonsense must FALL BACK, never reject the theme —
+    /// A level a theme fills with nonsense must FALL BACK, never reject the theme —
     /// the same clamp-don't-reject discipline every geometry key follows (TDD 18.11).
     #[test]
-    fn an_unparseable_heading_level_slot_falls_back_to_the_singular_key() {
+    fn an_unparseable_heading_level_falls_back_to_the_bare_key() {
         let mut themes = Themes::builtin();
         themes.merge_over(
             Themes::parse_compiled(
-                "[themes.synthwave]\nheading_colors = [\"not a colour\"]\n\
-                 heading_fonts = [\"}} * {{ color: red; }}\"]\n",
+                "[themes.synthwave]\nheading_color_h1 = \"not a colour\"\n\
+                 heading_font_h1 = \"}} * {{ color: red; }}\"\n",
             )
             .unwrap(),
         );
@@ -2133,9 +1589,11 @@ mod tests {
     #[test]
     fn the_heading_rule_and_space_above_are_absent_under_system() {
         let sys = Themes::builtin().resolve(SYSTEM_ID);
-        assert!(sys.heading_rule.is_absent());
-        assert!(sys.heading_rule.underline_rgba.is_none());
-        assert_eq!(sys.metrics.heading_space_above, [0; 5]);
+        for level in 0..HEADING_LEVELS {
+            assert!(sys.heading_rule.is_absent_at(level));
+        }
+        assert!(sys.heading_rule.underline_color.iter().all(Option::is_none));
+        assert_eq!(sys.metrics.heading_space_above, [0; HEADING_LEVELS]);
     }
 
     /// TDD 18.22 — both sides resolve independently, each with its own colour, and both
@@ -2149,19 +1607,25 @@ mod tests {
         synth.merge_over(
             Themes::parse_compiled(
                 "[themes.sepia]\nheading_underline = \"single\"\n\
-                 heading_underline_rgba = \"#3e6fa0\"\n\
-                 heading_space_above = [16, 12, 8, 6, 6]\n",
+                 heading_underline_color = \"#3e6fa0\"\n\
+                 heading_space_above_h1 = 16\nheading_space_above_h2 = 12\n\
+                 heading_space_above_h3 = 8\nheading_space_above_h4 = 6\n\
+                 heading_space_above_h5 = 6\n",
             )
             .unwrap(),
         );
         let t = synth.resolve("sepia");
-        assert_eq!(t.heading_rule.underline, LineStyle::Single);
+        // The bare key reaches every level (TDD 18.32), so all five carry the rule.
         assert_eq!(
-            crate::palette::to_hex(t.heading_rule.underline_rgba.expect("stated")),
+            t.heading_rule.underline,
+            [LineStyle::Single; HEADING_LEVELS]
+        );
+        assert_eq!(
+            crate::palette::to_hex(t.heading_rule.underline_color[0].expect("stated")),
             "#3e6fa0"
         );
         // This theme states no overline, so that side stays off.
-        assert_eq!(t.heading_rule.overline, LineStyle::None);
+        assert_eq!(t.heading_rule.overline, [LineStyle::None; HEADING_LEVELS]);
         assert_eq!(t.metrics.heading_space_above, [16, 12, 8, 6, 6]);
 
         let mut themes = Themes::builtin();
@@ -2169,28 +1633,35 @@ mod tests {
             Themes::parse_compiled(
                 "[themes.sepia]\nheading_overline = \"double\"\n\
                  heading_underline = \"wavy\"\n\
-                 heading_underline_rgba = \"#222222\"\nheading_space_above = [7]\n",
+                 heading_underline_color = \"#222222\"\nheading_space_above_h1 = 7\n",
             )
             .unwrap(),
         );
         let sep = themes.resolve("sepia");
         // The overline CLAMPS: Pango's attribute has only none/single, so a theme asking
         // for a double rule above gets a single one rather than a rejected theme.
-        assert_eq!(sep.heading_rule.overline, LineStyle::Double);
         assert_eq!(
-            sep.heading_rule.overline.overline(),
+            sep.heading_rule.overline,
+            [LineStyle::Double; HEADING_LEVELS]
+        );
+        assert_eq!(
+            sep.heading_rule.overline[0].overline(),
             gtk::pango::Overline::Single
         );
-        assert_eq!(sep.heading_rule.underline, LineStyle::Wavy);
         assert_eq!(
-            sep.heading_rule.underline.underline(),
+            sep.heading_rule.underline,
+            [LineStyle::Wavy; HEADING_LEVELS]
+        );
+        assert_eq!(
+            sep.heading_rule.underline[0].underline(),
             gtk::pango::Underline::Error
         );
         assert_eq!(
-            crate::palette::to_hex(sep.heading_rule.underline_rgba.expect("merged")),
+            crate::palette::to_hex(sep.heading_rule.underline_color[0].expect("merged")),
             "#222222"
         );
-        // A short array extends from the floor rather than panicking (TDD 18.11).
+        // A level the theme narrows nothing for keeps the key's own floor (TDD 18.32),
+        // which is what a short array used to buy by extending from it.
         assert_eq!(sep.metrics.heading_space_above, [7, 0, 0, 0, 0]);
     }
 
@@ -2207,7 +1678,7 @@ mod tests {
         );
         assert_eq!(
             themes.resolve("sepia").heading_rule.underline,
-            F_HEADING_UNDERLINE
+            [F_HEADING_UNDERLINE; HEADING_LEVELS]
         );
     }
 
@@ -2218,8 +1689,8 @@ mod tests {
     #[test]
     fn strike_and_link_underline_default_to_todays_rendering() {
         let sys = Themes::builtin().resolve(SYSTEM_ID);
-        assert!(sys.strikethrough_rgba.is_none());
-        assert!(sys.link_underline_rgba.is_none());
+        assert!(sys.strikethrough_color.is_none());
+        assert!(sys.link_underline_color.is_none());
         assert_eq!(sys.link_underline, LineStyle::Single);
         assert_eq!(
             sys.link_underline.underline(),
@@ -2227,7 +1698,7 @@ mod tests {
         );
         // Sepia states none of them either, so it inherits the same.
         let sep = Themes::builtin().resolve("sepia");
-        assert!(sep.strikethrough_rgba.is_none());
+        assert!(sep.strikethrough_color.is_none());
         assert_eq!(sep.link_underline, LineStyle::Single);
     }
 
@@ -2239,42 +1710,42 @@ mod tests {
         let mut synth = Themes::builtin();
         synth.merge_over(
             Themes::parse_compiled(
-                "[themes.sepia]\nlink = \"#2de1ff\"\nstrikethrough_rgba = \"#ff3caf\"\n\
-                 link_underline_rgba = \"#ff3caf\"\n",
+                "[themes.sepia]\nlink_color = \"#2de1ff\"\nstrikethrough_color = \"#ff3caf\"\n\
+                 link_underline_color = \"#ff3caf\"\n",
             )
             .unwrap(),
         );
         let t = synth.resolve("sepia");
         assert_eq!(
-            crate::palette::to_hex(t.strikethrough_rgba.expect("stated")),
+            crate::palette::to_hex(t.strikethrough_color.expect("stated")),
             "#ff3caf"
         );
         // Stated independently of the link's own ink — that separation IS the key.
         assert_eq!(
-            crate::palette::to_hex(t.link_underline_rgba.expect("stated")),
+            crate::palette::to_hex(t.link_underline_color.expect("stated")),
             "#ff3caf"
         );
         assert_ne!(
-            crate::palette::to_hex(t.link.expect("theme sets a link colour")),
-            crate::palette::to_hex(t.link_underline_rgba.unwrap())
+            crate::palette::to_hex(t.link_color.expect("theme sets a link colour")),
+            crate::palette::to_hex(t.link_underline_color.unwrap())
         );
 
         let mut themes = Themes::builtin();
         themes.merge_over(
             Themes::parse_compiled(
-                "[themes.sepia]\nstrikethrough_rgba = \"#654321\"\n\
-                 link_underline = \"wavy\"\nlink_underline_rgba = \"#abcdef\"\n",
+                "[themes.sepia]\nstrikethrough_color = \"#654321\"\n\
+                 link_underline = \"wavy\"\nlink_underline_color = \"#abcdef\"\n",
             )
             .unwrap(),
         );
         let sep = themes.resolve("sepia");
         assert_eq!(
-            crate::palette::to_hex(sep.strikethrough_rgba.expect("merged")),
+            crate::palette::to_hex(sep.strikethrough_color.expect("merged")),
             "#654321"
         );
         assert_eq!(sep.link_underline, LineStyle::Wavy);
         assert_eq!(
-            crate::palette::to_hex(sep.link_underline_rgba.expect("merged")),
+            crate::palette::to_hex(sep.link_underline_color.expect("merged")),
             "#abcdef"
         );
         // A link with NO line at all is expressible, and is not the floor.
@@ -2374,13 +1845,13 @@ mod tests {
         let sys = Themes::builtin().resolve(SYSTEM_ID);
         assert!(sys.heading_band.is_absent());
         assert_eq!(sys.metrics.heading_band_radius, F_HEADING_BAND_RADIUS);
-        assert!(sys.sprites.heading_band.is_none());
+        assert!(sys.sprites.heading_band.iter().all(Option::is_none));
 
         let mut shape_only = Themes::builtin();
         shape_only.merge_over(
             Themes::parse_compiled(
                 "[themes.sepia]\nheading_band_radius = 12\n\
-                 heading_band_gradient_to = \"#ffffff\"\n",
+                 heading_band_gradient_to_color = \"#ffffff\"\n",
             )
             .unwrap(),
         );
@@ -2396,8 +1867,9 @@ mod tests {
         let mut synth = Themes::builtin();
         synth.merge_over(
             Themes::parse_compiled(
-                "[themes.sepia]\nheading_band_bg = [\"#6c2a92\", \"#9e1449\"]\n\
-                 heading_band_gradient_to = \"#101a4d\"\nheading_band_radius = 8\n",
+                "[themes.sepia]\nheading_band_color_h1 = \"#6c2a92\"\n\
+                 heading_band_color_h2 = \"#9e1449\"\n\
+                 heading_band_gradient_to_color = \"#101a4d\"\nheading_band_radius = 8\n",
             )
             .unwrap(),
         );
@@ -2414,13 +1886,14 @@ mod tests {
         // h3..h5 are left empty on purpose — banding every level is a stack of stripes.
         assert!(t.heading_band.fills[2].is_none());
         assert!(t.heading_band.fills[4].is_none());
-        assert!(t.heading_band.gradient_to.is_some());
-        assert_eq!(t.metrics.heading_band_radius, 8);
+        // The gradient stop is stated bare, so it reaches every level.
+        assert!(t.heading_band.gradient_to.iter().all(Option::is_some));
+        assert_eq!(t.metrics.heading_band_radius, [8; HEADING_LEVELS]);
 
         let mut themes = Themes::builtin();
         themes.merge_over(
             Themes::parse_compiled(
-                "[themes.sepia]\nheading_band_bg = [\"\", \"#abcdef\"]\n\
+                "[themes.sepia]\nheading_band_color_h2 = \"#abcdef\"\n\
                  heading_band_radius = 999\n",
             )
             .unwrap(),
@@ -2432,7 +1905,10 @@ mod tests {
             "#abcdef"
         );
         // A hostile radius is CLAMPED into the metric range, never rejected (TDD 18.11).
-        assert_eq!(sep.metrics.heading_band_radius, METRIC_RANGE.1);
+        assert_eq!(
+            sep.metrics.heading_band_radius,
+            [METRIC_RANGE.1; HEADING_LEVELS]
+        );
     }
 
     /// TDD 18.26 — the tier map. A depth of 0 cannot arise from the renderer (the
@@ -2461,7 +1937,7 @@ mod tests {
         let mut themes = Themes::builtin();
         themes.merge_over(
             Themes::parse_compiled(
-                "[themes.sepia]\nlist_marker = \"#112233\"\nlist_bullet_glyph = \"a\"\n",
+                "[themes.sepia]\nlist_marker_color = \"#112233\"\nlist_bullet_glyph = \"a\"\n",
             )
             .unwrap(),
         );
@@ -2494,7 +1970,7 @@ mod tests {
         let mut themes = Themes::builtin();
         themes.merge_over(
             Themes::parse_compiled(
-                "[themes.sepia]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n\
+                "[themes.sepia]\nlist_marker_color = \"#111111\"\nlist_marker_color_2 = \"#222222\"\n\
                  list_bullet_glyph = \"a\"\nlist_bullet_glyph_2 = \"b\"\n",
             )
             .unwrap(),
@@ -2518,7 +1994,7 @@ mod tests {
         let mut only3 = Themes::builtin();
         only3.merge_over(
             Themes::parse_compiled(
-                "[themes.sepia]\nlist_marker = \"#111111\"\nlist_marker_3 = \"#333333\"\n",
+                "[themes.sepia]\nlist_marker_color = \"#111111\"\nlist_marker_color_3 = \"#333333\"\n",
             )
             .unwrap(),
         );
@@ -2545,14 +2021,17 @@ mod tests {
         let mut themes = Themes::builtin();
         themes.merge_over(
             Themes::parse_compiled(
-                "[themes.sepia]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n",
+                "[themes.sepia]\nlist_marker_color = \"#111111\"\nlist_marker_color_2 = \"#222222\"\n",
             )
             .unwrap(),
         );
         let t = themes.resolve("sepia");
         // The shared key is untouched by the depth keys — every non-bullet marker reads
         // it at every depth.
-        assert_eq!(crate::palette::to_hex(t.list_marker.unwrap()), "#111111");
+        assert_eq!(
+            crate::palette::to_hex(t.list_marker_color.unwrap()),
+            "#111111"
+        );
     }
 
     /// The `take!`-list guard, six keys' worth: a user file's depth override must merge
@@ -2563,7 +2042,7 @@ mod tests {
         let mut themes = Themes::builtin();
         themes.merge_over(
             Themes::parse_compiled(
-                "[themes.terminal]\nlist_marker_2 = \"#abcdef\"\n\
+                "[themes.terminal]\nlist_marker_color_2 = \"#abcdef\"\n\
                  list_bullet_glyph_2 = \"·\"\nlist_bullet_glyph_3 = \"‧\"\n",
             )
             .unwrap(),
@@ -2586,13 +2065,13 @@ mod tests {
     fn the_task_marker_colour_is_opt_in_and_folds_to_the_shared_key() {
         let sys = Themes::builtin().resolve(SYSTEM_ID);
         assert!(sys.list_task_color.is_none());
-        assert!(sys.list_marker.is_none());
+        assert!(sys.list_marker_color.is_none());
 
         // Stated `list_marker` alone: the task marker follows it, which is today's
         // behaviour and what makes the new key inert until asked for.
         let mut shared = Themes::builtin();
         shared.merge_over(
-            Themes::parse_compiled("[themes.sepia]\nlist_marker = \"#111111\"\n").unwrap(),
+            Themes::parse_compiled("[themes.sepia]\nlist_marker_color = \"#111111\"\n").unwrap(),
         );
         assert_eq!(
             crate::palette::to_hex(shared.resolve("sepia").list_task_color.unwrap()),
@@ -2604,7 +2083,7 @@ mod tests {
         let mut split = Themes::builtin();
         split.merge_over(
             Themes::parse_compiled(
-                "[themes.sepia]\nlist_marker = \"#111111\"\nlist_task_marker = \"#ff00ff\"\n",
+                "[themes.sepia]\nlist_marker_color = \"#111111\"\nlist_task_marker_color = \"#ff00ff\"\n",
             )
             .unwrap(),
         );
@@ -2613,7 +2092,10 @@ mod tests {
             crate::palette::to_hex(t.list_task_color.unwrap()),
             "#ff00ff"
         );
-        assert_eq!(crate::palette::to_hex(t.list_marker.unwrap()), "#111111");
+        assert_eq!(
+            crate::palette::to_hex(t.list_marker_color.unwrap()),
+            "#111111"
+        );
         // …and the BULLET tiers keep reading the shared key, not the task one.
         assert_eq!(
             crate::palette::to_hex(t.list_bullet_colors[0].unwrap()),
@@ -2637,10 +2119,13 @@ mod tests {
         // in exactly this state.
         let mut bar_only = Themes::builtin();
         bar_only.merge_over(
-            Themes::parse_compiled("[themes.sepia]\nblockquote_bar = \"#112233\"\n").unwrap(),
+            Themes::parse_compiled("[themes.sepia]\nblockquote_bar_color = \"#112233\"\n").unwrap(),
         );
         let t = bar_only.resolve("sepia");
-        assert_eq!(crate::palette::to_hex(t.blockquote_bar.unwrap()), "#112233");
+        assert_eq!(
+            crate::palette::to_hex(t.blockquote_bar_color.unwrap()),
+            "#112233"
+        );
         assert!(
             t.blockquote_bg.is_none(),
             "a bar colour must not seed a panel"
@@ -2663,7 +2148,7 @@ mod tests {
             assert_eq!(crate::palette::to_hex(stated.unwrap()), "#ff00ff", "{key}");
             assert!(other.is_none(), "{key} must not imply its counterpart");
             assert!(
-                t.blockquote_bar.is_none(),
+                t.blockquote_bar_color.is_none(),
                 "{key} must not disturb the bar, which stays whatever the theme said"
             );
         }
@@ -2678,53 +2163,50 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("rule.png"), b"bytes are not validated here").unwrap();
         let origin = crate::sprite::SpriteOrigin::Directory(dir.path());
-        let mut good = ThemeSpec {
-            sprite_rule: Some(crate::sprite::SpriteRef::Named("rule.png".to_string())),
-            rule: Some("#123456".to_string()),
-            ..Default::default()
-        };
-        resolve_sprite_refs(&mut good, origin);
-        let crate::sprite::SpriteRef::File(got) = good.sprite_rule.clone().expect("resolved")
-        else {
+        let good = resolved_from(
+            "[themes.t]\nrule_sprite = \"rule.png\"\nrule_color = \"#123456\"\n",
+            origin,
+        );
+        let crate::sprite::SpriteRef::File(got) = good.sprites.rule.expect("resolved") else {
             panic!("a directory origin must resolve to a file");
         };
         assert!(got.is_absolute());
         // The colour is UNTOUCHED by the sprite resolving: the sprite outranks it at
         // paint time, and the colour is what a refused reference falls back to.
-        assert_eq!(good.rule.as_deref(), Some("#123456"));
+        assert_eq!(good.rule_color, parse_color("#123456"));
 
-        let mut escaping = ThemeSpec {
-            sprite_rule: Some(crate::sprite::SpriteRef::Named("../escape.png".to_string())),
-            ..Default::default()
-        };
-        resolve_sprite_refs(&mut escaping, origin);
-        assert_eq!(escaping.sprite_rule, None);
+        let escaping = resolved_from("[themes.t]\nrule_sprite = \"../escape.png\"\n", origin);
+        assert!(escaping.sprites.rule.is_none());
     }
 
     /// **Every sprite a compiled-in theme names is compiled in too.**
     ///
     /// The general guard, and the one that would have caught the defect it was written
-    /// for: Pixel Quest's `sprite_blockquote_bar` was resolved against a themes-file
+    /// for: Pixel Quest's blockquote-bar sprite was resolved against a themes-file
     /// DIRECTORY that only a user file has, so it stayed unresolved forever and the
     /// bar rendered flat navy on every fresh install — with no warning, no crash and a
     /// green suite, because an unresolved sprite is inert by design and every existing
     /// sprite test used a synthetic path of its own.
     ///
-    /// Deliberately keyed off the RAW deserialization rather than a resolved `Themes`:
-    /// after resolution a refused reference and a key nobody set are both `None`, so a
-    /// resolved theme cannot tell you which one it is. This reads what the file
-    /// actually says, through `sprite_slots` — the same enumeration the resolver walks,
-    /// so a tenth sprite key cannot be covered here and missed there or the reverse.
+    /// Deliberately keyed off the RAW file rather than a resolved `Themes`: after
+    /// resolution a refused reference and a key nobody set are both `None`, so a
+    /// resolved theme cannot tell you which one it is. Which keys name a sprite comes
+    /// from the registry, so a new sprite key is covered here the moment it is
+    /// declared — there is no second list to forget.
     #[test]
     fn every_built_in_theme_sprite_reference_is_embedded() {
-        let mut raw: ThemesFile =
+        let raw: toml::Value =
             toml::from_str(BUILTIN_THEMES_TOML).expect("the shipped themes file must parse");
         let mut checked = 0usize;
-        for (id, spec) in raw.themes.iter_mut() {
-            for slot in sprite_slots(spec) {
-                let Some(crate::sprite::SpriteRef::Named(rel)) = slot else {
+        for (id, block) in raw["themes"].as_table().expect("a themes table") {
+            for (spelling, value) in block.as_table().expect("a theme block") {
+                let Some(key) = keys::lookup(spelling) else {
                     continue;
                 };
+                if key.kind != keys::Kind::Sprite {
+                    continue;
+                }
+                let rel = value.as_str().expect("a sprite key names a file");
                 checked += 1;
                 assert!(
                     crate::sprite::builtin(rel).is_some(),
@@ -2742,66 +2224,55 @@ mod tests {
         );
     }
 
-    /// `sprite_slots` enumerates EVERY sprite key the spec has — checked structurally,
-    /// because nothing else can.
-    ///
-    /// A key added to `ThemeSpec` and forgotten in `sprite_slots` compiles, and then
-    /// silently ignores every reference to itself in every theme file. The two guards
-    /// below it both drive the list, so neither can see a key that is missing FROM the
-    /// list; this one asks the struct instead. `Debug` on a defaulted spec names every
-    /// field, which is the only enumeration of them Rust hands out without a macro.
-    #[test]
-    fn the_sprite_slot_list_covers_every_sprite_key_the_spec_has() {
-        let named = format!("{:?}", ThemeSpec::default())
-            .matches("sprite_")
-            .count();
-        assert_eq!(
-            named, SPRITE_SLOTS,
-            "ThemeSpec has {named} sprite keys but sprite_slots enumerates {SPRITE_SLOTS} — \
-             a key missing from that list is resolved by nothing and silently never appears"
-        );
-    }
-
-    /// The compiled-in source is a property of the SLOT LIST, not of one decoration.
+    /// The compiled-in source is a property of the KEY SET, not of one decoration.
     ///
     /// The bug that prompted it was found through the blockquote bar, and a fix proved
-    /// only through the blockquote bar would be evidence about one arm of a nine-arm
-    /// loop. Every slot is driven here from a built-in-shaped fragment naming the one
-    /// sprite this binary embeds, so the mechanism is shown to be slot-agnostic — and
-    /// the two paths a slot can reach the screen by (a `Sprites` field the drawn
-    /// decorations read, and `bytes`, which both export sinks read) are both exercised.
+    /// only through the blockquote bar would be evidence about one arm of a ten-arm
+    /// loop. Every sprite spelling the registry declares is driven here from a
+    /// built-in-shaped fragment naming the one sprite this binary embeds, so the
+    /// mechanism is shown to be key-agnostic — and the two paths a sprite can reach
+    /// the screen by (a `Sprites` field the drawn decorations read, and `bytes`, which
+    /// both export sinks read) are both exercised.
+    ///
+    /// It is driven off `keys::KEYS` rather than a list of its own, so a sprite key
+    /// added to the vocabulary is covered by this guard without anyone remembering to
+    /// extend it — which is exactly what the list it replaced needed.
     #[test]
     fn a_compiled_in_sprite_reaches_every_slot_it_can_be_named_in() {
-        let key = "sprites/copper-plate.png";
+        let embedded = "sprites/copper-plate.png";
+        let mut fragment = String::from("[themes.embedded]\n");
+        let mut spellings = 0usize;
+        for key in keys::KEYS.iter().filter(|k| k.kind == keys::Kind::Sprite) {
+            for idx in 0..key.slots() {
+                fragment.push_str(&format!("{} = \"{embedded}\"\n", key.spelling(idx)));
+                spellings += 1;
+            }
+        }
+        assert!(spellings > 0, "the vocabulary declares no sprite key");
+
         let mut themes = Themes::builtin();
-        themes.merge_over_for_test(&format!(
-            "[themes.embedded]\n\
-             sprite_annotation_chip = \"{key}\"\n\
-             sprite_list_bullet = \"{key}\"\n\
-             sprite_list_bullet_2 = \"{key}\"\n\
-             sprite_list_bullet_3 = \"{key}\"\n\
-             sprite_list_ordered = \"{key}\"\n\
-             sprite_list_task = \"{key}\"\n\
-             sprite_list_task_checked = \"{key}\"\n\
-             sprite_heading_band = \"{key}\"\n\
-             sprite_blockquote_bar = \"{key}\"\n\
-             sprite_rule = \"{key}\"\n"
-        ));
+        themes.merge_over_for_test(&fragment);
         let s = themes.resolve("embedded").sprites;
-        let expected = crate::sprite::SpriteRef::Compiled(key);
-        let every: Vec<&Option<crate::sprite::SpriteRef>> = vec![
-            &s.annotation_chip,
-            &s.list_bullet[0],
-            &s.list_bullet[1],
-            &s.list_bullet[2],
-            &s.list_ordered,
-            &s.list_task,
-            &s.list_task_checked,
-            &s.heading_band,
-            &s.blockquote_bar,
-            &s.rule,
-        ];
-        assert_eq!(every.len(), SPRITE_SLOTS);
+        let expected = crate::sprite::SpriteRef::Compiled(embedded);
+        let every: Vec<&Option<crate::sprite::SpriteRef>> = s
+            .heading_band
+            .iter()
+            .chain(s.list_bullet.iter())
+            .chain([
+                &s.annotation_chip,
+                &s.list_ordered,
+                &s.list_task,
+                &s.list_task_checked,
+                &s.blockquote_bar,
+                &s.rule,
+            ])
+            .collect();
+        assert_eq!(
+            every.len(),
+            spellings,
+            "the resolved Sprites and the registry disagree on how many sprites a \
+             theme can name — one of them is carrying a slot the other cannot see"
+        );
         for (i, slot) in every.iter().enumerate() {
             assert_eq!(
                 slot.as_ref(),
@@ -2830,7 +2301,7 @@ mod tests {
             .resolve("pixelquest")
             .sprites
             .blockquote_bar
-            .expect("Pixel Quest states sprite_blockquote_bar");
+            .expect("Pixel Quest states blockquote_bar_sprite");
         assert!(
             matches!(bar, crate::sprite::SpriteRef::Compiled(_)),
             "a built-in theme's sprite must come from the binary, not from a path: {bar}"
@@ -2855,7 +2326,7 @@ mod tests {
     #[test]
     fn an_installed_themes_file_cannot_unship_a_compiled_in_sprite() {
         let key = "sprites/copper-plate.png";
-        let fragment = format!("[themes.pixelquest]\nsprite_blockquote_bar = \"{key}\"\n");
+        let fragment = format!("[themes.pixelquest]\nblockquote_bar_sprite = \"{key}\"\n");
 
         // (a) sprites installed beside the file — it resolves to the installed file.
         let dir = tempfile::tempdir().unwrap();
@@ -2900,10 +2371,9 @@ mod tests {
     }
 
     /// TDD 18.28 — the bar sprite is opt-in, and it goes through the SAME
-    /// theme-relative validation every other sprite key does. The second half is the
-    /// one worth pinning: `resolve_sprite_refs` iterates a list, and a key added to the
-    /// spec but forgotten there compiles and silently ignores every reference to
-    /// itself.
+    /// theme-relative validation every other sprite key does — which is now structural
+    /// rather than remembered: resolution walks the values the registry typed as
+    /// sprites, so a new sprite key is validated by having been declared.
     #[test]
     fn the_blockquote_bar_sprite_is_opt_in_and_validated_like_every_other() {
         assert!(Themes::builtin()
@@ -2915,25 +2385,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("bar.png"), b"not a real png, just bytes").unwrap();
         let origin = crate::sprite::SpriteOrigin::Directory(dir.path());
-        let mut good = ThemeSpec {
-            sprite_blockquote_bar: Some(crate::sprite::SpriteRef::Named("bar.png".to_string())),
-            ..Default::default()
-        };
-        resolve_sprite_refs(&mut good, origin);
-        let crate::sprite::SpriteRef::File(got) = good.sprite_blockquote_bar.expect("resolved")
+        let good = resolved_from("[themes.t]\nblockquote_bar_sprite = \"bar.png\"\n", origin);
+        let crate::sprite::SpriteRef::File(got) = good.sprites.blockquote_bar.expect("resolved")
         else {
             panic!("a directory origin must resolve to a file");
         };
         assert!(got.is_absolute());
 
-        let mut escaping = ThemeSpec {
-            sprite_blockquote_bar: Some(crate::sprite::SpriteRef::Named(
-                "../escape.png".to_string(),
-            )),
-            ..Default::default()
-        };
-        resolve_sprite_refs(&mut escaping, origin);
-        assert_eq!(escaping.sprite_blockquote_bar, None);
+        let escaping = resolved_from(
+            "[themes.t]\nblockquote_bar_sprite = \"../escape.png\"\n",
+            origin,
+        );
+        assert!(escaping.sprites.blockquote_bar.is_none());
     }
 
     /// TDD 18.8 / 18.17 — a decoration LINE (a heading rule, a link underline, a strike)
@@ -2951,11 +2414,20 @@ mod tests {
             // no colour key at all (see `HeadingRule`), so it is absent here by
             // construction — its ink is the heading's, already held to the stricter text
             // floor below.
-            for (what, ink) in [
-                ("heading rule", t.heading_rule.underline_rgba),
-                ("link underline", t.link_underline_rgba),
-                ("strikethrough", t.strikethrough_rgba),
-            ] {
+            // The heading rule is per level, so every level's ink is checked — a theme
+            // that rules one level in an unreadable colour must fail here whichever
+            // level it chose.
+            let mut inks: Vec<(String, Option<gdk::RGBA>)> = (0..HEADING_LEVELS)
+                .map(|l| {
+                    (
+                        format!("heading rule h{}", l + 1),
+                        t.heading_rule.underline_color[l],
+                    )
+                })
+                .collect();
+            inks.push(("link underline".to_string(), t.link_underline_color));
+            inks.push(("strikethrough".to_string(), t.strikethrough_color));
+            for (what, ink) in inks {
                 let Some(ink) = ink else { continue };
                 let c = crate::palette::contrast(ink, bg);
                 assert!(
@@ -3050,15 +2522,18 @@ mod tests {
     fn overlay_colours_resolve_per_theme_and_are_never_none() {
         let themes = Themes::builtin();
         let sys = themes.resolve(SYSTEM_ID);
-        assert_eq!(sys.annotation_hl.hex(), "#ffd133");
-        assert_eq!(sys.find_hl_all.hex(), "#f6d32d");
-        assert_eq!(sys.find_hl_current.hex(), "#ff7800");
+        assert_eq!(sys.annotation_hl_color.hex(), "#ffd133");
+        assert_eq!(sys.find_hl_all_color.hex(), "#f6d32d");
+        assert_eq!(sys.find_hl_current_color.hex(), "#ff7800");
         assert_eq!(sys.mark_bg.hex(), "#fff59d");
         // Sepia replaces all three, because the system yellows wash out on cream.
         let sep = themes.resolve("sepia");
-        assert_ne!(sep.annotation_hl.hex(), sys.annotation_hl.hex());
-        assert_ne!(sep.find_hl_all.hex(), sys.find_hl_all.hex());
-        assert_ne!(sep.find_hl_current.hex(), sys.find_hl_current.hex());
+        assert_ne!(sep.annotation_hl_color.hex(), sys.annotation_hl_color.hex());
+        assert_ne!(sep.find_hl_all_color.hex(), sys.find_hl_all_color.hex());
+        assert_ne!(
+            sep.find_hl_current_color.hex(),
+            sys.find_hl_current_color.hex()
+        );
         assert_ne!(sep.mark_bg.hex(), sys.mark_bg.hex());
         // Synthwave's highlight is the radioactive toxic green — a deliberate,
         // theme-specific mark colour, distinct from the neutral yellow floor.
@@ -3066,7 +2541,7 @@ mod tests {
         assert_eq!(synth.mark_bg.hex(), "#39ff14");
         assert_ne!(synth.mark_bg.hex(), sys.mark_bg.hex());
         // …and keeps the system's alpha semantics for the wash.
-        assert_eq!(sep.annotation_hl.alpha_pct(), "38%");
+        assert_eq!(sep.annotation_hl_color.alpha_pct(), "38%");
     }
 
     /// TDD 18.14 — a new theme is data. Nothing about adding one touches code.
@@ -3166,10 +2641,10 @@ mod tests {
         let mut themes = Themes::builtin();
         // Sepia ships no list_marker (stays None); a user file adds one.
         themes.merge_over(
-            Themes::parse_compiled("[themes.sepia]\nlist_marker = \"#abcdef\"\n").unwrap(),
+            Themes::parse_compiled("[themes.sepia]\nlist_marker_color = \"#abcdef\"\n").unwrap(),
         );
         assert_eq!(
-            crate::palette::to_hex(themes.resolve("sepia").list_marker.expect("merged")),
+            crate::palette::to_hex(themes.resolve("sepia").list_marker_color.expect("merged")),
             "#abcdef"
         );
     }
@@ -3204,38 +2679,34 @@ mod tests {
         );
     }
 
-    /// `resolve_sprite_refs` is the ONE step that answers a sprite key — proves that
+    /// Sprite resolution is the ONE step that answers a sprite key — proves that
     /// against a DIRECTORY origin it accepts a contained relative reference and drops
     /// one that fails `crate::sprite::resolve`'s checks, independent of the XDG search
     /// path.
     #[test]
-    fn resolve_sprite_refs_resolves_a_contained_reference_and_drops_a_bad_one() {
+    fn a_contained_reference_resolves_and_a_bad_one_is_dropped() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("chip.png"), b"not a real png, just bytes").unwrap();
         let origin = crate::sprite::SpriteOrigin::Directory(dir.path());
 
-        let mut good = ThemeSpec {
-            sprite_annotation_chip: Some(crate::sprite::SpriteRef::Named("chip.png".to_string())),
-            ..Default::default()
-        };
-        resolve_sprite_refs(&mut good, origin);
+        let good = resolved_from(
+            "[themes.t]\nannotation_chip_sprite = \"chip.png\"\n",
+            origin,
+        );
         // `resolve` only checks extension/containment/size, not that the bytes
         // decode — decoding is `sprite::texture`'s job, exercised in `sprite.rs`.
-        let crate::sprite::SpriteRef::File(got) = good.sprite_annotation_chip.expect("resolved")
+        let crate::sprite::SpriteRef::File(got) = good.sprites.annotation_chip.expect("resolved")
         else {
             panic!("a directory origin must resolve to a file");
         };
         assert!(got.is_absolute());
         assert!(got.ends_with("chip.png"));
 
-        let mut bad = ThemeSpec {
-            sprite_annotation_chip: Some(crate::sprite::SpriteRef::Named(
-                "../escape.png".to_string(),
-            )),
-            ..Default::default()
-        };
-        resolve_sprite_refs(&mut bad, origin);
-        assert_eq!(bad.sprite_annotation_chip, None);
+        let bad = resolved_from(
+            "[themes.t]\nannotation_chip_sprite = \"../escape.png\"\n",
+            origin,
+        );
+        assert!(bad.sprites.annotation_chip.is_none());
     }
 
     /// A user may also override what the app hardcodes, by overriding
@@ -3244,11 +2715,13 @@ mod tests {
     fn a_user_file_overrides_the_system_theme_itself() {
         let mut themes = Themes::builtin();
         themes.merge_over(
-            Themes::parse_compiled("[themes.system]\nfind_hl_all = \"#00ff00\"\nlist_step = 40\n")
-                .unwrap(),
+            Themes::parse_compiled(
+                "[themes.system]\nfind_hl_all_color = \"#00ff00\"\nlist_step = 40\n",
+            )
+            .unwrap(),
         );
         let sys = themes.resolve(SYSTEM_ID);
-        assert_eq!(sys.find_hl_all.hex(), "#00ff00");
+        assert_eq!(sys.find_hl_all_color.hex(), "#00ff00");
         assert_eq!(sys.metrics.list_step, 40);
         // …and it reaches every theme that doesn't state its own, per link 2.
         assert_eq!(themes.resolve("sepia").metrics.list_step, 40);
@@ -3280,35 +2753,41 @@ mod tests {
         let t = themes.resolve("evil");
         assert_eq!(t.metrics.list_step, LIST_STEP_RANGE.0);
         assert_eq!(t.metrics.blockquote_bar_width, METRIC_RANGE.1);
-        assert_eq!(t.typography.heading_weight, WEIGHT_RANGE.1);
+        assert_eq!(
+            t.typography.heading_weight,
+            [WEIGHT_RANGE.1; HEADING_LEVELS]
+        );
         assert_eq!(t.typography.supsub_scale, SCALE_RANGE.0);
         assert_eq!(t.typography.superscript_rise, RISE_RANGE.1);
     }
 
-    /// A theme file cannot kill the app with a wrong-length or non-finite array.
+    /// A theme file cannot kill the app with a value of the wrong shape.
+    ///
+    /// The vocabulary carries no arrays at all now, so the length hazard this once
+    /// guarded is gone by construction; what remains is the two ways a scalar can be
+    /// wrong. A value of the wrong TYPE costs its own key and nothing else — the file
+    /// still loads and every other key in that theme applies — and a non-finite float
+    /// is clamped rather than propagated into Pango.
     #[test]
-    fn malformed_arrays_fit_to_five_entries() {
+    fn a_malformed_value_costs_its_own_key_and_never_the_theme() {
         let mut themes = Themes::builtin();
         themes.merge_over(
             Themes::parse_compiled(
-                "[themes.short]\nheading_scale = [3.0]\n\
-                 [themes.long]\nheading_space_below = [1, 2, 3, 4, 5, 6]\n\
-                 [themes.nan]\nheading_scale = [nan, inf, 1.0, 1.0]\n",
+                "[themes.wrong]\nheading_scale_h1 = \"enormous\"\nheading_scale_h2 = 2.0\n\
+                 [themes.nan]\nheading_scale_h1 = nan\nheading_scale_h2 = inf\n",
             )
             .unwrap(),
         );
-        // Short: stated entries apply, the rest keep the system hierarchy.
-        let s = themes.resolve("short").typography.heading_scale;
-        assert_eq!(s[0], 3.0);
-        assert_eq!(&s[1..], &F_HEADING_SCALE[1..]);
-        // Long: truncated to the five tags the renderer actually has.
-        assert_eq!(
-            themes.resolve("long").metrics.heading_space_below,
-            [1, 2, 3, 4, 5]
-        );
+        // The refused key falls back to its floor; its neighbour is untouched.
+        let wrong = themes.resolve("wrong").typography.heading_scale;
+        assert_eq!(wrong[0], F_HEADING_SCALE[0]);
+        assert_eq!(wrong[1], 2.0);
         // Non-finite: clamped, never propagated into Pango.
         let n = themes.resolve("nan").typography.heading_scale;
         assert!(n.iter().all(|x| x.is_finite()));
+        // A level nobody states keeps the system hierarchy, which is what the short
+        // array used to buy by extending from the floor.
+        assert_eq!(&n[2..], &F_HEADING_SCALE[2..]);
     }
 
     /// TDD 18.11 — a colour cannot escape a generated CSS rule, because it is

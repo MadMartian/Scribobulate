@@ -191,7 +191,7 @@ pub(crate) fn list_marker_ink(
         // `list_marker`. The task arms come FIRST for the same reason they do in
         // `list_marker_markup`: `1. [x] done` is a checkbox, not a number.
         (Some(_), _) => theme.list_task_color,
-        _ => theme.list_marker,
+        _ => theme.list_marker_color,
     }
 }
 
@@ -301,7 +301,7 @@ mod tests {
     fn a_bullets_marker_follows_its_nesting_depth_and_no_other_kinds_does() {
         let mut themes = crate::theme::Themes::builtin();
         themes.merge_over_for_test(
-            "[themes.tiered]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n\
+            "[themes.tiered]\nlist_marker_color = \"#111111\"\nlist_marker_color_2 = \"#222222\"\n\
              list_bullet_glyph = \"1\"\nlist_bullet_glyph_2 = \"2\"\n\
              list_ordered_glyph = \"o\"\n",
         );
@@ -370,7 +370,7 @@ mod tests {
     fn the_task_marker_carries_its_own_ink_in_the_artefact() {
         let mut themes = crate::theme::Themes::builtin();
         themes.merge_over_for_test(
-            "[themes.split]\nlist_marker = \"#111111\"\nlist_task_marker = \"#ff00ff\"\n",
+            "[themes.split]\nlist_marker_color = \"#111111\"\nlist_task_marker_color = \"#ff00ff\"\n",
         );
         let t = themes.resolve("split");
         let markup = |task: Option<bool>, start: Option<u64>| {

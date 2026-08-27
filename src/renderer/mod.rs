@@ -67,7 +67,7 @@ pub(crate) use scan::{scan_script_spans, scan_scripts, Script, ScriptSpan};
 /// Separate `bgalpha` (not 8-digit hex) for robust Pango compatibility (the
 /// table-cell annotation markup path); `ThemeColor` owns that decomposition.
 pub(crate) fn ann_hl_open() -> String {
-    let c = crate::theme::active().annotation_hl;
+    let c = crate::theme::active().annotation_hl_color;
     format!(
         "<span background=\"{}\" bgalpha=\"{}\">",
         c.hex(),
@@ -123,7 +123,7 @@ pub(crate) const BOLD_CLOSE: &str = "</span>";
 /// and takes its half; they cannot disagree, because a render is one synchronous walk
 /// and the active theme cannot change inside it.
 pub(crate) fn strike_tags() -> (String, &'static str) {
-    match crate::theme::active().strikethrough_rgba {
+    match crate::theme::active().strikethrough_color {
         None => ("<s>".to_string(), "</s>"),
         Some(c) => (
             format!(

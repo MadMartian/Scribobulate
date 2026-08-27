@@ -251,7 +251,6 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // rather than the metric's value: an unconditional heading margin would re-indent
     // every heading in every theme, System's included. A level with no band sets no
     // margin at all and inherits the view's, exactly as before.
-    let band_pad = px(metrics.heading_band_padding);
     let view_lm_for_band = px(config().view.left_margin);
     let view_rm_for_band = px(config().view.right_margin);
     for (i, level) in [
@@ -265,7 +264,12 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     .enumerate()
     {
         let scale = typo.heading_scale[i];
-        let weight = typo.heading_weight;
+        let weight = typo.heading_weight[i];
+        // Every band and rule property is stated per level (TDD 18.32), so each is read
+        // at this level rather than once for the document.
+        let band_pad = px(metrics.heading_band_padding[i]);
+        let (overline, underline) = (rule.overline[i], rule.underline[i]);
+        let underline_color = rule.underline_color[i];
         let below = px(metrics.heading_space_below[i]);
         let above = px(metrics.heading_space_above[i]);
         let heading_color = theme.heading_colors[i];
@@ -290,12 +294,12 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
             // and a link inside a heading is exactly such a run, since the link tag
             // colours an underline. `set_overline_rgba` is clippy-banned so this cannot
             // be "improved" back into a heap bug.
-            if !rule.overline.is_none() {
-                t.set_overline(rule.overline.overline());
+            if !overline.is_none() {
+                t.set_overline(overline.overline());
             }
-            if !rule.underline.is_none() {
-                t.set_underline(rule.underline.underline());
-                if let Some(c) = rule.underline_rgba {
+            if !underline.is_none() {
+                t.set_underline(underline.underline());
+                if let Some(c) = underline_color {
                     t.set_underline_rgba(Some(&c));
                 }
             }
@@ -322,7 +326,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // (`renderer::ann_hl_open`), which is what stops the two paths drifting (TDD
     // 18.6). It must be theme-sourced rather than a fixed amber because a warm
     // reading page makes the system yellow a near-invisible wash (TDD 18.5).
-    let ann_hl = theme.annotation_hl.rgba();
+    let ann_hl = theme.annotation_hl_color.rgba();
     add(TagName::AnnotationHighlight.name(), &move |t| {
         t.set_background_rgba(Some(&ann_hl));
     });
@@ -338,7 +342,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // behaviour. The SAME key feeds the table-cell Pango path (`renderer::strike_tags`)
     // and both export sinks, so a struck word cannot be one colour in prose and another
     // in a table (POLICY "One theme key, every application path").
-    let strike_rgba = theme.strikethrough_rgba;
+    let strike_rgba = theme.strikethrough_color;
     add(TagName::Strike.name(), &move |t| {
         t.set_strikethrough(true);
         if let Some(c) = strike_rgba {
@@ -436,7 +440,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // tags both setting `underline-rgba` — this one and a heading rule — is measured
     // clean, which is what makes the below-side rule colourable.
     let link_underline = theme.link_underline;
-    let link_underline_rgba = theme.link_underline_rgba;
+    let link_underline_rgba = theme.link_underline_color;
     add(TagName::Link.name(), &move |t| {
         t.set_underline(link_underline.underline());
         if let Some(c) = link_underline_rgba {

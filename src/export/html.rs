@@ -400,7 +400,7 @@ fn stylesheet(p: &Palette, t: &Theme) -> String {
             .unwrap_or_else(|| to_hex(p.body_fg))
     };
     let list_marker = t
-        .list_marker
+        .list_marker_color
         .map(to_hex)
         .unwrap_or_else(|| to_hex(p.body_fg));
     let mark_fg = t
@@ -484,10 +484,10 @@ img {{ max-width: 100%; height: auto; }}
         mark_bg = t.mark_bg.hex(),
         mark_fg = mark_fg,
         strike = t
-            .strikethrough_rgba
+            .strikethrough_color
             .map(|c| format!("text-decoration-color: {};", to_hex(c)))
             .unwrap_or_default(),
-        claim = t.annotation_hl.hex(),
+        claim = t.annotation_hl_color.hex(),
         sup = (ty.supsub_scale * 100.0).round() as i32,
         bold = ty.bold_weight,
         chip_css = annotation_chip_css(t),
@@ -496,9 +496,9 @@ img {{ max-width: 100%; height: auto; }}
     // Headings: the theme's scale ladder, applied to the base size. Five entries, not
     // six — `emit.rs` maps h6-and-deeper onto the h5 tag before a tag is chosen, so no
     // theme can differentiate them and this export must not invent a difference.
-    let rule = heading_rule_css(t);
     for level in 1..=6usize {
-        let i = (level - 1).min(4);
+        let i = (level - 1).min(crate::theme::HEADING_LEVELS - 1);
+        let rule = heading_rule_css(t, i);
         let scale = ty.heading_scale[i];
         let space = m.heading_space_below[i];
         let _ = writeln!(
@@ -509,7 +509,7 @@ img {{ max-width: 100%; height: auto; }}
             face = heading_font(i),
             fg = heading_fg(i),
             size = BASE_PT * scale,
-            weight = ty.heading_weight,
+            weight = ty.heading_weight[i],
             top = heading_margin_top(m.heading_space_above[i]),
             band = heading_band_css(t, i),
         );
@@ -532,14 +532,17 @@ fn heading_band_css(t: &Theme, level_index: usize) -> String {
     let Some(fill) = t.heading_band.fills[level_index] else {
         return String::new();
     };
-    let radius = t.metrics.heading_band_radius;
+    let radius = t.metrics.heading_band_radius[level_index];
     let mut out = String::new();
     // A sprite outranks the fill and the gradient, the same precedence the drawn gutter
     // applies to a marker — and it TILES at natural size here too, so the artefact and
     // the screen show the same picture rather than the same file scaled differently.
-    if let Some((uri, _, _)) = t.sprites.heading_band.as_ref().and_then(sprite_data_uri) {
+    if let Some((uri, _, _)) = t.sprites.heading_band[level_index]
+        .as_ref()
+        .and_then(sprite_data_uri)
+    {
         let _ = write!(out, " background: url({uri}) repeat;");
-    } else if let Some(to) = t.heading_band.gradient_to {
+    } else if let Some(to) = t.heading_band.gradient_to[level_index] {
         let _ = write!(
             out,
             " background: linear-gradient({}, {});",
@@ -558,7 +561,7 @@ fn heading_band_css(t: &Theme, level_index: usize) -> String {
     // of the intent. `border-box` makes the padding eat into the column instead, which is
     // the preview's behaviour (band at the content column, text inset from it) and what
     // keeps all three renderings agreeing on the band's extent (TDD 25.3).
-    let pad = t.metrics.heading_band_padding;
+    let pad = t.metrics.heading_band_padding[level_index];
     if pad > 0 {
         let _ = write!(out, " box-sizing: border-box; padding: 0 {pad}px;");
     }
@@ -853,7 +856,7 @@ fn link_underline_css(t: &Theme) -> String {
             let _ = write!(out, " text-decoration-style: {style};");
         }
     }
-    if let Some(c) = t.link_underline_rgba {
+    if let Some(c) = t.link_underline_color {
         let _ = write!(out, " text-decoration-color: {};", to_hex(c));
     }
     out
@@ -888,23 +891,24 @@ fn heading_margin_top(space_above: i32) -> String {
 /// colour on the overline too here, where the preview draws the overline in the
 /// heading's ink. Named rather than left for a reader to discover in a browser; the
 /// single-sided case — every shipped example — is exact.
-fn heading_rule_css(t: &Theme) -> String {
+fn heading_rule_css(t: &Theme, level_index: usize) -> String {
     let rule = &t.heading_rule;
-    if rule.is_absent() {
+    if rule.is_absent_at(level_index) {
         return String::new();
     }
+    let (overline, underline) = (rule.overline[level_index], rule.underline[level_index]);
     let mut lines: Vec<&str> = Vec::new();
-    if !rule.overline.is_none() {
+    if !overline.is_none() {
         lines.push("overline");
     }
-    if !rule.underline.is_none() {
+    if !underline.is_none() {
         lines.push("underline");
     }
     // Whichever side is on, preferring the underline where both are.
-    let (style, colour) = if rule.underline.is_none() {
-        (rule.overline.css_style(), None)
+    let (style, colour) = if underline.is_none() {
+        (overline.css_style(), None)
     } else {
-        (rule.underline.css_style(), rule.underline_rgba)
+        (underline.css_style(), rule.underline_color[level_index])
     };
     let mut out = format!(" text-decoration-line: {};", lines.join(" "));
     if let Some(style) = style {
@@ -1266,11 +1270,11 @@ mod html_sink_tests {
     #[test]
     fn a_heading_rule_and_its_space_above_reach_the_stylesheet() {
         let (palette, mut theme) = style();
-        theme.heading_rule = crate::theme::HeadingRule {
-            overline: crate::theme::LineStyle::Single,
-            underline: crate::theme::LineStyle::Wavy,
-            underline_rgba: Some(gtk::gdk::RGBA::new(0.0, 0.0, 1.0, 1.0)),
-        };
+        // Stated for h1 alone, which is also what makes the h2 assertions below a
+        // real check that a narrowed key stays narrowed (TDD 18.32).
+        theme.heading_rule.overline[0] = crate::theme::LineStyle::Single;
+        theme.heading_rule.underline[0] = crate::theme::LineStyle::Wavy;
+        theme.heading_rule.underline_color[0] = Some(gtk::gdk::RGBA::new(0.0, 0.0, 1.0, 1.0));
         theme.metrics.heading_space_above = [24, 0, 0, 0, 0];
         let css = super::stylesheet(&palette, &theme);
         let h1 = css.lines().find(|l| l.starts_with("h1 ")).expect("h1 rule");
@@ -1285,8 +1289,10 @@ mod html_sink_tests {
         assert!(h1.contains("text-decoration-style: wavy;"), "{h1}");
         assert!(h1.contains("text-decoration-color: #0000ff;"), "{h1}");
         assert!(h1.contains("margin: calc(1.2em + 24px) 0"), "{h1}");
-        // A level whose space-above is zero keeps the bare flow margin.
+        // A level whose space-above is zero keeps the bare flow margin, and a level the
+        // theme did not rule carries no decoration at all.
         assert!(h2.contains("margin: 1.2em 0"), "{h2}");
+        assert!(!h2.contains("text-decoration-line"), "{h2}");
     }
 
     /// TDD 18.23 / 18.2 / 25.3 — at the floor the `a` rule is exactly what it always
@@ -1305,8 +1311,8 @@ mod html_sink_tests {
         assert!(plain.contains("del {  }"), "{plain}");
 
         theme.link_underline = crate::theme::LineStyle::Wavy;
-        theme.link_underline_rgba = Some(gtk::gdk::RGBA::new(0.0, 1.0, 0.0, 1.0));
-        theme.strikethrough_rgba = Some(gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 1.0));
+        theme.link_underline_color = Some(gtk::gdk::RGBA::new(0.0, 1.0, 0.0, 1.0));
+        theme.strikethrough_color = Some(gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 1.0));
         let themed = super::stylesheet(&palette, &theme);
         let a = themed
             .lines()
@@ -1395,12 +1401,12 @@ mod html_sink_tests {
         let (palette, mut theme) = style();
         let mut themes = crate::theme::Themes::builtin();
         themes.merge_over_for_test(
-            "[themes.tiered]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n\
-             list_marker_3 = \"#333333\"\nlist_bullet_glyph = \"1\"\n\
+            "[themes.tiered]\nlist_marker_color = \"#111111\"\nlist_marker_color_2 = \"#222222\"\n\
+             list_marker_color_3 = \"#333333\"\nlist_bullet_glyph = \"1\"\n\
              list_bullet_glyph_2 = \"2\"\n",
         );
         let t = themes.resolve("tiered");
-        theme.list_marker = t.list_marker;
+        theme.list_marker_color = t.list_marker_color;
         theme.list_bullet_colors = t.list_bullet_colors;
         theme.list_glyphs = t.list_glyphs;
         let css = super::stylesheet(&palette, &theme);
@@ -1435,8 +1441,8 @@ mod html_sink_tests {
     #[test]
     fn no_depth_rule_is_emitted_when_every_tier_inherits() {
         let (palette, mut theme) = style();
-        theme.list_marker = Some(gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 1.0));
-        theme.list_bullet_colors = [theme.list_marker; crate::theme::BULLET_TIERS];
+        theme.list_marker_color = Some(gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 1.0));
+        theme.list_bullet_colors = [theme.list_marker_color; crate::theme::BULLET_TIERS];
         let css = super::stylesheet(&palette, &theme);
         assert!(css.contains("li::marker { color: #ff0000; }"), "{css}");
         assert!(!css.contains("li ul > li::marker { color"), "{css}");
@@ -1683,7 +1689,7 @@ mod html_sink_tests {
     fn a_banded_heading_level_reaches_the_stylesheet() {
         let (palette, mut theme) = style();
         theme.heading_band.fills[0] = Some(gtk::gdk::RGBA::new(0.2, 0.4, 0.6, 1.0));
-        theme.metrics.heading_band_radius = 8;
+        theme.metrics.heading_band_radius[0] = 8;
         let flat = super::stylesheet(&palette, &theme);
         let h1 = flat.lines().find(|l| l.starts_with("h1 ")).expect("h1");
         let h2 = flat.lines().find(|l| l.starts_with("h2 ")).expect("h2");
@@ -1702,7 +1708,7 @@ mod html_sink_tests {
         assert!(!h2.contains("background"), "{h2}");
         assert!(!h2.contains("border-radius"), "{h2}");
 
-        theme.heading_band.gradient_to = Some(gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 1.0));
+        theme.heading_band.gradient_to[0] = Some(gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 1.0));
         let grad = super::stylesheet(&palette, &theme);
         let h1 = grad.lines().find(|l| l.starts_with("h1 ")).expect("h1");
         assert!(
@@ -1713,7 +1719,7 @@ mod html_sink_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("band.png");
         std::fs::write(&path, ONE_PIXEL_PNG).unwrap();
-        theme.sprites.heading_band = Some(crate::sprite::SpriteRef::File(path));
+        theme.sprites.heading_band[0] = Some(crate::sprite::SpriteRef::File(path));
         let sprite = super::stylesheet(&palette, &theme);
         let h1 = sprite.lines().find(|l| l.starts_with("h1 ")).expect("h1");
         assert!(h1.contains("url(data:image/png;base64,"), "{h1}");

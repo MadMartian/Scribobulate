@@ -2269,7 +2269,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** the table cell matches the body exactly, and the PDF's Pango markup carries the same weight/size/rise the body tag applied — closing the prerequisite `sdd/PLAN.preview-decoration.md` names for every later theme key
 
 ### 18.19 A theme can restyle the annotation chip by colour or by sprite
-- **Given** a theme setting `annotation_chip_bg`/`annotation_chip_fg`, or a `sprite_annotation_chip` file (theme-relative, validated the same way every sprite key is — no absolute path, no traversal, symlink-contained, allowlisted extension, size-capped)
+- **Given** a theme setting `annotation_chip_bg`/`annotation_chip_fg`, or a `annotation_chip_sprite` file (theme-relative, validated the same way every sprite key is — no absolute path, no traversal, symlink-contained, allowlisted extension, size-capped)
 - **When** a document with a CriticMarkup comment is rendered
 - **Then** the gutter chip shows the theme's colours, or the sprite in place of the flat fill — with the overflow-count numeral still legible on top
 - **And** under System, where no chip key is set, the chip stays the exact hardcoded amber/white it always was (18.2)
@@ -2291,7 +2291,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** the rule(s) appear on the stated side and the stated space above is honoured — closing the asymmetry where only space-*below* existed before
 
 ### 18.23 A theme can style strikethrough and link underline independently of colour
-- **Given** a theme setting `strikethrough_rgba`, and a link-underline style (`none`/`double`/`wavy`) with its own colour
+- **Given** a theme setting `strikethrough_color`, and a link-underline style (`none`/`double`/`wavy`) with its own colour
 - **When** struck-through text and a link are rendered
 - **Then** both apply without perturbing bold, italic, or mark, which stay themed exactly as today
 
@@ -2314,15 +2314,15 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **And** it reaches the HTML export via a depth-scoped `::marker` selector, and the PDF export via a themed colour on the marker text — closing a pre-existing gap where the PDF sink coloured no marker at all, of any kind, at any depth
 
 ### 18.27 A theme can colour task checkboxes independently of bullets and numerals
-- **Given** a theme setting a task-marker colour distinct from `list_marker`
+- **Given** a theme setting a task-marker colour distinct from `list_marker_color`
 - **When** a document with a checked and an unchecked task item is rendered, and separately exported to HTML and PDF
-- **Then** both checkbox states take the stated colour while bullets and ordered numerals in the same document keep `list_marker`'s colour
-- **And** omitted, task markers fall back to `list_marker` exactly as today (TDD 18.2)
+- **Then** both checkbox states take the stated colour while bullets and ordered numerals in the same document keep `list_marker_color`'s colour
+- **And** omitted, task markers fall back to `list_marker_color` exactly as today (TDD 18.2)
 
 ### 18.28 A theme can tile a sprite behind the blockquote bar
 - **Given** a theme setting a sprite image for the blockquote accent bar (theme-relative, validated the same way every sprite key is)
 - **When** a blockquoted document is rendered, and separately exported to HTML and PDF
-- **Then** the bar fills with the sprite tiled at its natural size in place of the flat `blockquote_bar` colour
+- **Then** the bar fills with the sprite tiled at its natural size in place of the flat `blockquote_bar_color` colour
 - **And** omitted, the bar stays the flat themed colour exactly as today
 
 ### 18.29 A theme can give a blockquote its own background and ink
@@ -2341,8 +2341,31 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 ### 18.31 A theme can tile a sprite across the horizontal rule
 - **Given** a theme setting a sprite image for the horizontal rule (theme-relative, validated the same way every sprite key is)
 - **When** a document containing a `---` rule is rendered, and separately exported to HTML and PDF
-- **Then** the rule fills with the sprite tiled at its natural size in place of the flat `rule` colour
+- **Then** the rule fills with the sprite tiled at its natural size in place of the flat `rule_color`
 - **And** omitted, the rule stays the flat themed colour exactly as today
+
+### 18.32 A heading key can be stated once for every level, or narrowed to one
+- **Given** a theme stating a bare heading key and the same key narrowed to a level (`heading_color` plus `heading_color_h2`)
+- **When** a document with headings at every level is rendered, and separately exported to HTML and PDF
+- **Then** the narrowed level takes its own value and every other level takes the bare one, on all three surfaces
+- **And** a level the theme leaves unset takes the bare key; a key stated in neither form takes its own default; and h6 still renders as h5 throughout, as it always has
+
+### 18.33 An unrecognised theme key is reported, never silently swallowed
+- **Given** a `themes.toml` carrying a key this build does not recognise — a misspelling, or a key from a later version
+- **When** themes are loaded
+- **Then** every recognised key in that theme still applies, and one `warn` record naming the theme id and the offending key is logged
+- **And** the rendering is unchanged: an unknown key is inert, exactly like an unset one
+
+### 18.34 A theme's own bare key outranks the system theme's narrowed one
+- **Given** `[themes.system]` stating a narrowed key (`heading_color_h1`) while the selected theme states only the bare `heading_color`
+- **When** an h1 is rendered
+- **Then** it takes the selected theme's bare value — source order decides between two themes, narrowing decides only within one
+- **And** with the selected theme silent on both forms, that h1 takes `[themes.system]`'s narrowed value
+
+### 18.35 The key vocabulary has one spelling, and a retired one is not it
+- **Given** a theme written against a pre-rename spelling (`sprite_rule`, `heading_colors`, `link`, `strikethrough_rgba`, an array-valued `heading_scale`)
+- **When** themes are loaded
+- **Then** each such key is reported by 18.33's unknown-key path and applies nothing — a retired spelling is never quietly honoured, so a theme file that looks like it works cannot be one that does not
 
 ## 19. Local document-link navigation
 

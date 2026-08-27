@@ -319,7 +319,7 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
         Some(style) => format!("underline; text-decoration-style: {style}"),
     };
     let link_line_color = theme
-        .link_underline_rgba
+        .link_underline_color
         .map(|c| format!(" text-decoration-color: {};", to_hex(c)))
         .unwrap_or_default();
     // THREE selectors, not two. `color` inherits to a `GtkLinkButton`'s caption label,
@@ -331,11 +331,11 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     // prose and in a mixed cell, a solid cyan one in the pure-link cell) — and invisible
     // to any test that asserts on the generated rule TEXT rather than on the pixels,
     // which is why this needed a look and not another assertion. The button rule stays:
-    // it is what the desktop theme's own `button.link` styling has to lose against.
+    // it is what the desktop theme's own `button.link_color` styling has to lose against.
     for selector in [
         "scribtable .cell link",
-        "scribtable button.cell.link",
-        "scribtable button.cell.link label",
+        "scribtable button.cell.link_color",
+        "scribtable button.cell.link_color label",
     ] {
         out.push_str(&format!(
             "{selector} {{ color: {link_fg}; text-decoration-line: {link_line};{link_line_color} }}\n"
@@ -471,7 +471,7 @@ mod tests {
             theme.background.unwrap_or(PROBE_BG),
             theme.foreground.unwrap_or_else(probe_fg),
             theme.foreground.unwrap_or_else(probe_chrome_fg),
-            theme.accent.unwrap_or_else(probe_accent),
+            theme.accent_color.unwrap_or_else(probe_accent),
             &theme,
         );
         theme_css(&theme, &palette)
@@ -536,8 +536,8 @@ mod tests {
         // missing third selector was found by looking at a driven render, not here.
         let prefixes = [
             "scribtable .cell link",
-            "scribtable button.cell.link",
-            "scribtable button.cell.link label",
+            "scribtable button.cell.link_color",
+            "scribtable button.cell.link_color label",
         ];
         let sys = css_for(crate::theme::SYSTEM_ID);
         for prefix in prefixes {
@@ -552,14 +552,14 @@ mod tests {
 
         let mut themes = Themes::builtin();
         themes.merge_over_for_test(
-            "[themes.sepia]\nlink_underline = \"double\"\nlink_underline_rgba = \"#00ff00\"\n",
+            "[themes.sepia]\nlink_underline = \"double\"\nlink_underline_color = \"#00ff00\"\n",
         );
         let theme = themes.resolve("sepia");
         let palette = Palette::from_base(
             theme.background.unwrap(),
             theme.foreground.unwrap(),
             theme.foreground.unwrap(),
-            theme.accent.unwrap(),
+            theme.accent_color.unwrap(),
             &theme,
         );
         let themed = theme_css(&theme, &palette);
@@ -655,7 +655,7 @@ mod tests {
                 theme.background.unwrap_or(PROBE_BG),
                 theme.foreground.unwrap_or_else(probe_fg),
                 theme.foreground.unwrap_or_else(probe_chrome_fg),
-                theme.accent.unwrap_or_else(probe_accent),
+                theme.accent_color.unwrap_or_else(probe_accent),
                 &theme,
             );
             let c = theme_css(&theme, &palette);
@@ -663,8 +663,8 @@ mod tests {
             let expected = crate::preview::css::to_hex(palette.link_fg);
             for prefix in [
                 "scribtable .cell link",
-                "scribtable button.cell.link",
-                "scribtable button.cell.link label",
+                "scribtable button.cell.link_color",
+                "scribtable button.cell.link_color label",
             ] {
                 let rule = c
                     .lines()
@@ -762,7 +762,7 @@ mod tests {
                 theme.background.unwrap_or(PROBE_BG),
                 theme.foreground.unwrap_or_else(probe_fg),
                 theme.foreground.unwrap_or_else(probe_chrome_fg),
-                theme.accent.unwrap_or_else(probe_accent),
+                theme.accent_color.unwrap_or_else(probe_accent),
                 &theme,
             );
             theme_css(&theme, &palette)

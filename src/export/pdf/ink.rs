@@ -50,7 +50,7 @@ pub(crate) fn draw_page(
     // "theme key, else palette" resolution in one readable place, which is where the
     // POLICY § One theme key rule wants it: a reader checking that a surface is themed
     // consistently should not have to find every draw site to be sure.
-    let bar_ink = theme.blockquote_bar.unwrap_or(palette.blockquote_bar);
+    let bar_ink = theme.blockquote_bar_color.unwrap_or(palette.blockquote_bar);
     // Decoded ONCE for the page rather than per quoted line: the surface is cheap to
     // hold and re-reading the file for every line of a long quote is not.
     let bar_sprite = theme
@@ -65,7 +65,7 @@ pub(crate) fn draw_page(
     // unstated one leaves quoted text on the page in the body ink, exactly as before.
     let quote_bg = theme.blockquote_bg;
     let quote_fg = theme.blockquote_fg;
-    let rule_ink = theme.rule.unwrap_or(palette.rule);
+    let rule_ink = theme.rule_color.unwrap_or(palette.rule);
     // The rule's tile (TDD 18.31), decoded ONCE for the page beside the quote bar's, for
     // the same reason: a document of rules would otherwise re-read the same picture per
     // rule. `measure` has already given each rule line room for a whole tile.
@@ -380,7 +380,7 @@ fn draw_table_row(
     palette: &Palette,
     theme: &Theme,
 ) {
-    let border_rgba = theme.table_border.unwrap_or(palette.table_border);
+    let border_rgba = theme.table_border_color.unwrap_or(palette.table_border);
     let head_bg = theme.table_head_bg.unwrap_or(palette.table_head_bg);
     let fg = palette.body_fg;
     // The header row's ink (TDD 18.30), already folded with `heading_color` by

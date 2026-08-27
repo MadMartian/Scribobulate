@@ -262,8 +262,8 @@ impl Palette {
             body_fg: fg,
             code_inline_bg,
             code_block_bg,
-            link_fg: theme.link.unwrap_or(link_fg),
-            blockquote_bar: theme.blockquote_bar.unwrap_or(accent),
+            link_fg: theme.link_color.unwrap_or(link_fg),
+            blockquote_bar: theme.blockquote_bar_color.unwrap_or(accent),
             selection_bg,
             selection_fg,
             // The table chrome's CSS used alpha(@theme_fg_color, 0.25 / 0.08) — the
@@ -273,12 +273,14 @@ impl Palette {
             // exactly `mix(page, c, t)`, so this is byte-identical to the CSS it
             // replaced — but ONLY when fed the same source colour, hence `chrome_fg`.
             table_border: theme
-                .table_border
+                .table_border_color
                 .unwrap_or_else(|| mix_rgba(bg, chrome_fg, 0.25)),
             table_head_bg: theme
                 .table_head_bg
                 .unwrap_or_else(|| mix_rgba(bg, chrome_fg, 0.08)),
-            rule: theme.rule.unwrap_or_else(|| mix_rgba(bg, chrome_fg, 0.25)),
+            rule: theme
+                .rule_color
+                .unwrap_or_else(|| mix_rgba(bg, chrome_fg, 0.25)),
             syntect_theme,
         }
     }
@@ -316,7 +318,7 @@ impl Palette {
         // would otherwise darken.
         let bg = theme.background.unwrap_or(PAPER_BG);
         let fg = theme.foreground.unwrap_or(PAPER_FG);
-        let accent = theme.accent.unwrap_or(PAPER_ACCENT);
+        let accent = theme.accent_color.unwrap_or(PAPER_ACCENT);
         Self::from_base(bg, fg, fg, accent, theme)
     }
 
@@ -346,7 +348,7 @@ impl Palette {
                 })
         });
 
-        let accent = theme.accent.unwrap_or_else(|| {
+        let accent = theme.accent_color.unwrap_or_else(|| {
             ctx.lookup_color("theme_selected_bg_color")
                 .or_else(|| ctx.lookup_color("accent_bg_color"))
                 .unwrap_or_else(|| gdk::RGBA::new(0.208, 0.518, 0.894, 1.0)) // #3584e4
@@ -445,7 +447,7 @@ mod tests {
             let (Some(bg), Some(fg)) = (t.background, t.foreground) else {
                 continue;
             };
-            let p = Palette::from_base(bg, fg, fg, t.accent.unwrap_or(fg), &t);
+            let p = Palette::from_base(bg, fg, fg, t.accent_color.unwrap_or(fg), &t);
             let c = contrast(p.selection_fg, p.selection_bg);
             assert!(
                 c >= 4.5,

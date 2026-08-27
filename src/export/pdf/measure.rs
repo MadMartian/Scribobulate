@@ -133,11 +133,8 @@ impl Layouter<'_> {
     /// for every row of a wrapped heading.
     fn heading_band_ink(&self, level_index: usize) -> Option<HeadingBandInk> {
         let fill = self.theme.heading_band.fills[level_index]?;
-        let padding = f64::from(self.theme.metrics.heading_band_padding);
-        let sprite = self
-            .theme
-            .sprites
-            .heading_band
+        let padding = f64::from(self.theme.metrics.heading_band_padding[level_index]);
+        let sprite = self.theme.sprites.heading_band[level_index]
             .as_ref()
             .and_then(crate::sprite::bytes)
             .and_then(|bytes| decode(&bytes))
@@ -145,7 +142,7 @@ impl Layouter<'_> {
         Some(HeadingBandInk {
             padding,
             fill,
-            gradient_to: self.theme.heading_band.gradient_to,
+            gradient_to: self.theme.heading_band.gradient_to[level_index],
             sprite,
         })
     }
@@ -225,12 +222,14 @@ impl Layouter<'_> {
     ) {
         match block {
             Block::Heading { level, inlines, .. } => {
-                let scale = self.theme.typography.heading_scale[heading_scale_index(*level)];
-                let band = self.heading_band_ink(heading_scale_index(*level));
+                let level_index = heading_scale_index(*level);
+                let scale = self.theme.typography.heading_scale[level_index];
+                let band = self.heading_band_ink(level_index);
                 // The theme's heading rule (TDD 18.22/25.3) wraps the whole run, so the
                 // artefact carries the same overline/underline the preview's heading tag
                 // does. Empty unless the theme states one.
-                let (rule_open, rule_close) = super::super::markup::heading_rule_span(self.theme);
+                let (rule_open, rule_close) =
+                    super::super::markup::heading_rule_span(self.theme, level_index);
                 let markup = format!(
                     "{rule_open}{}{rule_close}",
                     inline_markup(inlines, doc, self.theme)
@@ -246,13 +245,13 @@ impl Layouter<'_> {
                 // that bands nothing.
                 let pad = band
                     .as_ref()
-                    .map(|_| f64::from(self.theme.metrics.heading_band_padding))
+                    .map(|_| f64::from(self.theme.metrics.heading_band_padding[level_index]))
                     .unwrap_or(0.0);
                 self.paragraph(
                     &markup,
                     ParagraphSpec {
                         size_pt: BASE_PT * scale,
-                        weight: self.theme.typography.heading_weight,
+                        weight: self.theme.typography.heading_weight[level_index],
                         indent: indent + pad,
                         quote,
                         keep_with_next: true,

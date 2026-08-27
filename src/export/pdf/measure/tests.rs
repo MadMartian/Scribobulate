@@ -1095,11 +1095,11 @@ fn a_nested_bullet_reaches_its_own_depth_tier_through_the_layout_walk() {
     let mut t = theme();
     let mut themes = crate::theme::Themes::builtin();
     themes.merge_over_for_test(
-        "[themes.tiered]\nlist_marker = \"#111111\"\nlist_marker_2 = \"#222222\"\n\
-         list_marker_3 = \"#333333\"\n",
+        "[themes.tiered]\nlist_marker_color = \"#111111\"\nlist_marker_color_2 = \"#222222\"\n\
+         list_marker_color_3 = \"#333333\"\n",
     );
     let tiered = themes.resolve("tiered");
-    t.list_marker = tiered.list_marker;
+    t.list_marker_color = tiered.list_marker_color;
     t.list_bullet_colors = tiered.list_bullet_colors;
 
     let d = doc::build(
@@ -1153,7 +1153,7 @@ fn a_banded_headings_text_is_inset_while_its_band_keeps_the_column() {
     let mut t = theme();
     let mut themes = crate::theme::Themes::builtin();
     themes.merge_over_for_test(
-        "[themes.banded]\nheading_band_bg = [\"#334455\", \"\", \"\", \"\", \"\"]\n\
+        "[themes.banded]\nheading_band_color_h1 = \"#334455\"\n\
          heading_band_padding = 16\n",
     );
     let banded = themes.resolve("banded");

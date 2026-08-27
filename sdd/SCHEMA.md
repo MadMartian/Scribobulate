@@ -245,23 +245,44 @@ theme.
 **On Windows** row 1's base is `%APPDATA%` (Roaming) rather than `~/.config` —
 `XDG_CONFIG_HOME` is still honoured first if set, and only the fallback differs. Rows 2 and 3 come
 from GLib's own data-dir resolution and are already platform-aware. Assuming the XDG spelling here
-was literally the bug behind the (now-closed) register entry R: user theme overrides were
-unreachable on Windows because the base directory could never be resolved.
+is not a hypothetical: it once made user theme overrides unreachable on Windows outright, because
+the base directory could never be resolved there.
 
 ### Key resolution
 
-Each key resolves by the first source that supplies it: the selected theme's own
-key, then `[themes.system]`, then a probe of the desktop GTK theme with derived
-values. A theme therefore states only what makes it distinctive and derives the
-rest.
+Each key resolves by the first source that supplies it. A key that varies by
+heading level or by list depth is consulted in its **specific** form before its
+bare form *within each source*, so a theme's own bare key still outranks
+`[themes.system]`'s specific one:
 
-The desktop probe (the third source) reads these base Adwaita named colours via
+| Order | Source |
+|-------|--------|
+| 1 | the selected theme's specific key (`heading_color_h2`, `list_marker_color_3`) |
+| 2 | the selected theme's bare key (`heading_color`, `list_marker_color`) |
+| 3 | `[themes.system]`'s specific key |
+| 4 | `[themes.system]`'s bare key |
+| 5 | the key's own default — a fixed value, a value derived from the base colours, or a probe of the desktop GTK theme |
+
+A theme therefore states only what makes it distinctive and derives the rest.
+
+One consequence is worth stating, because it is the same rule read from the other
+end: a user file merges over a built-in **per key** (see the search path above), so
+displacing a built-in's `heading_color_h1` takes a `heading_color_h1` of your own.
+A bare `heading_color` does not displace it, exactly as it does not displace
+`[themes.system]`'s bare key.
+
+The desktop probe (source 5's colour half) reads these base Adwaita named colours via
 `StyleContext::lookup_color`: `theme_bg_color`, `theme_fg_color`, `theme_base_color`,
 `theme_text_color`, `theme_selected_bg_color`, `theme_selected_fg_color`, `borders`.
 The libadwaita-only names (`view_bg_color`, `accent_bg_color`, `card_bg_color`) are
 used only as fallback-chain entries where the active theme defines them.
 
-### How a `sprite_*` key resolves
+**An unrecognised key is ignored and logged at `warn`**, naming the theme id and the
+key. A themes file is hand-written, so a misspelling is the ordinary failure mode;
+silence would make a key that never applies indistinguishable from one that applied
+and did nothing.
+
+### How a `*_sprite` key resolves
 
 A sprite key names an image, and **where that image comes from is decided by which
 file states the key** — not by the key and not by the theme:
@@ -286,10 +307,61 @@ Two consequences worth stating, both load-bearing:
   packaging omission of `data/sprites/` costs a log line and nothing else: the
   refused override leaves the compiled-in sprite standing.
 
+### Key naming
+
+A key's suffix states its type, so a theme author can tell what a key takes without
+consulting the tables below.
+
+| Suffix | Type | Meaning |
+|--------|------|---------|
+| `_color` | colour | Every colour-valued key, except the pair spelling below. |
+| `_bg` / `_fg` | colour | A text surface's fill and its ink — `mark_bg`/`mark_fg`, `selection_bg`/`selection_fg`. A surface with no ink key of its own keeps a lone `_bg`. The page's own pair is spelled `background`/`foreground`. |
+| `_sprite` | sprite path | An image drawn or tiled in place of a flat value. Its value is a path, resolved as above — never an icon name and never an absolute path. |
+| `_glyph` | string | A character drawn in place of a marker the engine would otherwise draw. |
+| `_h1` … `_h5` | (the key's own type) | Narrows the key to one heading level. |
+| `_2`, `_3` | (the key's own type) | Narrows the key to one list-nesting depth. |
+
+Colours are strings parsed as `RGBA`: `#RRGGBB`, `#RRGGBBAA`, or a CSS colour name.
+
+**No key takes an array.** Anything that varies by heading level or list depth is
+stated as a suffixed key, one value each.
+
+**A sprite outranks its flat sibling.** Where a decoration has both a `_sprite` and
+a colour (or a `_glyph`), a theme that states both gets the sprite and the other
+value is ignored — not composited under it, and not used to tint it. Every renderer
+states that with an explicit branch rather than leaving it to paint order: filling
+first and tiling over looks identical for an opaque sprite and lets the flat colour
+bleed through a transparent one, which is a defect that appears only for the sprites
+nobody tested.
+
+**Metrics are design-time pixels at zoom 1.0**, typed `i32` and scaled on apply, so
+a value cannot carry punctuation into a generated CSS rule. Out-of-range values are
+clamped rather than rejected, and so is an unrecognised *line style*: a
+`heading_underline = "zigzag"` falls back to that key's default rather than failing
+the theme.
+
+### Heading keys are per level
+
+Every key in the Headings table below may be stated in either form:
+
+| Form | Applies to |
+|------|------------|
+| `heading_color` | every level |
+| `heading_color_h1` … `heading_color_h5` | that level only, overriding the bare form |
+
+**There are five levels, not six**: h1 · h2 · h3 · h4 · h5-and-deeper. The renderer
+maps h6 onto the h5 tag before a tag is ever chosen — on every surface, preview and
+outline alike — so no theme can differentiate them and no key spells `_h6`. Where a
+key's default varies by level, the table gives it as five values in order.
+
+The **table header is not a heading level**: it reads `table_head_fg`, which falls
+back to the bare `heading_color` and never to a per-level key.
+
 ### `[themes.<id>]` keys
 
-Every key is optional; omitting one means "derive or inherit it". Colours are
-strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
+Every key is optional; omitting one means "derive or inherit it".
+
+#### Base
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -297,102 +369,122 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `symbol` | `string` | — | Decorative symbol shown left of the name in the picker. |
 | `background` | colour | derived | Page background. One of the three base colours every derived colour follows from. |
 | `foreground` | colour | derived | Body text colour. |
-| `accent` | colour | derived | Accent colour. |
+| `accent_color` | colour | derived | Accent colour. |
 | `font_family` | `string` | derived | Body font stack. Sanitised, and always terminated with a generic family. |
-| `syntect_theme` | `string` | by page luminance | Syntax-highlighting theme for code blocks. |
-| `heading_color` | colour | body foreground | Heading colour (h1–h6). |
+| `syntect_theme` | `string` | by page luminance | Syntax-highlighting theme for code blocks. `InspiredGitHub` on a light page, `base16-ocean.dark` on a dark one — the *page's* luminance, not the desktop's. |
+
+#### Headings
+
+Each key here also takes an `_h1` … `_h5` form (see above).
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `heading_color` | colour | body foreground | Heading ink. A link inside a heading still takes the link colour. |
 | `heading_font` | `string` | `font_family` | Heading font stack. Same sanitisation as `font_family`. |
-| `heading_colors` | `[string; 5]` | `heading_color` | Per-level heading colours, h1 · h2 · h3 · h4 · h5-and-deeper. An empty (`""`), absent or unparseable slot falls back to `heading_color`. The table header is not a level and keeps reading `heading_color`. |
-| `heading_fonts` | `[string; 5]` | `heading_font` | Per-level heading font stacks, same five slots and same empty-means-inherit rule, falling back to `heading_font`. Each slot is sanitised like `font_family`. |
-| `heading_overline` | `"none"` \| `"single"` | `"none"` | A rule ABOVE the heading text, drawn in the heading's own ink. `"double"`/`"wavy"` are accepted and clamped to a single line (Pango's overline has no other value). ⚠️ There is deliberately **no** `heading_overline_rgba`: GTK 4.6 double-frees a text run carrying both a coloured overline and a coloured underline, and a link inside a heading is such a run (`src/theme.rs`, `HeadingRule`). |
+| `heading_scale` | `f64` | 2.2 · 1.8 · 1.48 · 1.2 · 1.0 | Size relative to the body. Clamped `0.25`–`8.0`. |
+| `heading_weight` | `i32` | `700` | Clamped `100`–`1000`. |
+| `heading_overline` | `"none"` \| `"single"` | `"none"` | A rule ABOVE the heading text, drawn in the heading's own ink. `"double"`/`"wavy"` are accepted and clamped to a single line (Pango's overline has no other value). ⚠️ There is deliberately **no** overline colour key at any level: GTK 4.6 double-frees a text run carrying both a coloured overline and a coloured underline, and a link inside a heading is such a run (`src/theme.rs`, `HeadingRule`). |
 | `heading_underline` | `"none"` \| `"single"` \| `"double"` \| `"wavy"` | `"none"` | A rule BELOW the heading text — the decoration line under the glyph run, not a column-width divider. |
-| `heading_underline_rgba` | colour | heading ink | The below-rule's colour. Omitted, the line follows the heading's own foreground. |
-| `heading_band_bg` | `[string; 5]` | — | The band drawn behind a heading's text, per level (h1 · h2 · h3 · h4 · h5-and-deeper). An empty or absent slot ⇒ that level carries no band. The band spans the **content column**, and survives soft-wrap as one continuous band. |
-| `heading_band_gradient_to` | colour | — | A second stop: the band becomes a vertical gradient from the level's own fill down to this colour. Ignored where no level states a fill. |
-| `heading_band_padding` (above) | | | Space between the band's edge and the heading text inside it, each side. ⚠️ Non-zero by default, unlike every other decoration key: padding is part of drawing a band correctly rather than a flourish. Applied **only to a level that carries a band**, so a theme that bands nothing is untouched by it whatever its value. |
-| `sprite_rule` | `string` | — | A sprite **tiled horizontally at its natural size** across the `---` horizontal rule, in place of its flat `rule` colour. Resolved like every sprite key (see above). ⚠️ Unlike every other sprite key, this one changes which WIDGET the rule is: a flat rule is a stock `GtkSeparator` filled by generated CSS, and a GTK CSS `url()` cannot name a sprite compiled into the binary, so a tiled rule is a widget that paints the texture itself. The rule's height becomes the tile's own; `rule_space` still sets the gap around it. |
-| `sprite_blockquote_bar` | `string` | — | A sprite **tiled at its natural size** down the blockquote's accent bar, in place of the flat `blockquote_bar` colour. Resolved like every sprite key (see above). ⚠️ The tile is clipped to the bar, so a theme using one wants `blockquote_bar_width` at the tile's own width — a 24px tile in a 4px bar is a 4px slice of a tile. |
-| `sprite_heading_band` | `string` | — | A sprite **tiled at its natural size** across the band, in place of its fill. Resolved like every sprite key (see above); outranks the fill and the gradient. |
-| `link` | colour | derived | Link colour. |
-| `link_underline` | `"none"` \| `"single"` \| `"double"` \| `"wavy"` | `"single"` | A link's underline style. Defaults to the single line the app has always drawn, not to `"none"`. |
-| `link_underline_rgba` | colour | the link colour | The link underline's colour, stated independently of the link's ink. Omitted, the line follows the ink. |
-| `strikethrough_rgba` | colour | the struck text's ink | The colour of the line through `~~text~~`. Omitted, it follows the struck text's own foreground. Reaches the body tag, the table-cell span and both export sinks alike. |
+| `heading_underline_color` | colour | heading ink | The below-rule's colour. Omitted, the line follows the heading's own foreground. |
+| `heading_band_color` | colour | — | The band drawn behind a heading's text. Absent ⇒ that level carries no band. The band spans the **content column**, and survives soft-wrap as one continuous band. |
+| `heading_band_gradient_to_color` | colour | — | A second stop: the band becomes a vertical gradient from its own fill down to this colour. Ignored where the level states no fill. |
+| `heading_band_sprite` | sprite path | — | A sprite **tiled at its natural size** across the band, in place of its fill. Outranks the fill and the gradient. |
+| `heading_band_radius` | `i32` | `0` | Corner radius of the band. Clamped `0`–`400`. |
+| `heading_band_padding` | `i32` | `12` | Space between the band's edge and the heading text inside it, each side. Clamped `0`–`400`. ⚠️ Non-zero by default, unlike every other decoration key: padding is part of drawing a band correctly rather than a flourish. Applied **only to a level that carries a band**, so a theme that bands nothing is untouched by it whatever its value. |
+| `heading_space_above` | `i32` | `0` (every level) | Space above the heading line. Clamped `0`–`400`. |
+| `heading_space_below` | `i32` | 4 · 4 · 2 · 2 · 2 | Space below the heading line. Clamped `0`–`400`. |
+
+#### Body and inline text
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `bold_weight` | `i32` | `700` | Clamped `100`–`1000`. |
+| `supsub_scale` | `f64` | `0.72` | Superscript/subscript size. Clamped `0.25`–`8.0`. |
+| `superscript_rise` | `i32` | `4` | Clamped `-64`–`64`. |
+| `subscript_rise` | `i32` | `-2` | Clamped `-64`–`64`. |
+| `strikethrough_color` | colour | the struck text's ink | The colour of the line through `~~text~~`. Omitted, it follows the struck text's own foreground. Reaches the body tag, the table-cell span and both export sinks alike. |
+| `mark_bg` | colour | `#fff59d_88` | Background band behind `==marked==` text. |
+| `mark_fg` | colour | body foreground | Ink for `==marked==` text. Omitted, marked text keeps the body foreground and only its background changes — how a highlighter behaves on paper, and right for any `mark_bg` that is a translucent wash. State it when the band is opaque enough to need its own ink. Reaches the body tag and the table-cell span alike. |
 | `code_inline_bg` | colour | derived | Inline code-span background. |
 | `code_block_bg` | colour | derived | Fenced code-block background. |
-| `blockquote_bar` | colour | derived | Blockquote indicator bar. |
-| `blockquote_bg` | colour | — | A panel behind quoted text. Absent unless stated: a quote sits on the page background, as it always has. Independent of `blockquote_bar` — an accent bar and a panel are two decisions, and a themed bar seeds no panel. |
-| `blockquote_fg` | colour | body foreground | The ink quoted **body** text takes on that panel. Re-inks the quote's prose only: a link, a heading or a `==mark==` inside the quote keeps its own colour, because this rides the lowest-priority ink tag in the preview and the cairo pen (rather than the markup) on the page. |
-| `selection_bg` | colour | derived | Selection background. |
-| `selection_fg` | colour | derived | Ink for *selected* text. Omitted, it derives from `selection_bg` plus the page and its ink — whichever of the two reads better on the fill — so a theme cannot strand its own selected text by accident. State it when the derived answer is legible but wrong: contrast is not taste. |
-| `table_border` | colour | derived | Table border. |
-| `table_head_bg` | colour | derived | Table header background. |
-| `table_head_fg` | colour | `heading_color` | The header ROW's text colour. Omitted, the header takes `heading_color` exactly as it always did, and omitting that too leaves it on the body ink. Stating it is what frees `table_head_bg` to be a fill of the theme's own choosing: while the header's ink was the heading's, a header fill had to be picked for legibility against a colour chosen for a different surface. |
-| `rule` | colour | derived | Horizontal-rule colour. |
-| `list_marker` | colour | widget foreground | Bullet, numeral and task-checkbox colour. Marker only; item text keeps the body foreground. |
-| `mark_bg` | colour | `#fff59d_88` | Background band behind `==marked==` text. |
-| `list_marker_2` | colour | `list_marker` | The **bullet's** colour at nesting depth 2. ⚠️ Bullet only, unlike the un-suffixed `list_marker` beside it, which colours all three marker kinds: a nested numeral is still a numeral and a nested task box still a box, where a bullet dot's whole job is to say which level you are on. |
-| `list_marker_3` | colour | `list_marker_2` | The bullet's colour at depth 3 **and deeper**. Unset falls back to the next *shallower* tier, not to the base — so stating only `list_marker_2` colours every depth from 2 down. |
-| `list_task_marker` | colour | `list_marker` | The **task checkbox's** colour, both states. Bullets and ordered numerals keep `list_marker`. One key rather than one per state: a checked and an unchecked box are the same control in two positions, and the glyph is what carries the state. |
-| `list_bullet_glyph` | `string` | — | A glyph drawn in place of the bullet dot. Trimmed; refused (falling back to the drawn marker) if empty, over 8 characters, or carrying a control character — over-long is refused rather than cut, since a cut can split a grapheme cluster. |
-| `list_bullet_glyph_2` | `string` | `list_bullet_glyph` | The bullet's glyph at nesting depth 2. |
-| `list_bullet_glyph_3` | `string` | `list_bullet_glyph_2` | The bullet's glyph at depth 3 and deeper. |
+
+#### Links
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `link_color` | colour | derived | Link ink. |
+| `link_underline` | `"none"` \| `"single"` \| `"double"` \| `"wavy"` | `"single"` | A link's underline style. Defaults to the single line the app has always drawn, not to `"none"`. |
+| `link_underline_color` | colour | the link colour | The link underline's colour, stated independently of the link's ink. Omitted, the line follows the ink. |
+
+#### Lists
+
+The three bullet keys marked ⓷ also take `_2` and `_3` forms — the bullet at nesting
+depth 2, and at depth 3 **and deeper**. Each falls back to the next *shallower*
+tier, not to the bare key, so stating only the `_2` form reaches every depth from 2
+down. Bullets alone are tiered: a nested numeral is still a numeral and a nested
+task box is still a box, where a bullet dot's whole job is to say which level you
+are on.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `list_marker_color` ⓷ | colour | widget foreground | Bullet, numeral and task-checkbox ink. Marker only; item text keeps the body foreground. ⚠️ The bare key colours all three marker kinds; its `_2`/`_3` forms are **bullet only**. |
+| `list_task_marker_color` | colour | `list_marker_color` | The **task checkbox's** colour, both states. One key rather than one per state: a checked and an unchecked box are the same control in two positions, and the glyph is what carries the state. |
+| `list_bullet_glyph` ⓷ | `string` | — | A glyph drawn in place of the bullet dot. Trimmed; refused (falling back to the drawn marker) if empty, over 8 characters, or carrying a control character — over-long is refused rather than cut, since a cut can split a grapheme cluster. |
 | `list_ordered_glyph` | `string` | — | A glyph drawn in place of the ordered numeral. ⚠️ This DISCARDS the ordinal — deliberate, and inert unless a theme asks for it. |
 | `list_task_glyph` | `string` | — | A glyph drawn in place of the unchecked task box. |
 | `list_task_checked_glyph` | `string` | — | A glyph drawn in place of the checked task box. Resolves independently of the unchecked one, so a theme may state either alone. |
-| `sprite_list_bullet` | `string` | — | A sprite image drawn in place of the bullet dot. Resolved like every sprite key (see above). **A sprite outranks a glyph for the same marker.** |
-| `sprite_list_bullet_2` | `string` | `sprite_list_bullet` | The bullet's sprite at nesting depth 2. |
-| `sprite_list_bullet_3` | `string` | `sprite_list_bullet_2` | The bullet's sprite at depth 3 and deeper. |
-| `sprite_list_ordered` | `string` | — | A sprite drawn in place of the ordered numeral. |
-| `sprite_list_task` | `string` | — | A sprite drawn in place of the unchecked task box. |
-| `sprite_list_task_checked` | `string` | — | A sprite drawn in place of the checked task box. |
-| `mark_fg` | colour | body foreground | Ink for `==marked==` text. Omitted, marked text keeps the body foreground and only its background changes — how a highlighter behaves on paper, and right for any `mark_bg` that is a translucent wash. State it when the band is opaque enough to need its own ink. Reaches the body tag and the table-cell span alike. |
-| `annotation_hl` | colour | `#FFD133_61` | Annotation highlight overlay. |
+| `list_bullet_sprite` ⓷ | sprite path | — | A sprite drawn in place of the bullet dot. |
+| `list_ordered_sprite` | sprite path | — | A sprite drawn in place of the ordered numeral. |
+| `list_task_sprite` | sprite path | — | A sprite drawn in place of the unchecked task box. |
+| `list_task_checked_sprite` | sprite path | — | A sprite drawn in place of the checked task box. |
+| `list_step` | `i32` | `28` | Indent added per nesting depth. Clamped `4`–`400`. |
+| `list_item_gap` | `i32` | `8` | Space between items. Clamped `0`–`400`. |
+
+#### Blockquote
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `blockquote_bar_color` | colour | derived | The quote's accent bar. |
+| `blockquote_bar_sprite` | sprite path | — | A sprite **tiled at its natural size** down the accent bar, in place of the flat colour. ⚠️ The tile is clipped to the bar, so a theme using one wants `blockquote_bar_width` at the tile's own width — a 24px tile in a 4px bar is a 4px slice of a tile. |
+| `blockquote_bar_width` | `i32` | `3` | Clamped `0`–`400`. |
+| `blockquote_text_gap` | `i32` | `10` | Bar → quoted text. Clamped `0`–`400`. |
+| `blockquote_bg` | colour | — | A panel behind quoted text. Absent unless stated: a quote sits on the page background, as it always has. Independent of `blockquote_bar_color` — an accent bar and a panel are two decisions, and a themed bar seeds no panel. |
+| `blockquote_fg` | colour | body foreground | The ink quoted **body** text takes on that panel. Re-inks the quote's prose only: a link, a heading or a `==mark==` inside the quote keeps its own colour, because this rides the lowest-priority ink tag in the preview and the cairo pen (rather than the markup) on the page. |
+
+#### Table
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `table_border_color` | colour | derived | Table border. |
+| `table_border_width` | `i32` | `1` | Clamped `0`–`400`. |
+| `table_head_bg` | colour | derived | Table header background. |
+| `table_head_fg` | colour | `heading_color` | The header ROW's text colour. Omitted, the header takes the bare `heading_color` exactly as it always did, and omitting that too leaves it on the body ink. Stating it is what frees `table_head_bg` to be a fill of the theme's own choosing: while the header's ink was the heading's, a header fill had to be picked for legibility against a colour chosen for a different surface. |
+| `table_cell_padding_v` | `i32` | `4` | Clamped `0`–`400`. |
+| `table_cell_padding_h` | `i32` | `10` | Clamped `0`–`400`. |
+| `table_cell_radius` | `i32` | `0` | Clamped `0`–`400`. |
+
+#### Horizontal rule
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `rule_color` | colour | derived | The `---` rule's colour. |
+| `rule_sprite` | sprite path | — | A sprite **tiled horizontally at its natural size** across the rule, in place of the flat colour. ⚠️ Unlike every other sprite key, this one changes which WIDGET the rule is: a flat rule is a stock `GtkSeparator` filled by generated CSS, and a GTK CSS `url()` cannot name a sprite compiled into the binary, so a tiled rule is a widget that paints the texture itself. The rule's height becomes the tile's own; `rule_space` still sets the gap around it. |
+| `rule_space` | `i32` | `4` | Space above and below the rule. Clamped `0`–`400`. |
+
+#### Selection
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `selection_bg` | colour | derived | Selection background. |
+| `selection_fg` | colour | derived | Ink for *selected* text. Omitted, it derives from `selection_bg` plus the page and its ink — whichever of the two reads better on the fill — so a theme cannot strand its own selected text by accident. State it when the derived answer is legible but wrong: contrast is not taste. |
+
+#### Annotations and find
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `annotation_hl_color` | colour | `#FFD133_61` | Annotation highlight overlay. |
 | `annotation_chip_bg` | colour | hardcoded amber | CriticMarkup comment gutter chip's fill. Omitted, the chip stays the exact hardcoded amber/white it always was (TDD 18.2). |
 | `annotation_chip_fg` | colour | hardcoded white | Ink for the chip's overflow-count numeral. |
-| `sprite_annotation_chip` | `string` | — | A sprite image drawn in place of the flat chip fill. Resolved like every sprite key (see above). No expression in the PDF's inline Pango markup — a stated scope limit (TDD 18.19). |
-| `find_hl_all` | colour | `#f6d32d` | Highlight for all find matches. |
-| `find_hl_current` | colour | derived | Highlight for the current find match. |
-
-`syntect_theme`'s "by page luminance" default resolves to `InspiredGitHub` for a
-light page and `base16-ocean.dark` for a dark one (the *page's* luminance, not the
-desktop's).
-
-### Typography
-
-Pango attributes, so inherently zoom-safe. Out-of-range values are clamped, not
-rejected — and so is an unrecognised *line style*: a `heading_underline = "zigzag"`
-falls back to that key's default rather than failing the theme.
-
-| Key | Type | Default | Range |
-|-----|------|---------|-------|
-| `heading_scale` | `[f64; 5]` | `[2.2, 1.8, 1.48, 1.2, 1.0]` | each `0.25`–`8.0` |
-| `heading_weight` | `i32` | `700` | `100`–`1000` |
-| `bold_weight` | `i32` | `700` | `100`–`1000` |
-| `supsub_scale` | `f64` | `0.72` | `0.25`–`8.0` |
-| `superscript_rise` | `i32` | `4` | `-64`–`64` |
-| `subscript_rise` | `i32` | `-2` | `-64`–`64` |
-
-### Decoration geometry
-
-Design-time pixels at zoom 1.0, scaled on apply. Typed `i32` and clamped, so a
-value cannot carry punctuation into a generated CSS rule.
-
-| Key | Type | Default | Range |
-|-----|------|---------|-------|
-| `heading_space_below` | `[i32; 5]` | `[4, 4, 2, 2, 2]` | each `0`–`400` |
-| `heading_space_above` | `[i32; 5]` | `[0, 0, 0, 0, 0]` | each `0`–`400` |
-| `heading_band_radius` | `i32` | `0` | `0`–`400` |
-| `heading_band_padding` | `i32` | `12` | `0`–`400` |
-| `blockquote_bar_width` | `i32` | `3` | `0`–`400` |
-| `blockquote_text_gap` | `i32` | `10` | `0`–`400` |
-| `list_step` | `i32` | `28` | `4`–`400` |
-| `list_item_gap` | `i32` | `8` | `0`–`400` |
-| `rule_space` | `i32` | `4` | `0`–`400` |
-| `table_cell_padding_v` | `i32` | `4` | `0`–`400` |
-| `table_cell_padding_h` | `i32` | `10` | `0`–`400` |
-| `table_border_width` | `i32` | `1` | `0`–`400` |
-| `table_cell_radius` | `i32` | `0` | `0`–`400` |
-
-The five-element arrays are indexed h1 · h2 · h3 · h4 · h5-and-deeper. The renderer
-maps h6-and-deeper onto the h5 tag, so no theme can differentiate h6 from h5 (that
-fold applies on every surface — preview and outline alike).
+| `annotation_chip_sprite` | sprite path | — | A sprite drawn in place of the flat chip fill. No expression in the PDF's inline Pango markup — a stated scope limit (TDD 18.19). |
+| `find_hl_all_color` | colour | `#f6d32d` | Highlight for all find matches. |
+| `find_hl_current_color` | colour | derived | Highlight for the current find match. |
