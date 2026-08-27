@@ -25,6 +25,8 @@ entry can still be the worst thing in the register.
 | Q | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | R | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | S | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
+| T | Any | Production | The find bar's "current match" indicator drops on an in-session edit (any mode); self-heals on the next Next/Prev — the originally-reported stronger form did not reproduce | Low |
+| U | Any | Production | In Edit/Split mode, a search match inside annotated text is counted but its "all matches" highlight is invisible, buried under the annotation's own tag | Medium |
 
 ## A. Tables are selection islands
 
@@ -603,3 +605,124 @@ here because this entry exists in order to be deleted when the defect is fixed, 
 evidence must outlive it. Do not restate its figures here; several carry caveats that do not
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
+
+## T. The find bar's "current match" indicator drops on an in-session edit, in every mode
+
+**Severity**: Low (revised down from Medium after reproduction — see below; the
+gap is real but self-heals on the very next Next/Prev press, not on reopening the
+bar)
+
+Operator-reported: with the find bar open, altering the document leaves stale
+highlights and a Next/Prev that neither scrolls nor highlights, recoverable only
+by closing and reopening the bar.
+
+**Driven live (Xvfb + openbox, release build) across the three plausible mutation
+paths and the reported strong form did NOT reproduce.** Fixture: a document with a
+repeated body term ("bodyneedle", 3 occurrences), a task checkbox, and a comment
+annotation, opened `-n` under a private display.
+
+- **Preview mode, task-checkbox toggle** (a same-buffer edit at a location that
+  does not overlap the current match): the "1 of 3" current-match selection, the
+  yellow all-matches tags, and Next/Prev cycling all stayed correct through the
+  toggle — no staleness.
+- **Preview mode, creating a new annotation** (via the selection→Annotate→comment
+  flow, which inserts a margin-marker anchor and shifts every later offset): the
+  current-match GRAY selection dropped to plain yellow immediately after — but
+  this is confounded by the annotation flow's OWN selection (drag-selecting the
+  annotated phrase necessarily replaces whatever was previously selected, which is
+  what the current-match indicator *is*). Pressing Next afterward landed correctly
+  on the third occurrence at its new (shifted) offset — the hit list rebuilt
+  correctly against the mutated buffer.
+- **Split mode, typing directly into the editor** (`window::livepreview::wire_live_preview`'s
+  debounce path, editor is the find target here per `find_target`): typing a new
+  line above the matches dropped the current-match indicator (expected — typing
+  moves the caret) but a subsequent Next correctly found the first occurrence at
+  its shifted line/column and re-highlighted it.
+
+**What IS confirmed, and is milder than reported**: any caret-moving action
+(a click, a drag-select, typing) collapses whatever "current match" selection was
+showing, because that selection is the *only* mechanism marking the current
+match — nothing re-asserts it until the next Next/Prev press. This is normal
+text-buffer behaviour (selecting or typing elsewhere always abandons a prior
+selection) rather than a find-specific defect, and CAM.md's Derived-view CAM row 7
+column-A obligation is met on the very next find action, not left broken until the
+bar is closed and reopened.
+
+**The originally reported strong form (Next/Prev itself broken; scroll frozen;
+fixed only by closing the bar) is UNCONFIRMED** after this pass. Candidates not yet
+ruled out: a timing race with the 300 ms Split-mode live-preview debounce
+(`window::livepreview::wire_live_preview` → `preview::re_render`) that a
+scripted, instant edit can't hit; a real-compositor/KDE-specific rendering gap
+invisible under Xvfb+openbox (per GTK4Rs skill AP-56, a clean Xvfb result doesn't
+clear the compositor/WM class of bug); or an interaction sequence not yet tried.
+
+**Mitigation options**:
+- Ask the operator for the exact steps (view mode, what kind of edit, whether the
+  find bar had focus) before spending more engineering time on a hypothesis three
+  reproduction attempts didn't support.
+- If reproduced live, re-drive the same scenario under Xvfb first to rule the
+  timing race in or out.
+- Independent of the above: make the current-match indicator survive an
+  intervening caret move (re-select the current hit's range after any buffer
+  change while find stays open), which would close the milder, confirmed gap
+  either way.
+
+## U. In Edit/Split mode, a match inside annotated text is counted but invisible
+
+**Severity**: Medium (a real match that reads as "not found" — the operator's own
+description, "find seems to ignore annotated text", because the one cue a user
+watches, the highlight, never appears, even though the count and Next/Prev both
+work correctly underneath)
+
+Operator-reported: find does not match a query term that only occurs inside text
+carrying a comment annotation, in a table cell or in body text.
+
+**Reproduced and root-caused, in Edit/Split mode specifically** (Xvfb + openbox,
+release build; fixture: a body phrase and a table-cell phrase each wrapped in a
+`{==…==}{>>…<<}` annotation). Screenshot-confirmed, in the editor pane:
+
+- The match COUNT is correct (`GtkSourceSearchContext` reports it, e.g. "1
+  matches"/"1 of 1") and Next/Prev correctly selects it (`buf.select_range`, a real
+  buffer selection, not a tag).
+- The "all matches" highlight — the cue the operator is watching for — never
+  appears over the annotated span. An identical, unannotated match ("bodyneedle")
+  highlights yellow the instant it's typed, with no Enter needed; the annotated
+  one ("annotneedle"/"cellannotneedle") never gets a visible tint, typed or not.
+- The CURRENT-match selection (a different rendering path — an actual buffer
+  selection, not a tag) *does* show over annotated text, which is why the count
+  and cycling "work" while the highlight silently doesn't — two independent
+  mechanisms, one broken.
+
+**Root cause, source-confirmed**: `tags.rs:435-436` explicitly raises the
+`AnnotationHighlight` `GtkTextTag` to the tag table's highest priority
+(`table.size() - 1`) — deliberately, per its own comment, so an annotation's wash
+"is always visible, even over a span that carries its own opaque background"
+(inline code). GTK text-tag backgrounds do not alpha-composite; the
+highest-priority tag's background wins outright and every lower one is painted
+over — the exact GTK4Rs/AP-84 shape. `GtkSourceSearchContext`'s own "all matches"
+style is a tag in that *same* editor buffer's tag table, added independently of
+this reassertion, so wherever `AnnotationHighlight` sits above it, the search
+tag's background is buried the same way inline code's would have been —
+`AnnotationHighlight`'s fix for one collision (AP-84 vs. code spans) creates the
+identical collision against the search engine's own tag.
+
+**Preview mode does NOT reproduce this** — confirmed on the same fixture. The
+preview's own highlighting (`window::find::apply_preview_highlights`) composes
+its overlay directly (a buffer tag for body text; a Pango `AttrColor` layered on
+top of the cell's markup for table cells) rather than going through
+`AnnotationHighlight`'s tag-table priority, so both body and cell annotated
+matches highlight correctly there, current and non-current alike.
+
+**Mitigation options**:
+- Give the editor's search-match tag priority above `AnnotationHighlight` — set it
+  explicitly after `GtkSourceSearchContext` creates it (or re-raise
+  `AnnotationHighlight` to sit just below whatever `GtkSourceSearchContext` uses,
+  never above it), rather than pinning `AnnotationHighlight` to an unconditional
+  max.
+- Or drop the editor-buffer annotation wash to a lower, code-span-only priority
+  and give the code-span tag the max slot only when no search is active — more
+  invasive, and reintroduces the case tags.rs's reassertion exists to prevent
+  unless done carefully.
+- Either way, add a regression check pinning the ORDER (tag-priority comparison,
+  not just a pixel diff — this is invisible to `compare -metric AE` on a
+  screenshot without a fixture as deliberate as the one used here).
