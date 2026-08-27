@@ -523,7 +523,8 @@ pub(crate) struct ThemeSpec {
     /// a tag is ever chosen, so no theme can differentiate them). A slot left EMPTY
     /// (`""`) — or absent, because the array is short — falls back to the single
     /// `heading_color`, so a theme states only the levels it wants to distinguish.
-    /// The table header is NOT a level and keeps reading `heading_color`.
+    /// The table header is NOT a level: it reads `table_head_fg`, which falls back to
+    /// the singular `heading_color` and never to a per-level slot.
     pub heading_colors: Option<Vec<String>>,
     /// Per-level heading font stacks, same five slots and same empty-means-inherit rule
     /// as `heading_colors`, falling back to `heading_font`. Each slot is sanitised and
@@ -579,6 +580,16 @@ pub(crate) struct ThemeSpec {
     /// like every sprite key. Outranks the fill and the gradient, the same way a marker
     /// sprite outranks a marker glyph.
     pub sprite_heading_band: Option<crate::sprite::SpriteRef>,
+    /// A sprite TILED horizontally across the `---` horizontal rule, in place of its flat
+    /// `rule` colour (TDD 18.31). Theme-relative and validated like every sprite key,
+    /// and it outranks the colour the same way every other sprite-vs-flat pair does.
+    ///
+    /// ⚠️ The rule is the one decoration in this vocabulary drawn as a real anchored
+    /// WIDGET (a `GtkSeparator`), so a sprite here does not colour that widget — it
+    /// replaces it with one that tiles the texture (`widgets::rule`). A GTK CSS `url()`
+    /// cannot reach a sprite that is compiled into the binary, which every built-in
+    /// theme's is.
+    pub sprite_rule: Option<crate::sprite::SpriteRef>,
     pub link: Option<String>,
     /// A link's underline style: `"single"` (the default, and what the app drew before
     /// this key existed), `"double"`, `"wavy"`, or `"none"` for a coloured link with no
@@ -590,6 +601,26 @@ pub(crate) struct ThemeSpec {
     pub code_inline_bg: Option<String>,
     pub code_block_bg: Option<String>,
     pub blockquote_bar: Option<String>,
+    /// The PANEL behind quoted text, and the ink on it (TDD 18.29) — both optional and
+    /// both independent of `blockquote_bar`, which stays the accent bar's own colour. A
+    /// theme may state either alone: a panel with no ink override, or re-inked quoted
+    /// text on the page background.
+    ///
+    /// The two halves reach the screen by DIFFERENT mechanisms, which is worth knowing
+    /// before moving either. The INK is a `GtkTextTag` property (below). The FILL is a
+    /// rect drawn over the quote's own `BufferSpan`, beside its accent bar
+    /// (`codeview`'s `snapshot_layer`) — it began as a `paragraph_background_rgba` on the
+    /// `blockquote` tag, which buys vertical padding and a soft-wrap-continuous band for
+    /// free, but GTK fills that background PER PARAGRAPH: a quote holding an intro
+    /// paragraph plus a nested list came out as disconnected rectangles with the page
+    /// showing between them, beside a bar drawn continuously from the one span. Drawn
+    /// from that same span the two can no longer disagree, and the padding and the
+    /// soft-wrap band survive because both come from `line_yrange`.
+    pub blockquote_bg: Option<String>,
+    /// See [`ThemeSpec::blockquote_bg`]. Carried by its OWN tag, registered before every
+    /// other ink-setting tag, so a link, a heading or a `==mark==` inside a quote keeps
+    /// its own colour — the panel re-inks the quote's BODY text, not everything in it.
+    pub blockquote_fg: Option<String>,
     pub selection_bg: Option<String>,
     /// The ink SELECTED text is drawn in, over `selection_bg`. Omit ⇒ derived from the
     /// page and its ink (see `palette::Palette::from_base`), which is right often enough
@@ -599,6 +630,15 @@ pub(crate) struct ThemeSpec {
     pub selection_fg: Option<String>,
     pub table_border: Option<String>,
     pub table_head_bg: Option<String>,
+    /// The table HEADER ROW's text colour (TDD 18.30), independent of `heading_color`.
+    /// Omitted ⇒ the header text falls back to `heading_color` exactly as before this
+    /// key existed, and omitting that too leaves it on the body ink.
+    ///
+    /// It exists because "a table header IS a heading" is true of the typography and not
+    /// of the FILL underneath it: a theme that bands its headings in one colour and
+    /// fills its table header in another had no way to say so, and had to leave
+    /// `table_head_bg` derived to keep the header text legible on it.
+    pub table_head_fg: Option<String>,
     pub rule: Option<String>,
     /// List-marker glyph colour — the unordered bullet dot, the ordered numeral, and
     /// the task checkbox outline+tick (all three drawn in the left gutter). Colours the
@@ -896,6 +936,7 @@ impl ThemeSpec {
             heading_band_padding,
             sprite_blockquote_bar,
             sprite_heading_band,
+            sprite_rule,
             link,
             link_underline,
             link_underline_rgba,
@@ -903,10 +944,13 @@ impl ThemeSpec {
             code_inline_bg,
             code_block_bg,
             blockquote_bar,
+            blockquote_bg,
+            blockquote_fg,
             selection_bg,
             selection_fg,
             table_border,
             table_head_bg,
+            table_head_fg,
             rule,
             list_marker,
             list_marker_2,
@@ -1207,11 +1251,22 @@ pub(crate) struct Theme {
     pub code_inline_bg: Option<gdk::RGBA>,
     pub code_block_bg: Option<gdk::RGBA>,
     pub blockquote_bar: Option<gdk::RGBA>,
+    /// The quote panel's fill and the ink on it (TDD 18.29); each `None` ⇒ that half is
+    /// absent and quoted text keeps the page background / the body foreground, exactly
+    /// as before these keys existed. Independent of `blockquote_bar` in both directions.
+    pub blockquote_bg: Option<gdk::RGBA>,
+    pub blockquote_fg: Option<gdk::RGBA>,
     pub selection_bg: Option<gdk::RGBA>,
     /// Selected-text ink; `None` ⇒ `palette` derives it from the page and its ink.
     pub selection_fg: Option<gdk::RGBA>,
     pub table_border: Option<gdk::RGBA>,
     pub table_head_bg: Option<gdk::RGBA>,
+    /// The table header row's ink (TDD 18.30), already folded with `heading_color` — so
+    /// this slot IS `heading_color` unless the theme says otherwise, and a consumer
+    /// indexes rather than re-deriving the fallback (the same discipline
+    /// `heading_colors` and `list_task_color` follow). `None` ⇒ the header text inherits
+    /// the body foreground, which is what a theme stating neither key always did.
+    pub table_head_fg: Option<gdk::RGBA>,
     pub rule: Option<gdk::RGBA>,
     /// List-marker glyph colour (bullet/numeral/checkbox); `None` ⇒ inherit the widget
     /// foreground. Marker glyph only — never the item text.
@@ -1267,6 +1322,10 @@ pub(crate) struct Sprites {
     pub list_task_checked: Option<crate::sprite::SpriteRef>,
     pub heading_band: Option<crate::sprite::SpriteRef>,
     pub blockquote_bar: Option<crate::sprite::SpriteRef>,
+    /// The horizontal rule's tile (TDD 18.31). Unlike every other entry here, this one
+    /// is read by a WIDGET rather than by a drawing pass or an export sink alone — see
+    /// `crate::widgets::rule`.
+    pub rule: Option<crate::sprite::SpriteRef>,
 }
 
 impl Theme {
@@ -1369,6 +1428,11 @@ impl Theme {
         // both export sinks index rather than each spelling the fallback.
         let list_task_color =
             color(&selected.list_task_marker, &system.list_task_marker).or(list_marker);
+        // The table header's ink, folded ONCE here (TDD 18.30) — the same shape as the
+        // task marker's fold to `list_marker` directly above. Every consumer (the
+        // preview's generated CSS and both export sinks) then reads one resolved value
+        // instead of three copies of the same `or`.
+        let table_head_fg = color(&selected.table_head_fg, &system.table_head_fg).or(heading_color);
         let tier2 = color(&selected.list_marker_2, &system.list_marker_2);
         let tier3 = color(&selected.list_marker_3, &system.list_marker_3);
         let list_bullet_colors = [
@@ -1463,10 +1527,13 @@ impl Theme {
             code_inline_bg: color(&selected.code_inline_bg, &system.code_inline_bg),
             code_block_bg: color(&selected.code_block_bg, &system.code_block_bg),
             blockquote_bar: color(&selected.blockquote_bar, &system.blockquote_bar),
+            blockquote_bg: color(&selected.blockquote_bg, &system.blockquote_bg),
+            blockquote_fg: color(&selected.blockquote_fg, &system.blockquote_fg),
             selection_bg: color(&selected.selection_bg, &system.selection_bg),
             selection_fg: color(&selected.selection_fg, &system.selection_fg),
             table_border: color(&selected.table_border, &system.table_border),
             table_head_bg: color(&selected.table_head_bg, &system.table_head_bg),
+            table_head_fg,
             rule: color(&selected.rule, &system.rule),
             list_marker,
             list_bullet_colors,
@@ -1576,6 +1643,7 @@ impl Theme {
                     &selected.sprite_blockquote_bar,
                     &system.sprite_blockquote_bar,
                 ),
+                rule: sprite(&selected.sprite_rule, &system.sprite_rule),
             },
         }
     }
@@ -1635,7 +1703,7 @@ fn load() -> Themes {
 
 /// How many sprite keys a spec has — the length of [`sprite_slots`], stated so the
 /// array's type says it rather than a reader counting the literal.
-const SPRITE_SLOTS: usize = 9;
+const SPRITE_SLOTS: usize = 10;
 
 /// Every sprite key of one spec, as one enumeration.
 ///
@@ -1656,6 +1724,7 @@ fn sprite_slots(spec: &mut ThemeSpec) -> [&mut Option<crate::sprite::SpriteRef>;
         &mut spec.sprite_list_task_checked,
         &mut spec.sprite_heading_band,
         &mut spec.sprite_blockquote_bar,
+        &mut spec.sprite_rule,
     ]
 }
 
@@ -2552,6 +2621,86 @@ mod tests {
         );
     }
 
+    /// TDD 18.29 / 18.2 — the quote panel is opt-in, its two halves are independent of
+    /// each other, and BOTH are independent of the accent bar's own colour.
+    ///
+    /// The independence is the rubric, not the parsing: `blockquote_bar` seeded a
+    /// blockquote's only themed colour until this pair existed, and a fold from it
+    /// would have made a themed bar silently panel the quote on every existing theme.
+    #[test]
+    fn the_quote_panel_is_opt_in_and_independent_of_the_bar() {
+        let sys = Themes::builtin().resolve(SYSTEM_ID);
+        assert!(sys.blockquote_bg.is_none());
+        assert!(sys.blockquote_fg.is_none());
+
+        // A bar colour alone panels nothing — every shipped theme before this pair is
+        // in exactly this state.
+        let mut bar_only = Themes::builtin();
+        bar_only.merge_over(
+            Themes::parse_compiled("[themes.sepia]\nblockquote_bar = \"#112233\"\n").unwrap(),
+        );
+        let t = bar_only.resolve("sepia");
+        assert_eq!(crate::palette::to_hex(t.blockquote_bar.unwrap()), "#112233");
+        assert!(
+            t.blockquote_bg.is_none(),
+            "a bar colour must not seed a panel"
+        );
+        assert!(t.blockquote_fg.is_none(), "…nor an ink");
+
+        // Either half alone resolves, leaving the other absent: a panel with the body
+        // ink on it, or re-inked quoted text on the page.
+        for (key, read) in [("blockquote_bg", true), ("blockquote_fg", false)] {
+            let mut one = Themes::builtin();
+            one.merge_over(
+                Themes::parse_compiled(&format!("[themes.sepia]\n{key} = \"#ff00ff\"\n")).unwrap(),
+            );
+            let t = one.resolve("sepia");
+            let (stated, other) = if read {
+                (t.blockquote_bg, t.blockquote_fg)
+            } else {
+                (t.blockquote_fg, t.blockquote_bg)
+            };
+            assert_eq!(crate::palette::to_hex(stated.unwrap()), "#ff00ff", "{key}");
+            assert!(other.is_none(), "{key} must not imply its counterpart");
+            assert!(
+                t.blockquote_bar.is_none(),
+                "{key} must not disturb the bar, which stays whatever the theme said"
+            );
+        }
+    }
+
+    /// TDD 18.31 / 18.2 — the rule's sprite is opt-in, resolves like every other sprite
+    /// key, and leaves the flat `rule` colour standing beside it as the fallback.
+    #[test]
+    fn the_rule_sprite_is_opt_in_and_keeps_the_flat_colour_beside_it() {
+        assert!(Themes::builtin().resolve(SYSTEM_ID).sprites.rule.is_none());
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("rule.png"), b"bytes are not validated here").unwrap();
+        let origin = crate::sprite::SpriteOrigin::Directory(dir.path());
+        let mut good = ThemeSpec {
+            sprite_rule: Some(crate::sprite::SpriteRef::Named("rule.png".to_string())),
+            rule: Some("#123456".to_string()),
+            ..Default::default()
+        };
+        resolve_sprite_refs(&mut good, origin);
+        let crate::sprite::SpriteRef::File(got) = good.sprite_rule.clone().expect("resolved")
+        else {
+            panic!("a directory origin must resolve to a file");
+        };
+        assert!(got.is_absolute());
+        // The colour is UNTOUCHED by the sprite resolving: the sprite outranks it at
+        // paint time, and the colour is what a refused reference falls back to.
+        assert_eq!(good.rule.as_deref(), Some("#123456"));
+
+        let mut escaping = ThemeSpec {
+            sprite_rule: Some(crate::sprite::SpriteRef::Named("../escape.png".to_string())),
+            ..Default::default()
+        };
+        resolve_sprite_refs(&mut escaping, origin);
+        assert_eq!(escaping.sprite_rule, None);
+    }
+
     /// **Every sprite a compiled-in theme names is compiled in too.**
     ///
     /// The general guard, and the one that would have caught the defect it was written
@@ -2635,7 +2784,8 @@ mod tests {
              sprite_list_task = \"{key}\"\n\
              sprite_list_task_checked = \"{key}\"\n\
              sprite_heading_band = \"{key}\"\n\
-             sprite_blockquote_bar = \"{key}\"\n"
+             sprite_blockquote_bar = \"{key}\"\n\
+             sprite_rule = \"{key}\"\n"
         ));
         let s = themes.resolve("embedded").sprites;
         let expected = crate::sprite::SpriteRef::Compiled(key);
@@ -2649,6 +2799,7 @@ mod tests {
             &s.list_task_checked,
             &s.heading_band,
             &s.blockquote_bar,
+            &s.rule,
         ];
         assert_eq!(every.len(), SPRITE_SLOTS);
         for (i, slot) in every.iter().enumerate() {

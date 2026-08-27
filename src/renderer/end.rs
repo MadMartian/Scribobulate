@@ -69,6 +69,17 @@ impl Renderer {
                         let end = self.end_offset();
                         if end > start {
                             self.apply_tag_per_line(crate::tags::TagName::Blockquote, start, end);
+                            // The quote's own ink (TDD 18.29) rides the same per-line
+                            // pass on its own, LOWEST-priority tag, so a link, heading
+                            // or `==mark==` inside the quote keeps its colour
+                            // (`tags::TagName::BlockquoteInk`). Applied unconditionally:
+                            // the tag carries no foreground at all unless the theme
+                            // states one, so a theme that states none re-inks nothing.
+                            self.apply_tag_per_line(
+                                crate::tags::TagName::BlockquoteInk,
+                                start,
+                                end,
+                            );
                             self.blockquote_ranges
                                 .push(crate::span::BufferSpan::new(start, end));
                         }

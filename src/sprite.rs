@@ -65,10 +65,20 @@ const MAX_SPRITE_BYTES: u64 = 512 * 1024;
 /// `CARGO_MANIFEST_DIR` or any other checkout-relative path, which would work only
 /// when the binary is run from the source tree and fail — silently, since an
 /// unresolved sprite is inert — for every installed copy.
-const BUILTIN_SPRITES: &[(&str, &[u8])] = &[(
-    "sprites/copper-plate.png",
-    include_bytes!("../data/sprites/copper-plate.png"),
-)];
+const BUILTIN_SPRITES: &[(&str, &[u8])] = &[
+    (
+        "sprites/copper-plate.png",
+        include_bytes!("../data/sprites/copper-plate.png"),
+    ),
+    (
+        "sprites/grass-platform.png",
+        include_bytes!("../data/sprites/grass-platform.png"),
+    ),
+    (
+        "sprites/sword.png",
+        include_bytes!("../data/sprites/sword.png"),
+    ),
+];
 
 /// Where a themes file's sprite references resolve from — the one decision that
 /// separates the two sources, made once per file at parse time and never guessed at

@@ -13,6 +13,9 @@
 //! - [`comment_entry`] — `CommentEntry`, the single annotation comment
 //!   entry + Save pair shared by all three annotation surfaces, wiring every
 //!   commit route once.
+//! - [`rule`] — `SpriteRule`, the horizontal rule when a theme tiles a sprite across
+//!   it (TDD 18.31). Built only where the theme states one; the flat rule stays the
+//!   stock `GtkSeparator` it has always been.
 //! - [`textfield`] — the constructors every `GtkEntry`/`GtkSearchEntry` in the
 //!   application comes from, so the two silent follow-ups a hand-built field owes
 //!   (accessible name; macOS word navigation) cannot be forgotten one surface at a
@@ -21,6 +24,7 @@
 use gtk::prelude::*;
 
 pub(crate) mod comment_entry;
+pub(crate) mod rule;
 pub(crate) mod tab;
 pub(crate) mod table;
 pub(crate) mod textfield;

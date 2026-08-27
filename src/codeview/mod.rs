@@ -602,8 +602,70 @@ mod imp {
             let card_w = (view.width() as f32 - lm - rm).max(0.0);
 
             if layer == gtk::TextViewLayer::BelowText {
-                // The heading band (TDD 18.25), FIRST in the below-text pass so anything
-                // else drawn under the text lands on top of it rather than under it.
+                // Every VISIBLE blockquote's Y-extent, computed ONCE and consumed TWICE
+                // — by the panel immediately below and by the accent bar further down.
+                // One `BufferSpan` per WHOLE quote (`renderer::end` closes the range at
+                // the outermost `TagEnd::BlockQuote`), so the extent spans the quote's
+                // intro paragraph, any nested list and its closing paragraph as ONE run,
+                // with the blank separator lines inside it. That is the whole of the fix
+                // to TDD 18.29: the panel used to be a `paragraph_background_rgba` on the
+                // `blockquote` tag, which GTK fills PER PARAGRAPH, so a quote holding a
+                // paragraph plus a list rendered as three disconnected rectangles with
+                // the page showing through between them — beside a bar that had always
+                // been drawn from this single extent and was therefore continuous. Same
+                // quote, two different extents, which is what made it visible.
+                //
+                // The clamping discipline is `span_card_y_extent`'s (GTK4Rs/AP-22: never
+                // measure an off-screen, unvalidated iter), and the extent carries NO
+                // extra pad (GTK4Rs/AP-127) — `line_yrange` already includes each line's
+                // own `pixels_above/below_lines`, which is where the panel's vertical
+                // breathing room comes from, exactly as it did from the tag.
+                let quote_extents: Vec<(f32, f32)> = blockquotes
+                    .iter()
+                    .filter(|q| !q.is_empty() && !q.is_outside(vis_start, vis_end))
+                    .filter_map(|&quote| {
+                        let (top, bottom) = span_card_y_extent(
+                            &*view,
+                            &buffer,
+                            quote,
+                            vis_start,
+                            vis_end,
+                            vtop as f32,
+                            vbot as f32,
+                        );
+                        (bottom > top).then_some((top, bottom))
+                    })
+                    .collect();
+
+                // The quote panel (TDD 18.29), FIRST in the below-text pass — before the
+                // heading band, the code-block card and the accent bar — because the
+                // quote is the outermost of those containers: a heading band or a code
+                // card INSIDE a quote must land on the panel, not under it.
+                //
+                // Absent unless the active theme states `blockquote_bg`, read at PAINT
+                // time for the same reason the heading band's fill is: selecting a theme
+                // repaints, it does not re-render.
+                //
+                // The extent is the CONTENT COLUMN — `lm`/`card_w`, the same rect the
+                // code-block card and the heading band take — so the panel starts at the
+                // accent bar's own left edge and the two read as one object, and the
+                // quoted text sits inset from both edges by `blockquote_bar_width +
+                // blockquote_text_gap` (the `blockquote` tag's margins) rather than
+                // running flush to the fill, which is what a panel wants and what a
+                // paragraph background pinned to the text column could not give.
+                if let Some(panel) = crate::theme::active().blockquote_bg {
+                    for &(top, bottom) in &quote_extents {
+                        snapshot.append_color(
+                            &panel,
+                            &graphene::Rect::new(lm, top, card_w, bottom - top),
+                        );
+                    }
+                }
+
+                // The heading band (TDD 18.25), before every other per-heading/per-block
+                // decoration in this pass so they land on top of it rather than under it.
+                // Only the quote panel above precedes it, and only because a quote
+                // CONTAINS a heading rather than sitting beside one.
                 //
                 // Absent unless the active theme states a fill for the level, which is
                 // why the fill is read at PAINT time and no colour travels with the
@@ -764,43 +826,29 @@ mod imp {
                     .blockquote_bar
                     .as_ref()
                     .and_then(crate::sprite::texture);
-                for &quote in blockquotes.iter() {
-                    if quote.is_empty() {
-                        continue;
-                    }
-                    if quote.is_outside(vis_start, vis_end) {
-                        continue;
-                    }
-                    let (top, bottom) = span_card_y_extent(
-                        &*view,
-                        &buffer,
-                        quote,
-                        vis_start,
-                        vis_end,
-                        vtop as f32,
-                        vbot as f32,
-                    );
-                    if bottom > top {
-                        let rect = graphene::Rect::new(lm, top, bar_w, bottom - top);
-                        // The sprite OUTRANKS the flat colour, and this is an `else`
-                        // rather than a paint-over on purpose: filling first and tiling
-                        // on top looks identical for an opaque tile and lets the flat
-                        // colour bleed through a transparent one — a bug reachable only
-                        // by the sprites nobody happened to test.
-                        match &bar_sprite {
-                            Some(tex) => {
-                                let tile = graphene::Rect::new(
-                                    rect.x(),
-                                    rect.y(),
-                                    tex.width() as f32,
-                                    tex.height() as f32,
-                                );
-                                snapshot.push_repeat(&rect, Some(&tile));
-                                snapshot.append_texture(tex, &tile);
-                                snapshot.pop();
-                            }
-                            None => snapshot.append_color(&bar_color, &rect),
+                // The SAME `quote_extents` the panel was filled from, so the bar and the
+                // fill behind it can never disagree about where the quote starts or ends
+                // — which is precisely how the TDD 18.29 defect announced itself.
+                for &(top, bottom) in &quote_extents {
+                    let rect = graphene::Rect::new(lm, top, bar_w, bottom - top);
+                    // The sprite OUTRANKS the flat colour, and this is an `else`
+                    // rather than a paint-over on purpose: filling first and tiling
+                    // on top looks identical for an opaque tile and lets the flat
+                    // colour bleed through a transparent one — a bug reachable only
+                    // by the sprites nobody happened to test.
+                    match &bar_sprite {
+                        Some(tex) => {
+                            let tile = graphene::Rect::new(
+                                rect.x(),
+                                rect.y(),
+                                tex.width() as f32,
+                                tex.height() as f32,
+                            );
+                            snapshot.push_repeat(&rect, Some(&tile));
+                            snapshot.append_texture(tex, &tile);
+                            snapshot.pop();
                         }
+                        None => snapshot.append_color(&bar_color, &rect),
                     }
                 }
 
@@ -1891,6 +1939,164 @@ mod gtk_integration_tests {
         );
         crate::theme::set_active(crate::theme::SYSTEM_ID);
         crate::sprite::clear_cache();
+    }
+
+    /// TDD 18.29 regression — the quote panel is ONE continuous fill over the whole
+    /// blockquote, covering exactly the rows its accent bar covers.
+    ///
+    /// The defect this pins shipped: the panel was a `paragraph_background_rgba` on the
+    /// `blockquote` tag, which GTK fills PER PARAGRAPH, so a quote holding an intro
+    /// paragraph plus a nested list drew as three disconnected rectangles with the page
+    /// showing between them — beside a bar drawn from the quote's ONE `BufferSpan` and
+    /// therefore continuous. **The oracle is that disagreement**, not "is there a fill":
+    /// the two decorations describe the same quote, so any row carrying one and not the
+    /// other is the bug, whatever produced it. A presence-only assertion passes on the
+    /// broken build (there WAS a fill — three of them).
+    ///
+    /// Deliberately a pixel assertion over a rendered snapshot, per POLICY's "verify
+    /// themed geometry by the resolved pixel, never by tag-property equality": the whole
+    /// failure was invisible to a tag-level test, because the tag carried exactly the
+    /// colour it was asked to.
+    #[gtktest::test]
+    fn a_quote_panel_covers_the_whole_quote_and_not_just_each_paragraph() {
+        const PANEL: (u8, u8, u8) = (0x0a, 0x18, 0x30);
+        const BAR: (u8, u8, u8) = (0x00, 0xff, 0x00);
+        const VIEW_MARGIN: i32 = 12;
+        const TEXT_INDENT: i32 = 60;
+        const W: usize = 400;
+        const H: usize = 300;
+
+        // Render the SAME quote under a theme that states a panel and one that does not,
+        // so TDD 18.2's "unstated ⇒ absent" is pinned at the layer that now owns the fill.
+        let render = |panel_key: &str| -> Vec<u8> {
+            let mut themes = crate::theme::themes();
+            themes.merge_over_for_test(&format!(
+                "[themes.panelled]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
+                 blockquote_bar = \"#00ff00\"\nblockquote_bar_width = 8\n{panel_key}"
+            ));
+            crate::theme::set_active_for_test(themes.resolve("panelled"));
+
+            let view = CodePreviewView::new();
+            view.set_left_margin(VIEW_MARGIN);
+            view.set_right_margin(VIEW_MARGIN);
+            // Shaped like the quote the defect was reported from: an intro paragraph, a
+            // blank separator, several short lines standing in for the nested list,
+            // another blank, a closing paragraph. A SINGLE-paragraph quote renders
+            // correctly even on the broken build, so a one-paragraph fixture would pass
+            // either way.
+            let quoted = "Intro paragraph\n\nitem one\nitem two\nitem three\n\nClosing paragraph";
+            let buffer = view.buffer();
+            buffer.set_text(&format!("{quoted}\n"));
+            // The quoted text indented clear of the decorations, which is what the real
+            // `blockquote` tag does — and here it is also what makes the oracle readable:
+            // a glyph landing on the bar would shrink that row's measured extent and read
+            // as a missing bar.
+            if let Some(indent) = buffer.create_tag(None, &[("left-margin", &TEXT_INDENT)]) {
+                buffer.apply_tag(&indent, &buffer.start_iter(), &buffer.end_iter());
+            }
+            view.set_blockquotes(
+                vec![crate::span::BufferSpan::new(
+                    0,
+                    quoted.chars().count() as i32,
+                )],
+                gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
+            );
+
+            let window = gtk::Window::new();
+            window.set_default_size(W as i32, H as i32);
+            window.set_child(Some(&view));
+            window.present();
+            crate::testpump::until(crate::testpump::Clock::Frame, "the preview maps", || {
+                view.width() > 0
+            });
+            let paintable = gtk::WidgetPaintable::new(Some(&view));
+            let snapshot = gtk::Snapshot::new();
+            paintable.snapshot(snapshot.upcast_ref::<gdk::Snapshot>(), W as f64, H as f64);
+            let node = snapshot
+                .to_node()
+                .expect("the preview snapshots to something");
+            let renderer = gsk::CairoRenderer::new();
+            renderer
+                .realize(None::<&gdk::Surface>)
+                .expect("the Cairo renderer realizes without a surface");
+            let texture = renderer.render_texture(&node, None);
+            let (w, h) = (texture.width() as usize, texture.height() as usize);
+            let mut data = vec![0u8; w * h * 4];
+            texture.download(&mut data, w * 4);
+            // Realized explicitly, so unrealized explicitly (GTK4Rs/AP-272).
+            renderer.unrealize();
+            window.destroy();
+            data
+        };
+
+        // Per scanline, the x-extent of a colour. Cairo ARGB32 on a little-endian host is
+        // B, G, R, A.
+        let extents = |data: &[u8], want: (u8, u8, u8)| -> Vec<Option<(usize, usize)>> {
+            data.chunks_exact(W * 4)
+                .map(|row| {
+                    row.chunks_exact(4)
+                        .enumerate()
+                        .filter(|(_, px)| (px[2], px[1], px[0]) == want)
+                        .fold(None, |acc: Option<(usize, usize)>, (x, _)| {
+                            Some(acc.map_or((x, x), |(lo, hi)| (lo.min(x), hi.max(x))))
+                        })
+                })
+                .collect()
+        };
+
+        let plain = render("");
+        assert!(
+            extents(&plain, PANEL).iter().all(Option::is_none),
+            "a theme stating no `blockquote_bg` must paint no panel at all (TDD 18.2)"
+        );
+
+        let data = render("blockquote_bg = \"#0a1830\"\n");
+        let panels = extents(&data, PANEL);
+        let bars = extents(&data, BAR);
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+
+        assert!(
+            bars.iter().filter(|b| b.is_some()).count() > 20,
+            "the fixture must actually draw a multi-line quote bar"
+        );
+        // THE assertion. Every row the bar covers must carry the panel too, and no row
+        // outside it may. On the broken build the bar's rows are a strict superset.
+        for (y, (panel, bar)) in panels.iter().zip(&bars).enumerate() {
+            assert_eq!(
+                panel.is_some(),
+                bar.is_some(),
+                "row {y}: the panel and the accent bar must describe the same quote \
+                 (panel {panel:?}, bar {bar:?})"
+            );
+        }
+
+        // …and the panel abuts the bar rather than starting past it, which is the
+        // content-column extent this fill is drawn at: no page colour between the two,
+        // and the fill runs on to the view's right text margin.
+        let span = |rows: &[Option<(usize, usize)>]| -> (usize, usize) {
+            rows.iter()
+                .flatten()
+                .fold(None, |acc: Option<(usize, usize)>, &(lo, hi)| {
+                    Some(acc.map_or((lo, hi), |(alo, ahi)| (alo.min(lo), ahi.max(hi))))
+                })
+                .expect("a barred quote carries both decorations somewhere")
+        };
+        let (panel_lo, panel_hi) = span(&panels);
+        let (bar_lo, bar_hi) = span(&bars);
+        assert_eq!(
+            bar_lo, VIEW_MARGIN as usize,
+            "the bar sits at the content column's left edge"
+        );
+        assert_eq!(
+            panel_lo,
+            bar_hi + 1,
+            "the panel must start where the bar ends — a gap there is the page showing \
+             between two halves of one decoration"
+        );
+        assert!(
+            panel_hi >= W - VIEW_MARGIN as usize - 1,
+            "the panel must reach the content column's right edge, got {panel_hi} of {W}"
+        );
     }
 
     /// TDD 13.7 / ScrAP-65 regression (area-1 automated test): a

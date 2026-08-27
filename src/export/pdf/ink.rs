@@ -60,7 +60,22 @@ pub(crate) fn draw_page(
         .and_then(crate::sprite::bytes)
         .and_then(|bytes| decode(&bytes))
         .map(|(surface, _, _)| surface);
+    // The quote panel and its ink (TDD 18.29), resolved with the same hoist and the same
+    // "theme key, else absent" rule: each is `None` unless the theme states it, and an
+    // unstated one leaves quoted text on the page in the body ink, exactly as before.
+    let quote_bg = theme.blockquote_bg;
+    let quote_fg = theme.blockquote_fg;
     let rule_ink = theme.rule.unwrap_or(palette.rule);
+    // The rule's tile (TDD 18.31), decoded ONCE for the page beside the quote bar's, for
+    // the same reason: a document of rules would otherwise re-read the same picture per
+    // rule. `measure` has already given each rule line room for a whole tile.
+    let rule_sprite = theme
+        .sprites
+        .rule
+        .as_ref()
+        .and_then(crate::sprite::bytes)
+        .and_then(|bytes| decode(&bytes))
+        .map(|(surface, _, _)| surface);
     set_ink(cr, fg);
     let mut y = margin_pt;
     for (i, idx) in range.clone().enumerate() {
@@ -73,11 +88,50 @@ pub(crate) fn draw_page(
         if i > 0 {
             y += frag.space_before;
         }
-        // The quote bar, at the metric the theme states.
-        if line.quote_depth > 0 {
+        // The quote's own decoration — its panel (TDD 18.29) and its accent bar — both
+        // drawn from the QUOTE's column rather than this line's, and both extended up
+        // over the block gap above when the line above belongs to the same quote.
+        //
+        // Those two corrections are what make a quote holding an intro paragraph, a
+        // nested list and a closing paragraph draw as ONE object. Per line at the line's
+        // own indent, the list's rows stepped `INDENT_PT` to the right of the paragraphs
+        // around them and every `space_before` between blocks showed the paper through —
+        // the same defect the preview carried, arriving here by a different route (there,
+        // GTK's per-paragraph `paragraph_background_rgba`; here, arithmetic that only
+        // ever saw one line at a time).
+        //
+        // `gap_above` is the space THIS iteration just added to `y`, given back. It is
+        // zero for the first line on a page, where none was added — so a quote split
+        // across a page break starts flush at the top margin rather than reaching above
+        // it, which is the right answer for a page and needs no case of its own.
+        if let Some(quote) = line.quote {
+            // Compared by IDENTITY, never by indent: two quotes one blank line apart
+            // share every metric and must still draw as two panels.
+            let previous_in_same_quote = i > 0
+                && idx
+                    .checked_sub(1)
+                    .and_then(|prev| laid.lines.get(prev))
+                    .and_then(|prev| prev.quote)
+                    .is_some_and(|prev| prev.id == quote.id);
+            let gap_above = if previous_in_same_quote {
+                frag.space_before
+            } else {
+                0.0
+            };
+            let top = y - gap_above;
+            let height = line.height + gap_above;
             cr.save().ok();
             let w = f64::from(theme.metrics.blockquote_bar_width);
-            let x = margin_pt + line.indent - w * 2.0;
+            let x = margin_pt + quote.indent - w * 2.0;
+            // The panel goes down FIRST, behind both the bar and the text. It spans the
+            // quote's own column — from the quote's indent to the printable edge — which
+            // is this medium's reading of the content column the preview fills.
+            if let Some(bg) = quote_bg {
+                set_ink(cr, bg);
+                let width = (laid.printable_width_pt - quote.indent).max(MIN_PRINTABLE_PT);
+                cr.rectangle(margin_pt + quote.indent, top, width, height);
+                cr.fill().ok();
+            }
             // A theme may tile a sprite down the bar instead of filling it (TDD 18.28),
             // at natural size, the same picture the preview tiles. An `else` rather than
             // a paint-over for the reason the drawn bar states: an opaque tile hides the
@@ -86,15 +140,15 @@ pub(crate) fn draw_page(
                 Some(surface) => {
                     let pattern = cairo::SurfacePattern::create(surface);
                     pattern.set_extend(cairo::Extend::Repeat);
-                    cr.translate(x, y);
+                    cr.translate(x, top);
                     if cr.set_source(&pattern).is_ok() {
-                        cr.rectangle(0.0, 0.0, w, line.height);
+                        cr.rectangle(0.0, 0.0, w, height);
                         cr.fill().ok();
                     }
                 }
                 None => {
                     set_ink(cr, bar_ink);
-                    cr.rectangle(x, y, w, line.height);
+                    cr.rectangle(x, top, w, height);
                     cr.fill().ok();
                 }
             }
@@ -174,12 +228,29 @@ pub(crate) fn draw_page(
         match &line.kind {
             LineKind::Rule => {
                 cr.save().ok();
+                let width = (laid.printable_width_pt - line.indent).max(MIN_PRINTABLE_PT);
+                // A sprite OUTRANKS the flat colour, stated as a branch for the reason
+                // every other sprite-vs-flat pair in this vocabulary states it: an opaque
+                // tile hides the difference, and a transparent one lets the colour bleed
+                // through — a bug only the tiles nobody tested would show.
+                if let Some(surface) = &rule_sprite {
+                    let pattern = cairo::SurfacePattern::create(surface);
+                    pattern.set_extend(cairo::Extend::Repeat);
+                    cr.translate(margin_pt + line.indent, y);
+                    if cr.set_source(&pattern).is_ok() {
+                        cr.rectangle(0.0, 0.0, width, line.height);
+                        cr.fill().ok();
+                    }
+                    cr.restore().ok();
+                    set_ink(cr, fg);
+                    y += line.height;
+                    continue;
+                }
                 set_ink(cr, rule_ink);
                 // Span the printable column this rule sits in, at the theme's own
                 // thickness. It used to be `400.0, 0.75` — two literals in a file whose
                 // POLICY forbids them, which over- or under-ran the margin depending on
                 // page setup and nesting depth rather than tracking either.
-                let width = (laid.printable_width_pt - line.indent).max(MIN_PRINTABLE_PT);
                 let thickness = RULE_THICKNESS_PT;
                 cr.rectangle(
                     margin_pt + line.indent,
@@ -212,12 +283,27 @@ pub(crate) fn draw_page(
                 set_ink(cr, fg);
             }
             LineKind::Text { layout, index } => {
+                // Quoted body text takes the panel's ink where the theme states one
+                // (TDD 18.29). Set on the CONTEXT, not into the markup, so a `<span
+                // foreground=…>` the markup already carries — a link, a heading colour, a
+                // `==mark==` — still wins: the same ladder the preview gets from
+                // `TagName::BlockquoteInk` being the lowest-priority ink tag.
+                let quoted_ink = line.quote.is_some().then_some(quote_fg).flatten();
+                if let Some(c) = quoted_ink {
+                    set_ink(cr, c);
+                }
                 if let Some(pl) = layout.line_readonly(*index) {
                     let (_ink, logical) = pl.extents();
                     cr.move_to(margin_pt + line.indent, y - pango_to_pt(logical.y()));
                     // `show_layout_line`, never a per-run glyph loop — the text layer is
                     // the difference between a searchable PDF and a picture of one.
                     pangocairo::functions::show_layout_line(cr, &pl);
+                }
+                // Put the body pen back, the same duty every branch above discharges:
+                // this is the one branch that used never to change it, so a quote's ink
+                // would otherwise have leaked into the prose after it.
+                if quoted_ink.is_some() {
+                    set_ink(cr, fg);
                 }
             }
             LineKind::TableRow {
@@ -237,6 +323,7 @@ pub(crate) fn draw_page(
                         scale: *scale,
                         box_height: *box_height,
                         is_head: *is_head,
+                        head_fg: theme.table_head_fg,
                     },
                     margin_pt + line.indent,
                     y,
@@ -274,6 +361,9 @@ struct TableRowInk<'a> {
     scale: f64,
     box_height: f64,
     is_head: bool,
+    /// The theme's resolved header ink, or `None` where neither `table_head_fg` nor
+    /// `heading_color` is stated.
+    head_fg: Option<gtk::gdk::RGBA>,
 }
 
 /// Draw one table row with its cell borders, header fill and text.
@@ -293,6 +383,18 @@ fn draw_table_row(
     let border_rgba = theme.table_border.unwrap_or(palette.table_border);
     let head_bg = theme.table_head_bg.unwrap_or(palette.table_head_bg);
     let fg = palette.body_fg;
+    // The header row's ink (TDD 18.30), already folded with `heading_color` by
+    // `Theme::resolve` — one resolved value, the same one the preview's `.cell-head` rule
+    // and the HTML sink's `th` rule read. Unstated by both keys it stays `fg`, which is
+    // what this sink drew for every row before the key existed; a theme that colours its
+    // headings now gets that colour here too, which closes a gap on the way past (this
+    // sink coloured no header ink at all, of any kind — the same shape as the marker gap
+    // TDD 18.26 closed).
+    let head_fg = if row.is_head {
+        row.head_fg.unwrap_or(fg)
+    } else {
+        fg
+    };
 
     cr.save().ok();
     cr.translate(left, top);
@@ -327,7 +429,7 @@ fn draw_table_row(
         cr.stroke().ok();
     }
 
-    set_ink(cr, fg);
+    set_ink(cr, head_fg);
     for cell in row.cells {
         let Some(column) = row.columns.get(cell.column) else {
             continue;

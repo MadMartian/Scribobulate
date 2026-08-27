@@ -93,8 +93,16 @@ pub(crate) struct Line {
     indent: f64,
     /// Height in points.
     height: f64,
-    /// A quote bar to draw down the left of this line, when it is inside a quote.
-    quote_depth: u32,
+    /// The blockquote this line sits in, when it sits in one — its identity and the
+    /// indent its own content starts at. Both halves are load-bearing and neither is a
+    /// depth count, which is all this used to carry (TDD 18.29's fix):
+    ///
+    /// * the INDENT is the quote's, not the line's, so a nested list inside the quote
+    ///   does not walk the bar and the panel to the right of the paragraph above it;
+    /// * the IDENTITY is what lets [`ink::draw_page`] tell "the next block of the same
+    ///   quote" from "a second quote directly below the first" — the first must swallow
+    ///   the block gap between them so the panel reads as one, the second must not.
+    quote: Option<QuoteRef>,
     /// The themed heading BAND to draw behind this line (TDD 18.25), present on every
     /// line of a banded heading. Per LINE rather than per paragraph because that is the
     /// unit this sink lays out and paginates in — consecutive lines produce abutting
@@ -106,6 +114,19 @@ pub(crate) struct Line {
     /// the whole reason this field exists rather than a fourth `LineKind`: the line is
     /// still ordinary text, with a picture beside it.
     marker: Option<MarkerImage>,
+}
+
+/// Which blockquote a line belongs to, and where that quote's own column starts.
+///
+/// One value per `Block::Quote` in document order; a nested quote gets its own, so its
+/// lines report the INNER quote, which is what has always been drawn for them.
+#[derive(Clone, Copy)]
+struct QuoteRef {
+    /// Distinct per blockquote, in document order. Compared, never counted.
+    id: u32,
+    /// Where this quote's own content starts, in points from the page margin — already
+    /// bounded to the page by `indent_on_page`, exactly as a line's own indent is.
+    indent: f64,
 }
 
 /// The heading band's ink for one line: its fill, an optional second gradient stop, and

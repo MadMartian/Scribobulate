@@ -159,20 +159,34 @@ impl Renderer {
 
             Event::Rule => {
                 self.block_sep();
-                let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
+                // A theme may tile a sprite across the rule instead of colouring it
+                // (TDD 18.31), and unlike every other sprite-vs-flat pair in this
+                // vocabulary the two cannot be one widget: the flat rule is a stock
+                // `GtkSeparator` filled by generated CSS, and a GTK CSS `url()` cannot
+                // reach a sprite compiled into the binary (ScrAP-324). The `else` arm
+                // below is therefore byte-for-byte the code that was here before this
+                // key existed — "unstated ⇒ unchanged" by construction, not by care.
+                let theme = crate::theme::active();
+                let rule_tile = theme.sprites.rule.as_ref().and_then(crate::sprite::texture);
+                let sep: gtk::Widget = match rule_tile {
+                    Some(tex) => crate::widgets::rule::SpriteRule::new(tex).upcast(),
+                    None => gtk::Separator::new(gtk::Orientation::Horizontal).upcast(),
+                };
                 // NO initial width_request: it must NOT start over-wide, or an
                 // Automatic preview scroller churns from frame 1 and the view never
                 // gets a clean allocation (GTK4Rs/AP-23). `CodePreviewView::size_allocate`
                 // grows it to the live content column before the first paint.
                 //
-                // A rule is a STOCK GtkSeparator — the only anchored widget the app
-                // doesn't build itself, and therefore the surface most likely to stay
+                // Unfilled, a rule is a STOCK GtkSeparator — the only anchored widget the
+                // app doesn't build itself, and therefore the surface most likely to stay
                 // system-coloured on a reading page. It carries a class so the generated
                 // theme CSS can recolour it (it has no tag and no snapshot of ours to
-                // theme through), and its margins are a themed decoration metric scaled
-                // by the live zoom like every other.
+                // theme through). The class goes on either widget so the two answer the
+                // same selector; the sprite one paints itself and takes nothing from that
+                // rule. Their margins are a themed decoration metric scaled by the live
+                // zoom like every other.
                 sep.add_css_class("scrib-rule");
-                let space = crate::theme::px(crate::theme::active().metrics.rule_space, self.zoom);
+                let space = crate::theme::px(theme.metrics.rule_space, self.zoom);
                 sep.set_margin_top(space);
                 sep.set_margin_bottom(space);
                 let mut iter = self.buf.end_iter();
@@ -181,9 +195,8 @@ impl Renderer {
                 // so it fills `content − inset`, not the whole column — an indented rule
                 // sized to the full column overflows by the indent → spurious Automatic
                 // h-scrollbar → GTK4Rs/AP-22/23 churn (GTK4Rs/AP-23a). 0 at top level.
-                self.width_bounded
-                    .push((sep.clone().upcast(), self.block_inset()));
-                self.anchored.push((anchor, sep.upcast()));
+                self.width_bounded.push((sep.clone(), self.block_inset()));
+                self.anchored.push((anchor, sep));
                 self.trailing_newlines = 0;
                 self.at_start = false;
                 self.newline();

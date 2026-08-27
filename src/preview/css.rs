@@ -258,12 +258,14 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
         m.table_cell_radius,
     ));
     // Table header row (the GFM row above the `---` delimiter): bold text on a faint
-    // fill, distinguishing it from body cells. When a theme colours its headings, the
-    // table header TEXT takes that same colour too (a table header IS a heading), from
-    // the one `heading_color` key — omitted, the header text inherits the body colour
-    // exactly as before.
+    // fill, distinguishing it from body cells. Its TEXT takes `table_head_fg`, which
+    // `Theme::resolve` has already folded down to `heading_color` where the theme states
+    // no header ink of its own (TDD 18.30) — so a theme that colours its headings and
+    // says nothing about tables gets exactly what it got before that key existed, and
+    // one that says nothing at all still inherits the body colour. The fold is not
+    // repeated here: this reads one resolved value, as both export sinks do.
     let head_fg = theme
-        .heading_color
+        .table_head_fg
         .map(|c| format!(" color: {};", to_hex(c)))
         .unwrap_or_default();
     // A themed heading FONT reaches the table header too. `heading_font` is a
@@ -740,6 +742,54 @@ mod tests {
         assert!(
             !c.contains("@theme_"),
             "a generated rule still binds to @theme_*"
+        );
+    }
+
+    /// TDD 18.30 / 18.2 — the table header's ink is its own key, and falls back to
+    /// `heading_color` exactly as it always did.
+    ///
+    /// Three cases, because two of them look identical from inside one theme: a theme
+    /// that states neither key (no `color` at all), one that states only
+    /// `heading_color` (the pre-18.30 behaviour, which is what "byte-identical" means
+    /// here), and one that states both (the header leaves the heading behind).
+    #[test]
+    fn the_table_header_ink_is_its_own_key_and_falls_back_to_heading_color() {
+        let sheet = |fragment: &str| {
+            let mut themes = Themes::builtin();
+            themes.merge_over_for_test(fragment);
+            let theme = themes.resolve("inked");
+            let palette = Palette::from_base(
+                theme.background.unwrap_or(PROBE_BG),
+                theme.foreground.unwrap_or_else(probe_fg),
+                theme.foreground.unwrap_or_else(probe_chrome_fg),
+                theme.accent.unwrap_or_else(probe_accent),
+                &theme,
+            );
+            theme_css(&theme, &palette)
+        };
+        let head_rule = |css: &str| {
+            css.lines()
+                .find(|l| l.starts_with("scribtable .cell-head"))
+                .expect("the header rule is generated for every theme")
+                .to_string()
+        };
+
+        assert!(
+            !head_rule(&sheet("[themes.inked]\n")).contains(" color:"),
+            "a theme stating neither key must leave the header on the body ink"
+        );
+        assert!(
+            head_rule(&sheet("[themes.inked]\nheading_color = \"#5f1010\"\n"))
+                .contains(" color: #5f1010;"),
+            "stating only heading_color must still reach the header, as it always did"
+        );
+        let both = head_rule(&sheet(
+            "[themes.inked]\nheading_color = \"#5f1010\"\ntable_head_fg = \"#ffd400\"\n",
+        ));
+        assert!(both.contains(" color: #ffd400;"), "{both}");
+        assert!(
+            !both.contains("#5f1010"),
+            "the header must leave heading_color behind entirely, not layer over it: {both}"
         );
     }
 

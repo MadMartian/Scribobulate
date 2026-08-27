@@ -1816,6 +1816,138 @@ mod gtk_integration_tests {
         crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
+    /// The name of the highest-PRIORITY tag at `off` that sets `prop` — i.e. the tag
+    /// GTK will actually resolve that attribute from.
+    ///
+    /// `TextIter::tags` returns the tags in ascending priority order, and GTK resolves
+    /// an attribute from the highest-priority tag that has it SET
+    /// (`gtktextbtree.c`'s style merge). So this is the resolution rule expressed as
+    /// data, which is as close as a headless test can get to reading the resolved
+    /// attributes — `gtk_text_iter_get_attributes` is private in GTK4 and absent from
+    /// gtk4-rs (GTK4Rs/AP-166), so the resolved struct itself cannot be asked.
+    fn winning_tag(buf: &TextBuffer, off: i32, prop: &str) -> Option<String> {
+        buf.iter_at_offset(off)
+            .tags()
+            .iter()
+            .rfind(|t| t.property::<bool>(prop))
+            .and_then(|t| t.name().map(|n| n.to_string()))
+    }
+
+    /// TDD 18.31 / 18.2 — the rule is a `GtkSeparator` until a theme tiles a sprite
+    /// across it, and a `SpriteRule` once it does.
+    ///
+    /// The choice of WIDGET is the whole feature, and it is a decision no CSS assertion
+    /// could reach: a GTK CSS `url()` cannot name a sprite compiled into the binary
+    /// (ScrAP-324), which is why the flat rule and the tiled one cannot be one widget.
+    /// Asserting the anchored child's TYPE is asserting exactly that fork.
+    #[gtktest::test]
+    fn a_rule_sprite_swaps_the_separator_for_a_tiling_widget() {
+        let md = "before\n\n---\n\nafter";
+        let anchored_rule = |products: &super::RenderProducts| -> glib::Type {
+            products
+                .anchored
+                .iter()
+                .map(|(_, widget)| widget.type_())
+                .find(|t| t.name() == "GtkSeparator" || t.name() == "ScribSpriteRule")
+                .expect("a `---` renders as an anchored rule widget")
+        };
+
+        let plain = with_theme(crate::theme::SYSTEM_ID, || {
+            build_render_products(md, None, 1.0, false)
+        });
+        assert_eq!(
+            anchored_rule(&plain).name(),
+            "GtkSeparator",
+            "a theme stating no rule sprite must anchor the same stock separator it always did"
+        );
+
+        // A COMPILED-IN reference, not a temp file: that is the source a built-in theme
+        // uses and the one CSS could never have reached, so the fork is proved against
+        // the case it exists for (ScrAP-324).
+        let mut theme = crate::theme::themes().resolve(crate::theme::SYSTEM_ID);
+        theme.sprites.rule = Some(crate::sprite::SpriteRef::Compiled(
+            "sprites/copper-plate.png",
+        ));
+        crate::theme::set_active_for_test(theme);
+        let tiled = build_render_products(md, None, 1.0, false);
+        assert_eq!(
+            anchored_rule(&tiled).name(),
+            "ScribSpriteRule",
+            "a stated rule sprite must anchor the tiling widget instead"
+        );
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// TDD 18.29 — a theme may panel its blockquotes, and the panel re-inks the quote's
+    /// BODY text only.
+    ///
+    /// The ink is the half with a trap in it. A `foreground` on the `blockquote` tag
+    /// would have been one line, and would have repainted every link in the quote too:
+    /// that tag is registered AFTER `link` (it must be, so its margin still beats a code
+    /// block's inside a quote), and the highest-priority tag that sets an attribute
+    /// wins. So the ink rides its own tag registered before every other ink-setting one,
+    /// and this asserts the resulting LADDER rather than the property — a test that only
+    /// read `blockquote-ink`'s foreground would pass just as happily with the ink on the
+    /// wrong tag.
+    ///
+    /// The FILL, by contrast, must reach no tag at all — see the first assertion.
+    #[gtktest::test]
+    fn a_quote_panel_inks_the_quote_but_never_the_link_inside_it() {
+        let md = "> quoted [anchor](https://example.invalid) text";
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.panel]\nblockquote_bg = \"#0a1830\"\nblockquote_fg = \"#ffffff\"\n",
+        );
+        crate::theme::set_active_for_test(themes.resolve("panel"));
+        let products = build_render_products(md, None, 1.0, false);
+        let text = buffer_slice(&products.buf);
+        let quoted = char_off(&text, "quoted");
+        let anchor = char_off(&text, "anchor");
+
+        assert_eq!(
+            winning_tag(&products.buf, quoted, "paragraph-background-set"),
+            None,
+            "the panel is DRAWN over the quote's own span (`codeview`'s snapshot_layer), \
+             never carried by a tag: GTK fills a paragraph background per PARAGRAPH, so a \
+             quote holding an intro paragraph and a nested list came out as disconnected \
+             rectangles with the page between them"
+        );
+        assert_eq!(
+            winning_tag(&products.buf, quoted, "foreground-set").as_deref(),
+            Some("blockquote-ink"),
+            "plain quoted body text must take the panel's ink"
+        );
+        assert_eq!(
+            winning_tag(&products.buf, anchor, "foreground-set").as_deref(),
+            Some("link"),
+            "a link inside the quote keeps its OWN colour — if this says blockquote-ink, \
+             the ink tag was registered after `link` and now outranks it"
+        );
+        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// TDD 18.29 / 18.2 — unstated, the panel is absent: quoted text is body text on the
+    /// page background, and no tag at a quoted character sets either property.
+    #[gtktest::test]
+    fn a_theme_that_states_no_quote_panel_leaves_quoted_text_plain() {
+        let md = "> quoted text";
+        let products = with_theme(crate::theme::SYSTEM_ID, || {
+            build_render_products(md, None, 1.0, false)
+        });
+        let off = char_off(&buffer_slice(&products.buf), "quoted");
+        // No paragraph-background assertion here: since the fill became a drawn rect it
+        // is absent from the tag table for EVERY theme, so asserting it at this layer
+        // would pass whatever the panel does. The unstated case is pinned where the fill
+        // now lives — `codeview`'s
+        // `a_quote_panel_covers_the_whole_quote_and_not_just_each_paragraph`, which
+        // renders both ways.
+        assert_eq!(
+            winning_tag(&products.buf, off, "foreground-set"),
+            None,
+            "System must leave quoted text on the body foreground"
+        );
+    }
+
     /// TDD 18.2 — the regression bar, at the layer that matters: selecting a reading
     /// theme must not disturb the document's resolved LAYOUT. Sepia restyles colour
     /// and typeface; it states no geometry, so every position is identical to System.

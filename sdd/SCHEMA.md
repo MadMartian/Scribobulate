@@ -310,6 +310,7 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `heading_band_bg` | `[string; 5]` | — | The band drawn behind a heading's text, per level (h1 · h2 · h3 · h4 · h5-and-deeper). An empty or absent slot ⇒ that level carries no band. The band spans the **content column**, and survives soft-wrap as one continuous band. |
 | `heading_band_gradient_to` | colour | — | A second stop: the band becomes a vertical gradient from the level's own fill down to this colour. Ignored where no level states a fill. |
 | `heading_band_padding` (above) | | | Space between the band's edge and the heading text inside it, each side. ⚠️ Non-zero by default, unlike every other decoration key: padding is part of drawing a band correctly rather than a flourish. Applied **only to a level that carries a band**, so a theme that bands nothing is untouched by it whatever its value. |
+| `sprite_rule` | `string` | — | A sprite **tiled horizontally at its natural size** across the `---` horizontal rule, in place of its flat `rule` colour. Resolved like every sprite key (see above). ⚠️ Unlike every other sprite key, this one changes which WIDGET the rule is: a flat rule is a stock `GtkSeparator` filled by generated CSS, and a GTK CSS `url()` cannot name a sprite compiled into the binary, so a tiled rule is a widget that paints the texture itself. The rule's height becomes the tile's own; `rule_space` still sets the gap around it. |
 | `sprite_blockquote_bar` | `string` | — | A sprite **tiled at its natural size** down the blockquote's accent bar, in place of the flat `blockquote_bar` colour. Resolved like every sprite key (see above). ⚠️ The tile is clipped to the bar, so a theme using one wants `blockquote_bar_width` at the tile's own width — a 24px tile in a 4px bar is a 4px slice of a tile. |
 | `sprite_heading_band` | `string` | — | A sprite **tiled at its natural size** across the band, in place of its fill. Resolved like every sprite key (see above); outranks the fill and the gradient. |
 | `link` | colour | derived | Link colour. |
@@ -319,10 +320,13 @@ strings parsed as `RGBA` (`#RRGGBB`, `#RRGGBBAA`, or a CSS colour name).
 | `code_inline_bg` | colour | derived | Inline code-span background. |
 | `code_block_bg` | colour | derived | Fenced code-block background. |
 | `blockquote_bar` | colour | derived | Blockquote indicator bar. |
+| `blockquote_bg` | colour | — | A panel behind quoted text. Absent unless stated: a quote sits on the page background, as it always has. Independent of `blockquote_bar` — an accent bar and a panel are two decisions, and a themed bar seeds no panel. |
+| `blockquote_fg` | colour | body foreground | The ink quoted **body** text takes on that panel. Re-inks the quote's prose only: a link, a heading or a `==mark==` inside the quote keeps its own colour, because this rides the lowest-priority ink tag in the preview and the cairo pen (rather than the markup) on the page. |
 | `selection_bg` | colour | derived | Selection background. |
 | `selection_fg` | colour | derived | Ink for *selected* text. Omitted, it derives from `selection_bg` plus the page and its ink — whichever of the two reads better on the fill — so a theme cannot strand its own selected text by accident. State it when the derived answer is legible but wrong: contrast is not taste. |
 | `table_border` | colour | derived | Table border. |
 | `table_head_bg` | colour | derived | Table header background. |
+| `table_head_fg` | colour | `heading_color` | The header ROW's text colour. Omitted, the header takes `heading_color` exactly as it always did, and omitting that too leaves it on the body ink. Stating it is what frees `table_head_bg` to be a fill of the theme's own choosing: while the header's ink was the heading's, a header fill had to be picked for legibility against a colour chosen for a different surface. |
 | `rule` | colour | derived | Horizontal-rule colour. |
 | `list_marker` | colour | widget foreground | Bullet, numeral and task-checkbox colour. Marker only; item text keeps the body foreground. |
 | `mark_bg` | colour | `#fff59d_88` | Background band behind `==marked==` text. |

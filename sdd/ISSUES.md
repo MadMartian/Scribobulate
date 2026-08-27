@@ -17,21 +17,22 @@ entry can still be the worst thing in the register.
 | ID | Platform | Scope | Issue | Severity |
 |----|----------|-------|-------|----------|
 | A | Any | Upstream | Tables are selection islands; cells are individually selectable but not part of the continuous buffer | Closed |
-| D | Any | Production | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
-| E | Linux | Production | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
-| G | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
-| N | Any | Production | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
-| O | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
-| Q | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
-| R | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
-| S | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
-| T | Any | Project | The PDF export ignores `heading_color`/`heading_font`/`heading_space_above`/`heading_space_below` entirely — headings print in the body face and ink, spaced by a fixed constant | Low |
-| U | Any | Project | The PDF export's body-font measurement passes the CSS-quoted font stack straight to Pango's `set_family`, the same quoting bug `tags.rs` strips for the on-screen path — a multi-word themed `font_family` likely drops to the default sans in the artefact | Low |
-| V | Windows | Test | A `platform::win32::appearance` test helper realizes a `gsk::CairoRenderer` and never unrealizes it | Low |
-| W | Any | Project | `sprite::scaled`'s per-`(path, width, height)` texture cache has no eviction policy | Low |
-| X | Any | Production | A long heading overflows the preview pane horizontally instead of wrapping to it | Low |
-| Y | Any | Project | The design-time-px-to-device-px rounding function (`px()`) exists as three separate copies rather than one shared definition | Low |
-| Z | Any | Production | A multi-paragraph blockquote's accent bar draws as one continuous rect per span, unconfirmed for every span shape a blockquote can produce | Low |
+| B | Any | Production | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
+| C | Linux | Production | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
+| D | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
+| E | Any | Production | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
+| F | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
+| G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
+| H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
+| I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
+| J | Any | Project | The PDF export ignores `heading_color`/`heading_font`/`heading_space_above`/`heading_space_below` entirely — headings print in the body face and ink, spaced by a fixed constant | Low |
+| K | Any | Project | The PDF export's body-font measurement passes the CSS-quoted font stack straight to Pango's `set_family`, the same quoting bug `tags.rs` strips for the on-screen path — a multi-word themed `font_family` likely drops to the default sans in the artefact | Low |
+| L | Windows | Test | A `platform::win32::appearance` test helper realizes a `gsk::CairoRenderer` and never unrealizes it | Low |
+| M | Any | Project | `sprite::scaled`'s per-`(path, width, height)` texture cache has no eviction policy | Low |
+| N | Any | Production | A long heading overflows the preview pane horizontally instead of wrapping to it | Low |
+| O | Any | Project | The design-time-px-to-device-px rounding function (`px()`) exists as three separate copies rather than one shared definition | Low |
+| P | Any | Production | A multi-paragraph blockquote's accent bar draws as one continuous rect per span, unconfirmed for every span shape a blockquote can produce | Low |
+| Q | Any | Project | The PDF's blockquote bar is positioned off the page margin, using the wrong metric for its text gap | Low |
 
 ## A. Tables are selection islands
 
@@ -130,7 +131,7 @@ free today, as the probe's control demonstrates — to un-break a Low-severity l
 nobody has asked for. It would be a deliberate project chosen on product grounds, not an
 increment, and it should not be started from this entry.
 
-## D. A strikethrough fence wrapping other inline markup renders the `~~` literally
+## B. A strikethrough fence wrapping other inline markup renders the `~~` literally
 
 **Severity**: Low (rare authoring pattern; plain `~~struck~~` is unaffected)
 
@@ -157,7 +158,7 @@ A related, rarer edge: `x\^2\^` (escaped literal carets) cannot be distinguished
   boundary explicit — it blesses the plain `~~struck~~` case as a contract and scopes
   the wrapping case (`~~a **bold** b~~`) OUT as this accepted limitation.
 
-## E. Live desktop dark↔light toggle doesn't repaint a running instance on KDE/X11
+## C. Live desktop dark↔light toggle doesn't repaint a running instance on KDE/X11
 
 **Severity**: Low (cosmetic; the new scheme applies on the next launch, and users
 rarely retheme mid-session — but a visible inconsistency with libadwaita/Qt apps,
@@ -223,7 +224,7 @@ flipping the scheme):**
 - **Accept the limitation**: the scheme applies on the next launch, users seldom
   retheme mid-session, and nothing is broken — only slower to follow than native apps.
 
-## G. A large document pegs a CPU core at ~100% while idle (GTK/Pango relayout loop that never converges)
+## D. A large document pegs a CPU core at ~100% while idle (GTK/Pango relayout loop that never converges)
 
 **Severity**: High (the symptom is a full CPU core held at ~100% **indefinitely while idle**,
 which directly contradicts the product's negligible-footprint thesis — but it is gated to
@@ -318,7 +319,7 @@ cost and the alternatives.
   primary use case (large agent-generated documents) defeats the negligible-footprint thesis the
   project exists to honour.
 
-## N. A click inside an existing selection never reaches the preview's click affordances
+## E. A click inside an existing selection never reaches the preview's click affordances
 
 **Severity**: Low (one wasted click, self-correcting — the click clears the selection and
 the next one works; no data at risk)
@@ -364,7 +365,7 @@ affordance cannot observe the click at all.
   itself, and every route past it trades a silent no-op for a silent loss of the drag.
 
 
-## O. A GTK4/Quartz autorelease-pool crash intermittently SIGABRTs the macOS integration suite
+## F. A GTK4/Quartz autorelease-pool crash intermittently SIGABRTs the macOS integration suite
 
 **Severity**: Medium (the macOS GTK suite cannot be trusted to complete; no data at risk,
 and no Scribobulate code is implicated — but a red run there means nothing until re-run)
@@ -438,7 +439,7 @@ evidence is machine-local and not transferable:
 
 ---
 
-## Q. A wall-clock growth-ratio guard fails on a loaded machine
+## G. A wall-clock growth-ratio guard fails on a loaded machine
 
 **Severity**: Low (nothing shipped is affected; a required pipeline step goes red on a
 correct tree, and the failure text accuses a specific, already-fixed regression by name,
@@ -486,7 +487,7 @@ being a timing test.
 
 ---
 
-## R. macOS: the preview's hover cursor sometimes does not take over body text or a link
+## H. macOS: the preview's hover cursor sometimes does not take over body text or a link
 
 **Severity**: Low (nothing is unreachable — links still activate on click and the copy
 button still copies; what is lost is the *affordance*, i.e. every link on the page looks
@@ -583,7 +584,7 @@ sampling loop over blank space with no hover target and seeing the same climb. A
 inside its own measurement, and the artefact it produced happened to match the hypothesis
 under test.
 
-## S. Every native file chooser invocation grows RSS on macOS
+## I. Every native file chooser invocation grows RSS on macOS
 
 **Severity**: Medium. Unbounded within everything measured — no plateau observed — but the
 cost is overwhelmingly AppKit's own price for presenting an `NSSavePanel`, and it is not
@@ -611,7 +612,7 @@ evidence must outlive it. Do not restate its figures here; several carry caveats
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
 
-## T. The PDF export ignores several heading theme keys
+## J. The PDF export ignores several heading theme keys
 
 **Severity**: Low. The PDF still renders every heading, correctly leveled and readable; it
 simply does not carry the theme's heading styling the way the screen and the HTML export do.
@@ -634,7 +635,7 @@ a regression from it.
 - Accept the limitation: the PDF already resolves at System-light by design (TDD 25.9), so a
   reader who wants themed headings has the HTML export.
 
-## U. The PDF export's font measurement re-quotes a CSS-safe font stack for Pango
+## K. The PDF export's font measurement re-quotes a CSS-safe font stack for Pango
 
 **Severity**: Low. Reproduces only when a themed `font_family` is a multi-word name (e.g.
 `"Times New Roman"`); every built-in theme today either leaves it unset or uses a bare/generic
@@ -657,7 +658,7 @@ about, just in the one call site that doesn't yet apply the fix.
   quote-stripped form, so every future Pango call site gets the correct string without
   restating the strip inline.
 
-## V. A win32 appearance test leaks a `gsk::CairoRenderer`
+## L. A win32 appearance test leaks a `gsk::CairoRenderer`
 
 **Severity**: Low. Windows-only, and confined to `#[cfg(test)]` code — the module is
 `#[cfg(windows)]`-gated so it neither compiles nor runs on this seat's own platform.
@@ -675,7 +676,7 @@ which does unrealize its renderer correctly.
   that unrealizes on drop, if the function grows more early-return paths). One line;
   needs a Windows build to verify, so it is `windows` seat's to land.
 
-## W. `sprite::scaled`'s texture cache has no eviction policy
+## M. `sprite::scaled`'s texture cache has no eviction policy
 
 **Severity**: Low. Inert today — every current call site (list-marker sprites, the
 heading-band tiled sprite) resolves at a small, bounded set of sizes per document —
@@ -697,7 +698,7 @@ life.
   triggers it — and note the constraint at `sprite::scaled`'s call sites as they're
   added, so a future author checks before assuming any size is safe to pass.
 
-## X. A long heading overflows the preview pane horizontally instead of wrapping
+## N. A long heading overflows the preview pane horizontally instead of wrapping
 
 **Severity**: Low. Reproduces identically under System with no theme keys set, so it
 predates all theming work — surfaced incidentally while driving TDD 18.25's heading
@@ -717,7 +718,7 @@ interaction named in ScrAP-23a's neighbourhood, but that is a guess, not a findi
 - Accept the limitation until reproduced deliberately — a control run is not yet a
   diagnosis.
 
-## Y. `px()` exists as three separate copies
+## O. `px()` exists as three separate copies
 
 **Severity**: Low. Purely a duplication cost — the three copies compute the same
 rounding and have not drifted.
@@ -737,7 +738,7 @@ uses.
   formula, so the risk is theoretical until a fourth definition or an actual bug
   in one copy surfaces.
 
-## Z. A multi-paragraph blockquote's bar continuity is unconfirmed for every span shape
+## P. A multi-paragraph blockquote's bar continuity is unconfirmed for every span shape
 
 **Severity**: Low. A flat colour never made a discontinuity visible; TDD 18.28's
 textured bar (a tiled sprite) would.
@@ -754,3 +755,24 @@ texture would show a visible seam or restart.
 - Render each of the span shapes above under a sprite-backed `blockquote_bar`
   and confirm the tile continues (or deliberately restarts) consistently.
 - Accept the limitation until a real document surfaces a visible seam.
+
+## Q. The PDF's blockquote bar is drawn off the page margin, at the wrong gap
+
+**Severity**: Low. Cosmetic — the quoted text itself is unaffected — but visible in
+every exported PDF containing a blockquote once a themed panel makes the quote's
+extent obvious.
+
+Noticed while fixing the PDF blockquote-panel fragmentation (TDD 18.29): `ink.rs`
+positions the accent bar at `quote.indent - 2 × blockquote_bar_width`, which for
+Pixel Quest's 24pt bar and an `INDENT_PT` of 18 places the bar roughly 30pt to the
+LEFT of the page's own margin — off the printable column entirely. The same
+calculation also uses `blockquote_bar_width` as the bar-to-text gap, where
+`blockquote_text_gap` is the themed key for that distance, so the gap does not
+track a theme's stated value.
+
+**Mitigation options**:
+- Recompute the bar's X position from the page margin and `blockquote_text_gap`
+  directly, the way the preview's own bar placement does, rather than deriving it
+  from the indent arithmetic.
+- Accept the limitation — no themed panel exposed it before now, and the quoted
+  text itself always measured and wrapped correctly.

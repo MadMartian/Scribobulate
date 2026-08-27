@@ -72,6 +72,21 @@ specifically had to add that branch in the preview, the PDF sink, and the
 HTML sink). That precedence is now a property of the closed decoration
 vocabulary itself, not a one-off decision each new decoration re-derives.
 
+**Further post-plan extensions, TDD 18.29-18.31**: an independent blockquote
+background/ink pair, a table-header ink independent of `heading_color`, and a
+sprite-tiled horizontal rule (via a small dedicated widget — GTK4-rs ships no
+`SeparatorImpl`, so a native `GtkSeparator` cannot be given a custom
+snapshot). 18.29 is a second consumer of § "Heading bands: what a paragraph
+background actually does" below, and sharpens its own finding: the fill's
+horizontal pin is to the TAG's own margin, and for `blockquote` that margin
+already differs from body text, so the panel's left edge and the quoted
+text's left edge are the same coordinate by construction — there is no tier
+at which they can be separated without a drawn rect. 18.29 also surfaced a
+GTK-core finding routed to `gtk4skiller` (pending): a `GtkTextTag` carrying a
+block's own margin cannot also carry its ink, because margin-priority and
+ink-priority pull in opposite directions on one tag — `blockquote`'s ink now
+rides a second, separately-prioritised tag for exactly that reason.
+
 **Requested by**: the operator, to give custom themes more flare — glyphs,
 graphics, background colours, shapes on headings and other Markdown-rendered
 elements.

@@ -223,6 +223,14 @@ fn an_image_wrapped_in_a_link_is_still_drawn() {
 /// A real 4×4 PNG — a decoder has to accept it, so a stub with only the magic
 /// number would not exercise the path this is about.
 fn png_4x4() -> Vec<u8> {
+    png(4, 4, [0xFF, 0x40, 0x40])
+}
+
+/// A real, opaque `w`×`h` PNG in one flat colour.
+///
+/// Non-square and parameterised on purpose: a fixture whose width equals its height
+/// cannot tell a transposed dimension from a correct one.
+fn png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
     fn chunk(tag: &[u8], data: &[u8]) -> Vec<u8> {
         let mut out = (data.len() as u32).to_be_bytes().to_vec();
         let body: Vec<u8> = tag.iter().chain(data).copied().collect();
@@ -259,13 +267,13 @@ fn png_4x4() -> Vec<u8> {
         out.extend_from_slice(&((b << 16) | a).to_be_bytes());
         out
     }
-    let mut ihdr = 4u32.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&4u32.to_be_bytes());
+    let mut ihdr = w.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&h.to_be_bytes());
     ihdr.extend_from_slice(&[8, 2, 0, 0, 0]); // 8-bit RGB
     let mut raw = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..h {
         raw.push(0); // filter: none
-        raw.extend_from_slice(&[0xFF, 0x40, 0x40].repeat(4));
+        raw.extend_from_slice(&rgb.repeat(w as usize));
     }
     let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
     png.extend(chunk(b"IHDR", &ihdr));
@@ -307,6 +315,359 @@ fn a_real_document_paginates_and_every_page_draws() {
         data.iter().any(|&b| b != 0),
         "nothing was drawn — the page is entirely blank"
     );
+}
+
+/// Every x at which `rgb` appears on an ARgb32 surface, as a `(min, max)` pair, or
+/// `None` if the colour is nowhere on it.
+///
+/// cairo's ARgb32 is premultiplied BGRA in native byte order, and at full alpha
+/// premultiplication is the identity — so an opaque fill lands as its own bytes and a
+/// literal comparison is exact rather than approximate.
+fn extent_where(
+    surface: cairo::ImageSurface,
+    matches: impl Fn(u8, u8, u8) -> bool,
+) -> Option<(usize, usize)> {
+    let stride = surface.stride() as usize;
+    let width = surface.width() as usize;
+    let data = surface.take_data().expect("surface data");
+    let mut extent: Option<(usize, usize)> = None;
+    for row in data.chunks_exact(stride) {
+        for (x, px) in row[..width * 4].chunks_exact(4).enumerate() {
+            if px[3] == 0xff && matches(px[2], px[1], px[0]) {
+                extent = Some(match extent {
+                    None => (x, x),
+                    Some((lo, hi)) => (lo.min(x), hi.max(x)),
+                });
+            }
+        }
+    }
+    extent
+}
+
+/// [`extent_where`] for an exact colour — right for a FILL, which lands as its own
+/// bytes, and wrong for a glyph, whose edges are antialiased against the page.
+fn colour_extent(surface: cairo::ImageSurface, rgb: (u8, u8, u8)) -> Option<(usize, usize)> {
+    let (r, g, b) = rgb;
+    extent_where(surface, move |pr, pg, pb| pr == r && pg == g && pb == b)
+}
+
+/// Every x at which `rgb` appears, grouped by scanline — the row-resolved form of
+/// [`colour_extent`], for an assertion about a fill's SHAPE rather than its bounding box.
+///
+/// A bounding box cannot see either half of the TDD 18.29 defect: three stacked
+/// rectangles of differing widths and one continuous one have the same one.
+fn colour_rows(surface: cairo::ImageSurface, rgb: (u8, u8, u8)) -> Vec<Vec<usize>> {
+    let (r, g, b) = rgb;
+    let stride = surface.stride() as usize;
+    let width = surface.width() as usize;
+    let data = surface.take_data().expect("surface data");
+    data.chunks_exact(stride)
+        .map(|row| {
+            row[..width * 4]
+                .chunks_exact(4)
+                .enumerate()
+                .filter(|(_, px)| px[3] == 0xff && (px[2], px[1], px[0]) == (r, g, b))
+                .map(|(x, _)| x)
+                .collect()
+        })
+        .collect()
+}
+
+/// Draw one document at `margin` onto a fresh white page and return the surface.
+fn drawn_page(
+    md: &str,
+    t: &crate::theme::Theme,
+    p: &crate::palette::Palette,
+    margin: f64,
+) -> cairo::ImageSurface {
+    let d = doc::build(md, &RenderOptions::default());
+    let laid = lay_out(&d, &ctx(), 468.0, 684.0, t);
+    let pages = paginate::paginate(&laid.fragments, &metrics_for(684.0));
+    let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 612, 792)
+        .expect("an image surface needs no display");
+    {
+        let cr = cairo::Context::new(&surface).expect("a cairo context");
+        // A white page under the ink. `draw_page` paints no background — a real PDF page
+        // is white by being paper — so without this the surface stays transparent and
+        // every glyph lands PREMULTIPLIED at partial coverage, which is why a colour
+        // assertion over a bare surface reads glyph antialiasing rather than ink.
+        cr.set_source_rgb(1.0, 1.0, 1.0);
+        cr.paint().expect("a fill on a fresh surface");
+        for page in &pages {
+            let _drawn = draw_page(&cr, &laid, page.clone(), p, t, margin);
+        }
+    }
+    surface
+}
+
+/// TDD 18.29 / 25.3 — the quote panel reaches the PAGE, spanning the quote's own
+/// column rather than the whole printable width, and is absent when unstated.
+///
+/// Asserted in pixels rather than on the theme key, because the sink can read a key
+/// and draw nothing with it: this is the artefact half TDD 18.10's "verify by the
+/// resolved position, never by the key having been read" asks for, in the medium §25
+/// governs.
+#[test]
+fn a_quote_panel_fills_the_quoted_column_on_the_page() {
+    const MARGIN: f64 = 54.0;
+    const PANEL: (u8, u8, u8) = (0x0a, 0x18, 0x30);
+    let md = "body line\n\n> quoted line\n";
+    let base = theme();
+    let p = palette(&base);
+
+    assert_eq!(
+        colour_extent(drawn_page(md, &base, &p, MARGIN), PANEL),
+        None,
+        "a theme that states no panel must put no panel on the page"
+    );
+
+    let mut panelled = theme();
+    panelled.blockquote_bg = crate::theme::parse_color("#0a1830");
+    let (lo, hi) = colour_extent(drawn_page(md, &panelled, &p, MARGIN), PANEL)
+        .expect("the stated panel must reach the page");
+    // Left edge: the quote's own indent, not the page margin — the page's reading of
+    // the text column the preview's paragraph background is pinned to.
+    assert_eq!(
+        lo,
+        (MARGIN + crate::export::pdf::geometry::INDENT_PT) as usize,
+        "the panel must start at the quote's indent, not at the page margin"
+    );
+    // Right edge: the printable column. `printable_width_pt` is measured from the
+    // page's own width, so this is the same edge body text wraps at.
+    assert!(
+        hi >= (MARGIN + 468.0) as usize - 1,
+        "the panel must reach the printable edge, got {hi}"
+    );
+}
+
+/// TDD 18.29 regression — on the PAGE, a quote holding an intro paragraph, a nested
+/// list and a closing paragraph panels as ONE rectangle, with no paper anywhere inside
+/// the quote's own column.
+///
+/// Both halves failed, and each is invisible to the sibling test above (which quotes a
+/// single line — the shape that renders correctly either way):
+///
+/// * **vertically**, the panel was drawn per LINE, so every `space_before` between the
+///   quote's blocks showed the paper through;
+/// * **horizontally**, it was drawn at each LINE's indent, so the nested list's rows
+///   stepped `INDENT_PT` right of the paragraphs around them.
+///
+/// The oracle is *"no page colour inside the quote's column"*, which is the defect stated
+/// as a property and catches both halves with one scan. The obvious alternative — assert
+/// where each row's panel run STARTS — cannot be written: quoted text begins at that same
+/// edge, and on a dense glyph row the antialiased ink covers the whole first `INDENT_PT`,
+/// so a correct page fails it. Ink over the panel is fine; paper is the bug, and nothing
+/// drawn here is white.
+#[test]
+fn a_quote_panel_leaves_no_paper_inside_the_quote_column() {
+    const MARGIN: f64 = 54.0;
+    const PANEL: (u8, u8, u8) = (0x0a, 0x18, 0x30);
+    const PAPER: (u8, u8, u8) = (0xff, 0xff, 0xff);
+    let md = "body line\n\n\
+              > Intro paragraph\n>\n\
+              > - item one\n> - item two\n>\n\
+              > Closing paragraph\n\n\
+              after\n";
+    let mut panelled = theme();
+    panelled.blockquote_bg = crate::theme::parse_color("#0a1830");
+    let p = palette(&panelled);
+    let rows = colour_rows(drawn_page(md, &panelled, &p, MARGIN), PANEL);
+
+    let filled: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(y, xs)| (!xs.is_empty()).then_some(y))
+        .collect();
+    let (first, last) = (
+        *filled
+            .first()
+            .expect("the stated panel must reach the page"),
+        *filled.last().expect("…and cover more than nothing"),
+    );
+    assert_eq!(
+        last - first + 1,
+        filled.len(),
+        "the panel must be ONE continuous run over the whole quote — a gap between \
+         rows {first} and {last} is the page showing between two of its blocks"
+    );
+
+    let left = (MARGIN + crate::export::pdf::geometry::INDENT_PT) as usize;
+    let column = left..(MARGIN as usize + 468);
+    let paper = colour_rows(drawn_page(md, &panelled, &p, MARGIN), PAPER);
+    for (y, row) in paper.iter().enumerate().take(last + 1).skip(first) {
+        assert!(
+            !row.iter().any(|x| column.contains(x)),
+            "row {y} shows the page inside the quote's own column — a nested list must \
+             not walk the panel in from the paragraphs around it"
+        );
+    }
+}
+
+/// TDD 18.31 / 25.3 — the rule's sprite reaches the PAGE, tiled across the column, and
+/// the rule's own line is made tall enough to hold a whole tile.
+///
+/// The height half is the one that would fail silently: `rule_space` is a gap around a
+/// hairline and says nothing about a picture, so a rule line left at that height shows a
+/// slice of the tile and looks like a rendering bug rather than a measurement one.
+#[test]
+fn a_rule_sprite_tiles_across_the_page_and_is_given_room_for_a_whole_tile() {
+    const MARGIN: f64 = 54.0;
+    let magenta = |r: u8, g: u8, b: u8| r > 0x80 && b > 0x80 && g < 0x60;
+    let md = "before\n\n---\n\nafter\n";
+    let base = theme();
+    let p = palette(&base);
+
+    assert_eq!(
+        extent_where(drawn_page(md, &base, &p, MARGIN), magenta),
+        None,
+        "a theme stating no rule sprite must draw the flat rule and nothing else"
+    );
+
+    // A 2x6 magenta tile: wider than one pixel so "tiled" is falsifiable, and TALLER
+    // than the shipped `rule_space` so the measured line has to grow to hold it.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rule.png");
+    std::fs::write(&path, png(2, 6, [255, 0, 255])).unwrap();
+    let mut tiled = theme();
+    tiled.sprites.rule = Some(crate::sprite::SpriteRef::File(path));
+    assert!(
+        f64::from(tiled.metrics.rule_space) < 6.0,
+        "this fixture only tests the height fold while the tile is TALLER than \
+         rule_space ({}) — pick a taller tile if that metric ever grows",
+        tiled.metrics.rule_space
+    );
+
+    let surface = drawn_page(md, &tiled, &p, MARGIN);
+    let stride = surface.stride() as usize;
+    let width = surface.width() as usize;
+    let data = surface.take_data().expect("surface data");
+    let rows: Vec<usize> = data
+        .chunks_exact(stride)
+        .enumerate()
+        .filter(|(_, row)| {
+            row[..width * 4]
+                .chunks_exact(4)
+                .any(|px| px[3] == 0xff && magenta(px[2], px[1], px[0]))
+        })
+        .map(|(y, _)| y)
+        .collect();
+    // 5 or 6, not exactly 6: the rule's y is the running sum of Pango line heights in
+    // points and is not an integer, so the band's top or bottom row is antialiased and
+    // fails the fully-opaque filter above. The claim being made is that the line grew
+    // past `rule_space` to hold a whole tile — at the un-grown height it would be 3-4.
+    assert!(
+        (5..=6).contains(&rows.len()),
+        "the rule must be one whole tile tall — {} rows carry the tile, against a \
+         6px tile and a rule_space of {}",
+        rows.len(),
+        tiled.metrics.rule_space
+    );
+    // Tiled ACROSS: a 2px tile drawn once would colour two columns, not the column.
+    let widest = data
+        .chunks_exact(stride)
+        .map(|row| {
+            row[..width * 4]
+                .chunks_exact(4)
+                .filter(|px| px[3] == 0xff && magenta(px[2], px[1], px[0]))
+                .count()
+        })
+        .max()
+        .unwrap_or(0);
+    assert!(
+        widest as f64 >= 468.0 - 1.0,
+        "the tile covered {widest} px of a 468pt column — it was drawn once, not tiled"
+    );
+}
+
+/// TDD 18.30 / 25.3 — the table header's ink reaches the PAGE, and only the header row.
+///
+/// This sink drew every cell in the body ink before the key existed — it read no header
+/// colour of any kind — so the assertion that the BODY rows are untouched is the half
+/// that says the new ink is scoped rather than a page-wide pen change.
+#[test]
+fn a_table_header_takes_its_own_ink_and_the_body_rows_do_not() {
+    const MARGIN: f64 = 54.0;
+    let magenta = |r: u8, g: u8, b: u8| r > 0x80 && b > 0x80 && g < 0x60;
+    let md = "| head one | head two |\n|---|---|\n| body cell | another |\n";
+    let base = theme();
+    let p = palette(&base);
+
+    assert_eq!(
+        extent_where(drawn_page(md, &base, &p, MARGIN), magenta),
+        None,
+        "a theme stating no header ink must tint no cell"
+    );
+
+    let mut inked = theme();
+    inked.table_head_fg = crate::theme::parse_color("#ff00ff");
+    let surface = drawn_page(md, &inked, &p, MARGIN);
+    // Row bands rather than an x extent: the header and the body rows share the same
+    // columns, so only the y axis can tell them apart.
+    let stride = surface.stride() as usize;
+    let width = surface.width() as usize;
+    let data = surface.take_data().expect("surface data");
+    let rows: Vec<usize> = data
+        .chunks_exact(stride)
+        .enumerate()
+        .filter(|(_, row)| {
+            row[..width * 4]
+                .chunks_exact(4)
+                .any(|px| px[3] == 0xff && magenta(px[2], px[1], px[0]))
+        })
+        .map(|(y, _)| y)
+        .collect();
+    assert!(
+        !rows.is_empty(),
+        "the stated header ink must reach the header row's glyphs"
+    );
+    // Every tinted row is inside ONE band — the header. A body row taking the ink too
+    // would put a second, lower band in this list.
+    let span = rows.last().unwrap() - rows.first().unwrap() + 1;
+    assert_eq!(
+        span,
+        rows.len(),
+        "the ink reached rows outside one contiguous band — a body row took the \
+         header's colour"
+    );
+}
+
+/// TDD 18.29 / 25.3 — the quote's INK reaches the page, and stops at the quote.
+///
+/// The stop is the assertion worth having. The ink is set on the cairo context rather
+/// than into the cell's markup, and every other decoration in `draw_page` puts the body
+/// pen back after itself — the text branch never had to before this, so an ink that
+/// leaked would tint every line after the quote and nothing else in the suite would
+/// notice.
+#[test]
+fn a_quoted_lines_ink_stops_at_the_quote() {
+    const MARGIN: f64 = 54.0;
+    // Unmistakably magenta rather than exactly `#ff00ff`: a glyph's edge pixels are
+    // antialiased against the page, so an exact match tests the rasteriser's coverage
+    // rather than the ink. Nothing else on this page is remotely magenta.
+    let magenta = |r: u8, g: u8, b: u8| r > 0x80 && b > 0x80 && g < 0x60;
+    let md = "> quoted line\n\nbody line after the quote\n";
+    let base = theme();
+    let p = palette(&base);
+
+    assert_eq!(
+        extent_where(drawn_page(md, &base, &p, MARGIN), magenta),
+        None,
+        "a theme that states no quote ink must not tint anything"
+    );
+
+    let mut inked = theme();
+    inked.blockquote_fg = crate::theme::parse_color("#ff00ff");
+    let (lo, hi) = extent_where(drawn_page(md, &inked, &p, MARGIN), magenta)
+        .expect("the stated ink must reach the quoted glyphs");
+    // The quote is indented; the body paragraph after it is not. So every pixel of the
+    // ink must sit right of the page margin's own text column start — if the pen leaked
+    // into the following paragraph, `lo` lands on the un-indented body line instead.
+    assert!(
+        lo >= (MARGIN + crate::export::pdf::geometry::INDENT_PT) as usize,
+        "the quote's ink reached something left of the quote's indent (lo = {lo}) — \
+         the body pen was not put back after the quoted line"
+    );
+    assert!(hi > lo, "a single-pixel extent is not a drawn glyph run");
 }
 
 #[test]

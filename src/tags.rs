@@ -73,6 +73,16 @@ const LI_CONT_NAMES: [&str; MAX_LIST_DEPTH as usize] = [
 /// own `apply_tag_by_name` path in `renderer::emit::insert_code_block`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TagName {
+    /// The ink quoted BODY text takes when a theme states `blockquote_fg` (TDD 18.29).
+    ///
+    /// **First on purpose.** A `GtkTextTag` gets its priority from the order it is added
+    /// to the table, and the highest-priority tag that sets `foreground` wins — so this
+    /// one is registered before every other ink-setting tag and is beaten by all of
+    /// them. That is the whole reason it is not simply a `foreground` on
+    /// [`TagName::Blockquote`]: that tag is registered AFTER `link` (it has to be, so
+    /// its margin still wins over a code block's inside a quote), so an ink on it would
+    /// repaint every link, heading and `==mark==` in the quote in the panel's ink.
+    BlockquoteInk,
     /// Heading levels h1–h5. h6-and-deeper are mapped onto [`TagName::H5`] upstream
     /// (see `renderer::emit`), the same fold GTK-side would apply to any over-max
     /// level, matching the five heading tags registered here.
@@ -118,6 +128,7 @@ impl TagName {
     /// clamp before constructing the variant.
     pub(crate) fn name(self) -> &'static str {
         match self {
+            TagName::BlockquoteInk => "blockquote-ink",
             TagName::H1 => "h1",
             TagName::H2 => "h2",
             TagName::H3 => "h3",
@@ -192,6 +203,19 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     let px = |n: i32| (n as f64 * zoom).round() as i32;
     let typo = &theme.typography;
     let metrics = &theme.metrics;
+
+    // The quote panel's INK (TDD 18.29), registered first so its priority is the lowest
+    // of every tag that sets a foreground — see `TagName::BlockquoteInk`. Inert until a
+    // theme states `blockquote_fg`: the tag is registered either way (so the vocabulary
+    // does not vary by theme), but the property is only ever SET when asked for, which
+    // is the same discipline the heading tags follow and what keeps System's tags
+    // byte-identical (TDD 18.2), not merely its pixels.
+    let quote_fg = theme.blockquote_fg;
+    add(TagName::BlockquoteInk.name(), &move |t| {
+        if let Some(c) = quote_fg {
+            t.set_foreground_rgba(Some(&c));
+        }
+    });
 
     // h1–h5. FIVE tags, not six: `emit.rs` maps h6-and-deeper onto "h5" before a tag
     // is ever chosen, so `heading_scale`/`heading_space_below` are 5-element by
@@ -430,8 +454,21 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // The bar width/gap are the SAME theme keys `codeview::mod`'s snapshot draws the
     // bar from and `codeview::gutter` offsets a quoted list's markers by, so a themed
     // bar cannot land beside a differently-indented quote (GTK4Rs/AP-96's failure mode).
+    //
+    // The PANEL behind the quote (TDD 18.29) is NOT here, and deliberately so. It began
+    // as a `paragraph_background_rgba` on this tag — which buys vertical padding and a
+    // continuous band across a soft-wrapped paragraph for free — but GTK fills that
+    // background PER PARAGRAPH, at each line's resolved text column
+    // (`gtktextlayout.c:3932-3939`). A quote holding an intro paragraph plus a nested
+    // list is many paragraphs, so it rendered as several disconnected rectangles with
+    // the page showing through the gaps, alongside an accent bar that was already drawn
+    // continuously from the quote's ONE `BufferSpan`. The panel is now drawn from that
+    // same span, beside the bar (`codeview::mod`'s `snapshot_layer`), which is the only
+    // way the two can agree; it keeps the padding and the soft-wrap band, because both
+    // come from `line_yrange`. The FOREGROUND deliberately does not live here either —
+    // see `TagName::BlockquoteInk`.
     let bq_indent = px(metrics.blockquote_bar_width + metrics.blockquote_text_gap);
-    add(TagName::Blockquote.name(), &|t| {
+    add(TagName::Blockquote.name(), &move |t| {
         t.set_left_margin(view_lm + bq_indent);
         t.set_right_margin(view_rm + bq_indent);
     });

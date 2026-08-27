@@ -502,7 +502,16 @@ foreground = "#17263b"   # near-navy ink — unchanged from the page's first dra
                           # dark enough to clear the new, harder page: 5.15:1 (was 12.51:1
                           # on the original paler blue)
 accent     = "#b23a2e"   # warm brick-red — seeds blockquote_bar/selection where not overridden below
-link       = "#09361f"   # forest green, SHADED darker for the new page (was #0f5b33) — 4.55:1
+# Operator's call 2026-08-26: a lighter, brighter blue than the forest green this theme
+# shipped with. ⚠️ Stated knowingly against the floor this page's own luminance sets:
+# this page (L≈0.30) cannot carry ANY light ink at the 4.5:1 text floor — even white
+# tops out at 2.96:1 here — so a light link colour is a deliberate legibility trade,
+# not an oversight (contrast with the near-black body ink around it does the heavy
+# lifting). `link_underline_rgba` is UNSTATED on purpose so the underline follows this
+# same colour, per the operator's ask that the two match.
+link       = "#3ddbff"   # bright cyan-blue — visually distinct from the page's own
+                          # duller mid-blue, which is what keeps a link readable as a
+                          # link despite the low arithmetic contrast above
 
 # Rounded, friendly display faces — illegible as body text, exactly what a heading
 # wants. Neither is packaged on a stock Linux box; both stacks fall through to the
@@ -514,9 +523,11 @@ heading_font = 'Fredoka, "Baloo 2", Quicksand, Cantarell, "Noto Sans", sans-seri
 # PER-LEVEL heading colour/face (TDD 18.21). h1 takes its own bold display face
 # ("Titan One"/"Luckiest Guy" — aspirational arcade-title faces, falling through to
 # the heading_font stack above where absent); h2/h3 take their own inks; h4 and h5
-# fall back to the singular heading_color below (also the table header's ink), so
-# the hierarchy has four distinct voices, not five competing ones.
-heading_color  = "#5f1010"                                    # h4/h5 + table header text — SHADED darker
+# fall back to the singular heading_color below, so the hierarchy has four distinct
+# voices, not five competing ones. It is NO LONGER the table header's ink — this theme
+# states `table_head_fg` below (TDD 18.30), which is what let the header take a fill of
+# its own without dragging the dark red onto it.
+heading_color  = "#5f1010"                                    # h4/h5 — SHADED darker
                                                                # for the new page (was #7a1414) — 4.53:1
 heading_colors = ["#ffd400", "#fff3c4", "#0a2d62", "", ""]     # h1 gold, h2 cream, h3 deep blue (h3 SHADED
                                                                 # darker for the new page, was #0e3e86 — 4.54:1;
@@ -541,13 +552,10 @@ heading_underline      = "single"
 heading_underline_rgba = "#274665"
 heading_space_above    = [16, 12, 8, 6, 6]
 
-# Strikethrough and the link underline theme independently of their ink (TDD 18.23).
-# A DOUBLE line under links, in a colour distinct from the green ink so the two read
-# as separate decisions rather than one blurred stroke; both SHADED darker for the new
-# page (were #b23a2e, #c24a1e) and both clear 3:1 with margin (3.32:1, 3.32:1).
+# Strikethrough theme independently of link (TDD 18.23). SHADED darker for the new
+# page (was #b23a2e) and clears 3:1 with margin (3.32:1).
 strikethrough_rgba  = "#79281f"
 link_underline      = "double"
-link_underline_rgba = "#752d12"
 
 # GLYPH list markers (TDD 18.24) — a diamond bullet and a star/filled-star task pair
 # read as "collectible" furniture without drawing anything. The ordered numeral is
@@ -581,18 +589,22 @@ list_task_checked_glyph  = "★"
 # bullets. ONE colour for both states: a checked and an unchecked star are the same
 # collectible, taken or not, and the GLYPH already carries which.
 #
-# A full-saturation magenta at reduced value, not `#ff00ff`. This page is mid-luminance
-# (L≈0.30) and bright magenta lands at L≈0.285 — 1.06:1, a colour told apart from the
-# page by hue alone and effectively invisible. Every other ink here was shaded down for
-# the same reason when the page changed; this one arrives already shaded. 3.37:1 on the
-# page (clearing the 3:1 floor a non-text graphic answers to) and 6.96:1 against the gold
-# h1 it commonly sits under.
-list_task_marker         = "#7a007a"
+# Operator's call 2026-08-26: a lighter, full-luminance red rather than the shaded-dark
+# tone this key first shipped with — same trade the link colour above makes, deliberately,
+# against this page's own low ceiling for light inks (a marker glyph is graphic, not
+# text, so nothing automated gates it either way).
+list_task_marker         = "#ff3b3b"
 
 blockquote_bar       = "#0a2d62"   # matches the new h3 shade (was #0e3e86). KEPT beside the
                                    # sprite below, not replaced: the sprite outranks it, and
                                    # this is what the bar falls back to if the file is ever
                                    # missing, unreadable or refused by `sprite::resolve`
+# A quote panel (TDD 18.29) — deep navy behind the quoted text, white ink on it: 17.70:1,
+# comfortably clear of the text floor regardless of this page's own low ceiling, because
+# the panel is its own surface, not the page. Independent of the bar's colour on purpose —
+# a themed accent bar and a themed panel are two different decisions.
+blockquote_bg        = "#0a1830"
+blockquote_fg        = "#ffffff"
 # A riveted copper plate tiled down the quote bar (TDD 18.28) — the one piece of the
 # arcade idiom this theme draws rather than states, and an original seamless tile.
 # Tiled at its NATURAL size and clipped to the bar, so the bar has to be as wide as the
@@ -602,15 +614,22 @@ sprite_blockquote_bar = "sprites/copper-plate.png"
 blockquote_bar_width = 24
 blockquote_text_gap  = 12
 list_item_gap        = 10
-rule                 = "#274665"   # matches the new heading-rule shade (was #3e6fa0)
+rule                 = "#274665"   # matches the new heading-rule shade (was #3e6fa0). KEPT
+                                   # beside the sprite below as its fallback, same shape as
+                                   # blockquote_bar/sprite_blockquote_bar
+# A grass-topped floating platform tiled across the rule (TDD 18.31) — the classic 2D
+# platformer ledge, generic rather than any one game's block art. Tiles horizontally
+# at natural size, seamless left-to-right.
+sprite_rule          = "sprites/grass-platform.png"
 rule_space           = 6
-table_border         = "#274665"   # a border carries no text, so it is free of the header-text trap
-                                    # below — `table_head_bg` is deliberately left UNSET (derived):
-                                    # this theme's singular `heading_color` (#5f1010, dark red) reads
-                                    # 1.08:1 on the indigo band colour, so reusing that band as the
-                                    # table header fill would have made the header text unreadable.
-                                    # Left to derive, the header fill stays legible against whatever
-                                    # ink the table actually uses.
+# Deep evergreen header fill with its own gold text (`table_head_fg`, TDD 18.30) —
+# now that the header's ink is independent of `heading_color`, the header-text trap
+# the singular dark red used to set (1.08:1 on the old candidate fill) no longer
+# applies; 6.83:1 for the gold stated below. Grass-green reads as its own "info panel"
+# family, distinct from every heading/band colour already on this page.
+table_border         = "#274665"   # a border carries no text, so no floor governs it
+table_head_bg        = "#1b4d2e"
+table_head_fg        = "#ffd400"   # the theme's collectible gold, reused — 6.83:1 on the fill
 table_cell_radius    = 6
 table_border_width   = 2
 table_cell_padding_v = 6
@@ -619,6 +638,12 @@ table_cell_padding_h = 12
 # A collectible-gold annotation chip — 10.65:1 for the overflow numeral on it.
 annotation_chip_bg = "#ffd400"
 annotation_chip_fg = "#17263b"
+# A diagonal sword sprite outranks the flat gold fill above (TDD 18.19) — an original
+# icon, not reproduced from any game's asset. `annotation_chip_bg`/`_fg` are KEPT, not
+# replaced: they are what the chip falls back to if the sprite is ever missing,
+# unreadable or refused, and `annotation_chip_fg` still colours the overflow-count
+# numeral drawn on top of whichever fill wins.
+sprite_annotation_chip = "sprites/sword.png"
 
 # Four distinct hue families, one per overlay, same discipline every theme here
 # follows: green wash for annotations, gold wash for ==marks==, pale lavender for

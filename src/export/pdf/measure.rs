@@ -26,8 +26,8 @@ use super::geometry::{
     PT_PER_PX,
 };
 use super::{
-    decode, HeadingBandInk, Laid, LayoutSpec, Line, LineKind, MarkerImage, BASE_PT, BLOCK_GAP_PT,
-    PANGO_WEIGHT_NORMAL,
+    decode, HeadingBandInk, Laid, LayoutSpec, Line, LineKind, MarkerImage, QuoteRef, BASE_PT,
+    BLOCK_GAP_PT, PANGO_WEIGHT_NORMAL,
 };
 use crate::theme::Theme;
 use gtk::pango;
@@ -51,9 +51,10 @@ pub(crate) fn lay_out(
         max_height_pt: height_pt,
         lines: Vec::new(),
         fragments: Vec::new(),
+        quote_seq: 0,
     };
     for block in &doc.blocks {
-        b.block(block, doc, 0.0, 0, 0);
+        b.block(block, doc, 0.0, None, 0);
     }
     Laid {
         lines: b.lines,
@@ -73,7 +74,7 @@ struct ParagraphSpec {
     size_pt: f64,
     weight: i32,
     indent: f64,
-    quote_depth: u32,
+    quote: Option<QuoteRef>,
     keep_with_next: bool,
     /// Taken off the wrap width only. `0.0` everywhere but a banded heading.
     right_inset: f64,
@@ -88,6 +89,8 @@ struct Layouter<'a> {
     max_height_pt: f64,
     lines: Vec<Line>,
     fragments: Vec<Fragment>,
+    /// Hands out one [`QuoteRef::id`] per blockquote met, in document order.
+    quote_seq: u32,
 }
 
 impl Layouter<'_> {
@@ -147,6 +150,12 @@ impl Layouter<'_> {
         })
     }
 
+    /// A fresh blockquote identity, unique within this layout.
+    fn next_quote_id(&mut self) -> u32 {
+        self.quote_seq += 1;
+        self.quote_seq
+    }
+
     /// Where a block indented `indent` points actually starts on the page.
     ///
     /// Bounded by the page, because `indent` is not: it grows `INDENT_PT` per nesting
@@ -181,14 +190,14 @@ impl Layouter<'_> {
         fragment: Fragment,
         indent: f64,
         height: f64,
-        quote_depth: u32,
+        quote: Option<QuoteRef>,
     ) {
         self.fragments.push(fragment);
         self.lines.push(Line {
             kind,
             indent: self.indent_on_page(indent),
             height,
-            quote_depth,
+            quote,
             // Both attached afterwards by the one caller that can have them — see
             // `list` and the `Heading` arm. Not `push_line` arguments: every other call
             // site would pass `None`, and positional arguments reading `None` at five of
@@ -199,10 +208,10 @@ impl Layouter<'_> {
         });
     }
 
-    /// Lay one block out at `indent` points, inside `quote_depth` block quotes and
+    /// Lay one block out at `indent` points, inside blockquote `quote` (if any) and
     /// `list_depth` enclosing lists.
     ///
-    /// `list_depth` is threaded exactly as `quote_depth` already is, and for the same
+    /// `list_depth` is threaded exactly as `quote` already is, and for the same
     /// reason: a bullet's decoration varies by nesting depth (TDD 18.26), and this walk
     /// is the only place that knows how deep it currently is. It counts the LIST it is
     /// inside, so the outermost list's items are depth 1.
@@ -211,7 +220,7 @@ impl Layouter<'_> {
         block: &Block,
         doc: &ExportDoc,
         indent: f64,
-        quote_depth: u32,
+        quote: Option<QuoteRef>,
         list_depth: u32,
     ) {
         match block {
@@ -245,7 +254,7 @@ impl Layouter<'_> {
                         size_pt: BASE_PT * scale,
                         weight: self.theme.typography.heading_weight,
                         indent: indent + pad,
-                        quote_depth,
+                        quote,
                         keep_with_next: true,
                         right_inset: pad,
                     },
@@ -273,14 +282,14 @@ impl Layouter<'_> {
                                         size_pt: BASE_PT,
                                         weight: PANGO_WEIGHT_NORMAL,
                                         indent,
-                                        quote_depth,
+                                        quote,
                                         keep_with_next: false,
                                         right_inset: 0.0,
                                     },
                                 );
                             }
                         }
-                        Seg::Image(img) => self.image(&img, doc, indent, quote_depth),
+                        Seg::Image(img) => self.image(&img, doc, indent, quote),
                     }
                 }
             }
@@ -296,36 +305,63 @@ impl Layouter<'_> {
                         size_pt: BASE_PT,
                         weight: PANGO_WEIGHT_NORMAL,
                         indent,
-                        quote_depth,
+                        quote,
                         keep_with_next: false,
                         right_inset: 0.0,
                     },
                 );
             }
             Block::BlockQuote(inner) => {
+                // ONE identity for the whole quote, and ONE indent — the quote's own
+                // content column, bounded to the page exactly as `push_line` bounds a
+                // line's. Every line inside reports this, whatever its own indent, so
+                // the bar and the panel `ink` draws span the quote as one object instead
+                // of stepping right at each nested list and breaking at each block gap
+                // (TDD 18.29). A nested quote takes a fresh id below, so it draws as
+                // itself — which is what has always happened for those lines.
+                let quote = Some(QuoteRef {
+                    id: self.next_quote_id(),
+                    indent: self.indent_on_page(indent + INDENT_PT),
+                });
                 for b in inner {
-                    self.block(b, doc, indent + INDENT_PT, quote_depth + 1, list_depth);
+                    self.block(b, doc, indent + INDENT_PT, quote, list_depth);
                 }
             }
             Block::List { start, items } => {
-                self.list(*start, items, doc, indent, quote_depth, list_depth + 1)
+                self.list(*start, items, doc, indent, quote, list_depth + 1)
             }
             Block::Table { aligns, head, rows } => {
-                self.table(aligns, head, rows, doc, indent, quote_depth)
+                self.table(aligns, head, rows, doc, indent, quote)
             }
             Block::Rule => {
                 // A rule is one indivisible fragment of its own, so a page break can
                 // fall either side of it but never through it.
+                //
+                // A themed rule SPRITE (TDD 18.31) needs room for one whole tile, or the
+                // page would show a slice of it — the flat rule's `rule_space` is a gap
+                // around a hairline and says nothing about a picture. Only the tile's
+                // DIMENSIONS are read here; `ink::draw_page` decodes the surface once for
+                // the whole page rather than once per rule.
+                use gtk::prelude::TextureExt;
+                let tile_h = self
+                    .theme
+                    .sprites
+                    .rule
+                    .as_ref()
+                    .and_then(crate::sprite::texture)
+                    .map(|t| f64::from(t.height()))
+                    .unwrap_or(0.0);
+                let height = f64::from(self.theme.metrics.rule_space).max(tile_h);
                 self.push_line(
                     LineKind::Rule,
                     Fragment {
-                        height: self.theme.metrics.rule_space as f64,
+                        height,
                         space_before: BLOCK_GAP_PT,
                         keep_with_next: false,
                     },
                     indent,
-                    self.theme.metrics.rule_space as f64,
-                    quote_depth,
+                    height,
+                    quote,
                 );
             }
         }
@@ -339,7 +375,7 @@ impl Layouter<'_> {
     /// bytes cannot be decoded — an SVG on a host with no librsvg pixbuf loader, a
     /// corrupt file — it falls back to the same visible note a refused or missing image
     /// gets, because a silent gap is the one outcome worth avoiding.
-    fn image(&mut self, img: &ImageRef, doc: &ExportDoc, indent: f64, quote_depth: u32) {
+    fn image(&mut self, img: &ImageRef, doc: &ExportDoc, indent: f64, quote: Option<QuoteRef>) {
         let available = self.printable_width(indent);
         let decoded = match &img.source {
             ImageSource::Embedded { bytes, .. } => decode(bytes),
@@ -348,7 +384,7 @@ impl Layouter<'_> {
             ImageSource::Remote(_) | ImageSource::Missing(_) => None,
         };
         let Some((surface, nat_w, nat_h)) = decoded else {
-            self.image_note(img, doc, indent, quote_depth);
+            self.image_note(img, doc, indent, quote);
             return;
         };
         // Natural size in points, then contained: never wider than the column, never
@@ -372,12 +408,18 @@ impl Layouter<'_> {
             },
             indent,
             h,
-            quote_depth,
+            quote,
         );
     }
 
     /// The visible note an image that cannot be drawn falls back to.
-    fn image_note(&mut self, img: &ImageRef, doc: &ExportDoc, indent: f64, quote_depth: u32) {
+    fn image_note(
+        &mut self,
+        img: &ImageRef,
+        doc: &ExportDoc,
+        indent: f64,
+        quote: Option<QuoteRef>,
+    ) {
         let markup = inline_markup(
             std::slice::from_ref(&Inline::Image(img.clone())),
             doc,
@@ -389,7 +431,7 @@ impl Layouter<'_> {
                 size_pt: BASE_PT,
                 weight: PANGO_WEIGHT_NORMAL,
                 indent,
-                quote_depth,
+                quote,
                 keep_with_next: false,
                 right_inset: 0.0,
             },
@@ -404,7 +446,7 @@ impl Layouter<'_> {
             size_pt,
             weight,
             indent,
-            quote_depth,
+            quote,
             keep_with_next,
             right_inset,
         } = spec;
@@ -445,7 +487,7 @@ impl Layouter<'_> {
                 },
                 indent,
                 height,
-                quote_depth,
+                quote,
             );
         }
     }
@@ -456,7 +498,7 @@ impl Layouter<'_> {
         items: &[ListItem],
         doc: &ExportDoc,
         indent: f64,
-        quote_depth: u32,
+        quote: Option<QuoteRef>,
         list_depth: u32,
     ) {
         for (n, item) in items.iter().enumerate() {
@@ -496,7 +538,7 @@ impl Layouter<'_> {
                                 size_pt: BASE_PT,
                                 weight: PANGO_WEIGHT_NORMAL,
                                 indent: indent + INDENT_PT,
-                                quote_depth,
+                                quote,
                                 keep_with_next: false,
                                 right_inset: 0.0,
                             },
@@ -521,7 +563,7 @@ impl Layouter<'_> {
                         continue;
                     }
                 }
-                self.block(block, doc, indent + INDENT_PT, quote_depth, list_depth);
+                self.block(block, doc, indent + INDENT_PT, quote, list_depth);
             }
         }
     }

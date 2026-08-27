@@ -19,7 +19,7 @@
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.9 |
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.53 |
-| 18 | Preview reading themes | 18.1 – 18.28 |
+| 18 | Preview reading themes | 18.1 – 18.31 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.18 |
 | 21 | Crash forensics | 21.1 – 21.12 |
@@ -2324,6 +2324,25 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** a blockquoted document is rendered, and separately exported to HTML and PDF
 - **Then** the bar fills with the sprite tiled at its natural size in place of the flat `blockquote_bar` colour
 - **And** omitted, the bar stays the flat themed colour exactly as today
+
+### 18.29 A theme can give a blockquote its own background and ink
+- **Given** a theme setting `blockquote_bg` and/or `blockquote_fg`, independent of the accent bar's own colour
+- **When** a blockquoted document is rendered, and separately exported to HTML and PDF
+- **Then** quoted text paints on the stated background in the stated ink, alongside the existing bar
+- **And** the background is ONE continuous panel over the whole quote — every block it contains (paragraphs, a nested list, a fenced code block), in every medium — never a separate fill per block with page colour showing between them
+- **And** omitted, quoted text stays plain body text on the page background exactly as today (TDD 18.2)
+
+### 18.30 A theme can colour table header text independently of heading_color
+- **Given** a theme setting `table_head_fg`
+- **When** a table is rendered, and separately exported to HTML and PDF
+- **Then** the header row's text takes the stated colour instead of `heading_color`
+- **And** omitted, the header text falls back to `heading_color` exactly as today — **and this parity now genuinely holds in the PDF too**: before this rubric the PDF sink read no header colour at all (every cell painted in body ink), so "falls back to heading_color" was true of the preview and HTML but not the artefact until this landed
+
+### 18.31 A theme can tile a sprite across the horizontal rule
+- **Given** a theme setting a sprite image for the horizontal rule (theme-relative, validated the same way every sprite key is)
+- **When** a document containing a `---` rule is rendered, and separately exported to HTML and PDF
+- **Then** the rule fills with the sprite tiled at its natural size in place of the flat `rule` colour
+- **And** omitted, the rule stays the flat themed colour exactly as today
 
 ## 19. Local document-link navigation
 

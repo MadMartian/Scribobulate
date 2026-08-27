@@ -20,7 +20,8 @@ use super::super::decide::table_column_count;
 use super::super::geometry::{pango_to_pt, PT_PER_PX};
 use super::super::pdftable;
 use super::super::{
-    CellWidths, LayoutSpec, LineKind, TableCell, BASE_PT, BLOCK_GAP_PT, PANGO_WEIGHT_NORMAL,
+    CellWidths, LayoutSpec, LineKind, QuoteRef, TableCell, BASE_PT, BLOCK_GAP_PT,
+    PANGO_WEIGHT_NORMAL,
 };
 use super::Layouter;
 use gtk::pango;
@@ -39,7 +40,7 @@ impl Layouter<'_> {
         rows: &[Vec<Vec<Inline>>],
         doc: &ExportDoc,
         indent: f64,
-        quote_depth: u32,
+        quote: Option<QuoteRef>,
     ) {
         let column_count = table_column_count(head, rows);
         if column_count == 0 {
@@ -85,23 +86,14 @@ impl Layouter<'_> {
                 &grid,
                 &chrome,
                 indent,
-                quote_depth,
+                quote,
                 true,
                 // The header keeps company with the first body row.
                 !rows.is_empty(),
             );
         }
         for row in &body_markup {
-            self.table_row(
-                row,
-                aligns,
-                &grid,
-                &chrome,
-                indent,
-                quote_depth,
-                false,
-                false,
-            );
+            self.table_row(row, aligns, &grid, &chrome, indent, quote, false, false);
         }
     }
 
@@ -176,7 +168,7 @@ impl Layouter<'_> {
         grid: &pdftable::Grid,
         chrome: &pdftable::Chrome,
         indent: f64,
-        quote_depth: u32,
+        quote: Option<QuoteRef>,
         is_head: bool,
         keep_with_next: bool,
     ) {
@@ -221,7 +213,7 @@ impl Layouter<'_> {
             },
             indent,
             box_height * grid.scale,
-            quote_depth,
+            quote,
         );
     }
 }

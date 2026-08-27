@@ -422,10 +422,10 @@ pre {{ background: {code_block}; padding: {cell_pv}px {cell_ph}px; border-radius
 pre code {{ background: none; padding: 0; }}
 blockquote {{ border-left: {bar_w}px solid {bar}; margin-left: 0;
   padding-left: {bar_gap}px; }}
-{bar_sprite_css}hr {{ border: 0; border-top: 1px solid {rule}; margin: {rule_space}px 0; }}
-table {{ border-collapse: collapse; }}
+{bar_sprite_css}{quote_panel_css}hr {{ border: 0; border-top: 1px solid {rule}; margin: {rule_space}px 0; }}
+{rule_sprite_css}table {{ border-collapse: collapse; }}
 th, td {{ border: {tbw}px solid {tb}; padding: {cell_pv}px {cell_ph}px; }}
-th {{ background: {thead}; }}
+th {{ background: {thead};{thead_fg} }}
 td.a-l, th.a-l {{ text-align: left; }}
 td.a-c, th.a-c {{ text-align: center; }}
 td.a-r, th.a-r {{ text-align: right; }}
@@ -458,12 +458,21 @@ img {{ max-width: 100%; height: auto; }}
         bar = to_hex(p.blockquote_bar),
         bar_w = m.blockquote_bar_width,
         bar_sprite_css = blockquote_bar_sprite_css(t),
+        quote_panel_css = blockquote_panel_css(t, &to_hex(p.body_fg)),
+        rule_sprite_css = rule_sprite_css(t),
         bar_gap = m.blockquote_text_gap,
         rule = to_hex(p.rule),
         rule_space = m.rule_space,
         tb = to_hex(p.table_border),
         tbw = m.table_border_width,
         thead = to_hex(p.table_head_bg),
+        // The header row's own ink (TDD 18.30), already folded with `heading_color` by
+        // `Theme::resolve` — the same value `preview/css.rs` puts on `.cell-head`, so the
+        // artefact and the screen cannot answer different keys.
+        thead_fg = t
+            .table_head_fg
+            .map(|c| format!(" color: {};", to_hex(c)))
+            .unwrap_or_default(),
         cell_pv = m.table_cell_padding_v,
         cell_ph = m.table_cell_padding_h,
         radius = m.table_cell_radius,
@@ -615,6 +624,57 @@ fn blockquote_bar_sprite_css(t: &Theme) -> String {
          blockquote::before {{ content: \"\"; position: absolute; left: -{bar_w}px; top: 0; \
          bottom: 0; width: {bar_w}px; background: url({uri}) repeat; }}\n"
     )
+}
+
+/// The horizontal rule's sprite (TDD 18.31), tiled at its natural size. Empty unless
+/// the theme states one, so a theme that states none emits the sheet it always did.
+///
+/// This sink may legitimately use `background-image` where the preview cannot: an
+/// exported artefact embeds its sprites as `data:` URIs, so there is no path to resolve
+/// and none of ScrAP-324's hazard. The preview's constraint is that a GTK CSS `url()`
+/// needs a real resource path and a built-in theme's sprite has none — a property of
+/// GTK's cascade, not of this decoration.
+///
+/// The flat `border-top` above is REPLACED rather than layered under: the same explicit
+/// branch every sprite-vs-flat pair in this vocabulary takes, because a transparent tile
+/// would otherwise let the colour show through, and only for the tiles nobody tested.
+/// The `height` is the tile's own, which is what makes it tile once vertically rather
+/// than showing a 1px slice of itself.
+fn rule_sprite_css(t: &Theme) -> String {
+    let Some((uri, _, h)) = t.sprites.rule.as_ref().and_then(sprite_data_uri) else {
+        return String::new();
+    };
+    format!("hr {{ border: 0; height: {h}px; background: url({uri}) repeat-x; }}\n")
+}
+
+/// The quote panel (TDD 18.29): a background behind quoted text, an ink on it, or
+/// both. Empty unless the theme states at least one, so a theme that states neither
+/// emits the exact bytes it emitted before these keys existed (TDD 18.2).
+///
+/// A separate rule rather than two more properties on the `blockquote` rule above,
+/// because of what the panel must NOT reach: an annotation claim is also a
+/// `<blockquote>`, carrying its own highlight fill, and a white quote ink on a pale
+/// claim wash is unreadable. `.annotations blockquote.claim` already overrides the
+/// bar; this restores the body ink there for the same reason, and only when there is
+/// an ink to restore from.
+fn blockquote_panel_css(t: &Theme, body_fg: &str) -> String {
+    let bg = t
+        .blockquote_bg
+        .map(|c| format!(" background: {};", to_hex(c)))
+        .unwrap_or_default();
+    let fg = t
+        .blockquote_fg
+        .map(|c| format!(" color: {};", to_hex(c)))
+        .unwrap_or_default();
+    if bg.is_empty() && fg.is_empty() {
+        return String::new();
+    }
+    let claim = if fg.is_empty() {
+        String::new()
+    } else {
+        format!(".annotations blockquote.claim {{ color: {body_fg}; }}\n")
+    };
+    format!("blockquote {{{bg}{fg} }}\n{claim}")
 }
 
 /// The task marker's own colour (TDD 18.27), for both the themed glyph and the
@@ -1404,6 +1464,107 @@ mod html_sink_tests {
         );
         // The shared marker rule is untouched — a bullet and a numeral keep their colour.
         assert!(css.contains("li::marker { color: "), "{css}");
+    }
+
+    /// TDD 18.31 / 18.2 — the rule's sprite reaches the artefact, embedded, tiled, and
+    /// REPLACING the flat line rather than sitting over it.
+    ///
+    /// `background-image` is legitimate HERE and not in the preview, and the asymmetry
+    /// is worth pinning: this sink embeds the bytes as a `data:` URI, so there is no
+    /// path to resolve; a GTK CSS `url()` needs one, and a built-in theme's sprite has
+    /// none (ScrAP-324).
+    #[test]
+    fn a_rule_sprite_is_embedded_and_replaces_the_flat_line() {
+        let (palette, mut theme) = style();
+        assert!(
+            super::rule_sprite_css(&theme).is_empty(),
+            "no sprite stated must emit nothing"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rule.png");
+        std::fs::write(&path, ONE_PIXEL_PNG).unwrap();
+        theme.sprites.rule = Some(crate::sprite::SpriteRef::File(path));
+
+        let css = super::stylesheet(&palette, &theme);
+        assert!(css.contains("data:image/png;base64,"), "{css}");
+        assert!(css.contains(") repeat-x;"), "tiled, not stretched:\n{css}");
+        // The tile's own height, so the artefact shows a whole tile rather than the
+        // slice a 1px-high `hr` would clip it to.
+        assert!(css.contains("height: 1px;"), "{css}");
+        // The flat rule is still emitted above — it is what the artefact falls back to
+        // if the sprite is ever refused — and the sprite rule zeroes the border rather
+        // than painting over it.
+        assert!(css.contains("border-top: 1px solid"), "{css}");
+        let sprite_rule = css
+            .lines()
+            .find(|l| l.contains("background: url("))
+            .expect("the sprite rule is emitted");
+        assert!(sprite_rule.contains("border: 0;"), "{sprite_rule}");
+    }
+
+    /// TDD 18.30 / 18.2 / 25.9 — the table header's ink reaches the artefact from its
+    /// own key, and from `heading_color` when the theme states no key of its own.
+    #[test]
+    fn the_table_header_ink_reaches_the_artefact_from_its_own_key() {
+        let (palette, mut theme) = style();
+        let th = |css: &str| {
+            css.lines()
+                .find(|l| l.starts_with("th {"))
+                .expect("the header rule is always emitted")
+                .to_string()
+        };
+
+        theme.table_head_fg = None;
+        assert!(
+            !th(&super::stylesheet(&palette, &theme)).contains(" color:"),
+            "neither key stated must leave the header on the body ink"
+        );
+
+        // `Theme::resolve` folds `heading_color` into this slot, so the sink sees one
+        // value either way — which is the point: it cannot fold differently from the
+        // preview, because it does not fold at all.
+        theme.table_head_fg = crate::theme::parse_color("#ffd400");
+        let rule = th(&super::stylesheet(&palette, &theme));
+        assert!(rule.contains(" color: #ffd400;"), "{rule}");
+    }
+
+    /// TDD 18.29 / 18.2 — the quote panel reaches the artefact, and an annotation claim
+    /// is spared it.
+    ///
+    /// The claim is why this is its own rule rather than two more properties on the
+    /// `blockquote` declaration: a claim is a `<blockquote>` too, wearing its own
+    /// highlight wash, and a white quote ink over a pale wash is unreadable. Nothing
+    /// else in the sheet could have told you that — the preview has no equivalent,
+    /// because a claim there is a tagged run, not a quote.
+    #[test]
+    fn a_quote_panel_reaches_the_artefact_and_spares_an_annotation_claim() {
+        let (palette, mut theme) = style();
+        let body_fg = crate::palette::to_hex(palette.body_fg);
+        assert!(
+            super::blockquote_panel_css(&theme, &body_fg).is_empty(),
+            "neither key stated must emit nothing"
+        );
+
+        theme.blockquote_bg = crate::theme::parse_color("#0a1830");
+        theme.blockquote_fg = crate::theme::parse_color("#ffffff");
+        let css = super::stylesheet(&palette, &theme);
+        assert!(
+            css.contains("blockquote { background: #0a1830; color: #ffffff; }"),
+            "{css}"
+        );
+        assert!(
+            css.contains(&format!(
+                ".annotations blockquote.claim {{ color: {body_fg}; }}"
+            )),
+            "{css}"
+        );
+
+        // Either half alone, and only the half that was stated: a `color:` emitted for
+        // a theme that stated only a background would silently re-ink every quote.
+        let mut bg_only = theme.clone();
+        bg_only.blockquote_fg = None;
+        let css = super::blockquote_panel_css(&bg_only, &body_fg);
+        assert_eq!(css, "blockquote { background: #0a1830; }\n", "{css}");
     }
 
     /// TDD 18.28 — the blockquote bar's sprite reaches the artefact, embedded, tiled,
