@@ -51,6 +51,7 @@ pub(crate) mod colorscheme;
 pub(crate) mod config;
 pub(crate) mod copymap;
 pub(crate) mod cssfrag;
+pub(crate) mod decorplan;
 pub(crate) mod docio;
 pub(crate) mod export;
 pub(crate) mod farscroll;

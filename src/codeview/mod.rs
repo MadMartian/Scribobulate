@@ -26,9 +26,8 @@
 //!
 //! Corners are square (angled), per the desired look.
 
-use crate::saferizer::viewport::ViewportRange;
 use gtk::prelude::*;
-use gtk::{gdk, glib, graphene, gsk};
+use gtk::{gdk, glib, graphene};
 
 /// `GtkTextView`'s `SPACE_FOR_CURSOR` — the 1 logical pixel it adds **once** to its
 /// global layout width (`width += SPACE_FOR_CURSOR`, gtktextview.c) so the cursor at a
@@ -42,12 +41,19 @@ use gtk::{gdk, glib, graphene, gsk};
 /// it from cursor geometry (the strong cursor's own width is 0).
 const ANCHORED_LINE_END_SLACK: i32 = 1;
 
+mod bands;
 mod card;
+mod cards;
+mod chips;
 mod copybutton;
 mod geometry;
 mod gutter;
+mod listmarkers;
 mod markers;
 mod navkeys;
+mod paint;
+mod pending;
+mod quotes;
 
 /// The compositing-ORDER guards — one test per pair of decorations that can overlap.
 /// A sibling module rather than more bodies inside [`gtk_integration_tests`] because
@@ -66,11 +72,6 @@ pub(crate) use markers::{
 };
 
 mod imp {
-    use super::geometry::{chip_rect, marker_row_y_h, span_card_y_extent};
-    use super::gutter::{
-        draw_list_marker, first_display_line, list_content_margin_px, marker_gap_px, MarkerPaint,
-    };
-    use super::markers::group_by_line;
     use super::*;
     use gtk::subclass::prelude::*;
     use std::cell::{Cell, RefCell};
@@ -508,7 +509,7 @@ mod imp {
         ///
         /// The 4.0 px tolerance matches the navigation test's, and absorbs the
         /// sub-pixel drift between an animated scroll's final step and the aim.
-        fn scroll_has_landed_on(&self, anchor: i32) -> bool {
+        pub(super) fn scroll_has_landed_on(&self, anchor: i32) -> bool {
             let view = self.obj();
             let Some(vadj) = view.vadjustment() else {
                 // No adjustment means nothing to wait for — never block the dispatch on
@@ -524,30 +525,21 @@ mod imp {
     }
 
     impl TextViewImpl for CodePreviewView {
+        /// Paint the preview's decorations, one layer at a time.
+        ///
+        /// The body is a **dispatch over [`crate::decorplan::PAINT_ORDER`]** rather
+        /// than a sequence of draws, because the compositing order between two
+        /// overlapping decorations is a property worth being able to state and to
+        /// test. What each step draws is in `super::paint`'s neighbours; the
+        /// per-frame values they share, and the two geometry hazards that shape every
+        /// measurement, are on [`super::paint::PaintCtx`].
         fn snapshot_layer(&self, layer: gtk::TextViewLayer, snapshot: gtk::Snapshot) {
-            // Paint each code block's background in the BELOW-TEXT layer: GTK calls
-            // this after the widget's own (opaque) CSS background but before the
-            // text + selection, so the fill is visible under the text. (Drawing in
-            // WidgetImpl::snapshot before parent_snapshot does NOT work — the widget
-            // background paints over it. GTK4Rs/AP-21.)
-            // Backgrounds (code blocks, blockquotes) paint in BELOW-TEXT (under the text
-            // and under anchored children). Comment markers paint in ABOVE-TEXT so the
-            // right-margin chip is drawn ON TOP of an anchored table widget — a cell
-            // annotation's chip sits at the cell's buffer-Y, which is INSIDE the table's
-            // vertical span, and BelowText would paint it behind the opaque table → invisible
-            // (that was the "cell markers don't show" bug).
             if layer != gtk::TextViewLayer::BelowText && layer != gtk::TextViewLayer::AboveText {
                 return;
             }
-            let view = self.obj();
-            let blocks = self.blocks.borrow();
-            let blockquotes = self.blockquotes.borrow();
-            let markers = self.markers.borrow();
-            let list_markers = self.list_markers.borrow();
-            let heading_spans = self.heading_spans.borrow();
             // The gate, DERIVED from [`super::DRAWN_VECTORS`] rather than written out
             // here. It used to be a hand-maintained conjunction over five vectors, and
-            // the comment above it said so: a new decoration whose vector was missing
+            // the comment beside it said so: a new decoration whose vector was missing
             // paints on a document that happens to have a code block or a list in it and
             // silently never paints on one that does not — no warning, and no failing
             // test that was not written for it. `heading_spans` needed exactly such a
@@ -557,744 +549,13 @@ mod imp {
             if !super::has_anything_to_draw(self) {
                 return;
             }
-            let buffer = view.buffer();
-
-            // The snapshot_layer paints in BUFFER coordinates (already scroll-
-            // translated), so the visible region and every measurement below are in
-            // that same space — no window-coordinate math.
-            // First/last VISIBLE lines, clamped to [vis_start, vis_end]. Two hazards
-            // shape the geometry reads below: (GTK4Rs/AP-22) an OFF-SCREEN validating read
-            // (mid-draw validation → alloc_needed → blanked view/scrollbar) — avoided
-            // by clamping the rect to the viewport; and (ScrAP-105) `iter_location`'s
-            // line-display CACHE insert dereferences freed lines when a paint lands
-            // right after a `set_buffer` swap — avoided by using `line_yrange` (a
-            // cache-free btree-height read) for every extent, never `iter_location`.
-            // The seam's `line_at_y` only maps a y to a line (no display cache), safe.
-            let ViewportRange {
-                top_y: vtop,
-                bottom_y: vbot,
-                top: top_iter,
-                bottom: mut bot_iter,
-            } = ViewportRange::of(&*view);
-            let vis_start = top_iter.offset();
-            if !bot_iter.ends_line() {
-                bot_iter.forward_to_line_end();
+            let view = self.obj();
+            let ctx = super::paint::PaintCtx::of(self, &view, layer);
+            for step in crate::decorplan::PAINT_ORDER {
+                if step.layer() == layer {
+                    super::paint::run(*step, &snapshot, &ctx);
+                }
             }
-            let vis_end = bot_iter.offset();
-
-            let bg = *self.bg.borrow();
-            // Card aligns with the body-text column (the view's left margin); the
-            // text is inset a further `pad` by the code-block tag, so the gap between
-            // the card edge and the text is the inner padding.
-            //
-            // That inset is provided ENTIRELY by the code-block tags — horizontally
-            // by `code-block`'s `left/right_margin` (= view margin + code_pad), and
-            // VERTICALLY by `code-block-top`/`code-block-bottom`'s
-            // `pixels_above/below_lines` (= code_pad), which expand the first/last
-            // line's own `line_yrange`. The card is therefore drawn to exactly the
-            // block's line-range extent `[line_top_y(start), line_bottom_y(last)]`
-            // with NO extra vertical pad: the padding is already inside those lines.
-            // Adding a further ±pad here double-counted it (24 px vertical vs the
-            // 12 px horizontal) and — because that extra bottom pad reaches BEYOND
-            // the block's last line — bled the card onto the immediately-following
-            // line whenever no blank block-separator absorbed it. That happens for a
-            // loose continuation paragraph abutting a code block inside a list item
-            // (only ONE `\n` separates them, not a `block_sep` blank line), so the
-            // paragraph's text rendered overlapping the card's bottom edge
-            // (GTK4Rs/AP-127). Relying on the tags also keeps the padding zoom-correct:
-            // `code_pad` is `px()`-scaled, the old raw `pad` was not.
-            let lm = view.left_margin() as f32;
-            let rm = view.right_margin() as f32;
-            let card_w = (view.width() as f32 - lm - rm).max(0.0);
-
-            if layer == gtk::TextViewLayer::BelowText {
-                // Every VISIBLE blockquote's Y-extent, computed ONCE and consumed TWICE
-                // — by the panel immediately below and by the accent bar further down.
-                // One `BufferSpan` per WHOLE quote (`renderer::end` closes the range at
-                // the outermost `TagEnd::BlockQuote`), so the extent spans the quote's
-                // intro paragraph, any nested list and its closing paragraph as ONE run,
-                // with the blank separator lines inside it. That is the whole of the fix
-                // to TDD 18.29: the panel used to be a `paragraph_background_rgba` on the
-                // `blockquote` tag, which GTK fills PER PARAGRAPH, so a quote holding a
-                // paragraph plus a list rendered as three disconnected rectangles with
-                // the page showing through between them — beside a bar that had always
-                // been drawn from this single extent and was therefore continuous. Same
-                // quote, two different extents, which is what made it visible.
-                //
-                // The clamping discipline is `span_card_y_extent`'s (GTK4Rs/AP-22: never
-                // measure an off-screen, unvalidated iter), and the extent carries NO
-                // extra pad (GTK4Rs/AP-127) — `line_yrange` already includes each line's
-                // own `pixels_above/below_lines`, which is where the panel's vertical
-                // breathing room comes from, exactly as it did from the tag.
-                let quote_extents: Vec<(f32, f32)> = blockquotes
-                    .iter()
-                    .filter(|q| !q.is_empty() && !q.is_outside(vis_start, vis_end))
-                    .filter_map(|&quote| {
-                        let (top, bottom) = span_card_y_extent(
-                            &*view,
-                            &buffer,
-                            quote,
-                            vis_start,
-                            vis_end,
-                            vtop as f32,
-                            vbot as f32,
-                        );
-                        (bottom > top).then_some((top, bottom))
-                    })
-                    .collect();
-
-                // The quote panel (TDD 18.29), FIRST in the below-text pass — before the
-                // heading band, the code-block card and the accent bar — because the
-                // quote is the outermost of those containers: a heading band or a code
-                // card INSIDE a quote must land on the panel, not under it.
-                //
-                // Absent unless the active theme states `blockquote_bg`, read at PAINT
-                // time for the same reason the heading band's fill is: selecting a theme
-                // repaints, it does not re-render.
-                //
-                // The extent is the CONTENT COLUMN — `lm`/`card_w`, the same rect the
-                // code-block card and the heading band take — so the panel starts at the
-                // accent bar's own left edge and the two read as one object, and the
-                // quoted text sits inset from both edges by `blockquote_bar_width +
-                // blockquote_text_gap` (the `blockquote` tag's margins) rather than
-                // running flush to the fill, which is what a panel wants and what a
-                // paragraph background pinned to the text column could not give.
-                if let Some(panel) = crate::theme::active().blockquote_bg {
-                    for &(top, bottom) in &quote_extents {
-                        snapshot.append_color(
-                            &panel,
-                            &graphene::Rect::new(lm, top, card_w, bottom - top),
-                        );
-                    }
-                }
-
-                // The heading band (TDD 18.25), before every other per-heading/per-block
-                // decoration in this pass so they land on top of it rather than under it.
-                // Only the quote panel above precedes it, and only because a quote
-                // CONTAINS a heading rather than sitting beside one.
-                //
-                // Absent unless the active theme states a fill for the level, which is
-                // why the fill is read at PAINT time and no colour travels with the
-                // spans: selecting a theme repaints, it does not re-render.
-                //
-                // The extent is the CONTENT COLUMN — `lm`/`card_w`, the very rect the
-                // code-block card uses — not the text column a `paragraph_background`
-                // tag would pin it to. A tag band follows the TAG's margins, so a
-                // heading inside a quote or a list would band at a different width from
-                // its siblings; the content column is also the one extent the HTML and
-                // PDF sinks can match, which is what keeps TDD 25.3 honest rather than
-                // nearly honest.
-                //
-                // A soft-wrapped heading gets ONE continuous band for free: the extent
-                // comes from `span_card_y_extent`, whose ends are `line_yrange` reads,
-                // and `line_yrange` spans every display row of the logical line. No
-                // display-line X is needed at all, which matters because at 4.6 there is
-                // no way to obtain one on the paint path without a line-display cache
-                // insert (ScrAP-105).
-                let band = crate::theme::active();
-                if !band.bands_nothing() {
-                    // `gutter_zoom` is the zoom THIS RENDER was laid out at — named for
-                    // the list gutter that first needed it, not scoped to it, and every
-                    // pixel metric painted here scales by it. A design-time px at zoom
-                    // 1.0, scaled explicitly, like every other themed metric.
-                    for h in heading_spans.iter() {
-                        if h.span.is_empty() || h.span.is_outside(vis_start, vis_end) {
-                            continue;
-                        }
-                        // Every band property is stated per level (TDD 18.32), so all
-                        // three are read at the level this heading is — not once for
-                        // the document.
-                        // Redundant by construction since `level_index` became a
-                        // `theme::heading_slot` result, which cannot exceed the bound.
-                        // Kept because the alternative on this path is an index panic
-                        // inside a `snapshot` callback, and a defence that costs one
-                        // comparison per visible heading is cheaper than that
-                        // (GTK4Rs/AP-254: stated as redundant rather than left to read
-                        // as load-bearing).
-                        let level = h.level_index.min(crate::theme::HEADING_LEVELS - 1);
-                        // The engine decides which of the band's three appearances
-                        // applies (`theme::Band`), so this paint site renders an
-                        // answer rather than re-deriving the precedence — which is
-                        // what let all three renderers agree with each other and
-                        // disagree with SCHEMA about a sprite needing a fill.
-                        let decor = band.heading_band_decor(level);
-                        if !decor.is_present() {
-                            continue;
-                        }
-                        let radius = (f64::from(band.metrics.heading_band_radius[level])
-                            * self.gutter_zoom.get())
-                        .round() as f32;
-                        let (top, bottom) = span_card_y_extent(
-                            &*view,
-                            &buffer,
-                            h.span,
-                            vis_start,
-                            vis_end,
-                            vtop as f32,
-                            vbot as f32,
-                        );
-                        if bottom <= top {
-                            continue;
-                        }
-                        let rect = graphene::Rect::new(lm, top, card_w, bottom - top);
-                        if radius > 0.0 {
-                            snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(
-                                rect,
-                                radius.min(card_w / 2.0).min((bottom - top) / 2.0),
-                            ));
-                        }
-                        // The sprite first, then whatever the band would have been
-                        // without it. A sprite that will not decode therefore falls
-                        // through to the gradient, then to the flat fill — degrading
-                        // rather than erasing the band, the same rule every other
-                        // decoration in this vocabulary follows.
-                        //
-                        // A sprite TILES at its natural size rather than stretching to
-                        // the band: 1:1 pixels need no filter, and GSK 4.6's
-                        // `append_texture` filters linearly with no choice (the variant
-                        // that takes one is 4.10 — GTK4Rs/AP-114). Tiling also means one
-                        // cached texture per path instead of one per band width, which
-                        // a window resize would otherwise mint by the hundred.
-                        let tiled = decor.sprite.and_then(crate::sprite::texture);
-                        match tiled {
-                            Some(tex) => crate::widgets::tile_texture(
-                                &snapshot,
-                                &rect,
-                                // BUFFER coordinates: anchoring at the rect is what
-                                // holds the tile phase to the DOCUMENT rather than to
-                                // the viewport, so the pattern travels with the band as
-                                // the reader scrolls.
-                                crate::widgets::TileOrigin::Rect,
-                                &tex,
-                            ),
-                            None => match decor.without_sprite() {
-                                Some(crate::theme::BandPaint::Gradient { from, to }) => snapshot
-                                    .append_linear_gradient(
-                                        &rect,
-                                        &graphene::Point::new(rect.x(), rect.y()),
-                                        &graphene::Point::new(rect.x(), rect.y() + rect.height()),
-                                        &[
-                                            gsk::ColorStop::new(0.0, from),
-                                            gsk::ColorStop::new(1.0, to),
-                                        ],
-                                    ),
-                                Some(crate::theme::BandPaint::Flat(fill)) => {
-                                    snapshot.append_color(&fill, &rect)
-                                }
-                                None => {}
-                            },
-                        }
-                        if radius > 0.0 {
-                            snapshot.pop();
-                        }
-                    }
-                }
-
-                // Rebuild the visible blocks' card rectangles this paint (the same
-                // clear+repopulate discipline the marker and checkbox hit-boxes use).
-                // The pointer is mapped to a block through these, which is what reveals
-                // that block's copy button; the button itself is drawn in the ABOVE-TEXT
-                // pass, which therefore reads a rectangle THIS pass computed.
-                let mut card_rects: Vec<(graphene::Rect, usize)> = Vec::new();
-                for (bi, &block) in blocks.iter().enumerate() {
-                    if block.is_empty() {
-                        continue;
-                    }
-                    // Skip blocks entirely off-screen.
-                    if block.is_outside(vis_start, vis_end) {
-                        continue;
-                    }
-                    // Clamp the RECT, never the iters: measure a boundary only when its
-                    // line is on-screen (validated); a boundary that straddles the
-                    // viewport edge clamps to that edge instead of reading an off-screen
-                    // (unvalidated) iter. A block taller than the viewport clamps both
-                    // ends and fills the visible height. The extent is the block's own
-                    // line range with NO extra pad (GTK4Rs/AP-127 — see `span_card_y_extent`).
-                    let (top, bottom) = span_card_y_extent(
-                        &*view,
-                        &buffer,
-                        block,
-                        vis_start,
-                        vis_end,
-                        vtop as f32,
-                        vbot as f32,
-                    );
-                    if bottom > top {
-                        let rect = graphene::Rect::new(lm, top, card_w, bottom - top);
-                        snapshot.append_color(&bg, &rect);
-                        // The rectangle is already clamped to the viewport, which is
-                        // exactly what makes the copy button STICKY: in a block taller
-                        // than the pane the button rides the top of the visible portion
-                        // rather than disappearing with the block's real first line, so
-                        // the long blocks — the ones nobody wants to select by hand —
-                        // keep their one-gesture copy. (Gating this on the first line
-                        // being on screen was tried and reverted for that reason.)
-                        card_rects.push((rect, bi));
-                    }
-                }
-                *self.code_block_rects.borrow_mut() = card_rects;
-
-                // Blockquote accent bars — same visible-only, viewport-clamped Y-extent
-                // logic as the code-block backgrounds (so we never read an off-screen,
-                // unvalidated iter — GTK4Rs/AP-22), but drawn as a thin vertical rect at the
-                // body-text left margin. Blockquotes are buffer text, so there is no
-                // anchored widget here to re-measure/churn (GTK4Rs/AP-23).
-                let bar_color = *self.bq_bar.borrow();
-                // The bar's width is a themed decoration metric: a design-time px at
-                // zoom 1.0, scaled here through the same `round(n * zoom)` the
-                // `blockquote` tag scales its indent by (`tags.rs`). Scaling it is a
-                // deliberate correction — the indent already scaled while the bar did
-                // not, so a zoomed-in quote drew a hairline bar in a wide gutter. At
-                // zoom 1.0 this is byte-identical to the previous constant.
-                let bqm = crate::theme::active();
-                let zoom_now = self.gutter_zoom.get();
-                let bar_w = crate::theme::px(bqm.metrics.blockquote_bar_width, zoom_now) as f32;
-                // A theme may tile a sprite down the bar instead of filling it (TDD
-                // 18.28), at the sprite's NATURAL size — `texture`, not `scaled`: 1:1
-                // pixels need no filter, and GSK 4.6's `append_texture` offers no filter
-                // choice (GTK4Rs/AP-114). The tile is clipped to the bar's own rect, so a
-                // theme using one wants `blockquote_bar_width` at the tile's width.
-                // The engine decides which of the bar's two appearances applies
-                // (`theme::Fill`); this site renders the answer. `bar_color` is the
-                // palette-derived default a theme that states neither key falls back
-                // to, so it is passed in rather than re-derived here.
-                let bar_decor = bqm.blockquote_bar_decor();
-                let bar_sprite = bar_decor.sprite.and_then(crate::sprite::texture);
-                // The SAME `quote_extents` the panel was filled from, so the bar and the
-                // fill behind it can never disagree about where the quote starts or ends
-                // — which is precisely how the TDD 18.29 defect announced itself.
-                for &(top, bottom) in &quote_extents {
-                    let rect = graphene::Rect::new(lm, top, bar_w, bottom - top);
-                    // The sprite OUTRANKS the flat colour, and this is an `else`
-                    // rather than a paint-over on purpose: filling first and tiling
-                    // on top looks identical for an opaque tile and lets the flat
-                    // colour bleed through a transparent one — a bug reachable only
-                    // by the sprites nobody happened to test.
-                    match &bar_sprite {
-                        Some(tex) => crate::widgets::tile_texture(
-                            &snapshot,
-                            &rect,
-                            crate::widgets::TileOrigin::Rect,
-                            tex,
-                        ),
-                        // Either the theme states no sprite, or the one it states
-                        // would not decode. Both degrade to the flat bar rather than
-                        // leaving a gap, which is `sdd/THEMING.md`'s inert-by-default
-                        // rule and what every sibling decoration does.
-                        // Either the theme states no sprite, or the one it states
-                        // would not decode. Both degrade to the flat bar, which is
-                        // the theme's own colour where it states one and the
-                        // palette-derived default where it does not.
-                        None => snapshot.append_color(&bar_decor.flat_or(bar_color), &rect),
-                    }
-                }
-
-                // List-item gutter markers. A bullet dot /
-                // right-aligned number / static checkbox per item, drawn in the band
-                // LEFT of the item's content margin, aligned to the item's FIRST line.
-                // Same discipline as the bars above: paint VISIBLE first-lines only, so
-                // the y read (`line_yrange`, cache-free — never `iter_location`, GTK4Rs/AP-22/
-                // ScrAP-105; research §4) is on a validated line; x derives from `depth`
-                // (`list_content_margin_px` == the `li-{depth}` content margin), never
-                // from GTK geometry. Buffer-space, so scroll-correct for free.
-                if !list_markers.is_empty() {
-                    let zoom = self.gutter_zoom.get();
-                    // The container text margins a list item's own indent accumulates
-                    // ONTO, mirroring `tags.rs` exactly: the view's configured
-                    // `left_margin` for a body item, and the `blockquote` tag's
-                    // `left_margin + px(bar_width + text_gap)` for a quoted one.
-                    // Both are SET properties (same read the bq bar above does), not
-                    // lazily-validated layout — no GTK4Rs/AP-22 exposure. Without the quoted
-                    // base, a quoted list's markers land left of the quote's accent bar
-                    // (POLICY Document Rendering CAM row 2).
-                    let body_base = lm;
-                    // The SAME two theme keys `tags.rs` builds the `blockquote` tag's
-                    // margin from, so a themed bar/gap can never leave a quoted list's
-                    // markers beside the quote instead of inside it (GTK4Rs/AP-96).
-                    let qm = crate::theme::active();
-                    let quoted_base = lm
-                        + crate::theme::px(
-                            qm.metrics.blockquote_bar_width + qm.metrics.blockquote_text_gap,
-                            zoom,
-                        ) as f32;
-                    // Marker glyph ink: the active theme's `list_marker` if it sets one,
-                    // else the widget foreground (the pre-theming default — keeps System
-                    // byte-identical). Colours the bullet/numeral/checkbox only; the item
-                    // text is buffer content and unaffected.
-                    // The pre-theming default every marker falls back to. The THEMED
-                    // ink is resolved per item below, because a bullet's colour varies
-                    // by nesting depth (TDD 18.26) and this loop is where the depth is.
-                    let default_fg = view.style_context().color();
-                    // Accent colour for a hovered checkbox's border — the desktop's
-                    // accent, distinct from the resting foreground so the hover border
-                    // reads as a change. Through `palette`, which owns the name chain and
-                    // its floor; this site used to open-code both and was the one probe
-                    // `F-PROBE-001` could not reach from inside that module.
-                    let hover_fg = crate::palette::desktop_accent();
-                    let hovered = self.hovered_checkbox.get();
-                    // Rebuild the checkbox hit-boxes for the visible task items this paint
-                    // (same clear+repopulate discipline as `marker_hitboxes`).
-                    let mut cbhits: Vec<(graphene::Rect, usize)> = Vec::new();
-                    // `line_yrange` returns the height of the WHOLE logical line, which for
-                    // a soft-wrapped item spans EVERY display row — centering a marker on
-                    // that whole span floats it to the MIDDLE row instead of the first
-                    // (operator report 2026-07-22, most visible at higher zoom, which grows
-                    // the rows and provokes the wrap). Clamp each item's height to its first
-                    // display row via `first_display_line`. `single_line_h` is one row's
-                    // text height in the view's OWN CSS-zoomed font — a fresh Pango layout
-                    // (cache-free, never `iter_location`: GTK4Rs/AP-22), the same font the ordered
-                    // numeral is drawn in, so it tracks zoom automatically. `marker_gap` is
-                    // the item's `pixels_above_lines`, the band the text sits below.
-                    let (_, single_line_h) = view.create_pango_layout(Some("0")).pixel_size();
-                    let single_line_h = single_line_h as f32;
-                    let marker_gap = marker_gap_px(&qm.metrics, zoom);
-                    for (idx, m) in list_markers.iter().enumerate() {
-                        // The item's first line must be within the on-screen span —
-                        // its `line_yrange` is 0/stale on an unvalidated line (research
-                        // §4). Offset gate mirrors the code-block/blockquote loops.
-                        if m.first_line < vis_start || m.first_line > vis_end {
-                            continue;
-                        }
-                        let (y, h) = view.line_yrange(&buffer.iter_at_offset(m.first_line));
-                        // Clamp the whole-logical-line height to the item's FIRST display
-                        // row so the marker stays top-aligned when the item soft-wraps
-                        // (see the `single_line_h` note above). A single-row item is
-                        // unchanged. Both the drawn marker and the checkbox hit-column below
-                        // derive from this clamped `(y, h)`, so they stay in lock-step.
-                        let (y, h) =
-                            first_display_line((y as f32, h as f32), single_line_h, marker_gap);
-                        // Straddle clamp: skip a first-line whose refined y left the
-                        // viewport (same guard the comment chips use).
-                        if y + h < vtop as f32 || y > vbot as f32 {
-                            continue;
-                        }
-                        let base = if m.quoted { quoted_base } else { body_base };
-                        let content = list_content_margin_px(base, m.depth, zoom, &qm.metrics);
-                        // Only TASK checkboxes are interactive: record a generous hit-box for
-                        // the checkbox in BUFFER coordinates — the exact space the marker is
-                        // drawn in. `is_over_checkbox` converts the incoming widget-space
-                        // click back to buffer coords with GTK's own `window_to_buffer_coords`
-                        // (the precise inverse of the draw transform), so there is NO
-                        // hand-rolled scroll/margin math to drift — the earlier `- vtop`
-                        // version silently displaced the zone by the margin on real
-                        // compositors (invisible under Xvfb). The hit-box is the whole marker
-                        // COLUMN for this item — from the parent depth's content margin across
-                        // to this item's, and the full first-line height — so the small drawn
-                        // box is not a pixel-hunt: clicking anywhere in the checkbox's gutter
-                        // cell toggles it. Clamped to the item's own line so adjacent items'
-                        // columns never overlap.
-                        if matches!(m.kind, crate::renderer::ListMarkerKind::Task { .. }) {
-                            let col_left = list_content_margin_px(
-                                base,
-                                m.depth.saturating_sub(1),
-                                zoom,
-                                &qm.metrics,
-                            );
-                            cbhits.push((
-                                graphene::Rect::new(col_left, y, (content - col_left).max(0.0), h),
-                                idx,
-                            ));
-                        }
-                        // Resolved per item, from the tier this item's depth reads —
-                        // a pure step over the array `Theme::resolve` already folded,
-                        // so nothing here re-derives the shallower-tier fallback.
-                        let fg = qm
-                            .marker_ink(m.kind.theme_kind(), m.depth)
-                            .unwrap_or(default_fg);
-                        draw_list_marker(
-                            &snapshot,
-                            view.upcast_ref::<gtk::TextView>(),
-                            &m.kind,
-                            content,
-                            (y, h),
-                            zoom,
-                            &MarkerPaint {
-                                fg: &fg,
-                                hover: (hovered == Some(idx)).then_some(&hover_fg),
-                                metrics: &qm.metrics,
-                                depth: m.depth,
-                                glyphs: &qm.list_glyphs,
-                                sprites: &qm.sprites,
-                            },
-                        );
-                    }
-                    *self.checkbox_hitboxes.borrow_mut() = cbhits;
-                }
-            } // end BelowText
-
-            if layer == gtk::TextViewLayer::AboveText {
-                // CriticMarkup comment markers: a small amber chip in
-                // the reserved right margin at each annotated line. When several
-                // annotations share one visual line they collapse to a single chip
-                // showing a count. Visible-only measurement, viewport-anchored — never
-                // reads an off-screen (unvalidated) iter (GTK4Rs/AP-22), same as the bars above.
-                let mut hitboxes: Vec<(graphene::Rect, Vec<usize>)> = Vec::new();
-                if !markers.is_empty() {
-                    /// One on-screen annotation marker: which marker it is, and the
-                    /// buffer-space row it sits on. Named rather than a bare
-                    /// `(usize, f32, f32)` so the three readers below cannot transpose
-                    /// `y` and `h` — the project convention is to destructure by name.
-                    struct VisMarker {
-                        index: usize,
-                        y: f32,
-                        h: f32,
-                    }
-                    let mut vis_markers: Vec<VisMarker> = Vec::new();
-                    for (i, m) in markers.iter().enumerate() {
-                        let is_cell = m.cell_widget.is_some();
-                        // Body markers: cheap anchor-offset visibility gate. A CELL
-                        // marker's anchor is the table U+FFFC, which can scroll off-screen
-                        // while the cell's own row is still visible (tall tables), so defer
-                        // its culling to the refined-Y check below.
-                        if !is_cell && (m.anchor < vis_start || m.anchor > vis_end) {
-                            continue;
-                        }
-                        // Base Y (anchor line), refined to the exact table row for a CELL
-                        // marker, via the SHARED `marker_row_y_h` — the same formula the
-                        // annotation card anchors itself with, so the chip and the card
-                        // that points at it can never drift apart (GTK4Rs/AP-78/GTK4Rs/AP-127).
-                        // Recomputed EVERY frame: both halves are cheap and scroll-stable,
-                        // so there's nothing to cache against (no flicker, no stale cache).
-                        let (y, h) = marker_row_y_h(&*view, &buffer, m);
-                        // Skip chips whose refined Y is fully outside the viewport
-                        // (tall tables: a lower-row cell can leave the view while the
-                        // table anchor line is still "visible" by buffer offset).
-                        if y + h < vtop as f32 || y > vbot as f32 {
-                            continue;
-                        }
-                        vis_markers.push(VisMarker { index: i, y, h });
-                    }
-                    let ys: Vec<i32> = vis_markers.iter().map(|m| m.y as i32).collect();
-                    let width = view.width() as f32;
-                    // Themed, TDD 18.19: `None` on either key ⇒ the exact hardcoded
-                    // amber/white this chip has always used (TDD 18.2). A sprite, if
-                    // the theme names one AND it decodes, replaces the flat fill only —
-                    // the count numeral still draws in `accent`/chip-fg ink on top,
-                    // same as the flat-fill case.
-                    let chip_th = crate::theme::active();
-                    // The engine decides which of the chip's two FILL appearances
-                    // applies (`theme::Fill`); its INK is a separate key and paints on
-                    // top either way, which is the one respect the chip differs from
-                    // the bar and the rule.
-                    let chip_decor = chip_th.annotation_chip_decor();
-                    let accent = chip_decor.flat_or(crate::palette::ANNOTATION_CHIP_FLOOR);
-                    let ink = chip_th
-                        .annotation_chip_fg
-                        .unwrap_or(crate::palette::ANNOTATION_CHIP_INK_FLOOR);
-                    for (_gy, local) in group_by_line(&ys) {
-                        let VisMarker { y, h, .. } = vis_markers[local[0]];
-                        // SHARED chip arithmetic (`chip_rect`) — the annotation card
-                        // re-derives its anchor with the very same call, so the drawn chip
-                        // and the card pointing at it cannot disagree (GTK4Rs/AP-78/GTK4Rs/AP-127).
-                        let (raw_x, raw_y, raw_w, raw_h) = chip_rect(width, rm, y, h);
-                        // ROUNDED ONCE, here, and then used by all four of the chip's
-                        // faces — the sprite, the flat fill, the count numeral and the
-                        // hit-box. The rounding is this site's own decision (the shared
-                        // `chip_rect` stays fractional for the card's anchor): the rect
-                        // comes from a text row, so a sprite drawn on a half-pixel
-                        // boundary is resampled a second time by the compositor. Rounding
-                        // only the sprite would make what is DRAWN and what is CLICKABLE
-                        // two different rectangles, which is an interaction defect rather
-                        // than a cosmetic one (GTK4Rs/AP-78).
-                        let (chip_x, cy) = (raw_x.round(), raw_y.round());
-                        let (marker_w, chip_h) = (raw_w.round().max(1.0), raw_h.round().max(1.0));
-                        let rect = graphene::Rect::new(chip_x, cy, marker_w, chip_h);
-                        // Through the SHARED resample-and-draw seam (the twin of
-                        // `tile_texture`).
-                        let sprite_drawn = chip_decor.sprite.is_some_and(|sprite| {
-                            crate::widgets::draw_sprite_into(&snapshot, &rect, sprite)
-                        });
-                        // A sprite that will not decode falls back to the flat fill —
-                        // degrading, not erasing.
-                        if !sprite_drawn {
-                            snapshot.append_color(&accent, &rect);
-                        }
-                        if local.len() > 1 {
-                            let layout = view.create_pango_layout(Some(&local.len().to_string()));
-                            snapshot.save();
-                            snapshot.translate(&graphene::Point::new(chip_x + 2.0, cy - 1.0));
-                            snapshot.append_layout(&layout, &ink);
-                            snapshot.restore();
-                        }
-                        // Hit-box in WIDGET coords. Convert the chip's buffer-y to widget-y
-                        // with GTK's own transform (chip_x is already widget-space). Using
-                        // `cy - visible_rect().y()` drifts by the top margin on compositors
-                        // where the two disagree — the same bug that displaced the task
-                        // checkbox hit zone (operator, 2026-07-16); GTK4Rs/AP-80-safe (pure math).
-                        let (_, chip_wy) =
-                            view.buffer_to_window_coords(gtk::TextWindowType::Widget, 0, cy as i32);
-                        let ann_idxs: Vec<usize> =
-                            local.iter().map(|&li| vis_markers[li].index).collect();
-                        hitboxes.push((
-                            graphene::Rect::new(chip_x, chip_wy as f32, marker_w, chip_h),
-                            ann_idxs,
-                        ));
-                    }
-                }
-                *self.marker_hitboxes.borrow_mut() = hitboxes;
-
-                // The code-block copy button, drawn ABOVE the text because it sits in
-                // the card's top-right corner and a long first line runs underneath it
-                // (its fill is the card's own, so it masks what it covers). Revealed for
-                // the block under the pointer, and kept for a moment after a copy so the
-                // checkmark is seen — the two states the reader can be in.
-                let mut copy_hits: Vec<(graphene::Rect, usize)> = Vec::new();
-                let hovered_block = self.hovered_code_block.get();
-                let copied_block = self.copied_block.get();
-                if hovered_block.is_some() || copied_block.is_some() {
-                    let zoom = self.gutter_zoom.get();
-                    // The block's own inner padding, through the same `px()` the
-                    // `code-block` tag's margins take — one value, so the button's inset
-                    // and the text's inset cannot drift apart.
-                    let pad =
-                        crate::theme::px(crate::config::config().code.block_padding, zoom) as f32;
-                    // One text row in the view's own CSS-zoomed font: a fresh Pango
-                    // layout, which validates nothing (GTK4Rs/AP-22), exactly as the
-                    // gutter's soft-wrap clamp measures it.
-                    let (_, row_h) = view.create_pango_layout(Some("0")).pixel_size();
-                    let row_h = row_h as f32;
-                    let fg = view.style_context().color();
-                    let accent = view
-                        .style_context()
-                        .lookup_color("theme_selected_bg_color")
-                        .or_else(|| view.style_context().lookup_color("accent_bg_color"))
-                        .unwrap_or(fg);
-                    for &(card, bi) in self.code_block_rects.borrow().iter() {
-                        let show = hovered_block == Some(bi) || copied_block == Some(bi);
-                        if !show {
-                            continue;
-                        }
-                        let Some(rect) = crate::affordance::copy_button_rect(&card, pad, row_h)
-                        else {
-                            continue;
-                        };
-                        copybutton::draw_copy_button(
-                            &snapshot,
-                            &rect,
-                            zoom,
-                            &copybutton::CopyButtonPaint {
-                                fill: &bg,
-                                fg: &fg,
-                                // Only the button the pointer is actually ON adopts the
-                                // accent border; a revealed-but-not-pointed-at button
-                                // stays at rest, the same split the checkbox draws.
-                                hover: (self.pointer_on_copy_button.get() == Some(bi))
-                                    .then_some(&accent),
-                                copied: copied_block == Some(bi),
-                            },
-                        );
-                        copy_hits.push((rect, bi));
-                    }
-                }
-                *self.copy_button_hitboxes.borrow_mut() = copy_hits;
-
-                // Fire an armed open-request now that the hit-boxes are live.
-                // THIS is the completion event a programmatic navigation was waiting for —
-                // see `pending_marker_open` for why we must generate it ourselves rather
-                // than wait on a GTK signal.
-                //
-                // Dispatch on an IDLE, NEVER inline: we are inside the draw path, and
-                // `open_marker_popover` calls `popup()`, which re-enters layout/validation
-                // (GTK4Rs/AP-22 — forcing layout from snapshot leaves the view stuck blank) and
-                // rebuilds widgets mid-emission (GTK4Rs/AP-30 — "broken accounting of active
-                // state"). The idle runs after this frame is on screen.
-                let dispatch = {
-                    let mut pending = self.pending_marker_open.borrow_mut();
-                    match pending.as_ref() {
-                        None => None,
-                        // Expired — abandon, and check this BEFORE the hit-box: a paint
-                        // arriving after the wall-clock budget is by construction not the
-                        // paint this navigation caused, so opening now would throw a
-                        // surprise popover at a rect the user is no longer asking about
-                        // (they have scrolled elsewhere; the chip merely happens to be on
-                        // screen again). Expiry wins over a late hit. The document keeps
-                        // whatever position the converge loop left it at — the visible
-                        // give-up.
-                        Some(p) if p.deadline.expired() => {
-                            *pending = None;
-                            None
-                        }
-                        // Painted and in view — but NOT necessarily arrived. The chip can
-                        // become visible while lazy line-height validation is still growing
-                        // the adjustment's `upper`, so a dispatch here would freeze the
-                        // scroll at whatever partial position happened to reveal it: the
-                        // converge tick sees its request gone and stops re-aiming (correctly
-                        // — the GTK4Rs/AP-118 re-pin guard owns the adjustment from that moment),
-                        // and nothing corrects it afterwards. Measured on GDK-Win32: left at
-                        // 103 against a reachable 263, because the chip surfaces earlier there
-                        // relative to validation.
-                        //
-                        // So require the scroll to have LANDED, testing it directly against
-                        // the same aim the converge loop computes. Deliberately a local test
-                        // and not a "has the loop converged?" flag (ScrAP-202, which also
-                        // records the half-fix this replaced: gating on convergence alone
-                        // silenced the very paint the dispatch rides on, because the final
-                        // `set_value` of a converged loop writes the value already held and
-                        // so queues no draw): convergence is only
-                        // observable through further frame-clock ticks, and those are not
-                        // guaranteed — under a non-blocking pump the clock can go idle after
-                        // a single tick, leaving a convergence gate that never opens and a
-                        // request that never dispatches (measured on 4.6.9/X11, where exactly
-                        // one paint is available). This test needs no extra frame: it is true
-                        // or false about the state already in front of us, and while it is
-                        // false the request simply stays armed and the loop keeps aiming.
-                        //
-                        // The clamp matters: where the target cannot reach the top of the
-                        // viewport, the correct landing IS the end of the document, and
-                        // `want` collapses to `max` — so this stays satisfiable rather than
-                        // deadlocking on an unreachable goal. The deadline still bounds it.
-                        Some(p) if !self.scroll_has_landed_on(p.anchor) => None,
-                        Some(p) => {
-                            // The hit-box is consulted as PROOF THAT THE CHIP PAINTED —
-                            // the completion event this request has been waiting for — and
-                            // for nothing else. Its RECTANGLE is deliberately not carried
-                            // forward: a widget rect is only meaningful at the scroll
-                            // offset it was read at, and handing one across the idle below
-                            // is precisely how the card came to be positioned where the
-                            // chip *had been* before the converge-scroll. The
-                            // card re-derives its own anchor when it is presented.
-                            let hit = self
-                                .marker_hitboxes
-                                .borrow()
-                                .iter()
-                                .find(|(_, idxs)| idxs.contains(&p.target))
-                                // The focus intent travels with the request, not with the
-                                // paint: the gesture that decided it returned frames ago.
-                                .map(|(_, idxs)| (idxs.clone(), p.focus));
-                            if hit.is_some() {
-                                *pending = None; // satisfied
-                            }
-                            hit
-                        }
-                    }
-                };
-                if let Some((idxs, focus)) = dispatch {
-                    // WEAK capture, not a strong clone (ScrAP-152/GTK4Rs/AP-128/GTK4Rs/AP-63): a
-                    // strong clone would pin this view alive as an unrooted zombie if its
-                    // window is destroyed between this paint and the idle firing, and the
-                    // idle would then drive `open_marker_popover` → `popup()` a popover on
-                    // an unrealized view (NULL parent surface → GDK_IS_SURFACE SIGSEGV).
-                    // De-pinned here, and `open_marker_popover` self-guards on
-                    // `is_realized()` — defense-in-depth, either alone prevents the crash.
-                    //
-                    // The idle also happens to be the POST-PAINT read this path requires.
-                    // We are inside the paint of the frame whose `size_allocate` already
-                    // ran `flush_first_validate`, so by the time the idle runs the geometry
-                    // the card is about to read is validated. That matters because the
-                    // programmatic navigation is the one case where a pre-paint read is
-                    // stably WRONG rather than merely late: a tick callback fires at the
-                    // UPDATE phase, before LAYOUT, so it samples the same pre-validation
-                    // estimate every frame and a stability check converges on it
-                    // (GTK4Rs/AP-142/GTK4Rs/AP-142). Reading after the paint is the fix, and
-                    // dispatching from inside the paint is how we get it for free.
-                    let obj = self.obj();
-                    glib::idle_add_local_once(glib::clone!(
-                        #[weak(rename_to = view)]
-                        obj,
-                        move || view.open_marker_popover(&idxs, focus)
-                    ));
-                }
-            } // end AboveText
         }
     }
 }
@@ -2557,12 +1818,12 @@ mod gtk_integration_tests {
         // Reproduce snapshot_layer's exact visible-range setup so the card extent is
         // computed by the SAME formula the paint uses (span_card_y_extent) — not an
         // independent recomputation (which would be a tautology, GTK4Rs/AP-78).
-        let ViewportRange {
+        let crate::saferizer::viewport::ViewportRange {
             top_y,
             bottom_y,
             top: top_iter,
             bottom: mut bot_iter,
-        } = ViewportRange::of(&view);
+        } = crate::saferizer::viewport::ViewportRange::of(&view);
         let vtop = top_y as f32;
         let vbot = bottom_y as f32;
         let vis_start = top_iter.offset();

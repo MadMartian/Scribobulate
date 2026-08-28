@@ -19,7 +19,7 @@
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.9 |
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.53 |
-| 18 | Preview reading themes | 18.1 – 18.46 |
+| 18 | Preview reading themes | 18.1 – 18.47 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.18 |
 | 21 | Crash forensics | 21.1 – 21.12 |
@@ -2464,6 +2464,14 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** the button node RESOLVES to the theme's link ink, and its caption carries the theme's underline, exactly as the body link and the mixed cell beside it do
 - **And** the check reads the resolved style off a real widget, never the generated rule text: a selector naming a class no widget carries generates, formats and asserts identically to one that matches, so rule-text assertions are blind to the whole failure (a blanket rename of the theme vocabulary spelled GTK's own `link` class as this project's `link_color` key, and 1279 tests stayed green)
 - **Rationale** a stylesheet is an instruction, not an effect; a test of the instruction is a test of the same defect one layer up
+
+### 18.47 Two decorations that overlap composite in one stated order
+- **Given** a document that nests one drawn decoration inside another — a heading band, a code-block card or a list marker inside a blockquote; a marker on the row a band or a card covers; a code block's copy button inside its own card
+- **When** the preview paints
+- **Then** the CONTAINED decoration lands ON the containing one: the quote panel is the ground for everything a quote holds, the accent bar and the gutter markers run over the band and the card they cross, and the copy button is drawn over its card
+- **And** that order is stated ONCE, as data the paint iterates, so changing it is an edit to a value a reviewer reads rather than a rearrangement of statements in a draw callback
+- **And** two decorations whose drawn columns cannot intersect are ordered by nothing and are recorded as such rather than left unmentioned — the right-margin annotation chip against anything in the content column, and a quoted list's markers against the accent bar they are deliberately placed clear of
+- **Rationale** the pairs are derived from the vectors the paint draws from, not enumerated by hand: a pair overlaps only if the two constructs nest in Markdown AND their rectangles intersect in x. Both halves are measurable — the nestings against the renderer's own products, the columns against the arithmetic the painters share — so the list is auditable rather than remembered, which is what a decoration added later needs
 
 ## 19. Local document-link navigation
 

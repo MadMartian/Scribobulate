@@ -346,7 +346,28 @@ cd "$(dirname "$0")/.."
 # `theme/tests/diagnostics.rs`. No code moved between files and the scope is untouched,
 # so this is not a floor climbing by exclusion. Raised by half the gain rather than to
 # the measurement, keeping the deliberate margin the 2026-08-20 entry explains.
-FLOOR=82.21
+#
+# 82.21 -> 82.31 with the `snapshot_layer` decomposition (F-GOD-001's deferred half).
+# Measured 82.25 Lines on the parent commit in a clean worktree and 82.38 after, so the
+# gain is +0.13 and real. Raised by roughly half the gain, per the 2026-08-20 margin.
+#
+# This is the scope rule working exactly as step 6 describes it, and worth recording
+# BECAUSE the arithmetic looks wrong at first glance: the change ADDS seven files under
+# `codeview/`, every one of them excluded here, and the number still went up. The reason
+# is that nothing was moved INTO the exclusion — the 774-line draw callback was already
+# inside it, so its painters cost this gate nothing on the way out. What came out to the
+# other side is `src/decorplan.rs` (98% Lines, 22 unit tests): the paint's ordered step
+# list, the viewport gates, the heading band's corner-radius clamp and level slot, the
+# copy button's reveal rule, and the pending-popover precedence between expiry, the
+# scroll landing and the chip painting. None of those could be asserted at all while
+# they lived in a draw callback; all of them can now be asserted without a display.
+#
+# `codeview/`'s exclusion needed no narrowing and got none. The new painters are flat
+# files directly under it, so they match the existing `codeview[/\\][a-z_]+` term as
+# written — deliberately, since a `codeview/paint/` DIRECTORY would have stopped matching
+# and silently pulled seven view-bound files into scope at 0%, which is the trap the
+# `tabs/`, `editbar/` and `navhistory/` entries above were each written after hitting.
+FLOOR=82.31
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:
