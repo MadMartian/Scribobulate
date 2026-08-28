@@ -841,26 +841,35 @@ mod tests {
     /// table lives. It now goes through the shared runtime skip, so a host that
     /// genuinely cannot make a symlink says so in the run output instead of counting
     /// as a pass (ScrAP-212).
+    ///
+    /// **And on Windows it no longer skips at all.** Containment is a property of
+    /// *reparse points*, not of symlinks specifically, so the fixture comes from
+    /// `escaping_reference_or_skip`, which falls back to an NTFS directory junction —
+    /// creatable without Developer Mode or elevation. MEASURED on an ordinary
+    /// unelevated box: the symlink arm fails with os error 1314 and the junction arm
+    /// then drives this assertion for real. The reference it hands back is
+    /// `junction/real.png` there and `real.png` on unix, which is why the caller must
+    /// use the returned string rather than assume either shape.
     #[test]
     fn resolve_refuses_a_symlink_that_escapes_the_theme_directory() {
-        use crate::testsymlink::symlink_or_skip;
+        use crate::testsymlink::escaping_reference_or_skip;
         let outside = tempfile::tempdir().unwrap();
-        write_test_png(&outside.path().join("real.png"));
+        let target = outside.path().join("real.png");
+        write_test_png(&target);
         let theme_dir = tempfile::tempdir().unwrap();
-        let link = theme_dir.path().join("link.png");
-        if symlink_or_skip(
-            &outside.path().join("real.png"),
-            &link,
-            "SCHEMA sprite containment",
-        )
-        .is_err()
-        {
+        let Ok(escaping) =
+            escaping_reference_or_skip(theme_dir.path(), &target, "SCHEMA sprite containment")
+        else {
             return;
-        }
-        assert!(matches!(
-            resolve(theme_dir.path(), "link.png"),
-            Err(Refusal::OutsideThemeDirectory { .. })
-        ));
+        };
+        assert!(
+            matches!(
+                resolve(theme_dir.path(), &escaping),
+                Err(Refusal::OutsideThemeDirectory { .. })
+            ),
+            "{escaping:?} must not resolve: it reads through to a file outside the \
+             theme directory"
+        );
         // Anti-vacuity: the identical fixture INSIDE the directory resolves, so the
         // refusal above is about containment and not about symlinks, or PNGs, or this
         // temp directory.
