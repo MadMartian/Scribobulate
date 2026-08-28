@@ -102,6 +102,22 @@ Before any change is considered valid, run these steps in order:
    body registered with one harness and not the other. Write bodies as
    `#[gtktest::test]`; see the testing section below for that rule, for when a check
    needs its own `harness = false` target instead, and for why the choice matters.
+   **In a session with no accessibility bus — any agent session, and any session
+   whose `at-spi-dbus-bus.service` has gone stale — this step SIGTRAPs before it
+   tests anything.** GTK emits `Unable to connect to the accessibility bus` as a
+   `Gtk-CRITICAL`, and `G_DEBUG=fatal-criticals` promotes it. The failure names
+   accessibility and is not about accessibility, is not about the change under test,
+   and reproduces identically on an untouched tree — so it costs a control build to
+   disbelieve, every time, unless it is written down. Run the step under
+   `dbus-run-session`, which lets at-spi autolaunch on a bus of its own; the contract
+   command is unchanged, only the bus around it. On the operator's live session the
+   other repair is `systemctl --user restart at-spi-dbus-bus.service`, which is needed
+   when the unit reports `active (running)` while its socket no longer exists —
+   `org.a11y.Bus.GetAddress` then returns an address for a socket that is not there,
+   so the service looks healthy from every angle except use. MEASURED twice this way,
+   once after a nested `dbus-run-session` in a test rig unlinked
+   `/run/user/1000/at-spi/bus_0` on teardown: a rig that claims that path takes the
+   operator's session down with it.
 6. **Coverage gate** — `scripts/coverage.sh` must pass. Scoped line coverage is a
    no-regression **ratchet**, not a target: the script owns both the floor (`FLOOR`)
    and the scope (`IGNORE`), and is the only place either is written down. **Do not
