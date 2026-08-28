@@ -517,6 +517,49 @@ single-instance handoff emits the same `open`/`activate` the D-Bus path does, an
 the appearance module writes the same `GtkSettings` properties a desktop would,
 re-theming nothing itself.
 
+## Cross-platform by default
+
+**This project ships on Linux, macOS and Windows, and all three are first-class.**
+Linux is the canonical platform for the gates (§ Build), which is a statement about
+where verification happens — not about which platform the code is written for. Write
+every line as portable unless it lives in a platform seam (§ Platform seams).
+
+- **Reach for the standard library's portable abstraction before the platform's own.**
+  `std::path::Path`/`PathBuf` over string concatenation with a separator; `std::fs`
+  over an OS call; a portable IPC choice over a hand-picked transport. Where the
+  toolkit or the standard library already spans the three platforms, use it and do not
+  re-derive the difference.
+- **Never hardcode a path separator, a path shape, or a filesystem root.** Not in
+  production code, and — the case that actually bites — **not in a test fixture**. A
+  POSIX-shaped literal like `/etc/passwd` reads as a constant and is not one: it is an
+  absolute path on unix and a rooted, drive-relative path on Windows, so a test using it
+  exercises a *different* case on each platform while looking identical everywhere. A
+  fixture that encodes one platform's grammar must be `#[cfg]`-selected per platform, so
+  each tests its own shape (a drive-qualified path and a UNC path on Windows, the POSIX
+  one on unix) — not one platform's literal inherited by the others.
+- **A predicate over a path is a question about the HOST's grammar, not about the
+  string.** `Path::is_absolute` is the standing example: on Windows it requires a volume
+  prefix, so a rooted path with no drive answers `false` there and `true` on unix.
+  Reason about what the platform means by the term, not about what the method name
+  suggests.
+- **Filesystem and IPC facilities are not universal.** A unix domain socket is a named
+  pipe elsewhere; a FIFO has no Windows form at all; POSIX mode bits are ACLs on
+  Windows; a symlink needs privilege there while a directory junction does not; case
+  sensitivity, path length limits and legal filename characters all differ (§ Build
+  pipeline's path-legality gate exists because one illegal character blocks every
+  Windows clone of the tree). Where a facility is genuinely absent, that is a platform
+  seam, not an `#[cfg]` sprinkled through shared code.
+- **A capability a test needs may be unavailable rather than absent.** Skip loudly
+  through the project's one skip marker so the run reports the limb as unverified — never
+  let a guard compile to an empty passing function on the platform that most needs it.
+  Before accepting a skip, ask whether a different mechanism reaches the same guarantee
+  on that platform.
+- **Verification is per platform, and the peer seats own it.** A change that touches
+  the filesystem, IPC, packaging or a path is not ratified by passing on Linux; it is
+  ratified when the macOS and Windows seats have run it (§ Verifying a change on macOS,
+  § Cross-machine seat branches). Never weaken a shared rule — a lint, a gate, a floor —
+  to make one platform pass.
+
 ## Code style
 
 - Format with `rustfmt`; keep `cargo clippy` clean. Use `Result`/`?`; no
