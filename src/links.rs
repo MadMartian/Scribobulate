@@ -918,21 +918,36 @@ mod tests {
         assert!(resolve_contained_image("nope.png", Some(&base)).is_none());
     }
 
+    /// A link UNDER the doc dir pointing OUTSIDE must be rejected: canonicalize
+    /// resolves it to its outside target, which fails containment.
+    ///
+    /// The fixture is whatever reparse point this host allows — a file symlink, or an
+    /// NTFS directory junction on a Windows box without Developer Mode, where the
+    /// symlink arm cannot run at all. The limb is named for the GUARANTEE rather than
+    /// for the mechanism, because the mechanism now varies by host and a skip line
+    /// saying "symlink" would misdescribe the box it ran on.
     #[test]
     fn resolve_rejects_symlink_escape() {
-        use crate::testsymlink::symlink_or_skip;
+        use crate::testsymlink::escaping_reference_or_skip;
         use std::fs;
         let outer = tempfile::tempdir().unwrap();
-        fs::write(outer.path().join("secret.png"), b"x").unwrap();
+        let secret = outer.path().join("secret.png");
+        fs::write(&secret, b"x").unwrap();
         let base = outer.path().join("doc");
         fs::create_dir(&base).unwrap();
-        // A symlink UNDER the doc dir pointing OUTSIDE must be rejected: canonicalize
-        // resolves the link to its outside target, which fails containment.
-        let link = base.join("link.png");
-        if symlink_or_skip(&outer.path().join("secret.png"), &link, "TDD 2.7 symlink").is_err() {
+        let Ok(escaping) = escaping_reference_or_skip(&base, &secret, "TDD 2.7 image containment")
+        else {
             return;
-        }
-        assert!(resolve_contained_image("link.png", Some(&base)).is_none());
+        };
+        assert!(
+            resolve_contained_image(&escaping, Some(&base)).is_none(),
+            "{escaping:?} reads through to a file outside the document folder and must \
+             not resolve"
+        );
+        // Anti-vacuity: an ordinary contained image in the same folder still resolves,
+        // so the refusal is about containment and not about the reference's shape.
+        fs::write(base.join("ok.png"), b"x").unwrap();
+        assert!(resolve_contained_image("ok.png", Some(&base)).is_some());
     }
 
     // ── resolve_image tests ─────────────────────────────────────────────────────
@@ -1338,25 +1353,26 @@ mod tests {
     /// target path — so the manual check silently exercised the INVERSE of its intent,
     /// navigating where it must refuse. Neither absence announced itself, and each
     /// made the other harder to see.
-    use crate::testsymlink::symlink_or_skip;
+    use crate::testsymlink::escaping_reference_or_skip;
 
     #[test]
     fn doc_link_refuses_symlink_escape_when_toggle_off() {
         use std::fs;
         let outer = tempfile::tempdir().unwrap();
-        fs::write(outer.path().join("secrets.md"), b"x").unwrap();
+        let secrets = outer.path().join("secrets.md");
+        fs::write(&secrets, b"x").unwrap();
         let base = outer.path().join("doc");
         fs::create_dir(&base).unwrap();
-        let link = base.join("link.md");
-        if symlink_or_skip(&outer.path().join("secrets.md"), &link, "TDD 19.2 symlink").is_err() {
+        let Ok(escaping) = escaping_reference_or_skip(&base, &secrets, "TDD 19.2 link containment")
+        else {
             return;
-        }
+        };
         assert!(
             matches!(
-                resolve_doc_link("link.md", Some(&base), false),
+                resolve_doc_link(&escaping, Some(&base), false),
                 LinkResolution::Refused
             ),
-            "a symlink under the document folder pointing outside it must be refused on \
+            "a link under the document folder pointing outside it must be refused on \
              the RESOLVED path; deciding on the link's own location admits it (TDD 19.2)"
         );
     }
@@ -1374,14 +1390,14 @@ mod tests {
         fs::write(&target, b"x").unwrap();
         let base = outer.path().join("doc");
         fs::create_dir(&base).unwrap();
-        let link = base.join("link.md");
-        if symlink_or_skip(&target, &link, "TDD 19.3 symlink").is_err() {
+        let Ok(escaping) = escaping_reference_or_skip(&base, &target, "TDD 19.3 link resolution")
+        else {
             return;
-        }
+        };
         let want = dunce::canonicalize(&target).unwrap();
         assert!(
             matches!(
-                resolve_doc_link("link.md", Some(&base), true),
+                resolve_doc_link(&escaping, Some(&base), true),
                 LinkResolution::Navigate(ref p) if *p == want
             ),
             "with containment lifted the link must resolve to its real target, proving \

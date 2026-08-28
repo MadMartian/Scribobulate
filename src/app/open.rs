@@ -407,19 +407,31 @@ mod tests {
     /// it is deleted, and no harness distinguishes "never compiled" from "passed"
     /// (ScrAP-212). This tree builds for Windows, so the exclusion left the guard
     /// silently absent on a platform where the failure it prevents is just as real.
+    ///
+    /// The link now points OUT of the folder the second spelling lives in, because
+    /// that is what an NTFS directory junction can express and a Windows box without
+    /// Developer Mode has no other reparse point available. It is also the stronger
+    /// fixture: two spellings in one directory can agree by accident of that
+    /// directory, and two that agree across a folder boundary cannot.
     #[test]
     fn same_file_via_symlink_is_recognised() {
-        use crate::testsymlink::symlink_or_skip;
+        use crate::testsymlink::escaping_reference_or_skip;
         use std::fs;
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path();
-        let target = base.join("TECH.md");
+        let outer = tempfile::tempdir().unwrap();
+        let target = outer.path().join("TECH.md");
         fs::write(&target, b"# Tech").unwrap();
-        let link = base.join("alias.md");
-        if symlink_or_skip(&target, &link, "path identity via symlink").is_err() {
+        let base = outer.path().join("doc");
+        fs::create_dir(&base).unwrap();
+        let Ok(alias) = escaping_reference_or_skip(&base, &target, "path identity through a link")
+        else {
             return;
-        }
-        assert!(paths_refer_to_same_file(&target, &link));
+        };
+        assert!(paths_refer_to_same_file(&target, &base.join(&alias)));
+        // Anti-vacuity: two paths that are genuinely different files still compare
+        // false, so the assertion above is not passing because everything matches.
+        let other = outer.path().join("OTHER.md");
+        fs::write(&other, b"# Other").unwrap();
+        assert!(!paths_refer_to_same_file(&target, &other));
     }
 
     #[test]
