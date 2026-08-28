@@ -25,8 +25,6 @@ entry can still be the worst thing in the register.
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | M | Any | Project | `sprite::scaled`'s per-`(path, width, height)` texture cache has no eviction policy | Low |
-| N | Any | Production | A long heading overflows the preview pane horizontally instead of wrapping to it | Low |
-| P | Any | Production | A multi-paragraph blockquote's accent bar draws as one continuous rect per span, unconfirmed for every span shape a blockquote can produce | Low |
 | R | Any | Production | Pixel Quest's `link_color` and `list_task_color` sit below their legibility floor and are carried as named exceptions the operator intends to revisit, not as settled choices | Low |
 
 ## A. Tables are selection islands
@@ -583,44 +581,6 @@ life.
 - Accept the limitation until such a call site actually exists — nothing today
   triggers it — and note the constraint at `sprite::scaled`'s call sites as they're
   added, so a future author checks before assuming any size is safe to pass.
-
-## N. A long heading overflows the preview pane horizontally instead of wrapping
-
-**Severity**: Low. Reproduces identically under System with no theme keys set, so it
-predates all theming work — surfaced incidentally while driving TDD 18.25's heading
-band, not caused by it.
-
-At a narrow pane width (measured at 700×1000 with the outline sidebar open), a
-sufficiently long heading extends past the preview pane's right edge instead of
-soft-wrapping to it, while body paragraphs at the same width wrap correctly. Not
-investigated further — possibly related to the outline/split-pane sizing
-interaction named in ScrAP-23a's neighbourhood, but that is a guess, not a finding.
-
-**Mitigation options**:
-- Reproduce deliberately (a document whose only content is one long heading, at a
-  matrix of pane widths and outline-open/closed states) to isolate whether it is
-  heading-specific or a wrap-mode/minimum-width issue shared with any single
-  long unbreakable run.
-- Accept the limitation until reproduced deliberately — a control run is not yet a
-  diagnosis.
-
-## P. A multi-paragraph blockquote's bar continuity is unconfirmed for every span shape
-
-**Severity**: Low. A flat colour never made a discontinuity visible; TDD 18.28's
-textured bar (a tiled sprite) would.
-
-The blockquote accent bar is drawn as one rect per recorded span
-(`codeview/mod.rs`), which is correct for the common case, but it was not
-re-verified against every shape a blockquote's span can take (nested quotes,
-a quote interrupted by a non-quote block, quotes separated by a blank line)
-while adding the sprite-tile option. A flat-colour bar hides a small vertical
-gap between two spans that should read as one continuous quote; a tiled
-texture would show a visible seam or restart.
-
-**Mitigation options**:
-- Render each of the span shapes above under a sprite-backed `blockquote_bar`
-  and confirm the tile continues (or deliberately restarts) consistently.
-- Accept the limitation until a real document surfaces a visible seam.
 
 ## R. Pixel Quest's link and task-marker inks are provisional exceptions, not settled ones
 

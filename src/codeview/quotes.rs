@@ -118,9 +118,14 @@ pub(super) fn draw_accent_bar(snapshot: &gtk::Snapshot, ctx: &PaintCtx) {
         // colour bleed through a transparent one — a bug reachable only
         // by the sprites nobody happened to test.
         match &bar_sprite {
-            Some(tex) => {
-                crate::widgets::tile_texture(snapshot, &rect, crate::widgets::TileOrigin::Rect, tex)
-            }
+            // `rect.y` here is `quote_extents`' viewport-CLAMPED top, so the
+            // tile grid must NOT be anchored to it: `tile_texture` anchors at
+            // the document instead, and its docs carry the measurement. The
+            // clamp is right for the two draws that are position-invariant
+            // (the panel fill, the flat bar) and wrong for the one that
+            // carries a phase — same extent, one more consumer than it was
+            // designed for.
+            Some(tex) => crate::widgets::tile_texture(snapshot, &rect, tex),
             // Either the theme states no sprite, or the one it states
             // would not decode. Both degrade to the flat bar rather than
             // leaving a gap, which is `sdd/THEMING.md`'s inert-by-default

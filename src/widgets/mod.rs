@@ -29,22 +29,8 @@ pub(crate) mod tab;
 pub(crate) mod table;
 pub(crate) mod textfield;
 
-/// Where a tiled sprite's grid is anchored — the decision the three former copies of
-/// this sequence made differently, and none of them stated.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TileOrigin {
-    /// Anchor at the rect's own top-left. Correct for a decoration whose rect is
-    /// already in the coordinate space being painted (a standalone widget), and it keeps
-    /// the tile phase fixed relative to the decoration.
-    Rect,
-    /// Anchor at the WIDGET's origin. Correct inside a `GtkTextView`'s `snapshot_layer`,
-    /// where the rect is in BUFFER coordinates: anchoring at the rect would hold the
-    /// phase to the document, so the pattern would shift under the decoration as the
-    /// view scrolls.
-    Widget,
-}
-
-/// Tile `tex` across `rect` at the texture's NATURAL size.
+/// Tile `tex` across `rect` at the texture's NATURAL size, with the grid anchored so the
+/// pattern travels with the document.
 ///
 /// **One spelling of one operation.** The `push_repeat` / `append_texture` / `pop`
 /// sequence was copy-pasted three times (the heading band, the blockquote bar, the rule
@@ -55,10 +41,58 @@ pub(crate) enum TileOrigin {
 /// other sprite in this vocabulary is painted with" — a claim about a shared seam that
 /// did not exist until now.
 ///
+/// # The anchor, and why it is not a parameter
+///
+/// The tile grid is anchored at `(rect.x(), 0.0)` — x from the rect, y from the DOCUMENT
+/// origin — and every tiling site in the tree wants that pair, so it is baked in rather
+/// than chosen per call. It replaced a `TileOrigin` enum whose two answers were "the
+/// rect's own top-left" and `(0, 0)`; both were wrong, in different ways, and the enum's
+/// own documentation asserted the opposite of what each did.
+///
+/// **What the anchor actually means** (researcher-verified against GTK 4.6.9):
+/// `gtk_snapshot_push_repeat` (`gtksnapshot.c:787-807`) `ensure_affine`-bakes the current
+/// 2-D affine into *both* `bounds` and `child_bounds`, and the cairo repeat node
+/// (`gskrendernodeimpl.c:3399-3432`) sets its source-surface matrix from
+/// `-child_bounds.origin`. So `child_bounds` is simultaneously the sample window and the
+/// phase anchor, absolute in that baked space: the phase at a point `P` is
+/// `(P - child_origin) mod tile`. "Anchored relative to the decoration" is not a mode the
+/// API offers — it is only what you get by choosing `child_origin == bounds.origin`.
+///
+/// **Why y must be the document origin, not the rect's top.** Inside a `GtkTextView`'s
+/// `snapshot_layer` the current transform is already `translate(-xoffset, -yoffset)`
+/// (`gtktextview.c:5871-5873`), and a pure translate bakes into the rects rather than
+/// wrapping a transform node — so `y = 0` bakes to `-yoffset`, putting plate row
+/// `yoffset % tile_h` at the top of the viewport, a phase that travels with the text.
+/// Anchoring at the rect cannot do this, because `codeview::geometry::span_card_y_extent`
+/// returns `top = vtop` whenever a span begins above the visible range — the normal case
+/// for anything taller than the pane. The anchor then *is* the viewport, and the pattern
+/// is nailed to the screen while the text scrolls under it. MEASURED on the blockquote
+/// bar before the fix: the bar column was pixel-identical (AE=0) across a 176px scroll —
+/// 7.3 tile periods — while the text column at the same rows differed by over 22,000
+/// pixels, absolute tile phase reading 6.34 in every frame. After: 6.34 / 19.34 / 8.34 /
+/// 22.34 at scroll offsets 576 / 635 / 694 / 752, matching `(6.34 - Δscroll) mod 24`
+/// exactly at all three steps.
+///
+/// **Why x must come from the rect.** The `(0, 0)` spelling samples the tile at
+/// `rect.x() % tile_w`, slicing the sprite horizontally wherever a decoration does not
+/// begin on a tile boundary — which a bar at the view's left margin generally does not.
+/// The two halves are independent: fixing the scroll phase with `(0, 0)` trades a
+/// vertical bug for a visible vertical seam down the bar's left edge. The rule widget's
+/// rect is `(0, 0, w, h)`, so both spellings coincide there and its pixels are unchanged.
+///
+/// Grid alignment to each decoration's own top is deliberately NOT offered: it needs
+/// `decoration_top % tile_h`, and for a viewport-clamped span that remainder is exactly
+/// the off-screen unvalidated-iter read ScrAP-22 bans. `0` is a coordinate, not an iter,
+/// so this anchor needs no such read.
+///
 /// Natural size, not stretched: 1:1 pixels need no filter, and GSK 4.6's
 /// `append_texture` filters linearly with no choice (the variant that takes one is 4.10,
 /// GTK4Rs/AP-114). Tiling also means one cached texture per reference instead of one per
 /// decoration width, which a window resize would otherwise mint by the hundred.
+///
+/// The same tile rect goes to `push_repeat` and to `append_texture`, and must: they bake
+/// through the same affine, and giving them different origins leaves the first
+/// `child_origin.y - texture_origin.y` rows of every tile empty.
 ///
 /// A zero or negative dimension — on either the rect or the texture — paints NOTHING
 /// rather than asking GSK for a degenerate repeat node. Two of the three call sites had
@@ -66,7 +100,6 @@ pub(crate) enum TileOrigin {
 pub(crate) fn tile_texture(
     snapshot: &gtk::Snapshot,
     rect: &gtk::graphene::Rect,
-    origin: TileOrigin,
     tex: &gtk::gdk::Texture,
 ) {
     use gtk::gdk::prelude::TextureExt;
@@ -74,11 +107,7 @@ pub(crate) fn tile_texture(
     if rect.width() <= 0.0 || rect.height() <= 0.0 || tw <= 0 || th <= 0 {
         return;
     }
-    let (ox, oy) = match origin {
-        TileOrigin::Rect => (rect.x(), rect.y()),
-        TileOrigin::Widget => (0.0, 0.0),
-    };
-    let tile = gtk::graphene::Rect::new(ox, oy, tw as f32, th as f32);
+    let tile = gtk::graphene::Rect::new(rect.x(), 0.0, tw as f32, th as f32);
     snapshot.push_repeat(rect, Some(&tile));
     snapshot.append_texture(tex, &tile);
     snapshot.pop();
@@ -139,7 +168,7 @@ pub(crate) fn unparent_all_children(widget: &impl IsA<gtk::Widget>) {
 /// bodies absent from the portable main-thread run (`sdd/POLICY.md`).
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod tile_tests {
-    use super::{tile_texture, TileOrigin};
+    use super::tile_texture;
     use gtk::graphene;
 
     /// A 2×2 texture, built from bytes rather than decoded — no display, no loader.
@@ -170,7 +199,7 @@ mod tile_tests {
             graphene::Rect::new(0.0, 0.0, 10.0, 0.0),
         ] {
             let snapshot = gtk::Snapshot::new();
-            tile_texture(&snapshot, &rect, TileOrigin::Rect, &t);
+            tile_texture(&snapshot, &rect, &t);
             assert!(
                 snapshot.to_node().is_none(),
                 "a {rect:?} tile must paint nothing"
@@ -179,43 +208,59 @@ mod tile_tests {
         // The control: a real rect DOES produce a node, so the assertions above are
         // about the guard and not about the seam painting nothing ever.
         let snapshot = gtk::Snapshot::new();
-        tile_texture(
-            &snapshot,
-            &graphene::Rect::new(0.0, 0.0, 10.0, 10.0),
-            TileOrigin::Rect,
-            &t,
-        );
+        tile_texture(&snapshot, &graphene::Rect::new(0.0, 0.0, 10.0, 10.0), &t);
         assert!(snapshot.to_node().is_some());
     }
 
-    /// **The origin is a stated decision, and the two answers differ.**
+    /// **The tile grid is anchored at `(rect.x(), 0)`, and BOTH halves are load-bearing.**
     ///
-    /// The three copies this seam replaced made it differently and none of them said so:
-    /// the band and the bar anchored at the rect (buffer coordinates, so the phase
-    /// travels with the document) while the rule widget anchored at its own origin. A
-    /// test that only drove `TileOrigin::Rect` would leave the parameter looking
-    /// decorative.
+    /// This test used to assert the opposite of the truth. It drove a `TileOrigin` enum
+    /// and asserted that the `codeview` sites' choice — the rect's own top-left — was
+    /// what made "the phase travel with the document". It does not:
+    /// `codeview::geometry::span_card_y_extent` clamps a span's `top` to the viewport, so
+    /// anchoring at the rect nails the pattern to the SCREEN. Measured on the blockquote
+    /// bar as a bar column that stayed pixel-identical (AE=0) across a 176px scroll while
+    /// the text scrolled under it. The enum is gone; this asserts the one anchor left.
+    ///
+    /// Two assertions, because the two axes fail differently and independently:
+    /// y must be the document origin (what survives the viewport clamp and keeps the
+    /// phase travelling with the text), and x must be the rect's own (a `0` there samples
+    /// the tile at `rect.x() % tile_w` and slices the sprite horizontally at every
+    /// decoration that does not begin on a tile boundary — the bug a fix for the y half
+    /// alone introduces, and one that is visible in a screenshot).
+    ///
+    /// **Mutation check (both killed, singly):** `(0.0, 0.0)` fails the x assertion;
+    /// `(rect.x(), rect.y())` fails the y assertion. Neither is visible in `RenderNode`'s
+    /// `Debug`, which prints only the node's OWN bounds — identical under every anchor,
+    /// so a formatted comparison would pass whatever this code did (ScrAP-325).
     #[gtktest::test]
-    fn the_two_origins_produce_different_tile_phases() {
+    fn the_tile_grid_is_anchored_at_the_rects_x_and_the_document_origin() {
         let t = tex();
-        // A rect NOT at the origin, or the two answers coincide and this proves nothing.
+        // A rect at neither axis' origin, or an assertion below passes by coincidence.
         let rect = graphene::Rect::new(3.0, 7.0, 10.0, 10.0);
-        // The CHILD bounds of the repeat node, which is where the phase lives.
-        // `RenderNode`'s `Debug` prints only the node's OWN bounds — identical for both
-        // origins — so a formatted comparison passes whatever the parameter does, which
-        // is the assertion this test exists to avoid.
-        let phase = |origin| {
+        let (x, y) = {
             use gtk::prelude::SnapshotExt;
             let snapshot = gtk::Snapshot::new();
-            tile_texture(&snapshot, &rect, origin, &t);
+            tile_texture(&snapshot, &rect, &t);
             let node = snapshot.to_node().expect("a real rect renders");
             let repeat = node
                 .downcast::<gtk::gsk::RepeatNode>()
                 .expect("tile_texture emits a repeat node");
+            // The CHILD bounds of the repeat node, which is where the phase lives.
             let child = repeat.child_bounds();
             (child.x(), child.y())
         };
-        assert_eq!(phase(TileOrigin::Rect), (3.0, 7.0));
-        assert_eq!(phase(TileOrigin::Widget), (0.0, 0.0));
+        assert_eq!(
+            y, 0.0,
+            "the tile grid must anchor y at the DOCUMENT origin: that is what survives \
+             span_card_y_extent's viewport clamp and keeps the phase travelling with the \
+             text as the reader scrolls (got {y})"
+        );
+        assert_eq!(
+            x,
+            rect.x(),
+            "the tile grid must take x from the RECT: a 0 here samples the tile at \
+             rect.x() % tile_w and slices the sprite down its left edge (got {x})"
+        );
     }
 }

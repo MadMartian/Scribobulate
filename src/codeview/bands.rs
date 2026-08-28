@@ -91,13 +91,15 @@ pub(super) fn draw(snapshot: &gtk::Snapshot, ctx: &PaintCtx) {
             let tiled = decor.sprite.and_then(crate::sprite::texture);
             match tiled {
                 Some(tex) => crate::widgets::tile_texture(
-                    snapshot,
-                    &rect,
-                    // BUFFER coordinates: anchoring at the rect is what
-                    // holds the tile phase to the DOCUMENT rather than to
-                    // the viewport, so the pattern travels with the band as
-                    // the reader scrolls.
-                    crate::widgets::TileOrigin::Rect,
+                    snapshot, &rect,
+                    // `rect.y` is viewport-clamped by `span_card_y_extent`
+                    // once the heading's line is above the visible range, so
+                    // the grid is anchored at the document by `tile_texture`
+                    // rather than at this rect. No bundled theme sets
+                    // `heading_band_sprite_hN`, so this site was latent rather
+                    // than live — corrected with its blockquote-bar twin,
+                    // because one mechanism with two spellings is how the next
+                    // reader gets it wrong again.
                     &tex,
                 ),
                 None => match decor.without_sprite() {

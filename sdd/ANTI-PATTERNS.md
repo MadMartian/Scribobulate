@@ -482,6 +482,7 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 330 | A seam that EXISTS is not a seam that is CALLED — a debt closed on the seam's existence, while the one consumer the debt was about still bypassed it | B |
 | 331 | A vocabulary rename that reaches a SELECTOR produces a well-formed rule matching nothing, and no assertion over generated rule TEXT can tell the two apart | B |
 | 332 | Re-styling a BACKGROUND view in place is correct headlessly and wrong on a real compositor — rebuild it on the way in instead of proving why | A |
+| 333 | A repeating pattern anchored to a viewport-CLAMPED extent is pinned to the screen, not the document — the clamp is right for every position-invariant draw and wrong for the one that carries a phase | A |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -4468,3 +4469,7 @@ than one that needs the mechanism understood, and pin the structure. The alterna
 spending the investigation budget proving why a cascade misbehaves on one windowing system in
 order to justify a fix that is cheaper than the investigation.
 
+## 333. A repeating pattern anchored to a viewport-CLAMPED extent is pinned to the screen, not the document
+**Symptom**: a theme's tiled sprite behind a decoration stays nailed to the screen while the text scrolls underneath it, and the tile grid re-phases the moment the decoration's own top leaves the pane — MEASURED on the blockquote bar as a bar column pixel-identical (AE=0) across a 176px scroll while the text column at the same rows differed by over 22,000 pixels.
+**Scribobulate**: `widgets::tile_texture` anchors the grid at `(rect.x(), 0.0)` for every caller (`codeview::quotes::draw_accent_bar`, `codeview::bands::draw`, `widgets::rule`) instead of taking a per-site `TileOrigin` whose two answers were both wrong and whose own docs asserted the opposite of what each did; guarded by `widgets::tile_tests::the_tile_grid_is_anchored_at_the_rects_x_and_the_document_origin` (mutation-checked on each axis singly), TDD 18.28's two anchor clauses and MANUAL-TEST 18.28's scroll case. The project-specific half: `codeview::geometry::span_card_y_extent`'s viewport clamp is CORRECT for every position-invariant consumer (the quote panel fill, the flat bar, the band fill) and wrong for the one that carries a phase — one extent, one more consumer than it was designed for, and nothing in its type says which kind a caller is.
+**See**: gtk4-rs skill → textview-layout-and-drawing (GTK4Rs/AP-315).

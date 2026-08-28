@@ -2363,6 +2363,8 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** a theme setting a sprite image for the blockquote accent bar (theme-relative, validated the same way every sprite key is)
 - **When** a blockquoted document is rendered, and separately exported to HTML and PDF
 - **Then** the bar fills with the sprite tiled at its natural size in place of the flat `blockquote_bar_color` colour
+- **And** the tile grid is anchored to the **document**, not to the viewport: scrolling a quote taller than the pane moves the pattern with the quoted text by the same number of pixels, and the grid does not re-phase at the moment the quote's top leaves the pane. (A viewport-anchored grid leaves the tiles nailed to the screen while the text slides underneath — the defect the flat bar could never show, since a flat fill carries no phase)
+- **And** the tile is not sliced along the bar's left edge: the grid's horizontal anchor is the bar's own left edge, so a decoration that does not begin on a tile boundary still shows whole tiles across the bar's width
 - **And** omitted, the bar stays the flat themed colour exactly as today
 
 ### 18.29 A theme can give a blockquote its own background and ink
