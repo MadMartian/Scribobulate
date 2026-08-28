@@ -37,6 +37,24 @@ waiting for you when you reopen it.
 > *One thing we're both very proud of is using Scribobulate to improve Scribobulate!*
 > -- *MadMartian*
 
+## Why I built it
+
+I run my models locally. [Ollama](https://ollama.com/), on my own hardware, and I want that option to stay
+open, because freedom from cloud computing and cloud providers should always be
+available to a developer. That is the first reason Scribobulate renders on the CPU
+and holds 0 MiB of VRAM: every megabyte of GPU memory it leaves alone is a megabyte
+your models get to use.
+
+The second reason is that I wanted it to look beautiful. A tool for humans working
+with AI should be a pleasant place for the human to sit, so the reading themes
+(Sepia, Bedtime, Synthwave, Terminal, Candy) and the theming system behind them got
+real attention, and the theme you choose travels into the HTML and PDF you export.
+
+The third reason is annotations. Reviewing what an agent wrote used to mean copying
+a paragraph into a chat window and explaining where it came from. Now I select the
+claim, leave a comment on it, and the comment is saved in the Markdown itself, so
+the next agent reads my objection exactly where I made it and answers it in place.
+
 ## Features
 
 *(Shortcuts below are shown in Linux/Windows form. On macOS, Ctrl becomes ⌘ —
@@ -191,6 +209,14 @@ Detailed documentation lives in the `sdd/` directory:
 - `sdd/POLICY.md` — Development rules and constraints
 - `sdd/ANTI-PATTERNS.md` — Why the native-widget stack was chosen
 - `sdd/ISSUES.md` — Known issues
+
+## How this project is built
+
+Scribobulate is built with AI agents working under human direction, and
+[AI-DILIGENCE.md](AI-DILIGENCE.md) is the full accounting: what tooling is used,
+what is disclosed, and what has to pass before a change reaches you. Short
+version: the application itself ships no AI features, no telemetry, and one
+opt-in outbound connection.
 
 ## License
 
