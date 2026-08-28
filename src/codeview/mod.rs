@@ -49,6 +49,16 @@ mod gutter;
 mod markers;
 mod navkeys;
 
+/// The compositing-ORDER guards — one test per pair of decorations that can overlap.
+/// A sibling module rather than more bodies inside [`gtk_integration_tests`] because
+/// they answer a different question about the same function: those tests ask whether
+/// each decoration reaches the pixels at all, these ask which of two lands on top.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod ordertests;
+/// The framebuffer oracles both test modules read the paint back through.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod painttest;
+
 pub(crate) use geometry::move_or_create_mark;
 pub(crate) use markers::{
     AnnotateTrigger, AnnotationEdit, AnnotationSink, CardFocus, CreateAnnotation, MarkerData,
@@ -1895,6 +1905,9 @@ impl Default for CodePreviewView {
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
     use super::geometry::span_card_y_extent;
+    use super::painttest::{
+        contains_rgb, framebuffer_of, present_for_paint, write_half_clear_tile,
+    };
     use super::*;
 
     /// TDD 18.25 — the heading band actually REACHES THE PIXELS, on a document whose
@@ -1947,68 +1960,6 @@ mod gtk_integration_tests {
              and the setter all look right, check that `heading_spans` is still in \
              snapshot_layer's early-return gate"
         );
-    }
-
-    /// Render `view` off-screen and hand back its framebuffer as ARGB32 bytes.
-    ///
-    /// Extracted because four paint tests had a verbatim copy of it, and a fifth
-    /// wanting one is how a paint branch ends up untested — `F-SPRITEPAINT-001` found
-    /// half of them uncovered. The realize/unrealize pair is not optional: dropping a
-    /// realized `CairoRenderer` does NOT honour the object's teardown contract, and on
-    /// a build with GLib assertions compiled in that is a hard abort rather than a
-    /// leak (GTK4Rs/AP-272).
-    fn framebuffer_of(view: &CodePreviewView, w: f64, h: f64) -> Vec<u8> {
-        let paintable = gtk::WidgetPaintable::new(Some(view));
-        let snapshot = gtk::Snapshot::new();
-        paintable.snapshot(snapshot.upcast_ref::<gdk::Snapshot>(), w, h);
-        let node = snapshot
-            .to_node()
-            .expect("the preview snapshots to something");
-        let renderer = gsk::CairoRenderer::new();
-        renderer
-            .realize(None::<&gdk::Surface>)
-            .expect("the Cairo renderer realizes without a surface");
-        let texture = renderer.render_texture(&node, None);
-        let (tw, th) = (texture.width() as usize, texture.height() as usize);
-        let mut data = vec![0u8; tw * th * 4];
-        texture.download(&mut data, tw * 4);
-        renderer.unrealize();
-        data
-    }
-
-    /// Whether `want` appears anywhere in an ARGB32 framebuffer.
-    ///
-    /// Cairo ARGB32 on a little-endian host is B, G, R, A.
-    fn contains_rgb(data: &[u8], want: (u8, u8, u8)) -> bool {
-        data.chunks_exact(4).any(|px| (px[2], px[1], px[0]) == want)
-    }
-
-    /// An 8x8 PNG whose LEFT HALF is `rgba` and whose right half is fully clear.
-    ///
-    /// **Half transparent, and that is the whole discriminating power of every test
-    /// that uses it.** An opaque tile hides an over-paint completely — the blockquote
-    /// bar's first fixture was opaque, and the mutation it was written to catch
-    /// passed. With half of every tile clear, a decoration that filled before it tiled
-    /// shows the flat colour through, and one that replaced shows the page.
-    fn write_half_clear_tile(path: &std::path::Path, rgba: u32) {
-        let pb = gtk::gdk_pixbuf::Pixbuf::new(gtk::gdk_pixbuf::Colorspace::Rgb, true, 8, 8, 8)
-            .expect("allocate pixbuf");
-        pb.fill(0x00_00_00_00);
-        pb.new_subpixbuf(0, 0, 4, 8).fill(rgba);
-        pb.savev(path, "png", &[]).expect("save png");
-    }
-
-    /// Map, pump and present a window holding `view`, and return it so the caller can
-    /// destroy it.
-    fn present_for_paint(view: &CodePreviewView) -> gtk::Window {
-        let window = gtk::Window::new();
-        window.set_default_size(400, 200);
-        window.set_child(Some(view));
-        window.present();
-        crate::testpump::until(crate::testpump::Clock::Frame, "the preview maps", || {
-            view.width() > 0
-        });
-        window
     }
 
     /// **TDD 18.25 — a heading-band SPRITE tiles across the band and replaces the flat
