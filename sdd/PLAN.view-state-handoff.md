@@ -1,5 +1,10 @@
 # Plan: View state handoff — what a view adopts when it is built, switched to, or re-entered
 
+> **This file cites `sdd/ISSUES.md` letters — the operator-granted, one-time exception
+> recorded in [PLAN.issue-batches.md](PLAN.issue-batches.md).** Read that note before
+> "correcting" a citation here, and delete a letter from this file in the same change that
+> deletes its entry from the register.
+
 ## Problem
 
 Three separate reported defects are one design gap seen from three angles: **a view
@@ -9,11 +14,13 @@ independently user-visible, each is measured as pre-existing (reproduced on a bi
 built at the current merge-base), and each is currently the highest severity band in
 the debt register.
 
-| Symptom | Surface |
-|---|---|
-| A live reading-theme change never reaches a tab the user has not activated yet — the page fill takes the new theme, the body ink and typeface do not, and it does not self-heal on a tab switch. Only a second theme change repairs it | Preview, background tab |
-| The caret sits on the document's **last** line the first time the editor view is materialised, and the outline sidebar highlights the last heading to match — so the sidebar actively misreports the reading position | Editor, first entry |
-| The reading position moves on every view-mode round trip, **cumulatively and without bound** — measured below, four preview↔split trips walk the reader from the middle of a document to its end, where it clamps. The edit round trip drifts the other way | Both panes, every mode switch |
+| Issue | Symptom | Surface |
+|:-:|---|---|
+| **T** | A live reading-theme change never reaches a tab the user has not activated yet — the page fill takes the new theme, the body ink and typeface do not, and it does not self-heal on a tab switch. Only a second theme change repairs it | Preview, background tab |
+| ~~U~~ | The caret sits on the document's **last** line the first time the editor view is materialised, and the outline sidebar highlights the last heading to match — so the sidebar actively misreports the reading position | Editor, first entry |
+| ~~V~~ | The reading position moves on every view-mode round trip, **cumulatively and without bound** — measured below, four preview↔split trips walk the reader from the middle of a document to its end, where it clamps. The edit round trip drifts the other way | Both panes, every mode switch |
+
+**`U` and `V` are struck through because they are FIXED and deleted from the register** — batch 1. `T` is what remains, and is batch 2 in [PLAN.issue-batches.md](PLAN.issue-batches.md), where it is paired with `C` (the desktop dark↔light toggle that does not repaint a running instance) on the same fan-out.
 
 Fixing them one at a time invites three different answers to the same question, which is how a
 state-handoff bug becomes four. **Measurement has since re-cut them**: the caret and the
