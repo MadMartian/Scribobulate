@@ -57,7 +57,7 @@
 use super::painttest::{contains_rgb, framebuffer_of, present_for_paint_sized, rows_with};
 use super::CodePreviewView;
 use crate::renderer::{HeadingSpan, ListMarker, ListMarkerKind};
-use crate::span::BufferSpan;
+use crate::span::{BufferSpan, QuoteSpan};
 use gtk::gdk;
 use gtk::prelude::*;
 
@@ -182,7 +182,10 @@ fn a_heading_band_inside_a_quote_lands_on_the_quote_panel() {
     let text = format!("{heading}\n\nquote body\n");
     let view = view_with(&text);
     view.set_blockquotes(
-        vec![BufferSpan::new(0, chars(&text))],
+        vec![QuoteSpan {
+            span: BufferSpan::new(0, chars(&text)),
+            depth: 1,
+        }],
         gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
     );
     view.set_heading_spans(vec![HeadingSpan {
@@ -205,7 +208,10 @@ fn a_code_card_inside_a_quote_lands_on_the_quote_panel() {
     let text = format!("{intro}code line\n");
     let view = view_with(&text);
     view.set_blockquotes(
-        vec![BufferSpan::new(0, chars(&text))],
+        vec![QuoteSpan {
+            span: BufferSpan::new(0, chars(&text)),
+            depth: 1,
+        }],
         gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
     );
     view.set_code_blocks(
@@ -232,7 +238,10 @@ fn the_accent_bar_lands_on_the_quote_panel() {
     let text = "Quoted paragraph\n\nand another\n";
     let view = view_with(text);
     view.set_blockquotes(
-        vec![BufferSpan::new(0, chars(text))],
+        vec![QuoteSpan {
+            span: BufferSpan::new(0, chars(text)),
+            depth: 1,
+        }],
         gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
     );
 
@@ -251,7 +260,10 @@ fn quoted_list_markers_land_on_the_quote_panel() {
     let text = format!("{first}item two\n");
     let view = view_with(&text);
     view.set_blockquotes(
-        vec![BufferSpan::new(0, chars(&text))],
+        vec![QuoteSpan {
+            span: BufferSpan::new(0, chars(&text)),
+            depth: 1,
+        }],
         gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
     );
     view.set_list_markers(
@@ -291,7 +303,10 @@ fn the_accent_bar_lands_on_a_quoted_heading_band() {
     let text = format!("{heading}\n\nquote body\n");
     let view = view_with(&text);
     view.set_blockquotes(
-        vec![BufferSpan::new(0, chars(&text))],
+        vec![QuoteSpan {
+            span: BufferSpan::new(0, chars(&text)),
+            depth: 1,
+        }],
         gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
     );
     view.set_heading_spans(vec![HeadingSpan {
@@ -311,7 +326,10 @@ fn the_accent_bar_lands_on_a_quoted_code_card() {
     let text = format!("{intro}code line\n");
     let view = view_with(&text);
     view.set_blockquotes(
-        vec![BufferSpan::new(0, chars(&text))],
+        vec![QuoteSpan {
+            span: BufferSpan::new(0, chars(&text)),
+            depth: 1,
+        }],
         gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
     );
     view.set_code_blocks(

@@ -39,44 +39,65 @@ impl Renderer {
             // flushed here so it can't swallow later content). No-op otherwise.
             TagEnd::Paragraph => self.flush_open_picture(),
             TagEnd::BlockQuote(_) => {
+                // This level's own depth, BEFORE decrementing: 1 for an unnested quote.
+                let depth = self.blockquote_depth;
                 self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
+                if let Some(start) = self.blockquote_starts.pop() {
+                    // Close THIS level: apply its depth's margin tag and record its range
+                    // so the preview view draws that level's accent bar over it in
+                    // snapshot_layer (the proven, never-flickers code-block pattern — no
+                    // anchored widget). The text is already in the buffer with its inline
+                    // tags, so it is selectable and its links work.
+                    //
+                    // Every level tags its OWN range, and an inner line therefore ends up
+                    // carrying every enclosing level's tag. That is deliberate and needs
+                    // no per-line depth arithmetic: `bq-{depth}` is registered
+                    // deepest-last, so the deepest tag on a line is the highest-priority
+                    // one and GTK resolves the margin to that level's indent (tags.rs).
+                    //
+                    // Apply the tag to each logical line's CONTENT ONLY, EXCLUDING the
+                    // terminating '\n's — NOT one continuous apply over the whole range.
+                    // A continuous multi-paragraph tag leaves the MIDDLE lines with no tag
+                    // toggle inside them, and GtkTextView's `one_style_cache`
+                    // (gtktextlayout.c get_style) then reuses the previous line's style and
+                    // DROPS the left-margin on those lines — a width-dependent layout
+                    // artifact (researcher-sourced, GTK 4.6.9; GTK4Rs/AP-72). Leaving each
+                    // '\n' untagged breaks the btree's same-tag run so every line's margin
+                    // is rebuilt. (The `\n`s carry no visible glyph, so excluding them
+                    // costs nothing.)
+                    let end = self.end_offset();
+                    if end > start {
+                        let depth = (depth as u8).clamp(1, crate::tags::MAX_QUOTE_DEPTH);
+                        self.apply_tag_per_line(
+                            crate::tags::TagName::Blockquote { depth },
+                            start,
+                            end,
+                        );
+                        self.blockquote_ranges.push(crate::span::QuoteSpan {
+                            span: crate::span::BufferSpan::new(start, end),
+                            depth,
+                        });
+                    }
+                }
                 if self.blockquote_depth == 0 {
-                    if let Some(start) = self.blockquote_start.take() {
-                        // Close the top-level blockquote: apply the `blockquote`
-                        // margin tag and record the range so the preview view draws
-                        // the left accent bar over it in snapshot_layer (proven,
-                        // never-flickers code-block pattern — no anchored widget). The
-                        // text is already in the buffer with its inline tags, so it is
-                        // selectable and its links work.
-                        //
-                        // Apply the tag to each logical line's CONTENT ONLY, EXCLUDING
-                        // the terminating '\n's — NOT one continuous apply over the
-                        // whole range. A continuous multi-paragraph tag leaves the
-                        // MIDDLE lines with no tag toggle inside them, and
-                        // GtkTextView's `one_style_cache` (gtktextlayout.c get_style)
-                        // then reuses the previous line's style and DROPS the
-                        // left-margin on those lines — a width-dependent layout
-                        // artifact (researcher-sourced, GTK 4.6.9; GTK4Rs/AP-72).
-                        // Leaving each '\n' untagged breaks the btree's same-tag
-                        // coalescing, so every line gets its own on/off toggle and its
-                        // margin is rebuilt. (The `\n`s carry no visible glyph, so
-                        // excluding them costs nothing.)
-                        let end = self.end_offset();
-                        if end > start {
-                            self.apply_tag_per_line(crate::tags::TagName::Blockquote, start, end);
-                            // The quote's own ink (TDD 18.29) rides the same per-line
-                            // pass on its own, LOWEST-priority tag, so a link, heading
-                            // or `==mark==` inside the quote keeps its colour
-                            // (`tags::TagName::BlockquoteInk`). Applied unconditionally:
-                            // the tag carries no foreground at all unless the theme
-                            // states one, so a theme that states none re-inks nothing.
+                    // The quote's own ink (TDD 18.29) is a property of the QUOTE, not of a
+                    // level, so it rides one pass over the OUTERMOST range on its own
+                    // LOWEST-priority tag — a link, heading or `==mark==` inside the quote
+                    // keeps its colour (`tags::TagName::BlockquoteInk`). Applying it per
+                    // level instead would re-ink nested text once per enclosing level for
+                    // no visible difference. Applied unconditionally: the tag carries no
+                    // foreground at all unless the theme states one, so a theme that states
+                    // none re-inks nothing.
+                    //
+                    // The outermost level is the LAST span pushed above (its close is this
+                    // one), so its extent is the whole quote.
+                    if let Some(outer) = self.blockquote_ranges.last().copied() {
+                        if outer.depth == 1 {
                             self.apply_tag_per_line(
                                 crate::tags::TagName::BlockquoteInk,
-                                start,
-                                end,
+                                outer.span.start,
+                                outer.span.end,
                             );
-                            self.blockquote_ranges
-                                .push(crate::span::BufferSpan::new(start, end));
                         }
                     }
                 }

@@ -815,7 +815,22 @@ fn blockquote_panel_css(t: &Theme, body_fg: &str) -> String {
     } else {
         format!(".annotations blockquote.claim {{ color: {body_fg}; }}\n")
     };
-    format!("blockquote {{{bg}{fg} }}\n{claim}")
+    // The BACKGROUND does not nest (TDD 2.11b, operator 2026-08-28): a nested level
+    // inherits its parent's fill, so depth is carried by the bars alone. Without this
+    // second rule the element selector would paint a panel per level, and a translucent
+    // `blockquote_bg` — two of the shipped themes state one — would composite with itself
+    // and read progressively darker the deeper a quote nests, which no theme key asked
+    // for. `transparent`, not the page colour: the parent's fill is what must show
+    // through, and it is not always the page's.
+    //
+    // The INK deliberately still cascades: `blockquote_fg` re-inks quoted prose at every
+    // depth, which is what a reader expects of quoted text and what the preview does.
+    let nested_bg = if bg.is_empty() {
+        String::new()
+    } else {
+        "blockquote blockquote { background: transparent; }\n".to_string()
+    };
+    format!("blockquote {{{bg}{fg} }}\n{nested_bg}{claim}")
 }
 
 /// The task marker's own colour (TDD 18.27), for both the themed glyph and the
@@ -1974,7 +1989,37 @@ mod html_sink_tests {
         let mut bg_only = theme.clone();
         bg_only.blockquote_fg = None;
         let css = super::blockquote_panel_css(&bg_only, &body_fg);
-        assert_eq!(css, "blockquote { background: #0a1830; }\n", "{css}");
+        assert_eq!(
+            css,
+            "blockquote { background: #0a1830; }\nblockquote blockquote { background: transparent; }\n",
+            "{css}"
+        );
+
+        // TDD 2.11b — the panel does NOT nest: an inner level inherits its parent's
+        // fill, so depth is carried by the bars alone. Asserted on its own rather than
+        // left to the equality above, because the equality would also pass if the
+        // suppressing rule were emitted with the wrong VALUE (the page colour, say,
+        // which is not always what sits behind a quote) and because this is the clause a
+        // future edit is most likely to drop while keeping the rest.
+        assert!(
+            css.contains("blockquote blockquote { background: transparent; }"),
+            "a nested quote must inherit its parent's fill, not paint a second panel \
+             over it — with the translucent `blockquote_bg` two shipped themes state, \
+             a per-level panel composites with itself and reads darker the deeper it \
+             nests: {css}"
+        );
+
+        // The INK, by contrast, deliberately DOES cascade to every depth: quoted prose
+        // is quoted prose however deep it sits. A suppressing rule for `color` would be
+        // a bug, so its absence is asserted rather than assumed.
+        let mut fg_only = theme.clone();
+        fg_only.blockquote_bg = None;
+        let css = super::blockquote_panel_css(&fg_only, &body_fg);
+        assert!(
+            !css.contains("blockquote blockquote"),
+            "the quote INK must reach every nesting depth; only the background is \
+             suppressed on nested levels: {css}"
+        );
     }
 
     /// TDD 18.28 — the blockquote bar's sprite reaches the artefact, embedded, tiled,

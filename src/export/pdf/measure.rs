@@ -400,9 +400,20 @@ impl Layouter<'_> {
                 // expressed nothing here; the gap on the page was whatever the bar's
                 // own width happened to be.
                 let step = self.quote_step_pt();
+                let id = self.next_quote_id();
+                // Depth and root come from the ENCLOSING quote when there is one, so a
+                // nested level knows both how many bars stand to its left and which
+                // outermost quote it belongs to. Clamped exactly as the preview's tag
+                // family is (`tags::MAX_QUOTE_DEPTH`), so the two media agree about what
+                // a pathologically nested document looks like instead of one of them
+                // stepping away forever.
+                let depth = quote
+                    .map_or(1, |q: QuoteRef| q.depth.saturating_add(1))
+                    .min(crate::tags::MAX_QUOTE_DEPTH);
                 let quote = Some(QuoteRef {
-                    id: self.next_quote_id(),
                     indent: self.indent_on_page(indent + step),
+                    depth,
+                    root: quote.map_or(id, |q: QuoteRef| q.root),
                 });
                 for b in inner {
                     self.block(b, doc, indent + step, quote, list_depth);

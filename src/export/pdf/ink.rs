@@ -179,12 +179,17 @@ pub(crate) fn draw_page(
         if let Some(quote) = line.quote {
             // Compared by IDENTITY, never by indent: two quotes one blank line apart
             // share every metric and must still draw as two panels.
+            // Compared on ROOT, not on `id`: two adjacent lines at different depths of
+            // one quote tree are the same quote to a reader, so comparing `id` here
+            // opens a seam in the outer bar and the panel at every nesting boundary.
+            // Two genuinely separate quotes one blank line apart still differ by root,
+            // which is the case this comparison exists for.
             let previous_in_same_quote = i > 0
                 && idx
                     .checked_sub(1)
                     .and_then(|prev| laid.lines.get(prev))
                     .and_then(|prev| prev.quote)
-                    .is_some_and(|prev| prev.id == quote.id);
+                    .is_some_and(|prev| prev.root == quote.root);
             let gap_above = if previous_in_same_quote {
                 frag.space_before
             } else {
@@ -199,21 +204,40 @@ pub(crate) fn draw_page(
             // own width and left `blockquote_text_gap` expressing nothing on the page.
             let w = px_to_pt(theme.metrics.blockquote_bar_width);
             let gap = px_to_pt(theme.metrics.blockquote_text_gap);
-            let x = margin_pt + quote.indent - w - gap;
-            // The panel goes down FIRST, behind both the bar and the text. It spans the
-            // quote's own column — from the quote's indent to the printable edge — which
+            let step = w + gap;
+            // The OUTERMOST level's indent, reached by stepping back out of every
+            // enclosing level. Both the panel and the leftmost bar hang off this.
+            let root_indent = quote.indent - step * f64::from(quote.depth - 1);
+            // The panel goes down FIRST, behind every bar and the text. It spans the
+            // OUTERMOST quote's column — from that indent to the printable edge — which
             // is this medium's reading of the content column the preview fills.
+            //
+            // Once per line, from the root, NOT once per level: the background does not
+            // nest (TDD 2.11b, operator 2026-08-28). Drawing it per level would step the
+            // fill right at each depth and, for the translucent `blockquote_bg` two
+            // shipped themes state, composite it with itself so the inner region read
+            // darker for a reason no theme key asked for.
             if let Some(bg) = quote_bg {
                 set_ink(cr, bg);
-                let width = (laid.printable_width_pt - quote.indent).max(MIN_PRINTABLE_PT);
-                cr.rectangle(margin_pt + quote.indent, top, width, height);
+                let width = (laid.printable_width_pt - root_indent).max(MIN_PRINTABLE_PT);
+                cr.rectangle(margin_pt + root_indent, top, width, height);
                 cr.fill().ok();
             }
+            // ONE BAR PER LEVEL, on every line inside it (TDD 2.11b). A line reports only
+            // its innermost quote, so without this loop the enclosing levels' bars would
+            // simply stop wherever a nested quote interrupted them — the outer quote
+            // would read as two quotes with a hole in the middle. Every level steps by
+            // the same `step`, so level `k` out from this one sits exactly `k * step`
+            // left of it and no ancestry list has to be carried on the line.
+            //
             // A theme may tile a sprite down the bar instead of filling it (TDD 18.28),
             // at natural size, the same picture the preview tiles. An `else` rather than
             // a paint-over for the reason the drawn bar states: an opaque tile hides the
             // difference and a transparent one lets the flat colour bleed through.
-            paint_wash(cr, &bar_wash, x, top, w, height);
+            for level in 0..quote.depth {
+                let x = margin_pt + quote.indent - step * f64::from(level) - w - gap;
+                paint_wash(cr, &bar_wash, x, top, w, height);
+            }
             cr.restore().ok();
             set_ink(cr, fg);
         }

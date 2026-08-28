@@ -23,37 +23,50 @@ use gtk::{graphene, TextBuffer};
 pub(super) fn visible_extents(
     view: &super::CodePreviewView,
     buffer: &TextBuffer,
-    blockquotes: &[crate::span::BufferSpan],
+    blockquotes: &[crate::span::QuoteSpan],
     vis_start: i32,
     vis_end: i32,
     vtop: f32,
     vbot: f32,
-) -> Vec<(f32, f32)> {
-    // One `BufferSpan` per WHOLE quote (`renderer::end` closes the range at
-    // the outermost `TagEnd::BlockQuote`), so the extent spans the quote's
-    // intro paragraph, any nested list and its closing paragraph as ONE run,
-    // with the blank separator lines inside it. That is the whole of the fix
-    // to TDD 18.29: the panel used to be a `paragraph_background_rgba` on the
-    // `blockquote` tag, which GTK fills PER PARAGRAPH, so a quote holding a
-    // paragraph plus a list rendered as three disconnected rectangles with
-    // the page showing through between them — beside a bar that had always
-    // been drawn from this single extent and was therefore continuous. Same
-    // quote, two different extents, which is what made it visible.
+) -> Vec<QuoteExtent> {
+    // One `QuoteSpan` per blockquote LEVEL (`renderer::end` closes and records at every
+    // `TagEnd::BlockQuote`, not only the outermost), so a level's extent spans its intro
+    // paragraph, any nested list or quote and its closing paragraph as ONE run, with the
+    // blank separator lines inside it. An enclosing level's extent covers the levels
+    // inside it, which is exactly what makes the outer bar run past the inner region
+    // rather than stopping where it begins (TDD 2.11b).
     //
-    // The clamping discipline is `span_card_y_extent`'s (GTK4Rs/AP-22: never
-    // measure an off-screen, unvalidated iter), and the extent carries NO
-    // extra pad (GTK4Rs/AP-127) — `line_yrange` already includes each line's
-    // own `pixels_above/below_lines`, which is where the panel's vertical
-    // breathing room comes from, exactly as it did from the tag.
+    // That is also the whole of the fix to TDD 18.29: the panel used to be a
+    // `paragraph_background_rgba` on the quote tag, which GTK fills PER PARAGRAPH, so a
+    // quote holding a paragraph plus a list rendered as three disconnected rectangles
+    // with the page showing through between them — beside a bar that had always been
+    // drawn from this single extent and was therefore continuous. Same quote, two
+    // different extents, which is what made it visible.
+    //
+    // The clamping discipline is `span_card_y_extent`'s (GTK4Rs/AP-22: never measure an
+    // off-screen, unvalidated iter), and the extent carries NO extra pad (GTK4Rs/AP-127)
+    // — `line_yrange` already includes each line's own `pixels_above/below_lines`, which
+    // is where the panel's vertical breathing room comes from, exactly as it did from the
+    // tag.
     blockquotes
         .iter()
-        .filter(|q| !q.is_empty() && !q.is_outside(vis_start, vis_end))
-        .filter_map(|&quote| {
+        .filter(|q| !q.span.is_empty() && !q.span.is_outside(vis_start, vis_end))
+        .filter_map(|&crate::span::QuoteSpan { span, depth }| {
             let (top, bottom) =
-                span_card_y_extent(view, buffer, quote, vis_start, vis_end, vtop, vbot);
-            (bottom > top).then_some((top, bottom))
+                span_card_y_extent(view, buffer, span, vis_start, vis_end, vtop, vbot);
+            (bottom > top).then_some(QuoteExtent { top, bottom, depth })
         })
         .collect()
+}
+
+/// One visible blockquote level's painted extent: where it starts and ends vertically,
+/// and how deeply it is nested (which is what decides the bar's horizontal offset).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct QuoteExtent {
+    pub(super) top: f32,
+    pub(super) bottom: f32,
+    /// 1-based, already clamped to `tags::MAX_QUOTE_DEPTH` by the renderer.
+    pub(super) depth: u8,
 }
 
 /// The quote panel.
@@ -71,9 +84,19 @@ pub(super) fn draw_panel(snapshot: &gtk::Snapshot, ctx: &PaintCtx) {
     // blockquote_text_gap` (the `blockquote` tag's margins) rather than
     // running flush to the fill, which is what a panel wants and what a
     // paragraph background pinned to the text column could not give.
+    //
+    // DEPTH 1 ONLY, and that is the operator's ruling (2026-08-28) rather than an
+    // oversight: the background does NOT nest. A nested level inherits its parent's
+    // fill, so depth is carried by the bars alone and 18.29's "ONE continuous panel"
+    // stays literally true. Painting a level's panel over its parent's would also
+    // double any translucent `blockquote_bg`, so the inner region would read darker
+    // for a reason no theme key asked for.
     if let Some(panel) = crate::theme::active().blockquote_bg {
-        for &(top, bottom) in quote_extents {
-            snapshot.append_color(&panel, &graphene::Rect::new(lm, top, card_w, bottom - top));
+        for e in quote_extents.iter().filter(|e| e.depth == 1) {
+            snapshot.append_color(
+                &panel,
+                &graphene::Rect::new(lm, e.top, card_w, e.bottom - e.top),
+            );
         }
     }
 }
@@ -109,9 +132,21 @@ pub(super) fn draw_accent_bar(snapshot: &gtk::Snapshot, ctx: &PaintCtx) {
     let bar_sprite = bar_decor.sprite.and_then(crate::sprite::texture);
     // The SAME `quote_extents` the panel was filled from, so the bar and the
     // fill behind it can never disagree about where the quote starts or ends
-    // — which is precisely how the TDD 18.29 defect announced itctx.imp.
-    for &(top, bottom) in quote_extents {
-        let rect = graphene::Rect::new(lm, top, bar_w, bottom - top);
+    // — which is precisely how the TDD 18.29 defect announced itself.
+    //
+    // One bar PER LEVEL, each stepped in by its own depth (TDD 2.11b). The step is the
+    // same `bar + gap` the `bq-{depth}` tag indents that level's text by, read from the
+    // same theme keys, so a bar cannot drift from the column it marks (POLICY "One theme
+    // key, every application path"). Depth is 1-based and already clamped by the
+    // renderer, so `depth - 1` cannot underflow and the offset cannot run away on a
+    // pathologically nested document.
+    let bq_step = crate::theme::px(
+        bqm.metrics.blockquote_bar_width + bqm.metrics.blockquote_text_gap,
+        zoom_now,
+    ) as f32;
+    for &QuoteExtent { top, bottom, depth } in quote_extents {
+        let x = lm + bq_step * f32::from(depth - 1);
+        let rect = graphene::Rect::new(x, top, bar_w, bottom - top);
         // The sprite OUTRANKS the flat colour, and this is an `else`
         // rather than a paint-over on purpose: filling first and tiling
         // on top looks identical for an opaque tile and lets the flat

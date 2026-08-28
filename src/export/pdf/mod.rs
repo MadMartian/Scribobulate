@@ -103,15 +103,31 @@ pub(crate) struct Line {
 
 /// Which blockquote a line belongs to, and where that quote's own column starts.
 ///
-/// One value per `Block::Quote` in document order; a nested quote gets its own, so its
-/// lines report the INNER quote, which is what has always been drawn for them.
+/// One value per `Block::Quote` in document order. A line reports its INNERMOST quote,
+/// and `depth` plus `root` are what let the painter reconstruct the rest of the ancestry
+/// without the line carrying a list of them.
 #[derive(Clone, Copy)]
 struct QuoteRef {
-    /// Distinct per blockquote, in document order. Compared, never counted.
-    id: u32,
     /// Where this quote's own content starts, in points from the page margin — already
     /// bounded to the page by `indent_on_page`, exactly as a line's own indent is.
     indent: f64,
+    /// 1-based nesting depth of THIS quote. Every level steps the indent in by the same
+    /// `quote_step_pt()`, so an enclosing level `k` steps out sits at
+    /// `indent - k * step` — which is how one bar per level gets drawn on every line
+    /// inside them (TDD 2.11b) from a single ref, rather than the innermost bar alone
+    /// and the outer ones breaking wherever a nested quote interrupts them.
+    depth: u8,
+    /// Identity of the OUTERMOST quote this one belongs to: a fresh id at depth 1,
+    /// inherited unchanged by every level inside it. **This is the whole identity a
+    /// painter needs**, which is why the per-quote `id` it replaced is gone rather than
+    /// kept beside it.
+    ///
+    /// The block-gap correction compares this: two adjacent lines at different depths of
+    /// one quote tree are still the same quote to a reader, so comparing a per-LEVEL id
+    /// there would open a seam in the outer bar and the panel at every nesting boundary.
+    /// Two genuinely separate quotes one blank line apart still differ here, which is
+    /// the case that comparison exists for. Compared, never counted.
+    root: u32,
 }
 
 /// A fill painted behind one line: a sprite tiled across it, or the flat/gradient
@@ -323,7 +339,11 @@ impl Line {
             "{kind}|{:.3}|{:.3}|{:?}|{}|{}",
             self.indent,
             self.height,
-            self.quote.map(|q| (q.id, q.indent)),
+            // Every field of the ref, enumerated: this digest is a guard, and a field
+            // it cannot see is a field a change can move without the guard going red
+            // (ScrAP-325). `depth` and `root` decide how many bars get drawn and where
+            // the panel starts, so both belong here beside the indent.
+            self.quote.map(|q| (q.root, q.depth, q.indent)),
             self.fill
                 .as_ref()
                 .map(|f| format!("{}/{:.3}", wash_digest(&f.wash), f.padding))

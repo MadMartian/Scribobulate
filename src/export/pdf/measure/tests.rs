@@ -534,6 +534,68 @@ fn a_quote_panel_fills_the_quoted_column_on_the_page() {
     );
 }
 
+/// **TDD 2.11b on the page: a nested quote gets a bar per level, and the panel does NOT
+/// nest with them.**
+///
+/// The fixture is quoted to depth 2 with **no depth-1 line of its own**, and that is the
+/// whole trick. A document with outer-level text as well would place the panel's left
+/// edge at the outer indent whatever the nested lines did, so the assertion would pass
+/// against a per-level panel and prove nothing (ScrAP-132: a guard whose input cannot
+/// exhibit the defect). With only depth-2 lines present, a panel drawn per level starts
+/// one step further right, and the two answers are a whole `quote_step` apart.
+///
+/// Mutation check (measured): drawing the panel from `quote.indent` instead of the
+/// root's moves the panel's left edge by exactly one step and fails the panel assert;
+/// drawing only the innermost bar (`for level in 0..1`) moves the bar's left edge by one
+/// step and fails the bar assert. Neither mutation touches the other assertion.
+#[test]
+fn a_nested_quote_bars_every_level_and_panels_only_the_outermost() {
+    const MARGIN: f64 = 54.0;
+    const PANEL: (u8, u8, u8) = (0x0a, 0x18, 0x30);
+    const BAR: (u8, u8, u8) = (0xd2, 0x00, 0x7f);
+    // Depth 2 throughout: no outer-level line to hide a per-level panel behind.
+    let md = "body line\n\n> > doubly quoted line\n";
+
+    let mut t = theme();
+    t.blockquote_bg = crate::theme::parse_color("#0a1830");
+    t.blockquote_bar_color = crate::theme::parse_color("#d2007f");
+    let p = palette(&t);
+    let step = quote_step(&t);
+
+    let (panel_lo, _) = colour_extent(drawn_page(md, &t, &p, MARGIN), PANEL)
+        .expect("the stated panel must reach the page");
+    // The panel is laid down from the OUTERMOST indent (MARGIN + one step), but its
+    // first VISIBLE column is one bar-width further in: the innermost level's bar is
+    // painted over the panel's own left edge, exactly as the depth-1 bar always has
+    // been. Stated as the sum rather than fudged into the tolerance, because the whole
+    // discrimination here is one `step` wide and a tolerance big enough to absorb the
+    // bar would also absorb the defect.
+    let bar_w = crate::export::pdf::geometry::px_to_pt(t.metrics.blockquote_bar_width);
+    let want_panel = MARGIN + step + bar_w;
+    assert!(
+        (panel_lo as f64 - want_panel).abs() <= 1.0,
+        "the panel must be laid from the OUTERMOST quote's indent even where every line \
+         is nested deeper — the background does not nest, an inner level inherits its \
+         parent's fill (TDD 2.11b). Expected its first visible column at {want_panel}pt \
+         (outermost indent {}pt, plus the {bar_w}pt bar painted over it); it starts at \
+         {panel_lo}, which is one step further in and means a panel was drawn per level",
+        MARGIN + step
+    );
+
+    let (bar_lo, _) = colour_extent(drawn_page(md, &t, &p, MARGIN), BAR)
+        .expect("the stated bar colour must reach the page");
+    // The outermost bar sits its own width plus the gap left of the outermost quote's
+    // indent, and that indent is exactly one step: the two cancel, so it lands on the
+    // page margin. A run that drew only the innermost bar would start one step right.
+    assert!(
+        (bar_lo as f64 - MARGIN).abs() <= 1.0,
+        "every enclosing level must draw its bar on a nested line, so the LEFTMOST bar \
+         is the outermost quote's, at the page margin ({MARGIN}pt) — a bar starting at \
+         {bar_lo} means only the innermost level was drawn and the outer quote reads as \
+         a hole in its own bar (TDD 2.11b)"
+    );
+}
+
 /// TDD 18.29 regression — on the PAGE, a quote holding an intro paragraph, a nested
 /// list and a closing paragraph panels as ONE rectangle, with no paper anywhere inside
 /// the quote's own column.

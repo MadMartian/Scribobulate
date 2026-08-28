@@ -83,7 +83,7 @@ mod imp {
         /// (first-char offset, exclusive end offset) per blockquote, + the accent-bar
         /// colour. Blockquotes are buffer text now; the view draws the left bar over
         /// each range in snapshot_layer (no anchored widget to churn — GTK4Rs/AP-23).
-        pub(crate) blockquotes: RefCell<Vec<crate::span::BufferSpan>>,
+        pub(crate) blockquotes: RefCell<Vec<crate::span::QuoteSpan>>,
         pub(crate) bq_bar: RefCell<gdk::RGBA>,
         /// Every heading's extent + the theme slot its level reads, for the drawn band
         /// behind it (TDD 18.25). Populated on every render whatever the theme says —
@@ -1073,7 +1073,7 @@ impl CodePreviewView {
 
     /// Set the blockquote ranges and accent-bar colour (called after a (re-)render).
     /// The bars are drawn live in `snapshot_layer`, so a redraw is all that's needed.
-    pub(crate) fn set_blockquotes(&self, ranges: Vec<crate::span::BufferSpan>, bar: gdk::RGBA) {
+    pub(crate) fn set_blockquotes(&self, ranges: Vec<crate::span::QuoteSpan>, bar: gdk::RGBA) {
         use gtk::subclass::prelude::*;
         let imp = self.imp();
         imp.blockquotes.replace(ranges);
@@ -1398,7 +1398,10 @@ mod gtk_integration_tests {
         let view = CodePreviewView::new();
         view.buffer().set_text("A quoted line\n");
         view.set_blockquotes(
-            vec![crate::span::BufferSpan::new(0, 13)],
+            vec![crate::span::QuoteSpan {
+                span: crate::span::BufferSpan::new(0, 13),
+                depth: 1,
+            }],
             gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
         );
 
@@ -1476,10 +1479,10 @@ mod gtk_integration_tests {
                 buffer.apply_tag(&indent, &buffer.start_iter(), &buffer.end_iter());
             }
             view.set_blockquotes(
-                vec![crate::span::BufferSpan::new(
-                    0,
-                    quoted.chars().count() as i32,
-                )],
+                vec![crate::span::QuoteSpan {
+                    span: crate::span::BufferSpan::new(0, quoted.chars().count() as i32),
+                    depth: 1,
+                }],
                 gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
             );
 

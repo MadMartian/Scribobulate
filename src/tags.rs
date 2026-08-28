@@ -42,6 +42,22 @@ pub(crate) const MAX_LIST_DEPTH: u8 = 6;
 // `&'static str` (not `format!`) keeps the per-logical-line apply allocation-free
 // (F-PERF-002).
 const LI_NAMES: [&str; MAX_LIST_DEPTH as usize] = ["li-1", "li-2", "li-3", "li-4", "li-5", "li-6"];
+
+/// Highest blockquote-nesting depth that gets its own dedicated indent tag, and the
+/// `bq-{depth}` name table beside it — the same shape, and the same reasoning, as
+/// [`MAX_LIST_DEPTH`] and `LI_NAMES` above.
+///
+/// **The cap is a layout guarantee, not a formatting preference.** A quote steals margin
+/// on BOTH sides (unlike a list, which takes only the left), so an uncapped indent
+/// narrows the reading column twice as fast as nesting deepens and would eventually
+/// collapse it to nothing — or, worse, push the preview over-wide and re-arm the
+/// h-scrollbar churn that the no-over-wide invariant exists to prevent (TDD 2.2·a11y,
+/// ScrAP-22/ScrAP-23). Past the cap a level renders at the cap's indent, which is what
+/// keeps a pathologically nested document (TDD 1.4b: thousands of levels) merely
+/// unusual-looking rather than broken.
+pub(crate) const MAX_QUOTE_DEPTH: u8 = 6;
+
+const BQ_NAMES: [&str; MAX_QUOTE_DEPTH as usize] = ["bq-1", "bq-2", "bq-3", "bq-4", "bq-5", "bq-6"];
 const LI_CONT_NAMES: [&str; MAX_LIST_DEPTH as usize] = [
     "li-1-cont",
     "li-2-cont",
@@ -114,7 +130,21 @@ pub(crate) enum TagName {
     /// Bottom-inner-padding tag for a code block's last line.
     CodeBlockBottom,
     Link,
-    Blockquote,
+    /// A blockquote's content-margin tag for one nesting `depth`
+    /// (1..=[`MAX_QUOTE_DEPTH`]), carrying that depth's FULL indent on both sides.
+    ///
+    /// One tag per logical line holding the line's whole depth, exactly as
+    /// [`TagName::ListItem`] carries `depth · list_step` — deliberately NOT one tag per
+    /// level accumulating onto the next. Two reasons. The tags are registered deepest-
+    /// last, so where an inner level's lines carry both `bq-1` and `bq-2` the deeper tag
+    /// simply wins on priority and no per-line depth has to be computed. And the family
+    /// must stay NON-accumulative to keep out-prioritising a code block's own absolute
+    /// margin inside a quote (see [`TagName::BlockquoteInk`]'s note on registration
+    /// order); making it accumulative instead would silently shift every quoted code
+    /// block right by `code_block_padding`.
+    Blockquote {
+        depth: u8,
+    },
     /// A list-item content-margin tag for one nesting `depth` (1..=[`MAX_LIST_DEPTH`]).
     /// `cont == false` is the item's FIRST logical line (`li-{depth}`, carrying the
     /// inter-item gap); `cont == true` is any LATER line (`li-{depth}-cont`).
@@ -151,7 +181,15 @@ impl TagName {
             TagName::CodeBlockTop => "code-block-top",
             TagName::CodeBlockBottom => "code-block-bottom",
             TagName::Link => "link",
-            TagName::Blockquote => "blockquote",
+            TagName::Blockquote { depth } => {
+                // Same clamp as ListItem's: an over-deep quote lands at the deepest
+                // REGISTERED margin rather than panicking, and callers clamp from the
+                // same constant so nothing reaches here out of range in practice.
+                let idx = (depth as usize)
+                    .saturating_sub(1)
+                    .min(MAX_QUOTE_DEPTH as usize - 1);
+                BQ_NAMES[idx]
+            }
             // Total, not merely "safe because the caller clamps" (QA round 3,
             // P-4). The index used to be `table[(depth as usize) - 1]`, correct
             // only because `renderer::emit` happened to `clamp(1, 6)` with a
@@ -481,11 +519,21 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // way the two can agree; it keeps the padding and the soft-wrap band, because both
     // come from `line_yrange`. The FOREGROUND deliberately does not live here either —
     // see `TagName::BlockquoteInk`.
-    let bq_indent = px(metrics.blockquote_bar_width + metrics.blockquote_text_gap);
-    add(TagName::Blockquote.name(), &move |t| {
-        t.set_left_margin(view_lm + bq_indent);
-        t.set_right_margin(view_rm + bq_indent);
-    });
+    // One tag per nesting depth, each carrying that depth's FULL indent on both sides,
+    // and each ABSOLUTE (non-accumulative) for the reason recorded on the variant. The
+    // deepest depth is registered last and therefore highest-priority, so a line inside a
+    // nested quote — which carries every enclosing level's tag — resolves to its own
+    // depth's margin with no per-line depth arithmetic anywhere (TDD 2.11b).
+    //
+    // At depth 1 this is byte-identical to the single `blockquote` tag it replaced.
+    let bq_step = px(metrics.blockquote_bar_width + metrics.blockquote_text_gap);
+    for depth in 1..=MAX_QUOTE_DEPTH {
+        let indent = bq_step * i32::from(depth);
+        add(TagName::Blockquote { depth }.name(), &move |t| {
+            t.set_left_margin(view_lm + indent);
+            t.set_right_margin(view_rm + indent);
+        });
+    }
 
     // Uniform per-level content margins for list items, one per nesting depth (up to
     // 6), in TWO variants applied per logical line by `apply_list_item_per_line`.

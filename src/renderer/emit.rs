@@ -63,21 +63,24 @@ impl Renderer {
     /// column, because the bound is `content − inset` against the FULL column width:
     /// - a **list** adds only a `left_margin` (`tags.rs` `li-{depth}` sets no right
     ///   margin), accumulating per level → `depth * list_step`;
-    /// - a **blockquote** sets BOTH a left AND a right margin (`view_lm + bar+gap` and
-    ///   `view_rm + bar+gap`, `tags.rs`), so it narrows the usable column on BOTH sides →
-    ///   `2 * (bar+gap)`. It applies ONE tag regardless of nesting depth (end.rs
-    ///   `TagEnd::BlockQuote` tags only at the top level), so it is not multiplied by depth.
+    /// - a **blockquote** sets BOTH a left AND a right margin (`view_lm + depth*(bar+gap)`
+    ///   and `view_rm + depth*(bar+gap)`, `tags.rs`), so it narrows the usable column on
+    ///   BOTH sides → `2 * depth * (bar+gap)`. **It IS multiplied by depth**, and was not
+    ///   until nested quotes gained their own indent (TDD 2.11b): this clause used to read
+    ///   "it applies ONE tag regardless of nesting depth", which was true while every level
+    ///   shared one margin and became silently wrong the moment they stopped. A stale inset
+    ///   here does not fail loudly — it under-reserves, so an anchored child inside a
+    ///   nested quote overflows by exactly the levels this forgot (GTK4Rs/AP-23a).
     ///
     /// Zero at top level, so callers can apply it unconditionally.
     pub(super) fn block_inset(&self) -> i32 {
         let theme = crate::theme::active();
         let m = &theme.metrics;
         let list = (self.lists.len() as i32) * m.list_step;
-        let quote = if self.blockquote_depth > 0 {
-            2 * (m.blockquote_bar_width + m.blockquote_text_gap)
-        } else {
-            0
-        };
+        // Clamped exactly as the tag family is, so the inset can never claim more
+        // margin than `bq-{depth}` actually applies on a pathologically nested document.
+        let quote_depth = (self.blockquote_depth as u8).min(crate::tags::MAX_QUOTE_DEPTH) as i32;
+        let quote = 2 * quote_depth * (m.blockquote_bar_width + m.blockquote_text_gap);
         crate::theme::px(list + quote, self.zoom)
     }
 

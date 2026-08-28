@@ -226,6 +226,17 @@
 - **When** it is rendered
 - **Then** **every** line of the quote — first, middle, last, and every wrapped continuation — sits at the same left inset past the accent bar, at any window width; no line collapses toward the bar (regression guard for the GtkTextView `one_style_cache` dropped-margin artifact — the tag is applied per line, content-only, ScrAP-76)
 
+### 2.11b A nested blockquote gets its own bar and its own indent
+- **Given** a blockquote containing a further `>` level (and a third below that), including one whose inner quote is followed by more outer-level content
+- **When** it is rendered, and separately exported to HTML and PDF
+- **Then** **each nesting level draws its own accent bar** at its own left offset, and every level's bar is visible **simultaneously** — the outer bar runs the full height of the outer quote, past the inner region rather than stopping where the inner one begins
+- **And** the quoted text steps in by exactly one level's worth per depth, on **both** sides (a blockquote sets a left *and* a right margin), with every wrapped continuation line at its own level's inset — 2.11a holds per level, not only at depth 1
+- **And** the per-level indent is carried by the **depth's own tag**, exactly as `li-{depth}` carries `depth · list_step`: one quote tag per logical line, holding that line's full depth, rather than one tag per level accumulating onto each other. That keeps the quote's margin out-prioritising a code block's inside it, which is why the quote tag is registered where it is and must stay non-accumulative (ScrAP-121, GTK4Rs/AP-96) — and a **list inside a quote** still nests correctly, because `li-{depth}` is accumulative and adds onto whichever quote depth is the line's base
+- **And** the **background does not nest**: `blockquote_bg` paints ONE continuous panel over the outermost quote and every level inside it inherits that fill (operator, 2026-08-28). Depth is carried by the bars alone, so 18.29's single-panel contract is unchanged and an inner level never paints a second fill over its parent's
+- **And** depth is **clamped at `MAX_QUOTE_DEPTH`** (6, mirroring `MAX_LIST_DEPTH`): past the cap a level renders at the cap's indent and bar rather than stepping further, so a pathologically nested document still opens and stays responsive (1.4b) and can never narrow the content column to nothing nor push the preview over-wide (2.2·a11y)
+- **And** a **sprite-tiled** bar (18.28) tiles per level, each keeping the document-anchored phase, so the levels cannot drift against one another while scrolling
+- **And** a **single-level** quote is byte-identical to before this rubric existed
+
 ### 2.10 Block separation after tables
 - **Given** a Markdown table followed immediately by a heading or paragraph
 - **When** it is rendered
