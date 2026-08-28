@@ -291,7 +291,10 @@ pub(crate) fn escaping_reference_or_skip(
     // symlink in a temp directory has a real problem and must not be let past as a skip.
     #[cfg(not(windows))]
     {
-        let _ = (outside_dir, refused);
+        // `limb` too: it is read only by the junction arm's `skipped` call, and this
+        // file is compiled on every platform, so an unused-variable error here is the
+        // cross-platform asymmetry POLICY warns about arriving in the gate itself.
+        let _ = (outside_dir, refused, limb);
         unreachable!("a unix host that refuses a symlink has already panicked")
     }
 }

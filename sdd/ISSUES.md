@@ -25,7 +25,6 @@ entry can still be the worst thing in the register.
 | G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
-| L | Windows | Test | A `platform::win32::appearance` test helper realizes a `gsk::CairoRenderer` and never unrealizes it | Low |
 | M | Any | Project | `sprite::scaled`'s per-`(path, width, height)` texture cache has no eviction policy | Low |
 | N | Any | Production | A long heading overflows the preview pane horizontally instead of wrapping to it | Low |
 | P | Any | Production | A multi-paragraph blockquote's accent bar draws as one continuous rect per span, unconfirmed for every span shape a blockquote can produce | Low |
@@ -613,24 +612,6 @@ here because this entry exists in order to be deleted when the defect is fixed, 
 evidence must outlive it. Do not restate its figures here; several carry caveats that do not
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
-
-## L. A win32 appearance test leaks a `gsk::CairoRenderer`
-
-**Severity**: Low. Windows-only, and confined to `#[cfg(test)]` code — the module is
-`#[cfg(windows)]`-gated so it neither compiles nor runs on this seat's own platform.
-
-`src/platform/win32/appearance.rs`'s `painted_centre_pixel` test helper (used by
-`the_window_actually_paints_the_desktop_lightness`) calls
-`gtk::gsk::CairoRenderer::realize` to sample a rendered window's centre pixel, but
-never calls `unrealize` before the renderer drops — GTK4Rs/AP-272's exact shape,
-which on a build with assertions enabled hard-aborts rather than merely warning.
-Surfaced while auditing the codebase during TDD 18.24/18.25's own pixel-probe test,
-which does unrealize its renderer correctly.
-
-**Mitigation options**:
-- Call `renderer.unrealize()` before the function returns (or wrap it in a guard
-  that unrealizes on drop, if the function grows more early-return paths). One line;
-  needs a Windows build to verify, so it is `windows` seat's to land.
 
 ## M. `sprite::scaled`'s texture cache has no eviction policy
 
