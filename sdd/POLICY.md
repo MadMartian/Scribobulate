@@ -108,9 +108,12 @@ Before any change is considered valid, run these steps in order:
    `Gtk-CRITICAL`, and `G_DEBUG=fatal-criticals` promotes it. The failure names
    accessibility and is not about accessibility, is not about the change under test,
    and reproduces identically on an untouched tree — so it costs a control build to
-   disbelieve, every time, unless it is written down. Run the step under
-   `dbus-run-session`, which lets at-spi autolaunch on a bus of its own; the contract
-   command is unchanged, only the bus around it. On the operator's live session the
+   disbelieve, every time, unless it is written down. **The runner now handles this** —
+   `scripts/run-integration.sh`, which the contract points step 5 at on Linux, wraps the
+   suite in `dbus-run-session` so at-spi autolaunches on a bus of its own. This paragraph
+   used to instruct the reader to do that by hand, with nothing in the toolchain doing it,
+   so every caller either supplied the wrapper themselves or ate the SIGTRAP; the helper's
+   header records what else it owns and why none of it fits on a command line. On the operator's live session the
    other repair is `systemctl --user restart at-spi-dbus-bus.service`, which is needed
    when the unit reports `active (running)` while its socket no longer exists —
    `org.a11y.Bus.GetAddress` then returns an address for a socket that is not there,
