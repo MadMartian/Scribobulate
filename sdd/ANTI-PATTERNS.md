@@ -456,6 +456,8 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 327 | `TextTag::property_value("*-rgba")` formats a POINTER under `Debug`, so a tag digest built that way compares heap addresses | A |
 | 328 | A gdk-pixbuf dimension probe must `set_size(0, 0)`; any non-zero size still allocates the bomb while reporting the right dimensions and passing its own test | A |
 | 329 | A gate read through a PIPE reports the pipe's LAST stage, so `$?` after `gate | tail` is tail's verdict — and it agreed with a floor set from the wrong summary column | B |
+| 330 | A seam that EXISTS is not a seam that is CALLED — a debt closed on the seam's existence, while the one consumer the debt was about still bypassed it | B |
+| 331 | A vocabulary rename that reaches a SELECTOR produces a well-formed rule matching nothing, and no assertion over generated rule TEXT can tell the two apart | B |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -4364,3 +4366,37 @@ D and E are the load-bearing arms. D is clean because `static_type()` registers 
 **Scribobulate**: `scripts/coverage.sh`'s header carries the column warning and its instances; the FLOOR (82.15) is set from the Lines column and verified by running the script directly.
 
 **See**: project tooling — cargo-llvm-cov and shell invocation. Kin — ScrAP-321's family (a green that means nothing), and ScrAP-326 beside it, which is the other way a coverage number misleads: 326 is a real number read as the wrong fact, this is a verdict that was never the gate's at all.
+
+## 330. A seam that exists is not a seam that is called
+
+**Symptom**: a known defect is reported fixed, the fix is verified by confirming the corrective seam exists, and the defect is still live — in the exact consumer the defect was about.
+
+**Root cause**: the promotion was checked against the wrong proposition. "A single de-quoting projection now exists" and "every consumer routes through it" are different claims, and only the first was tested. The one consumer that did not call it was the one the debt named, because that is what the debt *was*.
+
+**The measured instance**: a helper existed precisely to strip a CSS-quoted font stack before Pango sees it, and the export sink passed the raw quoted stack straight to `set_family` at both of its call sites. The helper was `pub(super)` in another module and **unreachable** from the sink, so the code as written could not have called it — visible from the visibility modifier alone, had anyone asked "who calls this?" rather than "does this exist?".
+
+**Why the verification felt sufficient**: existence is cheap to check and reads as the whole job, because the seam is the thing that was built. A caller list is the part nobody looks at, and it is the only part that carries the property.
+
+**Compounding, and worth its own line**: the failure hid because the wrong answer was FLATTERING. The quoted stack fell through to its generic terminator, so the artefact rendered in a serif rather than the default sans — which reads as "the theme's serif choice was honoured". The one test aimed at the area used a bare generic, which the sanitiser leaves unquoted, so the fixture and the assertion were wrong in the same direction and agreed with each other.
+
+**Corrective**: closing a debt about a consumer requires an enumeration of that seam's callers, not the seam. Where the language can express it, make the wrong call unspellable rather than merely corrected — the fix here moved the projection onto the value type so the CSS spelling cannot reach `set_family` at all. POLICY § Typed GTK seams already says "prove the wrapped call, not just the type"; this is the measured cost of proving only the type.
+
+**Scribobulate**: `CssSafeFontStack::pango_family` (`src/theme/value.rs`) is the sole projection, and the PDF sink's layout specs carry that type rather than `String`. The guard asserts the face Pango *resolved* in the artefact, and separately asserts its own fixture came back quoted so it cannot rot into the weaker shape.
+
+**See**: kin — ScrAP-321's family (a check that cannot fail), and ScrAP-272 (an obligation phrased as a property of an artefact reads as done once the artefact exists). Distinct from both: this check *could* fail, was aimed at a real property, and was aimed one proposition short.
+
+## 331. A vocabulary rename that reaches a selector
+
+**Symptom**: a styling rule stops applying to one widget shape while every neighbouring shape stays correct. The rule is still generated, still well-formed, and still present in every test's expected output. The whole suite is green.
+
+**Root cause**: a project's own vocabulary and a toolkit's CSS class namespace can share a spelling, and a blanket rename across the tree cannot tell them apart. Renaming the vocabulary term rewrote a selector's **class name** — the toolkit's, not the project's — into one that is syntactically valid and matches no widget. Nothing rejects it: a CSS selector that matches nothing is not an error at any layer.
+
+**Why no test caught it, which is the transferable half**: every guard over a generated stylesheet asserted on the rule **TEXT**. Text is exactly what a rename preserves. MEASURED: with the regression re-applied, **1279 tests stayed green** and the only red came from a guard written afterwards. An assertion over generated CSS proves the generator ran; it says nothing about what the rule selects, so it cannot distinguish a rule that styles a widget from one that styles nothing.
+
+**Corrective, two halves**:
+- A guard for a generated stylesheet must read the **resolved style off a real widget** — build the widget as the producer does, read the property before the provider is installed so a coincidental match fails the fixture rather than passing the test, install, read again.
+- A rename sweep must treat a **selector as a foreign namespace**. The blast radius question is not "which occurrences are ours" but "which occurrences are inside a string the toolkit parses", and those must each be resolved by hand.
+
+**Scribobulate**: the table-cell link selectors (`src/preview/css.rs`) name GTK's own `link` class on `GtkLinkButton`, not this project's `link_color` key; the constant carries a warning saying so, because the two are one blanket rename apart. Pinned by a guard that reads the button's resolved colour off a constructed cell.
+
+**See**: kin — ScrAP-132 (a guard whose input set is narrower than its hazard). The GTK-side facts underneath this (which class `GtkLinkButton` carries, and that `color` inherits to its caption while `text-decoration-*` does not) are routed to the `gtk4-rs` skill separately; the lesson here is about renaming across a namespace boundary, which is not a GTK lesson.
