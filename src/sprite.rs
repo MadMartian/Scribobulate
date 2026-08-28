@@ -773,14 +773,64 @@ mod tests {
         assert_eq!(got, dir.path().join("chip.png").canonicalize().unwrap());
     }
 
-    /// The verdict, not just the refusal — and it is the verdict that was platform-
-    /// dependent. MEASURED on Windows before the `has_root` change at the gate: this
-    /// exact case returned `Err(NotPlainRelative)`, because `/etc/passwd` is *rooted*
-    /// but not *absolute* there (no drive prefix), so the gate above it did not fire.
+    /// References that leave the theme directory by being **root-anchored**, in the
+    /// grammar of the platform the test is running on. Index 0 is that platform's
+    /// canonical spelling.
+    ///
+    /// **A POSIX literal is not a portable fixture, it is a different test on each
+    /// platform wearing one spelling.** `"/etc/passwd"` is an *absolute* path on unix
+    /// and a *rooted, drive-less* one on Windows — so a corpus of only that literal
+    /// left the Windows absolute limb untested with any actual Windows absolute path,
+    /// on the platform whose sprite search path starts at the user-writable
+    /// `%APPDATA%`. That is a coverage hole wearing a passing test: the same species
+    /// as the `#[cfg(unix)]`-inside-the-body one this module already carried, reached
+    /// by a string constant instead of an attribute.
+    ///
+    /// The cases cannot simply be unioned across platforms, which is why this is a
+    /// fixture and not a flat array: `C:\Windows\win.ini` is one ordinary relative
+    /// component on unix (a backslash is not a separator there), so asserting it as
+    /// absolute would fail for a reason that says nothing about containment. Each
+    /// platform states its own grammar; the *rule* under test is identical on both.
+    fn root_anchored_references() -> &'static [&'static str] {
+        #[cfg(windows)]
+        {
+            &[
+                // Drive-qualified: `is_absolute()` and `has_root()` both true.
+                r"C:\Windows\win.ini",
+                // UNC. Absolute, and the form that reaches another host entirely.
+                r"\\server\share\evil.png",
+                // Rooted with no drive prefix, in both separators. `is_absolute()` is
+                // FALSE for these on Windows and `has_root()` is true -- the pair that
+                // motivated the gate's predicate.
+                r"\Windows\win.ini",
+                "/etc/passwd",
+            ]
+        }
+        #[cfg(not(windows))]
+        {
+            &["/etc/passwd"]
+        }
+    }
+
+    /// The verdict, not just the refusal. MEASURED on Windows before the `has_root`
+    /// change at the gate: `/etc/passwd` returned `Err(NotPlainRelative)` there,
+    /// because it is *rooted* but not *absolute* (no drive prefix), so the gate above
+    /// it did not fire. Both spellings are refused at the first gate now, on both
+    /// platforms, which is what makes the reason a cross-platform verdict.
     #[test]
     fn resolve_refuses_an_absolute_path() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(resolve(dir.path(), "/etc/passwd"), Err(Refusal::Absolute));
+        for rel in root_anchored_references() {
+            assert_eq!(
+                resolve(dir.path(), rel),
+                Err(Refusal::Absolute),
+                "{rel:?} must be refused at the root-anchored gate"
+            );
+        }
+        // The control: the same directory admits an ordinary contained reference, so
+        // the loop above is not passing because every call refuses.
+        write_test_png(&dir.path().join("chip.png"));
+        assert!(resolve(dir.path(), "chip.png").is_ok());
     }
 
     #[test]
