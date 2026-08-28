@@ -73,6 +73,16 @@ active tab):
 | deferred, never activated, then activated | correct | correct |
 | pre-rendered by the prerender pump, never activated | correct | correct |
 
+**It DOES reproduce on the live display, and the ink is not what was filed.** Driven on the
+operator's real session (KDE/X11, `DISPLAY=:0`, release build, two documents in one window,
+second never activated, System → Sepia): tab 2 took Sepia's cream page fill and kept the
+**dark desktop theme's near-white ink**, leaving the body text all but invisible on the light
+page. The register recorded "pure black"; the truth is that the ink is whatever the PREVIOUS
+theme's was — black when switching away from a light theme, white when switching away from a
+dark one — which is a more useful statement of the same fault and points at the same place:
+the fill moved and the ink did not. A second theme change (Sepia → Candy) repairs the tab
+completely, headings, ink and all, confirming that half of the report too.
+
 So the mechanism is not the one the code reading suggested, and a headless harness cannot see
 this defect at all. Body ink and page fill are *both* CSS, emitted into one provider by
 `preview::css::theme_css` onto two nodes of the same widget (`textview.scrib-preview` for
