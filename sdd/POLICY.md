@@ -1034,6 +1034,11 @@ and the new one not yet read by every consumer — and those are exactly the rev
 `git bisect` lands on and a peer seat fetches mid-flight. One commit per batch keeps every
 revision on the branch a state the whole batch's tests describe.
 
+**A group of issues that merely shares a SUBSYSTEM is not a batch.** The test is a shared
+mechanism, fixture or verification rig; two issues in one file that need two different
+mechanisms are two batches. Stated because the subsystem reading is the tempting one and it
+produces batches that cannot land as one commit.
+
 **A batch that will not fit one commit is not one batch** — that is the signal to re-cut it,
 not to relax the rule. Two mechanisms wearing one batch's name is the thing this prevents.
 Seat branches (§ Cross-machine seat branches) are unaffected: a seat's branch is integrated

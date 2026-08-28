@@ -14,6 +14,19 @@ FIX it** — a workaround may exist, but the repair is not ours to make, so an `
 entry is not work waiting to be scheduled here. It is orthogonal to severity: an `Upstream`
 entry can still be the worst thing in the register.
 
+**Read an entry sceptically before building on it.** Across the five batches that emptied
+this register down from eighteen entries, **four** recorded root causes were measured and
+found WRONG, and three entries turned out not to be defects at all — one whose stated worry
+was structurally impossible while a different, real defect sat underneath it, reachable only
+because the reproduction was built anyway. An entry is a report plus somebody's best
+inference at the time, and the inference ages worse than the symptom. Reproduce first; fix
+the thing you measured, not the thing that was written down.
+
+**One defect can be filed twice.** A missing reading position, seen from two ends, was
+carried here as two unrelated entries and was nearly fixed twice before anyone noticed they
+were one thing. Before opening work on an entry, scan the others for the same mechanism
+described from a different vantage point.
+
 | ID | Platform | Scope | Issue | Severity |
 |----|----------|-------|-------|----------|
 | A | Any | Upstream | Tables are selection islands; cells are individually selectable but not part of the continuous buffer | Closed |
