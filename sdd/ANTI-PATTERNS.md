@@ -2,20 +2,37 @@
 
 Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file is now a compact **project index**: per entry — *symptom* · *where Scribobulate implements the fix* · *pointer into the `gtk4-rs` skill* (+ findings doc). The full transferable lesson, dead ends, and GTK source tracing live in the **`gtk4-rs` skill** — the standing GTK4/Rust anti-pattern knowledge base this project was originally built alongside and which is highly recommended (though not required) when working here. It is referred to **by name only, never by filesystem path**: the skill may not be installed on every machine this repository lives on, so a path would rot. AGENTS.md carries what it is and where to find it; the original self-contained essays remain in this file's **git history**.
 
-**Citation convention.** Two anti-pattern registers are in play and their numbering spaces are unrelated. An entry in **this** file is cited **`ScrAP-N`**; an entry in the `gtk4-rs` skill is cited **`GTK4Rs/AP-N`**, and one of that skill's numbered *techniques* (its `T-n` register — how-to recipes rather than traps, frozen and never reused, exactly like its `AP-n`) is cited **`GTK4Rs/T-N`**. **A bare `AP-N` is illegal anywhere in the tree** — not "it means the skill", illegal — and `lint-references` **check 8** fails on one. Both legal forms are deliberately SINGLE TOKENS with no space: a two-word form is split by any Markdown or `rustfmt` wrap, and two such citations were already broken that way when the gate was written. `ScrAP-` and `GTK4Rs/` are both unique, so a citation resolves to the same register whether it appears in a code comment, in `sdd/`, or inside this file. A bare `#N` inside **this file's own body** is the local shorthand for an entry here (never a skill entry); write `ScrAP-N` in full everywhere outside this file. When a lesson is held by BOTH registers, cite `ScrAP-N`: this register is always resolvable, whereas the skill may not be installed on the machine — which is also why a `GTK4Rs/AP-N` is checked for FORM only and its correctness rests on a human audit of a greppable list (#231). **`GTK4Rs/T-N` inherits that treatment, and its prefix is load-bearing in a way `AP-`'s is not:** a bare `T-N` is NOT gated and cannot be, because this tree already uses bare `T-n` for an unrelated purpose (four in `src/window/outline_nav.rs`, citing a testing register that does not exist here), so a bare-`T-N` check would fire on those and a check with false positives gets disabled. Always write the `GTK4Rs/` prefix on a technique citation; nothing will catch you if you don't. The retired forms — a bare `AP-N` meaning a project entry, `ANTI-PATTERNS #N`, and the two-word `skill AP-N` — are gone from the tree as of 2026-08-01, this time measured rather than asserted (#231 records why the first sweep's identical claim was false).
+**Citation convention.** Two anti-pattern registers are in play and their numbering spaces are unrelated. An entry in **this** file is cited **`ScrAP-N`**; an entry in the `gtk4-rs` skill is cited **`GTK4Rs/AP-N`**; an entry in the `general-engineering-principles` skill is cited **`GEP-N`** (its own native form, already a single unambiguous token, and deliberately NOT gated — a lesson routed there leaves no ScrAP behind to check it against), and one of that skill's numbered *techniques* (its `T-n` register — how-to recipes rather than traps, frozen and never reused, exactly like its `AP-n`) is cited **`GTK4Rs/T-N`**. **A bare `AP-N` is illegal anywhere in the tree** — not "it means the skill", illegal — and `lint-references` **check 8** fails on one. Both legal forms are deliberately SINGLE TOKENS with no space: a two-word form is split by any Markdown or `rustfmt` wrap, and two such citations were already broken that way when the gate was written. `ScrAP-` and `GTK4Rs/` are both unique, so a citation resolves to the same register whether it appears in a code comment, in `sdd/`, or inside this file. A bare `#N` inside **this file's own body** is the local shorthand for an entry here (never a skill entry); write `ScrAP-N` in full everywhere outside this file. When a lesson is held by BOTH registers, cite `ScrAP-N`: this register is always resolvable, whereas the skill may not be installed on the machine — which is also why a `GTK4Rs/AP-N` is checked for FORM only and its correctness rests on a human audit of a greppable list (#231). **`GTK4Rs/T-N` inherits that treatment, and its prefix is load-bearing in a way `AP-`'s is not:** a bare `T-N` is NOT gated and cannot be, because this tree already uses bare `T-n` for an unrelated purpose (four in `src/window/outline_nav.rs`, citing a testing register that does not exist here), so a bare-`T-N` check would fire on those and a check with false positives gets disabled. Always write the `GTK4Rs/` prefix on a technique citation; nothing will catch you if you don't. The retired forms — a bare `AP-N` meaning a project entry, `ANTI-PATTERNS #N`, and the two-word `skill AP-N` — are gone from the tree as of 2026-08-01, this time measured rather than asserted (#231 records why the first sweep's identical claim was false).
 
 > **ROUTING RULE — apply it when you MINT an entry, not in a migration later.** A lesson only
-> leaves this register if it has somewhere reusable to go, and today the **only** such destination
-> is the `gtk4-rs` skill. So one question decides it: **is this a lesson about gtk4-rs itself?**
+> leaves this register if it has somewhere reusable to go, and there are now **two** such
+> destinations. Two questions decide it, in this order:
 >
-> - **Yes** → weave it into the skill, and keep a stub here citing `GTK4Rs/AP-N`.
-> - **No** → **it stays here, in full.** That is Scribobulate's own internals *and* equally every
->   dependency that is not gtk4-rs — **Pango**, **GtkSourceView**, **pulldown-cmark/CommonMark**,
->   **librsvg**, **syntect**, **serde/`toml`**, the OS, the toolchain — *and* every process/tooling
->   concern (testing, CI, packaging, review discipline). None of those components is reused outside
->   Scribobulate, so extracting their lessons would buy no reuse and cost a hop. **Do not fold them
->   into the core skill.** (A separate home for the purely general engineering-discipline lessons is
->   under consideration but undecided; until it exists, they stay here too.)
+> 1. **Is this a lesson about gtk4-rs itself?** → weave it into the `gtk4-rs` skill and keep a
+>    stub here citing `GTK4Rs/AP-N`.
+> 2. **Is it general software-engineering discipline** — verification and gate design, experiment
+>    and diagnosis method, claims and relay hygiene, remedy reachability, cross-platform toolchain
+>    hazards, trust-boundary and state design — **that would hold in a project with none of this
+>    project's code in it?** → route it to the **`general-engineering-principles` skill**
+>    (**`gep`** in the ToasterTalk `skills` room), cited **`GEP-N`**.
+> - **Neither** → **it stays here, in full.** That is Scribobulate's own internals *and* equally
+>   every dependency that is not gtk4-rs — **Pango**, **GtkSourceView**, **pulldown-cmark/CommonMark**,
+>   **librsvg**, **syntect**, **serde/`toml`**, the OS, the toolchain — and any process or tooling
+>   concern whose specifics are OURS (this project's pipeline, its packaging, its review protocol).
+>   None of those components is reused outside Scribobulate, so extracting their lessons would buy
+>   no reuse and cost a hop. **Do not fold them into either skill.**
+>
+> **`GEP` was ratified as the `B` destination by the operator, 2026-08-27**, closing the "under
+> consideration but undecided" hold this rule carried until then. The test between 2 and "neither"
+> is whether the lesson survives deleting every Scribobulate-specific noun from it: *"a mutation
+> harness that restores with a VCS checkout destroys the uncommitted subject"* survives, so it went
+> to GEP; *"our pipeline step 5 SIGTRAPs with no accessibility bus"* does not, so it stayed (in
+> POLICY, in fact, beside the step it kills).
+>
+> **A GEP entry does not require a `ScrAP-N` for provenance** (operator, 2026-08-27): a lesson
+> routed OUT was ruled not to be a ScrAP, and minting a number purely to satisfy a citation regime
+> would undo the routing. Provenance travels as the commit SHA, branch and repository path. The
+> skill's own citation regime records that some of its entries carry no project number.
 >
 > **`glib`/`gio` are IN scope for the skill** (operator, 2026-08): its stated coverage is *gtk4,
 > glib, gio, gdk*, so a GLib or GIO lesson routes there like any other gtk4-rs lesson — the earlier
@@ -75,10 +92,13 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 >   home, this line reads *"project-specific; the fix + rationale live in a code comment
 >   at <site>."*
 >
-> **When to stub.** At MINT time, per the routing rule above — a lesson about gtk4-rs
-> itself is woven into the skill and stubbed here in the same change, never written full
-> and compressed later. A `B`/`C` lesson (no reusable home) stays here **in full** and is
-> not a stub; those are the entries legitimately running to dozens of lines.
+> **When to stub.** At MINT time, per the routing rule above — a lesson with a reusable
+> home is woven into that skill and stubbed here in the same change, never written full
+> and compressed later. **Only a `C` lesson stays here in full**; those are the entries
+> legitimately running to dozens of lines. A `B` lesson now has a home
+> (`general-engineering-principles`), so from 2026-08-27 a newly minted one is routed and
+> not written here at all — and unlike an `A`, it needs no stub, because the operator ruled
+> a routed-out general lesson is not a ScrAP. Nothing to point at means nothing to rot.
 >
 > **One caveat when stubbing at mint time:** the usual "the full essay lives in this
 > file's git history" does not apply, because it was never committed in full. Say where
@@ -137,10 +157,13 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > held is resolved above. **Keep this the only copy.**
 
 ---
-**Disposition tags (migration bucket, provisional).** `A` = GTK4-core, belongs in the `gtk4-rs`
-skill (body here becomes a pointer stub); `B` = general-engineering discipline, destination ON
-HOLD pending operator review — treat as provisional; `C` = stays in this register, per the
-routing rule above; `D` = dead landing-spot stub for a merged/superseded number. **Numbers are immutable: never renumbered,
+**Disposition tags (migration bucket).** `A` = GTK4-core, belongs in the `gtk4-rs`
+skill (body here becomes a pointer stub); `B` = general-engineering discipline, belongs in the
+**`general-engineering-principles`** skill — **destination ratified by the operator 2026-08-27**,
+no longer provisional; `C` = stays in this register, per the routing rule above; `D` = dead
+landing-spot stub for a merged/superseded number. **Every existing `B` row is therefore a
+migration candidate, not a resident** — route new ones at mint time and migrate the standing ones
+as they are next touched, rather than in one sweep nobody has budget for. **Numbers are immutable: never renumbered,
 never reused; a deleted entry keeps its `## N.` heading forever.**
 
 | #   | Anti-pattern | Disp |
