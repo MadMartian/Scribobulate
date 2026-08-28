@@ -710,10 +710,13 @@ gtk4-rs skill's dev-loop doc on why geometry/rendering bugs leave no warning.
 - [ ] **4.9** Edit, then Ctrl+S → **"File saved."** toast (~2.5s, save icon) + "File saved" in the status bar; toast auto-dismisses. Save As to a new path → same notice. Save immediately after an external reload → the notice **retargets** to "File saved." rather than stacking a second box over "File reloaded from disk." (one shared widget)
 
 ### §6 Resource footprint (go/no-go gate)
-- [ ] **6.1** Per §1.8 above: `nvidia-smi` shows **no GPU client** for the process; VRAM < 50 MiB
-- [ ] **6.2** Confirm no GL/GLES context held (no compositing pipeline) — check `GSK_RENDERER` effective value / absence of GL errors in log
-- [ ] **6.3** Sum RSS across all app processes; run several live-reload cycles (§3.1 repeated ~20x) and re-measure — must not climb unbounded
-- [ ] **6.4** *(Windows only)* Measure dedicated GPU memory and GPU engine utilisation for the PID (`Get-Counter "\GPU Process Memory(*)\Dedicated Usage"` and `"\GPU Engine(*)\Utilization Percentage"`, matched on `pid_<PID>_`). A non-zero reading is **expected and not a failure** — Windows composites every window through the GPU. What must hold: the figure stays far under 50 MiB, engine utilisation stays ~0%, and — the actual gate — the figure **does not grow** when the window is maximised (try ~9x the area) or when a much larger document is opened at a fixed window size, while RSS *does* grow with the document. Growth in either dimension means software compositing is not active (TDD 6.4)
+- [ ] **6.1** *(Linux/NVIDIA only — see 6.4 for macOS, 6.5 for Windows)* Per §1.8 above: `nvidia-smi` shows **no GPU client** for the process; VRAM < 50 MiB. The "no GPU client at all" reading is **`nvidia-smi` accounting and does not transfer** — macOS and Windows both composite every window through the GPU, so applying this item literally there fails a build that passes the actual gate (POLICY § Footprint verification)
+- [ ] **6.2** *(all platforms)* Confirm no GL/GLES context held (no compositing pipeline) — check `GSK_RENDERER` effective value / absence of GL errors in log. **Prefer the positive form where the platform offers one**: `GSK_DEBUG=renderer` makes GSK name the renderer it actually chose, per surface, which an absence of errors cannot do — an absent GL error does not distinguish a software path from a GL path that did not complain. The macOS spelling of that is in 6.4
+- [ ] **6.3** *(all platforms)* Sum RSS across all app processes; run several live-reload cycles (§3.1 repeated ~20x) and re-measure — must not climb unbounded. **Confirm the reloads actually fired** before trusting a flat RSS curve (the log's per-reload record, or the rendered content changing) — a watcher that silently stopped delivering produces the flattest curve of all
+- [ ] **6.4** *(macOS only)* macOS composites every visible window through the GPU, so 6.1's "no GPU client / zero VRAM" reading is unattainable here and is **not** the gate — do not apply 6.1 literally on this platform. Two measurements, both per-process and both **without `sudo`** (`powermetrics` needs root, so it is out of reach of this procedure): **(a) the renderer actually chosen** — launch with `GSK_DEBUG=renderer` and read stderr → it must name `Using renderer 'GskCairoRenderer' for surface 'GdkMacosToplevelSurface'`, and likewise for `GdkMacosPopupSurface`. This is *positive* evidence and is why it replaces 6.2's "absence of GL errors" here: an absent error cannot distinguish a software path from a GL path that simply did not complain. **(b) the GPU mappings the process holds** — `vmmap <PID>`, summing the `IOAccelerator` and `IOAccelerator (graphics)` regions. **What must hold:** every surface names `GskCairoRenderer`; the `IOAccelerator` total stays in the low **hundreds of KiB** and the whole GPU-mapped set stays far under 50 MiB; and — the actual gate, not the reading — **neither figure grows** when the window is resized across its full range (~4x area) or when a much larger document is opened at a fixed window size, while **RSS *does* grow with the document**, which is what confirms the document is being rendered on the CPU. Growth in either dimension, or any renderer other than Cairo, fails this gate (TDD 6.4)
+  > **Read `IOSurface` as context, never as the gate.** It is the window-server handoff that every macOS window has, Cairo-rendered or not, and it dominates the GPU-mapped total (tens of MiB against IOAccelerator's hundreds of KiB). It is area-*invariant* — measured constant across a 4x window-area range — but its large backing buffers appear and disappear **in pairs** over a process's life, so its total can halve or double for no application reason. A run that gates on the IOSurface total will read that as a regression. Report it, do not gate on it.
+  > **GPU engine utilisation is only available system-wide without `sudo`** (`ioreg -r -d 1 -c IOAccelerator`, field `"Device Utilization %"`). It therefore includes every other window on the desktop. Take a baseline with the app closed and compare against it; a single absolute reading proves nothing on its own.
+- [ ] **6.5** *(Windows only)* Measure dedicated GPU memory and GPU engine utilisation for the PID (`Get-Counter "\GPU Process Memory(*)\Dedicated Usage"` and `"\GPU Engine(*)\Utilization Percentage"`, matched on `pid_<PID>_`). A non-zero reading is **expected and not a failure** — Windows composites every window through the GPU. What must hold: the figure stays far under 50 MiB, engine utilisation stays ~0%, and — the actual gate — the figure **does not grow** when the window is maximised (try ~9x the area) or when a much larger document is opened at a fixed window size, while RSS *does* grow with the document. Growth in either dimension means software compositing is not active (TDD 6.5)
 
 ### §7 Window & layout
 - [ ] **7.0** *(Windows only, release build)* Launch the **installed** app from its Start-menu shortcut or by double-clicking a `.md` file — not from a terminal. **No console/CMD window may appear**, either in front or behind the app window, and none may show in the taskbar. Regression shape to watch for: a console-subsystem build allocates a console that owns the process, so closing that window kills the app with no save prompt. Verify with `Get-CimInstance Win32_Process -Filter "ParentProcessId = <PID>"` → no `conhost.exe`. A **debug** build is expected to keep its console (that is deliberate, so `RUST_LOG` still reaches the terminal during development) — test this against a release build only
@@ -1743,17 +1746,40 @@ Then two countermeasures, which are **continuous, not one-time setup**:
   under the run — as short as 2–3 minutes. When a click or capture starts failing
   mid-session, check `ioreg -n Root -d1 | grep CGSSessionScreenIsLocked` **before**
   concluding the app is at fault.
-- **Reassert frontmost before every click**, in the same shell invocation as the
-  click: `osascript -e 'tell application "System Events" to set frontmost of process "<name>" to true'`.
+- **Reassert frontmost before every click — and before every geometry write**, in the
+  same shell invocation as the action: `osascript -e 'tell application "System Events"
+  to set frontmost of (first process whose unix id is <pid>) to true'`.
   The controlling terminal is a real, focusable window that can regain frontmost
   status between tool-call turns, and a click issued without re-asserting can land
   on the terminal's own transcript — which then appears in the screenshot and reads
-  convincingly as bogus application state.
+  convincingly as bogus application state. A geometry write without it does not land
+  anywhere at all: it returns success and changes nothing.
+  **Target the pid, not the process name** — see *Window geometry* below for why a
+  name binds ambiguously whenever a second instance is up.
 
 **2. Drive loop.**
 
 - **Window geometry** — `System Events`' `position of window 1` / `size of window 1`,
-  in **points**.
+  in **points**. **Never address the process by name here.** `tell process
+  "scribobulate"` binds by name, and this plan deliberately creates moments when more
+  than one instance is running (8.1, 8.5, and any item run while another instance is
+  up) — the call then binds to whichever the window server offers, with no error.
+  Address the one you mean, and prove it:
+  `tell (first process whose unix id is <pid>)`, confirmed with `title of window 1`.
+  MEASURED: a footprint sweep resized one instance while reading `vmmap` from another,
+  and reported the invariance that mis-binding produces as a pass — see the read-back
+  rule below, which is what catches it.
+- **A geometry WRITE silently no-ops unless that process is frontmost.** It returns
+  success and changes nothing. The reassert-frontmost rule above is stated for clicks;
+  it applies identically here, for the same reason and with a worse failure mode, since
+  there is no cursor to photograph. Assert frontmost on the target pid first.
+- **Then READ THE GEOMETRY BACK and confirm it actually changed before trusting any
+  measurement taken against it.** This is the check that catches both faults above, and
+  it is not optional bookkeeping: an action that reports success and does nothing leaves
+  the window at its old size, so a sweep "across window areas" silently measures one
+  area several times — and invariance is usually the very thing such a sweep is trying
+  to establish. The window also has a **minimum width** it will not go below, so a
+  requested size is not an achieved size even when everything is bound correctly.
 - **Screenshot** — `screencapture -R<x>,<y>,<w>,<h>` for a window crop, `-C` to draw
   the cursor in. The image is in **pixels**; positions and clicks are in **points**.
   Every coordinate derived from a screenshot must be divided by the display's scale
