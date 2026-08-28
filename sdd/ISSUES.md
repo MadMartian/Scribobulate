@@ -32,7 +32,6 @@ entry can still be the worst thing in the register.
 | S | Any | Project | The horizontal rule's thickness is the one styling value no theme can state — a literal in the PDF sink and the separator's own CSS default on screen | Low |
 | W | Any | Production | The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`, so both shipped washes print as flat colour | Low |
 | X | Any | Production | The find bar's "current match" indicator drops on an in-session edit (any mode); self-heals on the next Next/Prev — the originally-reported stronger form did not reproduce | Low |
-| Y | Any | Production | In Edit/Split mode, a search match inside annotated text is counted but its "all matches" highlight is invisible, buried under the annotation's own tag | Medium |
 
 ## A. Tables are selection islands
 
@@ -833,63 +832,3 @@ clear the compositor/WM class of bug); or an interaction sequence not yet tried.
   intervening caret move (re-select the current hit's range after any buffer
   change while find stays open), which would close the milder, confirmed gap
   either way.
-
-## Y. In Edit/Split mode, a match inside annotated text is counted but invisible
-
-**Severity**: Medium (a real match that reads as "not found" — the operator's own
-description, "find seems to ignore annotated text", because the one cue a user
-watches, the highlight, never appears, even though the count and Next/Prev both
-work correctly underneath)
-
-Operator-reported: find does not match a query term that only occurs inside text
-carrying a comment annotation, in a table cell or in body text.
-
-**Reproduced and root-caused, in Edit/Split mode specifically** (Xvfb + openbox,
-release build; fixture: a body phrase and a table-cell phrase each wrapped in a
-`{==…==}{>>…<<}` annotation). Screenshot-confirmed, in the editor pane:
-
-- The match COUNT is correct (`GtkSourceSearchContext` reports it, e.g. "1
-  matches"/"1 of 1") and Next/Prev correctly selects it (`buf.select_range`, a real
-  buffer selection, not a tag).
-- The "all matches" highlight — the cue the operator is watching for — never
-  appears over the annotated span. An identical, unannotated match ("bodyneedle")
-  highlights yellow the instant it's typed, with no Enter needed; the annotated
-  one ("annotneedle"/"cellannotneedle") never gets a visible tint, typed or not.
-- The CURRENT-match selection (a different rendering path — an actual buffer
-  selection, not a tag) *does* show over annotated text, which is why the count
-  and cycling "work" while the highlight silently doesn't — two independent
-  mechanisms, one broken.
-
-**Root cause, source-confirmed**: `tags.rs:435-436` explicitly raises the
-`AnnotationHighlight` `GtkTextTag` to the tag table's highest priority
-(`table.size() - 1`) — deliberately, per its own comment, so an annotation's wash
-"is always visible, even over a span that carries its own opaque background"
-(inline code). GTK text-tag backgrounds do not alpha-composite; the
-highest-priority tag's background wins outright and every lower one is painted
-over — the exact GTK4Rs/AP-84 shape. `GtkSourceSearchContext`'s own "all matches"
-style is a tag in that *same* editor buffer's tag table, added independently of
-this reassertion, so wherever `AnnotationHighlight` sits above it, the search
-tag's background is buried the same way inline code's would have been —
-`AnnotationHighlight`'s fix for one collision (GTK4Rs/AP-84 vs. code spans) creates the
-identical collision against the search engine's own tag.
-
-**Preview mode does NOT reproduce this** — confirmed on the same fixture. The
-preview's own highlighting (`window::find::apply_preview_highlights`) composes
-its overlay directly (a buffer tag for body text; a Pango `AttrColor` layered on
-top of the cell's markup for table cells) rather than going through
-`AnnotationHighlight`'s tag-table priority, so both body and cell annotated
-matches highlight correctly there, current and non-current alike.
-
-**Mitigation options**:
-- Give the editor's search-match tag priority above `AnnotationHighlight` — set it
-  explicitly after `GtkSourceSearchContext` creates it (or re-raise
-  `AnnotationHighlight` to sit just below whatever `GtkSourceSearchContext` uses,
-  never above it), rather than pinning `AnnotationHighlight` to an unconditional
-  max.
-- Or drop the editor-buffer annotation wash to a lower, code-span-only priority
-  and give the code-span tag the max slot only when no search is active — more
-  invasive, and reintroduces the case tags.rs's reassertion exists to prevent
-  unless done carefully.
-- Either way, add a regression check pinning the ORDER (tag-priority comparison,
-  not just a pixel diff — this is invisible to `compare -metric AE` on a
-  screenshot without a fixture as deliberate as the one used here).

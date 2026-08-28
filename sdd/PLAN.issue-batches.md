@@ -47,7 +47,7 @@ they are two batches.
 |---|---|:-:|---|---|
 | **1 — View-state handoff** | *(U, V — deleted)* | Medium | One missing document position, seen from two ends | ✅ **DONE**, one commit on master |
 | **2 — A theme change that never lands** | *(T — deleted)* | Medium | A reading-theme switch missing a background tab. **C was re-cut OUT of this batch** — see below | ✅ **DONE**, verified on the live display |
-| **3 — Find highlight rendering** | **Y**, **X** | Medium, Low | Same files, same fixture (an annotated document with a repeated term), same rig. Y is root-caused to tag priority; X's confirmed half is re-asserting the current match after a buffer change. X adds little on top of Y | 💡 Ready; X's *strong* form still needs the operator's exact steps |
+| **3 — Find highlight rendering** | *(Y — deleted)*, **X** | Medium, Low | Y did NOT reproduce and its recorded root cause was disproven — see below. X is unchanged and is now a decision rather than a task | ◑ Y closed; **X awaiting the operator** |
 | **4 — Theme fidelity across export sinks** | **W**, **S** | Low, Low | Both fail TDD 25.9 the same way — a value that does not resolve through the theme engine. Coalescing buys a real deliverable neither gets alone: a **cross-sink parity guard** that the two sinks agree on a given key | 💡 Ready |
 | **5 — Preview render diagnostics** | **N**, **P** | Low, Low | Neither is a fix yet; both need a deliberate reproduction before anyone can act, and both want the same instrument — a fixture matrix driven at several pane widths with screenshot comparison. One pass covers both; two passes duplicate the setup | 💡 Ready |
 
@@ -69,6 +69,7 @@ they are two batches.
 | **A** | `Closed` — intractable, source-verified, and deliberately retained so nobody reopens the dead end. Not actionable by design |
 | **F**, **I** | `Upstream` — the defect is in a third-party library and the repair is not ours to make. A workaround may exist; the fix does not belong to this project |
 | **R** | Not an engineering task at all: an operator decision about Pixel Quest's palette (retune both inks, retune one, or settle both permanently and close). Blocked on the operator, not on effort |
+| **X** | Low | **Now a decision, not a task.** Its confirmed half is that any caret-moving action (a click, a drag-select, typing) collapses the current-match selection, because that selection IS the indicator — and it re-asserts on the very next Next/Prev. That is ordinary text-buffer behaviour, and the proposed remedy (re-select the current hit after any buffer change while find is open) would **take the caret back from the user** after they deliberately clicked elsewhere, which is worse than the symptom. The originally reported strong form (Next/Prev itself broken, scroll frozen, fixed only by closing the bar) is unconfirmed after three reproduction attempts. Recommendation: close it as working-as-intended unless the operator can supply steps that reproduce the strong form |
 | **M** | Inert today — every current call site resolves at a bounded set of sizes, so the missing cache eviction cannot fire. Either a small LRU cap or a documented constraint at the call sites; confirm it is worth spending anything on before doing so |
 
 ## Recommendation
