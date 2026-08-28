@@ -41,6 +41,29 @@ rig** — so fixing them together costs materially less than fixing them apart, 
 A group of issues that merely share a subsystem is not a batch; if they need two mechanisms,
 they are two batches.
 
+## Where this stands — read this first
+
+**Six of the eighteen entries this map opened with are gone; twelve remain.** Batches 1–4
+are done and each landed as one commit on `master`. Nothing is in flight: no branch, no
+uncommitted work, all gates green (fmt, clippy `-D warnings`, both test harnesses, coverage
+at its ratchet, `lint-references`).
+
+**What a session resuming here should know, and would otherwise re-derive:**
+
+- **Batch 5 is a measurement pass, not a fix.** Both its entries describe things nobody has
+  reproduced deliberately. Its most likely honest outcome under "better is the enemy of good
+  enough" is *deleting both* as accepted, and that counts as paying the register down — a
+  batch that measures its way to "this is fine" has done its job.
+- **`D` is the only High and the only open-ended item.** It is the one place where the
+  timebox matters more than the fix, and it is worth agreeing the budget with the operator
+  before starting rather than after.
+- **`R` and `M` are not engineering tasks.** They are decisions the operator owns; do not
+  start either without an answer.
+- **Three of the four batches closed at least one issue WITHOUT writing a fix** — by
+  disproving a recorded root cause, by finding the contract already stated, or by the
+  operator ruling something out of scope. Read an entry sceptically before building on it:
+  two of the root causes recorded in this register have now been measured and found wrong.
+
 ## The batches
 
 | Batch | Issues | Severity | Why these coalesce | State |
