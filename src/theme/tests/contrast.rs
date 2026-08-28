@@ -206,16 +206,6 @@ const TEXT: f64 = crate::palette::WCAG_AA_TEXT;
 ///   not treat their presence here as agreement that the colours are right.
 const DELIBERATE: &[(&str, &str, &str)] = &[
     (
-        "pixelquest",
-        "link_color",
-        "an arcade palette's neon link is a deliberate period look against this page's own low ceiling for light inks; the underline beside it carries the affordance and is held to the graphic floor",
-    ),
-    (
-        "pixelquest",
-        "list_task_color",
-        "operator's call 2026-08-26 (data/themes.toml): a full-luminance red over the shaded tone this key first shipped with, the same trade the link colour makes. The GLYPH carries taken-or-not, so the colour is decoration rather than the only signal",
-    ),
-    (
         "bedtime",
         "mark_fg",
         "chosen knowingly by the operator over a brighter band that measured 7.31:1, because the two-green pairing is the look wanted; it clears the 3:1 large-text floor. The reasoning is at data/themes.toml's `mark_fg`, which asks a future reader not to 'fix' it by accident",

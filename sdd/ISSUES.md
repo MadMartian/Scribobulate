@@ -23,7 +23,6 @@ entry can still be the worst thing in the register.
 | G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
-| R | Any | Production | Pixel Quest's `link_color` and `list_task_color` sit below their legibility floor and are carried as named exceptions the operator intends to revisit, not as settled choices | Low |
 
 ## A. Tables are selection islands
 
@@ -521,31 +520,3 @@ here because this entry exists in order to be deleted when the defect is fixed, 
 evidence must outlive it. Do not restate its figures here; several carry caveats that do not
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
-
-## R. Pixel Quest's link and task-marker inks are provisional exceptions, not settled ones
-
-**Severity**: Low. Both are legible enough to use and both have a second, non-colour
-signal carrying their meaning — the link's underline is held to the graphic floor, and
-the task marker's glyph carries taken-or-not. Neither is a blocker; the debt is that
-they occupy a permanent-looking slot in a list of decisions while actually awaiting one.
-
-`src/theme/tests/contrast.rs`'s `DELIBERATE` allow-list names five pairings that sit below
-the floor TDD 18.8 holds their role to. Three are settled: Terminal's `rule_color` (ANSI 8
-grey on true black — correcting it stops it being ANSI 8, operator-accepted 2026-08-27),
-and Bedtime's `mark_fg` and `rule_color` (that theme's palette is owned by a different
-operator and is not this project's to retune). **Pixel Quest's two are not settled** —
-the operator's ruling on 2026-08-27 was "we'll address those later", which is a different
-statement from the reasons recorded beside the other three, and the list as written cannot
-tell them apart.
-
-The risk is the one TDD 18.8's own last clause describes from the other direction: a named
-exception is a licence, and a licence inherited by a future reader reads as a decision
-somebody made rather than one somebody postponed.
-
-**Mitigation options**:
-- Retune Pixel Quest's `link_color` and `list_task_color` to clear their floors and delete
-  both rows — the arcade look is the constraint to preserve, and the page's low ceiling for
-  light inks is what makes it hard, so this is a palette question rather than a code one.
-- Retune only `list_task_color` (the newer of the two, changed 2026-08-26) and keep the link
-  as a period-look exception with its reason unchanged.
-- Accept both permanently: rewrite the two rows to state a settled reason and close this.
