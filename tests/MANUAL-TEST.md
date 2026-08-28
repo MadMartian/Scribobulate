@@ -1746,17 +1746,40 @@ Then two countermeasures, which are **continuous, not one-time setup**:
   under the run — as short as 2–3 minutes. When a click or capture starts failing
   mid-session, check `ioreg -n Root -d1 | grep CGSSessionScreenIsLocked` **before**
   concluding the app is at fault.
-- **Reassert frontmost before every click**, in the same shell invocation as the
-  click: `osascript -e 'tell application "System Events" to set frontmost of process "<name>" to true'`.
+- **Reassert frontmost before every click — and before every geometry write**, in the
+  same shell invocation as the action: `osascript -e 'tell application "System Events"
+  to set frontmost of (first process whose unix id is <pid>) to true'`.
   The controlling terminal is a real, focusable window that can regain frontmost
   status between tool-call turns, and a click issued without re-asserting can land
   on the terminal's own transcript — which then appears in the screenshot and reads
-  convincingly as bogus application state.
+  convincingly as bogus application state. A geometry write without it does not land
+  anywhere at all: it returns success and changes nothing.
+  **Target the pid, not the process name** — see *Window geometry* below for why a
+  name binds ambiguously whenever a second instance is up.
 
 **2. Drive loop.**
 
 - **Window geometry** — `System Events`' `position of window 1` / `size of window 1`,
-  in **points**.
+  in **points**. **Never address the process by name here.** `tell process
+  "scribobulate"` binds by name, and this plan deliberately creates moments when more
+  than one instance is running (8.1, 8.5, and any item run while another instance is
+  up) — the call then binds to whichever the window server offers, with no error.
+  Address the one you mean, and prove it:
+  `tell (first process whose unix id is <pid>)`, confirmed with `title of window 1`.
+  MEASURED: a footprint sweep resized one instance while reading `vmmap` from another,
+  and reported the invariance that mis-binding produces as a pass — see the read-back
+  rule below, which is what catches it.
+- **A geometry WRITE silently no-ops unless that process is frontmost.** It returns
+  success and changes nothing. The reassert-frontmost rule above is stated for clicks;
+  it applies identically here, for the same reason and with a worse failure mode, since
+  there is no cursor to photograph. Assert frontmost on the target pid first.
+- **Then READ THE GEOMETRY BACK and confirm it actually changed before trusting any
+  measurement taken against it.** This is the check that catches both faults above, and
+  it is not optional bookkeeping: an action that reports success and does nothing leaves
+  the window at its old size, so a sweep "across window areas" silently measures one
+  area several times — and invariance is usually the very thing such a sweep is trying
+  to establish. The window also has a **minimum width** it will not go below, so a
+  requested size is not an achieved size even when everything is bound correctly.
 - **Screenshot** — `screencapture -R<x>,<y>,<w>,<h>` for a window crop, `-C` to draw
   the cursor in. The image is in **pixels**; positions and clicks are in **points**.
   Every coordinate derived from a screenshot must be divided by the display's scale
