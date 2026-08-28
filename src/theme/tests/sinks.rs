@@ -11,9 +11,8 @@
 //! A key declared in `KEYS` but never read by a sink is **worse than an unknown key**:
 //! `ThemeSpec::validate` admits it WITHOUT a warning, because `keys::lookup` claims it,
 //! so it is accepted, SCHEMA-documented and completely inert with no log line at all.
-//! `sdd/PLAN.preview-decoration.md` predicted this in its own words — *"nothing asserts
-//! a key is **used** — so this is a completeness obligation on the author"* — and
-//! eleven keys duly reached two surfaces of three.
+//! Nothing asserts a key is *used*, so it was a completeness obligation on the author
+//! until this sweep existed — and eleven keys duly reached two surfaces of three.
 //!
 //! # The observable, and what it is not
 //!

@@ -482,10 +482,9 @@ mod tests {
     /// projections are the only way out of the type.
     ///
     /// A single `markup_escape_text` is not sufficient once both export sinks are
-    /// involved (`sdd/PLAN.preview-decoration.md` constraint 2): an un-escaped `&`
-    /// fails `pango_parse_markup` and renders the whole run EMPTY with no warning
-    /// (ScrAP-163), and an un-escaped `<` in HTML is an injection into a file this
-    /// project hands to a browser. The plain projection is deliberately NOT escaped —
+    /// involved: an un-escaped `&` fails `pango_parse_markup` and renders the whole run
+    /// EMPTY with no warning (ScrAP-163), and an un-escaped `<` in HTML is an injection
+    /// into a file this project hands to a browser. The plain projection is deliberately NOT escaped —
     /// it goes to a plain-text API — which is exactly why it has its own name.
     #[test]
     fn a_hostile_glyph_is_inert_in_every_grammar_it_reaches() {

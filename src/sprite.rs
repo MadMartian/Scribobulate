@@ -1,5 +1,5 @@
 //! Sprite decoration: a theme naming an image to stand in for part of the closed
-//! decoration vocabulary (`sdd/PLAN.preview-decoration.md`, ratified).
+//! decoration vocabulary the engine already knows how to draw.
 //!
 //! **A sprite has two possible sources, and which one a reference resolves to is
 //! decided by where its `themes.toml` came from** ([`SpriteOrigin`]). A file on disk

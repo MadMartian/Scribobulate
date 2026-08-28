@@ -151,10 +151,9 @@ impl Bound {
 /// 18.33) — and left it wide open for *consumption*. A key declared here but never read
 /// by a sink is **worse** than an unknown one: `ThemeSpec::validate` admits it WITHOUT
 /// a warning, because `keys::lookup` claims it, so it is accepted, SCHEMA-documented
-/// and completely inert with no log line at all. `sdd/PLAN.preview-decoration.md`
-/// predicted this in its own words — *"nothing asserts a key is **used** — so this is a
-/// completeness obligation on the author"* — and eleven keys duly reached two surfaces
-/// of three.
+/// and completely inert with no log line at all. Nothing asserts a key is *used*, so it
+/// was a completeness obligation on the author until this table existed — and eleven keys
+/// duly reached two surfaces of three.
 ///
 /// An excluded surface carries its reason, so an exception is *stated* rather than
 /// merely unmeasured. `theme::tests::sinks` sweeps the registry against it.

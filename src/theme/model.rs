@@ -93,8 +93,7 @@ impl Typography {
     /// Shared by every representation OUTSIDE the buffer (table-cell `GtkLabel`
     /// markup, PDF/HTML export markup) so `bold_weight` cannot silently apply on the
     /// body `GtkTextTag` alone and drift from a bold word in a table or an exported
-    /// document (TDD 18.18 — the prerequisite the whole decoration plan is gated on,
-    /// `sdd/PLAN.preview-decoration.md` constraint 1).
+    /// document (TDD 18.18 — the prerequisite every later inline theme key is gated on).
     pub(crate) fn bold_attr(&self) -> String {
         format!(" weight=\"{}\"", self.bold_weight)
     }

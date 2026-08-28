@@ -2529,10 +2529,9 @@ mod gtk_integration_tests {
         assert_eq!(text.as_str(), "one");
     }
 
-    /// The K+D trap `sdd/PLAN.preview-decoration.md` names, pinned: a new drawn vector
-    /// that is not added to `snapshot_layer`'s early-return gate paints on a document
-    /// that happens to contain a code block or a list and silently never paints on one
-    /// that does not.
+    /// The drawn-decoration trap, pinned: a new drawn vector that is not added to
+    /// `snapshot_layer`'s early-return gate paints on a document that happens to contain
+    /// a code block or a list and silently never paints on one that does not.
     ///
     /// A headings-ONLY document is therefore the whole point of this test — every other
     /// vector is empty on it, so the gate is the only thing standing between the band
@@ -2640,8 +2639,7 @@ mod gtk_integration_tests {
     /// TDD 18.18. Same shape as the annotation-highlight test above, one rung wider:
     /// `bold_weight` and `supsub_scale` (+ rise) are the two keys that applied ONLY on
     /// the body `GtkTextTag` before this fix — a table cell's `<b>`/`<sup>`/`<sub>`
-    /// silently ignored both, and nothing caught it (`sdd/PLAN.preview-decoration.md`
-    /// constraint 1).
+    /// silently ignored both, and nothing caught it.
     #[test]
     fn bold_and_supsub_match_between_body_and_cell_under_every_theme() {
         for id in ["system", "sepia"] {

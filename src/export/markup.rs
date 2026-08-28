@@ -285,8 +285,7 @@ mod markup_tests {
 
     /// TDD 18.18: the PDF/HTML export markup sink is the THIRD representation of
     /// `bold_weight`/`supsub_scale` (body tag, table cell, this one) — resolved
-    /// against the sink's own EXPLICIT `Theme`, never `crate::theme::active()`
-    /// (`sdd/PLAN.preview-decoration.md` constraint 1's three-way parity).
+    /// against the sink's own EXPLICIT `Theme`, never `crate::theme::active()`.
     #[test]
     fn bold_and_supsub_carry_the_themed_attributes_into_export_markup() {
         let (d, theme) = themed_fixture();

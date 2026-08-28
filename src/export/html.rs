@@ -730,10 +730,9 @@ fn task_marker_html(t: &Theme, checked: bool, uris: &SpriteUris) -> Option<Strin
         }
     }
     // ONE key, THREE grammars: this projection is the HTML one, and it is a different
-    // escape from the Pango-markup one the PDF sink takes (`sdd/PLAN.preview-decoration.md`
-    // constraint 2 — a single `markup_escape_text` is not sufficient once both sinks
-    // are involved, and what leaves this application is opened by software this project
-    // does not control).
+    // escape from the Pango-markup one the PDF sink takes — a single `markup_escape_text`
+    // is not sufficient once both sinks are involved, and what leaves this application is
+    // opened by software this project does not control.
     // Classed rather than inline-styled, so its colour lives in the sheet with every
     // other themed value (TDD 25.9) — see `task_marker_css`.
     choice.glyph.map(|g| {
@@ -1676,8 +1675,8 @@ mod html_sink_tests {
     ///
     /// The escaping is the point. This is the same key the PDF sink escapes for Pango
     /// markup and the gutter takes as plain text, and a single escape is not sufficient
-    /// for all three (`sdd/PLAN.preview-decoration.md` constraint 2) — what leaves this
-    /// application is opened by software this project neither controls nor sandboxes.
+    /// for all three — what leaves this application is opened by software this project
+    /// neither controls nor sandboxes.
     #[test]
     fn a_themed_marker_glyph_reaches_the_artefact_html_escaped() {
         let (palette, mut theme) = style();

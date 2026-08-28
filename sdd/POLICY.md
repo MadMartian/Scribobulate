@@ -823,8 +823,7 @@ full account is ScrAP-225; the rule above is what stops it recurring.
   where an otherwise-hardcoded value lives, and it is an ordinary theme — **no key
   is system-only and no theme is second-class**. The rule covers geometry
   deliberately: a value that is hardcoded is hardcoded regardless of its type, and
-  exempting geometry would make this rule mean less than it says. **Bounds (amended
-  2026-08-24 on ratification of [`PLAN.preview-decoration.md`](PLAN.preview-decoration.md)):
+  exempting geometry would make this rule mean less than it says. **Bounds:
   a theme selects from a closed vocabulary of decorations the engine already knows
   how to draw, and states their appearance and metric. It does not describe new
   drawing, and it does not change how layout is computed** (a bounded/centred
@@ -862,6 +861,13 @@ full account is ScrAP-225; the rule above is what stops it recurring.
   the resolved pixel** (`iter_location().x()` on a realized view), never by
   tag-property equality — that bug class is invisible to tag-level tests
   (ScrAP-121).
+- **Bundled decoration art is an original design.** A sprite or glyph shipped in
+  `data/themes.toml` may evoke an idiom but must not reproduce another work's
+  expression: no franchise names, no copied character, block or tile art, and no
+  edited derivative of one — a trace is still a copy. A bare colour is the stated
+  exception, carrying no copyrightable expression. This is a merge gate rather than
+  a taste note, and it is not recoverable after the fact: art produced from a
+  reference has to be discarded and redrawn, not sanitised.
 - **Every menubar nested-submenu action must call `window::dismiss_stray_menubar_popovers`**
   after it fires (on the active window, for an app-scoped action). Otherwise GTK
   4.6–4.12 leaks the activation onto a top-level menu (ScrAP-116). It is

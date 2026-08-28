@@ -504,15 +504,12 @@ rule_space    = 6
 # ── Pixel Quest ──────────────────────────────────────────────────────────────────
 # A bright, cheerful arcade-platformer reading theme: dark ink on a daylight sky-blue
 # page, playful rounded type, and level-title BANDS behind the top two heading levels
-# — the first theme to lean on every key `sdd/PLAN.preview-decoration.md` Phase 1/2
-# added (per-level heading colour/face, the heading band, glyph list markers, themed
-# strikethrough and a styled link underline). Deliberately GENERIC: no franchise
-# names, no reproduced character/block art, no image sprites at all — every
-# decoration here is a colour, a font stack, or a Unicode glyph, which is what keeps
-# it clear of the copyrighted-idiom trap this plan's own deleted spike walked into
-# (see the plan's header note — that spike is not revived, and this theme is an
-# independent design, not a sanitised copy of it). The page background is the one
-# deliberate exception to "independent design": it reuses the specific saturated sky
+# — the widest user of the decoration vocabulary (per-level heading colour/face, the
+# heading band, glyph list markers, themed strikethrough, a styled link underline, and
+# three tiled sprites). Deliberately GENERIC: no franchise names, no reproduced
+# character, block or tile art — every glyph is a Unicode character and every sprite
+# below is drawn for this project, which is what POLICY's "Bundled decoration art" rule
+# requires. The page background is the one deliberate exception to "independent design": it reuses the specific saturated sky
 # blue widely associated with a certain classic platformer's daylight levels. A bare
 # hue carries no copyrightable expression and this project asserts no trademark claim
 # over "sky blue" — the operator's call, on the same reasoning that ruled out reusing

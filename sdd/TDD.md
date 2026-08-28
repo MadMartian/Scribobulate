@@ -2282,7 +2282,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 ### 18.18 A table cell and the export sinks render themed emphasis identically to the body
 - **Given** a document with bold, superscript, or subscript both in body prose and inside a table cell, under a theme setting `bold_weight` and `supsub_scale`
 - **When** it is rendered, and separately exported to PDF and HTML
-- **Then** the table cell matches the body exactly, and the PDF's Pango markup carries the same weight/size/rise the body tag applied — closing the prerequisite `sdd/PLAN.preview-decoration.md` names for every later theme key
+- **Then** the table cell matches the body exactly, and the PDF's Pango markup carries the same weight/size/rise the body tag applied
 
 - **And** the TABLE HEADER takes the same `bold_weight`, and the same `heading_font` where the theme states one, on all three surfaces — it is bold text like any other, and hardcoding a weight per surface (`font-weight: bold`, a browser default, a Pango `<b>`) means three different numbers for one key
 ### 18.19 A theme can restyle the annotation chip by colour or by sprite
