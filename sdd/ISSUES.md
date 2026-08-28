@@ -18,7 +18,6 @@ entry can still be the worst thing in the register.
 |----|----------|-------|-------|----------|
 | A | Any | Upstream | Tables are selection islands; cells are individually selectable but not part of the continuous buffer | Closed |
 | B | Any | Production | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
-| C | Linux | Production | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
 | D | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
 | E | Any | Production | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | F | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in roughly one full run in four, at a varying site | Medium |
@@ -31,7 +30,6 @@ entry can still be the worst thing in the register.
 | R | Any | Production | Pixel Quest's `link_color` and `list_task_color` sit below their legibility floor and are carried as named exceptions the operator intends to revisit, not as settled choices | Low |
 | S | Any | Project | The horizontal rule's thickness is the one styling value no theme can state — a literal in the PDF sink and the separator's own CSS default on screen | Low |
 | W | Any | Production | The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`, so both shipped washes print as flat colour | Low |
-| X | Any | Production | The find bar's "current match" indicator drops on an in-session edit (any mode); self-heals on the next Next/Prev — the originally-reported stronger form did not reproduce | Low |
 
 ## A. Tables are selection islands
 
@@ -156,72 +154,6 @@ A related, rarer edge: `x\^2\^` (escaped literal carets) cannot be distinguished
   plain strikethrough and all tight super/subscript work. **TDD 10.10** makes the
   boundary explicit — it blesses the plain `~~struck~~` case as a contract and scopes
   the wrapping case (`~~a **bold** b~~`) OUT as this accepted limitation.
-
-## C. Live desktop dark↔light toggle doesn't repaint a running instance on KDE/X11
-
-**Severity**: Low (cosmetic; the new scheme applies on the next launch, and users
-rarely retheme mid-session — but a visible inconsistency with libadwaita/Qt apps,
-which *do* update live)
-
-With the app's reading theme left on **System**, switching the KDE global colour
-scheme from dark to light (or back) while an instance is running leaves that
-instance's chrome unchanged; the new scheme is only picked up when a fresh instance
-launches. Confirmed on the operator's live KDE/X11 session (2026-07-19): a running
-window stayed dark across a desktop dark→light switch, while a freshly-launched
-instance rendered light. Native GNOME/libadwaita and Qt/KDE apps repaint live under
-the same toggle, so the gap is app-visible.
-
-**Root cause is a propagation-channel gap, not a missing feature.** The app already
-wires a live-update path: it subscribes to `GtkSettings` `gtk-application-prefer-dark-theme`
-and `gtk-theme-name` notifications and, on either, re-probes the desktop colours and
-re-renders every window. The failure is upstream of that handler — KDE-on-X11 does
-**not** push a live colour-scheme change through the **XSettings** channel that backs
-those `GtkSettings` properties, so the notify never fires on a running client (a fresh
-launch reads the current value once, which is why restart works). The apps that update
-live listen on a *different* channel: the XDG desktop portal signal
-`org.freedesktop.portal.Settings` → `SettingChanged("org.freedesktop.appearance",
-"color-scheme")` (libadwaita's `AdwStyleManager` watches exactly this). Scribobulate is
-pure gtk4-rs (no libadwaita), so it isn't listening there.
-
-**The detection channel is now researcher-confirmed (2026-07-19, empirically on the
-operator's own KDE/X11 box).** `xdg-desktop-portal-kde` 5.27.11 is installed, running,
-and routed (`kde-portals.conf`: `org.freedesktop.impl.portal.Settings=kde`); a direct
-`gdbus call … Settings.Read org.freedesktop.appearance color-scheme` returns the live
-value. Its source derives `color-scheme` from Qt's `paletteChanged` (no X11/Wayland
-branch) and `Q_EMIT`s `SettingChanged`, so the scheme rides the **portal**, exactly
-what libadwaita/Qt watch and what our `GtkSettings`/XSettings handler cannot see. The
-signal is `SettingChanged(namespace s, key s, value v)` on the session bus at
-`org.freedesktop.portal.Desktop` `/org/freedesktop/portal/desktop`, iface
-`org.freedesktop.portal.Settings`; value maps `0=no-preference, 1=dark, 2=light`. A
-version gotcha for the *initial* read: `Read` double-wraps the variant and `ReadOne`
-(single-wrap) exists only at interface **version ≥ 2** (xdg-desktop-portal ≥ 1.18);
-the operator's box is version 1, so the initial read needs a double-unwrap (the
-`SettingChanged` signal is single-wrapped on every version).
-
-**Two gates remain before the fix can be committed (both need the operator's live
-session — a `gdbus monitor --session --dest org.freedesktop.portal.Desktop` while
-flipping the scheme):**
-1. Confirm the live *push* actually fires (the static `Read` only proves the value is
-   readable; the go/no-go is watching `SettingChanged` arrive on the toggle).
-2. **Whether the app's existing re-render even reflects the new scheme once the signal
-   fires.** The desktop-dark truth comes from `palette::desktop_is_dark()`, which
-   probes `GtkStyleContext` colours — and on KDE/X11 *those are also stale* on a live
-   flip (GTK never reloads the KDE theme without the XSettings/portal push). So the
-   portal handler must likely use the signal's `color-scheme` value **directly** as the
-   desktop-dark truth (overriding the stale probe) rather than re-probing; and the
-   GTK-themed chrome (editor/toolbar, rendered by the KDE Breeze GTK CSS) may still not
-   follow live without forcing a GTK theme reload — the reading-area palette we control
-   can, the base-theme chrome is the open question. Confirm on the live session which
-   surfaces actually switch before deciding whether the fix is "preview follows" or
-   "everything follows".
-
-**Mitigation options**:
-- **Subscribe to the XDG desktop-portal `color-scheme` signal** (gio `DBusProxy` on the
-  session bus, no new deps) alongside the two existing `GtkSettings` subscriptions, and
-  on change drive the desktop-dark truth from the signal value + re-render. Gate on the
-  two live checks above.
-- **Accept the limitation**: the scheme applies on the next launch, users seldom
-  retheme mid-session, and nothing is broken — only slower to follow than native apps.
 
 ## D. A large document pegs a CPU core at ~100% while idle (GTK/Pango relayout loop that never converges)
 
@@ -771,64 +703,3 @@ at this branch's merge-base; the same opaque call sits at both revisions.
   can see.
 - Make the opaque projection unreachable from the sink where alpha is meaningful, so the
   wrong conversion cannot be spelled rather than merely being corrected here.
-
-## X. The find bar's "current match" indicator drops on an in-session edit, in every mode
-
-**Severity**: Low (revised down from Medium after reproduction — see below; the
-gap is real but self-heals on the very next Next/Prev press, not on reopening the
-bar)
-
-Operator-reported: with the find bar open, altering the document leaves stale
-highlights and a Next/Prev that neither scrolls nor highlights, recoverable only
-by closing and reopening the bar.
-
-**Driven live (Xvfb + openbox, release build) across the three plausible mutation
-paths and the reported strong form did NOT reproduce.** Fixture: a document with a
-repeated body term ("bodyneedle", 3 occurrences), a task checkbox, and a comment
-annotation, opened `-n` under a private display.
-
-- **Preview mode, task-checkbox toggle** (a same-buffer edit at a location that
-  does not overlap the current match): the "1 of 3" current-match selection, the
-  yellow all-matches tags, and Next/Prev cycling all stayed correct through the
-  toggle — no staleness.
-- **Preview mode, creating a new annotation** (via the selection→Annotate→comment
-  flow, which inserts a margin-marker anchor and shifts every later offset): the
-  current-match GRAY selection dropped to plain yellow immediately after — but
-  this is confounded by the annotation flow's OWN selection (drag-selecting the
-  annotated phrase necessarily replaces whatever was previously selected, which is
-  what the current-match indicator *is*). Pressing Next afterward landed correctly
-  on the third occurrence at its new (shifted) offset — the hit list rebuilt
-  correctly against the mutated buffer.
-- **Split mode, typing directly into the editor** (`window::livepreview::wire_live_preview`'s
-  debounce path, editor is the find target here per `find_target`): typing a new
-  line above the matches dropped the current-match indicator (expected — typing
-  moves the caret) but a subsequent Next correctly found the first occurrence at
-  its shifted line/column and re-highlighted it.
-
-**What IS confirmed, and is milder than reported**: any caret-moving action
-(a click, a drag-select, typing) collapses whatever "current match" selection was
-showing, because that selection is the *only* mechanism marking the current
-match — nothing re-asserts it until the next Next/Prev press. This is normal
-text-buffer behaviour (selecting or typing elsewhere always abandons a prior
-selection) rather than a find-specific defect, and CAM.md's Derived-view CAM row 7
-column-A obligation is met on the very next find action, not left broken until the
-bar is closed and reopened.
-
-**The originally reported strong form (Next/Prev itself broken; scroll frozen;
-fixed only by closing the bar) is UNCONFIRMED** after this pass. Candidates not yet
-ruled out: a timing race with the 300 ms Split-mode live-preview debounce
-(`window::livepreview::wire_live_preview` → `preview::re_render`) that a
-scripted, instant edit can't hit; a real-compositor/KDE-specific rendering gap
-invisible under Xvfb+openbox (per GTK4Rs/AP-56, a clean Xvfb result doesn't
-clear the compositor/WM class of bug); or an interaction sequence not yet tried.
-
-**Mitigation options**:
-- Ask the operator for the exact steps (view mode, what kind of edit, whether the
-  find bar had focus) before spending more engineering time on a hypothesis three
-  reproduction attempts didn't support.
-- If reproduced live, re-drive the same scenario under Xvfb first to rule the
-  timing race in or out.
-- Independent of the above: make the current-match indicator survive an
-  intervening caret move (re-select the current hit's range after any buffer
-  change while find stays open), which would close the milder, confirmed gap
-  either way.

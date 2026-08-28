@@ -46,8 +46,8 @@ they are two batches.
 | Batch | Issues | Severity | Why these coalesce | State |
 |---|---|:-:|---|---|
 | **1 — View-state handoff** | *(U, V — deleted)* | Medium | One missing document position, seen from two ends | ✅ **DONE**, one commit on master |
-| **2 — A theme change that never lands** | *(T — deleted)* | Medium | A reading-theme switch missing a background tab. **C was re-cut OUT of this batch** — see below | ✅ **DONE**, verified on the live display |
-| **3 — Find highlight rendering** | *(Y — deleted)*, **X** | Medium, Low | Y did NOT reproduce and its recorded root cause was disproven — see below. X is unchanged and is now a decision rather than a task | ◑ Y closed; **X awaiting the operator** |
+| **2 — A theme change that never lands** | *(T — deleted)* | Medium | A reading-theme switch missing a background tab. C was grouped here at first and turned out to be a different mechanism entirely; the operator then dropped it as upstream (below) | ✅ **DONE**, verified on the live display |
+| **3 — Find highlight rendering** | *(Y, X — deleted)* | Medium, Low | Y did not reproduce and its recorded root cause was disproven; X was dropped as never having been a defect | ✅ **DONE** |
 | **4 — Theme fidelity across export sinks** | **W**, **S** | Low, Low | Both fail TDD 25.9 the same way — a value that does not resolve through the theme engine. Coalescing buys a real deliverable neither gets alone: a **cross-sink parity guard** that the two sinks agree on a given key | 💡 Ready |
 | **5 — Preview render diagnostics** | **N**, **P** | Low, Low | Neither is a fix yet; both need a deliberate reproduction before anyone can act, and both want the same instrument — a fixture matrix driven at several pane widths with screenshot comparison. One pass covers both; two passes duplicate the setup | 💡 Ready |
 
@@ -60,16 +60,16 @@ they are two batches.
 | **E** | Low | A click inside an existing selection never reaches the pane's affordances. Interaction/gesture routing; no sibling |
 | **G** | Low | `Test` scope, not `Production`: two wall-clock growth-ratio guards go red on a loaded machine. A gate-design problem, not an application one — the fix is to stop measuring an exponent with a stopwatch on a small baseline |
 | **H** | Low | macOS-only and intermittent; needs the Mac seat's hands, not a mechanism |
-| **C** | Low | **Re-cut out of batch 2 on inspection, and the correction is the point of keeping this row.** It was grouped with T on the reading that both are "a theme change that does not land". They are not: T was the fan-out *reaching* a view and leaving it half-styled, while C is that nothing ever *triggers* the fan-out — GTK 4.6 on KDE/X11 emits no settings change when the desktop flips dark↔light, so the app is never told. Closing it means a Linux platform seam subscribing to the XDG desktop portal's `org.freedesktop.appearance` `color-scheme` signal and writing `gtk-application-prefer-dark-theme`, mirroring `platform/mac/appearance.rs` (POLICY: never re-theme a surface directly from a platform signal). That is a different mechanism, a new `src/platform/linux/`, and verification means toggling the operator's own desktop theme. Not worth batching with anything; decide it on its own merits — it is Low, Linux-only, and has a working user workaround (restart) |
 
 ## Not work waiting to be scheduled
 
 | Issue | Why it is not on the list |
 |---|---|
 | **A** | `Closed` — intractable, source-verified, and deliberately retained so nobody reopens the dead end. Not actionable by design |
+| ~~C~~ | **Dropped by the operator, 2026-08-28**, on evidence the register could not have held: the same failure to repaint on a KDE/X11 desktop dark↔light switch occurs in an unrelated GNOME application, so it is upstream and outside this project's scope. Recorded here rather than nowhere because the investigation it invites is expensive — a new `src/platform/linux/` portal seam — and the reason not to do it is not visible from the code |
+| ~~X~~ | **Dropped by the operator, 2026-08-28**, as never having been a defect. Its confirmed behaviour was that a click collapses the selection which *is* the current-match indicator, re-asserting on the next Next/Prev — ordinary text-buffer behaviour, and the remedy once proposed for it would have taken the caret back from the user |
 | **F**, **I** | `Upstream` — the defect is in a third-party library and the repair is not ours to make. A workaround may exist; the fix does not belong to this project |
 | **R** | Not an engineering task at all: an operator decision about Pixel Quest's palette (retune both inks, retune one, or settle both permanently and close). Blocked on the operator, not on effort |
-| **X** | Low | **Now a decision, not a task.** Its confirmed half is that any caret-moving action (a click, a drag-select, typing) collapses the current-match selection, because that selection IS the indicator — and it re-asserts on the very next Next/Prev. That is ordinary text-buffer behaviour, and the proposed remedy (re-select the current hit after any buffer change while find is open) would **take the caret back from the user** after they deliberately clicked elsewhere, which is worse than the symptom. The originally reported strong form (Next/Prev itself broken, scroll frozen, fixed only by closing the bar) is unconfirmed after three reproduction attempts. Recommendation: close it as working-as-intended unless the operator can supply steps that reproduce the strong form |
 | **M** | Inert today — every current call site resolves at a bounded set of sizes, so the missing cache eviction cannot fire. Either a small LRU cap or a documented constraint at the call sites; confirm it is worth spending anything on before doing so |
 
 ## Recommendation
