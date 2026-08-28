@@ -336,6 +336,26 @@ pub(crate) struct Key {
     pub levelling: Levelling,
     pub bound: Bound,
     pub reach: Reach,
+    /// **A consumer that reads this key's BARE spelling directly, outside the
+    /// per-level walk** — named, so the exception is stated rather than inferred.
+    /// Empty for every key whose only reader is its own levelling, which is almost
+    /// all of them.
+    ///
+    /// It exists because the two facts it reconciles live in different files. A
+    /// levelled key's bare form is normally reachable only as the tail of a fallback
+    /// chain, so a theme that states every narrowed spelling has made the bare one
+    /// unreachable — which [`Key::bare_shadow`] reports. Three keys break that: the
+    /// table header takes bare `heading_color`/`heading_font` when it states no ink or
+    /// face of its own (TDD 18.30), and the task marker takes bare `list_marker_color`
+    /// when it states no colour of its own. For those, a fully levelled theme's bare
+    /// key still applies, and reporting it would be a false positive — the failure
+    /// mode a diagnostic never recovers from, because it teaches its reader to ignore
+    /// it.
+    ///
+    /// **Declared, not remembered:** [`super::sources::Sources::bare`] asserts that
+    /// the key it is reading is either flat or names its reader here, so a new bare
+    /// read of a levelled key cannot be added without this line.
+    pub bare_reader: &'static str,
 }
 
 impl Key {
@@ -383,26 +403,81 @@ impl Key {
             Levelling::Depth => (0..=idx).rev().map(|i| self.spelling(i)).collect(),
         }
     }
+
+    /// **The spellings that shadow this key's bare form at every slot it could reach**
+    /// — or `None` where the bare form still applies somewhere, which includes the
+    /// case where it is not stated at all.
+    ///
+    /// `stated` answers whether one spelling is present in the theme being checked.
+    /// The caller supplies a single theme's merged spec, and that is the whole of the
+    /// question: **within** a source a narrower spelling wins, **between** sources the
+    /// source wins (SCHEMA § Key resolution), so no other theme can shadow this one's
+    /// bare key and none can un-shadow it. A key that loses only to the *selected*
+    /// theme has not stopped applying — it applies whenever a different theme is
+    /// selected — and reporting that would be the false positive this returns `None`
+    /// for.
+    ///
+    /// **Precision is the whole design.** Three conditions each return `None`, and
+    /// each is a case where the bare key does something: it is not stated; some slot's
+    /// chain reaches it before any narrower spelling the theme states; or a consumer
+    /// reads it bare regardless of the levelling ([`Key::bare_reader`]). Only "stated,
+    /// and beaten at every level, with nothing else reading it" is reportable — a bare
+    /// key that loses at h1-h3 and wins at h4-h5 is doing its job.
+    ///
+    /// Written over the registry rather than over one key family, because the registry
+    /// is where levelling lives and a per-family predicate would be a second list to
+    /// keep in step. It is deliberately not restricted to [`Levelling::Heading`] even
+    /// though that is the only levelling it can fire for today: a `Flat` key and a
+    /// `Depth` key both reach their bare form at slot 0 by construction
+    /// ([`Key::fallbacks`]), so they fall out `None` from the same arithmetic rather
+    /// than from a special case that would have to be revisited if a chain ever
+    /// changed shape.
+    pub(crate) fn bare_shadow(&self, stated: impl Fn(&str) -> bool) -> Option<Vec<String>> {
+        if !stated(self.name) || !self.bare_reader.is_empty() {
+            return None;
+        }
+        let mut shadows: Vec<String> = Vec::new();
+        for idx in 0..self.slots() {
+            // Every chain ends at the bare name (`every_chain_ends_at_the_bare_key`),
+            // which `stated` has just answered for, so a winner always exists.
+            let winner = self.fallbacks(idx).into_iter().find(|s| stated(s))?;
+            if winner == self.name {
+                return None;
+            }
+            if !shadows.contains(&winner) {
+                shadows.push(winner);
+            }
+        }
+        Some(shadows)
+    }
 }
 
 /// Declare the vocabulary: a constant per key plus the [`KEYS`] table, from one line
 /// each.
 ///
-/// Three optional tails, in order: the **levelling** word (default
-/// [`Levelling::Flat`]); after a `|`, the key's **[`Bound`]** (default
-/// [`Bound::Inherited`]); and after a `,`, its **[`Reach`]** (default [`Reach::ALL`]). A key's
+/// Four optional tails, in order: the **levelling** word (default
+/// [`Levelling::Flat`]); after an `@`, the key's **[`Key::bare_reader`]** (default
+/// none); after a `|`, the key's **[`Bound`]** (default [`Bound::Inherited`]); and
+/// after a `,`, its **[`Reach`]** (default [`Reach::ALL`]). A key's
 /// floor and clamp range therefore sit on the same line as its name and type, where
 /// SCHEMA already puts them — rather than in a separate constant that has to be
 /// re-paired with the key by hand at the resolution site.
+///
+/// The bare-reader tail is spelled `@` and sits **before** the bound rather than after
+/// the reach, where it would read more naturally, because `macro_rules!` permits only
+/// `=>`, `,` or `;` after an `expr` fragment — so nothing can follow the `|` bound but
+/// the `,` reach.
 macro_rules! keys {
     (@lev) => { Levelling::Flat };
     (@lev $l:ident) => { Levelling::$l };
+    (@bare) => { "" };
+    (@bare $b:literal) => { $b };
     (@bound) => { Bound::Inherited };
     (@bound $b:expr) => { $b };
     (@reach) => { Reach::ALL };
     (@reach $r:expr) => { $r };
     ($(
-        $konst:ident = $name:literal : $kind:ident $($lev:ident)? $(| $bound:expr)? $(, $reach:expr)? ;
+        $konst:ident = $name:literal : $kind:ident $($lev:ident)? $(@ $bare:literal)? $(| $bound:expr)? $(, $reach:expr)? ;
     )+) => {
         $(
             pub(crate) const $konst: Key = Key {
@@ -411,6 +486,7 @@ macro_rules! keys {
                 levelling: keys!(@lev $($lev)?),
                 bound: keys!(@bound $($bound)?),
                 reach: keys!(@reach $($reach)?),
+                bare_reader: keys!(@bare $($bare)?),
             };
         )+
         /// Every key this build knows, in the order the schema documents them.
@@ -434,8 +510,10 @@ keys! {
                                                   plain monospace on both");
 
     // ── headings (every one of these also takes an `_h1`…`_h5` spelling) ─────
-    HEADING_COLOR          = "heading_color"           : Color  Heading;
-    HEADING_FONT           = "heading_font"            : Font   Heading;
+    HEADING_COLOR          = "heading_color"           : Color  Heading
+                             @ "the table header's ink, where the theme states no table_head_fg (TDD 18.30)";
+    HEADING_FONT           = "heading_font"            : Font   Heading
+                             @ "the table header's face, where the theme states no face of its own (TDD 18.30)";
     HEADING_SCALE          = "heading_scale"           : Float  Heading
                              | float(&[2.2, 1.8, 1.48, 1.2, 1.0], SCALE);
     HEADING_WEIGHT         = "heading_weight"          : Int    Heading | int(&[700], WEIGHT);
@@ -494,7 +572,8 @@ keys! {
     LINK_UNDERLINE_COLOR   = "link_underline_color"    : Color;
 
     // ── lists (the ⓷ keys also take `_2` and `_3` spellings) ─────────────────
-    LIST_MARKER_COLOR      = "list_marker_color"       : Color  Depth;
+    LIST_MARKER_COLOR      = "list_marker_color"       : Color  Depth
+                             @ "the task marker's ink, where the theme states no list_task_marker_color";
     LIST_TASK_MARKER_COLOR = "list_task_marker_color"  : Color;
     LIST_BULLET_GLYPH      = "list_bullet_glyph"       : Glyph  Depth;
     LIST_ORDERED_GLYPH     = "list_ordered_glyph"      : Glyph;
@@ -844,6 +923,103 @@ mod tests {
                 !crate::theme::BUILTIN_THEMES_TOML.contains(&format!("`{retired}`")),
                 "data/themes.toml quotes the retired spelling `{retired}` — use the \
                  live key, or the comment teaches a key that warns and does nothing"
+            );
+        }
+    }
+
+    /// **A bare key is reported shadowed only when it can apply NOWHERE.**
+    ///
+    /// The three `None` conditions, each a case where the key does something, and each
+    /// the difference between a diagnostic people read and one they filter out.
+    #[test]
+    fn a_bare_key_is_shadowed_only_when_every_level_is_narrowed() {
+        let stated = |set: &'static [&'static str]| move |s: &str| set.contains(&s);
+
+        // Not stated at all: nothing to report.
+        assert_eq!(
+            HEADING_SPACE_ABOVE.bare_shadow(stated(&["heading_space_above_h1"])),
+            None
+        );
+        // Narrowed at four of five levels — h5 still takes the bare key.
+        assert_eq!(
+            HEADING_SPACE_ABOVE.bare_shadow(stated(&[
+                "heading_space_above",
+                "heading_space_above_h1",
+                "heading_space_above_h2",
+                "heading_space_above_h3",
+                "heading_space_above_h4",
+            ])),
+            None
+        );
+        // All five: the bare key can reach no level, and the report names each winner.
+        assert_eq!(
+            HEADING_SPACE_ABOVE.bare_shadow(stated(&[
+                "heading_space_above",
+                "heading_space_above_h1",
+                "heading_space_above_h2",
+                "heading_space_above_h3",
+                "heading_space_above_h4",
+                "heading_space_above_h5",
+            ])),
+            Some(vec![
+                "heading_space_above_h1".to_string(),
+                "heading_space_above_h2".to_string(),
+                "heading_space_above_h3".to_string(),
+                "heading_space_above_h4".to_string(),
+                "heading_space_above_h5".to_string(),
+            ])
+        );
+        // …and a key with a consumer that reads it bare is never shadowed, however
+        // completely a theme narrows it.
+        assert_eq!(
+            HEADING_COLOR.bare_shadow(stated(&[
+                "heading_color",
+                "heading_color_h1",
+                "heading_color_h2",
+                "heading_color_h3",
+                "heading_color_h4",
+                "heading_color_h5",
+            ])),
+            None
+        );
+    }
+
+    /// **No `Flat` or `Depth` key can be reported shadowed, whatever a theme states.**
+    ///
+    /// Not an exception in the predicate — it falls out of the chains. A flat key's
+    /// chain is its bare form, and a depth key's tier-1 chain is too
+    /// (`a_heading_key_falls_back_to_its_bare_form_and_a_depth_key_walks_shallower`),
+    /// so both reach the bare form at slot 0. Swept over the registry rather than
+    /// argued, so a chain that ever changed shape would be caught here rather than by a
+    /// user reading a warning about a key that applies.
+    #[test]
+    fn only_a_heading_key_can_ever_be_shadowed() {
+        // The most hostile input available: a theme stating EVERY spelling of every key.
+        let everything = |_: &str| true;
+        for key in KEYS {
+            let shadowed = key.bare_shadow(everything).is_some();
+            let reportable = key.levelling == Levelling::Heading && key.bare_reader.is_empty();
+            assert_eq!(
+                shadowed, reportable,
+                "{} is {:?} with bare_reader {:?} — shadowed reported as {shadowed}",
+                key.name, key.levelling, key.bare_reader
+            );
+        }
+    }
+
+    /// **A declared bare reader belongs to a LEVELLED key**, or it says nothing.
+    ///
+    /// Every reader of a flat key reads it bare, so declaring one there would be noise
+    /// that reads like a load-bearing exception — and the field's whole job is to be
+    /// the one place a genuine exception is stated.
+    #[test]
+    fn only_a_levelled_key_declares_a_bare_reader() {
+        for key in KEYS {
+            assert!(
+                key.bare_reader.is_empty() || key.levelling != Levelling::Flat,
+                "{} is Flat and declares a bare_reader — every reader of a flat key \
+                 reads it bare, so the declaration means nothing",
+                key.name
             );
         }
     }

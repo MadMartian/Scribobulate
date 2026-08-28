@@ -41,7 +41,7 @@
 //! | [`value`] | The authored value types — colour, font stack, line style, glyph — each parsed or refused, never half-trusted |
 //! | [`model`] | The resolved [`Theme`] every consumer reads, with every fallback already folded in |
 //! | [`resolve`] | The floors, the clamp ranges, and the one function that applies them |
-//! | this module | The search path, the built-in/user merge, and the active-theme cell |
+//! | this module | The search path, the built-in/user merge, the report a key the merge leaves unreachable earns, and the active-theme cell |
 
 mod decor;
 pub(crate) mod keys;
@@ -169,6 +169,45 @@ impl Themes {
         }
     }
 
+    /// Report every stated key that **can never apply**, because a narrower spelling
+    /// of the same key in the same theme wins at every level it could reach (TDD
+    /// 18.46, SCHEMA § Key resolution).
+    ///
+    /// SCHEMA's rationale for the unknown-key warning is the whole argument for this
+    /// one: silence makes a key that never applies indistinguishable from one that
+    /// applied and did nothing. It is the third member of that family — `validate`
+    /// reports a spelling this build does not know, `Sources::walk` reports a value
+    /// its key's parser will not take, and this reports a key that is spelled right,
+    /// typed right, parses fine, and is beaten everywhere.
+    ///
+    /// **It runs on the MERGED specs, and it has to.** A user file merges over a
+    /// built-in per key, so the ordinary way to reach this state is to state a bare
+    /// key over a built-in that states every narrowed one — the two halves are in
+    /// different files and neither is wrong on its own. MEASURED before this existed:
+    /// a user `[themes.system]` stating `heading_space_above = 20` changed no heading
+    /// level, warned about nothing, and parsed clean, while `heading_space_below_h4`
+    /// beside it worked.
+    ///
+    /// One theme at a time, deliberately. Between two themes the SOURCE decides, so a
+    /// key that loses only to the selected theme still applies whenever another theme
+    /// is selected — reporting that would be a false positive, and a diagnostic that
+    /// fires on a key which does apply is worse than none.
+    fn warn_on_shadowed_keys(&self) {
+        for (id, spec) in &self.specs {
+            for key in keys::KEYS {
+                let Some(shadows) = key.bare_shadow(|spelling| spec.get(spelling).is_some()) else {
+                    continue;
+                };
+                log::warn!(
+                    "theme {id:?}: {} is stated but can never apply — this theme also \
+                     states {}, and a narrower spelling wins at every level it covers",
+                    key.name,
+                    shadows.join(", ")
+                );
+            }
+        }
+    }
+
     /// Parse a fragment the way the compiled-in file is parsed. Test-only convenience
     /// so the many parse-and-resolve tests below state only the TOML they are about —
     /// and `Compiled` rather than a directory because a fragment written inline has no
@@ -270,8 +309,22 @@ impl Themes {
 /// `XDG_DATA_HOME`/`XDG_DATA_DIRS` are untouched by the redirect, so the GLib
 /// helpers are correct and order-independent for those.
 fn load() -> Themes {
+    assemble(find_themes_file())
+}
+
+/// The whole of loading except **finding** the file: the built-ins, the user merge over
+/// them, and the diagnostics only the merged set can produce.
+///
+/// Split out of [`load`] for the same reason [`SearchBases`] was split out of
+/// [`find_themes_file`] — everything here is decidable from data, and leaving it fused
+/// to an `std::env` read made it reachable only by mutating process-global state. What
+/// the split buys is a test that the shadowed-key sweep is on **the path the
+/// application takes**, not merely on a method the tests call: a step wired into one
+/// caller and forgotten in the other is ScrAP-324's second half, and enumerating every
+/// key inside a function says nothing about a forgotten caller of it.
+fn assemble(found: Option<(String, std::path::PathBuf)>) -> Themes {
     let mut themes = Themes::builtin();
-    if let Some((text, dir)) = find_themes_file() {
+    if let Some((text, dir)) = found {
         // A file on disk resolves its sprites against its OWN directory — never the
         // current working directory, and never the compiled-in table, which would let
         // any theme file on the search path claim this project's own artwork.
@@ -279,6 +332,9 @@ fn load() -> Themes {
             themes.merge_over(user);
         }
     }
+    // AFTER the merge, because that is where a shadow is ordinarily made: neither the
+    // built-in's narrowed keys nor the user's bare one is wrong on its own.
+    themes.warn_on_shadowed_keys();
     themes
 }
 

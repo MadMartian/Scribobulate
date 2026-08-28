@@ -19,7 +19,7 @@
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.9 |
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.53 |
-| 18 | Preview reading themes | 18.1 – 18.31 |
+| 18 | Preview reading themes | 18.1 – 18.46 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.18 |
 | 21 | Crash forensics | 21.1 – 21.12 |
@@ -2396,6 +2396,14 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** a theme written against a pre-rename spelling (`sprite_rule`, `heading_colors`, `link`, `strikethrough_rgba`, an array-valued `heading_scale`)
 - **When** themes are loaded
 - **Then** each such key is reported by 18.33's unknown-key path and applies nothing — a retired spelling is never quietly honoured, so a theme file that looks like it works cannot be one that does not
+
+### 18.46 A theme key that can never apply says so
+- **Given** a themes file stating a key that is shadowed at **every** level it could reach — the bare `heading_space_above` in a user's `[themes.system]`, over a built-in that states `heading_space_above_h1` through `_h5`
+- **When** themes are loaded
+- **Then** one `warn` record names the theme id, the key, and the narrower spellings that beat it — and the key still applies nothing, exactly as the resolution order says it should
+- **And** a bare key that still wins at *any* level, a key beaten only by a *different* theme, and a key some surface reads bare regardless of levelling (`heading_color`, `heading_font`, `list_marker_color`) are each reported by nothing
+- **And** the shipped `data/themes.toml` states no such key
+- **Rationale** the third refusal class, and the one that was silent: the key is spelled right, is the right type, and parses — so 18.33's unknown-key path and 18.35's wrong-type path both pass it through. Without a record, a key that never applies is indistinguishable from one that applied and did nothing
 
 ### 18.44 A declared key reaches a surface, or says why it does not
 - **Given** the registry of keys a themes file may speak

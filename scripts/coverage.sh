@@ -338,7 +338,15 @@ cd "$(dirname "$0")/.."
 # figure was measured on the parent commit as well (82.17 Lines, in a clean worktree)
 # rather than inferred from "the change looks coverage-neutral", so the ratchet is
 # closing a known gap rather than quietly crediting one change with another's ground.
-FLOOR=82.18
+#
+# 82.18 -> 82.21 with TDD 18.46's shadowed-key diagnostic. Measured 82.18 Lines on the
+# parent commit in a clean worktree and 82.24 after, so the gain is +0.06 and real: the
+# predicate (`Key::bare_shadow`) and the sweep over it (`Themes::warn_on_shadowed_keys`)
+# are pure decision logic in already-scoped files, plus their guards in
+# `theme/tests/diagnostics.rs`. No code moved between files and the scope is untouched,
+# so this is not a floor climbing by exclusion. Raised by half the gain rather than to
+# the measurement, keeping the deliberate margin the 2026-08-20 entry explains.
+FLOOR=82.21
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

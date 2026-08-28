@@ -6,7 +6,7 @@
 //! differently. `resolve` builds a `Theme` out of these answers; nothing else reads a
 //! spec directly.
 
-use super::keys::Key;
+use super::keys::{Key, Levelling};
 use super::spec::{expected, ThemeSpec, Value};
 use super::{parse_color, sanitize_font_family};
 use super::{CssSafeFontStack, LineStyle, MarkerGlyph};
@@ -74,6 +74,22 @@ impl Sources<'_> {
     /// 18.30), and taking h1's narrowed colour there instead would make a theme that
     /// distinguishes its h1 silently re-ink a table header it said nothing about.
     fn bare<T>(&self, key: &Key, f: impl Fn(&Value) -> Option<T>) -> Option<T> {
+        // UNCONDITIONAL, for the same reason as `each`'s slot check below. That a
+        // LEVELLED key is read bare is a fact only this call site knows, and
+        // `Key::bare_shadow` has to know it too — a theme that states every narrowed
+        // spelling has made the bare form unreachable through the chain, but not
+        // through here. Nothing in the type system ties the two together, so a bare
+        // read added without its declaration would silently turn that diagnostic into
+        // a false positive on a key that still applies. Failing here instead makes the
+        // declaration unforgettable: every resolve of every theme runs this.
+        assert!(
+            key.levelling == Levelling::Flat || !key.bare_reader.is_empty(),
+            "{} is declared {:?} and is being read BARE, but names no bare_reader — \
+             declare the consumer on the key (src/theme/keys.rs) so the shadowed-key \
+             diagnostic knows the bare form still applies",
+            key.name,
+            key.levelling
+        );
         self.walk(key, vec![key.name.to_string()], f)
     }
 
@@ -482,5 +498,42 @@ mod tests {
         let system = ThemeSpec::default();
         let src = Sources::new("t", &selected, &system);
         let _ = src.colors::<{ keys::BULLET_TIERS }>(&keys::HEADING_COLOR);
+    }
+
+    /// **Reading a levelled key BARE without declaring the reader is a hard error too.**
+    ///
+    /// The declaration is what stops `Key::bare_shadow` reporting a key that still
+    /// applies, and nothing in the type system connects the two — so an undeclared bare
+    /// read would silently turn a precise diagnostic into a false positive, which is the
+    /// failure a diagnostic never recovers from. This is the mechanism that makes the
+    /// declaration unforgettable rather than remembered: every resolve of every theme
+    /// runs the assertion.
+    ///
+    /// `HEADING_SPACE_BELOW` stands in for "a levelled key nothing reads bare" — it is
+    /// `Heading` and declares no reader, exactly like every levelled key but the three
+    /// that do.
+    #[test]
+    #[should_panic(expected = "is being read BARE, but names no bare_reader")]
+    fn reading_an_undeclared_levelled_key_bare_is_a_hard_error() {
+        let selected = spec("t", "heading_space_below = 9\n");
+        let system = ThemeSpec::default();
+        let src = Sources::new("t", &selected, &system);
+        let _ = src.int(&keys::HEADING_SPACE_BELOW);
+    }
+
+    /// …and the three keys that DO declare a reader are readable bare, which is the
+    /// other half: an assertion that rejected every levelled key would pass the test
+    /// above and break the table header.
+    #[test]
+    fn a_levelled_key_that_declares_its_reader_is_readable_bare() {
+        let selected = spec(
+            "t",
+            "heading_color = \"#112233\"\nlist_marker_color = \"#445566\"\nheading_font = \"Georgia, serif\"\n",
+        );
+        let system = ThemeSpec::default();
+        let src = Sources::new("t", &selected, &system);
+        assert!(src.color(&keys::HEADING_COLOR).is_some());
+        assert!(src.color(&keys::LIST_MARKER_COLOR).is_some());
+        assert!(src.font(&keys::HEADING_FONT).is_some());
     }
 }

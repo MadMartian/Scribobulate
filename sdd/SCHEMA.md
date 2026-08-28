@@ -282,6 +282,24 @@ key. A themes file is hand-written, so a misspelling is the ordinary failure mod
 silence would make a key that never applies indistinguishable from one that applied
 and did nothing.
 
+**A key that is SHADOWED at every level is logged at `warn` too**, naming the theme
+id, the key, and the narrower spellings that beat it. The rule above is what creates
+the condition: a bare key loses to a narrower one within its own source, so a theme
+that states `heading_space_above` and also states `heading_space_above_h1`…`_h5` has
+a bare key that can reach no level. That is the ordinary shape of the mistake, because
+the two halves live in different files — a user file states the bare key while the
+built-in it merges over states every narrowed one — and neither half is wrong on its
+own. **The resolution above is unchanged: the key is still ignored, not repaired.**
+Same rationale as the unrecognised key, applied one refusal class further along.
+
+The report is narrow on purpose. It fires only where the key can apply **nowhere**: a
+bare key that loses at h1–h3 and wins at h4–h5 is a default doing its job and earns
+nothing, a key that loses only to *another theme* still applies whenever that theme is
+not selected, and a bare key some surface reads directly — `heading_color` and
+`heading_font` reach the table header, `list_marker_color` the task marker — is never
+reported however completely a theme narrows it. A warning that fires on a key which
+does apply would teach its reader to ignore the whole class.
+
 ### How a `*_sprite` key resolves
 
 A sprite key names an image, and **where that image comes from is decided by which
