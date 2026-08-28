@@ -363,6 +363,15 @@ fn unresolved(r: &SpriteRef) {
 /// **Relative only.** `rel` must not be an absolute path — a theme cannot point
 /// anywhere on the filesystem, only within its own directory tree.
 ///
+/// The test is `has_root`, not `is_absolute`, and the difference is a platform one:
+/// on Windows a *rooted* reference with no drive prefix (`/etc/passwd`, `\Windows\
+/// win.ini`) is **not** absolute, so `is_absolute` returned `false` for it and the
+/// component check one gate below refused it as `NotPlainRelative` instead. The
+/// reference was still refused either way — but a refusal's REASON is a cross-platform
+/// verdict, asserted by name and reported to the user by name, and one that flips with
+/// the host is the same class of drift every other rule in this module exists to
+/// prevent. `has_root` is `is_absolute` on unix, so nothing changes there.
+///
 /// **No parent traversal.** Every path component must be a plain name; `..` (or a
 /// root, prefix, or current-dir component) is refused outright rather than
 /// interpreted, so there is no `../../etc/…` to reason about.
@@ -384,7 +393,7 @@ fn unresolved(r: &SpriteRef) {
 /// until a writer that never comes.
 pub(crate) fn resolve(base: &Path, rel: &str) -> Result<PathBuf, Refusal> {
     let candidate = Path::new(rel);
-    if candidate.is_absolute() {
+    if candidate.has_root() {
         return Err(Refusal::Absolute);
     }
     if candidate
@@ -764,6 +773,10 @@ mod tests {
         assert_eq!(got, dir.path().join("chip.png").canonicalize().unwrap());
     }
 
+    /// The verdict, not just the refusal — and it is the verdict that was platform-
+    /// dependent. MEASURED on Windows before the `has_root` change at the gate: this
+    /// exact case returned `Err(NotPlainRelative)`, because `/etc/passwd` is *rooted*
+    /// but not *absolute* there (no drive prefix), so the gate above it did not fire.
     #[test]
     fn resolve_refuses_an_absolute_path() {
         let dir = tempfile::tempdir().unwrap();
