@@ -48,7 +48,7 @@ they are two batches.
 | **1 — View-state handoff** | *(U, V — deleted)* | Medium | One missing document position, seen from two ends | ✅ **DONE**, one commit on master |
 | **2 — A theme change that never lands** | *(T — deleted)* | Medium | A reading-theme switch missing a background tab. C was grouped here at first and turned out to be a different mechanism entirely; the operator then dropped it as upstream (below) | ✅ **DONE**, verified on the live display |
 | **3 — Find highlight rendering** | *(Y, X — deleted)* | Medium, Low | Y did not reproduce and its recorded root cause was disproven; X was dropped as never having been a defect | ✅ **DONE** |
-| **4 — Theme fidelity across export sinks** | **W**, **S** | Low, Low | Both fail TDD 25.9 the same way — a value that does not resolve through the theme engine. Coalescing buys a real deliverable neither gets alone: a **cross-sink parity guard** that the two sinks agree on a given key | 💡 Ready |
+| **4 — Theme fidelity across export sinks** | *(W, S — deleted)* | Low, Low | Both were violations of contracts that already existed (TDD 18.43, 25.9), so neither needed a new rubric. The parity guard the batch was supposed to buy turned out to be already built — `theme::tests::sinks`'s registry sweep — and it earned its keep immediately by failing on a THIRD surface neither issue mentioned | ✅ **DONE** |
 | **5 — Preview render diagnostics** | **N**, **P** | Low, Low | Neither is a fix yet; both need a deliberate reproduction before anyone can act, and both want the same instrument — a fixture matrix driven at several pane widths with screenshot comparison. One pass covers both; two passes duplicate the setup | 💡 Ready |
 
 ## Standalone — real work, but no batch to join

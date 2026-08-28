@@ -25,7 +25,7 @@
 use super::super::pdftable;
 use super::geometry::px_to_pt;
 use super::geometry::{pango_to_pt, MIN_PRINTABLE_PT};
-use super::{Laid, LineKind, PageDrawn, TableCell, RULE_THICKNESS_PT};
+use super::{Laid, LineKind, PageDrawn, TableCell};
 use crate::palette::Palette;
 use crate::theme::Theme;
 use gtk::cairo;
@@ -286,7 +286,7 @@ pub(crate) fn draw_page(
                 // thickness. It used to be `400.0, 0.75` — two literals in a file whose
                 // POLICY forbids them, which over- or under-ran the margin depending on
                 // page setup and nesting depth rather than tracking either.
-                let thickness = RULE_THICKNESS_PT;
+                let thickness = super::geometry::px_to_pt(theme.metrics.rule_thickness);
                 cr.rectangle(
                     margin_pt + line.indent,
                     y + line.height / 2.0,

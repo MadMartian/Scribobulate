@@ -67,28 +67,6 @@ const BASE_PT: f64 = 11.0;
 /// Space between blocks, in points.
 const BLOCK_GAP_PT: f64 = 6.0;
 
-/// How thick a horizontal rule is drawn, in points.
-///
-/// **A named const rather than a themed metric, and the reason is that there is nothing to
-/// theme it FROM.** The preview renders its rule as a `GtkSeparator` whose thickness comes
-/// from GTK's own CSS, not from a `metrics` key — so there is no existing key for this sink
-/// to read, and inventing one here would give the two surfaces separate sources for one
-/// decoration, which is precisely what POLICY's "one theme key, every application path" rule
-/// forbids. Closing this properly means adding the key AND routing the preview's separator
-/// through it, in one change; until then a named constant states the value once instead of
-/// burying it in a `cr.rectangle` call.
-///
-/// The genuine defect here was the WIDTH, which was the literal `400.0` — a fixed length
-/// that over- or under-ran the margin depending on page setup and nesting depth. That is now
-/// derived from the page and the block's own indent, matching what the preview does when it
-/// insets a nested rule by its enclosing content margin.
-///
-/// **The gap narrowed when `rule_sprite` landed.** A tiled rule takes its height from the
-/// tile's own pixels, so the FLAT rule is now the only rule on either surface whose
-/// thickness no theme can state — the argument above still holds, but it now excuses one
-/// case out of two rather than the whole decoration.
-const RULE_THICKNESS_PT: f64 = 0.75;
-
 /// Pango's numeric weight for normal text, named because a bare `400` in a font
 /// descriptor reads as a magic number.
 const PANGO_WEIGHT_NORMAL: i32 = 400;

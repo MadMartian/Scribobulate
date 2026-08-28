@@ -100,6 +100,7 @@ blockquote_text_gap  = 10            # bar → quoted text
 list_step            = 28            # per-nesting-level list indent
 list_item_gap        = 8             # space between consecutive list items
 rule_space           = 4             # above/below a horizontal rule
+rule_thickness       = 1             # the flat rule's weight (a sprite rule uses its tile's height)
 table_cell_padding_v = 4
 table_cell_padding_h = 10
 table_border_width   = 1

@@ -391,7 +391,16 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
         "separator.scrib-rule {{ background-color: {}; }}\n",
         to_hex_opaque(palette.rule)
     ));
-
+    // The flat rule's WEIGHT, from the same key the PDF sink strokes with — one theme
+    // key, both application paths (POLICY). `min-height` rather than `height`: a
+    // GtkSeparator's height is its CSS minimum, and stating only `height` leaves GTK's
+    // own 1px minimum to win. A sprite-tiled rule is a different widget entirely
+    // (`widgets::rule::SpriteRule`) and takes its tile's height, so this selector
+    // cannot reach it and the two cannot disagree.
+    out.push_str(&format!(
+        "separator.scrib-rule {{ min-height: {}px; }}\n",
+        m.rule_thickness.max(0)
+    ));
     // ── the image-selection tint ──────────────────────────────────────────────
     //
     // Shown over an anchored image when it falls inside the buffer selection (GTK

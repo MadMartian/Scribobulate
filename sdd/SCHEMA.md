@@ -526,6 +526,7 @@ are on.
 | `rule_color` | colour | derived | The `---` rule's colour. |
 | `rule_sprite` | sprite path | — | A sprite **tiled horizontally at its natural size** across the rule, in place of the flat colour. ⚠️ Unlike every other sprite key, this one changes which WIDGET the rule is: a flat rule is a stock `GtkSeparator` filled by generated CSS, and a GTK CSS `url()` cannot name a sprite compiled into the binary, so a tiled rule is a widget that paints the texture itself. The rule's height becomes the tile's own; `rule_space` still sets the gap around it. |
 | `rule_space` | `i32` | `4` | Space above and below the rule. Clamped `0`–`400`. |
+| `rule_thickness` | `i32` | `1` | The FLAT rule's weight, in design pixels at zoom 1.0. Read by all three surfaces — the preview separator's generated CSS, the HTML sink's `hr`, and the PDF sink's stroke — so one key states the weight everywhere. Ignored by a **sprite-tiled** rule, which takes its tile's own height (`rule_sprite` states the weight implicitly). The default converts to exactly the `0.75 pt` the PDF sink used to hard-code, so a theme stating nothing is byte-identical. Clamped `0`–`400`. |
 
 #### Selection
 

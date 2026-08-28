@@ -441,7 +441,7 @@ pre {{ background: {code_block}; padding: 0.6em 0.8em; overflow-x: auto; }}
 pre code {{ background: none; padding: 0; }}
 blockquote {{ border-left: {bar_w}px solid {bar}; margin-left: 0;
   padding-left: {bar_gap}px; }}
-{bar_sprite_css}{quote_panel_css}hr {{ border: 0; border-top: 1px solid {rule}; margin: {rule_space}px 0; }}
+{bar_sprite_css}{quote_panel_css}hr {{ border: 0; border-top: {rule_thickness}px solid {rule}; margin: {rule_space}px 0; }}
 {rule_sprite_css}table {{ border-collapse: collapse; }}
 th, td {{ border: {tbw}px solid {tb}; padding: {cell_pv}px {cell_ph}px;
   border-radius: {radius}px; }}
@@ -459,6 +459,7 @@ td.a-r, th.a-r {{ text-align: right; }}
         bar_gap = m.blockquote_text_gap,
         rule = to_hex_rgba(p.rule),
         rule_space = m.rule_space,
+        rule_thickness = m.rule_thickness.max(0),
         rule_sprite_css = rule_sprite_css(t),
         tb = to_hex_rgba(p.table_border),
         tbw = m.table_border_width,
@@ -531,7 +532,7 @@ sub {{ font-size: {sup}%; vertical-align: baseline; position: relative; bottom: 
 strong {{ font-weight: {bold}; }}
 del {{ {strike} }}
 ",
-        mark_bg = t.mark_bg.hex(),
+        mark_bg = t.mark_bg.css_hex(),
         mark_fg = crate::cssfrag::decl("color", t.mark_fg.map(to_hex_rgba)),
         sup = (ty.supsub_scale * 100.0).round() as i32,
         // The theme's own RISE, which this sink expressed nowhere: `vertical-align:
@@ -569,7 +570,7 @@ fn chrome_rules(p: &Palette, t: &Theme) -> String {
 .annotations blockquote.claim {{ background: {claim}; border-left: 0; padding: 0.2em 0.4em; }}
 img {{ max-width: 100%; height: auto; }}
 {chip_css}",
-        claim = t.annotation_hl_color.hex(),
+        claim = t.annotation_hl_color.css_hex(),
         bar = to_hex_rgba(p.blockquote_bar),
         bar_w = m.blockquote_bar_width,
         bar_gap = m.blockquote_text_gap,
@@ -1256,6 +1257,73 @@ mod html_sink_tests {
             &theme,
         );
         (palette, theme)
+    }
+
+    /// **A translucent theme key keeps its alpha in the exported sheet.**
+    ///
+    /// `mark_bg` and `annotation_hl_color` are washes — both shipped defaults are
+    /// deliberately translucent (`#fff59d_88`, `#FFD133_61`) — and both used to reach
+    /// this sink through `ThemeColor::hex`, which drops alpha. `#ff000044` exported as
+    /// `background: #ff0000`, so the highlight COVERED the text it was meant to tint,
+    /// on every export of any document containing a `==mark==` or an annotation. The
+    /// preview and the PDF keep the alpha, so one document's two exports disagreed.
+    ///
+    /// The assertion is on the emitted declaration rather than on the projection
+    /// function, because the defect was a call site choosing the wrong one of two
+    /// correct functions — a test of `to_hex_rgba` passes either way.
+    #[test]
+    fn a_translucent_theme_key_keeps_its_alpha_in_the_exported_sheet() {
+        let (palette, mut theme) = style();
+        // Alphas distinct from each other and from any default, so a rule cannot pass
+        // by accident or by reading its neighbour's colour.
+        theme.mark_bg = crate::theme::ThemeColor(gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 0.25));
+        theme.annotation_hl_color =
+            crate::theme::ThemeColor(gtk::gdk::RGBA::new(0.0, 1.0, 0.0, 0.5));
+        let css = super::stylesheet(&palette, &theme, &super::SpriteUris::default());
+
+        let decl = |selector: &str| -> String {
+            css.lines()
+                .find(|l| {
+                    l.split_once('{')
+                        .is_some_and(|(sel, _)| sel.split(',').any(|s| s.trim() == selector))
+                })
+                .unwrap_or_else(|| panic!("no rule styles {selector}:\n{css}"))
+                .to_string()
+        };
+
+        let mark = decl("mark");
+        assert!(
+            mark.contains("#ff000040"),
+            "mark's wash lost its alpha — exported `{mark}`, wanted an 8-digit \
+             #ff000040. A flat wash hides the text it was meant to tint"
+        );
+        let claim = decl(".claim");
+        assert!(
+            claim.contains("#00ff0080"),
+            "the annotation claim's wash lost its alpha — exported `{claim}`"
+        );
+    }
+
+    /// The paired direction, and the reason this pins alpha rather than a colour: an
+    /// OPAQUE key must still export as six digits, so a theme stating no alpha keeps
+    /// producing byte-identical sheets (TDD 18.2). Without this, "always emit eight
+    /// digits" would satisfy the test above and silently rewrite every existing sheet.
+    #[test]
+    fn an_opaque_theme_key_still_exports_as_six_digit_hex() {
+        let (palette, mut theme) = style();
+        theme.mark_bg = crate::theme::ThemeColor(gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 1.0));
+        let css = super::stylesheet(&palette, &theme, &super::SpriteUris::default());
+        let mark = css
+            .lines()
+            .find(|l| {
+                l.split_once('{')
+                    .is_some_and(|(sel, _)| sel.trim() == "mark")
+            })
+            .expect("a mark rule");
+        assert!(
+            mark.contains("#ff0000") && !mark.contains("#ff0000ff"),
+            "an opaque key must stay six digits — exported `{mark}`"
+        );
     }
 
     /// **`table_cell_radius` rounds TABLE CELLS, on both surfaces.**

@@ -28,8 +28,6 @@ entry can still be the worst thing in the register.
 | N | Any | Production | A long heading overflows the preview pane horizontally instead of wrapping to it | Low |
 | P | Any | Production | A multi-paragraph blockquote's accent bar draws as one continuous rect per span, unconfirmed for every span shape a blockquote can produce | Low |
 | R | Any | Production | Pixel Quest's `link_color` and `list_task_color` sit below their legibility floor and are carried as named exceptions the operator intends to revisit, not as settled choices | Low |
-| S | Any | Project | The horizontal rule's thickness is the one styling value no theme can state — a literal in the PDF sink and the separator's own CSS default on screen | Low |
-| W | Any | Production | The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`, so both shipped washes print as flat colour | Low |
 
 ## A. Tables are selection islands
 
@@ -651,55 +649,3 @@ somebody made rather than one somebody postponed.
 - Retune only `list_task_color` (the newer of the two, changed 2026-08-26) and keep the link
   as a period-look exception with its reason unchanged.
 - Accept both permanently: rewrite the two rows to state a settled reason and close this.
-
-## S. The horizontal rule's thickness is the one styling value no theme can state
-
-**Severity**: Low. Every rule still draws, at a sane weight, on both surfaces. The gap is
-that TDD 25.9 requires every colour, typeface and decoration metric in an exported artefact
-to resolve through the theme engine, and this one does not.
-
-`RULE_THICKNESS_PT = 0.75` (`src/export/pdf/mod.rs`, read at `pdf/ink.rs`) is a literal, and
-the preview's flat rule is a stock `GtkSeparator` taking its own CSS default. The rule's
-colour, its spacing and — since TDD 18.31 — its sprite tiling are all themeable; its weight
-alone is not.
-
-The sprite-tiled rule narrowed this rather than causing it: a tiled rule takes its tile's own
-height, so a theme that states `rule_sprite` already controls the weight implicitly. The flat
-rule is now the only rule, on either surface, whose thickness cannot be stated.
-
-**The two halves are not independently valid.** Adding a `rule_thickness` metric key without
-routing the preview's separator through it gives one decoration two sources of truth on two
-surfaces, which POLICY's "one theme key, every application path" exists to prevent — and a
-PDF that obeys a key the screen ignores is worse than one where neither does, because only
-the first looks correct in a review.
-
-**Mitigation options**:
-- Add a `rule_thickness` metric key and route BOTH the PDF sink and the preview separator's
-  generated CSS through it, in one change.
-- Derive the flat rule's thickness from an existing metric rather than minting a key — the
-  vocabulary is already large, and a weight that tracks something the theme already states
-  may be preferable to a knob nobody turns.
-- Accept it: a theme wanting a specific rule weight can state `rule_sprite` and get it from
-  the tile.
-
-## W. The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`
-
-**Severity**: Low. Both keys still export and both still read; they print as a flat colour
-where the theme asked for a wash, so a highlight covers the text it was meant to tint.
-
-Two of the roughly twenty-five colour sites in the HTML sink convert through the opaque
-projection rather than the RGBA one, so `#ff000044` exports as `background: #ff0000`. It
-needs no override to fire: both shipped defaults are deliberately translucent
-(`#fff59d_88`, `#FFD133_61`), so every export of a document with a `==mark==` or an
-annotation already shows it. The PDF sink keeps the alpha, so the two exports of one
-document disagree.
-
-**PRE-EXISTING, measured.** The exported declarations are byte-identical on a binary built
-at this branch's merge-base; the same opaque call sits at both revisions.
-
-**Mitigation options**:
-- Route both sites through the RGBA projection, and add a guard that the two export sinks
-  agree on a translucent key — the divergence between them is the part no single-sink test
-  can see.
-- Make the opaque projection unreachable from the sink where alpha is meaningful, so the
-  wrong conversion cannot be spelled rather than merely being corrected here.
