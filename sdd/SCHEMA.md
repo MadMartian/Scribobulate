@@ -502,9 +502,9 @@ are on.
 |-----|------|---------|-------------|
 | `blockquote_bar_color` | colour | derived | The quote's accent bar. |
 | `blockquote_bar_sprite` | sprite path | — | A sprite **tiled at its natural size** down the accent bar, in place of the flat colour. ⚠️ The tile is clipped to the bar, so a theme using one wants `blockquote_bar_width` at the tile's own width — a 24px tile in a 4px bar is a 4px slice of a tile. |
-| `blockquote_bar_width` | `i32` | `3` | Clamped `0`–`400`. |
+| `blockquote_bar_width` | `i32` | `3` | Clamped `0`–`400`. With `blockquote_text_gap` it is also the **per-level step**: a nested quote indents, and draws its own bar, `blockquote_bar_width + blockquote_text_gap` further in per depth, to a cap of 6 levels. |
 | `blockquote_text_gap` | `i32` | `10` | Bar → quoted text. Clamped `0`–`400`. |
-| `blockquote_bg` | colour | — | A panel behind quoted text. Absent unless stated: a quote sits on the page background, as it always has. Independent of `blockquote_bar_color` — an accent bar and a panel are two decisions, and a themed bar seeds no panel. |
+| `blockquote_bg` | colour | — | A panel behind quoted text. Absent unless stated: a quote sits on the page background, as it always has. Independent of `blockquote_bar_color` — an accent bar and a panel are two decisions, and a themed bar seeds no panel. ⚠️ **Does not nest.** A quote inside a quote inherits its parent's fill rather than painting a second panel over it, so depth is carried by the bars alone (TDD 2.11b). A translucent value is therefore composited once however deep the nesting goes. |
 | `blockquote_fg` | colour | body foreground | The ink quoted **body** text takes on that panel. Re-inks the quote's prose only: a link, a heading or a `==mark==` inside the quote keeps its own colour, because this rides the lowest-priority ink tag in the preview and the cairo pen (rather than the markup) on the page. |
 
 #### Table
