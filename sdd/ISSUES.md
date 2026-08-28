@@ -21,7 +21,7 @@ entry can still be the worst thing in the register.
 | C | Linux | Production | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
 | D | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
 | E | Any | Production | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
-| F | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
+| F | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in roughly one full run in four, at a varying site | Medium |
 | G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
@@ -368,6 +368,13 @@ affordance cannot observe the click at all.
 
 ## F. A GTK4/Quartz autorelease-pool crash intermittently SIGABRTs the macOS integration suite
 
+**Re-measured 2026-08-27, and the rate and shape are both narrower than first recorded.**
+Roughly **one abort in four FULL pipeline runs**, not two in three, and the abort site varies
+rather than concentrating on the focus-churning test — the observed one was a find-cursor
+test. The discriminator: `gtk_suite` run standalone, three times consecutively, passed clean
+every time (323 passed). So this is a property of the FULL run rather than of any one test,
+which is what a fix would have to account for and what a bisect-by-test would never find.
+
 **Severity**: Medium (the macOS GTK suite cannot be trusted to complete; no data at risk,
 and no Scribobulate code is implicated — but a red run there means nothing until re-run)
 
@@ -587,9 +594,23 @@ under test.
 
 ## I. Every native file chooser invocation grows RSS on macOS
 
-**Severity**: Medium. Unbounded within everything measured — no plateau observed — but the
+**Severity**: Medium. Monotonic within everything measured at the per-invocation scale, but the
 cost is overwhelmingly AppKit's own price for presenting an `NSSavePanel`, and it is not
 reachable by any change this project can make.
+
+**Re-measured 2026-08-27 with a control, which sharpened the claim in both directions.** Ten
+`File ▸ Open` invocations, CANCELLED every time so no document ever loaded, grew RSS
+222,432 → 232,288 KiB — monotonic, never reclaimed, **≈985 KiB per invocation**. The control
+is what makes that a cause rather than a coincidence: ten cycles at the same cadence, same
+frontmost-and-Escape driving, chooser never opened, moved RSS by **+32 KiB total**. So the
+growth is the chooser, not elapsed time and not the driving method.
+
+**And the counter-evidence, recorded because it is the half that would otherwise be
+mis-read.** A separately-observed instance sitting at 257 MiB after ~1.5 h of ordinary use
+was NOT this issue accumulating: watched across a further window it went 257 → 251.5 →
+230.5 MiB — *downward*. "Idle instance at a high RSS" reads as corroboration and is the
+opposite. The per-invocation leak is real; something reclaims at a larger scale, and the
+shape of that reclamation is unmeasured. Do not describe this entry as unbounded growth.
 
 **Symptom**: opening a `GtkFileChooserNative` and cancelling it grows resident memory on
 macOS, per invocation, and the memory never returns. Neither Linux nor Windows reproduces it.
