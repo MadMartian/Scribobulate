@@ -30,7 +30,6 @@ entry can still be the worst thing in the register.
 | P | Any | Production | A multi-paragraph blockquote's accent bar draws as one continuous rect per span, unconfirmed for every span shape a blockquote can produce | Low |
 | R | Any | Production | Pixel Quest's `link_color` and `list_task_color` sit below their legibility floor and are carried as named exceptions the operator intends to revisit, not as settled choices | Low |
 | S | Any | Project | The horizontal rule's thickness is the one styling value no theme can state — a literal in the PDF sink and the separator's own CSS default on screen | Low |
-| T | Any | Production | A live theme change never reaches a tab that has not been activated yet — its page fill updates, its ink and face do not | Medium |
 | W | Any | Production | The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`, so both shipped washes print as flat colour | Low |
 | X | Any | Production | The find bar's "current match" indicator drops on an in-session edit (any mode); self-heals on the next Next/Prev — the originally-reported stronger form did not reproduce | Low |
 | Y | Any | Production | In Edit/Split mode, a search match inside annotated text is counted but its "all matches" highlight is invisible, buried under the annotation's own tag | Medium |
@@ -751,36 +750,6 @@ the first looks correct in a review.
   may be preferable to a knob nobody turns.
 - Accept it: a theme wanting a specific rule weight can state `rule_sprite` and get it from
   the tile.
-
-## T. A live theme change never reaches a tab that has not been activated yet
-
-**Severity**: Medium. The document is still readable — the page takes the new fill — but
-it is readable in the wrong ink and the wrong face, which reads as a rendering fault
-rather than as a stale tab. It does not heal: switching away and back leaves it wrong, and
-only a second theme change repairs it.
-
-Reproduced from clean state with no user themes file. Open two documents in one window
-without activating the second, select a theme, then switch to the second tab: its page
-background is the new theme's, its body ink is pure black and its face is the desktop
-sans. Two discriminators bound it — activating both tabs *before* the switch leaves both
-correct, and launching with the theme already in `session.toml` leaves the late tab
-correct. So the fault is specific to a **live** switch reaching a view that does not exist
-yet.
-
-The fill and the ink land on the two different CSS nodes the preview splits a page across,
-which is the obvious place to look: one node is being restyled on the live path and the
-other is not.
-
-**PRE-EXISTING, measured.** Reproduced identically on a binary built at this branch's own
-merge-base, pixel-identical across five captures. Not caused by the decoration work.
-
-**Mitigation options**:
-- Make the live theme-change path restyle every node it owns, for views not yet built as
-  well as those already realised.
-- Make a view adopt the current theme at materialisation time rather than relying on having
-  received the change, so the two paths converge on one answer.
-- Accept it: a user who switches theme and then visits an untouched tab sees it wrong once
-  per switch.
 
 ## W. The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`
 

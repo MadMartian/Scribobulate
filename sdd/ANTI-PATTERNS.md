@@ -481,6 +481,7 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 329 | A gate read through a PIPE reports the pipe's LAST stage, so `$?` after `gate | tail` is tail's verdict — and it agreed with a floor set from the wrong summary column | B |
 | 330 | A seam that EXISTS is not a seam that is CALLED — a debt closed on the seam's existence, while the one consumer the debt was about still bypassed it | B |
 | 331 | A vocabulary rename that reaches a SELECTOR produces a well-formed rule matching nothing, and no assertion over generated rule TEXT can tell the two apart | B |
+| 332 | Re-styling a BACKGROUND view in place is correct headlessly and wrong on a real compositor — rebuild it on the way in instead of proving why | A |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -4423,3 +4424,47 @@ D and E are the load-bearing arms. D is clean because `static_type()` registers 
 **Scribobulate**: the table-cell link selectors (`src/preview/css.rs`) name GTK's own `link` class on `GtkLinkButton`, not this project's `link_color` key; the constant carries a warning saying so, because the two are one blanket rename apart. Pinned by a guard that reads the button's resolved colour off a constructed cell.
 
 **See**: kin — ScrAP-132 (a guard whose input set is narrower than its hazard). The GTK-side facts underneath this (which class `GtkLinkButton` carries, and that `color` inherits to its caption while `text-decoration-*` does not) are routed to the `gtk4-rs` skill separately; the lesson here is about renaming across a namespace boundary, which is not a GTK lesson.
+
+## 332. Re-styling a background view in place, and trusting a headless run to prove it
+
+**Symptom**: after a live reading-theme switch, a tab the user has never activated shows the
+new theme's **page fill** with the **previous** theme's **ink and typeface** — on a dark
+desktop switching to a light theme, near-white body text on a cream page, barely readable.
+It does not self-heal on a tab switch; only a *second* theme change repairs it. The active
+tab is always correct, which makes it read as a rendering fault in one tab rather than as a
+theming bug.
+
+**Why it resisted diagnosis**: it does not reproduce headlessly. Three separately driven
+Xvfb shapes of the same scenario — a deferred tab activated after the switch, a tab
+pre-rendered by the prerender pump and left in the background, and the pump sequence run end
+to end — all produced the **correct** ink (Sepia's `#5b4636` and its Charter stack, identical
+to the active tab). The defect appears only under a real compositor, which is
+GTK4Rs/AP-56's class. A code reading produced a confident and **wrong** suspect first: the
+sweep's silent early return for a tab with no preview scroller is real, but harmless, because
+such a tab still carries `needs_render` and is rendered against the current theme when it
+materialises.
+
+**What makes it hard to reason about**: the ink (`textview.scrib-preview { color; font-family }`)
+and the fill (`> text { background-color }`) are emitted by `preview::css::theme_css` into
+**one** provider and installed by **one** `load_from_data`. Any explanation of "the sheet did
+not reach the widget" has to account for half of it arriving. The mechanism is still not
+established, and this entry deliberately does not guess at one.
+
+**Scribobulate**: `app::setup::re_render_all_windows` re-renders only the **active** tab in
+place; every other preview-visible tab has its preview released and `needs_render` set, then
+`start_deferred_prerender_pump` warms them. A tab that is rebuilt on the way in cannot be
+showing a theme it was never rendered under, whatever the cascade did to the widget it used
+to hold — so the corrective does not depend on the mechanism being known. It is also cheaper
+than the in-place sweep (nothing is rendered for a tab the user may never open). Guard:
+`a_theme_change_re_arms_every_background_tab_rather_than_re_rendering_it`, which asserts the
+**mechanism** and not the colour — a colour assertion passes on the broken code here, so it
+would guard nothing. Rubric TDD 18.3; MANUAL-TEST §18.3b carries the live check and says why
+it cannot be automated.
+
+**The transferable half**: when a defect is invisible to the harness, an assertion over the
+*symptom* is worthless and an assertion over the *corrective's mechanism* is not. Reach for a
+repair whose correctness is structural — "it cannot be stale because it is rebuilt" — rather
+than one that needs the mechanism understood, and pin the structure. The alternative is
+spending the investigation budget proving why a cascade misbehaves on one windowing system in
+order to justify a fix that is cheaper than the investigation.
+

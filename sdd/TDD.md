@@ -2210,6 +2210,9 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** an open document rendered under System
 - **When** the user selects Sepia
 - **Then** the preview repaints book-like — an off-white yellowish page, a serif body face, and body text in black or a soft brown — in the same window, without re-reading the file from disk and without losing the reading position
+- **And given** the window has other tabs open, including one the user has never activated
+- **When** the user switches to any of them afterwards
+- **Then** that tab shows the newly selected theme in full — page, ink and typeface together — never the new page under the previous theme's ink, and without needing a second theme change to correct it
 
 ### 18.4 The theme reaches everything the preview draws
 - **Given** a document containing a blockquote, inline code, a fenced code block, a link, a table, an image, a horizontal rule, and an annotation

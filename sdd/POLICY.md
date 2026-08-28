@@ -1016,6 +1016,27 @@ diffing the trees, not by trusting a record of what was picked** (`git diff HEAD
 -- <paths>` before deleting a branch), because a seat that is still working moves the target
 under a confirmation that was accurate when it was sent.
 
+## One commit per batch
+
+**A batch of debt-register work lands as exactly one commit on the integration branch, or it
+has not landed.** A batch is a set of issues sharing a mechanism, a fixture or a verification
+rig — they are fixed together or not at all — so develop on a `feature/<batch>` branch with as
+many working commits as the work wants, then land with `git merge --squash` and one commit
+whose message names the batch and enumerates what it closes. Never fast-forward a batch
+branch, and never cherry-pick half of one.
+
+The reason is what a *published* revision is for. Splitting a batch into several commits
+publishes intermediate states in which the mechanism is half-replaced — the old hand-off gone
+and the new one not yet read by every consumer — and those are exactly the revisions a
+`git bisect` lands on and a peer seat fetches mid-flight. One commit per batch keeps every
+revision on the branch a state the whole batch's tests describe.
+
+**A batch that will not fit one commit is not one batch** — that is the signal to re-cut it,
+not to relax the rule. Two mechanisms wearing one batch's name is the thing this prevents.
+Seat branches (§ Cross-machine seat branches) are unaffected: a seat's branch is integrated
+into the batch branch and the squash carries it, so its work reaches the integration branch
+inside the batch's single commit rather than beside it.
+
 ## SDD register writes
 
 `sdd/ANTI-PATTERNS.md` and `sdd/ISSUES.md` have **one writer**. When work is split

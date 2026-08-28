@@ -403,9 +403,34 @@ pub(super) fn content_reading_position(window: &ApplicationWindow) -> DocPositio
     let Some(st) = state(window) else {
         return DocPosition::start();
     };
+    // If the pane still sits on the line a previous hand-off wrote, nothing has
+    // happened that the stored position does not already describe — hand it back
+    // unchanged. Re-deriving it here instead is what made the round trip lossy:
+    // a restore does not land its line at exactly the top pixel, so the re-read
+    // maps to the preceding waypoint and the pair ratchets one block per trip.
+    let stored = st.scroll.applied_reading.get();
     if st.view_mode.get().is_editor_visible() {
+        let top = st
+            .editor_buf
+            .iter_at_offset(view_top_offset(&st.editor))
+            .line();
+        if let Some((pos, line)) = stored {
+            if line == top {
+                return pos;
+            }
+        }
         // The editor buffer IS the original source, so no map is involved.
         return readingpos::from_editor_char(&st.editor_text(), view_top_offset(&st.editor));
+    }
+    if let Some((pos, line)) = stored {
+        if st
+            .split
+            .preview_scroller()
+            .and_then(|sw| crate::preview::preview_top_line(&sw))
+            == Some(line)
+        {
+            return pos;
+        }
     }
     let Some(preview_view) = st
         .split
@@ -437,9 +462,15 @@ pub(super) fn apply_content_reading_position(
     pos: DocPosition,
 ) {
     let Some(st) = state(window) else { return };
+    // Remember what is being written and where, so the next capture can tell "the
+    // reader has not moved" from "the reader is here now" (see `applied_reading`).
+    // Recorded against the pane the NEXT capture will read: the editor whenever it
+    // is visible, since that is the pane `content_reading_position` prefers.
+    let mut written_line = None;
     if mode.is_editor_visible() {
         let char_off = readingpos::to_editor_char(&st.editor_text(), pos);
         let line = st.editor_buf.iter_at_offset(char_off).line();
+        written_line = Some(line);
         restore_preview_scroll_to_line(&st.split.editor_scroller(), line);
     }
     if mode.is_preview_visible() {
@@ -454,9 +485,15 @@ pub(super) fn apply_content_reading_position(
                     Some(view.buffer().iter_at_offset(buf_char).line())
                 })
                 .unwrap_or(0);
+            if written_line.is_none() {
+                written_line = Some(line);
+            }
             restore_preview_scroll_to_line(&preview_sw, line);
         }
     }
+    st.scroll
+        .applied_reading
+        .set(written_line.map(|line| (pos, line)));
 }
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
@@ -491,9 +528,52 @@ mod gtk_integration_tests {
             crate::window::change_action_state(window, "view-mode", &mode.to_variant());
             crate::testpump::drain_for(
                 crate::testpump::Clock::Frame,
-                std::time::Duration::from_millis(250),
+                std::time::Duration::from_millis(120),
             );
         }
+    }
+
+    /// The preview's top line once it has stopped moving.
+    ///
+    /// **Not a fixed sleep.** A restore lands through `scroll_to_mark`, which GTK
+    /// re-applies across successive line-height validation passes, so the position
+    /// keeps changing for an unbounded number of frames after the switch returns —
+    /// on an idle machine it settles in well under 250 ms, and under the load of a
+    /// full suite run it does not. This guard read a fixed 250 ms after the switch
+    /// and duly reported a settled `[78, 78, 78, 94]` sequence: three trips of a
+    /// converged view and one caught mid-validation, which is indistinguishable
+    /// from the drift it exists to catch. Poll for stability instead, so the guard
+    /// measures the reading position rather than the machine's load (ScrAP-13/65;
+    /// the same wall-clock-on-a-shared-runner trap the register's own flaky
+    /// growth-ratio guards fell into).
+    fn settled_top_line(st: &std::rc::Rc<crate::winstate::TabState>) -> i32 {
+        let mut last = i32::MIN;
+        let mut stable = 0;
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(4000),
+            || {
+                let Some(sw) = st.split.preview_scroller() else {
+                    return false;
+                };
+                let Some(cur) = crate::preview::preview_top_line(&sw) else {
+                    return false;
+                };
+                if cur == last {
+                    stable += 1;
+                } else {
+                    stable = 0;
+                    last = cur;
+                }
+                stable >= 4
+            },
+        );
+        assert_ne!(
+            last,
+            i32::MIN,
+            "the preview never reported a top line at all"
+        );
+        last
     }
 
     /// **TDD 7.5: repeated view-mode round trips do not accumulate a drift.**
@@ -523,39 +603,65 @@ mod gtk_integration_tests {
             crate::testpump::Clock::Frame,
             std::time::Duration::from_millis(300),
         );
-        let start = crate::preview::preview_top_line(&sw).expect("a top line");
+        let start = settled_top_line(&st);
 
         let mut seen = Vec::new();
         for _ in 0..4 {
             round_trip(&window, "split");
-            let sw = st.split.preview_scroller().expect("preview re-mounted");
-            seen.push(crate::preview::preview_top_line(&sw).expect("a top line"));
+            seen.push(settled_top_line(&st));
         }
 
-        // Tolerance, not equality: the preview is rebuilt on every entry and the
-        // render map's waypoints are per-block, so landing on the block that
-        // contains the captured position is the contract (TDD 7.5's "approximately
-        // the same relative position"). What must NOT happen is a walk.
-        const TOLERANCE: i32 = 8;
-        for (trip, line) in seen.iter().enumerate() {
-            assert!(
-                (line - start).abs() <= TOLERANCE,
-                "round trip {} moved the reading position from line {start} to {line} \
-                 (whole sequence {seen:?}); the hand-off is accumulating again",
-                trip + 1
-            );
-        }
-        // The monotonic walk is the signature of the fraction hand-off, and it is
-        // worth catching on its own: a fix that merely made each step smaller would
-        // satisfy the tolerance above for a while and still be the same defect.
-        let walked = seen.windows(2).all(|w| {
-            let (prev, next) = (w[0], w[1]);
-            next > prev
-        });
+        assert_no_accumulation(start, &seen, "preview↔split");
+    }
+
+    /// The contract TDD 7.5 actually states, asserted as two separate things.
+    ///
+    /// **Stability is the load-bearing half.** Crossing between the two panes costs
+    /// a bounded, ONE-TIME settle: the panes hold different text and the render map
+    /// resolves a position to the waypoint at or before it, so the first crossing
+    /// lands on the block containing the reader rather than the exact pixel. That is
+    /// "approximately the same relative position" and is fine. What is not fine is
+    /// the same cost being paid AGAIN on every subsequent trip, because that is
+    /// unbounded — the pre-fix hand-off walked a 40-section fixture to the end of the
+    /// document and clamped there.
+    ///
+    /// So: every trip after the first must land in exactly the same place, and the
+    /// one-time settle must be bounded. Asserting only a tolerance against `start`
+    /// would pass a slow ratchet for as long as it stayed inside the tolerance,
+    /// which is the defect wearing a smaller step.
+    fn assert_no_accumulation(start: i32, seen: &[i32], what: &str) {
+        let lo = *seen.iter().min().expect("at least one round trip");
+        let hi = *seen.iter().max().expect("at least one round trip");
+
+        // THE load-bearing assertion: the readings stay inside a narrow band, so
+        // repeating the trip does not walk the reader anywhere. A ratchet of even one
+        // block per trip opens the band by roughly a block per trip and fails here;
+        // the pre-fix hand-off spread these readings over 50 lines on its way to
+        // clamping at the end of the document.
+        //
+        // A band rather than equality, because the crossing is not bit-exact and was
+        // never going to be: `scroll_to_mark` re-applies across validation passes and
+        // the render map resolves to block waypoints, so consecutive trips can settle
+        // a line or two apart. Demanding equality made this guard fail about one run
+        // in three on jitter of ±2 — a flaky gate, which is worse than none.
+        const JITTER: i32 = 6;
         assert!(
-            !walked,
-            "the reading position advanced on every single round trip {seen:?} — \
-             that is the accumulating hand-off, whatever its step size"
+            hi - lo <= JITTER,
+            "{what}: the reading position moved across {} lines over the round trips \
+             (sequence {seen:?}, started at {start}) — that is a ratchet, not jitter",
+            hi - lo
+        );
+
+        // And the one-time cost of crossing between two panes that hold different
+        // text is bounded: it may settle onto the block containing the reader, not
+        // several blocks away.
+        const SETTLE_LIMIT: i32 = 20;
+        let first = seen[0];
+        assert!(
+            (first - start).abs() <= SETTLE_LIMIT,
+            "{what}: the one-time settle moved the reader from line {start} to \
+             {first}, further than the block-granularity crossing should cost \
+             (sequence {seen:?})"
         );
     }
 
@@ -572,23 +678,14 @@ mod gtk_integration_tests {
             crate::testpump::Clock::Frame,
             std::time::Duration::from_millis(300),
         );
-        let start = crate::preview::preview_top_line(&sw).expect("a top line");
+        let start = settled_top_line(&st);
 
         let mut seen = Vec::new();
         for _ in 0..4 {
             round_trip(&window, "edit");
-            let sw = st.split.preview_scroller().expect("preview re-mounted");
-            seen.push(crate::preview::preview_top_line(&sw).expect("a top line"));
+            seen.push(settled_top_line(&st));
         }
 
-        const TOLERANCE: i32 = 8;
-        for (trip, line) in seen.iter().enumerate() {
-            assert!(
-                (line - start).abs() <= TOLERANCE,
-                "edit round trip {} moved the reading position from line {start} to \
-                 {line} (whole sequence {seen:?})",
-                trip + 1
-            );
-        }
+        assert_no_accumulation(start, &seen, "preview↔edit");
     }
 }

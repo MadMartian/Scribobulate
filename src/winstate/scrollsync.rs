@@ -39,6 +39,20 @@ pub(crate) struct ScrollSync {
     /// redundant notifications GtkAdjustment emits during validation.
     pub(crate) ed_last: Cell<(f64, f64)>,
     pub(crate) pv_last: Cell<(f64, f64)>,
+    /// The reading position last WRITTEN into a pane by a view-mode hand-off, with
+    /// the pane line it was written to.
+    ///
+    /// A hand-off that always re-derives the position from the destination's
+    /// geometry cannot be idempotent, because a restore does not land the requested
+    /// line at exactly the requested pixel: the next capture reads a viewport top a
+    /// little above it, maps that to the preceding waypoint, and the pair ratchets
+    /// one block per trip — measured walking a settled 40-section fixture 79 → 62 →
+    /// 58 → 54, upward, without bound. Remembering what was written closes the loop:
+    /// if the pane has not moved since (its top line is still the line written),
+    /// nothing has happened that the stored position does not already describe, so
+    /// it is handed back unchanged and a round trip is exact. A user scroll changes
+    /// the top line and the stored value is discarded.
+    pub(crate) applied_reading: Cell<Option<(crate::readingpos::DocPosition, i32)>>,
 }
 
 impl Default for ScrollSync {
@@ -49,6 +63,7 @@ impl Default for ScrollSync {
             guard: Cell::new(false),
             ed_last: Cell::new((-1.0, -1.0)),
             pv_last: Cell::new((-1.0, -1.0)),
+            applied_reading: Cell::new(None),
         }
     }
 }

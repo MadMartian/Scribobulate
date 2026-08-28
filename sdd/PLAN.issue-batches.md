@@ -37,7 +37,7 @@ tracker: the issue bodies stay in the register and are not duplicated here.
 
 A batch is a set of issues that share a **mechanism**, a **fixture**, or a **verification
 rig** — so fixing them together costs materially less than fixing them apart, and lands as
-**one commit** (see the working rule in [PLAN.view-state-handoff.md](PLAN.view-state-handoff.md)).
+**one commit** (POLICY § One commit per batch).
 A group of issues that merely share a subsystem is not a batch; if they need two mechanisms,
 they are two batches.
 
@@ -46,7 +46,7 @@ they are two batches.
 | Batch | Issues | Severity | Why these coalesce | State |
 |---|---|:-:|---|---|
 | **1 — View-state handoff** | *(U, V — deleted)* | Medium | One missing document position, seen from two ends | ✅ **DONE**, one commit on master |
-| **2 — A theme change that never lands** | **T**, **C** | Medium, Low | Both are "the reading surface keeps the old theme while something else updates". T is a *reading-theme* switch missing a background tab; C is a *desktop* dark↔light switch missing a running instance. Both end at the same fan-out (`app::setup::re_render_all_windows` and the one CSS provider it reloads), and both need the live display — neither reproduces headlessly | 💡 T has a live reproduction (see the other plan); C not yet re-driven |
+| **2 — A theme change that never lands** | *(T — deleted)* | Medium | A reading-theme switch missing a background tab. **C was re-cut OUT of this batch** — see below | ✅ **DONE**, verified on the live display |
 | **3 — Find highlight rendering** | **Y**, **X** | Medium, Low | Same files, same fixture (an annotated document with a repeated term), same rig. Y is root-caused to tag priority; X's confirmed half is re-asserting the current match after a buffer change. X adds little on top of Y | 💡 Ready; X's *strong* form still needs the operator's exact steps |
 | **4 — Theme fidelity across export sinks** | **W**, **S** | Low, Low | Both fail TDD 25.9 the same way — a value that does not resolve through the theme engine. Coalescing buys a real deliverable neither gets alone: a **cross-sink parity guard** that the two sinks agree on a given key | 💡 Ready |
 | **5 — Preview render diagnostics** | **N**, **P** | Low, Low | Neither is a fix yet; both need a deliberate reproduction before anyone can act, and both want the same instrument — a fixture matrix driven at several pane widths with screenshot comparison. One pass covers both; two passes duplicate the setup | 💡 Ready |
@@ -60,6 +60,7 @@ they are two batches.
 | **E** | Low | A click inside an existing selection never reaches the pane's affordances. Interaction/gesture routing; no sibling |
 | **G** | Low | `Test` scope, not `Production`: two wall-clock growth-ratio guards go red on a loaded machine. A gate-design problem, not an application one — the fix is to stop measuring an exponent with a stopwatch on a small baseline |
 | **H** | Low | macOS-only and intermittent; needs the Mac seat's hands, not a mechanism |
+| **C** | Low | **Re-cut out of batch 2 on inspection, and the correction is the point of keeping this row.** It was grouped with T on the reading that both are "a theme change that does not land". They are not: T was the fan-out *reaching* a view and leaving it half-styled, while C is that nothing ever *triggers* the fan-out — GTK 4.6 on KDE/X11 emits no settings change when the desktop flips dark↔light, so the app is never told. Closing it means a Linux platform seam subscribing to the XDG desktop portal's `org.freedesktop.appearance` `color-scheme` signal and writing `gtk-application-prefer-dark-theme`, mirroring `platform/mac/appearance.rs` (POLICY: never re-theme a surface directly from a platform signal). That is a different mechanism, a new `src/platform/linux/`, and verification means toggling the operator's own desktop theme. Not worth batching with anything; decide it on its own merits — it is Low, Linux-only, and has a working user workaround (restart) |
 
 ## Not work waiting to be scheduled
 
