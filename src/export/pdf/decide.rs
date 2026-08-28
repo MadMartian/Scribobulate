@@ -116,24 +116,28 @@ pub(crate) fn list_marker_markup(
     // `pango_parse_markup` and render the whole run EMPTY, with no warning (ScrAP-163).
     // The HTML sink takes the same key through its OWN projection — one key, one
     // validation, a different escape per grammar.
-    let themed = match (task, start) {
-        (Some(true), _) => glyphs.task_checked.as_ref(),
-        (Some(false), _) => glyphs.task.as_ref(),
-        (None, Some(_)) => glyphs.ordered.as_ref(),
-        // The BULLET alone varies by nesting depth (TDD 18.26), through the tier index
-        // every path shares. Its array was folded once in `Theme::resolve`, so an
-        // unstated tier already carries the shallower one's glyph.
-        (None, None) => glyphs.bullet[crate::theme::depth_tier(depth as usize)].as_ref(),
-    };
+    //
+    // The kind is normalised ONCE, at this sink's boundary, and the depth tier is
+    // applied inside the engine — so the "task arms come first" rule and the
+    // bullet-only depth variation are stated in one place rather than in four tables
+    // inside this file alone.
+    let kind = crate::theme::MarkerKind::from_task_and_start(task, start);
+    // This projection asks only about GLYPHS. A sprite marker is a picture and cannot
+    // ride inside a text run, so the sink resolves it separately
+    // (`list_marker_sprite`) and suppresses this markup entirely when one applies.
+    let themed = crate::theme::marker_glyph(kind, depth as usize, glyphs);
     let glyph = match themed {
         Some(g) => g.escaped_for_pango_markup(),
-        None => match (task, start) {
-            (Some(true), _) => "\u{2611}".to_string(),
-            (Some(false), _) => "\u{2610}".to_string(),
-            // A task item keeps its checkbox even inside an ordered list, which is why
-            // the task arms come first: `1. [x] done` is a checkbox, not a number.
-            (None, Some(s)) => format!("{}.", s + n as u64),
-            (None, None) => "\u{2022}".to_string(),
+        None => match kind {
+            crate::theme::MarkerKind::TaskChecked => "\u{2611}".to_string(),
+            crate::theme::MarkerKind::Task => "\u{2610}".to_string(),
+            // `saturating_add`, never `+`: `start` is a `u64` straight out of the
+            // parser and `n` is the item's index, so `u64::MAX` plus a second item
+            // overflows — a debug-build panic inside an export walk.
+            crate::theme::MarkerKind::Ordered => {
+                format!("{}.", start.unwrap_or(1).saturating_add(n as u64))
+            }
+            crate::theme::MarkerKind::Bullet => "\u{2022}".to_string(),
         },
     };
     // The marker's own INK, which this sink carried for nothing before: the marker was
@@ -149,7 +153,7 @@ pub(crate) fn list_marker_markup(
         None => format!("{glyph}\u{00a0}"),
         Some(c) => format!(
             "<span foreground=\"{}\">{glyph}</span>\u{00a0}",
-            crate::palette::to_hex(c)
+            crate::palette::to_hex_rgba(c)
         ),
     }
 }
@@ -163,47 +167,48 @@ pub(crate) fn list_marker_sprite(
     depth: u32,
     sprites: &crate::theme::Sprites,
 ) -> Option<&crate::sprite::SpriteRef> {
-    match (task, start) {
-        (Some(true), _) => sprites.list_task_checked.as_ref(),
-        (Some(false), _) => sprites.list_task.as_ref(),
-        (None, Some(_)) => sprites.list_ordered.as_ref(),
-        (None, None) => sprites.list_bullet[crate::theme::depth_tier(depth as usize)].as_ref(),
-    }
+    // Only the SPRITE half; the glyph half is `list_marker_markup`'s, and the two are
+    // chosen by the same table.
+    crate::theme::marker_sprite(
+        crate::theme::MarkerKind::from_task_and_start(task, start),
+        depth as usize,
+        sprites,
+    )
 }
 
 /// The ink one list marker is drawn in: the BULLET's depth-tiered colour where the theme
 /// states one (TDD 18.26), the shared `list_marker` otherwise.
 ///
-/// The four-line twin of `codeview::gutter::marker_ink`, and deliberately not a shared
-/// call: the FOLD is shared (it happened once, in `Theme::resolve`, over the array both
-/// read) and so is `depth_tier`, but this sink's marker kind is a `(task, start)` pair
-/// where the gutter's is a `ListMarkerKind`, and the module that owns the gutter's
-/// version draws with GTK — which this display-free module must not reach into.
+/// **A thin normalisation over the engine's own answer, not a twin of it.** This used
+/// to be a four-line hand-rolled copy, argued for on the grounds that "this sink's
+/// marker kind is a `(task, start)` pair where the gutter's is a `ListMarkerKind`, and
+/// the module that owns the gutter's version draws with GTK". The first half was true
+/// and is now handled by normalising the pair at this boundary
+/// (`MarkerKind::from_task_and_start`); the second was an argument for moving the
+/// dispatch OUT of the gutter, which is where it went (`crate::theme::decor`).
 pub(crate) fn list_marker_ink(
     task: Option<bool>,
     start: Option<u64>,
     depth: u32,
     theme: &crate::theme::Theme,
 ) -> Option<gtk::gdk::RGBA> {
-    match (task, start) {
-        (None, None) => theme.list_bullet_colors[crate::theme::depth_tier(depth as usize)],
-        // Both task states share one colour (TDD 18.27), already folded with
-        // `list_marker`. The task arms come FIRST for the same reason they do in
-        // `list_marker_markup`: `1. [x] done` is a checkbox, not a number.
-        (Some(_), _) => theme.list_task_color,
-        _ => theme.list_marker_color,
-    }
+    theme.marker_ink(
+        crate::theme::MarkerKind::from_task_and_start(task, start),
+        depth as usize,
+    )
 }
 
 /// Which entry of the theme's heading scale a heading of `level` reads.
 ///
-/// **The clamp is the whole function.** `heading_scale` has five entries and Markdown
-/// has six heading levels, so `level - 1` indexes out of bounds for an `h6` — a panic on
-/// a document a reader can trivially write. The bound was previously an inline
-/// `.min(4)` inside the measurement pass, where reaching it meant exporting a document
-/// with an `h6` in it.
+/// **The clamp is the whole function**, and it is no longer this function's own: the
+/// h6→h5 fold is `crate::theme::heading_slot`, so this sink cannot disagree with the
+/// preview or the outline about it. It used to hardcode `.min(4)` while the HTML sink
+/// derived the same bound from `HEADING_LEVELS` — one constant change away from moving
+/// one surface and not the other. `heading_scale` has five entries and Markdown has
+/// six heading levels, so an unclamped `level - 1` indexes out of bounds for an `h6`,
+/// which is a panic on a document a reader can trivially write.
 pub(crate) fn heading_scale_index(level: u8) -> usize {
-    (level as usize).saturating_sub(1).min(4)
+    crate::theme::heading_slot(level)
 }
 
 #[cfg(test)]
@@ -459,19 +464,41 @@ mod tests {
 
     /// An ordered list whose numbering would overflow does not panic. `start` is a
     /// `u64` straight out of the parser, so this is reachable from a document.
+    ///
+    /// **The SECOND item is the test.** This passed `n = 0`, so `start + n` never
+    /// exercised the addition the name is about — the arithmetic that overflows is
+    /// `u64::MAX + 1`, which is a debug-build panic *inside an export*, and
+    /// `start.rs:333-337` calls a panic on a render walk the worst outcome available.
     #[test]
     fn an_absurd_ordered_start_does_not_panic() {
-        let marker = list_marker_markup(None, Some(u64::MAX), 0, 1, &plain(), None);
-        assert!(marker.starts_with(&u64::MAX.to_string()));
+        let first = list_marker_markup(None, Some(u64::MAX), 0, 1, &plain(), None);
+        assert!(first.starts_with(&u64::MAX.to_string()));
+        // The item after it: `u64::MAX + 1`, saturating rather than wrapping or
+        // panicking. Saturating is right for a numeral — the list is already absurd,
+        // and the reader gets a number rather than a dead window.
+        let second = list_marker_markup(None, Some(u64::MAX), 1, 1, &plain(), None);
+        assert!(
+            second.starts_with(&u64::MAX.to_string()),
+            "the second item of a list starting at u64::MAX must saturate: {second}"
+        );
+        // …and a far-from-the-edge list still counts normally, so the saturation is
+        // not simply pinning every numeral to one value.
+        let ordinary = list_marker_markup(None, Some(7), 2, 1, &plain(), None);
+        assert!(ordinary.starts_with('9'), "7 + 2 must be 9: {ordinary}");
     }
 
     /// Every Markdown heading level indexes inside the theme's five-entry scale.
     #[test]
     fn every_heading_level_indexes_inside_the_scale() {
-        const SCALE_LEN: usize = 5;
+        // Derived from the theme's own constant, never a local literal: a hardcoded
+        // `5` here could not have caught the disagreement this seam was extracted to
+        // end, because it would have agreed with whichever site also hardcoded one.
         for level in 1..=6_u8 {
             let i = heading_scale_index(level);
-            assert!(i < SCALE_LEN, "h{level} indexed {i}, outside the scale");
+            assert!(
+                i < crate::theme::HEADING_LEVELS,
+                "h{level} indexed {i}, outside the scale"
+            );
         }
         assert_eq!(heading_scale_index(1), 0);
         assert_eq!(heading_scale_index(5), 4);
@@ -565,5 +592,167 @@ mod tests {
     #[test]
     fn an_empty_table_has_no_columns() {
         assert_eq!(table_column_count(&[], &[]), 0);
+    }
+}
+
+// ── what the page's surface decorations become ───────────────────────────────
+//
+// The sink's own module doc says `ink` "decides nothing … what is left is cairo". It
+// decided five things: theme-key-else-palette for the quote bar and the rule, and
+// sprite-vs-flat precedence for the bar, the band and the rule (F-INKSEAM-001). Each of
+// those is a decision with a definite answer no measurement can change, which is exactly
+// this module's remit — and `ink`'s versions were unreachable from a test without a
+// cairo surface and a page.
+
+/// How one surface is painted, once its precedence is settled.
+///
+/// Generic over the sprite payload so the DECISION can be exercised with a stand-in —
+/// `Wash<&str>` in a unit test, `Wash<cairo::ImageSurface>` in the sink. That is the
+/// injection point the ink half never had: reaching the sprite-vs-flat branch used to
+/// require decoding a real image.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Wash<S> {
+    /// A sprite, tiled at natural size. **Outranks the flat colour, and the flat colour
+    /// is not painted underneath it** — a transparent tile would let it bleed through,
+    /// which is a bug only the tiles nobody tested would show.
+    Tile(S),
+    /// The theme's flat colour, or the palette's where the theme states none.
+    Flat(gtk::gdk::RGBA),
+    /// Two stops. Only a heading band can be one; a bar or a rule has no gradient key.
+    Gradient {
+        from: gtk::gdk::RGBA,
+        to: gtk::gdk::RGBA,
+    },
+    /// Nothing to paint at all — a band the theme did not state.
+    None,
+}
+
+/// Settle a two-way decoration: its sprite where the theme names one AND `load` can
+/// produce it, else the theme's flat colour, else the caller's own default.
+///
+/// The `load` failure is the load-bearing case and it is why this takes a loader rather
+/// than an already-loaded `Option`: a sprite that passes every admission check and then
+/// fails to produce a surface must fall through to the flat colour, not erase the
+/// decoration — the same degrade-don't-erase rule every marker follows.
+pub(crate) fn wash_of<S>(
+    decor: &crate::theme::Fill<'_>,
+    fallback: gtk::gdk::RGBA,
+    load: impl Fn(&crate::sprite::SpriteRef) -> Option<S>,
+) -> Wash<S> {
+    match decor.sprite.and_then(load) {
+        Some(tile) => Wash::Tile(tile),
+        None => Wash::Flat(decor.flat_or(fallback)),
+    }
+}
+
+/// Settle a heading band's THREE-way decoration: sprite, else gradient, else flat, else
+/// nothing at all.
+///
+/// Unlike [`wash_of`] there is no fallback colour — a band the theme did not state paints
+/// nothing, which is what keeps an unbanded heading byte-identical to before the
+/// decoration existed (TDD 18.2).
+pub(crate) fn band_wash<S>(
+    decor: &crate::theme::Band<'_>,
+    load: impl Fn(&crate::sprite::SpriteRef) -> Option<S>,
+) -> Wash<S> {
+    if let Some(tile) = decor.sprite.and_then(load) {
+        return Wash::Tile(tile);
+    }
+    match decor.without_sprite() {
+        Some(crate::theme::BandPaint::Gradient { from, to }) => Wash::Gradient { from, to },
+        Some(crate::theme::BandPaint::Flat(fill)) => Wash::Flat(fill),
+        None => Wash::None,
+    }
+}
+
+#[cfg(test)]
+mod wash_tests {
+    use super::*;
+    use gtk::gdk::RGBA;
+
+    const RED: RGBA = RGBA::new(1.0, 0.0, 0.0, 1.0);
+    const BLUE: RGBA = RGBA::new(0.0, 0.0, 1.0, 1.0);
+    const GREEN: RGBA = RGBA::new(0.0, 1.0, 0.0, 1.0);
+
+    fn named() -> crate::sprite::SpriteRef {
+        crate::sprite::SpriteRef::Compiled("sprites/copper-plate.png")
+    }
+
+    /// The whole precedence ladder for a two-way decoration, including the rung that
+    /// matters most: a sprite the loader cannot produce falls through to the COLOUR
+    /// rather than erasing the decoration.
+    #[test]
+    fn a_sprite_outranks_the_colour_and_a_failed_load_falls_through_to_it() {
+        let sprite = named();
+        let stated = crate::theme::Fill {
+            sprite: Some(&sprite),
+            flat: Some(RED),
+        };
+        assert_eq!(
+            wash_of(&stated, BLUE, |_| Some("tile")),
+            Wash::Tile("tile"),
+            "a sprite that loads must outrank the theme's own colour"
+        );
+        assert_eq!(
+            wash_of(&stated, BLUE, |_| None::<&str>),
+            Wash::Flat(RED),
+            "a sprite that will not load must degrade to the colour, never erase it"
+        );
+
+        // No sprite: the theme's colour, else the caller's palette-derived default.
+        let coloured = crate::theme::Fill {
+            sprite: None,
+            flat: Some(RED),
+        };
+        assert_eq!(wash_of(&coloured, BLUE, |_| Some("tile")), Wash::Flat(RED));
+        let bare = crate::theme::Fill {
+            sprite: None,
+            flat: None,
+        };
+        assert_eq!(
+            wash_of(&bare, BLUE, |_| Some("tile")),
+            Wash::Flat(BLUE),
+            "a theme stating neither key leaves the caller's own default standing — \
+             which is what keeps this surface byte-identical (TDD 18.2)"
+        );
+    }
+
+    /// The band's extra rung, and the one asymmetry with [`wash_of`]: a band the theme
+    /// did not state paints NOTHING rather than falling back to a colour.
+    #[test]
+    fn a_bands_gradient_sits_between_its_sprite_and_its_flat_fill() {
+        let sprite = named();
+        let full = crate::theme::Band {
+            sprite: Some(&sprite),
+            gradient: Some((RED, GREEN)),
+            flat: Some(BLUE),
+        };
+        assert_eq!(band_wash(&full, |_| Some("tile")), Wash::Tile("tile"));
+        assert_eq!(
+            band_wash(&full, |_| None::<&str>),
+            Wash::Gradient {
+                from: RED,
+                to: GREEN
+            },
+            "a sprite that will not load must degrade to the gradient, not past it"
+        );
+
+        let gradientless = crate::theme::Band {
+            sprite: None,
+            gradient: None,
+            flat: Some(BLUE),
+        };
+        assert_eq!(band_wash(&gradientless, |_| Some("t")), Wash::Flat(BLUE));
+
+        let unstated = crate::theme::Band {
+            sprite: None,
+            gradient: None,
+            flat: None,
+        };
+        assert_eq!(
+            band_wash(&unstated, |_| Some("t")),
+            Wash::None::<&str>,
+            "an unstated band paints nothing — there is no palette fallback for it"
+        );
     }
 }

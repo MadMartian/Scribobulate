@@ -38,3 +38,65 @@ pub(crate) use setup::register_accelerators;
 pub(crate) use setup::setup_app;
 pub(crate) use setup::{re_render_all_windows, reload_theme_css};
 pub(crate) use shortcuts::make_shortcuts_window;
+
+/// The `--new-instance` / `-n` decision, and the argv it leaves behind.
+///
+/// Pure, and extracted for that reason: it is the whole of a decision with a
+/// recorded past failure (ScrAP-17 — a uniqueness flag parsed after
+/// `g_application_register()` is parsed in the wrong process, so it is forwarded and
+/// never spawns anything), and it sat inline in `run()`, which the coverage gate
+/// cannot see. The caller does the two GTK-shaped things — set `NON_UNIQUE`, hand the
+/// remaining arguments to `run_with_args` — and takes no decision of its own.
+///
+/// Both spellings are stripped whether or not either was found, so the arguments that
+/// reach `HANDLES_OPEN` are file paths and nothing else.
+pub(crate) fn new_instance_argv(args: Vec<String>) -> (bool, Vec<String>) {
+    let is_flag = |a: &String| a == "--new-instance" || a == "-n";
+    let force_new = args.iter().any(is_flag);
+    let mut rest = args;
+    rest.retain(|a| !is_flag(a));
+    (force_new, rest)
+}
+
+#[cfg(test)]
+mod new_instance_tests {
+    use super::new_instance_argv;
+
+    fn argv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn both_spellings_are_recognised_and_stripped() {
+        for flag in ["--new-instance", "-n"] {
+            let (force_new, rest) = new_instance_argv(argv(&["scribobulate", flag, "a.md"]));
+            assert!(force_new, "{flag} must force a new instance");
+            assert_eq!(rest, argv(&["scribobulate", "a.md"]));
+        }
+    }
+
+    #[test]
+    fn an_absent_flag_leaves_the_arguments_untouched() {
+        let (force_new, rest) = new_instance_argv(argv(&["scribobulate", "a.md", "b.md"]));
+        assert!(!force_new);
+        assert_eq!(rest, argv(&["scribobulate", "a.md", "b.md"]));
+    }
+
+    /// A repeat, and a filename that merely CONTAINS a spelling, are both handled —
+    /// the match is on the whole argument, so `-notes.md` is a file.
+    #[test]
+    fn matching_is_on_the_whole_argument_and_survives_repeats() {
+        let (force_new, rest) = new_instance_argv(argv(&[
+            "scribobulate",
+            "-n",
+            "-notes.md",
+            "--new-instance",
+            "--new-instance-x",
+        ]));
+        assert!(force_new);
+        assert_eq!(
+            rest,
+            argv(&["scribobulate", "-notes.md", "--new-instance-x"])
+        );
+    }
+}

@@ -16,8 +16,13 @@
 //!   scaled explicitly on every render/zoom. The theme states design-time px at
 //!   zoom 1.0; `px()` below is the one place they are scaled.
 
+/// The theme→tag DECISIONS, display-free, so the priority ladder and the metrics can be
+/// asserted without standing up a view (`sdd/POLICY.md` § coverage gate — extract the
+/// decision core; F-TAGS-001).
+mod spec;
+
 use crate::config::config;
-use crate::palette::{to_hex, Palette};
+use crate::palette::{to_hex_opaque, Palette};
 use crate::theme::Theme;
 use gtk::prelude::*;
 use gtk::{TextBuffer, TextTag};
@@ -182,12 +187,14 @@ impl TagName {
     }
 }
 
-pub(crate) fn setup_tags(buf: &TextBuffer, palette: &Palette, zoom: f64) {
-    setup_tags_with_theme(buf, palette, zoom, &crate::theme::active())
-}
-
-/// [`setup_tags`] against an explicit theme — the seam headless tests use to build
-/// a buffer under a chosen theme without touching the app-wide active theme.
+/// Register the preview's whole `GtkTextTag` vocabulary on `buf`, at `zoom`, under
+/// `theme`.
+///
+/// **There is no ambient-theme sibling any more.** There was one — `setup_tags`, reading
+/// `crate::theme::active()` — and it was the last thing keeping the render-products
+/// construction tied to a process global (F-BUILDPRODUCTS-001). Its one caller now
+/// resolves the theme once and hands it down, so a render is a function of what it was
+/// given rather than of what the process happened to have selected.
 pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f64, theme: &Theme) {
     let add = |name: &str, setup: &dyn Fn(&TextTag)| {
         let tag = TextTag::new(Some(name));
@@ -195,12 +202,15 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
         buf.tag_table().add(&tag);
     };
 
-    let code_inline_bg = to_hex(palette.code_inline_bg);
+    let code_inline_bg = to_hex_opaque(palette.code_inline_bg);
     // Note: the code-*block* background is self-drawn by codeview::CodePreviewView
     // (GTK4Rs/AP-21), not set here as a paragraph_background.
-    let link_fg = to_hex(palette.link_fg);
+    let link_fg = to_hex_opaque(palette.link_fg);
 
-    let px = |n: i32| (n as f64 * zoom).round() as i32;
+    // `theme::px` — THE design-time→pixel conversion. Not re-declared here: four
+    // sites used to spell it themselves and two had drifted onto different rounding,
+    // so a themed metric landed a pixel apart on the tag and on the marker beside it.
+    let px = |n: i32| crate::theme::px(n, zoom);
     let typo = &theme.typography;
     let metrics = &theme.metrics;
 
@@ -216,6 +226,25 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
             t.set_foreground_rgba(Some(&c));
         }
     });
+
+    // **The ink floor the quote panel creates.** SCHEMA's `blockquote_fg` row promises
+    // that a link, A HEADING and a `==mark==` inside a quote keep their own colour. The
+    // link tag delivers that by setting its foreground unconditionally; the heading and
+    // mark tags set theirs only `if let Some(…)`, so a theme that states `blockquote_fg`
+    // and leaves `heading_color`/`mark_fg` unstated left NO tag above `blockquote-ink`
+    // setting a foreground on those runs — and the quote re-inked two of the three
+    // constructs the row exempts.
+    //
+    // The fix is a floor rather than an unconditional set, because the two contracts
+    // pull opposite ways and both are real. TDD 18.2 says a theme that states nothing
+    // leaves System's tags BYTE-IDENTICAL — not merely its pixels — so these tags must
+    // keep setting no foreground at all when nothing asks them to. They only need one
+    // when something ELSE is about to claim the run, which is exactly when the theme has
+    // stated a quote ink. So the floor is `Some(body_fg)` only then, and `None`
+    // otherwise: the resolved body ink is what "the heading's own colour" MEANS for a
+    // theme that states no heading colour, and it is what the run would have inherited
+    // from the page if `blockquote-ink` were not underneath it.
+    let ink_floor = spec::ink_floor(theme, palette);
 
     // h1–h5. FIVE tags, not six: `emit.rs` maps h6-and-deeper onto "h5" before a tag
     // is ever chosen, so `heading_scale`/`heading_space_below` are 5-element by
@@ -239,20 +268,16 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // always did. The rule is `overline`/`underline` — a decoration line over the glyph
     // run, sharing the run's own ink unless the theme colours it — NOT a drawn divider;
     // a column-width band is a different, tier-K+D decoration.
-    let rule = theme.heading_rule;
-    // The heading text's inset from its BAND (TDD 18.25's padding fix). The band's rect
-    // stays the full content column — that extent is what both export sinks match
-    // against — so the text moves in, through the tag's own margins: the identical lever
-    // `code-block` and `blockquote` already use to sit their text inside the decoration
-    // drawn behind it (GTK4Rs/AP-21 — a drawn rect and a tag margin are the only two
-    // halves available, and the rect cannot pad).
+    // The heading text's inset from its BAND, the per-level rule sides, the ink floor and
+    // the pixel arithmetic are all `spec::heading_spec`'s — pure, and asserted without a
+    // view. What is left here is application (F-TAGS-001).
     //
-    // ⚠️ CONDITIONAL PER LEVEL, and that is what keeps System byte-identical (TDD 18.2)
-    // rather than the metric's value: an unconditional heading margin would re-indent
-    // every heading in every theme, System's included. A level with no band sets no
-    // margin at all and inherits the view's, exactly as before.
-    let view_lm_for_band = px(config().view.left_margin);
-    let view_rm_for_band = px(config().view.right_margin);
+    // The view's own margins are read ONCE and handed in, so the spec stays a function of
+    // its arguments rather than of the process's config.
+    let view_margins = (
+        px(config().view.left_margin),
+        px(config().view.right_margin),
+    );
     for (i, level) in [
         TagName::H1,
         TagName::H2,
@@ -263,26 +288,15 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     .into_iter()
     .enumerate()
     {
-        let scale = typo.heading_scale[i];
-        let weight = typo.heading_weight[i];
-        // Every band and rule property is stated per level (TDD 18.32), so each is read
-        // at this level rather than once for the document.
-        let band_pad = px(metrics.heading_band_padding[i]);
-        let (overline, underline) = (rule.overline[i], rule.underline[i]);
-        let underline_color = rule.underline_color[i];
-        let below = px(metrics.heading_space_below[i]);
-        let above = px(metrics.heading_space_above[i]);
-        let heading_color = theme.heading_colors[i];
-        let hfont = theme.heading_fonts[i].clone();
-        let banded = theme.heading_band.fills[i].is_some();
+        let h = spec::heading_spec(theme, palette, zoom, i, view_margins);
         add(level.name(), &move |t| {
-            t.set_scale(scale);
-            t.set_weight(weight);
-            t.set_pixels_below_lines(below);
-            t.set_pixels_above_lines(above);
-            if banded {
-                t.set_left_margin(view_lm_for_band + band_pad);
-                t.set_right_margin(view_rm_for_band + band_pad);
+            t.set_scale(h.scale);
+            t.set_weight(h.weight);
+            t.set_pixels_below_lines(h.space_below);
+            t.set_pixels_above_lines(h.space_above);
+            if let Some(inset) = h.band_inset {
+                t.set_left_margin(inset.left);
+                t.set_right_margin(inset.right);
             }
             // Set only when the theme asks. Calling the setter with `None`/`NONE` would
             // still mark the property SET on the tag, which is a different tag from the
@@ -294,28 +308,20 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
             // and a link inside a heading is exactly such a run, since the link tag
             // colours an underline. `set_overline_rgba` is clippy-banned so this cannot
             // be "improved" back into a heap bug.
-            if !overline.is_none() {
-                t.set_overline(overline.overline());
+            if !h.overline.is_none() {
+                t.set_overline(h.overline.overline());
             }
-            if !underline.is_none() {
-                t.set_underline(underline.underline());
-                if let Some(c) = underline_color {
+            if !h.underline.is_none() {
+                t.set_underline(h.underline.underline());
+                if let Some(c) = h.underline_color {
                     t.set_underline_rgba(Some(&c));
                 }
             }
-            if let Some(c) = heading_color {
+            if let Some(c) = h.foreground {
                 t.set_foreground_rgba(Some(&c));
             }
-            if let Some(f) = &hfont {
-                // `set_family` feeds a Pango font description, NOT CSS: Pango wants a
-                // plain comma-separated family list and does its OWN ordered fallback
-                // across it (down to the generic terminator), but the CSS double-quotes
-                // that `sanitize_font_family` adds for multi-word names break that
-                // parsing — so a themed heading font silently dropped to the default
-                // sans instead of walking the stack to the first installed face. Strip
-                // the quotes to hand Pango a clean list; the sanitiser already
-                // guaranteed it is injection-safe and generic-terminated.
-                t.set_family(Some(&f.replace('"', "")));
+            if let Some(f) = &h.family {
+                t.set_family(Some(&f.pango_family()));
             }
         });
     }
@@ -367,7 +373,11 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     let mark_fg = theme.mark_fg;
     add(TagName::Mark.name(), &move |t| {
         t.set_background_rgba(Some(&mark_bg));
-        if let Some(fg) = mark_fg {
+        // `.or(ink_floor)` for the same reason the heading tag takes it: a `==mark==`
+        // inside a quote keeps its own colour, and a wash that states no ink of its own
+        // leaves the body ink showing through — which is how a highlighter behaves on
+        // paper, and is NOT the quote's ink.
+        if let Some(fg) = mark_fg.or(ink_floor) {
             t.set_foreground_rgba(Some(&fg));
         }
     });

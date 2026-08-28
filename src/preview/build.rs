@@ -10,12 +10,35 @@ use crate::codeview::CodePreviewView;
 use crate::config::config;
 use crate::palette::Palette;
 use crate::renderer::Renderer;
-use crate::tags::setup_tags;
 use crate::widgets::table::ScribTableWidget;
 use gtk::prelude::*;
 use gtk::{TextBuffer, TextChildAnchor};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use std::collections::HashMap;
+
+/// Everything one render hands to the `CodePreviewView` — the CONTENT half.
+///
+/// A named struct, so a new render product is one field here plus one line in
+/// [`install_content`] and the compiler propagates the rest. As twelve positional
+/// arguments it was nine coordinated edits, and `heading_spans` — the product this
+/// branch added — is what made the count concrete.
+pub(super) struct ViewInstall {
+    pub(super) code_blocks: Vec<crate::span::BufferSpan>,
+    pub(super) code_block_bg: gtk::gdk::RGBA,
+    pub(super) blockquote_ranges: Vec<crate::span::BufferSpan>,
+    pub(super) blockquote_bar: gtk::gdk::RGBA,
+    pub(super) heading_spans: Vec<crate::renderer::HeadingSpan>,
+    pub(super) width_bounded: Vec<(gtk::Widget, i32)>,
+    pub(super) image_bounded: Vec<(gtk::Widget, i32, i32)>,
+    pub(super) tables: Vec<ScribTableWidget>,
+    /// One entry per rendered list item — the data seam for the drawn marker gutter,
+    /// drawn in `snapshot_layer(BelowText)`.
+    ///
+    /// The one field BOTH install routes carry: the annotation refresh needs it because a
+    /// task-checkbox toggle changes a marker's checked state without changing a byte of
+    /// buffer text, so the structural guard passes and nothing else would update it.
+    pub(super) list_markers: Vec<crate::renderer::ListMarker>,
+}
 
 /// Everything a Markdown parse+render produces up to (but not including) widget
 /// wiring: the freshly-filled buffer, the source map, and the renderer's typed
@@ -33,23 +56,21 @@ pub(super) struct RenderProducts {
     pub(super) links: Vec<(i32, i32, String)>,
     pub(super) anchored: Vec<(TextChildAnchor, gtk::Widget)>,
     pub(super) image_tints: Vec<(TextChildAnchor, gtk::Widget)>,
-    pub(super) width_bounded: Vec<(gtk::Widget, i32)>,
-    pub(super) image_bounded: Vec<(gtk::Widget, i32, i32)>,
-    pub(super) tables: Vec<ScribTableWidget>,
-    pub(super) code_blocks: Vec<crate::span::BufferSpan>,
-    pub(super) code_block_bg: gtk::gdk::RGBA,
-    pub(super) blockquote_ranges: Vec<crate::span::BufferSpan>,
-    pub(super) heading_spans: Vec<crate::renderer::HeadingSpan>,
-    pub(super) blockquote_bar: gtk::gdk::RGBA,
     pub(super) heading_offsets: Vec<i32>,
     pub(super) heading_slugs: Vec<String>,
     pub(super) heading_map: HashMap<String, i32>,
     /// CriticMarkup comment markers to draw in the preview's right margin.
     pub(super) markers: Vec<crate::codeview::MarkerData>,
-    /// One entry per rendered list item — the data seam for the drawn marker gutter.
-    /// Threaded to the view via `set_list_markers` and drawn in
-    /// `snapshot_layer(BelowText)` (Phase 2).
-    pub(super) list_markers: Vec<crate::renderer::ListMarker>,
+    /// Everything the VIEW itself is handed, as one value.
+    ///
+    /// Contained rather than inlined as nine more fields: both render routes used to
+    /// destructure `RenderProducts` back into loose bindings and hand twelve of them
+    /// POSITIONALLY to `install_products_into_view`, which carried an
+    /// `#[allow(clippy::too_many_arguments)]` to say so. Three of the twelve are
+    /// `Vec<…Span>` and two are `gdk::RGBA`, so two adjacent same-typed arguments
+    /// transposed at one call site and not the other compiled clean and produced a wrong
+    /// preview on exactly one render route (F-INSTALL-001).
+    pub(super) install: ViewInstall,
     /// Per-cell cleaned-source spans (row-major, same order as table children /
     /// `cell_maps`). Used after widgets exist to attach `cell_widget` on markers
     /// whose claim lives in a table cell (cell-marker pairing).
@@ -115,8 +136,45 @@ pub(super) fn build_render_products(
     zoom: f64,
     allow_unsafe_images: bool,
 ) -> RenderProducts {
+    build_render_products_with_theme(
+        md,
+        doc_dir,
+        zoom,
+        allow_unsafe_images,
+        crate::theme::active(),
+    )
+}
+
+/// [`build_render_products`] against an EXPLICIT theme.
+///
+/// The construction used to reach for `crate::theme::active()` in three places — the
+/// palette, the tag set, and the renderer's own themed cell markup — so the whole of it
+/// could only be exercised against whatever the process happened to have active
+/// (F-BUILDPRODUCTS-001). The theme is now a parameter and the two ambient entry points
+/// above are thin wrappers over it, which is the same shape `tags::setup_tags` /
+/// `setup_tags_with_theme` already had.
+///
+/// **The residue, stated:** the DRAWN decorations (`codeview`'s `snapshot_layer`, the
+/// marker gutter) resolve their theme at PAINT time, not here, so this seam does not
+/// reach them — nor should it, since selecting a theme repaints rather than re-renders.
+pub(super) fn build_render_products_with_theme(
+    md: &str,
+    doc_dir: Option<&std::path::Path>,
+    zoom: f64,
+    allow_unsafe_images: bool,
+    theme: std::rc::Rc<crate::theme::Theme>,
+) -> RenderProducts {
     let fresh = TextBuffer::new(None::<&gtk::TextTagTable>);
-    build_render_products_into(&fresh, md, doc_dir, zoom, allow_unsafe_images)
+    let palette = Palette::for_theme(&theme);
+    build_products(
+        &fresh,
+        md,
+        doc_dir,
+        zoom,
+        allow_unsafe_images,
+        theme,
+        palette,
+    )
 }
 
 /// [`build_render_products`] rendering into an EXISTING buffer, clearing whatever
@@ -165,10 +223,34 @@ pub(super) fn build_render_products_into(
     zoom: f64,
     allow_unsafe_images: bool,
 ) -> RenderProducts {
-    let palette = Palette::resolve();
+    build_products(
+        buf,
+        md,
+        doc_dir,
+        zoom,
+        allow_unsafe_images,
+        crate::theme::active(),
+        Palette::resolve(),
+    )
+}
+
+/// The one construction both entry points above call, with the two things that used to
+/// be read from process globals — the theme and the palette derived from it — supplied.
+#[allow(clippy::too_many_arguments)] // the theme and its palette are the two seams this
+                                     // function exists to take; every other parameter is
+                                     // a render input the callers already had
+fn build_products(
+    buf: &TextBuffer,
+    md: &str,
+    doc_dir: Option<&std::path::Path>,
+    zoom: f64,
+    allow_unsafe_images: bool,
+    theme: std::rc::Rc<crate::theme::Theme>,
+    palette: Palette,
+) -> RenderProducts {
     let buf = buf.clone();
     reset_buffer_for_render(&buf);
-    setup_tags(&buf, &palette, zoom);
+    crate::tags::setup_tags_with_theme(&buf, &palette, zoom, &theme);
 
     // Normalise inline hard tabs to spaces so tab-separated table rows parse as GFM
     // tables (a tab in a delimiter row otherwise makes pulldown reject the whole
@@ -226,6 +308,7 @@ pub(super) fn build_render_products_into(
         .collect();
     let mut r = Renderer::new(
         buf.clone(),
+        theme.clone(),
         palette.syntect_theme,
         doc_dir.map(|d| d.to_path_buf()),
         allow_unsafe_images,
@@ -341,19 +424,21 @@ pub(super) fn build_render_products_into(
         links: r.links,
         anchored: r.anchored,
         image_tints: r.image_tints,
-        width_bounded: r.width_bounded,
-        image_bounded: r.image_bounded,
-        tables: r.tables,
-        code_blocks: r.code_blocks,
-        code_block_bg: palette.code_block_bg,
-        blockquote_ranges: r.blockquote_ranges,
-        heading_spans: r.heading_spans,
-        blockquote_bar: palette.blockquote_bar,
+        install: ViewInstall {
+            code_blocks: r.code_blocks,
+            code_block_bg: palette.code_block_bg,
+            blockquote_ranges: r.blockquote_ranges,
+            blockquote_bar: palette.blockquote_bar,
+            heading_spans: r.heading_spans,
+            width_bounded: r.width_bounded,
+            image_bounded: r.image_bounded,
+            tables: r.tables,
+            list_markers: r.list_markers,
+        },
         heading_offsets,
         heading_slugs,
         heading_map,
         markers,
-        list_markers: r.list_markers,
         cell_src_spans,
         highlight_ranges,
         shifts,
@@ -545,43 +630,75 @@ fn highlight_tag_ranges(
 /// where a one-sided edit would compile and silently apply to only one render
 /// route (D4, the same lockstep-edit hazard `RenderProducts` removed for the
 /// parse half).
-#[allow(clippy::too_many_arguments)]
-pub(super) fn install_products_into_view(
-    view: &CodePreviewView,
-    code_blocks: Vec<crate::span::BufferSpan>,
-    code_block_bg: gtk::gdk::RGBA,
-    blockquote_ranges: Vec<crate::span::BufferSpan>,
-    blockquote_bar: gtk::gdk::RGBA,
-    heading_spans: Vec<crate::renderer::HeadingSpan>,
-    anchored: &[(TextChildAnchor, gtk::Widget)],
-    width_bounded: Vec<(gtk::Widget, i32)>,
-    image_bounded: Vec<(gtk::Widget, i32, i32)>,
-    tables: Vec<ScribTableWidget>,
-    list_markers: Vec<crate::renderer::ListMarker>,
-    zoom: f64,
-) {
-    // Both render routes pass through here, so this is where "the content changed"
-    // is recorded. State derived from the rendered content (the find hit list) keys
-    // on this generation rather than on the buffer's object identity, which no longer
-    // changes per render — see `CodePreviewView::render_generation`. Bumping at the
-    // shared choke point is what makes the invalidation impossible to forget.
-    view.bump_render_generation();
+/// Install the CONTENT half of a render into the view — the sequence both full render
+/// routes apply, in lockstep, where a one-sided edit would compile and silently apply to
+/// only one of them.
+///
+/// **Split from [`install_annotations`] on purpose.** This function used to install all
+/// nine things and document itself as the choke point *no render path can forget*, and
+/// the rustdoc on its `bump_render_generation` call carried the stronger claim that
+/// "because the bump lives in the same choke point that rebuilds the content, no render
+/// path can forget to invalidate." A THIRD route falsified it:
+/// `render::refresh_annotations_in_place` rebuilds render products and installs a
+/// hand-picked TWO of the nine, calling neither this function nor the bump. Splitting the
+/// two halves makes the SET a route installs a visible choice rather than an omission —
+/// the annotation route now names `install_annotations` instead of picking two setters
+/// out of nine.
+pub(super) fn install_content(view: &CodePreviewView, install: ViewInstall, zoom: f64) {
+    let ViewInstall {
+        code_blocks,
+        code_block_bg,
+        blockquote_ranges,
+        blockquote_bar,
+        heading_spans,
+        width_bounded,
+        image_bounded,
+        tables,
+        list_markers,
+    } = install;
     view.set_code_blocks(code_blocks, code_block_bg);
     view.set_blockquotes(blockquote_ranges, blockquote_bar);
     // The heading band's spans (TDD 18.25). Installed HERE, at the deliberate single
-    // choke point both render routes pass through, for the same reason everything else
-    // is: a decoration installed at one route and not the other is absent on whichever
-    // path the person testing it did not take.
+    // choke point both full render routes pass through, for the same reason everything
+    // else is: a decoration installed at one route and not the other is absent on
+    // whichever path the person testing it did not take.
     view.set_heading_spans(heading_spans);
-    // Drawn list-marker gutter. `zoom` travels with the markers
-    // so their drawn x matches the `li-{depth}` content margin (`px(depth*28)`).
-    view.set_list_markers(list_markers, zoom);
-    for (anchor, widget) in anchored {
-        view.add_child_at_anchor(widget, anchor);
-    }
     view.set_width_bounded(width_bounded);
     view.set_image_bounded(image_bounded);
     view.set_tables(tables);
+    install_annotations(view, list_markers, zoom);
+}
+
+/// Install the half a route that did NOT rebuild the buffer still owes.
+///
+/// One thing today — the drawn list-marker gutter — and it is here rather than inline at
+/// the annotation route because the SET is the point: a route that reuses the live buffer
+/// still changes the checked state of a task marker, still invalidates the find hit list,
+/// and both of those are properties of the render rather than of the text. `zoom` travels
+/// with the markers so their drawn x matches the `li-{depth}` content margin.
+pub(super) fn install_annotations(
+    view: &CodePreviewView,
+    list_markers: Vec<crate::renderer::ListMarker>,
+    zoom: f64,
+) {
+    // "The content changed" is recorded on EVERY route that installs anything, this one
+    // included. State derived from the rendered content (the find hit list) keys on this
+    // generation rather than on the buffer's object identity, which no longer changes per
+    // render — see `CodePreviewView::render_generation`. The annotation route used to skip
+    // the bump entirely; it was safe only because of a structural-identity guard that says
+    // nothing about the find hits an annotation edit moves.
+    view.bump_render_generation();
+    view.set_list_markers(list_markers, zoom);
+}
+
+/// Attach the render's anchored children, which only a route that rebuilt the buffer has.
+///
+/// Separate from [`install_content`] because it takes a BORROW the caller goes on using
+/// (cell-marker pairing needs the same list) rather than an owned field of `ViewInstall`.
+pub(super) fn attach_anchored(view: &CodePreviewView, anchored: &[(TextChildAnchor, gtk::Widget)]) {
+    for (anchor, widget) in anchored {
+        view.add_child_at_anchor(widget, anchor);
+    }
     if !anchored.is_empty() {
         view.queue_resize();
     }
@@ -593,7 +710,7 @@ pub(super) fn install_products_into_view(
 /// `setup_tags` uses. Shared by `render` and `re_render` (L4).
 pub(super) fn apply_preview_margins(view: &CodePreviewView, zoom: f64) {
     let cfg_view = &config().view;
-    let px = |n: i32| (n as f64 * zoom).round() as i32;
+    let px = |n: i32| crate::theme::px(n, zoom);
     view.set_left_margin(px(cfg_view.left_margin));
     view.set_right_margin(px(cfg_view.right_margin));
     view.set_top_margin(px(cfg_view.top_margin));
@@ -907,6 +1024,7 @@ mod gtk_integration_tests {
         // The ListMarker seam still records each item's kind (approach-independent input
         // for the drawn gutter). Task `src` spans vary with pulldown, so normalise them.
         let kinds: Vec<crate::renderer::ListMarkerKind> = products
+            .install
             .list_markers
             .iter()
             .map(|m| match &m.kind {
@@ -948,6 +1066,7 @@ mod gtk_integration_tests {
         let md = "- a\n- b\n\n1. one\n2. two\n\n- [ ] todo\n- [x] done\n\n- top\n  - nested";
         let products = build_render_products(md, None, 1.0, false);
         let got: Vec<(usize, crate::renderer::ListMarkerKind)> = products
+            .install
             .list_markers
             .iter()
             .map(|m| (m.depth, m.kind.clone()))
@@ -989,13 +1108,18 @@ mod gtk_integration_tests {
             ]
         );
         // Each first_line offset lands on a real line and increases in document order.
-        let offs: Vec<i32> = products.list_markers.iter().map(|m| m.first_line).collect();
+        let offs: Vec<i32> = products
+            .install
+            .list_markers
+            .iter()
+            .map(|m| m.first_line)
+            .collect();
         assert!(
             offs.windows(2).all(|w| w[0] < w[1]),
             "offsets are monotonic"
         );
         // Task markers carry a non-empty source span (the `[ ]`/`[x]` to flip on toggle).
-        for m in &products.list_markers {
+        for m in &products.install.list_markers {
             if let Task { src, .. } = &m.kind {
                 assert!(src.start < src.end, "task marker has a real source span");
             }
@@ -1014,9 +1138,9 @@ mod gtk_integration_tests {
         for md in ["- ", "- \n", "1. ", "1. \n", "- [ ]\n", "- [ ] "] {
             let p = build_render_products(md, None, 1.0, false);
             assert!(
-                p.list_markers.is_empty(),
+                p.install.list_markers.is_empty(),
                 "empty item {md:?} must record no marker, got {:?}",
-                p.list_markers
+                p.install.list_markers
             );
         }
         // Empty items interleaved with content: only the content items keep a marker,
@@ -1024,6 +1148,7 @@ mod gtk_integration_tests {
         let md = "- \n- has text\n\n1. \n2. numbered\n\n- [ ]\n- [x] done\n";
         let p = build_render_products(md, None, 1.0, false);
         let kinds: Vec<_> = p
+            .install
             .list_markers
             .iter()
             .map(|m| match &m.kind {
@@ -1072,6 +1197,7 @@ mod gtk_integration_tests {
             start: bstart,
             end: bend,
         } = *products
+            .install
             .blockquote_ranges
             .first()
             .expect("one blockquote range");
@@ -1215,6 +1341,7 @@ mod gtk_integration_tests {
 
         // The renderer flags it for the gutter, so the marker uses the quoted base.
         let m = products
+            .install
             .list_markers
             .first()
             .expect("the quoted item recorded a marker");
@@ -1718,13 +1845,13 @@ mod gtk_integration_tests {
 
     /// Render `md` under the theme `id`, restoring the previously-active theme after.
     /// The active theme is app-wide state, so a test that changed it and walked away
-    /// would leak into whichever test ran next on the shared GTK thread.
+    /// would leak into whichever test ran next on the shared GTK thread — and a test
+    /// that PANICKED with the restore written as a trailing statement did exactly
+    /// that, turning one failure into a spurious verdict somewhere unrelated. The
+    /// guard's `Drop` runs on both paths.
     fn with_theme<T>(id: &str, f: impl FnOnce() -> T) -> T {
-        let prev = crate::theme::active().id.clone();
-        crate::theme::set_active(id);
-        let out = f();
-        crate::theme::set_active(&prev);
-        out
+        let _theme = crate::theme::activate_for_test(crate::theme::themes().resolve(id));
+        f()
     }
 
     /// The resolved x of `needle`'s first char on a realized view — i.e. the margin
@@ -1771,7 +1898,7 @@ mod gtk_integration_tests {
         // A theme that widens the step must widen the RESOLVED indent, at every depth.
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test("[themes.wide]\nlist_step = 40\n");
-        crate::theme::set_active_for_test(themes.resolve("wide"));
+        let _theme = crate::theme::activate_for_test(themes.resolve("wide"));
         let products = build_render_products(md, None, 1.0, false);
         assert_eq!(
             resolved_x(&products.buf, "level one"),
@@ -1783,7 +1910,6 @@ mod gtk_integration_tests {
             cfg_lm + 80,
             "…and accumulate correctly at depth 2"
         );
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
     /// TDD 18.10 — a themed blockquote bar/gap must move the quote's resolved text,
@@ -1799,7 +1925,7 @@ mod gtk_integration_tests {
         themes.merge_over_for_test(
             "[themes.wideq]\nblockquote_bar_width = 6\nblockquote_text_gap = 20\n",
         );
-        crate::theme::set_active_for_test(themes.resolve("wideq"));
+        let _theme = crate::theme::activate_for_test(themes.resolve("wideq"));
         let products = build_render_products(md, None, 1.0, false);
         let bq_text_x = cfg_lm + 6 + 20;
         assert_eq!(
@@ -1813,7 +1939,6 @@ mod gtk_integration_tests {
             bq_text_x + step,
             "a quoted item accumulates onto the THEMED quote margin, staying inside it"
         );
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
     /// The name of the highest-PRIORITY tag at `off` that sets `prop` — i.e. the tag
@@ -1868,14 +1993,13 @@ mod gtk_integration_tests {
         theme.sprites.rule = Some(crate::sprite::SpriteRef::Compiled(
             "sprites/copper-plate.png",
         ));
-        crate::theme::set_active_for_test(theme);
+        let _theme = crate::theme::activate_for_test(theme);
         let tiled = build_render_products(md, None, 1.0, false);
         assert_eq!(
             anchored_rule(&tiled).name(),
             "ScribSpriteRule",
             "a stated rule sprite must anchor the tiling widget instead"
         );
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
     /// TDD 18.29 — a theme may panel its blockquotes, and the panel re-inks the quote's
@@ -1898,7 +2022,7 @@ mod gtk_integration_tests {
         themes.merge_over_for_test(
             "[themes.panel]\nblockquote_bg = \"#0a1830\"\nblockquote_fg = \"#ffffff\"\n",
         );
-        crate::theme::set_active_for_test(themes.resolve("panel"));
+        let _theme = crate::theme::activate_for_test(themes.resolve("panel"));
         let products = build_render_products(md, None, 1.0, false);
         let text = buffer_slice(&products.buf);
         let quoted = char_off(&text, "quoted");
@@ -1923,7 +2047,73 @@ mod gtk_integration_tests {
             "a link inside the quote keeps its OWN colour — if this says blockquote-ink, \
              the ink tag was registered after `link` and now outranks it"
         );
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
+    }
+
+    /// TDD 18.29 / SCHEMA § Blockquote — the `blockquote_fg` row exempts **three**
+    /// constructs, not one: a link, **a heading** and **a `==mark==`** inside the quote
+    /// each keep their own colour.
+    ///
+    /// The link half was covered and the other two were not, and they were the two that
+    /// were broken: the heading and mark tags set their foreground only `if let
+    /// Some(…)`, so a theme stating `blockquote_fg` and nothing else left no tag above
+    /// `blockquote-ink` on those runs and the quote re-inked both.
+    ///
+    /// The fixture states ONLY the quote ink, which is the case the defect lives in — a
+    /// theme that also states `heading_color` and `mark_fg` was always correct, and a
+    /// test written that way would have passed against the broken build.
+    #[gtktest::test]
+    fn a_quote_panel_re_inks_neither_a_heading_nor_a_mark_inside_it() {
+        let md = "> ### Quoted heading\n>\n> quoted ==marked== text\n";
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test("[themes.quoteink]\nblockquote_fg = \"#ffffff\"\n");
+        let _theme = crate::theme::activate_for_test(themes.resolve("quoteink"));
+        let products = build_render_products(md, None, 1.0, false);
+        let text = buffer_slice(&products.buf);
+
+        // The control: ordinary quoted prose DOES take the panel's ink, so the two
+        // assertions below are about the exemption and not about the ink being absent.
+        assert_eq!(
+            winning_tag(&products.buf, char_off(&text, "quoted"), "foreground-set").as_deref(),
+            Some("blockquote-ink"),
+            "plain quoted body text must still take the panel's ink"
+        );
+        assert_eq!(
+            winning_tag(&products.buf, char_off(&text, "Quoted"), "foreground-set").as_deref(),
+            Some("h3"),
+            "a heading inside the quote must keep its own ink, not the quote's"
+        );
+        assert_eq!(
+            winning_tag(&products.buf, char_off(&text, "marked"), "foreground-set").as_deref(),
+            Some("mark"),
+            "a ==mark== inside the quote must keep its own ink, not the quote's"
+        );
+    }
+
+    /// TDD 18.2, the other side of the floor above: a theme that states NO quote ink
+    /// leaves the heading and mark tags setting no foreground at all.
+    ///
+    /// The floor could have been written as an unconditional `set_foreground_rgba` on
+    /// both tags, which would also satisfy the exemption — and would silently make every
+    /// theme's heading tag a different tag from the one the preview registered before
+    /// any of this existed. 18.2 is a claim about the TAG, not about the pixels it
+    /// happens to produce, so this is the assertion that keeps the fix narrow.
+    #[gtktest::test]
+    fn without_a_quote_ink_the_heading_and_mark_tags_set_no_foreground() {
+        let md = "### Heading\n\nbody ==marked== text\n";
+        let products = with_theme(crate::theme::SYSTEM_ID, || {
+            build_render_products(md, None, 1.0, false)
+        });
+        let text = buffer_slice(&products.buf);
+        assert_eq!(
+            winning_tag(&products.buf, char_off(&text, "Heading"), "foreground-set"),
+            None,
+            "System must leave a heading on the page's own colour"
+        );
+        assert_eq!(
+            winning_tag(&products.buf, char_off(&text, "marked"), "foreground-set"),
+            None,
+            "System's ==mark== is a background wash only — the ink stays the body's"
+        );
     }
 
     /// TDD 18.29 / 18.2 — unstated, the panel is absent: quoted text is body text on the
@@ -1981,7 +2171,7 @@ mod gtk_integration_tests {
     fn a_themed_heading_scale_reaches_the_tag_and_leaves_font_size_alone() {
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test("[themes.big]\nheading_scale_h1 = 3.0\nheading_scale_h2 = 2.0\nheading_scale_h3 = 1.5\nheading_scale_h4 = 1.0\n");
-        crate::theme::set_active_for_test(themes.resolve("big"));
+        let _theme = crate::theme::activate_for_test(themes.resolve("big"));
         for zoom in [1.0, 2.0] {
             let products = build_render_products("# H1\n\n## H2\n\nbody", None, zoom, false);
             let h1 = products.buf.tag_table().lookup("h1").unwrap();
@@ -1996,7 +2186,6 @@ mod gtk_integration_tests {
                 "a heading tag must not set an absolute size"
             );
         }
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
     /// TDD 18.21 — per-level heading colour and face reach the real `GtkTextTag`s, and
@@ -2012,18 +2201,18 @@ mod gtk_integration_tests {
              heading_color_h1 = \"#ff0000\"\n\
              heading_font_h1 = \"Courier, monospace\"\n",
         );
-        crate::theme::set_active_for_test(themes.resolve("tiers"));
+        let _theme = crate::theme::activate_for_test(themes.resolve("tiers"));
         let products = build_render_products("# one\n\n## two\n", None, 1.0, false);
         let tt = products.buf.tag_table();
         let h1 = tt.lookup("h1").unwrap();
         let h2 = tt.lookup("h2").unwrap();
         assert_eq!(
-            crate::palette::to_hex(h1.foreground_rgba().unwrap()),
+            crate::palette::to_hex_opaque(h1.foreground_rgba().unwrap()),
             "#ff0000"
         );
         // h2's slot is empty, so it takes the theme's single heading_color.
         assert_eq!(
-            crate::palette::to_hex(h2.foreground_rgba().unwrap()),
+            crate::palette::to_hex_opaque(h2.foreground_rgba().unwrap()),
             "#0000ff"
         );
         // The family reaches Pango UNQUOTED — `sanitize_font_family` emits CSS quoting,
@@ -2031,7 +2220,6 @@ mod gtk_integration_tests {
         // to the default sans instead of walking the stack).
         assert_eq!(h1.family().as_deref(), Some("Courier, monospace"));
         assert_eq!(h2.family().as_deref(), Some("Georgia, serif"));
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
     /// TDD 18.22 — the heading rule and the space above it reach the real heading tags,
@@ -2059,7 +2247,7 @@ mod gtk_integration_tests {
              heading_underline = \"wavy\"\nheading_underline_color = \"#0000ff\"\n\
              heading_space_above_h1 = 20\nheading_space_above_h2 = 10\n",
         );
-        crate::theme::set_active_for_test(themes.resolve("ruled"));
+        let _theme = crate::theme::activate_for_test(themes.resolve("ruled"));
         for zoom in [1.0, 2.0] {
             let products = build_render_products("# one\n\n## two\n", None, zoom, false);
             let tt = products.buf.tag_table();
@@ -2068,7 +2256,7 @@ mod gtk_integration_tests {
             assert_eq!(h1.overline(), gtk::pango::Overline::Single);
             assert_eq!(h1.underline(), gtk::pango::Underline::Error);
             assert_eq!(
-                crate::palette::to_hex(h1.underline_rgba().unwrap()),
+                crate::palette::to_hex_opaque(h1.underline_rgba().unwrap()),
                 "#0000ff"
             );
             // A pixel metric is a DESIGN-TIME value at zoom 1.0, scaled on apply —
@@ -2076,7 +2264,6 @@ mod gtk_integration_tests {
             assert_eq!(h1.pixels_above_lines(), (20.0 * zoom).round() as i32);
             assert_eq!(h2.pixels_above_lines(), (10.0 * zoom).round() as i32);
         }
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
     /// TDD 18.23 — the strike colour and the themed link underline reach the real tags,
@@ -2100,22 +2287,21 @@ mod gtk_integration_tests {
             "[themes.marked]\nstrikethrough_color = \"#ff0000\"\n\
              link_underline = \"wavy\"\nlink_underline_color = \"#00ff00\"\n",
         );
-        crate::theme::set_active_for_test(themes.resolve("marked"));
+        let _theme = crate::theme::activate_for_test(themes.resolve("marked"));
         let products = build_render_products("~~gone~~ [x](https://e.com)\n", None, 1.0, false);
         let tt = products.buf.tag_table();
         let strike = tt.lookup("strike").unwrap();
         assert!(strike.is_strikethrough());
         assert_eq!(
-            crate::palette::to_hex(strike.strikethrough_rgba().unwrap()),
+            crate::palette::to_hex_opaque(strike.strikethrough_rgba().unwrap()),
             "#ff0000"
         );
         let link = tt.lookup("link").unwrap();
         assert_eq!(link.underline(), gtk::pango::Underline::Error);
         assert_eq!(
-            crate::palette::to_hex(link.underline_rgba().unwrap()),
+            crate::palette::to_hex_opaque(link.underline_rgba().unwrap()),
             "#00ff00"
         );
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
     /// TDD 18.23 + 18.22 together, on the run that carries BOTH — a link inside a
@@ -2131,16 +2317,16 @@ mod gtk_integration_tests {
              heading_underline = \"single\"\nheading_underline_color = \"#ff0000\"\n\
              link_underline = \"double\"\nlink_underline_color = \"#00ff00\"\n",
         );
-        crate::theme::set_active_for_test(themes.resolve("both"));
+        let _theme = crate::theme::activate_for_test(themes.resolve("both"));
         let products =
             build_render_products("# see [the docs](https://e.com) first\n", None, 1.0, false);
         let tt = products.buf.tag_table();
         assert_eq!(
-            crate::palette::to_hex(tt.lookup("h1").unwrap().underline_rgba().unwrap()),
+            crate::palette::to_hex_opaque(tt.lookup("h1").unwrap().underline_rgba().unwrap()),
             "#ff0000"
         );
         assert_eq!(
-            crate::palette::to_hex(tt.lookup("link").unwrap().underline_rgba().unwrap()),
+            crate::palette::to_hex_opaque(tt.lookup("link").unwrap().underline_rgba().unwrap()),
             "#00ff00"
         );
         let mut offenders: Vec<String> = Vec::new();
@@ -2150,7 +2336,6 @@ mod gtk_integration_tests {
             }
         });
         assert!(offenders.is_empty(), "overline-rgba set on {offenders:?}");
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
     /// The heap-safety invariant `theme::HeadingRule` documents, pinned on the LIVE tag
@@ -2170,7 +2355,7 @@ mod gtk_integration_tests {
             "[themes.everything]\nheading_overline = \"single\"\n\
              heading_underline = \"double\"\nheading_underline_color = \"#0000ff\"\n",
         );
-        crate::theme::set_active_for_test(themes.resolve("everything"));
+        let _theme = crate::theme::activate_for_test(themes.resolve("everything"));
         let products = build_render_products(
             "# a [link](https://example.com) in a heading\n\nbody ~~struck~~ text\n",
             None,
@@ -2194,7 +2379,6 @@ mod gtk_integration_tests {
             "these tags set overline-rgba, which double-frees on GTK 4.6 \
              (see theme::HeadingRule): {offenders:?}"
         );
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
     /// TDD 18.25's padding fix — a BANDED heading's text is inset from the band's edge,
@@ -2213,36 +2397,104 @@ mod gtk_integration_tests {
             "[themes.oneband]\nheading_band_color_h1 = \"#334455\"\n\
              heading_band_padding = 14\n",
         );
-        crate::theme::set_active_for_test(themes.resolve("oneband"));
-        for zoom in [1.0, 2.0] {
-            let products = build_render_products("# one\n\n## two\n", None, zoom, false);
-            let tt = products.buf.tag_table();
-            let h1 = tt.lookup("h1").unwrap();
-            let h2 = tt.lookup("h2").unwrap();
-            // h1 is banded: inset from the view's own margin by the themed padding, and
-            // symmetric, and zoom-scaled like every other pixel metric.
-            let view_lm =
-                (f64::from(crate::config::config().view.left_margin) * zoom).round() as i32;
-            let view_rm =
-                (f64::from(crate::config::config().view.right_margin) * zoom).round() as i32;
-            let pad = (14.0 * zoom).round() as i32;
-            assert!(h1.is_left_margin_set(), "zoom {zoom}");
-            assert_eq!(h1.left_margin(), view_lm + pad, "zoom {zoom}");
-            assert_eq!(h1.right_margin(), view_rm + pad, "zoom {zoom}");
-            // h2 carries no band, so it sets no margin at all and inherits the view's —
-            // byte-identical to the tag registered before any of this existed.
-            assert!(
-                !h2.is_left_margin_set(),
-                "an unbanded level must not be re-indented (zoom {zoom})"
-            );
-            assert!(!h2.is_right_margin_set(), "zoom {zoom}");
+        // Scoped: the theme is restored at the end of this block, because the last
+        // assertion below is about the UNBANDED baseline and needs System active.
+        {
+            let _theme = crate::theme::activate_for_test(themes.resolve("oneband"));
+            for zoom in [1.0, 2.0] {
+                let products = build_render_products("# one\n\n## two\n", None, zoom, false);
+                let tt = products.buf.tag_table();
+                let h1 = tt.lookup("h1").unwrap();
+                let h2 = tt.lookup("h2").unwrap();
+                // h1 is banded: inset from the view's own margin by the themed padding, and
+                // symmetric, and zoom-scaled like every other pixel metric.
+                let view_lm =
+                    (f64::from(crate::config::config().view.left_margin) * zoom).round() as i32;
+                let view_rm =
+                    (f64::from(crate::config::config().view.right_margin) * zoom).round() as i32;
+                let pad = (14.0 * zoom).round() as i32;
+                assert!(h1.is_left_margin_set(), "zoom {zoom}");
+                assert_eq!(h1.left_margin(), view_lm + pad, "zoom {zoom}");
+                assert_eq!(h1.right_margin(), view_rm + pad, "zoom {zoom}");
+                // h2 carries no band, so it sets no margin at all and inherits the view's —
+                // byte-identical to the tag registered before any of this existed.
+                assert!(
+                    !h2.is_left_margin_set(),
+                    "an unbanded level must not be re-indented (zoom {zoom})"
+                );
+                assert!(!h2.is_right_margin_set(), "zoom {zoom}");
+            }
         }
-        // …and under System, which bands nothing, no level is touched.
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
+        // With no band stated at all, h1 sets no margin either — byte-identical to the
+        // tag the preview registered before the band existed (TDD 18.2).
         let products = build_render_products("# one\n", None, 1.0, false);
         let h1 = products.buf.tag_table().lookup("h1").unwrap();
         assert!(!h1.is_left_margin_set());
         assert!(!h1.is_right_margin_set());
+    }
+
+    /// **A render is a function of the theme it is GIVEN, not of the process's.**
+    ///
+    /// The construction used to reach for `crate::theme::active()` in three places — the
+    /// palette, the tag set, and the renderer's themed cell markup — so the whole of it
+    /// could only be exercised against whatever the process happened to have selected
+    /// (F-BUILDPRODUCTS-001). Two DIFFERENT themes are built here while the active theme
+    /// is untouched, and the products must differ: if either one echoed the global, both
+    /// would come back the same and this assertion would fail.
+    ///
+    /// The observable is a tag the theme moves and a colour the palette derives, because
+    /// the two ambient reads were in different places and one of them alone would leave
+    /// the other unproved.
+    #[gtktest::test]
+    fn a_render_takes_the_theme_it_is_handed_and_not_the_active_one() {
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.alpha]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
+             code_block_bg = \"#112233\"\nheading_color = \"#ff0000\"\n\
+             [themes.beta]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
+             code_block_bg = \"#445566\"\nheading_color = \"#00ff00\"\n",
+        );
+        let md = "# Heading\n\n```\ncode\n```\n";
+        let before = crate::theme::active().id.clone();
+
+        let alpha = super::build_render_products_with_theme(
+            md,
+            None,
+            1.0,
+            false,
+            std::rc::Rc::new(themes.resolve("alpha")),
+        );
+        let beta = super::build_render_products_with_theme(
+            md,
+            None,
+            1.0,
+            false,
+            std::rc::Rc::new(themes.resolve("beta")),
+        );
+
+        // The palette-derived half.
+        assert_ne!(
+            alpha.install.code_block_bg, beta.install.code_block_bg,
+            "the palette came from the active theme, not the one handed in"
+        );
+        // The tag half, read off each render's own buffer.
+        let ink = |p: &super::RenderProducts| {
+            p.buf
+                .tag_table()
+                .lookup("h1")
+                .expect("the h1 tag")
+                .foreground_rgba()
+        };
+        assert_ne!(
+            ink(&alpha),
+            ink(&beta),
+            "the tag set came from the active theme, not the one handed in"
+        );
+        assert_eq!(
+            crate::theme::active().id,
+            before,
+            "building against an explicit theme must not disturb the active one"
+        );
     }
 
     /// TDD 18.25 — the heading spans the drawn band is measured from are collected on
@@ -2261,7 +2513,7 @@ mod gtk_integration_tests {
             1.0,
             false,
         );
-        let spans = &products.heading_spans;
+        let spans = &products.install.heading_spans;
         assert_eq!(spans.len(), 3, "{spans:?}");
         assert_eq!(spans[0].level_index, 0);
         assert_eq!(spans[1].level_index, 2);
@@ -2290,14 +2542,13 @@ mod gtk_integration_tests {
     fn a_headings_only_document_still_reaches_the_paint_path() {
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test("[themes.banded]\nheading_band_color_h1 = \"#334455\"\n");
-        crate::theme::set_active_for_test(themes.resolve("banded"));
+        let _theme = crate::theme::activate_for_test(themes.resolve("banded"));
         let products = build_render_products("# only a heading\n", None, 1.0, false);
         // Nothing else is present — this is the document the gate would have skipped.
-        assert!(products.code_blocks.is_empty());
-        assert!(products.blockquote_ranges.is_empty());
-        assert!(products.list_markers.is_empty());
-        assert_eq!(products.heading_spans.len(), 1);
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
+        assert!(products.install.code_blocks.is_empty());
+        assert!(products.install.blockquote_ranges.is_empty());
+        assert!(products.install.list_markers.is_empty());
+        assert_eq!(products.install.heading_spans.len(), 1);
     }
 
     /// TDD 2.1a — the preview has FIVE heading tiers, and h6 folds onto the h5 tag:
@@ -2373,7 +2624,7 @@ mod gtk_integration_tests {
                     "{id}: body tag colour"
                 );
                 // The cell path decomposes the same key into Pango attributes.
-                let cell = crate::renderer::ann_hl_open();
+                let cell = crate::renderer::ann_hl_open(&theme);
                 assert!(
                     cell.contains(&theme.annotation_hl_color.hex()),
                     "{id}: cell markup: {cell}"
@@ -2396,13 +2647,13 @@ mod gtk_integration_tests {
         for id in ["system", "sepia"] {
             with_theme(id, || {
                 let theme = crate::theme::active();
-                let bold = crate::renderer::bold_open();
+                let bold = crate::renderer::bold_open(&theme);
                 assert!(
                     bold.contains(&format!("weight=\"{}\"", theme.typography.bold_weight)),
                     "{id}: bold cell markup: {bold}"
                 );
-                let sup = crate::renderer::superscript_open();
-                let sub = crate::renderer::subscript_open();
+                let sup = crate::renderer::superscript_open(&theme);
+                let sub = crate::renderer::subscript_open(&theme);
                 let pct = (theme.typography.supsub_scale * 100.0).round() as i32;
                 for (open, rise, label) in [
                     (&sup, theme.typography.superscript_rise, "sup"),
@@ -2433,15 +2684,15 @@ mod gtk_integration_tests {
     #[test]
     fn the_strike_colour_matches_between_body_and_cell() {
         with_theme("sepia", || {
-            let (open, close) = crate::renderer::strike_tags();
+            let (open, close) = crate::renderer::strike_tags(&crate::theme::active());
             assert_eq!(open, "<s>", "no strike colour stated");
             assert_eq!(close, "</s>");
         });
 
         let mut themes = crate::theme::themes();
         themes.merge_over_for_test("[themes.sepia]\nstrikethrough_color = \"#654321\"\n");
-        crate::theme::set_active_for_test(themes.resolve("sepia"));
-        let (open, close) = crate::renderer::strike_tags();
+        let struck = themes.resolve("sepia");
+        let (open, close) = crate::renderer::strike_tags(&struck);
         assert!(
             open.contains("strikethrough_color=\"#654321\""),
             "cell strike markup: {open}"
@@ -2449,7 +2700,6 @@ mod gtk_integration_tests {
         assert_eq!(close, "</span>", "a span open must close as a span");
         gtk::pango::parse_markup(&format!("{open}gone{close}"), '\0')
             .expect("the themed cell strike markup must parse");
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
     }
 
     /// Write a real 4×4 PNG into `dir` and return its path — a decodable local
@@ -2483,7 +2733,7 @@ mod gtk_integration_tests {
                   </picture>\n\nAfter the hero.";
         let products = build_render_products(md, Some(dir.path()), 1.0, false);
         assert_eq!(
-            products.image_bounded.len(),
+            products.install.image_bounded.len(),
             1,
             "exactly one GtkPicture anchored from the <picture> block"
         );
@@ -2514,8 +2764,12 @@ mod gtk_integration_tests {
                   <img src=\"fallback.png\">\n\
                   </picture>";
         let products = build_render_products(md, Some(dir.path()), 1.0, false);
-        assert_eq!(products.image_bounded.len(), 1, "one anchored image");
-        let (_widget, nat_w, nat_h) = &products.image_bounded[0];
+        assert_eq!(
+            products.install.image_bounded.len(),
+            1,
+            "one anchored image"
+        );
+        let (_widget, nat_w, nat_h) = &products.install.image_bounded[0];
         assert_eq!(
             (*nat_w, *nat_h),
             (8, 8),
@@ -2541,7 +2795,7 @@ mod gtk_integration_tests {
             false,
         );
         assert_eq!(
-            ungrouped.image_bounded.len(),
+            ungrouped.install.image_bounded.len(),
             2,
             "ungrouped <source> + <img> render as two independent images"
         );
@@ -2553,11 +2807,11 @@ mod gtk_integration_tests {
             false,
         );
         assert_eq!(
-            grouped.image_bounded.len(),
+            grouped.install.image_bounded.len(),
             1,
             "<picture> groups into one slot"
         );
-        let (_widget, nat_w, _nat_h) = &grouped.image_bounded[0];
+        let (_widget, nat_w, _nat_h) = &grouped.install.image_bounded[0];
         assert_eq!(*nat_w, 8, "the <source> (8×8) won the <picture> fallback");
     }
 
@@ -2570,7 +2824,7 @@ mod gtk_integration_tests {
         let products =
             build_render_products("<img src=\"logo.png\">", Some(dir.path()), 1.0, false);
         assert_eq!(
-            products.image_bounded.len(),
+            products.install.image_bounded.len(),
             1,
             "bare <img> anchors a picture"
         );
@@ -2584,7 +2838,7 @@ mod gtk_integration_tests {
                   <iframe src=\"file:///etc/passwd\"></iframe>\n\n\
                   <div class=\"src\">hi</div>\n\nAfter.";
         let products = build_render_products(md, None, 1.0, false);
-        assert!(products.image_bounded.is_empty(), "no images");
+        assert!(products.install.image_bounded.is_empty(), "no images");
         assert!(
             products.anchored.is_empty(),
             "non-image HTML anchors nothing (no stray broken-image marker)"
@@ -2609,7 +2863,7 @@ mod gtk_integration_tests {
                   <img src=\"nope.png\">\n\
                   </picture>";
         let products = build_render_products(md, Some(dir.path()), 1.0, false);
-        assert!(products.image_bounded.is_empty(), "nothing decoded");
+        assert!(products.install.image_bounded.is_empty(), "nothing decoded");
         assert_eq!(
             products.anchored.len(),
             1,
@@ -2655,7 +2909,7 @@ mod gtk_integration_tests {
         let md = std::fs::read_to_string(root.join("README.md")).expect("read README");
         let products = build_render_products(&md, Some(root), 1.0, false);
         assert!(
-            !products.image_bounded.is_empty(),
+            !products.install.image_bounded.is_empty(),
             "the README <picture> hero must render as an anchored image, not be dropped"
         );
         assert!(

@@ -143,13 +143,12 @@ if (Test-Path "$GtkPrefix\share\gtksourceview-5") {
 New-Item -ItemType Directory -Force -Path "$OutDir\share\scribobulate" | Out-Null
 Copy-Item "$RepoRoot\data\themes.toml" "$OutDir\share\scribobulate\"
 
-# The sprites that themes.toml's shipped themes name. NOT what makes those themes
-# work -- a built-in theme's sprite is compiled into the binary (`include_bytes!`,
-# src/sprite.rs) precisely so no install step can take a shipped decoration away.
-# This copy exists because the installed themes.toml is itself read as a themes file
-# (search-path row 3), and its own sprite references resolve against its own
-# directory; without the sprites beside it every launch would log a resolution
-# failure for a decoration that is in fact rendering perfectly from the binary.
+# The sprite copy every platform ships. WHY it is shipped is stated once, in
+# install.sh, beside the Linux copy of this same step -- read it there rather than
+# trusting a second copy here. All three packaging scripts once carried that rationale
+# verbatim, which hid the fact that the commands underneath the three copies did three
+# different things with an empty directory, a subdirectory, and a filename with a space.
+# `-Recurse -Force` already survives all three; the two shell scripts now do too.
 Copy-Item "$RepoRoot\data\sprites" "$OutDir\share\scribobulate\" -Recurse -Force
 
 $files = Get-ChildItem $OutDir -Recurse -File

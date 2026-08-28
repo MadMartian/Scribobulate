@@ -102,7 +102,7 @@ pub(crate) struct Config {
 // these derived colours", which is now what a user `themes.toml` override of
 // `[themes.system]` does — strictly more capable, and it reaches the typography
 // and geometry the app hardcodes as well. Keeping both would have left two
-// override layers with unspecified precedence. See `src/theme.rs`.
+// override layers with unspecified precedence. See `src/theme/`.
 
 #[derive(serde::Deserialize)]
 #[serde(default)]

@@ -28,6 +28,16 @@ pub(crate) struct Fragment {
     /// Dropped at a page top, so a block's inter-paragraph gap never appears as a
     /// blank strip at the head of a page.
     pub(crate) space_before: f64,
+    /// Space to leave BELOW this fragment. Unlike [`Fragment::space_before`] it is
+    /// **not** dropped at a page boundary — it is a property of the block above it,
+    /// not of the join, so a heading whose page ends right after it keeps the gap it
+    /// asked for rather than having it silently vanish.
+    ///
+    /// Exists because `heading_space_below` is a per-level theme key the preview and
+    /// the HTML sink both honour and this sink expressed nowhere: every gap here was
+    /// the flat `BLOCK_GAP_PT`, so a theme's heading rhythm reached two surfaces of
+    /// three (TDD 18.32's "on all three surfaces").
+    pub(crate) space_after: f64,
     /// Keep this fragment on the same page as the one after it where possible — a
     /// heading with its first line of body, or a table's header row with its first
     /// body row. Advisory: honoured only when the pair actually fits.
@@ -41,6 +51,7 @@ impl Fragment {
         Self {
             height,
             space_before: 0.0,
+            space_after: 0.0,
             keep_with_next: false,
         }
     }
@@ -74,6 +85,7 @@ pub(crate) fn paginate(fragments: &[Fragment], metrics: &PageMetrics) -> Vec<Ran
     for (i, frag) in fragments.iter().enumerate() {
         let first_on_page = i == start;
         let needed = frag.height
+            + frag.space_after
             + if first_on_page {
                 0.0
             } else {
@@ -112,7 +124,8 @@ fn apply_keep_with_next(
         if !fragments[last].keep_with_next || this.len() < 2 {
             continue;
         }
-        let moved = fragments[last].height + fragments[last].space_before;
+        let moved =
+            fragments[last].height + fragments[last].space_before + fragments[last].space_after;
         let next_used: f64 = height_of(fragments, &next);
         if next_used + moved > metrics.content_height {
             continue;
@@ -128,7 +141,7 @@ fn height_of(fragments: &[Fragment], range: &Range<usize>) -> f64 {
     fragments[range.clone()]
         .iter()
         .enumerate()
-        .map(|(i, f)| f.height + if i == 0 { 0.0 } else { f.space_before })
+        .map(|(i, f)| f.height + f.space_after + if i == 0 { 0.0 } else { f.space_before })
         .sum()
 }
 
@@ -207,11 +220,13 @@ mod paginate_tests {
         // because the second page's leading space is dropped.
         let f = vec![
             Fragment {
+                space_after: 0.0,
                 height: 10.0,
                 space_before: 0.0,
                 keep_with_next: false,
             },
             Fragment {
+                space_after: 0.0,
                 height: 10.0,
                 space_before: 50.0,
                 keep_with_next: false,
@@ -230,6 +245,7 @@ mod paginate_tests {
             Fragment::plain(10.0),
             Fragment::plain(10.0),
             Fragment {
+                space_after: 0.0,
                 height: 10.0,
                 space_before: 0.0,
                 keep_with_next: true,
@@ -251,6 +267,7 @@ mod paginate_tests {
         let f = vec![
             Fragment::plain(30.0),
             Fragment {
+                space_after: 0.0,
                 height: 10.0,
                 space_before: 0.0,
                 keep_with_next: true,

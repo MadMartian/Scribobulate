@@ -58,8 +58,7 @@ pub(crate) use markers::{
 mod imp {
     use super::geometry::{chip_rect, marker_row_y_h, span_card_y_extent};
     use super::gutter::{
-        draw_list_marker, first_display_line, list_content_margin_px, marker_gap_px, marker_ink,
-        MarkerPaint,
+        draw_list_marker, first_display_line, list_content_margin_px, marker_gap_px, MarkerPaint,
     };
     use super::markers::group_by_line;
     use super::*;
@@ -536,19 +535,16 @@ mod imp {
             let markers = self.markers.borrow();
             let list_markers = self.list_markers.borrow();
             let heading_spans = self.heading_spans.borrow();
-            // ⚠️ EVERY drawn vector belongs in this gate. A new decoration whose vector
-            // is missing here paints on a document that happens to have a code block or
-            // a list in it and silently never paints on one that does not — no warning,
-            // no failing test that was not written for it (the trap
-            // `sdd/PLAN.preview-decoration.md` names at tier K+D). `heading_spans` is
-            // this rubric's addition; the test below it drives a headings-only document
-            // for exactly that reason.
-            if blocks.is_empty()
-                && blockquotes.is_empty()
-                && markers.is_empty()
-                && list_markers.is_empty()
-                && heading_spans.is_empty()
-            {
+            // The gate, DERIVED from [`super::DRAWN_VECTORS`] rather than written out
+            // here. It used to be a hand-maintained conjunction over five vectors, and
+            // the comment above it said so: a new decoration whose vector was missing
+            // paints on a document that happens to have a code block or a list in it and
+            // silently never paints on one that does not — no warning, and no failing
+            // test that was not written for it. `heading_spans` needed exactly such a
+            // bespoke test; the table now carries a FIXTURE per vector, so that test is
+            // written once for all of them and a new decoration extends it by the same
+            // one line that extends the gate (F-GOD-001).
+            if !super::has_anything_to_draw(self) {
                 return;
             }
             let buffer = view.buffer();
@@ -686,7 +682,7 @@ mod imp {
                 // no way to obtain one on the paint path without a line-display cache
                 // insert (ScrAP-105).
                 let band = crate::theme::active();
-                if !band.heading_band.is_absent() {
+                if !band.bands_nothing() {
                     // `gutter_zoom` is the zoom THIS RENDER was laid out at — named for
                     // the list gutter that first needed it, not scoped to it, and every
                     // pixel metric painted here scales by it. A design-time px at zoom
@@ -698,16 +694,26 @@ mod imp {
                         // Every band property is stated per level (TDD 18.32), so all
                         // three are read at the level this heading is — not once for
                         // the document.
+                        // Redundant by construction since `level_index` became a
+                        // `theme::heading_slot` result, which cannot exceed the bound.
+                        // Kept because the alternative on this path is an index panic
+                        // inside a `snapshot` callback, and a defence that costs one
+                        // comparison per visible heading is cheaper than that
+                        // (GTK4Rs/AP-254: stated as redundant rather than left to read
+                        // as load-bearing).
                         let level = h.level_index.min(crate::theme::HEADING_LEVELS - 1);
-                        let Some(fill) = band.heading_band.fills[level] else {
+                        // The engine decides which of the band's three appearances
+                        // applies (`theme::Band`), so this paint site renders an
+                        // answer rather than re-deriving the precedence — which is
+                        // what let all three renderers agree with each other and
+                        // disagree with SCHEMA about a sprite needing a fill.
+                        let decor = band.heading_band_decor(level);
+                        if !decor.is_present() {
                             continue;
-                        };
+                        }
                         let radius = (f64::from(band.metrics.heading_band_radius[level])
                             * self.gutter_zoom.get())
                         .round() as f32;
-                        let sprite = band.sprites.heading_band[level]
-                            .as_ref()
-                            .and_then(crate::sprite::texture);
                         let (top, bottom) = span_card_y_extent(
                             &*view,
                             &buffer,
@@ -727,32 +733,46 @@ mod imp {
                                 radius.min(card_w / 2.0).min((bottom - top) / 2.0),
                             ));
                         }
-                        match (&sprite, band.heading_band.gradient_to[level]) {
-                            // A sprite TILES at its natural size rather than stretching
-                            // to the band: 1:1 pixels need no filter, and GSK 4.6's
-                            // `append_texture` filters linearly with no choice (the
-                            // variant that takes one is 4.10 — GTK4Rs/AP-114). Tiling
-                            // also means one cached texture per path instead of one per
-                            // band width, which a window resize would otherwise mint by
-                            // the hundred.
-                            (Some(tex), _) => {
-                                let tile = graphene::Rect::new(
-                                    rect.x(),
-                                    rect.y(),
-                                    tex.width() as f32,
-                                    tex.height() as f32,
-                                );
-                                snapshot.push_repeat(&rect, Some(&tile));
-                                snapshot.append_texture(tex, &tile);
-                                snapshot.pop();
-                            }
-                            (None, Some(to)) => snapshot.append_linear_gradient(
+                        // The sprite first, then whatever the band would have been
+                        // without it. A sprite that will not decode therefore falls
+                        // through to the gradient, then to the flat fill — degrading
+                        // rather than erasing the band, the same rule every other
+                        // decoration in this vocabulary follows.
+                        //
+                        // A sprite TILES at its natural size rather than stretching to
+                        // the band: 1:1 pixels need no filter, and GSK 4.6's
+                        // `append_texture` filters linearly with no choice (the variant
+                        // that takes one is 4.10 — GTK4Rs/AP-114). Tiling also means one
+                        // cached texture per path instead of one per band width, which
+                        // a window resize would otherwise mint by the hundred.
+                        let tiled = decor.sprite.and_then(crate::sprite::texture);
+                        match tiled {
+                            Some(tex) => crate::widgets::tile_texture(
+                                &snapshot,
                                 &rect,
-                                &graphene::Point::new(rect.x(), rect.y()),
-                                &graphene::Point::new(rect.x(), rect.y() + rect.height()),
-                                &[gsk::ColorStop::new(0.0, fill), gsk::ColorStop::new(1.0, to)],
+                                // BUFFER coordinates: anchoring at the rect is what
+                                // holds the tile phase to the DOCUMENT rather than to
+                                // the viewport, so the pattern travels with the band as
+                                // the reader scrolls.
+                                crate::widgets::TileOrigin::Rect,
+                                &tex,
                             ),
-                            (None, None) => snapshot.append_color(&fill, &rect),
+                            None => match decor.without_sprite() {
+                                Some(crate::theme::BandPaint::Gradient { from, to }) => snapshot
+                                    .append_linear_gradient(
+                                        &rect,
+                                        &graphene::Point::new(rect.x(), rect.y()),
+                                        &graphene::Point::new(rect.x(), rect.y() + rect.height()),
+                                        &[
+                                            gsk::ColorStop::new(0.0, from),
+                                            gsk::ColorStop::new(1.0, to),
+                                        ],
+                                    ),
+                                Some(crate::theme::BandPaint::Flat(fill)) => {
+                                    snapshot.append_color(&fill, &rect)
+                                }
+                                None => {}
+                            },
                         }
                         if radius > 0.0 {
                             snapshot.pop();
@@ -818,17 +838,18 @@ mod imp {
                 // zoom 1.0 this is byte-identical to the previous constant.
                 let bqm = crate::theme::active();
                 let zoom_now = self.gutter_zoom.get();
-                let bar_w = (bqm.metrics.blockquote_bar_width as f64 * zoom_now).round() as f32;
+                let bar_w = crate::theme::px(bqm.metrics.blockquote_bar_width, zoom_now) as f32;
                 // A theme may tile a sprite down the bar instead of filling it (TDD
                 // 18.28), at the sprite's NATURAL size — `texture`, not `scaled`: 1:1
                 // pixels need no filter, and GSK 4.6's `append_texture` offers no filter
                 // choice (GTK4Rs/AP-114). The tile is clipped to the bar's own rect, so a
                 // theme using one wants `blockquote_bar_width` at the tile's width.
-                let bar_sprite = bqm
-                    .sprites
-                    .blockquote_bar
-                    .as_ref()
-                    .and_then(crate::sprite::texture);
+                // The engine decides which of the bar's two appearances applies
+                // (`theme::Fill`); this site renders the answer. `bar_color` is the
+                // palette-derived default a theme that states neither key falls back
+                // to, so it is passed in rather than re-derived here.
+                let bar_decor = bqm.blockquote_bar_decor();
+                let bar_sprite = bar_decor.sprite.and_then(crate::sprite::texture);
                 // The SAME `quote_extents` the panel was filled from, so the bar and the
                 // fill behind it can never disagree about where the quote starts or ends
                 // — which is precisely how the TDD 18.29 defect announced itself.
@@ -840,18 +861,21 @@ mod imp {
                     // colour bleed through a transparent one — a bug reachable only
                     // by the sprites nobody happened to test.
                     match &bar_sprite {
-                        Some(tex) => {
-                            let tile = graphene::Rect::new(
-                                rect.x(),
-                                rect.y(),
-                                tex.width() as f32,
-                                tex.height() as f32,
-                            );
-                            snapshot.push_repeat(&rect, Some(&tile));
-                            snapshot.append_texture(tex, &tile);
-                            snapshot.pop();
-                        }
-                        None => snapshot.append_color(&bar_color, &rect),
+                        Some(tex) => crate::widgets::tile_texture(
+                            &snapshot,
+                            &rect,
+                            crate::widgets::TileOrigin::Rect,
+                            tex,
+                        ),
+                        // Either the theme states no sprite, or the one it states
+                        // would not decode. Both degrade to the flat bar rather than
+                        // leaving a gap, which is `sdd/THEMING.md`'s inert-by-default
+                        // rule and what every sibling decoration does.
+                        // Either the theme states no sprite, or the one it states
+                        // would not decode. Both degrade to the flat bar, which is
+                        // the theme's own colour where it states one and the
+                        // palette-derived default where it does not.
+                        None => snapshot.append_color(&bar_decor.flat_or(bar_color), &rect),
                     }
                 }
 
@@ -879,10 +903,10 @@ mod imp {
                     // markers beside the quote instead of inside it (GTK4Rs/AP-96).
                     let qm = crate::theme::active();
                     let quoted_base = lm
-                        + ((qm.metrics.blockquote_bar_width + qm.metrics.blockquote_text_gap)
-                            as f64
-                            * zoom)
-                            .round() as f32;
+                        + crate::theme::px(
+                            qm.metrics.blockquote_bar_width + qm.metrics.blockquote_text_gap,
+                            zoom,
+                        ) as f32;
                     // Marker glyph ink: the active theme's `list_marker` if it sets one,
                     // else the widget foreground (the pre-theming default — keeps System
                     // byte-identical). Colours the bullet/numeral/checkbox only; the item
@@ -891,14 +915,12 @@ mod imp {
                     // ink is resolved per item below, because a bullet's colour varies
                     // by nesting depth (TDD 18.26) and this loop is where the depth is.
                     let default_fg = view.style_context().color();
-                    // Accent colour for a hovered checkbox's border — a named theme CSS
-                    // colour via the style context (NO libadwaita; research §7). Distinct
-                    // from the resting foreground, so the hover border reads as a change.
-                    let hover_fg = view
-                        .style_context()
-                        .lookup_color("theme_selected_bg_color")
-                        .or_else(|| view.style_context().lookup_color("accent_bg_color"))
-                        .unwrap_or_else(|| gdk::RGBA::new(0.208, 0.518, 0.894, 1.0));
+                    // Accent colour for a hovered checkbox's border — the desktop's
+                    // accent, distinct from the resting foreground so the hover border
+                    // reads as a change. Through `palette`, which owns the name chain and
+                    // its floor; this site used to open-code both and was the one probe
+                    // `F-PROBE-001` could not reach from inside that module.
+                    let hover_fg = crate::palette::desktop_accent();
                     let hovered = self.hovered_checkbox.get();
                     // Rebuild the checkbox hit-boxes for the visible task items this paint
                     // (same clear+repopulate discipline as `marker_hitboxes`).
@@ -913,7 +935,8 @@ mod imp {
                     // (cache-free, never `iter_location`: GTK4Rs/AP-22), the same font the ordered
                     // numeral is drawn in, so it tracks zoom automatically. `marker_gap` is
                     // the item's `pixels_above_lines`, the band the text sits below.
-                    let single_line_h = view.create_pango_layout(Some("0")).pixel_size().1 as f32;
+                    let (_, single_line_h) = view.create_pango_layout(Some("0")).pixel_size();
+                    let single_line_h = single_line_h as f32;
                     let marker_gap = marker_gap_px(&qm.metrics, zoom);
                     for (idx, m) in list_markers.iter().enumerate() {
                         // The item's first line must be within the on-screen span —
@@ -965,7 +988,9 @@ mod imp {
                         // Resolved per item, from the tier this item's depth reads —
                         // a pure step over the array `Theme::resolve` already folded,
                         // so nothing here re-derives the shallower-tier fallback.
-                        let fg = marker_ink(&m.kind, m.depth, &qm).unwrap_or(default_fg);
+                        let fg = qm
+                            .marker_ink(m.kind.theme_kind(), m.depth)
+                            .unwrap_or(default_fg);
                         draw_list_marker(
                             &snapshot,
                             view.upcast_ref::<gtk::TextView>(),
@@ -995,7 +1020,16 @@ mod imp {
                 // reads an off-screen (unvalidated) iter (GTK4Rs/AP-22), same as the bars above.
                 let mut hitboxes: Vec<(graphene::Rect, Vec<usize>)> = Vec::new();
                 if !markers.is_empty() {
-                    let mut vis_markers: Vec<(usize, f32, f32)> = Vec::new();
+                    /// One on-screen annotation marker: which marker it is, and the
+                    /// buffer-space row it sits on. Named rather than a bare
+                    /// `(usize, f32, f32)` so the three readers below cannot transpose
+                    /// `y` and `h` — the project convention is to destructure by name.
+                    struct VisMarker {
+                        index: usize,
+                        y: f32,
+                        h: f32,
+                    }
+                    let mut vis_markers: Vec<VisMarker> = Vec::new();
                     for (i, m) in markers.iter().enumerate() {
                         let is_cell = m.cell_widget.is_some();
                         // Body markers: cheap anchor-offset visibility gate. A CELL
@@ -1018,9 +1052,9 @@ mod imp {
                         if y + h < vtop as f32 || y > vbot as f32 {
                             continue;
                         }
-                        vis_markers.push((i, y, h));
+                        vis_markers.push(VisMarker { index: i, y, h });
                     }
-                    let ys: Vec<i32> = vis_markers.iter().map(|&(_, y, _)| y as i32).collect();
+                    let ys: Vec<i32> = vis_markers.iter().map(|m| m.y as i32).collect();
                     let width = view.width() as f32;
                     // Themed, TDD 18.19: `None` on either key ⇒ the exact hardcoded
                     // amber/white this chip has always used (TDD 18.2). A sprite, if
@@ -1028,40 +1062,40 @@ mod imp {
                     // the count numeral still draws in `accent`/chip-fg ink on top,
                     // same as the flat-fill case.
                     let chip_th = crate::theme::active();
-                    let accent = chip_th
-                        .annotation_chip_bg
-                        .unwrap_or_else(|| gdk::RGBA::new(0.90, 0.62, 0.10, 0.95));
+                    // The engine decides which of the chip's two FILL appearances
+                    // applies (`theme::Fill`); its INK is a separate key and paints on
+                    // top either way, which is the one respect the chip differs from
+                    // the bar and the rule.
+                    let chip_decor = chip_th.annotation_chip_decor();
+                    let accent = chip_decor.flat_or(crate::palette::ANNOTATION_CHIP_FLOOR);
                     let ink = chip_th
                         .annotation_chip_fg
-                        .unwrap_or_else(|| gdk::RGBA::new(1.0, 1.0, 1.0, 1.0));
+                        .unwrap_or(crate::palette::ANNOTATION_CHIP_INK_FLOOR);
                     for (_gy, local) in group_by_line(&ys) {
-                        let (_, y, h) = vis_markers[local[0]];
+                        let VisMarker { y, h, .. } = vis_markers[local[0]];
                         // SHARED chip arithmetic (`chip_rect`) — the annotation card
                         // re-derives its anchor with the very same call, so the drawn chip
                         // and the card pointing at it cannot disagree (GTK4Rs/AP-78/GTK4Rs/AP-127).
-                        let (chip_x, cy, marker_w, chip_h) = chip_rect(width, rm, y, h);
+                        let (raw_x, raw_y, raw_w, raw_h) = chip_rect(width, rm, y, h);
+                        // ROUNDED ONCE, here, and then used by all four of the chip's
+                        // faces — the sprite, the flat fill, the count numeral and the
+                        // hit-box. The rounding is this site's own decision (the shared
+                        // `chip_rect` stays fractional for the card's anchor): the rect
+                        // comes from a text row, so a sprite drawn on a half-pixel
+                        // boundary is resampled a second time by the compositor. Rounding
+                        // only the sprite would make what is DRAWN and what is CLICKABLE
+                        // two different rectangles, which is an interaction defect rather
+                        // than a cosmetic one (GTK4Rs/AP-78).
+                        let (chip_x, cy) = (raw_x.round(), raw_y.round());
+                        let (marker_w, chip_h) = (raw_w.round().max(1.0), raw_h.round().max(1.0));
                         let rect = graphene::Rect::new(chip_x, cy, marker_w, chip_h);
-                        let sprite_drawn = chip_th
-                            .sprites
-                            .annotation_chip
-                            .as_ref()
-                            .and_then(|sprite| {
-                                let w = marker_w.round().max(1.0) as i32;
-                                let h = chip_h.round().max(1.0) as i32;
-                                crate::sprite::scaled(sprite, w, h).map(|tex| (tex, w, h))
-                            })
-                            .map(|(tex, w, h)| {
-                                snapshot.append_texture(
-                                    &tex,
-                                    &graphene::Rect::new(
-                                        chip_x.round(),
-                                        cy.round(),
-                                        w as f32,
-                                        h as f32,
-                                    ),
-                                );
-                            })
-                            .is_some();
+                        // Through the SHARED resample-and-draw seam (the twin of
+                        // `tile_texture`).
+                        let sprite_drawn = chip_decor.sprite.is_some_and(|sprite| {
+                            crate::widgets::draw_sprite_into(&snapshot, &rect, sprite)
+                        });
+                        // A sprite that will not decode falls back to the flat fill —
+                        // degrading, not erasing.
                         if !sprite_drawn {
                             snapshot.append_color(&accent, &rect);
                         }
@@ -1080,7 +1114,7 @@ mod imp {
                         let (_, chip_wy) =
                             view.buffer_to_window_coords(gtk::TextWindowType::Widget, 0, cy as i32);
                         let ann_idxs: Vec<usize> =
-                            local.iter().map(|&li| vis_markers[li].0).collect();
+                            local.iter().map(|&li| vis_markers[li].index).collect();
                         hitboxes.push((
                             graphene::Rect::new(chip_x, chip_wy as f32, marker_w, chip_h),
                             ann_idxs,
@@ -1107,7 +1141,8 @@ mod imp {
                     // One text row in the view's own CSS-zoomed font: a fresh Pango
                     // layout, which validates nothing (GTK4Rs/AP-22), exactly as the
                     // gutter's soft-wrap clamp measures it.
-                    let row_h = view.create_pango_layout(Some("0")).pixel_size().1 as f32;
+                    let (_, row_h) = view.create_pango_layout(Some("0")).pixel_size();
+                    let row_h = row_h as f32;
                     let fg = view.style_context().color();
                     let accent = view
                         .style_context()
@@ -1252,6 +1287,81 @@ mod imp {
             } // end AboveText
         }
     }
+}
+
+/// One vector `snapshot_layer` draws a decoration from.
+///
+/// **This is the enumeration the draw gate reads, and it is the same enumeration a test
+/// reads.** The gate used to be a hand-written conjunction over five vectors and the code
+/// beside it warned about exactly what that costs: a decoration whose vector is missing
+/// from it paints on a document that happens to contain a code block or a list, and
+/// silently never paints on one that does not — no warning, and no failing test that
+/// nobody thought to write. `heading_spans` needed a bespoke pixel test written
+/// specifically to catch its omission (F-GOD-001).
+///
+/// Carrying the FIXTURE here is what makes the guard extensible rather than remembered:
+/// a new decoration adds one row, and the row supplies both the predicate the gate uses
+/// and the document that proves the predicate can be true on its own.
+///
+/// **What this does NOT close, stated rather than implied.** Rust cannot reflect over
+/// `imp`'s fields, so a vector added to the struct and not to this table is still
+/// invisible here — the sweep checks the rows it has. What catches THAT is the pixel
+/// test each decoration owns: deleting the `heading bands` row below turns
+/// `a_heading_band_is_painted_on_a_document_that_has_nothing_else_drawn` red, verified.
+/// Two layers, and the second is the one a new decoration must still bring with it.
+pub(crate) struct DrawnVector {
+    /// For the failure message, so a red test names the decoration rather than an index.
+    ///
+    /// Gated to the sweep's own cfg, not a bare `#[cfg(test)]`: its only reader is a
+    /// `gtk-integration-tests` body, so under a plain `cargo test` it would be dead code
+    /// reported by step 4 and invisible to step 2 (`sdd/POLICY.md`).
+    #[cfg(all(test, feature = "gtk-integration-tests"))]
+    pub(crate) what: &'static str,
+    /// Markdown containing this construct AND NOTHING ELSE that draws. A fixture with a
+    /// code block in it would open the gate through `blocks` whatever this row's own
+    /// vector did, which is the false pass the whole table exists to prevent.
+    #[cfg(all(test, feature = "gtk-integration-tests"))]
+    pub(crate) only: &'static str,
+    pub(crate) has_work: fn(&imp::CodePreviewView) -> bool,
+}
+
+/// Declare the table: one line per decoration, carrying its name, its
+/// nothing-else-draws fixture and the predicate the gate reads.
+///
+/// A macro so the two test-only fields can be `#[cfg]`-gated at the STRUCT and still be
+/// written once per row — writing the `cfg` at every field of every row is how a row
+/// ends up half-gated.
+macro_rules! drawn_vectors {
+    ($( $what:literal, $only:literal => $has:expr ; )+) => {
+        /// Every vector the preview's `snapshot_layer` draws from.
+        pub(crate) const DRAWN_VECTORS: &[DrawnVector] = &[$(
+            DrawnVector {
+                #[cfg(all(test, feature = "gtk-integration-tests"))]
+                what: $what,
+                #[cfg(all(test, feature = "gtk-integration-tests"))]
+                only: $only,
+                has_work: $has,
+            }
+        ),+];
+    };
+}
+
+drawn_vectors! {
+    "code-block cards and their copy buttons", "```\ncode\n```\n"
+        => |imp| !imp.blocks.borrow().is_empty();
+    "blockquote panels and accent bars", "> quoted\n"
+        => |imp| !imp.blockquotes.borrow().is_empty();
+    "annotation chips", "text {>>a comment<<} here\n"
+        => |imp| !imp.markers.borrow().is_empty();
+    "the drawn list-marker gutter", "- an item\n"
+        => |imp| !imp.list_markers.borrow().is_empty();
+    "heading bands", "# Heading\n"
+        => |imp| !imp.heading_spans.borrow().is_empty();
+}
+
+/// Whether this paint has anything to draw at all — the derived form of the gate.
+pub(crate) fn has_anything_to_draw(imp: &imp::CodePreviewView) -> bool {
+    DRAWN_VECTORS.iter().any(|d| (d.has_work)(imp))
 }
 
 glib::wrapper! {
@@ -1811,7 +1921,7 @@ mod gtk_integration_tests {
             "[themes.banded]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
              heading_band_color_h1 = \"#336699\"\n",
         );
-        crate::theme::set_active_for_test(themes.resolve("banded"));
+        let _theme = crate::theme::activate_for_test(themes.resolve("banded"));
 
         let view = CodePreviewView::new();
         view.buffer().set_text("A banded heading\n");
@@ -1828,9 +1938,29 @@ mod gtk_integration_tests {
             view.width() > 0
         });
 
-        let paintable = gtk::WidgetPaintable::new(Some(&view));
+        let data = framebuffer_of(&view, 400.0, 200.0);
+        window.destroy();
+
+        assert!(
+            contains_rgb(&data, BAND),
+            "the heading band never reached the framebuffer — if the spans, the theme \
+             and the setter all look right, check that `heading_spans` is still in \
+             snapshot_layer's early-return gate"
+        );
+    }
+
+    /// Render `view` off-screen and hand back its framebuffer as ARGB32 bytes.
+    ///
+    /// Extracted because four paint tests had a verbatim copy of it, and a fifth
+    /// wanting one is how a paint branch ends up untested — `F-SPRITEPAINT-001` found
+    /// half of them uncovered. The realize/unrealize pair is not optional: dropping a
+    /// realized `CairoRenderer` does NOT honour the object's teardown contract, and on
+    /// a build with GLib assertions compiled in that is a hard abort rather than a
+    /// leak (GTK4Rs/AP-272).
+    fn framebuffer_of(view: &CodePreviewView, w: f64, h: f64) -> Vec<u8> {
+        let paintable = gtk::WidgetPaintable::new(Some(view));
         let snapshot = gtk::Snapshot::new();
-        paintable.snapshot(snapshot.upcast_ref::<gdk::Snapshot>(), 400.0, 200.0);
+        paintable.snapshot(snapshot.upcast_ref::<gdk::Snapshot>(), w, h);
         let node = snapshot
             .to_node()
             .expect("the preview snapshots to something");
@@ -1839,25 +1969,180 @@ mod gtk_integration_tests {
             .realize(None::<&gdk::Surface>)
             .expect("the Cairo renderer realizes without a surface");
         let texture = renderer.render_texture(&node, None);
-        let (w, h) = (texture.width() as usize, texture.height() as usize);
-        let mut data = vec![0u8; w * h * 4];
-        texture.download(&mut data, w * 4);
-        // Realized explicitly, so unrealized explicitly: dropping a realized
-        // `CairoRenderer` does NOT honour the object's teardown contract, and on a
-        // build with GLib assertions compiled in that is a hard abort rather than a
-        // leak (GTK4Rs/AP-272).
+        let (tw, th) = (texture.width() as usize, texture.height() as usize);
+        let mut data = vec![0u8; tw * th * 4];
+        texture.download(&mut data, tw * 4);
         renderer.unrealize();
+        data
+    }
+
+    /// Whether `want` appears anywhere in an ARGB32 framebuffer.
+    ///
+    /// Cairo ARGB32 on a little-endian host is B, G, R, A.
+    fn contains_rgb(data: &[u8], want: (u8, u8, u8)) -> bool {
+        data.chunks_exact(4).any(|px| (px[2], px[1], px[0]) == want)
+    }
+
+    /// An 8x8 PNG whose LEFT HALF is `rgba` and whose right half is fully clear.
+    ///
+    /// **Half transparent, and that is the whole discriminating power of every test
+    /// that uses it.** An opaque tile hides an over-paint completely — the blockquote
+    /// bar's first fixture was opaque, and the mutation it was written to catch
+    /// passed. With half of every tile clear, a decoration that filled before it tiled
+    /// shows the flat colour through, and one that replaced shows the page.
+    fn write_half_clear_tile(path: &std::path::Path, rgba: u32) {
+        let pb = gtk::gdk_pixbuf::Pixbuf::new(gtk::gdk_pixbuf::Colorspace::Rgb, true, 8, 8, 8)
+            .expect("allocate pixbuf");
+        pb.fill(0x00_00_00_00);
+        pb.new_subpixbuf(0, 0, 4, 8).fill(rgba);
+        pb.savev(path, "png", &[]).expect("save png");
+    }
+
+    /// Map, pump and present a window holding `view`, and return it so the caller can
+    /// destroy it.
+    fn present_for_paint(view: &CodePreviewView) -> gtk::Window {
+        let window = gtk::Window::new();
+        window.set_default_size(400, 200);
+        window.set_child(Some(view));
+        window.present();
+        crate::testpump::until(crate::testpump::Clock::Frame, "the preview maps", || {
+            view.width() > 0
+        });
+        window
+    }
+
+    /// **TDD 18.25 — a heading-band SPRITE tiles across the band and replaces the flat
+    /// fill**, and a band stated by a sprite ALONE is painted at all.
+    ///
+    /// Two properties in one drive, because the second is the one that was broken:
+    /// `a_heading_band_is_painted_…` drives the flat arm only, so the sprite arm of
+    /// this paint had no test that would fail if it broke — and the fill precondition
+    /// meant a theme naming only `heading_band_sprite_h1` got no band, no sprite, no
+    /// inset and no log line.
+    #[gtktest::test]
+    fn a_heading_band_sprite_tiles_and_replaces_the_flat_fill() {
+        const FLAT: (u8, u8, u8) = (0x33, 0x66, 0x99);
+        const TILE: (u8, u8, u8) = (0xff, 0x00, 0xff);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("band.png");
+        write_half_clear_tile(&path, 0xff_00_ff_ff);
+
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.banded]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
+             heading_band_color_h1 = \"#336699\"\n",
+        );
+        let mut theme = themes.resolve("banded");
+        theme.sprites.heading_band[0] = Some(crate::sprite::SpriteRef::File(path.clone()));
+        let _theme = crate::theme::activate_for_test(theme);
+        crate::sprite::clear_cache();
+
+        let view = CodePreviewView::new();
+        view.buffer().set_text("A banded heading\n");
+        view.set_heading_spans(vec![crate::renderer::HeadingSpan {
+            span: crate::span::BufferSpan::new(0, 16),
+            level_index: 0,
+        }]);
+        let window = present_for_paint(&view);
+        let data = framebuffer_of(&view, 400.0, 200.0);
         window.destroy();
 
-        // Cairo ARGB32 on a little-endian host: B, G, R, A.
-        let found = data.chunks_exact(4).any(|px| (px[2], px[1], px[0]) == BAND);
         assert!(
-            found,
-            "the heading band never reached the framebuffer — if the spans, the theme \
-             and the setter all look right, check that `heading_spans` is still in \
-             snapshot_layer's early-return gate"
+            contains_rgb(&data, TILE),
+            "the band sprite never reached the framebuffer"
         );
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
+        assert!(
+            !contains_rgb(&data, FLAT),
+            "the flat band fill is still painted under the sprite — the sprite must \
+             REPLACE the fill, not sit on top of it"
+        );
+
+        // …and the sprite alone is a band: no `heading_band_color` anywhere.
+        let mut bare = crate::theme::themes();
+        bare.merge_over_for_test(
+            "[themes.spriteonly]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n",
+        );
+        let mut theme = bare.resolve("spriteonly");
+        theme.sprites.heading_band[0] = Some(crate::sprite::SpriteRef::File(path));
+        let _theme = crate::theme::activate_for_test(theme);
+        crate::sprite::clear_cache();
+        let view = CodePreviewView::new();
+        view.buffer().set_text("A banded heading\n");
+        view.set_heading_spans(vec![crate::renderer::HeadingSpan {
+            span: crate::span::BufferSpan::new(0, 16),
+            level_index: 0,
+        }]);
+        let window = present_for_paint(&view);
+        let data = framebuffer_of(&view, 400.0, 200.0);
+        window.destroy();
+        assert!(
+            contains_rgb(&data, TILE),
+            "a heading_band_sprite with no heading_band_color beside it must still \
+             paint a band — SCHEMA's sprite row carries no fill precondition"
+        );
+
+        crate::sprite::clear_cache();
+    }
+
+    /// **TDD 18.19 — an annotation-chip SPRITE replaces the chip's flat fill**, while
+    /// the chip's INK remains a separate key that still paints on top.
+    ///
+    /// The chip's sprite arm was proven only to reach an exported HTML file; nothing
+    /// drove the drawn one. The ink half is the reason the chip is not simply another
+    /// `Fill`: a sprite replaces the fill and the count numeral is unaffected.
+    #[gtktest::test]
+    fn an_annotation_chip_sprite_replaces_the_flat_fill() {
+        const FLAT: (u8, u8, u8) = (0x00, 0xff, 0x00);
+        const TILE: (u8, u8, u8) = (0xff, 0x00, 0xff);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chip.png");
+        write_half_clear_tile(&path, 0xff_00_ff_ff);
+
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.chipped]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
+             annotation_chip_bg = \"#00ff00\"\nannotation_chip_fg = \"#0000ff\"\n",
+        );
+        let mut theme = themes.resolve("chipped");
+        theme.sprites.annotation_chip = Some(crate::sprite::SpriteRef::File(path));
+        let _theme = crate::theme::activate_for_test(theme);
+        crate::sprite::clear_cache();
+
+        let view = CodePreviewView::new();
+        // The chip is drawn INSIDE the right margin (`chip_rect`), so a view with no
+        // right margin puts it past the widget's own edge and nothing lands in the
+        // framebuffer — the production preview always sets one.
+        view.set_right_margin(24);
+        view.buffer().set_text("An annotated line\n");
+        let src = "An annotated line";
+        view.set_markers(vec![MarkerData {
+            anchor: 5,
+            comment: "a note".to_string(),
+            claim: Some("annotated".to_string()),
+            source: MarkerSource {
+                construct: crate::annotate::AnchoredSpan::capture(src, 0..src.len())
+                    .expect("the fixture span is a valid slice"),
+                src_content: Some(0..3),
+                src_comment_body: 0..3,
+                cleaned_content: 0..3,
+            },
+            cell_widget: None,
+            cell_table_anchor: None,
+        }]);
+        let window = present_for_paint(&view);
+        let data = framebuffer_of(&view, 400.0, 200.0);
+        window.destroy();
+
+        assert!(
+            contains_rgb(&data, TILE),
+            "the chip sprite never reached the framebuffer"
+        );
+        assert!(
+            !contains_rgb(&data, FLAT),
+            "the flat chip fill is still painted under the sprite — the sprite must \
+             REPLACE the fill, not sit on top of it"
+        );
+        crate::sprite::clear_cache();
     }
 
     /// TDD 18.28 — a themed sprite TILES down the blockquote bar and REPLACES the flat
@@ -1893,9 +2178,9 @@ mod gtk_integration_tests {
         let mut theme = themes.resolve("barred");
         // Set the resolved path directly: `resolve` never touches the filesystem, and
         // this test is about the PAINT, not about sprite validation (`sprite.rs` owns
-        // that, and `rewrite_sprite_paths` exercises it).
+        // that, and `theme::tests::sprites` exercises it across every sprite key).
         theme.sprites.blockquote_bar = Some(crate::sprite::SpriteRef::File(path.clone()));
-        crate::theme::set_active_for_test(theme);
+        let _theme = crate::theme::activate_for_test(theme);
         crate::sprite::clear_cache();
 
         let view = CodePreviewView::new();
@@ -1912,35 +2197,16 @@ mod gtk_integration_tests {
         crate::testpump::until(crate::testpump::Clock::Frame, "the preview maps", || {
             view.width() > 0
         });
-        let paintable = gtk::WidgetPaintable::new(Some(&view));
-        let snapshot = gtk::Snapshot::new();
-        paintable.snapshot(snapshot.upcast_ref::<gdk::Snapshot>(), 400.0, 200.0);
-        let node = snapshot
-            .to_node()
-            .expect("the preview snapshots to something");
-        let renderer = gsk::CairoRenderer::new();
-        renderer
-            .realize(None::<&gdk::Surface>)
-            .expect("the Cairo renderer realizes without a surface");
-        let texture = renderer.render_texture(&node, None);
-        let (w, h) = (texture.width() as usize, texture.height() as usize);
-        let mut data = vec![0u8; w * h * 4];
-        texture.download(&mut data, w * 4);
-        // Realized explicitly, so unrealized explicitly (GTK4Rs/AP-272).
-        renderer.unrealize();
+        let data = framebuffer_of(&view, 400.0, 200.0);
         window.destroy();
 
-        let found = |want: (u8, u8, u8)| {
-            // Cairo ARGB32 on a little-endian host: B, G, R, A.
-            data.chunks_exact(4).any(|px| (px[2], px[1], px[0]) == want)
-        };
+        let found = |want: (u8, u8, u8)| contains_rgb(&data, want);
         assert!(found(TILE), "the bar sprite never reached the framebuffer");
         assert!(
             !found(FLAT),
             "the flat bar colour is still painted under the sprite — the sprite must \
              REPLACE the fill, not sit on top of it"
         );
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
         crate::sprite::clear_cache();
     }
 
@@ -1977,7 +2243,7 @@ mod gtk_integration_tests {
                 "[themes.panelled]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
                  blockquote_bar_color = \"#00ff00\"\nblockquote_bar_width = 8\n{panel_key}"
             ));
-            crate::theme::set_active_for_test(themes.resolve("panelled"));
+            let _theme = crate::theme::activate_for_test(themes.resolve("panelled"));
 
             let view = CodePreviewView::new();
             view.set_left_margin(VIEW_MARGIN);
@@ -2012,22 +2278,7 @@ mod gtk_integration_tests {
             crate::testpump::until(crate::testpump::Clock::Frame, "the preview maps", || {
                 view.width() > 0
             });
-            let paintable = gtk::WidgetPaintable::new(Some(&view));
-            let snapshot = gtk::Snapshot::new();
-            paintable.snapshot(snapshot.upcast_ref::<gdk::Snapshot>(), W as f64, H as f64);
-            let node = snapshot
-                .to_node()
-                .expect("the preview snapshots to something");
-            let renderer = gsk::CairoRenderer::new();
-            renderer
-                .realize(None::<&gdk::Surface>)
-                .expect("the Cairo renderer realizes without a surface");
-            let texture = renderer.render_texture(&node, None);
-            let (w, h) = (texture.width() as usize, texture.height() as usize);
-            let mut data = vec![0u8; w * h * 4];
-            texture.download(&mut data, w * 4);
-            // Realized explicitly, so unrealized explicitly (GTK4Rs/AP-272).
-            renderer.unrealize();
+            let data = framebuffer_of(&view, W as f64, H as f64);
             window.destroy();
             data
         };
@@ -2056,7 +2307,6 @@ mod gtk_integration_tests {
         let data = render("blockquote_bg = \"#0a1830\"\n");
         let panels = extents(&data, PANEL);
         let bars = extents(&data, BAR);
-        crate::theme::set_active(crate::theme::SYSTEM_ID);
 
         assert!(
             bars.iter().filter(|b| b.is_some()).count() > 20,
@@ -2387,7 +2637,8 @@ mod gtk_integration_tests {
             // its own last line onto the abutting loose paragraph).
             let next_line = buffer.iter_at_offset(cb.last_content()).line() + 1;
             if let Some(next) = buffer.iter_at_line(next_line) {
-                let next_top = view.line_yrange(&next).0 as f32;
+                let (next_top, _) = view.line_yrange(&next);
+                let next_top = next_top as f32;
                 assert!(
                     card_bottom <= next_top,
                     "card bottom {card_bottom} must not reach past the next line's top {next_top}"
@@ -2402,5 +2653,90 @@ mod gtk_integration_tests {
              ABUTTED by a following paragraph"
         );
         win.destroy();
+    }
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gate_tests {
+    use super::*;
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+
+    /// **Every drawn vector opens the gate ON ITS OWN.**
+    ///
+    /// This is the guard the gate never had. It was a hand-maintained conjunction, and
+    /// the comment beside it said what that costs: a decoration whose vector is missing
+    /// paints on a document that happens to contain a code block or a list and silently
+    /// never paints on one that does not. `heading_spans` needed a bespoke pixel test
+    /// written specifically to catch its omission — this is that test written once, for
+    /// the whole table, and a new decoration extends it by the same single row that
+    /// extends the gate (F-GOD-001).
+    ///
+    /// Each fixture contains its own construct AND NOTHING ELSE that draws, which is the
+    /// load-bearing property: a fixture with a code block in it would open the gate
+    /// through `blocks` whatever its own vector did, and the test would pass for a
+    /// decoration that is not in the gate at all.
+    #[gtktest::test]
+    fn every_drawn_vector_opens_the_gate_by_itself() {
+        assert!(
+            DRAWN_VECTORS.len() > 1,
+            "the table is not a table — this sweep would be near-vacuous"
+        );
+        for entry in DRAWN_VECTORS {
+            let widget = crate::preview::render(entry.only, None, 1.0, false);
+            let view = widget
+                .downcast_ref::<gtk::Overlay>()
+                .and_then(|o| o.child())
+                .and_then(|c| c.downcast::<gtk::ScrolledWindow>().ok())
+                .and_then(|sw| sw.child())
+                .and_then(|c| c.downcast::<CodePreviewView>().ok())
+                .expect("Overlay > ScrolledWindow > CodePreviewView");
+            let imp = view.imp();
+
+            assert!(
+                (entry.has_work)(imp),
+                "{}: the fixture {:?} produced nothing in this decoration's own vector \
+                 — the fixture and the predicate have drifted apart, so the gate \
+                 assertion below would pass for the wrong reason",
+                entry.what,
+                entry.only
+            );
+            assert!(
+                has_anything_to_draw(imp),
+                "{}: its vector is populated and the draw gate is still shut, so this \
+                 decoration never paints on a document that contains only it",
+                entry.what
+            );
+
+            // …and it is the ONLY vector this fixture populated, which is what makes the
+            // assertion above about THIS decoration rather than about some other
+            // construct the fixture happens to carry.
+            let also: Vec<&str> = DRAWN_VECTORS
+                .iter()
+                .filter(|other| other.what != entry.what && (other.has_work)(imp))
+                .map(|other| other.what)
+                .collect();
+            assert!(
+                also.is_empty(),
+                "{}: its fixture {:?} also populates {also:?}, so it would open the \
+                 gate even with this decoration missing from the table",
+                entry.what,
+                entry.only
+            );
+        }
+    }
+
+    /// The other side: a document with none of these constructs leaves the gate SHUT, so
+    /// the sweep above is not passing because the gate is always open.
+    #[gtktest::test]
+    fn a_document_with_no_decoration_leaves_the_gate_shut() {
+        let widget = crate::preview::render("Just a paragraph of prose.\n", None, 1.0, false);
+        let view = widget
+            .downcast_ref::<gtk::Overlay>()
+            .and_then(|o| o.child())
+            .and_then(|c| c.downcast::<gtk::ScrolledWindow>().ok())
+            .and_then(|sw| sw.child())
+            .and_then(|c| c.downcast::<CodePreviewView>().ok())
+            .expect("Overlay > ScrolledWindow > CodePreviewView");
+        assert!(!has_anything_to_draw(view.imp()));
     }
 }

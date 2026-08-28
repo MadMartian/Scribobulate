@@ -25,14 +25,12 @@ entry can still be the worst thing in the register.
 | G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
-| J | Any | Project | The PDF export ignores `heading_color`/`heading_font`/`heading_space_above`/`heading_space_below` entirely — headings print in the body face and ink, spaced by a fixed constant | Low |
-| K | Any | Project | The PDF export's body-font measurement passes the CSS-quoted font stack straight to Pango's `set_family`, the same quoting bug `tags.rs` strips for the on-screen path — a multi-word themed `font_family` likely drops to the default sans in the artefact | Low |
 | L | Windows | Test | A `platform::win32::appearance` test helper realizes a `gsk::CairoRenderer` and never unrealizes it | Low |
 | M | Any | Project | `sprite::scaled`'s per-`(path, width, height)` texture cache has no eviction policy | Low |
 | N | Any | Production | A long heading overflows the preview pane horizontally instead of wrapping to it | Low |
-| O | Any | Project | The design-time-px-to-device-px rounding function (`px()`) exists as three separate copies rather than one shared definition | Low |
 | P | Any | Production | A multi-paragraph blockquote's accent bar draws as one continuous rect per span, unconfirmed for every span shape a blockquote can produce | Low |
-| Q | Any | Project | The PDF's blockquote bar is positioned off the page margin, using the wrong metric for its text gap | Low |
+| R | Any | Production | Pixel Quest's `link_color` and `list_task_color` sit below their legibility floor and are carried as named exceptions the operator intends to revisit, not as settled choices | Low |
+| S | Any | Project | The horizontal rule's thickness is the one styling value no theme can state — a literal in the PDF sink and the separator's own CSS default on screen | Low |
 
 ## A. Tables are selection islands
 
@@ -612,52 +610,6 @@ evidence must outlive it. Do not restate its figures here; several carry caveats
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
 
-## J. The PDF export ignores several heading theme keys
-
-**Severity**: Low. The PDF still renders every heading, correctly leveled and readable; it
-simply does not carry the theme's heading styling the way the screen and the HTML export do.
-
-`src/export/pdf/measure.rs`'s `Block::Heading` arm and its `layout_of` font-description builder
-never read `theme.heading_color`, `theme.heading_font`, `theme.heading_font_colors`/
-`heading_fonts` (TDD 18.21), or `theme.metrics.heading_space_above`/`heading_space_below` (TDD
-18.22) — headings measure and ink in the plain body face and colour, spaced by the fixed
-`BLOCK_GAP_PT` constant (`measure.rs:223,270,333`) rather than a themed gap. TDD 25.9 requires
-every colour, typeface and decoration metric in an exported artefact to resolve through the
-theme engine; nothing asserts a key is *used*, so this gap does not fail any current rubric —
-it is a completeness gap surfaced while scoping `sdd/PLAN.preview-decoration.md`'s Phase 1, not
-a regression from it.
-
-**Mitigation options**:
-- Thread `theme.heading_color`/`heading_font` (falling back through the per-level slots the
-  same way `tags.rs` does) into `layout_of` for `Block::Heading`, and replace the fixed
-  `BLOCK_GAP_PT` with a themed `space_before`/`space_after` derived from
-  `heading_space_above`/`heading_space_below` for that heading's level.
-- Accept the limitation: the PDF already resolves at System-light by design (TDD 25.9), so a
-  reader who wants themed headings has the HTML export.
-
-## K. The PDF export's font measurement re-quotes a CSS-safe font stack for Pango
-
-**Severity**: Low. Reproduces only when a themed `font_family` is a multi-word name (e.g.
-`"Times New Roman"`); every built-in theme today either leaves it unset or uses a bare/generic
-family, so no shipped theme currently shows the symptom.
-
-`src/export/pdf/measure.rs:90-91` passes `theme.font_family`'s `CssSafeFontStack::as_str()`
-straight to `pango::FontDescription::set_family`. That string is CSS-quoted
-(`sanitize_font_family` double-quotes multi-word names for the CSS cascade — `theme.rs:253-`).
-Pango's own family parsing is a comma-separated list it fallback-walks itself and does not
-expect CSS quoting; `tags.rs:239` already strips the quotes for exactly this reason before
-calling `set_family` on a themed heading font, with a comment explaining why. `pdf/measure.rs`
-does not, so a themed multi-word body family likely silently drops to the default sans in the
-exported PDF rather than raising an error — the same failure shape `tags.rs`'s comment warns
-about, just in the one call site that doesn't yet apply the fix.
-
-**Mitigation options**:
-- Strip the quotes the same way `tags.rs:239` does before calling `set_family` in
-  `pdf/measure.rs`; one-line fix, same shape as the existing precedent.
-- Give `CssSafeFontStack` a second accessor (e.g. `as_pango_str`) that returns the
-  quote-stripped form, so every future Pango call site gets the correct string without
-  restating the strip inline.
-
 ## L. A win32 appearance test leaks a `gsk::CairoRenderer`
 
 **Severity**: Low. Windows-only, and confined to `#[cfg(test)]` code — the module is
@@ -718,26 +670,6 @@ interaction named in ScrAP-23a's neighbourhood, but that is a guess, not a findi
 - Accept the limitation until reproduced deliberately — a control run is not yet a
   diagnosis.
 
-## O. `px()` exists as three separate copies
-
-**Severity**: Low. Purely a duplication cost — the three copies compute the same
-rounding and have not drifted.
-
-The design-time-px-at-zoom-1.0-to-device-px rounding a themed pixel metric needs
-(`sdd/PLAN.preview-decoration.md` named this while scoping the decoration work) is
-defined independently at `theme.rs:122` (a named `fn`), `tags.rs:192` (a local
-closure), and `preview/build.rs:596` (another local closure) — three definitions of
-`(n as f64 * zoom).round() as i32` rather than one shared function every call site
-uses.
-
-**Mitigation options**:
-- Make `theme::px` `pub(crate)` (it already is) and have `tags.rs`/`preview/build.rs`
-  call it instead of defining their own closures — a mechanical replacement, no
-  behaviour change.
-- Accept the limitation — the three copies have not drifted and each is a one-line
-  formula, so the risk is theoretical until a fourth definition or an actual bug
-  in one copy surfaces.
-
 ## P. A multi-paragraph blockquote's bar continuity is unconfirmed for every span shape
 
 **Severity**: Low. A flat colour never made a discontinuity visible; TDD 18.28's
@@ -756,23 +688,60 @@ texture would show a visible seam or restart.
   and confirm the tile continues (or deliberately restarts) consistently.
 - Accept the limitation until a real document surfaces a visible seam.
 
-## Q. The PDF's blockquote bar is drawn off the page margin, at the wrong gap
+## R. Pixel Quest's link and task-marker inks are provisional exceptions, not settled ones
 
-**Severity**: Low. Cosmetic — the quoted text itself is unaffected — but visible in
-every exported PDF containing a blockquote once a themed panel makes the quote's
-extent obvious.
+**Severity**: Low. Both are legible enough to use and both have a second, non-colour
+signal carrying their meaning — the link's underline is held to the graphic floor, and
+the task marker's glyph carries taken-or-not. Neither is a blocker; the debt is that
+they occupy a permanent-looking slot in a list of decisions while actually awaiting one.
 
-Noticed while fixing the PDF blockquote-panel fragmentation (TDD 18.29): `ink.rs`
-positions the accent bar at `quote.indent - 2 × blockquote_bar_width`, which for
-Pixel Quest's 24pt bar and an `INDENT_PT` of 18 places the bar roughly 30pt to the
-LEFT of the page's own margin — off the printable column entirely. The same
-calculation also uses `blockquote_bar_width` as the bar-to-text gap, where
-`blockquote_text_gap` is the themed key for that distance, so the gap does not
-track a theme's stated value.
+`src/theme/tests/contrast.rs`'s `DELIBERATE` allow-list names five pairings that sit below
+the floor TDD 18.8 holds their role to. Three are settled: Terminal's `rule_color` (ANSI 8
+grey on true black — correcting it stops it being ANSI 8, operator-accepted 2026-08-27),
+and Bedtime's `mark_fg` and `rule_color` (that theme's palette is owned by a different
+operator and is not this project's to retune). **Pixel Quest's two are not settled** —
+the operator's ruling on 2026-08-27 was "we'll address those later", which is a different
+statement from the reasons recorded beside the other three, and the list as written cannot
+tell them apart.
+
+The risk is the one TDD 18.8's own last clause describes from the other direction: a named
+exception is a licence, and a licence inherited by a future reader reads as a decision
+somebody made rather than one somebody postponed.
 
 **Mitigation options**:
-- Recompute the bar's X position from the page margin and `blockquote_text_gap`
-  directly, the way the preview's own bar placement does, rather than deriving it
-  from the indent arithmetic.
-- Accept the limitation — no themed panel exposed it before now, and the quoted
-  text itself always measured and wrapped correctly.
+- Retune Pixel Quest's `link_color` and `list_task_color` to clear their floors and delete
+  both rows — the arcade look is the constraint to preserve, and the page's low ceiling for
+  light inks is what makes it hard, so this is a palette question rather than a code one.
+- Retune only `list_task_color` (the newer of the two, changed 2026-08-26) and keep the link
+  as a period-look exception with its reason unchanged.
+- Accept both permanently: rewrite the two rows to state a settled reason and close this.
+
+## S. The horizontal rule's thickness is the one styling value no theme can state
+
+**Severity**: Low. Every rule still draws, at a sane weight, on both surfaces. The gap is
+that TDD 25.9 requires every colour, typeface and decoration metric in an exported artefact
+to resolve through the theme engine, and this one does not.
+
+`RULE_THICKNESS_PT = 0.75` (`src/export/pdf/mod.rs`, read at `pdf/ink.rs`) is a literal, and
+the preview's flat rule is a stock `GtkSeparator` taking its own CSS default. The rule's
+colour, its spacing and — since TDD 18.31 — its sprite tiling are all themeable; its weight
+alone is not.
+
+The sprite-tiled rule narrowed this rather than causing it: a tiled rule takes its tile's own
+height, so a theme that states `rule_sprite` already controls the weight implicitly. The flat
+rule is now the only rule, on either surface, whose thickness cannot be stated.
+
+**The two halves are not independently valid.** Adding a `rule_thickness` metric key without
+routing the preview's separator through it gives one decoration two sources of truth on two
+surfaces, which POLICY's "one theme key, every application path" exists to prevent — and a
+PDF that obeys a key the screen ignores is worse than one where neither does, because only
+the first looks correct in a review.
+
+**Mitigation options**:
+- Add a `rule_thickness` metric key and route BOTH the PDF sink and the preview separator's
+  generated CSS through it, in one change.
+- Derive the flat rule's thickness from an existing metric rather than minting a key — the
+  vocabulary is already large, and a weight that tracks something the theme already states
+  may be preferable to a knob nobody turns.
+- Accept it: a theme wanting a specific rule weight can state `rule_sprite` and get it from
+  the tile.

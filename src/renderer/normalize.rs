@@ -484,17 +484,50 @@ mod normalize_inline_tabs_tests {
     /// gone); their raw source must survive in the `Text` stream instead.
     #[test]
     fn unsupported_extensions_degrade_to_literal_text_not_dropped_events() {
-        let md = "Euler $E=mc^2$ and a note[^1] and a [[WikiLink]].";
+        use pulldown_cmark::{Tag, TagEnd};
+        // Every construct whose renderer arm is a `dropped_construct` call, in one
+        // document. The three GTK dispatchers now match `Event`/`Tag`/`TagEnd`
+        // exhaustively, so a pulldown-cmark UPGRADE that adds a variant is a compile
+        // error — but nothing in the compiler notices an OPTION being enabled, which
+        // turns an existing variant from unreachable into reachable and lands it on a
+        // `dropped_construct` arm. This assertion is that half of the pairing, and it
+        // is why the block-level constructs are here beside the inline ones.
+        let md = concat!(
+            "---\ntitle: front matter\n---\n\n",
+            "+++\ntitle = \"toml front matter\"\n+++\n\n",
+            "Euler $E=mc^2$ and a note[^1] and a [[WikiLink]].\n\n",
+            "$$\n\\int_0^1 x\n$$\n\n",
+            "[^1]: the footnote body\n\n",
+            "Term\n\n: The definition\n",
+        );
         let evs: Vec<Event> = Parser::new_ext(md, md_options()).collect();
         // None of the drop-prone special events are produced.
+        let offenders: Vec<&str> = evs
+            .iter()
+            .filter_map(|e| match e {
+                Event::InlineMath(_) => Some("InlineMath"),
+                Event::DisplayMath(_) => Some("DisplayMath"),
+                Event::FootnoteReference(_) => Some("FootnoteReference"),
+                Event::Start(Tag::FootnoteDefinition(_)) => Some("FootnoteDefinition"),
+                Event::Start(Tag::DefinitionList) => Some("DefinitionList"),
+                Event::Start(Tag::DefinitionListTitle) => Some("DefinitionListTitle"),
+                Event::Start(Tag::DefinitionListDefinition) => Some("DefinitionListDefinition"),
+                Event::Start(Tag::MetadataBlock(_)) => Some("MetadataBlock"),
+                Event::End(TagEnd::FootnoteDefinition) => Some("end FootnoteDefinition"),
+                Event::End(TagEnd::MetadataBlock(_)) => Some("end MetadataBlock"),
+                _ => None,
+            })
+            .collect();
         assert!(
-            !evs.iter().any(|e| matches!(
-                e,
-                Event::InlineMath(_) | Event::DisplayMath(_) | Event::FootnoteReference(_)
-            )),
-            "math/footnote extensions must be OFF so their events are never emitted"
+            offenders.is_empty(),
+            "md_options() enabled an extension the renderer has no handler for: \
+             {offenders:?}. Either write the handler (and replace its \
+             `dropped_construct` arm) or take the option back out — an enabled, \
+             unhandled extension renders as NOTHING, not as its own source \
+             (ScrAP-78)"
         );
-        // The raw source survives as visible Text.
+        // The raw source survives as visible Text. Anti-vacuity as well as the
+        // contract: an empty event stream satisfies the assertion above.
         let text: String = evs
             .iter()
             .filter_map(|e| match e {
@@ -510,6 +543,18 @@ mod normalize_inline_tabs_tests {
         assert!(
             text.contains("[[WikiLink]]"),
             "wikilink renders as literal text"
+        );
+        assert!(
+            text.contains("title: front matter"),
+            "YAML front matter renders as literal text"
+        );
+        assert!(
+            text.contains("the footnote body"),
+            "a footnote definition renders as literal text"
+        );
+        assert!(
+            text.contains("The definition"),
+            "a definition list renders as literal text"
         );
     }
 

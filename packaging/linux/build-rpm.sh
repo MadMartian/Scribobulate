@@ -59,6 +59,28 @@ mkdir -p "$top"/{BUILD,RPMS,SOURCES,SPECS,SRPMS} "$payload"
 
 stage_payload "$payload" "$BIN" "$VERSION"
 
+# %files, DERIVED from the staged tree rather than restated beside it.
+#
+# It used to be a hand-written list, and payload.sh's own header says why that is
+# wrong: "build-deb.sh and build-rpm.sh install the same five things ... Written twice,
+# the two layouts drift." The payload became shared and the manifest did not — so when
+# `stage_payload` gained `data/sprites/`, the list here did not, and rpmbuild's default
+# `%_unpackaged_files_terminate_build` turned that into a hard BUILD FAILURE
+# ("Installed (but unpackaged) file(s) found"). The `.deb` was unaffected, because
+# `dpkg-deb --build` packages the staged tree wholesale — which is exactly the shape
+# this derivation gives the rpm. There is now no second enumeration to forget.
+#
+# Directories are owned only under the package's own `%{_datadir}/$PKG` subtree;
+# `/usr/bin`, `/usr/share/applications` and the icon and man hierarchies belong to
+# other packages and must not be claimed.
+filelist="$top/SPECS/$PKG.files"
+(
+    cd "$payload"
+    find . -mindepth 1 \( -type f -o -type l \) -printf '"/%P"\n'
+    find . -mindepth 1 -type d -path "./usr/share/$PKG*" -printf '%%dir "/%P"\n'
+) | sort > "$filelist"
+[ -s "$filelist" ] || { echo "build-rpm: staged payload is empty" >&2; exit 1; }
+
 spec="$top/SPECS/$PKG.spec"
 cat > "$spec" <<EOF
 Name:           $PKG
@@ -88,13 +110,7 @@ replace, and CriticMarkup annotation review.
 mkdir -p %{buildroot}
 cp -a $payload/. %{buildroot}/
 
-%files
-%{_bindir}/$PKG
-%{_datadir}/applications/$PKG.desktop
-%{_datadir}/icons/hicolor/scalable/apps/$APP_ID.svg
-%dir %{_datadir}/$PKG
-%{_datadir}/$PKG/themes.toml
-%{_mandir}/man1/$PKG.1.gz
+%files -f $filelist
 
 %post
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q %{_datadir}/applications || :

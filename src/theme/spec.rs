@@ -19,6 +19,10 @@ use super::keys::{self, Key, Kind};
 use crate::sprite::SpriteRef;
 use std::collections::BTreeMap;
 
+/// Stands in for a sprite path that is not valid UTF-8, so a diagnostic about one
+/// names the problem rather than printing an empty string that reads as a real name.
+const NON_UTF8: &str = "<non-UTF-8 path>";
+
 /// One authored value, already coerced to the type its key declares.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Value {
@@ -53,6 +57,18 @@ impl Value {
             Value::Float(x) => Some(*x),
             Value::Int(n) => Some(*n as f64),
             _ => None,
+        }
+    }
+
+    /// The value as a theme file spelled it, for a diagnostic that has to quote it
+    /// back. `Debug` would print the Rust variant (`Text("wavy")`), which names this
+    /// module's model rather than the line the author has to go and fix.
+    pub(super) fn authored(&self) -> String {
+        match self {
+            Value::Text(s) => format!("{s:?}"),
+            Value::Int(n) => n.to_string(),
+            Value::Float(x) => x.to_string(),
+            Value::Sprite(r) => format!("{:?}", r.name().unwrap_or(NON_UTF8)),
         }
     }
 
@@ -159,7 +175,10 @@ impl ThemeSpec {
                     true
                 }
                 None => {
-                    log::warn!("theme: sprite {:?} for {name:?} is unavailable", r.name());
+                    log::warn!(
+                        "theme: sprite {:?} for {name:?} is unavailable",
+                        r.name().unwrap_or(NON_UTF8)
+                    );
                     false
                 }
             }
@@ -231,8 +250,10 @@ fn coerce(kind: Kind, raw: &toml::Value) -> Coerced {
     }
 }
 
-/// What a key of this kind takes, for the warning a wrong-typed value earns.
-fn expected(kind: Kind) -> &'static str {
+/// What a key of this kind takes, for the warning a refused value earns — both the
+/// wrong-TOML-type refusal here and the value-level one `Sources::walk` reports, so
+/// the two read in one voice.
+pub(super) fn expected(kind: Kind) -> &'static str {
     match kind {
         Kind::Int => "a whole number",
         Kind::Float => "a number",

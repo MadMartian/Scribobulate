@@ -26,15 +26,10 @@ impl Renderer {
                 // the heading.
                 self.heading_spans.push(crate::renderer::HeadingSpan {
                     span: crate::span::BufferSpan::new(self.heading_start, self.end_offset()),
-                    // h5 and h6 share the deepest slot, the same fold `emit.rs` applies
-                    // when it picks the heading's tag.
-                    level_index: match level {
-                        pulldown_cmark::HeadingLevel::H1 => 0,
-                        pulldown_cmark::HeadingLevel::H2 => 1,
-                        pulldown_cmark::HeadingLevel::H3 => 2,
-                        pulldown_cmark::HeadingLevel::H4 => 3,
-                        _ => 4,
-                    },
+                    // h5 and h6 share the deepest slot, the same fold `emit.rs`
+                    // applies when it picks the heading's tag — the same call, so
+                    // they cannot disagree about it.
+                    level_index: crate::theme::heading_slot(level as u8),
                 });
                 self.newline();
                 self.heading = None;
@@ -145,6 +140,7 @@ impl Renderer {
                             &ts.cell_content_evs,
                             &self.cleaned,
                             &self.ann_highlights,
+                            &self.theme,
                         );
                     }
                     let cell_widget: gtk::Widget =
@@ -255,7 +251,7 @@ impl Renderer {
             }
             TagEnd::Strikethrough => {
                 if self.in_table_cell() {
-                    let (_open, close) = super::strike_tags();
+                    let (_open, close) = super::strike_tags(&self.theme);
                     if let Some(ts) = &mut self.table {
                         ts.cell_markup.push_str(close);
                     }
@@ -312,13 +308,29 @@ impl Renderer {
             // rendering any `<picture>`/`<img>` images, else dropped (sanitize by
             // omission). Flush a `<picture>` left open by a malformed/unclosed block.
             // See ScrAP-147 / TDD 2.23.
-            TagEnd::HtmlBlock if self.in_html_block => {
-                self.in_html_block = false;
-                let html = std::mem::take(&mut self.html_acc);
-                self.feed_html(&html);
-                self.flush_open_picture();
+            // TOTAL, not guarded, for the reason `events.rs`'s twin gives — and here
+            // a failed guard was worse than a dropped event: it left `in_html_block`
+            // true and `html_acc` holding stale bytes, which the next block would
+            // then inherit.
+            TagEnd::HtmlBlock => {
+                if self.in_html_block {
+                    self.in_html_block = false;
+                    let html = std::mem::take(&mut self.html_acc);
+                    self.feed_html(&html);
+                    self.flush_open_picture();
+                } else {
+                    self.dropped_construct("an HTML-block close with no open block");
+                }
             }
-            _ => {}
+
+            // Inert BY OPTION, matching `start.rs`'s arms one for one — the two
+            // halves of one construct's absence, so neither can be added without the
+            // other.
+            TagEnd::FootnoteDefinition => self.dropped_construct("a footnote definition"),
+            TagEnd::DefinitionList
+            | TagEnd::DefinitionListTitle
+            | TagEnd::DefinitionListDefinition => self.dropped_construct("a definition list"),
+            TagEnd::MetadataBlock(_) => self.dropped_construct("a metadata block"),
         }
     }
 }

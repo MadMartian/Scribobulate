@@ -203,7 +203,7 @@ renderer.
 
 | Component | Mech | Themed today | Headroom |
 |---|---|---|---|
-| **h1–h5** (h6 folds to h5) | A | scale, weight, space-below, colour, family — *one* colour and *one* face for all five levels (`tags.rs:209-242`) | **K+P**: per-level colour/face; `overline`+`overline_rgba` (a rule *above* the heading — the cheapest real flare in the list); `underline`/`underline_rgba` (rule below); `letter_spacing`; `variant`/`text_transform` small-caps; `line_height`. **`heading_space_above` does not exist at all** — only space-below (`theme.rs:566-581`). **K+P**: a background **band** via `paragraph_background_rgba` — spans the text column, takes vertical padding from `pixels_above/below_lines`, survives soft-wrap as one band (*MEASURED*, § "Heading bands"). **K+D**: edge-to-edge band, rounded panel, gradient, border; a gutter glyph (§, ❧, level pips) drawn exactly as list markers are. |
+| **h1–h5** (h6 folds to h5) | A | scale, weight, space-below, colour, family — *one* colour and *one* face for all five levels (`tags.rs:209-242`) | **K+P**: per-level colour/face; `overline`+`overline_rgba` (a rule *above* the heading — the cheapest real flare in the list); `underline`/`underline_rgba` (rule below); `letter_spacing`; `variant`/`text_transform` small-caps; `line_height`. **`heading_space_above` does not exist at all** — only space-below (`theme/resolve.rs`). **K+P**: a background **band** via `paragraph_background_rgba` — spans the text column, takes vertical padding from `pixels_above/below_lines`, survives soft-wrap as one band (*MEASURED*, § "Heading bands"). **K+D**: edge-to-edge band, rounded panel, gradient, border; a gutter glyph (§, ❧, level pips) drawn exactly as list markers are. |
 | **Body paragraph** | — | **nothing — body text carries no tag at all** (`renderer/emit.rs:78-107`) | **K**: paragraph spacing, `letter_spacing`, `line_height` — but with no body tag these go on the view or need one created. |
 | **Bold / italic / strike** | A | `bold_weight` only (`tags.rs:254-261`) | **K+P**: italic style, `strikethrough_color`, bold colour. |
 | **Mark `==…==`** | A | `mark_bg`, `mark_fg` | **K+P**: highlighter underline, letter-spacing. **K+D**: a rounded or rough highlighter band — a tag background cannot have a radius or padding (ScrAP-21). |
@@ -226,16 +226,23 @@ renderer.
 
 *READ* — these are the actual edit paths, not estimates.
 
+⚠️ **The K path below is SUPERSEDED and is kept as the record of what the tiers cost
+when this plan was ratified.** The theme engine is now a registry (`theme/keys.rs`): a
+key is one row carrying its type, levelling, clamp range and floor, and the merge is a
+map merge — so the per-key `ThemeSpec` field, the `take!` list, and the per-key
+`Theme::resolve` branch no longer exist, and neither does the silent-failure mode the
+first ⚠️ below describes. Read `theme/keys.rs`'s module doc for the current path. The
+export half of the second ⚠️ is unchanged and still binding.
+
 **K — a new key, existing use site.** Eleven steps, none optional:
-`data/themes.toml` (document + `[themes.system]` value) → `theme.rs:54-69` floor
-const → `theme.rs:77-85` clamp range → `ThemeSpec` field (`theme.rs:264-349`) →
-**the `take!` list in `ThemeSpec::overlay` (`theme.rs:468-514`)** → `Theme` /
-`Typography` / `Metrics` field → `Theme::resolve` (`theme.rs:633-761`) → tests →
+`data/themes.toml` (document + `[themes.system]` value) → the key's floor and clamp
+range → a `ThemeSpec` field → **the `take!` list in `ThemeSpec::overlay`** → `Theme` /
+`Typography` / `Metrics` field → `Theme::resolve` → tests →
 `Palette` field + `Palette::from_base` if derived (`palette.rs:59-91`,
 `:150-271`) → the use site → [`THEMING.md`](THEMING.md) mechanism table.
 ⚠️ The `take!` step is the silent one: omitting it compiles, and built-in themes
 still work while **every user-file override of that key is dropped** — the shipped
-`list_marker_color` bug, pinned at `theme.rs:1190-1199`.
+`list_marker_color` bug.
 ⚠️ **Since export landed, eleven steps are thirteen**: the key must also reach
 `export/html.rs`'s stylesheet and, where it is a value the page sink draws or measures,
 `export/pdf.rs` / `export/markup.rs`. This has the same silent-failure shape as `take!`
@@ -267,7 +274,7 @@ a construct the preview decorates and it cannot.
 ## Cross-cutting constraints
 
 1. ✅ **Resolved (18.18) for `bold_weight`/`supsub_scale`; the same shape applies to
-   any later inline key.** `Typography::bold_attr`/`supsub_attr` (theme.rs) are the
+   any later inline key.** `Typography::bold_attr`/`supsub_attr` (`theme/model.rs`) are the
    one shared formatting source: `renderer::bold_open`/`superscript_open`/
    `subscript_open` wrap them with `crate::theme::active()` for the table-cell path,
    `export/markup.rs` calls them directly on its own explicit `Theme` (never
@@ -281,7 +288,7 @@ a construct the preview decorates and it cannot.
    key added under 18.21-18.23 follows this exact shape.
 2. **Glyph strings are a new class of untrusted theme input.** Today the only
    free-form string is `font_family`, behind a type-enforced sanitiser
-   (`CssSafeFontStack`, `theme.rs:177-257`). A glyph reaches a Pango *layout* in
+   (`CssSafeFontStack`, `theme/value.rs`). A glyph reaches a Pango *layout* in
    the gutter (plain text, safe) but the *same* value would reach Pango *markup* in
    a table cell — ScrAP-163 exactly, where an unescaped `&` renders the label
    **empty**. Any glyph key needs `glib::markup_escape_text` at the one funnel plus
@@ -320,7 +327,7 @@ a construct the preview decorates and it cannot.
 4. **System parity and legibility.** TDD 18.2 requires System to stay
    byte-identical, so every new key must default to today's rendering; any new
    ink/fill pair joins the contrast floors (TDD 18.8, 18.17) asserted at
-   `theme.rs:1025-1038` and `palette.rs:400-423`.
+   `theme/tests/contrast.rs` and `palette/tests.rs`.
 5. **Tag hazards that decide designs rather than estimates.** *Character* backgrounds do
    not composite — highest priority wins (ScrAP-99). A **paragraph** background is a
    separate, lower layer and does compose with them (*MEASURED* — § "Heading bands"),
@@ -661,7 +668,7 @@ re-derived by the next person to measure it.
 **A second, unrelated finding from 18.22 is queued for the same routing**: GTK
 4.6.9 double-frees a `GtkTextTag` text run carrying both a coloured overline and a
 coloured underline (§ "Current status" — 18.22's deviation; the finding and the
-production workaround live in `src/theme.rs`'s `HeadingRule` rustdoc and
+production workaround live in `src/theme/model.rs`'s `HeadingRule` rustdoc and
 `clippy.toml`'s `set_overline_rgba` ban). This is squarely about GTK's own tag-
 attribute code, not this project, so — same rule — it does not belong in this
 tree's `sdd/ANTI-PATTERNS.md`; it goes to `gtk4skiller`.

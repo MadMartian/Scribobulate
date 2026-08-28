@@ -66,8 +66,8 @@ pub(crate) use scan::{scan_script_spans, scan_scripts, Script, ScriptSpan};
 ///
 /// Separate `bgalpha` (not 8-digit hex) for robust Pango compatibility (the
 /// table-cell annotation markup path); `ThemeColor` owns that decomposition.
-pub(crate) fn ann_hl_open() -> String {
-    let c = crate::theme::active().annotation_hl_color;
+pub(crate) fn ann_hl_open(theme: &crate::theme::Theme) -> String {
+    let c = theme.annotation_hl_color;
     format!(
         "<span background=\"{}\" bgalpha=\"{}\">",
         c.hex(),
@@ -83,8 +83,7 @@ pub(crate) const ANN_HL_CLOSE: &str = "</span>";
 /// `mark_bg` — the SAME key the body tag reads — so the two paths cannot drift
 /// (Document Rendering CAM row 12 / TDD 18.6). Separate `bgalpha` (not 8-digit hex)
 /// for Pango robustness, exactly as [`ann_hl_open`].
-pub(crate) fn mark_open() -> String {
-    let theme = crate::theme::active();
+pub(crate) fn mark_open(theme: &crate::theme::Theme) -> String {
     let c = theme.mark_bg;
     // `mark_fg` rides the SAME generated span as the fill, for the same reason the fill
     // is generated here at all: a cell is a GtkLabel outside the buffer, so the body
@@ -92,7 +91,7 @@ pub(crate) fn mark_open() -> String {
     // theme without the key produces the byte-identical span it always did.
     let fg = theme
         .mark_fg
-        .map(|f| format!(" foreground=\"{}\"", crate::palette::to_hex(f)))
+        .map(|f| format!(" foreground=\"{}\"", crate::palette::to_hex_opaque(f)))
         .unwrap_or_default();
     format!(
         "<span background=\"{}\" bgalpha=\"{}\"{fg}>",
@@ -105,8 +104,8 @@ pub(crate) const MARK_CLOSE: &str = "</span>";
 /// Opening Pango span for themed BOLD inside a table-cell label — the cell twin of
 /// the `TagName::Bold` body tag's `bold_weight`. Without this, `bold_weight` applied
 /// only on the buffer; a table cell's `<b>` ignored it (TDD 18.18).
-pub(crate) fn bold_open() -> String {
-    format!("<span{}>", crate::theme::active().typography.bold_attr())
+pub(crate) fn bold_open(theme: &crate::theme::Theme) -> String {
+    format!("<span{}>", theme.typography.bold_attr())
 }
 pub(crate) const BOLD_CLOSE: &str = "</span>";
 
@@ -122,13 +121,13 @@ pub(crate) const BOLD_CLOSE: &str = "</span>";
 /// The open and the close are pushed from different walk callbacks, so each calls this
 /// and takes its half; they cannot disagree, because a render is one synchronous walk
 /// and the active theme cannot change inside it.
-pub(crate) fn strike_tags() -> (String, &'static str) {
-    match crate::theme::active().strikethrough_color {
+pub(crate) fn strike_tags(theme: &crate::theme::Theme) -> (String, &'static str) {
+    match theme.strikethrough_color {
         None => ("<s>".to_string(), "</s>"),
         Some(c) => (
             format!(
                 "<span strikethrough=\"true\" strikethrough_color=\"{}\">",
-                crate::palette::to_hex(c)
+                crate::palette::to_hex_opaque(c)
             ),
             "</span>",
         ),
@@ -137,57 +136,82 @@ pub(crate) fn strike_tags() -> (String, &'static str) {
 
 /// Opening Pango span for themed SUPERSCRIPT inside a table-cell label — the cell
 /// twin of `TagName::Superscript`'s `supsub_scale` + `superscript_rise` (TDD 18.18).
-pub(crate) fn superscript_open() -> String {
-    format!(
-        "<span{}>",
-        crate::theme::active().typography.supsub_attr(true)
-    )
+pub(crate) fn superscript_open(theme: &crate::theme::Theme) -> String {
+    format!("<span{}>", theme.typography.supsub_attr(true))
 }
 pub(crate) const SUPERSCRIPT_CLOSE: &str = "</span>";
 
 /// Opening Pango span for themed SUBSCRIPT inside a table-cell label — the cell twin
 /// of `TagName::Subscript`'s `supsub_scale` + `subscript_rise` (TDD 18.18).
-pub(crate) fn subscript_open() -> String {
-    format!(
-        "<span{}>",
-        crate::theme::active().typography.supsub_attr(false)
-    )
+pub(crate) fn subscript_open(theme: &crate::theme::Theme) -> String {
+    format!("<span{}>", theme.typography.supsub_attr(false))
 }
 pub(crate) const SUBSCRIPT_CLOSE: &str = "</span>";
+
+/// A half-open character range in the plain text a markup string renders.
+///
+/// A NAMED pair, so a caller says which end it means instead of `.0`/`.1`. Both ends are
+/// `usize` and a transposition compiles — it would then produce an empty range, which the
+/// merge below silently drops, so the highlight simply does not appear (POLICY § Code
+/// style: destructure by name).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct CharRange {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+}
+
+/// Sort and coalesce a set of highlight ranges, dropping the empty ones.
+///
+/// **One implementation, not two.** This walk was written out twice in this file —
+/// `annotate_markup`'s and `wrap_markup_at_char_ranges`'s — either of which could be
+/// corrected without the other, and both spelled with positional tuple access. The
+/// property every caller needs is that no two emitted spans nest or abut: Pango markup
+/// must stay well-nested, and two abutting identical spans render the same but are two
+/// runs where one was meant.
+///
+/// ADJACENT ranges merge as well as overlapping ones (`start <= last.end`, not `<`) —
+/// `[0,3)` and `[3,5)` become `[0,5)`, which is the "never abut" half.
+pub(crate) fn merge_char_ranges(ranges: impl IntoIterator<Item = CharRange>) -> Vec<CharRange> {
+    let mut sorted: Vec<CharRange> = ranges.into_iter().filter(|r| r.start < r.end).collect();
+    sorted.sort_unstable();
+    let mut merged: Vec<CharRange> = Vec::new();
+    for range in sorted {
+        if let Some(last) = merged.last_mut() {
+            if range.start <= last.end {
+                last.end = last.end.max(range.end);
+                continue;
+            }
+        }
+        merged.push(range);
+    }
+    merged
+}
 
 /// Wrap half-open **char** ranges of `plain` in the amber annotation highlight span.
 /// `highlights` are char offsets into `plain` (cell-local, as from
 /// [`crate::annotate::map_cleaned_highlight_to_local`]); they are sorted and
 /// merged before emission. Non-highlight text is Pango-escaped. Pure / display-free.
-pub(crate) fn annotate_markup(plain: &str, highlights: &[(usize, usize)]) -> String {
+pub(crate) fn annotate_markup(
+    plain: &str,
+    highlights: &[(usize, usize)],
+    theme: &crate::theme::Theme,
+) -> String {
     let chars: Vec<char> = plain.chars().collect();
     let n = chars.len();
-    let mut ranges: Vec<(usize, usize)> = highlights
-        .iter()
-        .map(|&(a, b)| (a.min(n), b.min(n)))
-        .filter(|&(a, b)| a < b)
-        .collect();
-    ranges.sort_unstable();
-    // Merge overlapping / adjacent ranges so we never nest or abut identical spans.
-    let mut merged: Vec<(usize, usize)> = Vec::new();
-    for (a, b) in ranges {
-        if let Some(last) = merged.last_mut() {
-            if a <= last.1 {
-                last.1 = last.1.max(b);
-                continue;
-            }
-        }
-        merged.push((a, b));
-    }
+    // Clamped to the text, then merged through the ONE merge — see `merge_char_ranges`.
+    let merged = merge_char_ranges(highlights.iter().map(|&(a, b)| CharRange {
+        start: a.min(n),
+        end: b.min(n),
+    }));
     let mut out = String::new();
     let mut cursor = 0usize;
-    for (a, b) in merged {
+    for CharRange { start: a, end: b } in merged {
         if cursor < a {
             out.push_str(&glib::markup_escape_text(
                 &chars[cursor..a].iter().collect::<String>(),
             ));
         }
-        out.push_str(&ann_hl_open());
+        out.push_str(&ann_hl_open(theme));
         out.push_str(&glib::markup_escape_text(
             &chars[a..b].iter().collect::<String>(),
         ));
@@ -278,9 +302,10 @@ pub(crate) struct TableState {
 }
 
 /// The marker kind of a rendered list item, recorded so the preview can draw it in a
-/// left gutter. Approach-independent data seam: the render walk
-/// populates it; the future gutter draw + checkbox interaction consume it. Nothing
-/// draws from it yet — list markers still render inline (see `renderer/start.rs`).
+/// left gutter. Approach-independent data seam: the render walk populates it, and
+/// `codeview::gutter::draw_list_marker` and the checkbox hit-boxes beside it consume
+/// it. No marker is inserted into the buffer at all — moving it out is what makes
+/// selection and copy skip it (ScrAP-118).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ListMarkerKind {
     /// Unordered bullet.
@@ -293,6 +318,23 @@ pub(crate) enum ListMarkerKind {
         checked: bool,
         src: std::ops::Range<usize>,
     },
+}
+
+impl ListMarkerKind {
+    /// This marker's display-free discriminant — the shape the theme engine and both
+    /// export sinks share.
+    ///
+    /// The source span a `Task` carries is a *preview* concern (it is the range the
+    /// checkbox toggle flips) and no theme key varies by it, so it is dropped at this
+    /// boundary rather than carried into the engine.
+    pub(crate) fn theme_kind(&self) -> crate::theme::MarkerKind {
+        match self {
+            ListMarkerKind::Bullet => crate::theme::MarkerKind::Bullet,
+            ListMarkerKind::Ordered(_) => crate::theme::MarkerKind::Ordered,
+            ListMarkerKind::Task { checked: true, .. } => crate::theme::MarkerKind::TaskChecked,
+            ListMarkerKind::Task { checked: false, .. } => crate::theme::MarkerKind::Task,
+        }
+    }
 }
 
 /// One heading's extent in the preview buffer, plus the theme slot its level reads.
@@ -372,6 +414,14 @@ pub(crate) struct Renderer {
     pub heading_spans: Vec<HeadingSpan>,
     link_start: Option<(i32, String)>,
     pub links: Vec<(i32, i32, String)>,
+    /// The theme THIS render is built against.
+    ///
+    /// Held rather than read from `crate::theme::active()` at each use: the markup this
+    /// walk emits for a table cell is themed (`bold_open`, `mark_open`, the strike and
+    /// super/subscript spans), and reading the process-global at six scattered call
+    /// sites made the whole render-products construction exercisable only against
+    /// whatever the process happened to have active (F-BUILDPRODUCTS-001).
+    pub(crate) theme: std::rc::Rc<crate::theme::Theme>,
     pub anchored: Vec<(TextChildAnchor, gtk::Widget)>,
     /// Anchored children whose width must track the live content column, each with
     /// the fixed chrome to its left (`inset`). Handed to
@@ -391,10 +441,10 @@ pub(crate) struct Renderer {
     /// the preview view can self-draw each block's padded background under the
     /// text (a `paragraph-background` tag cannot pad — GTK4Rs/AP-21).
     pub code_blocks: Vec<crate::span::BufferSpan>,
-    /// One entry per rendered list item, in document order — the data seam for the
-    /// planned drawn marker gutter. Populated at `Tag::Item`
-    /// (bullet/number) and upgraded to `Task` at the item's `TaskListMarker`. Nothing
-    /// consumes it yet; markers still render inline.
+    /// One entry per rendered list item, in document order — the data seam the drawn
+    /// marker gutter reads. Populated at `Tag::Item` (bullet/number) and upgraded to
+    /// `Task` at the item's `TaskListMarker`; consumed by `codeview`'s `snapshot_layer`
+    /// through `gutter::draw_list_marker`. No marker text is inserted into the buffer.
     pub list_markers: Vec<ListMarker>,
     table: Option<TableState>,
     at_start: bool,
@@ -438,9 +488,39 @@ pub(crate) struct Renderer {
 }
 
 impl Renderer {
+    /// A parser construct this renderer deliberately renders as nothing, announced
+    /// rather than dropped in silence.
+    ///
+    /// **Every caller of this is an arm that could have been a bare `_`, and that is
+    /// the point.** ScrAP-78 is exactly this: an enabled-but-unhandled pulldown-cmark
+    /// extension is *dropped* instead of degrading to literal text, and the failure is
+    /// total silence — `$E=mc^2$` rendered empty, `[^1]` vanished, `---` frontmatter
+    /// leaked as a stray paragraph, with every test green. The three dispatchers now
+    /// match exhaustively, so a pulldown-cmark upgrade that adds a variant is a
+    /// **compile error** rather than a construct that quietly stops rendering; this is
+    /// for the variants that already exist and are inert by option.
+    ///
+    /// Every construct routed here is unreachable through
+    /// [`normalize::md_options`](super::normalize::md_options), which enables only the
+    /// extensions this renderer has handlers for. So a record from here means the
+    /// option set gained an extension and the handler did not — which is the pairing
+    /// nothing else in the toolchain can check.
+    ///
+    /// `debug` with an explicit target: off by default, and independently toggleable
+    /// from the rest of the renderer's chatter.
+    fn dropped_construct(&self, what: &str) {
+        log::debug!(
+            target: "scribobulate::render",
+            "renderer: {what} has no handler and was rendered as nothing — it is \
+             reachable only if md_options() enabled an extension without a handler \
+             (ScrAP-78)"
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         buf: TextBuffer,
+        theme: std::rc::Rc<crate::theme::Theme>,
         syntect_theme: String,
         doc_dir: Option<std::path::PathBuf>,
         allow_unsafe_images: bool,
@@ -450,6 +530,7 @@ impl Renderer {
     ) -> Self {
         Renderer {
             buf,
+            theme,
             ann_highlights,
             cleaned,
             zoom,
@@ -501,6 +582,7 @@ impl Renderer {
         content_evs: &[(usize, usize, i32, i32)],
         cleaned: &str,
         ann_highlights: &[(usize, usize)],
+        theme: &crate::theme::Theme,
     ) -> String {
         if ann_highlights.is_empty() || plain.is_empty() {
             return markup.to_string();
@@ -520,15 +602,13 @@ impl Renderer {
         }
         let escaped_plain = glib::markup_escape_text(plain);
         if markup == escaped_plain.as_str() {
-            return annotate_markup(plain, &local);
+            return annotate_markup(plain, &local, theme);
         }
         // Formatted cell: insert the amber highlight at the EXACT plain-char offsets, tag-
         // aware — NOT by text search. A `result.find(slice)` wrapped the FIRST occurrence of
         // the substring, so a claim repeated in the cell (very common in the ANTI-PATTERNS
         // TOC cells) got highlighted on the wrong occurrence.
-        local.sort_unstable();
-        local.dedup();
-        wrap_markup_at_char_ranges(markup, &local)
+        wrap_markup_at_char_ranges(markup, &local, theme)
     }
 }
 
@@ -540,28 +620,20 @@ impl Renderer {
 /// the next highlighted char, so it never crosses an existing tag boundary (Pango markup
 /// must stay well-nested) — correct for a highlight that only partially overlaps a
 /// bold/code/link run, and, being position-based, correct for repeated substrings.
-fn wrap_markup_at_char_ranges(markup: &str, ranges: &[(usize, usize)]) -> String {
-    // Merge overlapping/adjacent ranges so spans never nest or abut.
-    let mut merged: Vec<(usize, usize)> = Vec::new();
-    {
-        let mut rs: Vec<(usize, usize)> = ranges.iter().copied().filter(|&(a, b)| a < b).collect();
-        rs.sort_unstable();
-        for (a, b) in rs {
-            if let Some(last) = merged.last_mut() {
-                if a <= last.1 {
-                    last.1 = last.1.max(b);
-                    continue;
-                }
-            }
-            merged.push((a, b));
-        }
-    }
+fn wrap_markup_at_char_ranges(
+    markup: &str,
+    ranges: &[(usize, usize)],
+    theme: &crate::theme::Theme,
+) -> String {
+    // Through the ONE merge — see `merge_char_ranges`. It also sorts and drops empties,
+    // which is why the caller no longer does either.
+    let merged = merge_char_ranges(ranges.iter().map(|&(start, end)| CharRange { start, end }));
     if merged.is_empty() {
         return markup.to_string();
     }
-    let in_range = |i: usize| merged.iter().any(|&(a, b)| i >= a && i < b);
+    let in_range = |i: usize| merged.iter().any(|r| i >= r.start && i < r.end);
 
-    let open = ann_hl_open();
+    let open = ann_hl_open(theme);
     let mut out = String::with_capacity(markup.len() + 3 * open.len());
     let mut it = markup.chars().peekable();
     let mut plain_idx = 0usize;
@@ -586,7 +658,7 @@ fn wrap_markup_at_char_ranges(markup: &str, ranges: &[(usize, usize)]) -> String
         // A visible char (a bare char, or an `&…;` entity — both are ONE plain char).
         let want = in_range(plain_idx);
         if want && !amber {
-            out.push_str(&ann_hl_open());
+            out.push_str(&ann_hl_open(theme));
             amber = true;
         } else if !want && amber {
             out.push_str(ANN_HL_CLOSE);
@@ -610,11 +682,50 @@ fn wrap_markup_at_char_ranges(markup: &str, ranges: &[(usize, usize)]) -> String
 }
 
 #[cfg(test)]
+mod merge_range_tests {
+    use super::{merge_char_ranges, CharRange};
+
+    fn r(start: usize, end: usize) -> CharRange {
+        CharRange { start, end }
+    }
+
+    /// **The one merge**, pinned at every case its two former copies had to answer
+    /// identically. It was written out twice in this file — in `annotate_markup` and in
+    /// `wrap_markup_at_char_ranges` — so either could be corrected without the other,
+    /// and both spelled with positional tuple access.
+    #[test]
+    fn ranges_are_sorted_coalesced_and_never_left_abutting() {
+        // Out of order in, sorted out.
+        assert_eq!(
+            merge_char_ranges([r(5, 7), r(0, 2)]),
+            vec![r(0, 2), r(5, 7)]
+        );
+        // Overlapping.
+        assert_eq!(merge_char_ranges([r(0, 4), r(2, 6)]), vec![r(0, 6)]);
+        // ADJACENT, which is the half a `<` instead of a `<=` silently loses: two
+        // abutting spans render the same and are two runs where one was meant, and
+        // Pango markup must stay well-nested.
+        assert_eq!(merge_char_ranges([r(0, 3), r(3, 5)]), vec![r(0, 5)]);
+        // Fully contained — the outer range must not be shortened to the inner one's end.
+        assert_eq!(merge_char_ranges([r(0, 10), r(2, 4)]), vec![r(0, 10)]);
+        // Empty and inverted ranges are dropped rather than emitted as zero-width spans.
+        assert_eq!(merge_char_ranges([r(3, 3), r(5, 2)]), vec![]);
+        // Duplicates collapse, which is why no caller needs its own `dedup`.
+        assert_eq!(merge_char_ranges([r(1, 4), r(1, 4)]), vec![r(1, 4)]);
+        assert_eq!(merge_char_ranges([]), vec![]);
+    }
+}
+
+#[cfg(test)]
 mod wrap_markup_tests {
     use super::{ann_hl_open, wrap_markup_at_char_ranges, ANN_HL_CLOSE};
 
+    fn theme() -> std::rc::Rc<crate::theme::Theme> {
+        crate::theme::active()
+    }
+
     fn hl(s: &str) -> String {
-        format!("{}{s}{ANN_HL_CLOSE}", ann_hl_open())
+        format!("{}{s}{ANN_HL_CLOSE}", ann_hl_open(&theme()))
     }
 
     #[test]
@@ -623,7 +734,7 @@ mod wrap_markup_tests {
         // SECOND "quirk" (chars 17..22), a repeat of the first (chars 0..5). A `find`-based
         // wrap highlighted the FIRST; position-based must highlight the SECOND.
         let markup = "<tt>quirk</tt> sibling of <tt>quirk</tt>";
-        let out = wrap_markup_at_char_ranges(markup, &[(17, 22)]);
+        let out = wrap_markup_at_char_ranges(markup, &[(17, 22)], &crate::theme::active());
         // plain indices: "quirk"=0..5, " sibling of "=5..17, "quirk"=17..22.
         assert_eq!(
             out,
@@ -639,7 +750,7 @@ mod wrap_markup_tests {
         // overlaps the <b> run → the amber span must CLOSE before <b> and reopen inside it
         // (never straddle the tag), staying well-nested.
         let markup = "a <b>bold</b> c";
-        let out = wrap_markup_at_char_ranges(markup, &[(0, 6)]);
+        let out = wrap_markup_at_char_ranges(markup, &[(0, 6)], &crate::theme::active());
         // chars: a(0) ' '(1) b(2)o(3)l(4)d(5) ' '(6) c(7). Range 0..6 = "a bold".
         assert_eq!(out, format!("{}<b>{}</b> c", hl("a "), hl("bold")));
     }
@@ -649,7 +760,7 @@ mod wrap_markup_tests {
         // Highlight spans the entire <b>bold</b> plus surroundings → the span closes/reopens
         // around each tag (valid, if slightly more spans) and every visible char is amber.
         let markup = "x<b>y</b>z";
-        let out = wrap_markup_at_char_ranges(markup, &[(0, 3)]);
+        let out = wrap_markup_at_char_ranges(markup, &[(0, 3)], &crate::theme::active());
         assert_eq!(out, format!("{}<b>{}</b>{}", hl("x"), hl("y"), hl("z")));
     }
 
@@ -657,14 +768,17 @@ mod wrap_markup_tests {
     fn entity_counts_as_one_plain_char() {
         // markup "a &amp; b" ← plain "a & b"; highlight the '&' (char 2).
         let markup = "a &amp; b";
-        let out = wrap_markup_at_char_ranges(markup, &[(2, 3)]);
+        let out = wrap_markup_at_char_ranges(markup, &[(2, 3)], &crate::theme::active());
         assert_eq!(out, format!("a {} b", hl("&amp;")));
     }
 
     #[test]
     fn empty_ranges_returns_markup_unchanged() {
         let markup = "<tt>x</tt>";
-        assert_eq!(wrap_markup_at_char_ranges(markup, &[]), markup);
+        assert_eq!(
+            wrap_markup_at_char_ranges(markup, &[], &crate::theme::active()),
+            markup
+        );
     }
 }
 
@@ -679,14 +793,14 @@ mod annotate_markup_tests {
     /// matters is the WRAPPING (which chars get highlighted), not the colour; the
     /// colour's own resolution is `theme`'s to test.
     fn hl(s: &str) -> String {
-        format!("{}{s}{ANN_HL_CLOSE}", ann_hl_open())
+        format!("{}{s}{ANN_HL_CLOSE}", ann_hl_open(&crate::theme::active()))
     }
 
     #[test]
     fn wraps_a_single_claim_range_and_escapes_the_rest() {
         let plain = "the earth is flat here";
         // "flat" at chars 13..17
-        let markup = annotate_markup(plain, &[(13, 17)]);
+        let markup = annotate_markup(plain, &[(13, 17)], &crate::theme::active());
         assert_eq!(markup, format!("the earth is {} here", hl("flat")));
     }
 
@@ -695,21 +809,27 @@ mod annotate_markup_tests {
         let plain = "a <b> & c";
         // highlight "b" at char 3 (0:a 1:  2:< 3:b 4:> 5:  6:& 7:  8:c) — wait
         // chars: 0'a' 1' ' 2'<' 3'b' 4'>' 5' ' 6'&' 7' ' 8'c'
-        let markup = annotate_markup(plain, &[(3, 4)]);
+        let markup = annotate_markup(plain, &[(3, 4)], &crate::theme::active());
         assert_eq!(markup, format!("a &lt;{}&gt; &amp; c", hl("b")));
     }
 
     #[test]
     fn merges_overlapping_ranges() {
         let plain = "abcdefgh";
-        let markup = annotate_markup(plain, &[(1, 4), (3, 6)]);
+        let markup = annotate_markup(plain, &[(1, 4), (3, 6)], &crate::theme::active());
         assert_eq!(markup, format!("a{}gh", hl("bcdef")));
     }
 
     #[test]
     fn empty_or_out_of_range_highlights_leave_plain_escaped() {
-        assert_eq!(annotate_markup("x & y", &[]), "x &amp; y");
-        assert_eq!(annotate_markup("hello", &[(10, 20)]), "hello");
+        assert_eq!(
+            annotate_markup("x & y", &[], &crate::theme::active()),
+            "x &amp; y"
+        );
+        assert_eq!(
+            annotate_markup("hello", &[(10, 20)], &crate::theme::active()),
+            "hello"
+        );
     }
 }
 

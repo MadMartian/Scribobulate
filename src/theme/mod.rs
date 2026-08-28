@@ -43,6 +43,7 @@
 //! | [`resolve`] | The floors, the clamp ranges, and the one function that applies them |
 //! | this module | The search path, the built-in/user merge, and the active-theme cell |
 
+mod decor;
 pub(crate) mod keys;
 mod model;
 mod resolve;
@@ -53,7 +54,11 @@ mod value;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use keys::{BULLET_TIERS, HEADING_LEVELS};
+pub(crate) use decor::{
+    marker_choice, marker_glyph, marker_sprite, Band, BandPaint, Fill, MarkerChoice, MarkerKind,
+    MarkerSubstitute,
+};
+pub(crate) use keys::{heading_slot, BULLET_TIERS, HEADING_LEVELS};
 pub(crate) use model::{ListGlyphs, Metrics, Sprites, Theme};
 pub(crate) use spec::ThemeSpec;
 pub(crate) use value::{
@@ -84,6 +89,28 @@ pub(crate) const SYSTEM_ID: &str = "system";
 #[derive(Debug, Clone)]
 pub(crate) struct Themes {
     specs: BTreeMap<String, ThemeSpec>,
+}
+
+/// One row of the theme picker: what to select, what to show, and the glyph to show
+/// beside it.
+///
+/// A NAMED struct rather than the `(String, String, Option<String>)` this used to be.
+/// The triple carried two indistinguishable `String`s, so every one of its eleven call
+/// and test sites re-derived which was which from position — and a transposition
+/// between the id and the label compiles, then selects a theme named after its own
+/// display text. Field names make that unrepresentable (POLICY § Code style:
+/// destructure by name).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChooserEntry {
+    /// The theme id — what `set_active` takes, never what a human reads.
+    pub(crate) id: String,
+    /// The theme's display name, with no symbol prefix. This is also the sort key, so
+    /// a theme's glyph cannot decide where it appears in the list.
+    pub(crate) label: String,
+    /// The theme's own picker glyph, `None` where it states none. A theme's symbol is
+    /// its OWN — it is never inherited from `[themes.system]`, or every unnamed theme
+    /// wears the base theme's window glyph.
+    pub(crate) symbol: Option<String>,
 }
 
 impl Themes {
@@ -165,26 +192,27 @@ impl Themes {
     /// Theme ids paired with display names, in chooser order: the system theme
     /// first (it is the default), then every other theme by display name.
     /// Deterministic — TOML tables carry no authoring order we could honour.
-    pub(crate) fn chooser_list(&self) -> Vec<(String, String, Option<String>)> {
-        let entry = |id: &String, s: &ThemeSpec| {
-            (
-                id.clone(),
-                s.own_text(&keys::NAME)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| id.clone()),
-                s.own_text(&keys::SYMBOL).map(str::to_string),
-            )
+    pub(crate) fn chooser_list(&self) -> Vec<ChooserEntry> {
+        let entry = |id: &str, s: &ThemeSpec| ChooserEntry {
+            id: id.to_string(),
+            label: s
+                .own_text(&keys::NAME)
+                .map(str::to_string)
+                .unwrap_or_else(|| id.to_string()),
+            symbol: s.own_text(&keys::SYMBOL).map(str::to_string),
         };
-        let mut rest: Vec<(String, String, Option<String>)> = self
+        let mut rest: Vec<ChooserEntry> = self
             .specs
             .iter()
             .filter(|(id, _)| id.as_str() != SYSTEM_ID)
             .map(|(id, s)| entry(id, s))
             .collect();
-        rest.sort_by(|a, b| a.1.cmp(&b.1)); // by NAME (not the symbol-prefixed label)
+        // By NAME, not by the symbol-prefixed label — a theme's glyph must not decide
+        // where it sorts.
+        rest.sort_by(|a, b| a.label.cmp(&b.label));
         let mut out = Vec::with_capacity(rest.len() + 1);
         if let Some(sys) = self.specs.get(SYSTEM_ID) {
-            out.push(entry(&SYSTEM_ID.to_string(), sys));
+            out.push(entry(SYSTEM_ID, sys));
         }
         out.extend(rest);
         out
@@ -206,14 +234,19 @@ impl Themes {
     /// Resolve `id` against the resolution order's links 1 and 2. An unknown id
     /// resolves as the system theme, so a stale persisted selection (a theme the
     /// user deleted) degrades to the default instead of failing.
+    /// **No carve-out for [`SYSTEM_ID`], deliberately.** This used to blank `selected`
+    /// for that id, which bought nothing — `Sources::walk` reads `[selected, system]`
+    /// and returns the first hit, so the walk is idempotent when the two are the same
+    /// spec. Its only *effect* was to destroy the system theme's own display name,
+    /// which then required a compensating branch in a **different file**
+    /// (`Theme::resolve`'s `name`) to put back. Deleting either one alone made the
+    /// system theme silently become `"system"` in every picker, nothing linked them,
+    /// and no test covered the coupling — the same shape as ScrAP-324, where one
+    /// origin got a step and the other did not. Both are gone; the module doc's claim
+    /// that `SYSTEM_ID` is "not privileged in any other way" is true again.
     pub(crate) fn resolve(&self, id: &str) -> Theme {
         let system = self.specs.get(SYSTEM_ID).cloned().unwrap_or_default();
-        let selected = self
-            .specs
-            .get(id)
-            .filter(|_| id != SYSTEM_ID)
-            .cloned()
-            .unwrap_or_default();
+        let selected = self.specs.get(id).cloned().unwrap_or_default();
         Theme::resolve(id, &selected, &system)
     }
 }
@@ -249,27 +282,80 @@ fn load() -> Themes {
     themes
 }
 
+/// The directories the search path is derived from, snapshotted once.
+///
+/// **A data seam, not a trait.** `find_themes_file` used to read
+/// `config::user_config_dir()`, `glib::user_data_dir()` and `glib::system_data_dirs()`
+/// inline and take no parameters, so every rule SCHEMA states about the search path —
+/// row ordering, `$XDG_DATA_DIRS` being *iterated* rather than hard-coded to
+/// `/usr/share`, first-match-wins, the returned directory being the found file's own
+/// parent (which is the sprite origin) — was untestable. The only way to reach it was
+/// to mutate `std::env`, which is process-global and breaks `cargo test`'s
+/// parallelism: a hazard, not a test. SCHEMA records that this is not hypothetical —
+/// the ordering once made user theme overrides unreachable on Windows outright.
+///
+/// A trait object for one call site would be over-abstraction; the split that buys the
+/// tests is between *"where would I look?"* (pure, over this struct) and *"read the
+/// first one that exists"* (thin I/O).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SearchBases {
+    /// The user's configuration directory — row 1, the override.
+    pub config: Option<std::path::PathBuf>,
+    /// The per-user data directory — row 2.
+    pub data_home: std::path::PathBuf,
+    /// The system data directories, **in order** — row 3, one candidate each.
+    pub system_dirs: Vec<std::path::PathBuf>,
+}
+
+impl SearchBases {
+    /// The bases this host actually offers.
+    ///
+    /// ⚠️ **`XDG_CONFIG_HOME` is snapshotted, never read through GLib** — see
+    /// [`load`]'s note. `XDG_DATA_HOME`/`XDG_DATA_DIRS` are untouched by that
+    /// redirect, so the GLib helpers are correct and order-independent for those.
+    fn from_env() -> SearchBases {
+        SearchBases {
+            config: crate::config::user_config_dir(),
+            data_home: glib::user_data_dir(),
+            system_dirs: glib::system_data_dirs(),
+        }
+    }
+
+    /// Every candidate path, **in search order**. Pure.
+    ///
+    /// The order is SCHEMA's three-row table: the user override first, then the
+    /// per-user install, then each system install directory in the order the platform
+    /// gave them. `system_dirs` is *iterated* and never hard-coded to `/usr/share` —
+    /// on a KDE box its first entry is `/usr/share/plasma`, so a hard-coded path works
+    /// on GNOME and fails there.
+    pub(crate) fn candidates(&self) -> Vec<std::path::PathBuf> {
+        let leaf = |dir: &std::path::Path| dir.join("scribobulate").join("themes.toml");
+        let mut paths = Vec::with_capacity(2 + self.system_dirs.len());
+        if let Some(dir) = &self.config {
+            paths.push(leaf(dir));
+        }
+        paths.push(leaf(&self.data_home));
+        paths.extend(self.system_dirs.iter().map(|d| leaf(d)));
+        paths
+    }
+}
+
 /// Returns the file's text and the directory it was read from — sprite references
 /// resolve against that directory, never against the current working directory.
 fn find_themes_file() -> Option<(String, std::path::PathBuf)> {
-    let mut paths: Vec<std::path::PathBuf> = Vec::new();
-    // 1. user override — from the config path snapshotted before the redirect.
-    if let Some(dir) = crate::config::user_config_dir() {
-        paths.push(dir.join("scribobulate").join("themes.toml"));
-    }
-    // 2. per-user install, then 3. system install. Iterate `system_data_dirs()`;
-    // never hard-code `/usr/share` — on a KDE box its first entry is
-    // `/usr/share/plasma`, and a hard-coded path would work on GNOME and fail here.
-    paths.push(
-        glib::user_data_dir()
-            .join("scribobulate")
-            .join("themes.toml"),
-    );
-    for dir in glib::system_data_dirs() {
-        paths.push(dir.join("scribobulate").join("themes.toml"));
-    }
+    read_first_existing(&SearchBases::from_env().candidates())
+}
+
+/// The thin I/O half: read the **first** candidate that exists, and report the
+/// directory it came from.
+///
+/// First-match-wins is the contract, not an implementation detail — a later file does
+/// NOT merge over an earlier one, so a system install cannot add keys to a user's own
+/// themes file. The directory is the found file's own parent because that is the
+/// sprite origin (`crate::sprite::SpriteOrigin::Directory`).
+fn read_first_existing(paths: &[std::path::PathBuf]) -> Option<(String, std::path::PathBuf)> {
     for p in paths {
-        if let Ok(text) = std::fs::read_to_string(&p) {
+        if let Ok(text) = std::fs::read_to_string(p) {
             log::debug!("theme: loaded themes from {}", p.display());
             let dir = p
                 .parent()
@@ -328,16 +414,57 @@ pub(crate) fn set_active(id: &str) -> std::rc::Rc<Theme> {
     resolved
 }
 
-/// Make an already-resolved [`Theme`] active. Test-only seam: it lets a test
-/// activate a theme built from an inline fragment (via
+/// Make an already-resolved [`Theme`] active **for the life of the returned guard**.
+///
+/// Test-only seam: it lets a test activate a theme built from an inline fragment (via
 /// [`Themes::merge_over_for_test`]) without installing a file on the search path.
 /// Production code always goes through [`set_active`], so the active theme can only
 /// ever be one the registry actually holds.
 ///
-/// Gated on the integration feature because only the realized-view tests need it —
-/// the pure tests resolve a `Theme` and assert on it directly, without ever making
-/// it the app-wide active one.
-#[cfg(all(test, feature = "gtk-integration-tests"))]
-pub(crate) fn set_active_for_test(theme: Theme) {
+/// Test-only, and NOT gated on the integration feature: a display-free test needs it
+/// too. `pangospan`'s parity check asserts that the preview's wrappers — which resolve
+/// against the app-wide active theme — emit the same span the export sink builds from
+/// an explicit one, and there is no way to ask that question without setting the
+/// active theme.
+///
+/// # Why a guard and not a setter
+///
+/// The active theme and the sprite caches are PROCESS-GLOBAL, and every `#[gtktest]`
+/// body in the binary shares one thread — so a test that panicked mid-body used to
+/// leave whichever theme it had installed active for whatever ran next, turning one
+/// failure into a spurious failure, or a spurious PASS, somewhere unrelated. The
+/// restore used to be a trailing `set_active(SYSTEM_ID)` on the happy path, which is
+/// exactly the shape `sdd/POLICY.md` § Unit tests prescribes an RAII guard for: `Drop`
+/// runs on the panic path too, and it restores the theme that was active BEFORE rather
+/// than assuming it was System.
+#[cfg(test)]
+#[must_use = "the guard restores the previous active theme when it is dropped; \
+              binding it to `_` drops it immediately and undoes the activation"]
+pub(crate) fn activate_for_test(theme: Theme) -> ActiveThemeGuard {
+    let previous = ACTIVE.with(|a| a.borrow_mut().take());
+    // Sprite textures are cached by REFERENCE, not by theme, so a swap must clear them
+    // on the way in as well as on the way out — otherwise a theme installed here can
+    // be served a texture the previous one decoded.
+    crate::sprite::clear_cache();
     ACTIVE.with(|a| *a.borrow_mut() = Some(std::rc::Rc::new(theme)));
+    ActiveThemeGuard { previous }
+}
+
+/// Restores the process-global active theme and clears the sprite caches on `Drop` —
+/// including the panic path, which is the whole point.
+#[cfg(test)]
+pub(crate) struct ActiveThemeGuard {
+    /// What was active before, `None` when nothing had resolved a theme yet. Restoring
+    /// `None` rather than System keeps the guard honest about the state it found: a
+    /// test that runs first must not leave the process looking like one that had
+    /// already resolved a theme.
+    previous: Option<std::rc::Rc<Theme>>,
+}
+
+#[cfg(test)]
+impl Drop for ActiveThemeGuard {
+    fn drop(&mut self) {
+        crate::sprite::clear_cache();
+        ACTIVE.with(|a| *a.borrow_mut() = self.previous.take());
+    }
 }

@@ -28,7 +28,8 @@
 //! decoration no shipped theme but one asks for.
 //!
 //! So the flat rule stays exactly the `GtkSeparator` it has always been, and this
-//! widget is built **only** where `theme.sprites.rule` resolved. "Unstated ⇒
+//! widget is built **only** where `Theme::rule_decor` answered with a sprite that
+//! decoded. "Unstated ⇒
 //! byte-identical" is then true by construction rather than by care: the untouched path
 //! is the untouched code.
 //!
@@ -101,19 +102,22 @@ mod imp {
             };
             let obj = self.obj();
             let (w, h) = (obj.width() as f32, obj.height() as f32);
-            if w <= 0.0 || h <= 0.0 || tex.width() <= 0 || tex.height() <= 0 {
-                return;
-            }
-            // The same two calls the blockquote bar's tile uses: one repeat node over
-            // the whole widget, one texture node at the tile's natural size inside it.
-            // Clipped to the widget, so a tile taller than the rule shows a slice of
-            // itself rather than overflowing — the documented consequence the bar's
-            // `blockquote_bar_width` has, here decided by the tile itself.
+            // The SAME seam the heading band and the blockquote bar tile through, which
+            // is what `sdd/THEMING.md` has claimed all along. The zero-dimension guard
+            // this site used to carry alone now lives inside it, so the two `codeview`
+            // sites cannot go on lacking it. Clipped to the widget, so a tile taller
+            // than the rule shows a slice of itself rather than overflowing — the
+            // documented consequence the bar's `blockquote_bar_width` has, here decided
+            // by the tile itself.
             let rect = graphene::Rect::new(0.0, 0.0, w, h);
-            let tile_rect = graphene::Rect::new(0.0, 0.0, tex.width() as f32, tex.height() as f32);
-            snapshot.push_repeat(&rect, Some(&tile_rect));
-            snapshot.append_texture(tex, &tile_rect);
-            snapshot.pop();
+            crate::widgets::tile_texture(
+                snapshot,
+                &rect,
+                // A standalone widget: its rect IS its own coordinate space, so the
+                // origin and the rect coincide and the phase is fixed either way.
+                crate::widgets::TileOrigin::Widget,
+                tex,
+            );
         }
     }
 }

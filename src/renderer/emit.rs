@@ -8,8 +8,21 @@ use super::{syntect, Renderer};
 use crate::tags::TagName;
 use gtk::prelude::*;
 use gtk::TextTag;
-use pulldown_cmark::HeadingLevel;
 use syntect::easy::HighlightLines;
+
+/// The buffer tag each heading slot renders with, indexed by
+/// [`crate::theme::heading_slot`].
+///
+/// A table rather than a `match`, so the fold is not restated here: a `match` over
+/// `HeadingLevel` has to name the h5/h6 collapse itself, which is how this became one
+/// of five hand-rolled copies of one rule.
+const HEADING_TAGS: [TagName; crate::theme::HEADING_LEVELS] = [
+    TagName::H1,
+    TagName::H2,
+    TagName::H3,
+    TagName::H4,
+    TagName::H5,
+];
 
 /// Whether `iter`'s line has already been given a list-item content margin — i.e. it
 /// carries any tag from the `li-*` family. Used to keep the "exactly one `li-*` tag per
@@ -92,17 +105,11 @@ impl Renderer {
             apply(tag);
         }
         if let Some(level) = self.heading {
-            apply(match level {
-                HeadingLevel::H1 => TagName::H1,
-                HeadingLevel::H2 => TagName::H2,
-                HeadingLevel::H3 => TagName::H3,
-                HeadingLevel::H4 => TagName::H4,
-                // h5 and h6 both fold onto the deepest rendered tag; there is no
-                // distinct h6 tier on any surface (a deliberate fold-into-deepest,
-                // the same GTK would apply to any over-max level). See TECH.md
-                // § "Heading levels (h1–h5; h6 folds to h5)".
-                _ => TagName::H5,
-            });
+            // Indexed by `theme::heading_slot`, the one definition of the h6→h5
+            // fold, rather than re-deriving it here — this arm was one of five
+            // hand-rolled copies. See TECH.md § "Heading levels (h1–h5; h6 folds
+            // to h5)".
+            apply(HEADING_TAGS[crate::theme::heading_slot(level as u8)]);
         }
         self.trailing_newlines = 0;
         self.at_start = false;
@@ -339,6 +346,7 @@ mod code_block_per_line_tests {
 
         let mut r = Renderer::new(
             buf.clone(),
+            crate::theme::active(),
             "InspiredGitHub".to_string(),
             None,
             false,

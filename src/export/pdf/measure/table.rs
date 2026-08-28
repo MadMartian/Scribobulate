@@ -17,7 +17,7 @@ use super::super::super::markup::inline_markup;
 use super::super::super::paginate::Fragment;
 use super::super::super::{Align, ExportDoc, Inline};
 use super::super::decide::table_column_count;
-use super::super::geometry::{pango_to_pt, PT_PER_PX};
+use super::super::geometry::{pango_to_pt, px_to_pt};
 use super::super::pdftable;
 use super::super::{
     CellWidths, LayoutSpec, LineKind, QuoteRef, TableCell, BASE_PT, BLOCK_GAP_PT,
@@ -25,6 +25,55 @@ use super::super::{
 };
 use super::Layouter;
 use gtk::pango;
+
+/// Which row this is, and whether it must stay with the next one.
+///
+/// A NAMED value, not two adjacent `bool`s at the end of a nine-parameter signature.
+/// The two were transposable — same type, same position class — in the ONE module that
+/// introduces three dedicated structs (`Grid`, `Chrome`, `CellWidths`) specifically to
+/// remove that hazard, and it carried an `#[allow(clippy::too_many_arguments)]` to say
+/// so. `is_head` and `keep_with_next` are not independent in practice either: a header
+/// always keeps company with the row under it, and folding them into one value is what
+/// makes the two callers state their intent rather than their flags.
+/// The measured grid and the theme's chrome, which always travel together.
+///
+/// One borrow rather than two parameters: `fit` computes the grid FROM the chrome, so a
+/// row laid out against one and drawn with the other is a table whose reserved space and
+/// drawn space disagree. Bundling them is also what brings `table_row` inside clippy's
+/// argument limit without an `#[allow]` — the limit was flagging a real thing, which is
+/// that a nine-parameter signature in this module was carrying decisions that belong in
+/// values.
+#[derive(Clone, Copy)]
+pub(super) struct TableGeometry<'a> {
+    pub(super) grid: &'a pdftable::Grid,
+    pub(super) chrome: &'a pdftable::Chrome,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RowKind {
+    /// The header row. Carries `keep_with_next` because a header alone at the foot of a
+    /// page is the break this exists to prevent — `false` only where the table has no
+    /// body for it to keep company with.
+    Head { keep_with_next: bool },
+    /// An ordinary body row: never kept with the next, so a long table breaks between
+    /// any two of its rows.
+    Body,
+}
+
+impl RowKind {
+    fn is_head(self) -> bool {
+        matches!(self, RowKind::Head { .. })
+    }
+
+    fn keep_with_next(self) -> bool {
+        matches!(
+            self,
+            RowKind::Head {
+                keep_with_next: true
+            }
+        )
+    }
+}
 
 impl Layouter<'_> {
     /// A table is laid out one **row** at a time on a measured column grid, each row an
@@ -79,42 +128,59 @@ impl Layouter<'_> {
 
         // Pass 2 — the grid decides, then every row is built against it.
         let grid = pdftable::fit(&wants, self.printable_width(indent), &chrome);
+        let geometry = TableGeometry {
+            grid: &grid,
+            chrome: &chrome,
+        };
         if !head_markup.is_empty() {
             self.table_row(
                 &head_markup,
                 aligns,
-                &grid,
-                &chrome,
+                geometry,
                 indent,
                 quote,
-                true,
-                // The header keeps company with the first body row.
-                !rows.is_empty(),
+                // The header keeps company with the first body row — where there is one.
+                RowKind::Head {
+                    keep_with_next: !rows.is_empty(),
+                },
             );
         }
         for row in &body_markup {
-            self.table_row(row, aligns, &grid, &chrome, indent, quote, false, false);
+            self.table_row(row, aligns, geometry, indent, quote, RowKind::Body);
         }
     }
 
     /// The theme's table chrome in points — no literal, per THEMING.md.
+    ///
+    /// Through `px_to_pt` rather than by multiplying `PT_PER_PX` here. The value is the
+    /// same; the point is that it is the SAME ROUTE every other `Metrics` read in this
+    /// sink takes, so "is this key converted?" has one answer to look up instead of one
+    /// per key. It was coherent per key and wrong overall — `blockquote_bar_width`,
+    /// `rule_space` and `heading_band_padding` were read straight as points while these
+    /// three converted, so a reader checking any one metric concluded the sink was right.
     fn table_chrome(&self) -> pdftable::Chrome {
         let m = &self.theme.metrics;
         pdftable::Chrome {
-            padding_h: f64::from(m.table_cell_padding_h) * PT_PER_PX,
-            padding_v: f64::from(m.table_cell_padding_v) * PT_PER_PX,
-            border: f64::from(m.table_border_width) * PT_PER_PX,
+            padding_h: px_to_pt(m.table_cell_padding_h),
+            padding_v: px_to_pt(m.table_cell_padding_v),
+            border: px_to_pt(m.table_border_width),
         }
     }
 
     /// One row's cells as Pango markup, bolded when it is the header.
+    ///
+    /// `<b>` is Pango's own "bolder than the base", which is a different number from the
+    /// one the theme stated — so a theme setting `bold_weight = 800` got 800 for
+    /// `**bold**` on this very page and Pango's default bold in the header beside it.
+    /// `Typography::bold_attr` is the one spelling of that key, already shared by every
+    /// surface for inline bold (F-BOLD-001).
     fn row_markup(&self, cells: &[Vec<Inline>], doc: &ExportDoc, head: bool) -> Vec<String> {
         cells
             .iter()
             .map(|cell| {
                 let markup = inline_markup(cell, doc, self.theme);
                 if head {
-                    format!("<b>{markup}</b>")
+                    format!("<span{}>{markup}</span>", self.theme.typography.bold_attr())
                 } else {
                     markup
                 }
@@ -125,14 +191,19 @@ impl Layouter<'_> {
     /// How wide a cell wants to be, both ways.
     fn cell_widths(&self, markup: &str) -> CellWidths {
         let layout = self.cell_layout(markup, None, Align::None);
-        let max = pango_to_pt(layout.extents().1.width());
+        // `extents()` answers (ink, logical); the LOGICAL rect is the one a column
+        // width is measured from — ink stops at the glyphs and would drop a trailing
+        // space's advance.
+        let (_ink, logical) = layout.extents();
+        let max = pango_to_pt(logical.width());
 
         // Min-content: squeeze the layout to nothing in `Word` mode, which refuses to
         // break inside a word, so the widest line that comes back IS the widest word.
         // `WordChar` would happily split one and report a meaningless 1pt.
         layout.set_wrap(pango::WrapMode::Word);
         layout.set_width(1);
-        let min = pango_to_pt(layout.extents().1.width());
+        let (_ink, logical) = layout.extents();
+        let min = pango_to_pt(logical.width());
 
         CellWidths { max, min }
     }
@@ -143,6 +214,7 @@ impl Layouter<'_> {
         self.layout_of(
             markup,
             LayoutSpec {
+                family: None,
                 width_pt: text_width,
                 size_pt: BASE_PT,
                 // A cell's weight comes from its markup (the header row is bolded there),
@@ -160,18 +232,16 @@ impl Layouter<'_> {
 
     /// Build and push one row: every cell laid out in its column, the row's height the
     /// tallest of them, and the whole thing **one** fragment.
-    #[allow(clippy::too_many_arguments)]
     fn table_row(
         &mut self,
         cells: &[String],
         aligns: &[Align],
-        grid: &pdftable::Grid,
-        chrome: &pdftable::Chrome,
+        geometry: TableGeometry<'_>,
         indent: f64,
         quote: Option<QuoteRef>,
-        is_head: bool,
-        keep_with_next: bool,
+        kind: RowKind,
     ) {
+        let TableGeometry { grid, chrome } = geometry;
         let mut drawn = Vec::with_capacity(cells.len());
         let mut text_height = 0.0_f64;
         for (index, markup) in cells.iter().enumerate() {
@@ -183,7 +253,8 @@ impl Layouter<'_> {
             };
             let align = aligns.get(index).copied().unwrap_or(Align::None);
             let layout = self.cell_layout(markup, Some(column.text_width), align);
-            let height = pango_to_pt(layout.extents().1.height());
+            let (_ink, logical) = layout.extents();
+            let height = pango_to_pt(logical.height());
             if height > text_height {
                 text_height = height;
             }
@@ -204,16 +275,47 @@ impl Layouter<'_> {
                 chrome: *chrome,
                 scale: grid.scale,
                 box_height,
-                is_head,
+                is_head: kind.is_head(),
             },
             Fragment {
+                space_after: 0.0,
                 height: box_height * grid.scale,
-                space_before: if is_head { BLOCK_GAP_PT } else { 0.0 },
-                keep_with_next,
+                space_before: if kind.is_head() { BLOCK_GAP_PT } else { 0.0 },
+                keep_with_next: kind.keep_with_next(),
             },
             indent,
             box_height * grid.scale,
             quote,
         );
+    }
+}
+
+#[cfg(test)]
+mod row_kind_tests {
+    use super::RowKind;
+
+    /// `is_head` and `keep_with_next` were two adjacent `bool` parameters at the end of
+    /// a nine-argument signature — transposable, same type, and behind an
+    /// `#[allow(clippy::too_many_arguments)]`. Folding them into one value makes the
+    /// transposition unrepresentable; this pins the mapping the two callers rely on.
+    ///
+    /// The pairing is not free either way: a body row that kept company with the next
+    /// would make a long table indivisible, and a header that did not would let a page
+    /// break fall between the header and its first row — which is the break the flag
+    /// exists to prevent.
+    #[test]
+    fn a_header_keeps_company_with_its_body_and_a_body_row_never_does() {
+        let with_body = RowKind::Head {
+            keep_with_next: true,
+        };
+        assert!(with_body.is_head() && with_body.keep_with_next());
+
+        // A header with no body under it: still a header, but there is nothing to keep.
+        let alone = RowKind::Head {
+            keep_with_next: false,
+        };
+        assert!(alone.is_head() && !alone.keep_with_next());
+
+        assert!(!RowKind::Body.is_head() && !RowKind::Body.keep_with_next());
     }
 }

@@ -1,7 +1,7 @@
 //! Heading keys: the ink, the face, the rule and the band — each stated bare for
 //! every level or narrowed to one (TDD 18.21/18.22/18.25/18.32).
 
-use super::super::resolve::*;
+use super::super::keys;
 use super::super::value::*;
 use super::super::*;
 
@@ -13,7 +13,7 @@ fn heading_color_is_opt_in() {
     assert!(Themes::builtin().resolve("sepia").heading_color.is_none());
     let sw = Themes::builtin().resolve("synthwave");
     assert_eq!(
-        crate::palette::to_hex(sw.heading_color.expect("synthwave sets it")),
+        crate::palette::to_hex_opaque(sw.heading_color.expect("synthwave sets it")),
         "#ffc21e"
     );
 }
@@ -35,9 +35,11 @@ fn heading_font_is_opt_in_and_sanitised() {
 /// they are one contract: a stated slot wins, an EMPTY or absent slot falls back to
 /// the theme's singular key, and the array merges from a user file.
 ///
-/// The merge half is not decoration. A new key has to reach `overlay`'s `take!`
-/// list, and omitting it compiles, leaves every built-in theme working, and silently
-/// drops EVERY user override — the shipped `list_marker` bug, pinned below.
+/// The merge half is not decoration, though the mechanism it guards has changed. It
+/// once watched `overlay`'s hand-written per-key merge list, where an omission compiled,
+/// left every built-in theme working, and silently dropped every user override (the
+/// shipped `list_marker` bug, pinned below). The registry retired that list; what
+/// remains is that a NARROWED spelling survives the merge and lands on its own level.
 #[test]
 fn per_level_heading_colour_and_face_fall_back_and_merge() {
     let themes = Themes::builtin();
@@ -62,13 +64,13 @@ fn per_level_heading_colour_and_face_fall_back_and_merge() {
     );
     let t = synth.resolve("sepia");
     assert_eq!(
-        crate::palette::to_hex(t.heading_colors[0].expect("h1 is stated")),
+        crate::palette::to_hex_opaque(t.heading_colors[0].expect("h1 is stated")),
         "#ff3caf"
     );
-    let base = crate::palette::to_hex(t.heading_color.expect("theme sets one"));
+    let base = crate::palette::to_hex_opaque(t.heading_color.expect("theme sets one"));
     for level in 1..5 {
         assert_eq!(
-            crate::palette::to_hex(t.heading_colors[level].expect("falls back")),
+            crate::palette::to_hex_opaque(t.heading_colors[level].expect("falls back")),
             base,
             "h{} did not fall back to heading_color",
             level + 1
@@ -95,7 +97,7 @@ fn per_level_heading_colour_and_face_fall_back_and_merge() {
         .iter()
         .all(Option::is_none));
 
-    // The `take!`-list guard: a user override of a theme that ships no array.
+    // A user override of a theme that states no per-level value of its own.
     let mut user = Themes::builtin();
     user.merge_over(
         Themes::parse_compiled(
@@ -106,7 +108,7 @@ fn per_level_heading_colour_and_face_fall_back_and_merge() {
     );
     let sep = user.resolve("sepia");
     assert_eq!(
-        crate::palette::to_hex(sep.heading_colors[1].expect("h2 override merged")),
+        crate::palette::to_hex_opaque(sep.heading_colors[1].expect("h2 override merged")),
         "#123456"
     );
     assert_eq!(
@@ -133,8 +135,8 @@ fn an_unparseable_heading_level_falls_back_to_the_bare_key() {
     );
     let sw = themes.resolve("synthwave");
     assert_eq!(
-        crate::palette::to_hex(sw.heading_colors[0].expect("fell back")),
-        crate::palette::to_hex(sw.heading_color.unwrap())
+        crate::palette::to_hex_opaque(sw.heading_colors[0].expect("fell back")),
+        crate::palette::to_hex_opaque(sw.heading_color.unwrap())
     );
     assert_eq!(
         sw.heading_fonts[0].as_ref().map(|f| f.as_str()),
@@ -155,8 +157,8 @@ fn the_heading_rule_and_space_above_are_absent_under_system() {
 }
 
 /// TDD 18.22 — both sides resolve independently, each with its own colour, and both
-/// merge from a user file (the `take!`-list guard again — four new keys, four ways
-/// to silently drop every user override).
+/// merge from a user file. Four keys, each of which must reach the resolved `Theme`;
+/// the per-key merge list this once guarded no longer exists.
 #[test]
 fn a_theme_states_each_heading_rule_side_independently_and_merges() {
     // Synthetic rather than a built-in theme's own content on purpose — content is
@@ -179,7 +181,7 @@ fn a_theme_states_each_heading_rule_side_independently_and_merges() {
         [LineStyle::Single; HEADING_LEVELS]
     );
     assert_eq!(
-        crate::palette::to_hex(t.heading_rule.underline_color[0].expect("stated")),
+        crate::palette::to_hex_opaque(t.heading_rule.underline_color[0].expect("stated")),
         "#3e6fa0"
     );
     // This theme states no overline, so that side stays off.
@@ -215,7 +217,7 @@ fn a_theme_states_each_heading_rule_side_independently_and_merges() {
         gtk::pango::Underline::Error
     );
     assert_eq!(
-        crate::palette::to_hex(sep.heading_rule.underline_color[0].expect("merged")),
+        crate::palette::to_hex_opaque(sep.heading_rule.underline_color[0].expect("merged")),
         "#222222"
     );
     // A level the theme narrows nothing for keeps the key's own floor (TDD 18.32),
@@ -236,18 +238,22 @@ fn an_unknown_line_style_falls_back_to_the_floor() {
     );
     assert_eq!(
         themes.resolve("sepia").heading_rule.underline,
-        [F_HEADING_UNDERLINE; HEADING_LEVELS]
+        [keys::HEADING_UNDERLINE.bound.line_floor(); HEADING_LEVELS]
     );
 }
 
-/// TDD 18.25 / 18.2 — the heading band is absent on every level under System, and
-/// `is_absent` keys on the FILLS: a theme that describes a band's shape without
-/// stating a fill has described a decoration it never asked for.
+/// TDD 18.25 / 18.2 — the heading band is absent on every level under System, and a
+/// theme that describes a band's *shape* without stating either a fill or a sprite has
+/// described a decoration it never asked for.
 #[test]
-fn the_heading_band_is_absent_until_a_theme_states_a_fill() {
+fn the_heading_band_is_absent_until_a_theme_states_a_fill_or_a_sprite() {
     let sys = Themes::builtin().resolve(SYSTEM_ID);
-    assert!(sys.heading_band.is_absent());
-    assert_eq!(sys.metrics.heading_band_radius, F_HEADING_BAND_RADIUS);
+    assert!(sys.bands_nothing());
+    // Against the SHIPPED value, not against the key's own floor. Comparing a
+    // floored resolution to that same floor is a tautology that holds whatever the
+    // shipped value says — which is what this assertion used to be, for the one
+    // floor `[themes.system]` did not state at all.
+    assert_eq!(sys.metrics.heading_band_radius, [0; HEADING_LEVELS]);
     assert!(sys.sprites.heading_band.iter().all(Option::is_none));
 
     let mut shape_only = Themes::builtin();
@@ -258,11 +264,84 @@ fn the_heading_band_is_absent_until_a_theme_states_a_fill() {
         )
         .unwrap(),
     );
-    assert!(shape_only.resolve("sepia").heading_band.is_absent());
+    assert!(shape_only.resolve("sepia").bands_nothing());
 }
 
-/// TDD 18.25 — per-level fills, a gradient stop and a radius all resolve and merge
-/// (the `take!`-list guard once more), and an unstated level carries no band.
+/// **A SPRITE alone is a band, on every surface** (SCHEMA § Headings —
+/// `heading_band_sprite` "Outranks the fill and the gradient", with no fill
+/// precondition, unlike the gradient row beside it).
+///
+/// This is the case a schema reader will write, and it used to produce **no band, no
+/// sprite, no heading inset and no log line**: all three renderers required a stated
+/// `heading_band_color` as well, agreed with each other, and disagreed with the
+/// document. ScrAP-324's class with a third case added — "the reference resolved fine
+/// and was then discarded for want of an unrelated key" is pixel-identical to "the
+/// theme stated no sprite".
+#[test]
+fn a_band_sprite_needs_no_fill_beside_it() {
+    let mut themes = Themes::builtin();
+    themes.merge_over(Themes::parse_compiled("[themes.sepia]\nname = \"Sepia\"\n").unwrap());
+    let mut t = themes.resolve("sepia");
+    assert!(t.bands_nothing(), "the fixture starts unbanded");
+    // Set the resolved reference directly: `resolve` never touches the filesystem, and
+    // this is about the PRECEDENCE rather than about sprite validation.
+    t.sprites.heading_band[0] = Some(crate::sprite::SpriteRef::File(std::path::PathBuf::from(
+        "/x/band.png",
+    )));
+    assert!(
+        !t.bands_nothing(),
+        "a sprite alone makes the document banded"
+    );
+    let decor = t.heading_band_decor(0);
+    assert!(decor.is_present(), "h1 carries a band");
+    assert!(decor.sprite.is_some());
+    // …and nothing else does, because the key was narrowed to h1.
+    assert!(!t.heading_band_decor(1).is_present());
+    // With no fill stated there is nothing to fall back to, which is what makes an
+    // undecodable sprite here an EMPTY band rather than a wrongly-coloured one.
+    assert_eq!(decor.without_sprite(), None);
+
+    // A fill beside it survives as the fallback, and the sprite still outranks it.
+    t.heading_band.fills[0] = crate::theme::parse_color("#123456");
+    let decor = t.heading_band_decor(0);
+    assert!(decor.sprite.is_some());
+    assert_eq!(
+        decor.without_sprite(),
+        Some(crate::theme::BandPaint::Flat(
+            crate::theme::parse_color("#123456").unwrap()
+        ))
+    );
+}
+
+/// A gradient's second stop with no first one renders nothing — SCHEMA says so, and it
+/// is now SAID rather than done in silence.
+#[test]
+fn a_gradient_with_no_fill_beneath_it_is_ignored_and_diagnosed() {
+    let cap = crate::testlog::capture();
+    let mut themes = Themes::builtin();
+    themes.merge_over(
+        Themes::parse_compiled(
+            "[themes.gradonly]\nheading_band_gradient_to_color_h1 = \"#ffffff\"\n",
+        )
+        .unwrap(),
+    );
+    let t = themes.resolve("gradonly");
+    assert!(
+        t.bands_nothing(),
+        "a gradient cannot conjure the band it is a second stop of"
+    );
+    assert!(
+        cap.logged(
+            log::Level::Warn,
+            "heading_band_gradient_to_color_h1 is ignored"
+        ),
+        "a discarded key that renders nothing must say so: {:?}",
+        cap.records()
+    );
+}
+
+/// TDD 18.25 — per-level fills, a gradient stop and a radius all resolve and merge,
+/// and an unstated level carries no band.
 #[test]
 fn a_theme_bands_the_levels_it_names_and_no_others() {
     // Synthetic rather than a built-in theme's own content on purpose — content is
@@ -277,13 +356,13 @@ fn a_theme_bands_the_levels_it_names_and_no_others() {
         .unwrap(),
     );
     let t = synth.resolve("sepia");
-    assert!(!t.heading_band.is_absent());
+    assert!(!t.bands_nothing());
     assert_eq!(
-        crate::palette::to_hex(t.heading_band.fills[0].expect("h1 is banded")),
+        crate::palette::to_hex_opaque(t.heading_band.fills[0].expect("h1 is banded")),
         "#6c2a92"
     );
     assert_eq!(
-        crate::palette::to_hex(t.heading_band.fills[1].expect("h2 is banded")),
+        crate::palette::to_hex_opaque(t.heading_band.fills[1].expect("h2 is banded")),
         "#9e1449"
     );
     // h3..h5 are left empty on purpose — banding every level is a stack of stripes.
@@ -304,12 +383,12 @@ fn a_theme_bands_the_levels_it_names_and_no_others() {
     let sep = themes.resolve("sepia");
     assert!(sep.heading_band.fills[0].is_none());
     assert_eq!(
-        crate::palette::to_hex(sep.heading_band.fills[1].expect("merged")),
+        crate::palette::to_hex_opaque(sep.heading_band.fills[1].expect("merged")),
         "#abcdef"
     );
     // A hostile radius is CLAMPED into the metric range, never rejected (TDD 18.11).
     assert_eq!(
         sep.metrics.heading_band_radius,
-        [METRIC_RANGE.1; HEADING_LEVELS]
+        [keys::HEADING_BAND_RADIUS.bound.int_range().max; HEADING_LEVELS]
     );
 }

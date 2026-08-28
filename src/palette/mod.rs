@@ -43,7 +43,72 @@ pub(crate) fn mix_rgba(a: gdk::RGBA, b: gdk::RGBA, t: f64) -> gdk::RGBA {
     )
 }
 
-pub(crate) fn to_hex(c: gdk::RGBA) -> String {
+/// How far a syntax theme's own background must sit from the page before it is used
+/// as the code panel. Below this the block would wash into the document, so a deeper
+/// fg-mix is used instead — see [`Palette::from_base`].
+const CODE_PANEL_MIN_CONTRAST: f64 = 1.08;
+
+/// The luminance at which a surface counts as DARK. One threshold for every such
+/// decision here: the desktop probe's ink/page pairing, the page-lightness branch
+/// `from_base` picks a syntax palette with, and the direction [`walk_to_contrast`]
+/// walks in.
+const DARK_SURFACE_LUMINANCE: f64 = 0.5;
+
+/// WCAG 2.1 AA's contrast floor for body-sized text (SC 1.4.3).
+///
+/// `pub(crate)` because the theme engine's legibility gates hold every ink a theme
+/// *states* to the same floor this module walks every ink it *derives* up to. One
+/// constant, so the two halves cannot drift apart.
+pub(crate) const WCAG_AA_TEXT: f64 = 4.5;
+
+/// How far one step of the contrast walk moves the ink toward its target, and how many
+/// steps it may take. Twenty tenths leaves the ink ~88% of the way to pure white or
+/// black, which clears AA against any fill; the cap is what makes a pathological
+/// pairing terminate instead of looping.
+const WALK_STEP: f64 = 0.1;
+const WALK_STEPS: usize = 20;
+
+/// Walk `ink` toward white or black — whichever `fill` is farther from — until it
+/// clears [`WCAG_AA_TEXT`] against `fill`, or the walk runs out of steps. An ink that
+/// already clears the floor is returned untouched.
+///
+/// **The only WCAG walk in this module.** It was written out twice, once for the link
+/// colour and once for the selection ink, each with its own copy of the floor, the step
+/// size and the step count — so either could be corrected without the other, which is
+/// the whole of finding `F-WCAG-001`.
+fn walk_to_contrast(ink: gdk::RGBA, fill: gdk::RGBA) -> gdk::RGBA {
+    let target = if luminance(fill) < DARK_SURFACE_LUMINANCE {
+        gdk::RGBA::WHITE
+    } else {
+        gdk::RGBA::BLACK
+    };
+    let mut ink = ink;
+    for _ in 0..WALK_STEPS {
+        if contrast(ink, fill) >= WCAG_AA_TEXT {
+            break;
+        }
+        ink = mix_rgba(ink, target, WALK_STEP);
+    }
+    ink
+}
+
+/// `#rrggbb` — the colour's three channels, **alpha discarded**.
+///
+/// Named for what it does rather than for what it is, because the unnamed version was
+/// the whole of `F-ALPHA-001`: every colour key in this vocabulary parses
+/// `#RRGGBBAA` (SCHEMA § Key naming), two shipped defaults are translucent
+/// (`mark_bg = #fff59d_88`, `annotation_hl_color = #FFD133_61`), and a translucent wash
+/// is the natural authoring choice for `blockquote_bg` — "a panel behind quoted text".
+/// A `to_hex` that silently dropped the alpha at 41 call sites made
+/// `blockquote_bg = "#0a183080"` a translucent wash in the preview and a **solid navy
+/// block** in both exports, with nothing warning and the reader seeing three different
+/// documents.
+///
+/// Right for a `Palette`-derived colour — `Palette::from_base` has already composited
+/// those against the page, so their alpha is 1.0 by construction and saying "opaque"
+/// out loud costs nothing. Wrong for a colour that came straight off a theme key; use
+/// [`to_hex_rgba`].
+pub(crate) fn to_hex_opaque(c: gdk::RGBA) -> String {
     let ch = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!(
         "#{:02x}{:02x}{:02x}",
@@ -51,6 +116,26 @@ pub(crate) fn to_hex(c: gdk::RGBA) -> String {
         ch(c.green()),
         ch(c.blue())
     )
+}
+
+/// `#rrggbb` for an opaque colour, `#rrggbbaa` for a translucent one.
+///
+/// Eight-digit hex is CSS Color 4 and is supported by every browser this artefact
+/// targets. The opaque case is spelled in six digits deliberately: it keeps a theme
+/// that states no alpha producing byte-identical output to before this function existed
+/// (TDD 18.2), so the only sheets that change are the ones that were wrong.
+pub(crate) fn to_hex_rgba(c: gdk::RGBA) -> String {
+    let ch = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let a = ch(c.alpha());
+    match a {
+        0xff => to_hex_opaque(c),
+        _ => format!(
+            "#{:02x}{:02x}{:02x}{a:02x}",
+            ch(c.red()),
+            ch(c.green()),
+            ch(c.blue())
+        ),
+    }
 }
 
 /// The preview's resolved colours. Every field is a concrete colour — link 3 of
@@ -99,42 +184,101 @@ pub(crate) struct Palette {
 // desktop's lightness calls [`desktop_is_dark`]; inside `from_base`, the page's own
 // lightness is a local, used to pick the derivations tuned for it.
 
+/// The colours resolution link 3 answers with when the desktop GTK theme defines none
+/// of the names asked for — the `floor` argument of [`probe_named`]. Named rather than
+/// spelled at each probe, because they were literals scattered across the four probe
+/// sites and a correction to one silently left the others behind.
+const BODY_INK_FLOOR: gdk::RGBA = gdk::RGBA::new(0.067, 0.067, 0.067, 1.0); // #111111
+/// Adwaita's chrome ink, distinct from its body ink — see [`Palette::from_base`].
+const CHROME_INK_FLOOR: gdk::RGBA = gdk::RGBA::new(0.180, 0.204, 0.212, 1.0); // #2e3436
+const ACCENT_FLOOR: gdk::RGBA = gdk::RGBA::new(0.208, 0.518, 0.894, 1.0); // #3584e4
+const DARK_PAGE_FLOOR: gdk::RGBA = gdk::RGBA::new(0.118, 0.118, 0.118, 1.0); // #1e1e1e
+const LIGHT_PAGE_FLOOR: gdk::RGBA = gdk::RGBA::WHITE;
+
+/// The desktop theme's named colours, in the order each probe asks for them; the first
+/// the theme defines wins. One list per role, and the list IS the chain — a change to
+/// a probe's order is an edit to one array.
+const BODY_INK_NAMES: &[&str] = &["theme_text_color", "theme_fg_color"];
+/// The CHROME ink chain: the body chain reversed, so a theme that names only one of the
+/// pair still answers both roles with it.
+const CHROME_INK_NAMES: &[&str] = &["theme_fg_color", "theme_text_color"];
+const PAGE_NAMES: &[&str] = &["theme_base_color", "view_bg_color", "theme_bg_color"];
+const ACCENT_NAMES: &[&str] = &["theme_selected_bg_color", "accent_bg_color"];
+
 /// The base an exported page resolves against when its theme states no page of its
 /// own — see [`Palette::for_paper`]. White page, near-black ink, and the same default
 /// accent the desktop probe falls back to, so an export on a machine with no theme
-/// colours at all looks like an export on one that has them.
+/// colours at all looks like an export on one that has them — stated by *sharing* the
+/// probe's floors rather than by restating their values.
 ///
-/// These sit here rather than in an export sink deliberately: this module is where
-/// the light/dark resolution floor already lives (see `for_theme`'s fallbacks), and
-/// keeping them together is what lets POLICY's "no hard-coded styling" rule hold for
-/// every renderer — none of them names a colour, they ask this module for one.
-const PAPER_BG: gdk::RGBA = gdk::RGBA::new(1.0, 1.0, 1.0, 1.0);
-const PAPER_FG: gdk::RGBA = gdk::RGBA::new(0.067, 0.067, 0.067, 1.0);
-const PAPER_ACCENT: gdk::RGBA = gdk::RGBA::new(0.208, 0.518, 0.894, 1.0);
+/// These sit here rather than in an export sink deliberately: this module is where the
+/// light/dark resolution floor already lives, and keeping them together is what lets
+/// POLICY's "no hard-coded styling" rule hold for every renderer — none of them names a
+/// colour, they ask this module for one.
+const PAPER_BG: gdk::RGBA = LIGHT_PAGE_FLOOR;
+const PAPER_FG: gdk::RGBA = BODY_INK_FLOOR;
+const PAPER_ACCENT: gdk::RGBA = ACCENT_FLOOR;
+
+/// The annotation chip's pre-theming appearance — the amber pill and the ink of the
+/// count numeral on it, exactly as `codeview` drew them before `annotation_chip_bg` /
+/// `annotation_chip_fg` existed, so a theme stating neither renders byte-identically
+/// (TDD 18.2).
+///
+/// Here rather than at the paint site because this module's contract is that **none of
+/// the renderers names a colour** — they ask this module for one. `codeview` was the
+/// standing exception, with three literals in a `snapshot` body.
+pub(crate) const ANNOTATION_CHIP_FLOOR: gdk::RGBA = gdk::RGBA::new(0.90, 0.62, 0.10, 0.95);
+/// The ink on [`ANNOTATION_CHIP_FLOOR`] — white, for the collapsed-count numeral.
+pub(crate) const ANNOTATION_CHIP_INK_FLOOR: gdk::RGBA = gdk::RGBA::new(1.0, 1.0, 1.0, 1.0);
+
+/// The desktop's accent, through the SAME chain and floor `Palette::resolve_for` uses.
+///
+/// A fifth probe site (the hovered task checkbox's border) open-coded this chain and
+/// re-spelled `ACCENT_FLOOR` as a literal — which is `F-PROBE-001`'s defect at a site
+/// outside `palette/`, where the fix for the other four could not reach it. Anything
+/// that wants "the desktop's accent" and is not building a `Palette` calls this.
+pub(crate) fn desktop_accent() -> gdk::RGBA {
+    probe_named(ACCENT_NAMES, ACCENT_FLOOR)
+}
+
+/// **Resolution link 3, spelled once.** Ask the desktop GTK theme for the first of
+/// `names` it defines; answer with `floor` when it defines none of them.
+///
+/// The chain and its floor were written out at four probe sites, so a change to either
+/// had to land in all four (finding `F-PROBE-001`). This function owns the "none of
+/// them names a colour" contract, so the floor is not optional and no caller can forget
+/// one.
+///
+/// The probe reads named colours through a temporary widget's style context. Theme CSS
+/// is loaded for the default display by `connect_startup`, so `lookup_color` answers
+/// even on an unparented widget.
+#[allow(deprecated)] // style_context() deprecated in GTK ≥ 4.10; no stable alternative yet
+fn probe_named(names: &[&str], floor: gdk::RGBA) -> gdk::RGBA {
+    let probe = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let ctx = probe.style_context();
+    names
+        .iter()
+        .find_map(|name| ctx.lookup_color(name))
+        .unwrap_or(floor)
+}
+
+/// The page floor to pair with an ink the probe *did* answer with: the opposite
+/// lightness, so a desktop that names an ink but no page still yields a legible pair.
+fn page_floor_for_ink(ink: gdk::RGBA) -> gdk::RGBA {
+    if luminance(ink) > DARK_SURFACE_LUMINANCE {
+        DARK_PAGE_FLOOR
+    } else {
+        LIGHT_PAGE_FLOOR
+    }
+}
 
 /// Whether the DESKTOP theme is dark, independent of the active reading theme.
 /// The editor pane, the toolbar, the tab strip and the outline sidebar all stay on
 /// the desktop theme, so this — not `Palette::is_dark` — is what they follow.
-#[allow(deprecated)] // style_context() deprecated in GTK ≥ 4.10; no stable alternative yet
 pub(crate) fn desktop_is_dark() -> bool {
-    let probe = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    let ctx = probe.style_context();
-    let fg = ctx
-        .lookup_color("theme_text_color")
-        .or_else(|| ctx.lookup_color("theme_fg_color"))
-        .unwrap_or_else(|| gdk::RGBA::new(0.067, 0.067, 0.067, 1.0));
-    let bg = ctx
-        .lookup_color("theme_base_color")
-        .or_else(|| ctx.lookup_color("view_bg_color"))
-        .or_else(|| ctx.lookup_color("theme_bg_color"))
-        .unwrap_or_else(|| {
-            if luminance(fg) > 0.5 {
-                gdk::RGBA::new(0.118, 0.118, 0.118, 1.0)
-            } else {
-                gdk::RGBA::new(1.0, 1.0, 1.0, 1.0)
-            }
-        });
-    luminance(bg) < 0.5
+    let ink = probe_named(BODY_INK_NAMES, BODY_INK_FLOOR);
+    let page = probe_named(PAGE_NAMES, page_floor_for_ink(ink));
+    luminance(page) < DARK_SURFACE_LUMINANCE
 }
 
 impl Palette {
@@ -167,21 +311,11 @@ impl Palette {
         accent: gdk::RGBA,
         theme: &crate::theme::Theme,
     ) -> Self {
-        let is_dark = luminance(bg) < 0.5;
+        let is_dark = luminance(bg) < DARK_SURFACE_LUMINANCE;
 
-        // Walk link color toward white (dark) or black (light) until WCAG AA contrast met.
-        let adjust_target = if is_dark {
-            gdk::RGBA::new(1.0, 1.0, 1.0, 1.0)
-        } else {
-            gdk::RGBA::new(0.0, 0.0, 0.0, 1.0)
-        };
-        let mut link_fg = accent;
-        for _ in 0..20 {
-            if contrast(link_fg, bg) >= 4.5 {
-                break;
-            }
-            link_fg = mix_rgba(link_fg, adjust_target, 0.1);
-        }
+        // The derived link colour is the accent walked up to the legibility floor
+        // against the page; a theme that states `link_color` overrides it below.
+        let link_fg = walk_to_contrast(accent, bg);
 
         let code_cfg = &config().code;
         // A theme may name its own syntax theme (a string — which is exactly what
@@ -210,14 +344,14 @@ impl Palette {
         // #fdf6e3 sits ~1.05 against the sepia page, correctly failing the gate and
         // falling back to a deeper sepia rather than washing into it.)
         let code_block_bg = theme.code_block_bg.unwrap_or_else(|| {
-            let theme_bg = syntect()
-                .1
+            let (_syntaxes, syntect_themes) = syntect();
+            let theme_bg = syntect_themes
                 .themes
                 .get(&syntect_theme)
                 .and_then(|t| t.settings.background)
                 .map(syntect_color_to_rgba);
             match theme_bg {
-                Some(tb) if contrast(tb, bg) >= 1.08 => tb,
+                Some(tb) if contrast(tb, bg) >= CODE_PANEL_MIN_CONTRAST => tb,
                 _ => mix_rgba(bg, fg, 0.12),
             }
         });
@@ -238,23 +372,12 @@ impl Palette {
         // the answer has to be statable rather than only computed.
         let selection_bg = theme.selection_bg.unwrap_or(accent);
         let selection_fg = theme.selection_fg.unwrap_or_else(|| {
-            let mut best = if contrast(fg, selection_bg) >= contrast(bg, selection_bg) {
+            let better = if contrast(fg, selection_bg) >= contrast(bg, selection_bg) {
                 fg
             } else {
                 bg
             };
-            let target = if luminance(selection_bg) < 0.5 {
-                gdk::RGBA::new(1.0, 1.0, 1.0, 1.0)
-            } else {
-                gdk::RGBA::new(0.0, 0.0, 0.0, 1.0)
-            };
-            for _ in 0..20 {
-                if contrast(best, selection_bg) >= 4.5 {
-                    break;
-                }
-                best = mix_rgba(best, target, 0.1);
-            }
-            best
+            walk_to_contrast(better, selection_bg)
         });
 
         Palette {
@@ -288,10 +411,8 @@ impl Palette {
     /// Resolve the palette for the ACTIVE theme: probe the desktop for whatever the
     /// theme leaves unstated (resolution link 3), then derive the rest purely.
     ///
-    /// The probe reads theme named colors via a temporary widget's style context.
-    /// Theme CSS is loaded for the default display by connect_startup, so
-    /// lookup_color is available even on an unparented widget.
-    #[allow(deprecated)] // style_context() deprecated in GTK ≥ 4.10; no stable alternative yet
+    /// The probe itself is [`probe_named`]; this is only the entry point that hands it
+    /// the active theme.
     pub(crate) fn resolve() -> Self {
         Self::for_theme(&crate::theme::active())
     }
@@ -324,142 +445,28 @@ impl Palette {
 
     /// [`Palette::resolve`] for an explicit theme — the seam the theme switch and
     /// the tests use.
-    #[allow(deprecated)] // style_context() deprecated in GTK ≥ 4.10; no stable alternative yet
     pub(crate) fn for_theme(theme: &crate::theme::Theme) -> Self {
-        let probe = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        let ctx = probe.style_context();
-
-        let fg = theme.foreground.unwrap_or_else(|| {
-            ctx.lookup_color("theme_text_color")
-                .or_else(|| ctx.lookup_color("theme_fg_color"))
-                .unwrap_or_else(|| gdk::RGBA::new(0.067, 0.067, 0.067, 1.0))
-        });
-
-        let bg = theme.background.unwrap_or_else(|| {
-            ctx.lookup_color("theme_base_color")
-                .or_else(|| ctx.lookup_color("view_bg_color"))
-                .or_else(|| ctx.lookup_color("theme_bg_color"))
-                .unwrap_or_else(|| {
-                    if luminance(fg) > 0.5 {
-                        gdk::RGBA::new(0.118, 0.118, 0.118, 1.0) // #1e1e1e dark bg
-                    } else {
-                        gdk::RGBA::new(1.0, 1.0, 1.0, 1.0) // #ffffff light bg
-                    }
-                })
-        });
-
-        let accent = theme.accent_color.unwrap_or_else(|| {
-            ctx.lookup_color("theme_selected_bg_color")
-                .or_else(|| ctx.lookup_color("accent_bg_color"))
-                .unwrap_or_else(|| gdk::RGBA::new(0.208, 0.518, 0.894, 1.0)) // #3584e4
-        });
-
+        let fg = theme
+            .foreground
+            .unwrap_or_else(|| probe_named(BODY_INK_NAMES, BODY_INK_FLOOR));
+        let bg = theme
+            .background
+            .unwrap_or_else(|| probe_named(PAGE_NAMES, page_floor_for_ink(fg)));
+        let accent = theme
+            .accent_color
+            .unwrap_or_else(|| probe_named(ACCENT_NAMES, ACCENT_FLOOR));
         // The CHROME ink — what the preview's table borders/header fill derive from,
         // matching the `@theme_fg_color` their CSS used to name. Distinct from `fg`
         // above (`theme_text_color`) in real themes; a named theme states one
         // foreground and both collapse onto it. See `from_base`.
-        let chrome_fg = theme.foreground.unwrap_or_else(|| {
-            ctx.lookup_color("theme_fg_color")
-                .or_else(|| ctx.lookup_color("theme_text_color"))
-                .unwrap_or_else(|| gdk::RGBA::new(0.180, 0.204, 0.212, 1.0)) // #2e3436
-        });
-
+        let chrome_fg = theme
+            .foreground
+            .unwrap_or_else(|| probe_named(CHROME_INK_NAMES, CHROME_INK_FLOOR));
         Self::from_base(bg, fg, chrome_fg, accent, theme)
     }
 }
 
+/// Gated tests live beside the module rather than inside it: `sdd/POLICY.md` § Code
+/// style caps a file at 500 lines and this one had outgrown it.
 #[cfg(test)]
-mod tests {
-    use super::{contrast, luminance, mix_rgba, syntect_color_to_rgba, to_hex, Palette};
-    use gtk::gdk;
-
-    const BLACK: gdk::RGBA = gdk::RGBA::BLACK;
-    const WHITE: gdk::RGBA = gdk::RGBA::WHITE;
-
-    #[test]
-    fn syntect_color_maps_channels_and_forces_opaque() {
-        let c = syntect::highlighting::Color {
-            r: 255,
-            g: 0,
-            b: 128,
-            a: 0,
-        };
-        let rgba = syntect_color_to_rgba(c);
-        assert_eq!(rgba.red(), 1.0);
-        assert_eq!(rgba.green(), 0.0);
-        assert!((rgba.blue() - 128.0 / 255.0).abs() < 1e-6);
-        // Alpha is forced opaque regardless of the source `a`.
-        assert_eq!(rgba.alpha(), 1.0);
-    }
-
-    #[test]
-    fn to_hex_formats_channels() {
-        assert_eq!(to_hex(BLACK), "#000000");
-        assert_eq!(to_hex(WHITE), "#ffffff");
-        assert_eq!(to_hex(gdk::RGBA::new(1.0, 0.0, 0.0, 1.0)), "#ff0000");
-        // Out-of-range channels clamp rather than overflow.
-        assert_eq!(to_hex(gdk::RGBA::new(2.0, -1.0, 0.0, 1.0)), "#ff0000");
-    }
-
-    #[test]
-    fn luminance_endpoints() {
-        assert!((luminance(BLACK) - 0.0).abs() < 1e-9);
-        assert!((luminance(WHITE) - 1.0).abs() < 1e-9);
-        // Mid-grey sits between the endpoints.
-        let g = luminance(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
-        assert!(g > 0.0 && g < 1.0);
-    }
-
-    #[test]
-    fn contrast_black_on_white_is_maximal() {
-        // WCAG contrast ratio of pure black vs pure white is 21:1.
-        assert!((contrast(BLACK, WHITE) - 21.0).abs() < 1e-6);
-        // Contrast is symmetric.
-        assert!((contrast(WHITE, BLACK) - contrast(BLACK, WHITE)).abs() < 1e-9);
-        // A color against itself has ratio 1.
-        assert!((contrast(WHITE, WHITE) - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn mix_rgba_interpolates() {
-        // t=0 yields a, t=1 yields b.
-        assert_eq!(to_hex(mix_rgba(BLACK, WHITE, 0.0)), "#000000");
-        assert_eq!(to_hex(mix_rgba(BLACK, WHITE, 1.0)), "#ffffff");
-        // Midpoint of black→white is mid-grey (0.5*255 = 127.5 → 128 = 0x80).
-        assert_eq!(to_hex(mix_rgba(BLACK, WHITE, 0.5)), "#808080");
-    }
-
-    /// Selected text stays legible on every shipped theme's selection fill.
-    ///
-    /// The bug this pins: styling the selection's background alone left its
-    /// foreground to the desktop GTK theme, which painted selected text `#000000`
-    /// at 2.1:1 on Bedtime's fill — measured on screen, not theorised. The
-    /// derivation picks between the page ink and the page itself, so the assertion
-    /// is on the RATIO rather than on a literal: a future theme is free to choose
-    /// any fill, and this fails if that choice would strand its selected text.
-    #[test]
-    fn selected_text_clears_the_legibility_floor_on_every_theme() {
-        let themes = crate::theme::Themes::builtin();
-        for (id, _name, _sym) in themes.chooser_list() {
-            let t = themes.resolve(&id);
-            // Only a theme that states its own page emits a selection rule at all;
-            // System defers the whole block to the desktop (TDD 18.2).
-            let (Some(bg), Some(fg)) = (t.background, t.foreground) else {
-                continue;
-            };
-            let p = Palette::from_base(bg, fg, fg, t.accent_color.unwrap_or(fg), &t);
-            let c = contrast(p.selection_fg, p.selection_bg);
-            assert!(
-                c >= 4.5,
-                "{id}: selected text {} on selection fill {} is {c:.2}:1",
-                to_hex(p.selection_fg),
-                to_hex(p.selection_bg)
-            );
-            assert_ne!(
-                to_hex(p.selection_fg),
-                to_hex(p.selection_bg),
-                "{id}: selected text drawn in the fill's own colour"
-            );
-        }
-    }
-}
+mod tests;

@@ -226,14 +226,14 @@ fn build_command_menu(cmds: &[Cmd]) -> Menu {
 /// menu is user-visible behaviour and not only a test-hygiene problem.
 fn reading_theme_menu(action: &str, themes: &crate::theme::Themes) -> Menu {
     let menu = Menu::new();
-    for (id, name, symbol) in themes.chooser_list() {
+    for entry in themes.chooser_list() {
         // A theme name comes from a user-editable `themes.toml`, so this is DYNAMIC text
         // in a mnemonic context: escape it, and do not route it through `mnem()`, whose
         // table is keyed on static command labels and would inject a marker into any theme
         // sharing one of them.
-        let label = crate::theme::Themes::chooser_label(&name, symbol.as_deref());
+        let label = crate::theme::Themes::chooser_label(&entry.label, entry.symbol.as_deref());
         let item = MenuItem::new(Some(&crate::app::escape_mnemonic(&label)), None);
-        item.set_action_and_target_value(Some(action), Some(&id.to_variant()));
+        item.set_action_and_target_value(Some(action), Some(&entry.id.to_variant()));
         menu.append_item(&item);
     }
     menu

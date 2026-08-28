@@ -302,6 +302,14 @@
 - **And** raw HTML that is **not** a `<picture>`/`<source>`/`<img>` image element (e.g. `<script>`, `<iframe>`, `<div>`) continues to be dropped entirely — neither rendered nor shown as literal text (sanitize-by-omission is unchanged)
 - **And** an animated GIF/WebP shows its **static first frame** (frame animation is out of scope)
 
+### 2.25 A Markdown construct the renderer cannot render is visible, never silently dropped
+- **Given** a document containing constructs from parser extensions this build does not handle — math (`$E=mc^2$`, `$$…$$`), footnotes (`[^1]` and its definition), a definition list, a wikilink, and YAML or TOML front matter
+- **When** it is rendered, and when it is exported
+- **Then** each appears as its own **literal source text** — the reader sees what they wrote, unstyled — and nothing vanishes
+- **And** the parser is asked for **only** the extensions the renderer has handlers for, so those constructs never become parser events at all
+- **And** the three event dispatchers match the parser's `Event`, `Tag` and `TagEnd` vocabularies **exhaustively**: a parser upgrade that adds a construct fails to compile rather than rendering it as nothing
+- **Rationale** the failure mode this pins is *silence*: an enabled-but-unhandled extension is dropped, not degraded, so `$E=mc^2$` rendered empty and `[^1]` vanished with every gate green (ScrAP-78)
+
 ### 2.12 Links within blockquotes
 - **Given** a blockquote containing a Markdown hyperlink
 - **When** the user activates that link
@@ -1366,6 +1374,9 @@
 - **Given** a search term with multiple matches in the active view (editor or preview)
 - **When** the user presses Enter or clicks Next (or Shift+Enter / Prev)
 - **Then** the selection advances to the next (or previous) match and scrolls it into view, wrapping past the last match to the first (and before the first to the last) — find-**next** must genuinely advance, not re-select the current match
+- **And given** a document large enough that the editor is still counting when the first Next is pressed (the counter shows "…" rather than a number)
+- **When** the user steps through several matches without waiting for that count to settle
+- **Then** the position reported for each step is the match actually landed on — or, where it genuinely cannot yet be known, none at all — never a "1" standing in for "not known yet"; so when the count does settle, the counter names the match the selection is sitting on rather than the first one
 
 ### 11.6 Find works on the preview pane
 - **Given** pure-preview mode (the editor is not visible)
@@ -2180,6 +2191,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** the app as installed with its shipped themes
 - **When** the user opens the theme chooser (menu or toolbar)
 - **Then** at least "System" and "Sepia" are offered, with the active one indicated — and both surfaces always show the same choice
+- **And** a theme's **name and picker symbol are its own**: a theme that states no symbol is offered by name alone on *both* surfaces, never wearing the base theme's glyph on one of them
 
 ### 18.2 System renders exactly as it did before themes existed
 - **Given** a fresh profile where no theme has ever been chosen
@@ -2215,6 +2227,10 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** every installed theme
 - **When** body text is rendered on its page
 - **Then** the contrast clears a legibility floor, so a later "warm it up a bit" tweak cannot quietly degrade readability
+- **And** the floor reaches **every ink a theme states**, not a hand-picked few — the link, the mark, the table header, the list markers, the rule, the quote bar and the annotation chip as well as the body and the headings — each measured on the surface it is actually read on, with the theme's own translucent washes composited first
+- **And** each ink answers to the floor its ROLE takes: 4.5:1 where a reader parses words, WCAG's 3:1 non-text floor where the ink is a drawn mark
+- **And** a heading's ink is measured against **every appearance its band can take** — both endpoints of a gradient, not just the first — and skipped with a named reason where a sprite outranks the fill, because no ratio describes reading text on arbitrary pixels
+- **And** a pairing that is deliberately below its floor is **named**, with its reason, and a named exception that is no longer below its floor is a failure: a licence standing over nothing is inherited silently by the next theme to state that key
 
 ### 18.9 Theme and zoom compose
 - **Given** a document under Sepia
@@ -2268,6 +2284,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** it is rendered, and separately exported to PDF and HTML
 - **Then** the table cell matches the body exactly, and the PDF's Pango markup carries the same weight/size/rise the body tag applied — closing the prerequisite `sdd/PLAN.preview-decoration.md` names for every later theme key
 
+- **And** the TABLE HEADER takes the same `bold_weight`, and the same `heading_font` where the theme states one, on all three surfaces — it is bold text like any other, and hardcoding a weight per surface (`font-weight: bold`, a browser default, a Pango `<b>`) means three different numbers for one key
 ### 18.19 A theme can restyle the annotation chip by colour or by sprite
 - **Given** a theme setting `annotation_chip_bg`/`annotation_chip_fg`, or a `annotation_chip_sprite` file (theme-relative, validated the same way every sprite key is — no absolute path, no traversal, symlink-contained, allowlisted extension, size-capped)
 - **When** a document with a CriticMarkup comment is rendered
@@ -2300,12 +2317,24 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** a document with all three list kinds is rendered, and separately exported to HTML and PDF
 - **Then** the gutter draws the glyph, or the sprite, in place of the dot/numeral/checkbox
 - **And** the same glyph reaches the HTML export HTML-escaped, and the PDF export Pango-escaped; a sprite reaches the HTML export embedded (the artefact stays self-contained) and the PDF export drawn as an image — one key, three renderings (TDD §25's completeness rule)
+- **And** where a sprite marker applies, the item's own text run carries **no** marker prefix — a picture *instead of* the bullet, never both
+- **And** a marker whose sprite **cannot be produced** — admitted but undecodable — falls back to the theme's glyph, and then to the drawn dot/numeral/checkbox. It never leaves the marker absent, which for a task item would leave an invisible checkbox behind a hit-box that is still clickable
+
+- **And** an item whose FIRST block is not a paragraph — a fenced code block, a nested list — still carries its marker in every medium, glyph or picture alike; the drawn gutter marks every item whatever it contains, and the page must agree
+### 18.41 Every decoration degrades when its sprite cannot be produced
+- **Given** a theme naming a sprite for any decoration — heading band, blockquote bar, horizontal rule, annotation chip, or any list marker — whose file is admitted but cannot be decoded
+- **When** the document is rendered, and separately exported to HTML and PDF
+- **Then** each falls back to what it would have been without the sprite: the band to its gradient then its fill, the bar and the chip to their flat colours, the rule to a plain separator, a marker to its glyph and then to the drawn primitive
+- **And** the fallback is never a *partial* render and never a gap — `sdd/THEMING.md` § Untrusted input's inert-by-default rule
+- **And** the failure is logged, because an absent decoration is otherwise indistinguishable from a theme that named none (ScrAP-324)
 
 ### 18.25 A theme can band a heading, with a fill or a sprite
 - **Given** a theme setting a heading band (fill, and optionally radius/gradient within the closed decoration vocabulary), or a sprite image as the band's fill (theme-relative, validated the same way every sprite key is)
 - **When** a heading — including one that soft-wraps — is rendered, and separately exported to HTML and PDF
 - **Then** the band spans the stated extent and survives soft-wrap as one continuous band, whichever fill it carries
 - **And** the band appears in both export sinks, the PDF resolving at System-light per 25.9, a sprite embedded in the HTML sink and drawn as an image in the PDF sink
+- **And** a **sprite alone bands the level**: `heading_band_sprite_hN` with no `heading_band_color_hN` beside it paints the band, reserves the heading's inset, and does so identically on all three surfaces — a sprite outranks the fill and does not depend on one
+- **And** a `heading_band_gradient_to_color` with no fill beneath it is **ignored and logged**: a gradient is a second stop and needs a first one, so the key renders nothing, and a key that renders nothing says so
 
 ### 18.26 A theme can vary a bullet's colour, glyph and sprite by nesting depth
 - **Given** a theme setting a bullet colour/glyph/sprite for depth 1, and distinct overrides for depth 2 and depth 3-and-deeper (each optional, unset falling back to the shallower depth)
@@ -2330,7 +2359,8 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** a blockquoted document is rendered, and separately exported to HTML and PDF
 - **Then** quoted text paints on the stated background in the stated ink, alongside the existing bar
 - **And** the background is ONE continuous panel over the whole quote — every block it contains (paragraphs, a nested list, a fenced code block), in every medium — never a separate fill per block with page colour showing between them
-- **And** omitted, quoted text stays plain body text on the page background exactly as today (TDD 18.2)
+- **And** the ink re-inks the quote's PROSE ONLY: a link, **a heading** and **a `==mark==`** inside the quote each keep their own colour — and where the theme states no colour for one of them, "its own colour" is the resolved BODY ink, never the quote's
+- **And** omitted, quoted text stays plain body text on the page background exactly as today (TDD 18.2) — and the heading and mark tags set no foreground at all, so a theme stating no quote ink leaves them byte-identical
 
 ### 18.30 A theme can colour table header text independently of heading_color
 - **Given** a theme setting `table_head_fg`
@@ -2366,6 +2396,66 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** a theme written against a pre-rename spelling (`sprite_rule`, `heading_colors`, `link`, `strikethrough_rgba`, an array-valued `heading_scale`)
 - **When** themes are loaded
 - **Then** each such key is reported by 18.33's unknown-key path and applies nothing — a retired spelling is never quietly honoured, so a theme file that looks like it works cannot be one that does not
+
+### 18.44 A declared key reaches a surface, or says why it does not
+- **Given** the registry of keys a themes file may speak
+- **When** any one of them is stated at a value nothing ships
+- **Then** the output of **every surface that key claims** changes — the preview's CSS, tag set or drawn decoration; the HTML artefact; the laid-out page
+- **And** a key that reaches a surface it does not claim is equally a failure: the exception is stale and must be wired or restated
+- **And** every excluded surface carries a **reason**, because an unexplained exclusion is indistinguishable from a key somebody forgot to wire
+- **Rationale** a key declared and never read is worse than an unknown one: an unknown key warns (18.33), while a declared-but-inert key is accepted, documented, and silent
+
+### 18.42 A themed inline style is one span, whichever surface builds it
+- **Given** a theme stating `mark_fg`, a strike colour, a bold weight, a superscript rise, a link colour or an annotation wash
+- **When** the same construct is rendered in a table cell (which the preview styles with Pango markup, not a tag) and exported to PDF (which lays every run out through Pango)
+- **Then** both carry the **same span** — the two are one builder reading one theme, not two copies reading two sources
+- **And** every span's opening and closing tag come from **one** call, because a strike's plain form closes `</s>` and its themed form closes `</span>`, and a mismatched pair fails `pango_parse_markup` and renders the whole run empty with no warning (ScrAP-163)
+
+### 18.43 A translucent theme colour stays translucent in every artefact
+- **Given** a theme stating a colour with alpha — `blockquote_bg = "#0a183080"`, or either of the two shipped translucent defaults
+- **When** the document is rendered, exported to HTML and exported to PDF
+- **Then** all three show a **wash**: the preview composites it, the HTML sheet carries eight-digit hex, and the page composites it onto the paper
+- **And** a colour with no alpha is unchanged on every surface, in its six-digit spelling — so a theme that states none is byte-identical to before this held (TDD 18.2)
+
+### 18.40 The themes file is found by a stated search path, first match wins
+- **Given** a host that may carry a themes file in the user's configuration directory, in the per-user data directory, or in any system data directory
+- **When** themes are loaded
+- **Then** the candidates are tried in that order — user override, per-user install, then each `$XDG_DATA_DIRS` entry in the order the platform lists them — and the **first one that exists wins whole**
+- **And** a later candidate is **not merged over** an earlier one, so a system install cannot add keys to a user's own themes file
+- **And** every system data directory is a candidate: the list is iterated, never hard-coded to `/usr/share` (on KDE its first entry is `/usr/share/plasma`)
+- **And** the directory a theme's sprite references resolve against is **the found file's own parent**, not the first candidate tried and never the working directory
+- **And** on a host where no candidate exists, the compiled-in themes stand alone
+
+### 18.36 A sprite reference is admitted by what it IS, not only by how big it is
+- **Given** a themes file on disk whose sprite reference names a FIFO, or a symlink to a file whose real extension is not on the allowlist, or a path that leaves the theme's own directory in any spelling
+- **When** themes are loaded
+- **Then** each is refused and logged, and the decoration is absent — a size test alone would admit the FIFO (whose reported length is zero) and then block the main thread on the read forever
+- **And** an ordinary contained reference beside the same file still resolves, so the refusals are about the hazard and not about the directory
+
+### 18.37 A sprite is bounded by its decoded size, not only by its file size
+- **Given** a sprite file inside the byte cap whose header declares more pixels than the decoded-raster cap (a decompression bomb: a 20000×20000 PNG is under 512 KiB)
+- **When** any surface asks for that sprite — the preview's texture, the pre-resampled marker, or the PDF sink's image surface
+- **Then** it is refused before being decoded, and one `warn` naming the sprite and its declared dimensions is logged
+- **And** the decoration degrades to absent, the same answer every other refusal in this vocabulary gives
+
+### 18.38 A sprite that cannot be produced says so
+- **Given** a sprite file that passes every admission check but cannot be decoded — truncated, corrupt, or a `.png` that is not one
+- **When** it is asked for through either decode path
+- **Then** a `warn` naming the reference is logged on **both**, and neither path silently answers "absent"
+- **Rationale** an inert-by-default decoration makes "the theme stated no sprite" and "the reference resolved but would not decode" produce identical pixels; the log record is the only observable that distinguishes them (ScrAP-324)
+
+### 18.39 A sprite's admission is re-established when it is read, not only when it is resolved
+- **Given** a sprite that passed resolution and has since grown past the byte cap, or ceased to be a regular file
+- **When** it is read — at first paint, at a theme swap, or at an export
+- **Then** it is refused on the open handle and logged, and the read is bounded by the cap rather than predicting it
+- **Rationale** resolution runs once at load and the read happens many times afterwards; between them the guarantee is a path and nothing else
+
+### 18.45 A themed rule reaches the widget, not only the stylesheet
+- **Given** a reading theme that states a `link_color` (and, where it states them, `link_underline` / `link_underline_color`)
+- **When** a table cell whose ENTIRE content is a link is rendered — the `GtkLinkButton` shape, not the mixed cell's label
+- **Then** the button node RESOLVES to the theme's link ink, and its caption carries the theme's underline, exactly as the body link and the mixed cell beside it do
+- **And** the check reads the resolved style off a real widget, never the generated rule text: a selector naming a class no widget carries generates, formats and asserts identically to one that matches, so rule-text assertions are blind to the whole failure (a blanket rename of the theme vocabulary spelled GTK's own `link` class as this project's `link_color` key, and 1279 tests stayed green)
+- **Rationale** a stylesheet is an instruction, not an effect; a test of the instruction is a test of the same defect one layer up
 
 ## 19. Local document-link navigation
 
@@ -2986,7 +3076,11 @@ up doing.
 - **When** a document is exported to HTML
 - **Then** every colour, typeface and decoration metric in the artefact resolves through the theme engine from the **active reading theme** — a literal styling value anywhere in either sink is a defect
 - **And** the PDF resolves through the same engine against the **System theme's light resolution** by default, paper having no dark mode; "default to System-light" is a resolution request, not a licence for a literal
+- **And** the PDF sink expresses **every** key the other two surfaces express, not four of five: a heading's ink and face as well as its scale, weight, band and rule; the mark ink; both code fills; and the three metrics — list step, list-item gap, and the gap between a quote's bar and its text — which were `INDENT_PT`, `BLOCK_GAP_PT` and "whatever the bar's own width happened to be"
+- **And** a design-time **pixel** metric reaches the page converted to **points**, never read as a point count
 
+- **And** a design-time PIXEL metric is converted to points before it reaches the page, EVERY key without exception: the unit error is coherent per key, so a sink that converts some and not others looks correct from whichever key a reader checks
+- **And** an embedded sprite's payload appears in the artefact ONCE per distinct image, however many constructs use it — a payload emitted per USE is linear in the document's length and turns one 512 KiB image into hundreds of megabytes of HTML
 ### 25.10 The default filename cannot destroy the source
 - **Given** a document named `notes.md`
 - **When** the destination chooser opens for either target
@@ -3063,6 +3157,14 @@ up doing.
 - **Given** a completed PDF export
 - **Then** success is concluded from the operation's return value **and** the count of pages drawn against pages expected
 - **And** never from `is_finished()` or `status()`, which are inverted in both directions — success never reports finished, and finished means aborted
+
+### 25.25 A named font reaches the PDF as that named face
+- **Given** `[themes.system]` states a multi-word `font_family` and a multi-word `heading_font`, both installed on the host
+- **When** the document is exported to PDF
+- **Then** the artefact's embedded fonts are those faces by NAME, body and heading alike
+- **And** the check asserts the face Pango RESOLVED, never the requested string, the laid-out width, or "not the default font": the theme holds a CSS font stack in which a multi-word family is quoted, Pango's own list parser rejects quotes and falls through to the stack's generic terminator, so a totally broken sink lands on plain `serif` — a real face, a different width, and exactly what a reader would expect a serif theme to look like
+- **And** the fixture goes through `sanitize_font_family` and asserts the value came back QUOTED, since a bare generic (`monospace`) is left unquoted and so passes on the broken sink
+- **Rationale** the de-quoting seam existed for the preview's tag sink and was `pub(super)` inside `tags/`; the PDF sink could not reach it and handed Pango the CSS spelling verbatim. The debt was closed on the strength of the seam existing, which is a claim about the seam and not about its callers
 
 ### 25.21 A cancelled or failed export leaves the destination untouched
 - **Given** a destination that already holds a PDF

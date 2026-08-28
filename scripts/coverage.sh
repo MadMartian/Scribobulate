@@ -241,7 +241,7 @@ cd "$(dirname "$0")/.."
 #
 # 2026-08-25, 79.95 -> 80.20, TDD 18.21-18.23 (the Phase 1 decoration keys). No code
 # moved between files this time — every gain is test-side, on already-scoped modules:
-# `theme.rs` picked up the per-level heading fold, the line-style vocabulary and their
+# `theme/` picked up the per-level heading fold, the line-style vocabulary and their
 # clamp/merge/floor cases; `export/html.rs`, `export/markup.rs` and `preview/css.rs`
 # each gained sink tests for the new keys, including two that assert the generated Pango
 # markup PARSES rather than merely spelling right. Measured 80.97% before (at `35aab05`,
@@ -252,7 +252,7 @@ cd "$(dirname "$0")/.."
 # make on the way past.
 #
 # 2026-08-26, 80.20 -> 80.30, TDD 18.26 (depth-tiered bullet colour/glyph/sprite, plus the
-# PDF marker-ink prerequisite). Test-only again, on already-scoped modules: `theme.rs`
+# PDF marker-ink prerequisite). Test-only again, on already-scoped modules: `theme/`
 # picked up the tier map and the shallower-tier fallback cases, `codeview/gutter.rs` the
 # per-depth substitution and ink, `export/pdf/decide.rs` the marker ink and the per-depth
 # arms, and `export/html.rs` the depth-scoped selectors. Measured 81.45% before (at
@@ -267,7 +267,78 @@ cd "$(dirname "$0")/.."
 # Half the gain is +0.03. Skipping a move because it is small is how a ratchet quietly
 # stops tracking; the ~1.4pt standing margin the 2026-08-25 entry names absorbs it either
 # way.
-FLOOR=80.33
+#
+# 2026-08-27, 80.33 -> 81.45, QA round 1's mitigations (TDD 18.36-18.44, 2.25, 25.9's two
+# new clauses) — and the entry that closes the standing margin rather than adding to it.
+#
+# THREE things, because this entry answers a finding rather than logging a feature:
+#
+#   1. THE 0.9pt DROP THE LOG NEVER RECORDED. The previous entry claims 81.74% at
+#      `51caea6`. MEASURED at `7f6b09d` — the branch tip this round started from, in a
+#      clean worktree — the tree was at 80.85%, and the gate stayed green the whole way
+#      because the slack absorbed it. The three commits between them (`f61a7fa`'s
+#      panel/header/rule, `595d517`'s registry rewrite, `7f6b09d`'s module split) added
+#      about 780 gated lines and their tests did not keep pace. Nothing was wrong with
+#      the gate; the gate simply was not tracking, which is exactly what the 2026-08-26
+#      entry above warns a small skipped move leads to.
+#
+#   2. THE MARGIN IS NOW ~0.3pt, DELIBERATELY. 1.4pt of a ~23k-line gated scope is
+#      roughly 320 lines that can evaporate with the gate green — larger than most
+#      changes it is meant to gate, and `src/theme/` alone is ~2,300 new lines this
+#      branch. A gate whose margin exceeds the size of the change it gates is not gating
+#      that change. This supersedes the "raise by half the gain" convention for this one
+#      move: half-the-gain is a rule for keeping headroom, and the headroom had become
+#      the problem. Future entries can go back to it from here.
+#
+#   3. A CONST-EVALUATED CONSTRUCTOR SCORES ZERO, AND THAT IS AN INSTRUMENT ARTEFACT.
+#      `theme/keys.rs` fell from 100% to 74.5% purely because `Reach`'s and `Bound`'s
+#      `const fn` constructors are evaluated inside the `keys!` table at COMPILE time, so
+#      llvm-cov sees no run-time execution and scores every line of them zero. They are
+#      exercised at every build. The answer was to call them from a unit test that also
+#      asserts the shape each one builds — a `preview_only` that quietly set `pdf: true`
+#      would silently licence a key on a surface it never reaches — which makes the
+#      number honest AND adds a guard. Worth knowing before someone reads a similar drop
+#      as untested code.
+#
+# Where the gain came from: `theme/decor.rs` and `pangospan.rs` are new and both 100%;
+# `theme/resolve.rs` and `theme/model.rs` are 100%; `theme/keys.rs` 98.4%;
+# `export/pdf/ink.rs` 71.9% -> 87.1% and `export/pdf/measure.rs` 95.1% -> 99.2% from the
+# sprite-paint and PDF-key tests. `codeview/`'s exclusion needed no narrowing after all:
+# `marker_substitute` — the one pure decision function the exclusion was swallowing —
+# moved OUT of `codeview/gutter.rs` into `theme/decor.rs` as part of the sprite-seam
+# work, which is precisely the extraction POLICY step 6 describes as the mechanism by
+# which the floor rises. Measured 81.78% after, at a clean worktree.
+#
+# RAISED 81.45 -> 82.15 by QA round 1's Medium mitigation batch. 82.16 printed in the
+# LINES column, rounded DOWN per the rule at the top — and the rule's own warning was
+# earned again here: the first attempt read 82.68 off the REGIONS column, which leads
+# the row, and set a floor no run could ever reach. The gain is the extraction rule working
+# as designed rather than a windfall — three decision cores came OUT of files this scope
+# excludes and landed with their unit tests:
+#
+#   * `window/find/plan.rs` — the preview find highlight's hit->attribute mapping, which
+#     was interleaved with GTK mutation inside `window/find.rs` (excluded), so neither
+#     the suite nor this gate could see it. NOTE the path: `window/<name>.rs` is
+#     excluded and `window/find/<name>.rs` is NOT, because the IGNORE pattern names its
+#     three excluded subdirectories explicitly.
+#   * `widgets/mod.rs`'s `tile_texture`/`draw_sprite_into` — one seam replacing three
+#     open-coded copies in `codeview/` (excluded).
+#   * `cssfrag.rs` — the fragments the preview sheet and the HTML sink genuinely share.
+#
+# The rest is test bodies in already-scoped modules: `theme/tests/diagnostics.rs`,
+# `theme/tests/registry.rs`, `palette/tests.rs` (the palette split its tests out at the
+# 500-line limit; both halves stay in scope) and the sprite/PDF guards.
+#
+# `tags/spec.rs` is the last extraction of the batch — the theme->tag decisions came out
+# of `tags.rs`, which this scope EXCLUDES, so the ink floor's condition and the band
+# inset's per-level gate went from unassertable-without-a-view to five unit tests.
+#
+# 82.15 -> 82.18 with TDD 25.25's named-face guard. The rise is +0.01 and the other
+# 0.02 was the floor being stale, and the two are recorded separately on purpose: this
+# figure was measured on the parent commit as well (82.17 Lines, in a clean worktree)
+# rather than inferred from "the change looks coverage-neutral", so the ratchet is
+# closing a known gap rather than quietly crediting one change with another's ground.
+FLOOR=82.18
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:
@@ -350,6 +421,12 @@ FLOOR=80.33
 #                   (line/cell buffer-Y reads), markers (popover UI) are all
 #                   view-bound → excluded. The one pure piece, group_by_line, keeps
 #                   its unit tests but rides along inside the excluded markers.rs.
+#                   `marker_substitute` used to be a second such piece, and QA round 1
+#                   named the exclusion swallowing it. It is no longer here: the
+#                   marker's precedence moved to `theme::decor`, which is gated and at
+#                   100%. That is the shape POLICY step 6 asks for — extract the
+#                   decision core rather than widen the gate — and it is why this
+#                   exclusion did not need narrowing.
 #   outline_view.rs the outline sidebar's GObject subclass (HeadingObject), its
 #                   GtkTreeListModel/GtkSignalListItemFactory wiring, and the
 #                   expand-all TreeListRow walk — all live widget construction and

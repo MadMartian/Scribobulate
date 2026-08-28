@@ -13,12 +13,15 @@ fn resolved_from(fragment: &str, origin: crate::sprite::SpriteOrigin<'_>) -> The
     Theme::resolve("t", &specs["t"], &ThemeSpec::default())
 }
 
-/// TDD 18.31 / 18.2 — the rule's sprite is opt-in, resolves like every other sprite
-/// key, and leaves the flat `rule` colour standing beside it as the fallback.
+/// TDD 18.31 / 18.2 — a sprite key and the FLAT key beside it are independent: the
+/// sprite outranks the colour at paint time, and the colour is what a refused
+/// reference falls back to, so resolving one must not disturb the other.
+///
+/// The opt-in, directory-relative and containment halves this test used to also assert
+/// are now swept across every sprite key at once (see below); what is left here is the
+/// claim that is about this PAIR of keys rather than about sprite resolution.
 #[test]
-fn the_rule_sprite_is_opt_in_and_keeps_the_flat_colour_beside_it() {
-    assert!(Themes::builtin().resolve(SYSTEM_ID).sprites.rule.is_none());
-
+fn a_sprite_key_leaves_the_flat_key_beside_it_standing() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("rule.png"), b"bytes are not validated here").unwrap();
     let origin = crate::sprite::SpriteOrigin::Directory(dir.path());
@@ -26,16 +29,17 @@ fn the_rule_sprite_is_opt_in_and_keeps_the_flat_colour_beside_it() {
         "[themes.t]\nrule_sprite = \"rule.png\"\nrule_color = \"#123456\"\n",
         origin,
     );
-    let crate::sprite::SpriteRef::File(got) = good.sprites.rule.expect("resolved") else {
-        panic!("a directory origin must resolve to a file");
-    };
-    assert!(got.is_absolute());
-    // The colour is UNTOUCHED by the sprite resolving: the sprite outranks it at
-    // paint time, and the colour is what a refused reference falls back to.
+    assert!(good.sprites.rule.is_some());
     assert_eq!(good.rule_color, parse_color("#123456"));
 
-    let escaping = resolved_from("[themes.t]\nrule_sprite = \"../escape.png\"\n", origin);
+    // …and a REFUSED sprite leaves it standing too, which is the case the fallback
+    // exists for.
+    let escaping = resolved_from(
+        "[themes.t]\nrule_sprite = \"../escape.png\"\nrule_color = \"#123456\"\n",
+        origin,
+    );
     assert!(escaping.sprites.rule.is_none());
+    assert_eq!(escaping.rule_color, parse_color("#123456"));
 }
 
 /// **Every sprite a compiled-in theme names is compiled in too.**
@@ -229,60 +233,201 @@ fn an_installed_themes_file_cannot_unship_a_compiled_in_sprite() {
     );
 }
 
-/// TDD 18.28 — the bar sprite is opt-in, and it goes through the SAME
-/// theme-relative validation every other sprite key does — which is now structural
-/// rather than remembered: resolution walks the values the registry typed as
-/// sprites, so a new sprite key is validated by having been declared.
+/// **Every sprite key is opt-in, resolves against the file's own directory, and
+/// refuses a reference that leaves it** — asserted across the WHOLE key set.
+///
+/// This replaces three near-identical hand-written variants (the rule's, the
+/// blockquote bar's and the annotation chip's), each of which asked the same three
+/// questions of one key. The file already carried the exemplary registry-driven sweep
+/// beside them, so the hand-maintained mirrors were the odd ones out: a sprite key
+/// added later got none of these three properties checked until somebody remembered to
+/// write a fourth copy.
+///
+/// The three properties are asserted per key rather than per decoration because they
+/// are properties of `SpriteOrigin::resolve`, which has one implementation for all of
+/// them.
 #[test]
-fn the_blockquote_bar_sprite_is_opt_in_and_validated_like_every_other() {
-    assert!(Themes::builtin()
-        .resolve(SYSTEM_ID)
-        .sprites
-        .blockquote_bar
-        .is_none());
+fn every_sprite_key_is_opt_in_directory_relative_and_refuses_an_escape() {
+    // The escape target REALLY EXISTS, one level above the theme directory. Pointing
+    // at a missing file would be refused by the does-this-resolve gate instead, so the
+    // containment half would pass with containment deleted (GTK4Rs/AP-254).
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("escape.png"), b"a real file, outside").unwrap();
+    let theme_dir = root.path().join("theme");
+    std::fs::create_dir(&theme_dir).unwrap();
+    std::fs::write(theme_dir.join("art.png"), b"not a real png, just bytes").unwrap();
+    let origin = crate::sprite::SpriteOrigin::Directory(&theme_dir);
+    let system = Themes::builtin().resolve(SYSTEM_ID);
 
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("bar.png"), b"not a real png, just bytes").unwrap();
-    let origin = crate::sprite::SpriteOrigin::Directory(dir.path());
-    let good = resolved_from("[themes.t]\nblockquote_bar_sprite = \"bar.png\"\n", origin);
-    let crate::sprite::SpriteRef::File(got) = good.sprites.blockquote_bar.expect("resolved") else {
-        panic!("a directory origin must resolve to a file");
-    };
-    assert!(got.is_absolute());
+    let mut checked = 0usize;
+    for key in keys::KEYS.iter().filter(|k| k.kind == keys::Kind::Sprite) {
+        for idx in 0..key.slots() {
+            let spelling = key.spelling(idx);
+            checked += 1;
 
-    let escaping = resolved_from(
-        "[themes.t]\nblockquote_bar_sprite = \"../escape.png\"\n",
-        origin,
-    );
-    assert!(escaping.sprites.blockquote_bar.is_none());
+            // (a) OPT-IN: the base theme states no sprite anywhere, so every slot of
+            // every sprite key is absent until a theme asks for one (TDD 18.2).
+            assert!(
+                sprite_slot(&system, key, idx).is_none(),
+                "[themes.system] resolves a sprite for {spelling}, so it is not opt-in"
+            );
+
+            // (b) DIRECTORY-RELATIVE: a contained reference resolves to an absolute
+            // path inside the stating file's own directory.
+            let good = resolved_from(&format!("[themes.t]\n{spelling} = \"art.png\"\n"), origin);
+            match sprite_slot(&good, key, idx) {
+                Some(crate::sprite::SpriteRef::File(p)) => {
+                    assert!(p.is_absolute(), "{spelling} resolved to a relative path");
+                    assert!(p.ends_with("art.png"), "{spelling} resolved to {p:?}");
+                }
+                other => panic!("{spelling} did not resolve to a file: {other:?}"),
+            }
+
+            // (c) CONTAINED: a reference that leaves the directory is refused, and the
+            // slot degrades to absent rather than to something outside the theme.
+            let escaping = resolved_from(
+                &format!("[themes.t]\n{spelling} = \"../escape.png\"\n"),
+                origin,
+            );
+            assert!(
+                sprite_slot(&escaping, key, idx).is_none(),
+                "{spelling} accepted a reference outside the theme directory"
+            );
+        }
+    }
+    assert!(checked > 0, "the vocabulary declares no sprite key");
 }
 
-/// Sprite resolution is the ONE step that answers a sprite key — proves that
-/// against a DIRECTORY origin it accepts a contained relative reference and drops
-/// one that fails `crate::sprite::resolve`'s checks, independent of the XDG search
-/// path.
+/// One resolved sprite slot, addressed by the registry key and index that produced it.
+///
+/// The `Sprites` model is a struct of named fields, so a registry-driven sweep needs
+/// one place that maps a `Key` back onto its field — this is it, and the exhaustive
+/// `else` means a sprite key added without a slot here fails loudly instead of being
+/// skipped.
+fn sprite_slot<'a>(
+    t: &'a Theme,
+    key: &keys::Key,
+    idx: usize,
+) -> &'a Option<crate::sprite::SpriteRef> {
+    let s = &t.sprites;
+    if key.name == keys::ANNOTATION_CHIP_SPRITE.name {
+        &s.annotation_chip
+    } else if key.name == keys::LIST_BULLET_SPRITE.name {
+        &s.list_bullet[idx]
+    } else if key.name == keys::LIST_ORDERED_SPRITE.name {
+        &s.list_ordered
+    } else if key.name == keys::LIST_TASK_SPRITE.name {
+        &s.list_task
+    } else if key.name == keys::LIST_TASK_CHECKED_SPRITE.name {
+        &s.list_task_checked
+    } else if key.name == keys::HEADING_BAND_SPRITE.name {
+        &s.heading_band[idx]
+    } else if key.name == keys::BLOCKQUOTE_BAR_SPRITE.name {
+        &s.blockquote_bar
+    } else if key.name == keys::RULE_SPRITE.name {
+        &s.rule
+    } else {
+        panic!(
+            "sprite key {:?} has no slot in this map — add it, or the sweep silently \
+             stops covering it",
+            key.name
+        )
+    }
+}
+
+/// **A themed bar width must not clip its own sprite tile** (ScrAP-324's lesson: where
+/// a feature degrades silently, a guard must inspect what the INPUT said).
+///
+/// `blockquote_bar_sprite` and `blockquote_bar_width` are coupled in prose — in
+/// `data/themes.toml` and in SCHEMA's Blockquote table — and by nothing else. Redraw
+/// the plate wider, or drop the width while keeping the sprite, and the bar renders a
+/// CLIPPED SLICE of a tile: a decoration that is present but wrong, which is worse than
+/// this vocabulary's usual inert-by-default failure and produces no log line at all.
+///
+/// Driven off the shipped file with each theme's own reference in hand, so every future
+/// theme naming a bar sprite is covered by having named one.
 #[test]
-fn a_contained_reference_resolves_and_a_bad_one_is_dropped() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("chip.png"), b"not a real png, just bytes").unwrap();
-    let origin = crate::sprite::SpriteOrigin::Directory(dir.path());
-
-    let good = resolved_from(
-        "[themes.t]\nannotation_chip_sprite = \"chip.png\"\n",
-        origin,
+fn a_shipped_bar_width_is_never_narrower_than_the_sprite_it_tiles() {
+    let raw: toml::Value =
+        toml::from_str(BUILTIN_THEMES_TOML).expect("the shipped themes file must parse");
+    let mut checked = 0usize;
+    for (id, block) in raw["themes"].as_table().expect("a themes table") {
+        let table = block.as_table().expect("a theme block");
+        let Some(rel) = table
+            .get(keys::BLOCKQUOTE_BAR_SPRITE.name)
+            .and_then(toml::Value::as_str)
+        else {
+            continue;
+        };
+        let sprite = crate::sprite::builtin(rel)
+            .unwrap_or_else(|| panic!("theme {id:?} names sprite {rel:?}, not compiled in"));
+        let tex = crate::sprite::texture(&sprite)
+            .unwrap_or_else(|| panic!("theme {id:?}: sprite {rel:?} did not decode"));
+        let tile_width = gtk::prelude::TextureExt::width(&tex);
+        let bar = Themes::builtin().resolve(id).metrics.blockquote_bar_width;
+        checked += 1;
+        assert!(
+            bar >= tile_width,
+            "theme {id:?}: blockquote_bar_width is {bar} px but {rel:?} is \
+             {tile_width} px wide, so the bar renders a clipped slice of the tile"
+        );
+    }
+    assert!(
+        checked > 0,
+        "no shipped theme names a blockquote bar sprite — this guard is vacuous"
     );
-    // `resolve` only checks extension/containment/size, not that the bytes
-    // decode — decoding is `sprite::texture`'s job, exercised in `sprite.rs`.
-    let crate::sprite::SpriteRef::File(got) = good.sprites.annotation_chip.expect("resolved")
-    else {
-        panic!("a directory origin must resolve to a file");
-    };
-    assert!(got.is_absolute());
-    assert!(got.ends_with("chip.png"));
+}
 
-    let bad = resolved_from(
-        "[themes.t]\nannotation_chip_sprite = \"../escape.png\"\n",
-        origin,
+/// **The sprite set on disk and the sprite set in the binary are the same set.**
+///
+/// The three packaging scripts ship `data/sprites/` wholesale; `crate::sprite::BUILTIN_SPRITES`
+/// compiles the same files in. Nothing compared the two, and every way they can disagree is
+/// silent — an unresolved sprite is inert by design (ScrAP-324), so the only symptom is a
+/// decoration that is quietly flat on an installed copy.
+///
+/// **Direction 1 — a file no key names.** A sprite dropped into `data/sprites/` is shipped by
+/// every packaging script the moment it lands there, with no edit; if nobody also adds it to
+/// `BUILTIN_SPRITES` it exists on disk and not in the binary, and `builtin()` returns `None`
+/// here. This is the direction packaging can open on its own, which is why it is the one that
+/// needed a guard.
+///
+/// **Direction 2 — a compiled-in key that is not its own file.** The byte comparison fails when
+/// a key's spelling and its `include_bytes!` path drift apart. The other half of that direction —
+/// a key naming a file that is absent altogether — is refused by `include_bytes!` at compile
+/// time and needs no runtime assertion.
+///
+/// Anchored to `CARGO_MANIFEST_DIR`: the working directory a test binary is launched from is not
+/// a property this guard may rest on.
+#[test]
+fn every_sprite_on_disk_is_compiled_in_with_the_same_bytes() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/sprites");
+    let mut checked = 0usize;
+    for entry in std::fs::read_dir(&dir).expect("data/sprites/ must exist") {
+        let path = entry.expect("a readable directory entry").path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        // The packaging scripts survive a subdirectory rather than aborting on one; the key
+        // space is flat, so a subdirectory would be shipped and nameable by nothing. Fail here,
+        // where a human reads it, instead of at install time where nobody does.
+        assert!(path.is_file(), "data/sprites/{name} is not a plain file");
+        let key = format!("sprites/{name}");
+        let compiled = crate::sprite::builtin(&key).unwrap_or_else(|| {
+            panic!(
+                "data/sprites/{name} is shipped by every packaging script but is not in \
+                 crate::sprite::BUILTIN_SPRITES — add it there with include_bytes!, or the \
+                 installed themes.toml names a sprite this binary cannot fall back to"
+            )
+        });
+        let embedded = crate::sprite::bytes(&compiled).expect("compiled-in bytes");
+        let on_disk = std::fs::read(&path).expect("the file reads");
+        assert_eq!(
+            &embedded[..],
+            &on_disk[..],
+            "{key} is compiled in, but not from the file of that name"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "data/sprites/ is empty — this guard is vacuous"
     );
-    assert!(bad.sprites.annotation_chip.is_none());
 }

@@ -102,13 +102,14 @@ impl HeadingObject {
 /// h6→h5 fold, so no surface distinguishes h6 from h5. See TECH.md § "Heading
 /// levels (h1–h5; h6 folds to h5)".
 fn level_class(level: u8) -> &'static str {
-    match level {
-        1 => "outline-h1",
-        2 => "outline-h2",
-        3 => "outline-h3",
-        4 => "outline-h4",
-        _ => "outline-h5",
-    }
+    const CLASSES: [&str; crate::theme::HEADING_LEVELS] = [
+        "outline-h1",
+        "outline-h2",
+        "outline-h3",
+        "outline-h4",
+        "outline-h5",
+    ];
+    CLASSES[crate::theme::heading_slot(level)]
 }
 
 /// Expand every heading row of a `GtkTreeListModel` that was built

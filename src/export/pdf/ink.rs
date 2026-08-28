@@ -6,6 +6,15 @@
 //! [`super::geometry`], and what a construct is came from [`super::decide`]. What is
 //! left is cairo.
 //!
+//! **That claim was FALSE for a while and this note is what makes it checkable.** Five
+//! decisions had leaked in: theme-key-else-palette for the quote bar and the rule, and
+//! sprite-vs-flat precedence for the bar, the band and the rule — each of them a
+//! definite answer no measurement can change, and each unreachable from a test without a
+//! cairo surface and a page (F-INKSEAM-001). They are `decide::wash_of` and
+//! `decide::band_wash` now, both generic over the sprite payload so the PRECEDENCE can
+//! be exercised with a stand-in and no image at all. What is left here is
+//! [`paint_wash`]: given a settled `Wash`, fill a rectangle.
+//!
 //! # Every glyph goes through `show_layout_line`
 //!
 //! **Never** a per-run `show_glyph_string` loop. That hands cairo positioned glyphs with
@@ -14,8 +23,9 @@
 //! (TDD 25.18). It is the kind of regression that passes every visual check.
 
 use super::super::pdftable;
+use super::geometry::px_to_pt;
 use super::geometry::{pango_to_pt, MIN_PRINTABLE_PT};
-use super::{decode, Laid, LineKind, PageDrawn, TableCell, RULE_THICKNESS_PT};
+use super::{Laid, LineKind, PageDrawn, TableCell, RULE_THICKNESS_PT};
 use crate::palette::Palette;
 use crate::theme::Theme;
 use gtk::cairo;
@@ -26,12 +36,79 @@ use gtk::cairo;
 /// times in this file, four of them restoring a colour nothing subsequently drew with.
 /// One name, so a reader can see WHICH colour is being set rather than decode that it is
 /// being set at all.
+///
+/// **`set_source_rgba`, four channels.** It was three, which discarded the alpha of
+/// every colour a theme stated — while the gradient arm four lines away passed
+/// `f64::from(c.alpha())` to `add_color_stop_rgba` and kept it. Two arms of one `match`,
+/// disagreeing about whether alpha exists. Every colour key in this vocabulary parses
+/// `#RRGGBBAA`, two shipped defaults are translucent, and `blockquote_bg` — "a panel
+/// behind quoted text" — is the key an author would most naturally make a wash: it
+/// rendered translucent on screen and as a solid block on the page.
 fn set_ink(cr: &cairo::Context, colour: gtk::gdk::RGBA) {
-    cr.set_source_rgb(
+    cr.set_source_rgba(
         f64::from(colour.red()),
         f64::from(colour.green()),
         f64::from(colour.blue()),
+        f64::from(colour.alpha()),
     );
+}
+
+/// Fill `rect` with a settled [`Wash`] — the cairo half, and nothing but.
+///
+/// A tile repeats at its natural size from the rect's own origin (`translate` first, so
+/// the pattern's phase is the decoration's rather than the page's). A flat colour and a
+/// gradient fill the same rect. `None` paints nothing, which is how an unstated band
+/// leaves a heading byte-identical.
+fn paint_wash(
+    cr: &cairo::Context,
+    wash: &super::decide::Wash<cairo::ImageSurface>,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) {
+    match wash {
+        super::decide::Wash::Tile(surface) => {
+            let pattern = cairo::SurfacePattern::create(surface);
+            pattern.set_extend(cairo::Extend::Repeat);
+            cr.save().ok();
+            cr.translate(x, y);
+            if cr.set_source(&pattern).is_ok() {
+                cr.rectangle(0.0, 0.0, width, height);
+                cr.fill().ok();
+            }
+            cr.restore().ok();
+        }
+        super::decide::Wash::Gradient { from, to } => {
+            let g = cairo::LinearGradient::new(x, y, x, y + height);
+            for (offset, c) in [(0.0, from), (1.0, to)] {
+                g.add_color_stop_rgba(
+                    offset,
+                    f64::from(c.red()),
+                    f64::from(c.green()),
+                    f64::from(c.blue()),
+                    f64::from(c.alpha()),
+                );
+            }
+            cr.save().ok();
+            // The rectangle goes INSIDE the guard, matching the tile arm above.
+            // Appended before it, a failing `set_source` leaves it on the path —
+            // and cairo's save/restore does not save the path, so the next
+            // `show_layout_line` would fill it in the TEXT colour: a solid block
+            // over the heading rather than a missing gradient.
+            if cr.set_source(&g).is_ok() {
+                cr.rectangle(x, y, width, height);
+                cr.fill().ok();
+            }
+            cr.restore().ok();
+        }
+        super::decide::Wash::Flat(fill) => {
+            set_ink(cr, *fill);
+            cr.rectangle(x, y, width, height);
+            cr.fill().ok();
+        }
+        super::decide::Wash::None => {}
+    }
 }
 
 /// Draw one page's fragments onto `cr`, in points.
@@ -50,32 +127,27 @@ pub(crate) fn draw_page(
     // "theme key, else palette" resolution in one readable place, which is where the
     // POLICY § One theme key rule wants it: a reader checking that a surface is themed
     // consistently should not have to find every draw site to be sure.
-    let bar_ink = theme.blockquote_bar_color.unwrap_or(palette.blockquote_bar);
     // Decoded ONCE for the page rather than per quoted line: the surface is cheap to
     // hold and re-reading the file for every line of a long quote is not.
-    let bar_sprite = theme
-        .sprites
-        .blockquote_bar
-        .as_ref()
-        .and_then(crate::sprite::bytes)
-        .and_then(|bytes| decode(&bytes))
-        .map(|(surface, _, _)| surface);
+    // Sprite-vs-flat precedence and theme-key-else-palette are BOTH `decide`'s, so what
+    // is left below is cairo — which is what this module's own doc has always claimed
+    // (F-INKSEAM-001). `surface` is the injection point: `wash_of` takes the loader, so
+    // the decision is exercisable with a stand-in payload and no image at all.
+    let bar_wash =
+        super::decide::wash_of(&theme.blockquote_bar_decor(), palette.blockquote_bar, |r| {
+            crate::sprite::surface(r).map(|(surface, _, _)| surface)
+        });
     // The quote panel and its ink (TDD 18.29), resolved with the same hoist and the same
     // "theme key, else absent" rule: each is `None` unless the theme states it, and an
     // unstated one leaves quoted text on the page in the body ink, exactly as before.
     let quote_bg = theme.blockquote_bg;
     let quote_fg = theme.blockquote_fg;
-    let rule_ink = theme.rule_color.unwrap_or(palette.rule);
     // The rule's tile (TDD 18.31), decoded ONCE for the page beside the quote bar's, for
     // the same reason: a document of rules would otherwise re-read the same picture per
     // rule. `measure` has already given each rule line room for a whole tile.
-    let rule_sprite = theme
-        .sprites
-        .rule
-        .as_ref()
-        .and_then(crate::sprite::bytes)
-        .and_then(|bytes| decode(&bytes))
-        .map(|(surface, _, _)| surface);
+    let rule_wash = super::decide::wash_of(&theme.rule_decor(), palette.rule, |r| {
+        crate::sprite::surface(r).map(|(surface, _, _)| surface)
+    });
     set_ink(cr, fg);
     let mut y = margin_pt;
     for (i, idx) in range.clone().enumerate() {
@@ -121,8 +193,13 @@ pub(crate) fn draw_page(
             let top = y - gap_above;
             let height = line.height + gap_above;
             cr.save().ok();
-            let w = f64::from(theme.metrics.blockquote_bar_width);
-            let x = margin_pt + quote.indent - w * 2.0;
+            // The bar sits its own width plus the themed gap left of the quoted text
+            // — the geometry `measure` stepped the quote in by, read back. It used to
+            // be `w * 2.0`, which made the bar-to-text gap silently equal to the bar's
+            // own width and left `blockquote_text_gap` expressing nothing on the page.
+            let w = px_to_pt(theme.metrics.blockquote_bar_width);
+            let gap = px_to_pt(theme.metrics.blockquote_text_gap);
+            let x = margin_pt + quote.indent - w - gap;
             // The panel goes down FIRST, behind both the bar and the text. It spans the
             // quote's own column — from the quote's indent to the printable edge — which
             // is this medium's reading of the content column the preview fills.
@@ -136,29 +213,14 @@ pub(crate) fn draw_page(
             // at natural size, the same picture the preview tiles. An `else` rather than
             // a paint-over for the reason the drawn bar states: an opaque tile hides the
             // difference and a transparent one lets the flat colour bleed through.
-            match &bar_sprite {
-                Some(surface) => {
-                    let pattern = cairo::SurfacePattern::create(surface);
-                    pattern.set_extend(cairo::Extend::Repeat);
-                    cr.translate(x, top);
-                    if cr.set_source(&pattern).is_ok() {
-                        cr.rectangle(0.0, 0.0, w, height);
-                        cr.fill().ok();
-                    }
-                }
-                None => {
-                    set_ink(cr, bar_ink);
-                    cr.rectangle(x, top, w, height);
-                    cr.fill().ok();
-                }
-            }
+            paint_wash(cr, &bar_wash, x, top, w, height);
             cr.restore().ok();
             set_ink(cr, fg);
         }
         // The heading band (TDD 18.25), FIRST so the heading's own glyphs land on top of
         // it. Spans the printable column — the same extent the preview draws it at, and
         // the widest thing this medium offers without restructuring the page.
-        if let Some(band) = &line.band {
+        if let Some(band) = &line.fill {
             // Back OUT by the padding the line was laid out inside: the text moved in,
             // the band did not (TDD 18.25's padding fix), so the band keeps the exact
             // printable column the preview and the HTML sink match against.
@@ -166,42 +228,9 @@ pub(crate) fn draw_page(
             let width = (laid.printable_width_pt - left).max(MIN_PRINTABLE_PT);
             let x = margin_pt + left;
             cr.save().ok();
-            cr.rectangle(x, y, width, line.height);
-            match (&band.sprite, band.gradient_to) {
-                // TILED at natural size, like the preview's `push_repeat` — the same
-                // picture on the page as on the screen, rather than the same file
-                // stretched to a different box in each medium.
-                (Some(surface), _) => {
-                    let pattern = cairo::SurfacePattern::create(surface);
-                    pattern.set_extend(cairo::Extend::Repeat);
-                    cr.save().ok();
-                    cr.translate(x, y);
-                    if cr.set_source(&pattern).is_ok() {
-                        cr.rectangle(0.0, 0.0, width, line.height);
-                        cr.fill().ok();
-                    }
-                    cr.restore().ok();
-                }
-                (None, Some(to)) => {
-                    let g = cairo::LinearGradient::new(x, y, x, y + line.height);
-                    for (offset, c) in [(0.0, band.fill), (1.0, to)] {
-                        g.add_color_stop_rgba(
-                            offset,
-                            f64::from(c.red()),
-                            f64::from(c.green()),
-                            f64::from(c.blue()),
-                            f64::from(c.alpha()),
-                        );
-                    }
-                    if cr.set_source(&g).is_ok() {
-                        cr.fill().ok();
-                    }
-                }
-                (None, None) => {
-                    set_ink(cr, band.fill);
-                    cr.fill().ok();
-                }
-            }
+            // The band's three-way precedence is `decide`'s (`BlockFill::wash`), settled
+            // at measure time; what happens here is the fill.
+            paint_wash(cr, &band.wash, x, y, width, line.height);
             cr.restore().ok();
             set_ink(cr, fg);
         }
@@ -233,20 +262,26 @@ pub(crate) fn draw_page(
                 // every other sprite-vs-flat pair in this vocabulary states it: an opaque
                 // tile hides the difference, and a transparent one lets the colour bleed
                 // through — a bug only the tiles nobody tested would show.
-                if let Some(surface) = &rule_sprite {
-                    let pattern = cairo::SurfacePattern::create(surface);
-                    pattern.set_extend(cairo::Extend::Repeat);
-                    cr.translate(margin_pt + line.indent, y);
-                    if cr.set_source(&pattern).is_ok() {
-                        cr.rectangle(0.0, 0.0, width, line.height);
-                        cr.fill().ok();
-                    }
+                if matches!(rule_wash, super::decide::Wash::Tile(_)) {
+                    paint_wash(
+                        cr,
+                        &rule_wash,
+                        margin_pt + line.indent,
+                        y,
+                        width,
+                        line.height,
+                    );
                     cr.restore().ok();
                     set_ink(cr, fg);
-                    y += line.height;
+                    y += line.height + frag.space_after;
                     continue;
                 }
-                set_ink(cr, rule_ink);
+                // The flat rung of the same `Wash` — a hairline rather than a filled
+                // band, which is why it is not `paint_wash`: the rule's flat form is a
+                // LINE and its tiled form fills the reserved height.
+                if let super::decide::Wash::Flat(ink) = rule_wash {
+                    set_ink(cr, ink);
+                }
                 // Span the printable column this rule sits in, at the theme's own
                 // thickness. It used to be `400.0, 0.75` — two literals in a file whose
                 // POLICY forbids them, which over- or under-ran the margin depending on
@@ -335,7 +370,12 @@ pub(crate) fn draw_page(
                 set_ink(cr, fg);
             }
         }
-        y += line.height;
+        // The gap BELOW this block, where the theme asked for one. Unlike
+        // `space_before` it is not dropped at a page boundary: it belongs to the block
+        // above it rather than to the join, so a heading whose page ends right after it
+        // keeps the rhythm it asked for. The paginator budgets the same quantity, so a
+        // page's contents and its measurement agree.
+        y += line.height + frag.space_after;
     }
     // ONE status check, at the one place that owns the page's outcome.
     //
@@ -398,7 +438,12 @@ fn draw_table_row(
 
     cr.save().ok();
     cr.translate(left, top);
-    if row.scale > 0.0 && (row.scale - 1.0).abs() > f64::EPSILON {
+    // Says what it means: skip an IDENTITY transform. Written as a tolerance
+    // (`(scale - 1.0).abs() > f64::EPSILON`) it read as an approximate comparison
+    // while being an exact one — `f64::EPSILON` is the ULP at 1.0, so it admits
+    // nothing a plain `!=` does not, and a scale arrived at by a different
+    // derivation would take the wrong branch for reasons the code did not state.
+    if row.scale > 0.0 && row.scale != 1.0 {
         cr.scale(row.scale, row.scale);
     }
 

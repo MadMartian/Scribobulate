@@ -37,17 +37,21 @@ impl Renderer {
                             // Superscript/highlight are theme-generated (TDD 18.18,
                             // 18.6) — `open` is a `Cow` for exactly those two branches.
                             let (open, close): (std::borrow::Cow<str>, &str) = match script {
-                                Script::Superscript => {
-                                    (super::superscript_open().into(), super::SUPERSCRIPT_CLOSE)
-                                }
-                                Script::Subscript => {
-                                    (super::subscript_open().into(), super::SUBSCRIPT_CLOSE)
-                                }
+                                Script::Superscript => (
+                                    super::superscript_open(&self.theme).into(),
+                                    super::SUPERSCRIPT_CLOSE,
+                                ),
+                                Script::Subscript => (
+                                    super::subscript_open(&self.theme).into(),
+                                    super::SUBSCRIPT_CLOSE,
+                                ),
                                 Script::Strikethrough => {
-                                    let (open, close) = super::strike_tags();
+                                    let (open, close) = super::strike_tags(&self.theme);
                                     (open.into(), close)
                                 }
-                                Script::Highlight => (super::mark_open().into(), super::MARK_CLOSE),
+                                Script::Highlight => {
+                                    (super::mark_open(&self.theme).into(), super::MARK_CLOSE)
+                                }
                                 Script::None => ("".into(), ""),
                             };
                             ts.cell_markup.push_str(&open);
@@ -150,7 +154,20 @@ impl Renderer {
             // (start.rs / end.rs); accumulate each line so the whole block is parsed
             // once, at its close, as a `<picture>`/`<img>` image or dropped. Guard on
             // `in_html_block` so a stray `Html` event outside a block can't leak.
-            Event::Html(t) if self.in_html_block => self.html_acc.push_str(&t),
+            // TOTAL, not guarded: an arm whose guard fails falls through to the
+            // catch-all, so while a `_ => {}` existed a block-HTML event arriving
+            // with `in_html_block` false was dropped in complete silence. There is
+            // no catch-all now, and there is no guard either.
+            Event::Html(t) => {
+                if self.in_html_block {
+                    self.html_acc.push_str(&t);
+                } else {
+                    // Block HTML outside a block: pulldown always brackets these
+                    // with `Tag::HtmlBlock`, so this is a parser-shape surprise
+                    // rather than a document one.
+                    self.dropped_construct("a block-HTML event outside an HTML block");
+                }
+            }
             // Inline raw HTML (mid-paragraph, e.g. a bare `<img …>`, or the separate
             // tags of a single-line `<picture>`): feed each tag through the scanner,
             // which honours the `<picture>` grouping carried across events. Non-image
@@ -167,7 +184,12 @@ impl Renderer {
                 // below is therefore byte-for-byte the code that was here before this
                 // key existed — "unstated ⇒ unchanged" by construction, not by care.
                 let theme = crate::theme::active();
-                let rule_tile = theme.sprites.rule.as_ref().and_then(crate::sprite::texture);
+                // The engine decides which of the rule's two appearances applies
+                // (`theme::Fill`); this site renders the answer. A sprite that will
+                // not decode falls through to the stock separator, which the theme's
+                // own `rule_color` styles through generated CSS — degrading, not
+                // erasing.
+                let rule_tile = theme.rule_decor().sprite.and_then(crate::sprite::texture);
                 let sep: gtk::Widget = match rule_tile {
                     Some(tex) => crate::widgets::rule::SpriteRule::new(tex).upcast(),
                     None => gtk::Separator::new(gtk::Orientation::Horizontal).upcast(),
@@ -202,7 +224,15 @@ impl Renderer {
                 self.newline();
             }
 
-            _ => {}
+            // Inert BY OPTION, spelled out rather than swept into a `_`.
+            // `normalize::md_options` enables neither MATH nor FOOTNOTES, so
+            // pulldown never emits these and the source text arrives as literal
+            // `Text` — which is the visible degradation ScrAP-78 is about. Listing
+            // them keeps the match exhaustive, so adding an option without adding a
+            // handler stops compiling instead of silently rendering nothing.
+            Event::InlineMath(_) => self.dropped_construct("inline math"),
+            Event::DisplayMath(_) => self.dropped_construct("display math"),
+            Event::FootnoteReference(_) => self.dropped_construct("a footnote reference"),
         }
     }
 }

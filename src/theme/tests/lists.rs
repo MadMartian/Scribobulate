@@ -19,18 +19,23 @@ fn list_marker_is_opt_in() {
         .is_none());
     let term = Themes::builtin().resolve("terminal");
     assert_eq!(
-        crate::palette::to_hex(term.list_marker_color.expect("terminal sets it")),
+        crate::palette::to_hex_opaque(term.list_marker_color.expect("terminal sets it")),
         "#55ff55"
     );
     let sw = Themes::builtin().resolve("synthwave");
     assert_eq!(
-        crate::palette::to_hex(sw.list_marker_color.expect("synthwave sets it")),
+        crate::palette::to_hex_opaque(sw.list_marker_color.expect("synthwave sets it")),
         "#ff3caf"
     );
 }
 
 /// TDD 18.24 / 18.2 — every marker key is absent under System, and resolves and
-/// merges from a user file (the `take!`-list guard, eight keys' worth).
+/// merges from a user file, eight keys' worth.
+///
+/// The merge half no longer guards a per-key merge LIST — `overlay` is one `extend`
+/// over a spelling map and a key cannot be omitted from it. What it still proves is the
+/// surviving obligation: that each key reaches the resolved `Theme` at all, which is
+/// `F-SINK-001`'s hazard and is narrower than the one this docstring used to name.
 #[test]
 fn list_marker_glyphs_and_sprites_are_opt_in_and_merge() {
     let sys = Themes::builtin().resolve(SYSTEM_ID);
@@ -78,7 +83,7 @@ fn every_bullet_tier_inherits_the_unsuffixed_key_by_default() {
     let t = themes.resolve("sepia");
     for tier in 0..BULLET_TIERS {
         assert_eq!(
-            crate::palette::to_hex(t.list_bullet_colors[tier].expect("inherited")),
+            crate::palette::to_hex_opaque(t.list_bullet_colors[tier].expect("inherited")),
             "#112233",
             "tier {tier}"
         );
@@ -110,7 +115,7 @@ fn an_unstated_tier_falls_back_to_the_next_shallower_one() {
         .unwrap(),
     );
     let t = themes.resolve("sepia");
-    let hex = |i: usize| crate::palette::to_hex(t.list_bullet_colors[i].unwrap());
+    let hex = |i: usize| crate::palette::to_hex_opaque(t.list_bullet_colors[i].unwrap());
     assert_eq!(hex(0), "#111111");
     assert_eq!(hex(1), "#222222");
     assert_eq!(
@@ -134,15 +139,15 @@ fn an_unstated_tier_falls_back_to_the_next_shallower_one() {
     );
     let t3 = only3.resolve("sepia");
     assert_eq!(
-        crate::palette::to_hex(t3.list_bullet_colors[0].unwrap()),
+        crate::palette::to_hex_opaque(t3.list_bullet_colors[0].unwrap()),
         "#111111"
     );
     assert_eq!(
-        crate::palette::to_hex(t3.list_bullet_colors[1].unwrap()),
+        crate::palette::to_hex_opaque(t3.list_bullet_colors[1].unwrap()),
         "#111111"
     );
     assert_eq!(
-        crate::palette::to_hex(t3.list_bullet_colors[2].unwrap()),
+        crate::palette::to_hex_opaque(t3.list_bullet_colors[2].unwrap()),
         "#333333"
     );
 }
@@ -160,17 +165,43 @@ fn the_depth_keys_do_not_reach_the_ordered_or_task_markers() {
         .unwrap(),
     );
     let t = themes.resolve("sepia");
-    // The shared key is untouched by the depth keys — every non-bullet marker reads
-    // it at every depth.
+    // **The markers themselves, at depth, not the bare key.** The only assertion here
+    // used to be on `list_marker_color`, which the depth keys could not affect under
+    // ANY implementation — so this test passed with the rule broken, and SCHEMA's Lists
+    // ⚠️ callout is the one list contract a reader is most likely to get backwards.
+    use crate::theme::MarkerKind;
+    let hex = |kind: MarkerKind, depth: usize| {
+        crate::palette::to_hex_opaque(t.marker_ink(kind, depth).expect("stated"))
+    };
+    for depth in [1usize, 2, 3, 9] {
+        assert_eq!(
+            hex(MarkerKind::Ordered, depth),
+            "#111111",
+            "an ordered numeral at depth {depth} must keep the shared colour"
+        );
+        assert_eq!(
+            hex(MarkerKind::Task, depth),
+            "#111111",
+            "a task box at depth {depth} must keep the shared colour"
+        );
+        assert_eq!(hex(MarkerKind::TaskChecked, depth), "#111111");
+    }
+    // Anti-vacuity: the BULLET does move, so the assertions above are about which
+    // kinds the depth key reaches and not about the key doing nothing at all.
+    assert_eq!(hex(MarkerKind::Bullet, 1), "#111111");
+    assert_eq!(hex(MarkerKind::Bullet, 2), "#222222");
+    // And the shared key itself is untouched.
     assert_eq!(
-        crate::palette::to_hex(t.list_marker_color.unwrap()),
+        crate::palette::to_hex_opaque(t.list_marker_color.unwrap()),
         "#111111"
     );
 }
 
-/// The `take!`-list guard, six keys' worth: a user file's depth override must merge
-/// over a shipped theme. Omitting a key there compiles, leaves every built-in theme
-/// working, and silently drops EVERY user override.
+/// A user file's depth override must merge over a shipped theme, six keys' worth.
+///
+/// Not a merge-LIST guard any more: `overlay` extends a spelling map, so the per-key
+/// omission this once watched for is unrepresentable. The live claim is that a NARROWED
+/// depth spelling survives the merge and lands on the tier it names.
 #[test]
 fn a_user_file_can_override_a_bullet_depth_key() {
     let mut themes = Themes::builtin();
@@ -183,7 +214,7 @@ fn a_user_file_can_override_a_bullet_depth_key() {
     );
     let t = themes.resolve("terminal");
     assert_eq!(
-        crate::palette::to_hex(t.list_bullet_colors[1].expect("merged")),
+        crate::palette::to_hex_opaque(t.list_bullet_colors[1].expect("merged")),
         "#abcdef"
     );
     assert_eq!(t.list_glyphs.bullet[1].as_ref().unwrap().as_plain(), "·");
@@ -208,7 +239,7 @@ fn the_task_marker_colour_is_opt_in_and_folds_to_the_shared_key() {
         Themes::parse_compiled("[themes.sepia]\nlist_marker_color = \"#111111\"\n").unwrap(),
     );
     assert_eq!(
-        crate::palette::to_hex(shared.resolve("sepia").list_task_color.unwrap()),
+        crate::palette::to_hex_opaque(shared.resolve("sepia").list_task_color.unwrap()),
         "#111111"
     );
 
@@ -223,24 +254,26 @@ fn the_task_marker_colour_is_opt_in_and_folds_to_the_shared_key() {
         );
     let t = split.resolve("sepia");
     assert_eq!(
-        crate::palette::to_hex(t.list_task_color.unwrap()),
+        crate::palette::to_hex_opaque(t.list_task_color.unwrap()),
         "#ff00ff"
     );
     assert_eq!(
-        crate::palette::to_hex(t.list_marker_color.unwrap()),
+        crate::palette::to_hex_opaque(t.list_marker_color.unwrap()),
         "#111111"
     );
     // …and the BULLET tiers keep reading the shared key, not the task one.
     assert_eq!(
-        crate::palette::to_hex(t.list_bullet_colors[0].unwrap()),
+        crate::palette::to_hex_opaque(t.list_bullet_colors[0].unwrap()),
         "#111111"
     );
 }
 
-/// Regression: `list_marker` must merge through a user-file override like every
-/// other colour. It was omitted from the `overlay` `take!` list, so a user
-/// override was silently dropped — `resolve()`'s own per-key path masked the gap
-/// for built-in themes, but a user file goes through `merge_over` → `overlay`.
+/// HISTORY, kept as a named regression rather than as a live mechanism: `list_marker`
+/// was once omitted from `overlay`'s hand-written per-key merge list, so every user
+/// override of that one key was silently dropped while every built-in theme kept
+/// working. That list no longer exists — the registry made the omission
+/// unrepresentable — so this test now pins the OUTCOME (a user file overrides a key its
+/// theme never states) rather than the mechanism that used to break it.
 #[test]
 fn a_user_file_can_override_list_marker() {
     let mut themes = Themes::builtin();
@@ -249,7 +282,7 @@ fn a_user_file_can_override_list_marker() {
         Themes::parse_compiled("[themes.sepia]\nlist_marker_color = \"#abcdef\"\n").unwrap(),
     );
     assert_eq!(
-        crate::palette::to_hex(themes.resolve("sepia").list_marker_color.expect("merged")),
+        crate::palette::to_hex_opaque(themes.resolve("sepia").list_marker_color.expect("merged")),
         "#abcdef"
     );
 }

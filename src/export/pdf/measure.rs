@@ -22,14 +22,14 @@ use super::decide::{
     Seg,
 };
 use super::geometry::{
-    indent_on_page, pango_to_pt, printable_width, pt_to_pango, INDENT_PT, MIN_PRINTABLE_PT,
+    indent_on_page, pango_to_pt, printable_width, pt_to_pango, px_to_pt, MIN_PRINTABLE_PT,
     PT_PER_PX,
 };
 use super::{
-    decode, HeadingBandInk, Laid, LayoutSpec, Line, LineKind, MarkerImage, QuoteRef, BASE_PT,
+    decode, BlockFill, Laid, LayoutSpec, Line, LineKind, MarkerImage, QuoteRef, BASE_PT,
     BLOCK_GAP_PT, PANGO_WEIGHT_NORMAL,
 };
-use crate::theme::Theme;
+use crate::theme::{CssSafeFontStack, Theme};
 use gtk::pango;
 
 /// Lay `doc` out for a page `width_pt` points wide.
@@ -78,6 +78,16 @@ struct ParagraphSpec {
     keep_with_next: bool,
     /// Taken off the wrap width only. `0.0` everywhere but a banded heading.
     right_inset: f64,
+    /// The block's own font family, where the theme states one for it. `None` ⇒ the
+    /// body face. Only a heading uses it today (`heading_font`, per level), and it is
+    /// a field rather than an argument for the reason the bundle exists: a new
+    /// per-block property must not change the call arity.
+    family: Option<CssSafeFontStack>,
+    /// The gap above the block's FIRST line and below its LAST — themed where a key
+    /// says so, `BLOCK_GAP_PT` / `0.0` otherwise, which is what this sink emitted
+    /// before either key could reach it.
+    space_above: f64,
+    space_below: f64,
 }
 
 struct Layouter<'a> {
@@ -114,8 +124,21 @@ impl Layouter<'_> {
         }
         layout.set_alignment(spec.align);
         let mut desc = pango::FontDescription::new();
-        if let Some(family) = self.theme.font_family.as_ref() {
-            desc.set_family(family.as_str());
+        // The block's OWN face where it states one (a heading's `heading_font`, per
+        // level), else the theme's body face. This used to read `font_family` and
+        // nothing else — it is the only font descriptor this sink builds, which is
+        // why `heading_font` reached two surfaces of three.
+        //
+        // Through `pango_family`, ALWAYS: what the theme holds is the CSS spelling, in
+        // which a multi-word name is quoted, and Pango's own list parser does not accept
+        // quotes — a quoted stack falls through to its generic terminator, so
+        // `font_family = "DejaVu Serif"` produced no DejaVu face in the artefact at all
+        // and landed on plain `serif`, which reads like the theme's serif choice being
+        // honoured. The seam existed and this sink did not call it; a bare generic
+        // (`monospace`) is unquoted by the sanitiser and so came through, which is why
+        // the one test aimed here passed.
+        if let Some(family) = spec.family.as_ref().or(self.theme.font_family.as_ref()) {
+            desc.set_family(&family.pango_family());
         }
         desc.set_size(pt_to_pango(spec.size_pt));
         desc.set_weight(pango::Weight::__Unknown(spec.weight));
@@ -131,20 +154,37 @@ impl Layouter<'_> {
     /// The sprite is decoded here, once per heading, rather than per line: the surface is
     /// cheap to clone (cairo refcounts it) and decoding per line would re-read the file
     /// for every row of a wrapped heading.
-    fn heading_band_ink(&self, level_index: usize) -> Option<HeadingBandInk> {
-        let fill = self.theme.heading_band.fills[level_index]?;
-        let padding = f64::from(self.theme.metrics.heading_band_padding[level_index]);
-        let sprite = self.theme.sprites.heading_band[level_index]
-            .as_ref()
-            .and_then(crate::sprite::bytes)
-            .and_then(|bytes| decode(&bytes))
-            .map(|(surface, _, _)| surface);
-        Some(HeadingBandInk {
+    fn heading_band_ink(&self, level_index: usize) -> Option<BlockFill> {
+        // The engine decides which of the band's three appearances applies
+        // (`theme::Band`), so this sink resolves an answer rather than re-deriving the
+        // precedence. A level banded ONLY by a sprite is a banded level here too,
+        // which it was not before — all three renderers used to require a stated fill,
+        // against SCHEMA.
+        let decor = self.theme.heading_band_decor(level_index);
+        if !decor.is_present() {
+            return None;
+        }
+        let padding = px_to_pt(self.theme.metrics.heading_band_padding[level_index]);
+        // The whole precedence — sprite, else gradient, else flat — settled ONCE, by
+        // `decide`, with the sprite load as its injection point. A sprite that will not
+        // decode degrades to the gradient rather than erasing the band, the same
+        // degradation the preview and the HTML sink perform.
+        Some(BlockFill {
             padding,
-            fill,
-            gradient_to: self.theme.heading_band.gradient_to[level_index],
-            sprite,
+            wash: super::decide::band_wash(&decor, |r| {
+                crate::sprite::surface(r).map(|(surface, _, _)| surface)
+            }),
         })
+    }
+
+    /// The points a blockquote's content is stepped in from its container: the bar,
+    /// plus the themed gap between the bar and the quoted text.
+    ///
+    /// The same two keys the preview's `blockquote` tag adds to its own left margin, so
+    /// a quote is inset by one geometry on both surfaces (TDD 25.3).
+    fn quote_step_pt(&self) -> f64 {
+        px_to_pt(self.theme.metrics.blockquote_bar_width)
+            + px_to_pt(self.theme.metrics.blockquote_text_gap)
     }
 
     /// A fresh blockquote identity, unique within this layout.
@@ -201,7 +241,7 @@ impl Layouter<'_> {
             // six sites is how the pairing invariant this function exists to hold gets
             // diluted.
             marker: None,
-            band: None,
+            fill: None,
         });
     }
 
@@ -228,10 +268,10 @@ impl Layouter<'_> {
                 // The theme's heading rule (TDD 18.22/25.3) wraps the whole run, so the
                 // artefact carries the same overline/underline the preview's heading tag
                 // does. Empty unless the theme states one.
-                let (rule_open, rule_close) =
-                    super::super::markup::heading_rule_span(self.theme, level_index);
+                let (span_open, span_close) =
+                    super::super::markup::heading_span(self.theme, level_index);
                 let markup = format!(
-                    "{rule_open}{}{rule_close}",
+                    "{span_open}{}{span_close}",
                     inline_markup(inlines, doc, self.theme)
                 );
                 // A heading keeps its first body line company where it can — the
@@ -245,11 +285,23 @@ impl Layouter<'_> {
                 // that bands nothing.
                 let pad = band
                     .as_ref()
-                    .map(|_| f64::from(self.theme.metrics.heading_band_padding[level_index]))
+                    .map(|_| px_to_pt(self.theme.metrics.heading_band_padding[level_index]))
                     .unwrap_or(0.0);
                 self.paragraph(
                     &markup,
                     ParagraphSpec {
+                        // The level's own face where the theme states one, falling back
+                        // to the body face — `heading_font` reached the preview and the
+                        // HTML sink and stopped here, because `layout_of` built the ONLY
+                        // font descriptor in this sink and read `font_family` alone.
+                        family: self.theme.heading_fonts[level_index].clone(),
+                        // The level's own rhythm. Both keys are per level, both reach
+                        // the preview and the HTML sink, and both used to hit the flat
+                        // `BLOCK_GAP_PT` here — TDD 18.32 says "on all three surfaces"
+                        // in its own predicate.
+                        space_above: px_to_pt(self.theme.metrics.heading_space_above[level_index])
+                            .max(BLOCK_GAP_PT),
+                        space_below: px_to_pt(self.theme.metrics.heading_space_below[level_index]),
                         size_pt: BASE_PT * scale,
                         weight: self.theme.typography.heading_weight[level_index],
                         indent: indent + pad,
@@ -262,7 +314,7 @@ impl Layouter<'_> {
                 // is several abutting rects, which is one continuous band (TDD 18.25).
                 if let Some(band) = band {
                     for line in &mut self.lines[first..] {
-                        line.band = Some(band.clone());
+                        line.fill = Some(band.clone());
                     }
                 }
             }
@@ -278,6 +330,9 @@ impl Layouter<'_> {
                                 self.paragraph(
                                     &markup,
                                     ParagraphSpec {
+                                        family: None,
+                                        space_above: BLOCK_GAP_PT,
+                                        space_below: 0.0,
                                         size_pt: BASE_PT,
                                         weight: PANGO_WEIGHT_NORMAL,
                                         indent,
@@ -298,9 +353,21 @@ impl Layouter<'_> {
                     "<span font_family=\"monospace\">{}</span>",
                     escape_pango(text.trim_end_matches('\n'))
                 );
+                // The block's CARD (TDD 18.7): the same rect at the same column a
+                // banded heading gets, which is why they share `BlockFill`. This sink
+                // drew none at all, so `code_block_bg` reached the preview and the
+                // HTML sink and printed nothing.
+                let card = self.theme.code_block_bg.map(|bg| BlockFill {
+                    padding: 0.0,
+                    wash: super::decide::Wash::Flat(bg),
+                });
+                let first = self.lines.len();
                 self.paragraph(
                     &markup,
                     ParagraphSpec {
+                        family: None,
+                        space_above: BLOCK_GAP_PT,
+                        space_below: 0.0,
                         size_pt: BASE_PT,
                         weight: PANGO_WEIGHT_NORMAL,
                         indent,
@@ -309,6 +376,14 @@ impl Layouter<'_> {
                         right_inset: 0.0,
                     },
                 );
+                // EVERY line of the block, so a multi-line listing is one continuous
+                // card rather than a stripe per row — the same reason a wrapped
+                // heading's band is applied per line.
+                if let Some(card) = card {
+                    for line in &mut self.lines[first..] {
+                        line.fill = Some(card.clone());
+                    }
+                }
             }
             Block::BlockQuote(inner) => {
                 // ONE identity for the whole quote, and ONE indent — the quote's own
@@ -318,12 +393,19 @@ impl Layouter<'_> {
                 // of stepping right at each nested list and breaking at each block gap
                 // (TDD 18.29). A nested quote takes a fresh id below, so it draws as
                 // itself — which is what has always happened for those lines.
+                // The quote's step is its BAR plus the gap the theme puts between the
+                // bar and the quoted text — the same two keys the preview's
+                // `blockquote` tag adds to its left margin. It was a flat `INDENT_PT`,
+                // so `blockquote_text_gap` reached the preview and the HTML sink and
+                // expressed nothing here; the gap on the page was whatever the bar's
+                // own width happened to be.
+                let step = self.quote_step_pt();
                 let quote = Some(QuoteRef {
                     id: self.next_quote_id(),
-                    indent: self.indent_on_page(indent + INDENT_PT),
+                    indent: self.indent_on_page(indent + step),
                 });
                 for b in inner {
-                    self.block(b, doc, indent + INDENT_PT, quote, list_depth);
+                    self.block(b, doc, indent + step, quote, list_depth);
                 }
             }
             Block::List { start, items } => {
@@ -350,10 +432,11 @@ impl Layouter<'_> {
                     .and_then(crate::sprite::texture)
                     .map(|t| f64::from(t.height()))
                     .unwrap_or(0.0);
-                let height = f64::from(self.theme.metrics.rule_space).max(tile_h);
+                let height = px_to_pt(self.theme.metrics.rule_space).max(tile_h);
                 self.push_line(
                     LineKind::Rule,
                     Fragment {
+                        space_after: 0.0,
                         height,
                         space_before: BLOCK_GAP_PT,
                         keep_with_next: false,
@@ -401,6 +484,7 @@ impl Layouter<'_> {
                 drawn: (w, h),
             },
             Fragment {
+                space_after: 0.0,
                 height: h,
                 space_before: BLOCK_GAP_PT,
                 keep_with_next: false,
@@ -427,6 +511,9 @@ impl Layouter<'_> {
         self.paragraph(
             &markup,
             ParagraphSpec {
+                family: None,
+                space_above: BLOCK_GAP_PT,
+                space_below: 0.0,
                 size_pt: BASE_PT,
                 weight: PANGO_WEIGHT_NORMAL,
                 indent,
@@ -448,6 +535,9 @@ impl Layouter<'_> {
             quote,
             keep_with_next,
             right_inset,
+            family,
+            space_above,
+            space_below,
         } = spec;
         let layout = self.layout_of(
             markup,
@@ -461,6 +551,7 @@ impl Layouter<'_> {
                 width_pt: Some((self.printable_width(indent) - right_inset).max(MIN_PRINTABLE_PT)),
                 size_pt,
                 weight,
+                family,
                 align: pango::Alignment::Left,
             },
         );
@@ -479,8 +570,10 @@ impl Layouter<'_> {
                 },
                 Fragment {
                     height,
-                    // Only the first line of a block carries the inter-block gap.
-                    space_before: if index == 0 { BLOCK_GAP_PT } else { 0.0 },
+                    // Only the first line of a block carries the inter-block gap, and
+                    // only its last line carries the gap below it.
+                    space_before: if index == 0 { space_above } else { 0.0 },
+                    space_after: if index == count - 1 { space_below } else { 0.0 },
                     // A keep-with-next block keeps only its LAST line with what follows.
                     keep_with_next: keep_with_next && index == count - 1,
                 },
@@ -505,9 +598,14 @@ impl Layouter<'_> {
             // inside the item's own text run: it is drawn in the gutter beside the first
             // line (see `Line::marker`). When one applies, the text run carries NO marker
             // prefix — the same substitution the drawn gutter makes, in this sink's terms.
+            //
+            // `crate::sprite::surface` MEMOISES on the reference, so a 500-item list with
+            // one themed bullet decodes once and hands out refcounted clones; the decode
+            // is deliberately not hoisted into a local here, because the cache is the
+            // shared one every sink reads and a second cache beside it is the drift this
+            // project keeps paying for.
             let mut sprite = list_marker_sprite(item.task, start, list_depth, &self.theme.sprites)
-                .and_then(crate::sprite::bytes)
-                .and_then(|bytes| decode(&bytes));
+                .and_then(crate::sprite::surface);
             let marker = if sprite.is_some() {
                 String::new()
             } else {
@@ -520,6 +618,37 @@ impl Layouter<'_> {
                     list_marker_ink(item.task, start, list_depth, self.theme),
                 )
             };
+            let item_indent = indent + px_to_pt(self.theme.metrics.list_step);
+            // Where this item's first line will land, recorded BEFORE any block is laid
+            // out. The sprite used to be attached inside the "first block is a paragraph
+            // or a heading" branch, so an item beginning with a fenced code block or a
+            // nested list — ordinary Markdown, reachable and untested — decoded its
+            // sprite, discarded it, and rendered with NO marker at all, glyph or picture.
+            let first_line = self.lines.len();
+            let leads_with_text = matches!(
+                item.blocks.first(),
+                Some(Block::Paragraph(_) | Block::Heading { .. })
+            );
+            // A glyph or numeral is TEXT and can only ride a text run. Where the item
+            // does not begin with one, it gets a line of its own kept with the block
+            // under it, rather than vanishing — the drawn gutter marks every item
+            // whatever its first block is, and the page must agree.
+            if !leads_with_text && !marker.is_empty() {
+                self.paragraph(
+                    &marker,
+                    ParagraphSpec {
+                        family: None,
+                        space_above: px_to_pt(self.theme.metrics.list_item_gap),
+                        space_below: 0.0,
+                        size_pt: BASE_PT,
+                        weight: PANGO_WEIGHT_NORMAL,
+                        indent: item_indent,
+                        quote,
+                        keep_with_next: true,
+                        right_inset: 0.0,
+                    },
+                );
+            }
             for (i, block) in item.blocks.iter().enumerate() {
                 // The marker joins the item's FIRST line; everything after it hangs at
                 // the item's own indent.
@@ -530,39 +659,47 @@ impl Layouter<'_> {
                         // rather than run through `escape_pango` a second time, which
                         // would put a literal `&amp;` on the page for a themed glyph.
                         let markup = format!("{marker}{}", inline_markup(inlines, doc, self.theme));
-                        let first = self.lines.len();
                         self.paragraph(
                             &markup,
                             ParagraphSpec {
+                                family: None,
+                                // The theme's own space between list items (TDD 18.26),
+                                // converted from design-time pixels. It was the flat
+                                // `BLOCK_GAP_PT`, so `list_item_gap` reached the preview
+                                // and the HTML sink and expressed nothing here — a
+                                // literal styling value in a sink, which TDD 25.9 calls
+                                // a defect outright.
+                                space_above: px_to_pt(self.theme.metrics.list_item_gap),
+                                space_below: 0.0,
                                 size_pt: BASE_PT,
                                 weight: PANGO_WEIGHT_NORMAL,
-                                indent: indent + INDENT_PT,
+                                indent: item_indent,
                                 quote,
                                 keep_with_next: false,
                                 right_inset: 0.0,
                             },
                         );
-                        // Attach the sprite to the FIRST line the paragraph produced —
-                        // the item's own first row, which is where every other marker
-                        // goes. A paragraph that produced no line (empty item) has
-                        // nothing to hang it on and simply gets no marker.
-                        if let (Some((surface, nw, nh)), Some(line)) =
-                            (sprite.take(), self.lines.get_mut(first))
-                        {
-                            // A square at the row's own height, so the marker tracks the
-                            // text size with no metric of its own — the same relationship
-                            // the drawn gutter's marker box has to its row.
-                            let size = line.height.max(1.0);
-                            line.marker = Some(MarkerImage {
-                                surface,
-                                natural: (nw, nh),
-                                size,
-                            });
-                        }
                         continue;
                     }
                 }
-                self.block(block, doc, indent + INDENT_PT, quote, list_depth);
+                self.block(block, doc, item_indent, quote, list_depth);
+            }
+            // Attach the sprite to the FIRST line the item produced — whatever produced
+            // it, which is the half that was inside the block-kind guard. An item that
+            // produced no line at all (an empty item) has nothing to hang it on and
+            // simply gets no marker.
+            if let (Some((surface, nw, nh)), Some(line)) =
+                (sprite.take(), self.lines.get_mut(first_line))
+            {
+                // A square at the row's own height, so the marker tracks the text size
+                // with no metric of its own — the same relationship the drawn gutter's
+                // marker box has to its row.
+                let size = line.height.max(1.0);
+                line.marker = Some(MarkerImage {
+                    surface,
+                    natural: (nw, nh),
+                    size,
+                });
             }
         }
     }

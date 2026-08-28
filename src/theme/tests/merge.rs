@@ -1,7 +1,7 @@
 //! The user-file merge, and the keys whose whole contract is "opt in, or inherit"
 //! (TDD 18.13/18.14/18.23/18.29).
 
-use super::super::resolve::*;
+use super::super::keys;
 use super::super::value::*;
 use super::super::*;
 
@@ -25,7 +25,9 @@ fn strike_and_link_underline_default_to_todays_rendering() {
     assert_eq!(sep.link_underline, LineStyle::Single);
 }
 
-/// TDD 18.23 — both resolve, and both merge from a user file (`take!`-list guard).
+/// TDD 18.23 — both resolve, and both merge from a user file. The merge half proves
+/// each key reaches the resolved `Theme`; it is no longer a guard over a per-key merge
+/// list, which `overlay`'s single `extend` retired.
 #[test]
 fn a_theme_states_the_strike_and_link_underline_colours_independently() {
     // Synthetic rather than a built-in theme's own content on purpose — content is
@@ -40,17 +42,17 @@ fn a_theme_states_the_strike_and_link_underline_colours_independently() {
     );
     let t = synth.resolve("sepia");
     assert_eq!(
-        crate::palette::to_hex(t.strikethrough_color.expect("stated")),
+        crate::palette::to_hex_opaque(t.strikethrough_color.expect("stated")),
         "#ff3caf"
     );
     // Stated independently of the link's own ink — that separation IS the key.
     assert_eq!(
-        crate::palette::to_hex(t.link_underline_color.expect("stated")),
+        crate::palette::to_hex_opaque(t.link_underline_color.expect("stated")),
         "#ff3caf"
     );
     assert_ne!(
-        crate::palette::to_hex(t.link_color.expect("theme sets a link colour")),
-        crate::palette::to_hex(t.link_underline_color.unwrap())
+        crate::palette::to_hex_opaque(t.link_color.expect("theme sets a link colour")),
+        crate::palette::to_hex_opaque(t.link_underline_color.unwrap())
     );
 
     let mut themes = Themes::builtin();
@@ -63,12 +65,12 @@ fn a_theme_states_the_strike_and_link_underline_colours_independently() {
     );
     let sep = themes.resolve("sepia");
     assert_eq!(
-        crate::palette::to_hex(sep.strikethrough_color.expect("merged")),
+        crate::palette::to_hex_opaque(sep.strikethrough_color.expect("merged")),
         "#654321"
     );
     assert_eq!(sep.link_underline, LineStyle::Wavy);
     assert_eq!(
-        crate::palette::to_hex(sep.link_underline_color.expect("merged")),
+        crate::palette::to_hex_opaque(sep.link_underline_color.expect("merged")),
         "#abcdef"
     );
     // A link with NO line at all is expressible, and is not the floor.
@@ -97,7 +99,7 @@ fn the_quote_panel_is_opt_in_and_independent_of_the_bar() {
     );
     let t = bar_only.resolve("sepia");
     assert_eq!(
-        crate::palette::to_hex(t.blockquote_bar_color.unwrap()),
+        crate::palette::to_hex_opaque(t.blockquote_bar_color.unwrap()),
         "#112233"
     );
     assert!(
@@ -119,7 +121,11 @@ fn the_quote_panel_is_opt_in_and_independent_of_the_bar() {
         } else {
             (t.blockquote_fg, t.blockquote_bg)
         };
-        assert_eq!(crate::palette::to_hex(stated.unwrap()), "#ff00ff", "{key}");
+        assert_eq!(
+            crate::palette::to_hex_opaque(stated.unwrap()),
+            "#ff00ff",
+            "{key}"
+        );
         assert!(other.is_none(), "{key} must not imply its counterpart");
         assert!(
             t.blockquote_bar_color.is_none(),
@@ -167,14 +173,20 @@ fn a_user_file_can_add_a_whole_new_theme() {
     assert!(themes.contains("slate"));
     let t = themes.resolve("slate");
     assert_eq!(t.name, "Slate");
-    assert_eq!(crate::palette::to_hex(t.background.unwrap()), "#222222");
+    assert_eq!(
+        crate::palette::to_hex_opaque(t.background.unwrap()),
+        "#222222"
+    );
     // It inherits [themes.system]'s typography/geometry without restating them.
-    assert_eq!(t.typography.heading_scale, F_HEADING_SCALE);
-    assert_eq!(t.metrics.list_step, F_LIST_STEP);
+    assert_eq!(
+        t.typography.heading_scale,
+        std::array::from_fn::<f64, HEADING_LEVELS, _>(|i| keys::HEADING_SCALE.bound.float_floor(i))
+    );
+    assert_eq!(t.metrics.list_step, keys::LIST_STEP.bound.int_floor(0));
     // …and appears in the chooser after System.
     let list = themes.chooser_list();
-    assert_eq!(list[0].0, SYSTEM_ID);
-    assert!(list.iter().any(|(id, _, _)| id == "slate"));
+    assert_eq!(list[0].id, SYSTEM_ID);
+    assert!(list.iter().any(|e| e.id == "slate"));
 }
 
 /// TDD 18.13 — a user overrides ONE key without restating the theme.
@@ -184,60 +196,69 @@ fn a_user_file_overrides_one_key_of_a_shipped_theme() {
     themes
         .merge_over(Themes::parse_compiled("[themes.sepia]\nbackground = \"#fffbe6\"\n").unwrap());
     let t = themes.resolve("sepia");
-    assert_eq!(crate::palette::to_hex(t.background.unwrap()), "#fffbe6");
+    assert_eq!(
+        crate::palette::to_hex_opaque(t.background.unwrap()),
+        "#fffbe6"
+    );
     // Every other Sepia key survives the override.
     assert_eq!(t.name, "Sepia");
-    assert_eq!(crate::palette::to_hex(t.foreground.unwrap()), "#5b4636");
+    assert_eq!(
+        crate::palette::to_hex_opaque(t.foreground.unwrap()),
+        "#5b4636"
+    );
     assert_eq!(t.syntect_theme.as_deref(), Some("Solarized (light)"));
 }
 
 /// TDD 18.17 — `selection_fg` is opt-in: stated, it wins; omitted, it stays `None`
 /// so `palette` derives the selected-text ink from the page and its own ink.
 ///
-/// The merge half is asserted here on purpose. A new colour key has to be added in
-/// FOUR places (the spec, the resolved struct, `overlay`'s `take!` list, and
-/// `resolve`), and missing the `take!` list is invisible for built-in themes —
-/// `resolve()`'s per-key path masks it — while silently dropping every user
-/// override. That is exactly what happened to `list_marker` (test below).
+/// The merge half is asserted here on purpose, though what it guards has changed. A
+/// new colour key once had to be added in FOUR places, one of them `overlay`'s
+/// hand-written merge list, and missing that one silently dropped every user override
+/// (it happened to `list_marker` — test below). The registry retired that list. The
+/// SURVIVING obligation is narrower and still real: a key can reach `ThemeSpec` and
+/// never reach `Theme`, which is what this assertion actually catches now.
 #[test]
 fn selection_fg_is_opt_in_and_merges() {
     assert!(Themes::builtin().resolve(SYSTEM_ID).selection_fg.is_none());
     assert!(Themes::builtin().resolve("sepia").selection_fg.is_none());
     let bed = Themes::builtin().resolve("bedtime");
     assert_eq!(
-        crate::palette::to_hex(bed.selection_fg.expect("bedtime states it")),
+        crate::palette::to_hex_opaque(bed.selection_fg.expect("bedtime states it")),
         "#e6e4e9"
     );
 
-    // The `take!`-list guard: a user override of a theme that ships no value.
+    // A user override of a theme that ships no value — i.e. the key reaches `Theme`
+    // through the merge, not merely through `resolve`'s own read of a built-in.
     let mut themes = Themes::builtin();
     themes.merge_over(
         Themes::parse_compiled("[themes.sepia]\nselection_fg = \"#abcdef\"\n").unwrap(),
     );
     assert_eq!(
-        crate::palette::to_hex(themes.resolve("sepia").selection_fg.expect("merged")),
+        crate::palette::to_hex_opaque(themes.resolve("sepia").selection_fg.expect("merged")),
         "#abcdef"
     );
 }
 
 /// TDD 10.17 — `mark_fg` is opt-in, and merges. Omitted, marked text keeps the body
 /// foreground (every theme's behaviour before the key existed); stated, it reaches
-/// both the body tag and the cell span. Same four-place / `take!`-list guard as
-/// [`selection_fg_is_opt_in_and_merges`].
+/// both the body tag and the cell span. Same reach-the-model obligation as
+/// [`selection_fg_is_opt_in_and_merges`], whose docstring records what the merge half
+/// used to guard and what it guards now.
 #[test]
 fn mark_fg_is_opt_in_and_merges() {
     assert!(Themes::builtin().resolve(SYSTEM_ID).mark_fg.is_none());
     assert!(Themes::builtin().resolve("synthwave").mark_fg.is_none());
     let bed = Themes::builtin().resolve("bedtime");
     assert_eq!(
-        crate::palette::to_hex(bed.mark_fg.expect("bedtime states it")),
+        crate::palette::to_hex_opaque(bed.mark_fg.expect("bedtime states it")),
         "#a9ce99"
     );
 
     let mut themes = Themes::builtin();
     themes.merge_over(Themes::parse_compiled("[themes.sepia]\nmark_fg = \"#123456\"\n").unwrap());
     assert_eq!(
-        crate::palette::to_hex(themes.resolve("sepia").mark_fg.expect("merged")),
+        crate::palette::to_hex_opaque(themes.resolve("sepia").mark_fg.expect("merged")),
         "#123456"
     );
 }
@@ -263,11 +284,11 @@ fn a_user_file_can_theme_the_annotation_chip_colours() {
     );
     let sys = themes.resolve(SYSTEM_ID);
     assert_eq!(
-        crate::palette::to_hex(sys.annotation_chip_bg.expect("set")),
+        crate::palette::to_hex_opaque(sys.annotation_chip_bg.expect("set")),
         "#112233"
     );
     assert_eq!(
-        crate::palette::to_hex(sys.annotation_chip_fg.expect("set")),
+        crate::palette::to_hex_opaque(sys.annotation_chip_fg.expect("set")),
         "#ffffff"
     );
 }
@@ -299,5 +320,100 @@ fn a_malformed_user_file_is_ignored_and_the_builtin_survives() {
         themes.merge_over(user);
     }
     assert!(themes.contains("sepia"));
-    assert_eq!(themes.resolve(SYSTEM_ID).metrics.list_step, F_LIST_STEP);
+    assert_eq!(
+        themes.resolve(SYSTEM_ID).metrics.list_step,
+        keys::LIST_STEP.bound.int_floor(0)
+    );
+}
+
+/// **A bare user key does not displace a built-in's NARROWED key** — the consequence
+/// SCHEMA § Key resolution flags as load-bearing, in the hard direction.
+///
+/// The merge is per SPELLING, so a user's bare `heading_color` and the theme's own
+/// `heading_color_h1` are two entries and only the first is replaced; specificity then
+/// decides within the merged source, so h1 keeps the theme's narrowed value and every
+/// other level takes the user's.
+///
+/// The coverage that existed merged a NARROWED user key over a theme shipping neither
+/// form — the easy direction — so reversing the walk order inside `Sources::walk` would
+/// still have passed the whole suite. Two shipped themes are in exactly the state this
+/// pins (`synthwave` and `pixelquest` both ship a bare `heading_color` beside narrowed
+/// `_hN` forms), which is what makes the direction reachable rather than theoretical.
+#[test]
+fn a_bare_user_key_does_not_displace_a_built_ins_narrowed_key() {
+    let shipped = Themes::builtin().resolve("synthwave");
+    let h1 = shipped.heading_colors[0].expect("synthwave ships heading_color_h1");
+    assert_ne!(
+        crate::palette::to_hex_opaque(h1),
+        "#000000",
+        "the fixture below must differ from what the theme already states"
+    );
+
+    let mut themes = Themes::builtin();
+    themes.merge_over(
+        Themes::parse_compiled("[themes.synthwave]\nheading_color = \"#000000\"\n")
+            .expect("fixture parses"),
+    );
+    let merged = themes.resolve("synthwave");
+
+    assert_eq!(
+        merged.heading_colors[0], shipped.heading_colors[0],
+        "a bare user key must not displace the theme's own heading_color_h1"
+    );
+    for level in 1..HEADING_LEVELS {
+        assert_eq!(
+            crate::palette::to_hex_opaque(
+                merged.heading_colors[level].expect("the user's bare key applies here")
+            ),
+            "#000000",
+            "level {level} did not take the user's bare heading_color",
+        );
+    }
+    // …and the bare key itself — what the table header reads — IS the user's.
+    assert_eq!(
+        crate::palette::to_hex_opaque(merged.heading_color.expect("stated")),
+        "#000000"
+    );
+}
+
+/// TDD 18.30 — `table_head_fg` falls back to the **bare** `heading_color`, never to a
+/// per-level one.
+///
+/// The fold is one `.or(heading_color)` in `Theme::resolve` and nothing pinned it, so a
+/// change to `heading_colors[0]` would have passed: a theme that distinguishes its h1
+/// would then silently re-ink a table header it said nothing about, which is the whole
+/// reason `Sources::bare` exists beside `Sources::pick`.
+#[test]
+fn the_table_header_takes_the_bare_heading_ink_never_a_levels() {
+    let mut themes = Themes::builtin();
+    themes.merge_over(
+        Themes::parse_compiled(
+            "[themes.acme]\nheading_color = \"#112233\"\nheading_color_h1 = \"#ff0000\"\n",
+        )
+        .expect("fixture parses"),
+    );
+    let t = themes.resolve("acme");
+    assert_eq!(
+        crate::palette::to_hex_opaque(t.heading_colors[0].expect("h1 is narrowed")),
+        "#ff0000",
+        "the fixture is only discriminating while h1 and the bare key differ"
+    );
+    assert_eq!(
+        crate::palette::to_hex_opaque(t.table_head_fg.expect("folded from heading_color")),
+        "#112233",
+        "the table header took a heading LEVEL's ink instead of the bare key's"
+    );
+
+    // …and a stated table_head_fg still outranks the fold.
+    let mut own = Themes::builtin();
+    own.merge_over(
+        Themes::parse_compiled(
+            "[themes.acme]\nheading_color = \"#112233\"\ntable_head_fg = \"#00ff00\"\n",
+        )
+        .expect("fixture parses"),
+    );
+    assert_eq!(
+        crate::palette::to_hex_opaque(own.resolve("acme").table_head_fg.expect("stated outright")),
+        "#00ff00"
+    );
 }

@@ -1,6 +1,6 @@
 # Scribobulate preview reading themes.
 #
-# This file is DATA. The theming engine (src/theme.rs) holds no per-theme
+# This file is DATA. The theming engine (src/theme/) holds no per-theme
 # knowledge — no colour constants, no `if theme == "sepia"` branches. A new theme
 # is a block here, not a code change.
 #
@@ -49,7 +49,7 @@ find_hl_current_color = "#ff7800"      # the current find match, inside a table 
                                  # (in body text the current match uses the real
                                  # buffer selection; a cell label cannot, ScrAP-36)
 mark_bg         = "#fff59d_88"   # ==highlight== (mark) — a neutral pale-yellow highlighter
-                                 # wash (matches theme.rs's last-resort floor)
+                                 # wash (matches the engine's last-resort floor)
 
 # Typography that is literal in the source today.
 heading_scale_h1 = 2.2   # h1..h5 (h6-and-deeper renders as h5, so there is no _h6)
@@ -70,7 +70,7 @@ subscript_rise   = -2             # points, down
 # (Pango's attribute does), so a bolder value there is clamped to a single line.
 heading_overline  = "none"
 heading_underline = "none"
-link_underline    = "single"   # what the body `link` tag has always drawn
+link_underline    = "single"   # what the body link tag has always drawn
 
 # Decoration geometry that is literal in the source today (design-time px @ zoom 1.0).
 heading_space_below_h1 = 4   # space below the heading line, per level
@@ -84,6 +84,12 @@ heading_space_above_h2 = 0
 heading_space_above_h3 = 0
 heading_space_above_h4 = 0
 heading_space_above_h5 = 0
+heading_band_radius  = 0                # square corners on a band, until a theme rounds
+                                        # them. Stated here even though it is zero: this
+                                        # block is the register of what the app hardcodes,
+                                        # and a key that is ONLY a code floor is a second
+                                        # source of truth by definition — which is what
+                                        # this one was
 heading_band_padding = 12               # band edge → heading text, each side. NON-ZERO
                                         # unlike the other decoration defaults: padding is
                                         # part of drawing a band correctly, not a flourish.
@@ -174,9 +180,13 @@ heading_font_h1 = 'Michroma, Orbitron, Jura, sans-serif'
 # The gradient runs from each level's own fill down to the deep indigo of the page, so the
 # band dissolves into the page instead of ending on a hard edge. Both fills clear the
 # heading INK against them (the ink is checked against the band, not the page, wherever a
-# band exists — see theme.rs).
+# band exists — see src/theme/).
 heading_band_color_h1 = "#2b1152"
 heading_band_color_h2 = "#221046"
+# ⚠️ This IS `background` above, restated. `theme::tests::system`'s
+# `a_shipped_bands_gradient_ends_on_that_themes_own_page` holds the two together — retint
+# the page and that guard fails rather than the bands quietly ending on a hard edge
+# against a colour this theme no longer has.
 heading_band_gradient_to_color = "#1a1033"
 heading_band_radius      = 6
 # Operator's call 2026-08-26: flush left, no inset. `heading_band_padding` (TDD
@@ -186,7 +196,7 @@ heading_band_radius      = 6
 # edge than indented from it.
 heading_band_padding = 0
 # Operator's call 2026-08-26: the per-level colour and the band stay — no heading rule
-# though. `heading_underline`/`heading_underline_rgba` (TDD 18.22) were tried here too;
+# though. `heading_underline`/`heading_underline_color` (TDD 18.22) were tried here too;
 # dropped by preference, independently of the colour/band decision above (these three
 # keys are independent knobs, not a package — TDD 18.21/18.22/18.25 are three separate
 # rubrics for a reason). `heading_space_above` below is kept regardless — it is its own
@@ -198,8 +208,8 @@ heading_space_above_h4 = 8
 heading_space_above_h5 = 8
 #
 # Operator's call 2026-08-26: link underline back to the link's OWN cyan ink, the plain
-# pre-18.23 look — `link_underline_rgba` omitted on purpose (the line then follows
-# `link`'s colour, exactly as every link on this page did before that key existed).
+# pre-18.23 look — `link_underline_color` omitted on purpose (the line then follows
+# `link_color`, exactly as every link on this page did before that key existed).
 # The strike keeps its own magenta, independent of the (now unstated) underline colour —
 # a mark that reads as deliberate rather than as the lavender body ink with a scratch
 # through it.
@@ -289,6 +299,7 @@ list_marker_color = "#fb6f92"   # hot-pink bullets/numerals/checkboxes — 6.0:1
 # a light-page theme has to guard against.
 heading_band_color_h1 = "#6c2a92"
 heading_band_color_h2 = "#9e1449"
+# ⚠️ This IS `background` above, restated — see the Synthwave note on the same key.
 heading_band_gradient_to_color = "#101a4d"
 heading_band_radius      = 8
 
@@ -524,7 +535,7 @@ accent_color = "#b23a2e"   # warm brick-red — seeds blockquote_bar/selection w
 # this page (L≈0.30) cannot carry ANY light ink at the 4.5:1 text floor — even white
 # tops out at 2.96:1 here — so a light link colour is a deliberate legibility trade,
 # not an oversight (contrast with the near-black body ink around it does the heavy
-# lifting). `link_underline_rgba` is UNSTATED on purpose so the underline follows this
+# lifting). `link_underline_color` is UNSTATED on purpose so the underline follows this
 # same colour, per the operator's ask that the two match.
 link_color = "#3ddbff"   # bright cyan-blue — visually distinct from the page's own
                           # duller mid-blue, which is what keeps a link readable as a
@@ -585,8 +596,10 @@ link_underline      = "double"
 # read as "collectible" furniture without drawing anything. The ordered numeral is
 # left alone: overriding it discards the ordinal, and a numbered list staying
 # numbered is worth more here than one more glyph.
-# `list_marker` is ONE key for bullet, numeral AND task-checkbox alike (SCHEMA.md) —
-# there is no per-kind colour, so "the bullets" pop the whole marker family. A bright
+# `list_marker_color` is the SHARED marker ink (SCHEMA.md): the bullet reads it through
+# its per-depth `list_marker_color_N` narrowing and the checkbox through
+# `list_task_marker_color`, each falling back here when unstated — so setting this one
+# key pops the whole marker family at once. A bright
 # primary blue, not the link's green: markers are furniture, links are content, and
 # giving them the same hue was reading as one undifferentiated family. SHADED darker
 # for the new page (was #2962ff) — a marker is a graphic, no automated floor governs
@@ -595,7 +608,7 @@ list_marker_color        = "#0035c9"
 # DEPTH-TIERED bullets (TDD 18.26). A nested list reads as a route through the level,
 # and a sub-branch in a second colour is the cheapest way to say "this hangs off that".
 # SHADED darker for the new page (was #d32011) — 3.01:1, clearing the 3:1 floor a
-# non-text graphic answers to — and it is deliberately NOT the brick `accent`
+# non-text graphic answers to — and it is deliberately NOT the brick `accent_color`
 # (#b23a2e), the strikethrough ink (#79281f), or the dark `heading_color` (#5f1010):
 # four reds now share this page and value is what tells them apart.
 #
@@ -615,8 +628,10 @@ list_task_checked_glyph  = "★"
 #
 # Operator's call 2026-08-26: a lighter, full-luminance red rather than the shaded-dark
 # tone this key first shipped with — same trade the link colour above makes, deliberately,
-# against this page's own low ceiling for light inks (a marker glyph is graphic, not
-# text, so nothing automated gates it either way).
+# against this page's own low ceiling for light inks. A marker glyph is graphic rather
+# than text, so it answers to the 3:1 floor; this is 1.19:1 on the page and is therefore
+# a NAMED exception in `theme::tests::contrast`'s DELIBERATE list, with this reason.
+# (It used to say "nothing automated gates it either way" — that is no longer true.)
 list_task_marker_color   = "#ff3b3b"
 
 blockquote_bar_color = "#0a2d62"   # matches the new h3 shade (was #0e3e86). KEPT beside the

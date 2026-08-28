@@ -433,7 +433,7 @@ fn migrate_v2_app_wide_chrome(session: &mut Session, v2: &V2AppWideChrome) {
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
 #[serde(default)]
 pub(crate) struct Session {
-    /// The selected preview reading theme's id (`src/theme.rs`). Genuinely
+    /// The selected preview reading theme's id (`src/theme/`). Genuinely
     /// app-wide, unlike the per-window chrome in [`ChromeSession`]: the theme is
     /// one app-wide CSS provider, so there is exactly one value and no
     /// "which window's?" question to answer. Defaults to the base theme, so an

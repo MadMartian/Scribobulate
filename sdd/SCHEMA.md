@@ -307,6 +307,31 @@ Two consequences worth stating, both load-bearing:
   packaging omission of `data/sprites/` costs a log line and nothing else: the
   refused override leaves the compiled-in sprite standing.
 
+**When each check holds, and the one that does not hold twice.** Resolution runs once,
+at `theme::load()`; the bytes are read much later — at first paint, at every theme swap
+and at every export. Three of the checks are re-established on the **open file handle**
+at each read (`crate::sprite`'s `open_checked`): it is still a regular file, it is still
+under the byte cap, and the cap now *bounds* the read rather than predicting it. Two are
+not, and a theme author should know which:
+
+- **Containment is proved once.** Re-proving it against an open handle needs
+  `openat2(RESOLVE_BENEATH)`, which is Linux-only, and this is a portable application.
+  A directory component replaced by a symlink after the theme loaded is therefore
+  followed at read time — and those bytes reach a self-contained HTML export.
+- **A path replaced by a FIFO after the theme loaded** blocks at `open(2)`, before there
+  is a handle to interrogate.
+
+Both require write access to the theme's own directory, which is the user's own
+configuration directory; a party that holds it can simply edit `themes.toml`. The
+residual is stated rather than closed.
+
+**A sprite is admitted by its decoded size as well as its file size.** The byte cap
+bounds the compressed file and says nothing about the raster it expands to — a
+20000×20000 PNG fits inside it and decodes to about 1.2 GB. A sprite whose header
+declares more than `crate::sprite::MAX_SPRITE_PIXELS` is refused and logged, without
+being decoded. Like every other refusal in this vocabulary it degrades to "this
+decoration is absent".
+
 ### Key naming
 
 A key's suffix states its type, so a theme author can tell what a key takes without
@@ -321,7 +346,14 @@ consulting the tables below.
 | `_h1` … `_h5` | (the key's own type) | Narrows the key to one heading level. |
 | `_2`, `_3` | (the key's own type) | Narrows the key to one list-nesting depth. |
 
-Colours are strings parsed as `RGBA`: `#RRGGBB`, `#RRGGBBAA`, or a CSS colour name.
+Colours are strings parsed as `RGBA`: `#RRGGBB`, `#RRGGBBAA`, `#RRGGBB_AA`, or a CSS
+colour name. The underscored form is a `#RRGGBB` plus a hex alpha byte and is what the
+Default column below quotes (`#fff59d_88`, `#FFD133_61`); it exists because the two
+application paths consume alpha differently — the `GtkTextTag` path takes an `RGBA`
+whole, while a table cell is a `GtkLabel` outside the buffer and needs the alpha as a
+separate Pango attribute (`background="#FFD133" bgalpha="38%"`), so the underscore is
+where the engine splits it. `#RRGGBBAA` is handed straight to GDK and resolves to the
+same colour; only the spelling differs.
 
 **No key takes an array.** Anything that varies by heading level or list depth is
 stated as a suffixed key, one value each.
@@ -335,7 +367,13 @@ bleed through a transparent one, which is a defect that appears only for the spr
 nobody tested.
 
 **Metrics are design-time pixels at zoom 1.0**, typed `i32` and scaled on apply, so
-a value cannot carry punctuation into a generated CSS rule. Out-of-range values are
+a value cannot carry punctuation into a generated CSS rule. "On apply" means *through a
+widget or Pango property*; the metrics carried by **generated CSS** — the four
+`table_cell_*` / `table_border_width` keys — are applied at their design-time value and
+do not follow zoom, because the theme's CSS provider is app-wide and zoom's is
+per-window (THEMING § Pixel metrics and zoom states why that boundary is load-bearing). **The PDF sink converts
+them to points** at the CSS reference ratio (72 pt / 96 px) rather than reading a pixel
+count as a point count — one geometry, expressed in each medium's own unit. Out-of-range values are
 clamped rather than rejected, and so is an unrecognised *line style*: a
 `heading_underline = "zigzag"` falls back to that key's default rather than failing
 the theme.
@@ -383,13 +421,13 @@ Each key here also takes an `_h1` … `_h5` form (see above).
 | `heading_font` | `string` | `font_family` | Heading font stack. Same sanitisation as `font_family`. |
 | `heading_scale` | `f64` | 2.2 · 1.8 · 1.48 · 1.2 · 1.0 | Size relative to the body. Clamped `0.25`–`8.0`. |
 | `heading_weight` | `i32` | `700` | Clamped `100`–`1000`. |
-| `heading_overline` | `"none"` \| `"single"` | `"none"` | A rule ABOVE the heading text, drawn in the heading's own ink. `"double"`/`"wavy"` are accepted and clamped to a single line (Pango's overline has no other value). ⚠️ There is deliberately **no** overline colour key at any level: GTK 4.6 double-frees a text run carrying both a coloured overline and a coloured underline, and a link inside a heading is such a run (`src/theme.rs`, `HeadingRule`). |
+| `heading_overline` | `"none"` \| `"single"` | `"none"` | A rule ABOVE the heading text, drawn in the heading's own ink. `"double"`/`"wavy"` are accepted and clamped to a single line (Pango's overline has no other value). ⚠️ There is deliberately **no** overline colour key at any level: GTK 4.6 double-frees a text run carrying both a coloured overline and a coloured underline, and a link inside a heading is such a run (`src/theme/model.rs`, `HeadingRule`). |
 | `heading_underline` | `"none"` \| `"single"` \| `"double"` \| `"wavy"` | `"none"` | A rule BELOW the heading text — the decoration line under the glyph run, not a column-width divider. |
 | `heading_underline_color` | colour | heading ink | The below-rule's colour. Omitted, the line follows the heading's own foreground. |
 | `heading_band_color` | colour | — | The band drawn behind a heading's text. Absent ⇒ that level carries no band. The band spans the **content column**, and survives soft-wrap as one continuous band. |
 | `heading_band_gradient_to_color` | colour | — | A second stop: the band becomes a vertical gradient from its own fill down to this colour. Ignored where the level states no fill. |
 | `heading_band_sprite` | sprite path | — | A sprite **tiled at its natural size** across the band, in place of its fill. Outranks the fill and the gradient. |
-| `heading_band_radius` | `i32` | `0` | Corner radius of the band. Clamped `0`–`400`. |
+| `heading_band_radius` | `i32` | `0` | Corner radius of the band. Clamped `0`–`400`. ⚠️ **Not drawn on the page**, for the reason `table_cell_radius` gives. |
 | `heading_band_padding` | `i32` | `12` | Space between the band's edge and the heading text inside it, each side. Clamped `0`–`400`. ⚠️ Non-zero by default, unlike every other decoration key: padding is part of drawing a band correctly rather than a flourish. Applied **only to a level that carries a band**, so a theme that bands nothing is untouched by it whatever its value. |
 | `heading_space_above` | `i32` | `0` (every level) | Space above the heading line. Clamped `0`–`400`. |
 | `heading_space_below` | `i32` | 4 · 4 · 2 · 2 · 2 | Space below the heading line. Clamped `0`–`400`. |
@@ -461,7 +499,7 @@ are on.
 | `table_head_fg` | colour | `heading_color` | The header ROW's text colour. Omitted, the header takes the bare `heading_color` exactly as it always did, and omitting that too leaves it on the body ink. Stating it is what frees `table_head_bg` to be a fill of the theme's own choosing: while the header's ink was the heading's, a header fill had to be picked for legibility against a colour chosen for a different surface. |
 | `table_cell_padding_v` | `i32` | `4` | Clamped `0`–`400`. |
 | `table_cell_padding_h` | `i32` | `10` | Clamped `0`–`400`. |
-| `table_cell_radius` | `i32` | `0` | Clamped `0`–`400`. |
+| `table_cell_radius` | `i32` | `0` | Corner radius of a **table cell** — and of nothing else. Clamped `0`–`400`. ⚠️ **Not drawn on the page.** The PDF sink lays out and draws line by line, so a wrapped cell is several rects that abut and rounding each would pinch the box at every interior join; the same limit applies to `heading_band_radius` there. A stated scope limit, not a gap — colour, gradient and sprite all reach the page, the corners do not. |
 
 #### Horizontal rule
 
@@ -487,4 +525,4 @@ are on.
 | `annotation_chip_fg` | colour | hardcoded white | Ink for the chip's overflow-count numeral. |
 | `annotation_chip_sprite` | sprite path | — | A sprite drawn in place of the flat chip fill. No expression in the PDF's inline Pango markup — a stated scope limit (TDD 18.19). |
 | `find_hl_all_color` | colour | `#f6d32d` | Highlight for all find matches. |
-| `find_hl_current_color` | colour | derived | Highlight for the current find match. |
+| `find_hl_current_color` | colour | `#ff7800` | Highlight for the current find match. Like `find_hl_all_color` and `annotation_hl_color` this is an **overlay wash with no surface to inherit from**, so it resolves to a stated literal rather than to a derivation of the desktop probe — the column said "derived" and the code never was. |

@@ -46,21 +46,27 @@ pub(crate) struct ListGlyphs {
 pub(crate) struct ThemeColor(pub(crate) gdk::RGBA);
 
 impl ThemeColor {
+    /// The whole colour, alpha included. Every other accessor here — and every
+    /// caller — reads the wrapped value through this one rather than through the
+    /// positional field, so the field has exactly one reader and the newtype can be
+    /// reshaped without hunting `.0`s (project convention: destructure by name,
+    /// never positionally).
     pub(crate) fn rgba(self) -> gdk::RGBA {
         self.0
     }
     /// `#rrggbb`, alpha dropped — for the paths that take colour and alpha apart.
     pub(crate) fn hex(self) -> String {
-        crate::palette::to_hex(self.0)
+        crate::palette::to_hex_opaque(self.rgba())
     }
     /// Alpha as a Pango percentage attribute value, e.g. `38%`.
     pub(crate) fn alpha_pct(self) -> String {
-        format!("{}%", (self.0.alpha() * 100.0).round() as i32)
+        format!("{}%", (self.rgba().alpha() * 100.0).round() as i32)
     }
     /// The 16-bit-per-channel triple a `GtkLabel`'s Pango attribute list wants.
     pub(crate) fn u16_triple(self) -> (u16, u16, u16) {
         let ch = |x: f32| (x.clamp(0.0, 1.0) * 65535.0).round() as u16;
-        (ch(self.0.red()), ch(self.0.green()), ch(self.0.blue()))
+        let c = self.rgba();
+        (ch(c.red()), ch(c.green()), ch(c.blue()))
     }
 }
 
@@ -178,6 +184,12 @@ impl HeadingRule {
     /// Per level rather than per theme: each side is stated per level (TDD 18.32), so
     /// a theme that rules its h1 alone must not make every other level emit an empty
     /// decoration.
+    ///
+    /// `level` is a **slot**, and [`crate::theme::heading_slot`] is its only legal
+    /// producer — it is the one definition of the h6→h5 fold and clamps to
+    /// `HEADING_LEVELS - 1`, so every per-level array in this module is indexed
+    /// in range by construction rather than by a bounds check here. That is the
+    /// contract for every `[…; HEADING_LEVELS]` field below, not just this one.
     pub(crate) fn is_absent_at(&self, level: usize) -> bool {
         self.overline[level].is_none() && self.underline[level].is_none()
     }
@@ -189,7 +201,8 @@ impl HeadingRule {
 ///
 /// Absent by default on every level: `fills` is all-`None` until a theme states one, so a
 /// theme that says nothing leaves the paint path byte-identical to before the decoration
-/// existed. `is_absent` is the one gate every consumer asks, so "no band" is one decision
+/// existed. `Theme::bands_nothing` is the one gate every consumer asks, so "no band" is
+/// one decision
 /// rather than five.
 ///
 /// **The band spans the CONTENT COLUMN**, the same extent the code-block card uses — not
@@ -206,18 +219,6 @@ pub(crate) struct HeadingBand {
     pub fills: [Option<gdk::RGBA>; HEADING_LEVELS],
     /// A second stop, making the band a vertical gradient from the level's fill.
     pub gradient_to: [Option<gdk::RGBA>; HEADING_LEVELS],
-}
-
-impl HeadingBand {
-    /// Whether any level carries a band at all — the single gate, so the paint path, the
-    /// span scan and both export sinks ask one question rather than five.
-    ///
-    /// Keyed on the FILLS alone, deliberately: a sprite or a gradient describes what a
-    /// band looks like and cannot conjure one, so a theme that states a sprite and no
-    /// fill has stated the shape of a decoration it never asked for.
-    pub(crate) fn is_absent(&self) -> bool {
-        self.fills.iter().all(Option::is_none)
-    }
 }
 
 /// Decoration metrics: design-time px at zoom 1.0. Every consumer scales these
@@ -349,8 +350,10 @@ pub(crate) struct Theme {
 
 /// Every sprite a theme may name, one field per decoration. A decoration's sprite lives
 /// HERE rather than inside that decoration's own struct, so "what files does this theme
-/// name?" is one question with one answer — which is also what `rewrite_sprite_paths`
-/// iterates, and therefore what keeps a new sprite key from being validated nowhere. Each is `None` unless
+/// name?" is one question with one answer. What keeps a new sprite key from being
+/// validated nowhere is no longer a hand-written walk over these fields:
+/// `ThemeSpec::resolve_sprites` retains over the entries the REGISTRY types as sprites,
+/// so a key is validated by having been declared. Each is `None` unless
 /// the theme both set the key AND `crate::sprite::resolve` accepted it — a theme
 /// that sets a broken reference gets the SAME "decoration absent" fallback as a
 /// theme that sets nothing, never a partial or broken render.
@@ -418,7 +421,8 @@ mod tests {
         let c = ThemeColor(parse_color("#FFD133_61").unwrap());
         assert_eq!(c.hex(), "#ffd133");
         assert_eq!(c.alpha_pct(), "38%");
-        assert_eq!(c.u16_triple().0, 0xffff);
+        let (red, _green, _blue) = c.u16_triple();
+        assert_eq!(red, 0xffff);
         assert_eq!(c.rgba().alpha(), 97.0 / 255.0);
     }
 }

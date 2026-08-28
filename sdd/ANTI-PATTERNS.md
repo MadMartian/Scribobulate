@@ -451,6 +451,11 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 322 | A control is a property of a CLAIM, not of a probe — one control makes every other claim in the same probe feel covered | B |
 | 323 | `Clipboard::formats()` is a UNION with deserializer-reachable gtypes, so `contains_type` answers "has this gtype been initialised in the process", not "is the content that type" | A |
 | 324 | A compiled-in asset resolved against a runtime directory is absent everywhere that directory isn't — a built-in theme's sprite path was resolved only on the user-file load path, never the compiled-in one | C |
+| 325 | A whole-struct `{:?}` in a completeness digest degenerates the guard into a restatement of what the PRODUCER already guarantees, and the sweep passes whatever the consumer does | B |
+| 326 | A `const`-evaluated constructor scores ZERO in llvm-cov, so code exercised at every build reads as dead and invites a ratchet to be lowered around it | B |
+| 327 | `TextTag::property_value("*-rgba")` formats a POINTER under `Debug`, so a tag digest built that way compares heap addresses | A |
+| 328 | A gdk-pixbuf dimension probe must `set_size(0, 0)`; any non-zero size still allocates the bomb while reporting the right dimensions and passing its own test | A |
+| 329 | A gate read through a PIPE reports the pipe's LAST stage, so `$?` after `gate | tail` is tail's verdict — and it agreed with a floor set from the wrong summary column | B |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -927,6 +932,7 @@ GTK4 is single-threaded, yet many pitfalls below present as **races** — interm
 **Symptom**: math (`$E=mc^2$`) rendered as nothing, footnote refs (`[^1]`) vanished, and YAML/`+++` frontmatter leaked into the body as a stray paragraph — silent content loss, no warning.
 **Root cause**: `Options::all()` turns on EVERY pulldown-cmark extension, including ones the renderer has no handler for; the dispatcher's catch-all silently drops standalone events and leaks a container's inner `Text`.
 **Resolution**: the Markdown-options setup is an explicit ALLOWLIST of only the extensions actually handled (`TABLES | TASKLISTS | SMART_PUNCTUATION | HEADING_ATTRIBUTES | GFM`); anything else degrades to literal `Text` rather than vanishing.
+**Live recurrence, 2026-08-27 — a GUARDED arm that fails its guard falls through to the catch-all.** The allowlist above bounds what the parser EMITS; it says nothing about a dispatcher's own `_ => {}`. `Event::Html(t) if self.in_html_block` looked handled and was not: with the flag false the arm was skipped and the event silently dropped, and the `TagEnd` twin left `in_html_block` true with stale bytes for the next block to inherit — a real instance, not a future one. Corrective: the three renderer dispatchers match `Event`/`Tag`/`TagEnd` EXHAUSTIVELY with no guard on any arm, so a pulldown-cmark upgrade stops compiling instead of absorbing new variants. Routing only the known-inert variants to a named sink and KEEPING the `_` was tried and rejected — it reads as sufficient, but a surviving `_` absorbs every variant added later, which is the whole thing deleting it buys. Commit `3b6bdee`.
 
 ## 79. A container-level `GtkGestureClick` also fires on presses that land on a child `GtkButton` — a bar-wide "activate" gesture activates a tab even when the press was on its × close button
 **Symptom**: clicking a BACKGROUND tab's × close button closed the right tab but also silently switched the active document — the closed tab's neighbour became active instead of the previously-active tab staying active.
@@ -4299,6 +4305,62 @@ D and E are the load-bearing arms. D is clean because `static_type()` registers 
 
 **Two transferable halves.** (1) **An inert-by-default fallback makes a whole defect class unobservable.** "The theme stated no sprite" and "the reference resolved nowhere" produce identical pixels and identical logs, so every gate — visual or automated — passes either way. Where a feature degrades silently on failure, at least one guard must inspect what the *input* said, never only what the *output* did. (2) **A resolution step wired for one origin and forgotten for the other survives even a proud single-loop enumeration.** The loop that resolved every sprite *key* for a disk-read theme was already exactly the discipline this register recommends elsewhere — one place, every key, add a key and the loop catches it. It was still only ever *called* on one of the two paths a `ThemeSpec` can arrive by. Enumerating every key inside a function protects against a forgotten key; it says nothing about a forgotten caller of that function.
 
-**Corrective, Scribobulate**: resolution moved to construction time — `Themes::parse` is now the sole place a `ThemeSpec`'s sprite fields exist, in a form (`SpriteRef`/`SpriteOrigin`, `src/sprite.rs`) that cannot be *stated* without already being resolved, so a second caller cannot forget the step because there is no unresolved shape left to skip it on. Built-in sprite bytes are `include_bytes!`-compiled into the binary (mirroring how the built-in theme TOML itself is `include_str!`-compiled) rather than materialised to a runtime directory — the alternative considered and rejected, because it would have made a *compiled-in* decoration contingent on a writable state directory existing, which is the same class of silent absence one layer down. Five mutation-tested guards pin the fix, including one that asks the struct itself (via its `Debug` output) whether every sprite key reached the enumeration, since a list-driven guard is blind to a key missing *from* the list it drives. Commit `5c2d2b7`.
+**Corrective, Scribobulate**: resolution moved to construction time — `Themes::parse` is now the sole place a `ThemeSpec`'s sprite fields exist, in a form (`SpriteRef`/`SpriteOrigin`, `src/sprite.rs`) that cannot be *stated* without already being resolved, so a second caller cannot forget the step because there is no unresolved shape left to skip it on. Built-in sprite bytes are `include_bytes!`-compiled into the binary (mirroring how the built-in theme TOML itself is `include_str!`-compiled) rather than materialised to a runtime directory — the alternative considered and rejected, because it would have made a *compiled-in* decoration contingent on a writable state directory existing, which is the same class of silent absence one layer down. Five mutation-tested guards pin the fix, including one that asks the struct itself whether every sprite key reached the enumeration, since a list-driven guard is blind to a key missing *from* the list it drives. **That guard was itself defective as first written** — it dumped whole sub-structs with `{:?}`, which degenerated it into a restatement of what the producer already guarantees; see ScrAP-325. Commit `5c2d2b7`.
 
 **See**: kin to ScrAP-317/319/320/321 (this register's own family of checks/mechanisms that cannot go red for the right reason) — here the mechanism that went silently right was a *resolution step*, not a test. Not a gtk4-rs lesson: the two GTK-adjacent calls involved (`Texture::from_bytes`, `Pixbuf::from_stream` as the embedded-bytes twins of `from_filename`/`from_file`) are already covered by GTK4Rs/AP-66 and GTK4Rs/AP-292, and no user-theme sprite's decode route changed.
+
+## 325. A whole-struct `{:?}` in a completeness digest degenerates the guard into a restatement of what the producer already guarantees
+
+**Symptom**: a surface sweep built to prove "every declared key actually reaches every renderer" passes for every key, including keys the renderer demonstrably ignores. The guard is present, its intent is documented, its diff looks thorough, and it cannot go red for the reason it was written.
+
+**Root cause**: the digest it compares was built by dumping a whole sub-struct with `{:?}` rather than enumerating the fields the CONSUMER reads. A whole-struct dump is a function of the resolved model alone, so the question the sweep actually answers is "did this key survive resolution" — which resolution already guarantees — and the consumer never enters the comparison at all. The guard is not weak; it is asking a different question, and the two questions produce identical green.
+
+**MEASURED**: with the resolved typography sub-struct dumped into the digest, deleting the preview's `bold_weight` read left the sweep green. The mutation that should have killed it changed nothing the digest could see.
+
+**Corrective**: name the fields the consumer reads, one by one, and read them at the boundary the consumer reads them at — for a preview whose typography reaches the screen through a `GtkTextTag`, that means the tag's own properties, not the model's. Enumerating explicitly also makes adding a field a deliberate claim rather than a silent inheritance, which is the property the `{:?}` was reached for in the first place and the one it does not deliver.
+
+**Scribobulate**: `src/theme/tests/sinks.rs` — `decoration_digest` enumerates the metrics the preview's paint pass scales and nothing else, with the measurement above stated in the function's own comment so the next agent does not "simplify" it back; everything typographic is proven through the tag digest beside it, at the tag.
+
+**See**: kin — ScrAP-321 (a check that cannot fail, in its optimistic direction) and ScrAP-322 (a control belongs to the CLAIM, not the probe). This is the same family narrowed to one mechanism: **a digest is only as strong as the narrowest thing that can change it**, and a whole-struct dump silently widens the subject back to the producer. Direct correction to ScrAP-324's own corrective, which shipped this defect in its first form.
+
+## 326. A `const`-evaluated constructor scores ZERO in llvm-cov, so code exercised at every build reads as dead
+
+**Symptom**: a module's line coverage collapses — here 100% to 74.5% — for code that has not changed behaviour and that every single build executes. Nothing is untested; the report simply cannot see it.
+
+**Root cause**: llvm-cov instruments code the RUNTIME executes. A constructor evaluated in a `const` context runs in the compiler, emits no instrumented counters, and so contributes lines with a zero execution count exactly as unreachable code would. The two are indistinguishable in the report, and the report is the thing a ratchet reads.
+
+**Why it is dangerous rather than merely wrong**: the honest-looking response is to lower the floor to accommodate "code that cannot be covered", which permanently blinds the ratchet by the size of the misreading. The second-most-likely response — an exclusion pragma — hides the module from the gate for real. Both convert a measurement artefact into a lasting hole.
+
+**Corrective**: add a unit test that CONSTRUCTS the value at runtime and asserts its shape — the count, the ordering, the invariant the const form is relied upon to hold. That earns the lines back honestly, and it is worth having independently of the number: a const-evaluated table is precisely the kind of thing nothing else checks, because it "obviously" cannot be wrong. Never lower a floor to accommodate a const-eval gap without first trying to construct the value at runtime.
+
+**Scribobulate**: `src/theme/keys.rs`'s registry is the const-evaluated table; its runtime-construction test asserts the registry's shape as well as restoring the measurement, and `scripts/coverage.sh`'s FLOOR was re-armed upward (81.45) rather than relaxed. Commit `4b17fde`.
+
+**See**: project tooling — cargo-llvm-cov. Kin to ScrAP-321's family (a number that reads as evidence and is not), and a direct sibling of the coverage-scope trap `scripts/coverage.sh` already documents in its own header: a sibling `mod tests;` leaving the measured scope. Both make the gate green while measuring something other than what it claims.
+
+## 327. `TextTag::property_value("*-rgba")` formats a POINTER under `Debug`, not the colour
+**Symptom**: a digest built from a `GtkTextTag`'s colour properties never compares equal across two resolutions of the SAME theme, so the guard is permanently red — and the natural "fix" is to drop the colours from it, silently neutering the check.
+**Scribobulate**: `src/theme/tests/sinks.rs`'s tag digest reads colours typed as `property::<Option<gdk::RGBA>>` and formats the RGBA; the `Debug` spelling is confined to the non-colour properties beside it, where it is faithful.
+**See**: gtk4-rs skill → ui-testing-verification (GTK4Rs/AP-310). Woven at mint time — the canonical text is skill-side and was never committed in full here.
+
+## 328. A gdk-pixbuf dimension probe must `set_size(0, 0)`; any non-zero size still allocates the bomb
+**Symptom**: a probe that reads a PNG's declared dimensions in order to REFUSE a decompression bomb reports the right dimensions, refuses the image, passes its own test, and has already allocated the bomb — the only observable is peak RSS, which no in-process oracle can assert on.
+**Scribobulate**: `src/sprite.rs`'s decoded-pixel cap probes with `set_size(0, 0)` in its `size-prepared` handler and carries the measured RSS figures and the failing spelling in its rustdoc, because the correct and incorrect forms are indistinguishable from the gate's own verdict.
+**See**: gtk4-rs skill → app-lifecycle-and-env (GTK4Rs/AP-311, beside GTK4Rs/AP-66's loader-chain entry). Woven at mint time — the canonical text is skill-side and was never committed in full here.
+
+## 329. A gate read through a pipe reports the pipe's last stage, not the gate
+
+**Symptom**: a coverage ratchet was set from a measurement, re-run to confirm, and reported green twice — while actually failing. Two independent mechanisms had to line up, and both fail in the green direction.
+
+**Root cause, part one — the pipe.** The gate was invoked as `scripts/coverage.sh | tail -2; echo $?`. In a POSIX shell `$?` after a pipeline is the exit status of its LAST command, so the `0` printed was `tail`'s, and `tail` succeeds whatever the gate decided. The output looked right because `tail` faithfully showed the gate's own summary lines; only the VERDICT was substituted. `set -o pipefail` was not in effect, and would have fixed it.
+
+**Root cause, part two — the column.** The floor was set from the leading column of `cargo llvm-cov --summary-only`, which is **Regions**; `--fail-under-lines` reads **Lines**, roughly a point lower. So the floor was set about a point too high and the gate genuinely failed — which the pipe then hid.
+
+**The compounding is the finding.** Either mechanism alone is recoverable: a wrong floor fails loudly on the next run, and a swallowed exit status is caught the first time the gate legitimately fails. Together they cancel — the wrong floor produced the failure and the pipe erased it, so the run that would have exposed the first was the run silenced by the second. Neither is exotic and neither announces itself.
+
+**Resolution**: invoke a gate directly and read its own exit status; where a pipeline is genuinely wanted, `set -o pipefail` first. Read a coverage floor from the column the gate reads, never the column the summary leads with.
+
+**Prior instance, which is why this has a number**: the column half was ALREADY documented at the top of `scripts/coverage.sh` — including a note from a previous agent recording that they "walked straight into it" — and it was walked into again anyway. A warning in the file being read is not a guard; it is only reachable by someone who reads before acting, which is precisely who does not need it. The durable half is the gate's own exit status, and only the invocation can carry that.
+
+**Scribobulate**: `scripts/coverage.sh`'s header carries the column warning and its instances; the FLOOR (82.15) is set from the Lines column and verified by running the script directly.
+
+**See**: project tooling — cargo-llvm-cov and shell invocation. Kin — ScrAP-321's family (a green that means nothing), and ScrAP-326 beside it, which is the other way a coverage number misleads: 326 is a real number read as the wrong fact, this is a verdict that was never the gate's at all.
