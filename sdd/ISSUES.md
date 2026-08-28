@@ -19,7 +19,6 @@ entry can still be the worst thing in the register.
 | A | Any | Upstream | Tables are selection islands; cells are individually selectable but not part of the continuous buffer | Closed |
 | B | Any | Production | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
 | D | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
-| E | Any | Production | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | F | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in roughly one full run in four, at a varying site | Medium |
 | G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
@@ -254,52 +253,6 @@ midway through a bisect.
 - **Accept the limitation**: not viable long-term — an idle full-core spin on the product's own
   primary use case (large agent-generated documents) defeats the negligible-footprint thesis the
   project exists to honour.
-
-## E. A click inside an existing selection never reaches the preview's click affordances
-
-**Severity**: Low (one wasted click, self-correcting — the click clears the selection and
-the next one works; no data at risk)
-
-With text selected in the preview, a primary click whose press lands **inside** that
-selection does not activate the affordance under it: a link does not open, a margin
-comment marker does not open its card, a gutter checkbox does not toggle, a code block's
-copy button does not copy. The click clears the selection instead, and a second click
-behaves normally.
-
-**Measured, and pre-existing.** Reproduced identically on the binary from before the
-complete-click fix (ScrAP-238) and on the one after, under Xvfb: press+release on a
-fragment link with a selection covering it produced no scroll on either build, while the
-same click with nothing selected navigated on both. So the seam that now pairs press with
-release neither introduced nor addresses it.
-
-**Cause — measured, then traced to the two lines that implement it.** Instrumented build,
-Xvfb: on the swallowed click the app's gesture receives `pressed` and then **nothing** — no
-`released`, and no `cancel` either, which is why it fails silently.
-
-`gtk_text_view_click_gesture_pressed` (`gtktextview.c`, GTK 4.6.9) handles a single
-non-touch press whose iter lies inside the selection by claiming the sequence for its own
-drag gesture — *"Claim the sequence on the drag gesture, but attach no selection data,
-this is a special case to start DnD"* — unconditionally, not gated on the view being
-editable. A claim denies every other gesture handling that sequence, and
-`gtk_gesture_click_end` (`gtkgestureclick.c`) emits `released` only
-`if (current == sequence && state != GTK_EVENT_SEQUENCE_DENIED && interpreted)`. DENIED is
-terminal (the same arbitration wall issue A documents), and it is not a cancellation, so
-no `cancel` fires to tell the app anything happened.
-
-So the release is not late or misrouted — GTK deliberately withholds it, and the app's
-affordance cannot observe the click at all.
-
-**Mitigation options**:
-- Claim the sequence ourselves on a press that lands on an affordance — **priced and not
-  recommended**. It is the only way to out-rank GTK's claim, and it buys one click at the
-  cost of the case it steals from: a press on a link is then no longer available to start
-  a drag, so dragging the selection (GTK's DnD) from a point that happens to sit over a
-  link stops working, and — since intent is unknowable at press time — a press that does
-  turn into a drag would end in nothing happening at all, which is worse than today. The
-  press cannot be disambiguated at the moment the decision must be made.
-- Leave it, which is the standing choice: the failure is one wasted click that fixes
-  itself, and every route past it trades a silent no-op for a silent loss of the drag.
-
 
 ## F. A GTK4/Quartz autorelease-pool crash intermittently SIGABRTs the macOS integration suite
 

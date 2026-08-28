@@ -43,7 +43,7 @@ they are two batches.
 
 ## Where this stands — read this first
 
-**Eight of the eighteen entries this map opened with are gone; ten remain.** Batches 1–5
+**Ten of the eighteen entries this map opened with are gone; eight remain.** Batches 1–5
 are done and each landed as one commit on **`mitigations/various`**, which is this
 campaign's integration branch — **not `master`**, which is behind it and contains none
 of this work. (This paragraph said `master` until 2026-08-28, when the batch-5 seat went
@@ -90,7 +90,7 @@ by `D` — the only High, and the largest thing outstanding.
 |---|:-:|---|
 | **D** | **High** | The only High in the register, and the largest thing outstanding: a large document pegs a CPU core at ~100% while idle. Shares a mechanism with nothing here. **[PLAN.profiling.md](PLAN.profiling.md) is a PREREQUISITE, not a companion** (operator, 2026-08-28): this class of defect has no oracle, so the instrument is built and its cost agreed BEFORE the hunt starts, otherwise the open-ended part of D is the measuring rather than the fixing |
 | **B** | Low | A nesting defect in strikethrough parsing — the parser, touching nothing else here |
-| **E** | Low | A click inside an existing selection never reaches the pane's affordances. Interaction/gesture routing; no sibling |
+
 | **G** | Low | `Test` scope, not `Production`: two wall-clock growth-ratio guards go red on a loaded machine. A gate-design problem, not an application one — the fix is to stop measuring an exponent with a stopwatch on a small baseline |
 | **H** | Low | macOS-only and intermittent; needs the Mac seat's hands, not a mechanism |
 
@@ -100,6 +100,7 @@ by `D` — the only High, and the largest thing outstanding.
 |---|---|
 | **A** | `Closed` — intractable, source-verified, and deliberately retained so nobody reopens the dead end. Not actionable by design |
 | ~~C~~ | **Dropped by the operator, 2026-08-28**, on evidence the register could not have held: the same failure to repaint on a KDE/X11 desktop dark↔light switch occurs in an unrelated GNOME application, so it is upstream and outside this project's scope. Recorded here rather than nowhere because the investigation it invites is expensive — a new `src/platform/linux/` portal seam — and the reason not to do it is not visible from the code |
+| ~~E~~ | **Dropped by the operator, 2026-08-28**, and documented as expected UI behaviour instead (TDD 2.24a, MANUAL-TEST 2.24a). A press landing inside an existing selection is claimed by `gtk_text_view_click_gesture_pressed` for a possible drag-and-drop, and that claim denies the application's own gesture; `DENIED` is terminal and is not a cancellation, so the app sees `pressed` and then neither `released` nor `cancel`. The one workaround was priced and rejected: claiming the sequence ourselves is the only way to out-rank GTK, and it trades one self-correcting wasted click for the silent loss of a selection drag begun over an affordance, with intent unknowable at the moment the claim must be made. Recorded here because the entry was well-traced and reads like actionable work right up until the pricing |
 | ~~X~~ | **Dropped by the operator, 2026-08-28**, as never having been a defect. Its confirmed behaviour was that a click collapses the selection which *is* the current-match indicator, re-asserting on the next Next/Prev — ordinary text-buffer behaviour, and the remedy once proposed for it would have taken the caret back from the user |
 | **F**, **I** | `Upstream` — the defect is in a third-party library and the repair is not ours to make. A workaround may exist; the fix does not belong to this project |
 | **R** | Not an engineering task at all: an operator decision about Pixel Quest's palette (retune both inks, retune one, or settle both permanently and close). Blocked on the operator, not on effort |
@@ -116,7 +117,7 @@ samples", the one GTK key that would answer it is dark on this host, and an open
 budget spent on ad-hoc measurement is the failure mode. Build the instrument, agree what it
 costs, then aim it.
 
-`B`, `E` and `G` are the cheap standalone remainder and need none of that; `H` needs the
+`B` and `G` are the cheap standalone remainder and need none of that; `H` needs the
 Mac seat's hands. `R` is a decision rather than a task and can be taken at any point.
 
 **A note on what this ordering is not.** It is not a commitment to do them all: the
