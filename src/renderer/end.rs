@@ -66,6 +66,40 @@ impl Renderer {
                     // is rebuilt. (The `\n`s carry no visible glyph, so excluding them
                     // costs nothing.)
                     let end = self.end_offset();
+                    // Step the start PAST the separator newlines that stand between the
+                    // parent's last line and this level's first one.
+                    //
+                    // Only an OUTERMOST quote gets a `block_sep()` at `Tag::BlockQuote`
+                    // (`start.rs`), so only its recorded start already sits at a line
+                    // start. A nested level records the offset it is opened at — which is
+                    // the END of whatever the parent last wrote — and the newlines that
+                    // move it onto its own line are inserted afterwards, by the first
+                    // block INSIDE it (a paragraph's own `block_sep`). The span therefore
+                    // opened one line too high, and since the bar is drawn from
+                    // `span_card_y_extent`'s line yrange, the inner bar visibly overlapped
+                    // the parent's last line and the blank line under it — in every theme,
+                    // sprite or flat.
+                    //
+                    // Normalising HERE rather than emitting a separator at
+                    // `Tag::BlockQuote` is deliberate: it inserts no text, so it cannot
+                    // change the rendered layout, and it is indifferent to WHICH block
+                    // opens the nested level (a paragraph `block_sep`s, a nested list
+                    // inside a list emits a single `newline`). Only `block_sep`/`newline`
+                    // can sit in that gap, so skipping '\n' skips exactly the separator
+                    // and stops at the first real character.
+                    //
+                    // '\n' alone is enough on EVERY platform, and that is not an
+                    // assumption about the host's line endings: the separator is
+                    // `newline()`'s own hardcoded "\n", never a byte copied out of the
+                    // document. A CRLF document renders to the byte-identical buffer
+                    // because pulldown-cmark does not carry a line terminator into a
+                    // text event, which is also why `lineendings.rs` states its rule at
+                    // the two doors documents arrive by and never at a parse site.
+                    // Guarded, not assumed — `preview::build`'s nested-quote test
+                    // renders the LF and CRLF twins and compares both.
+                    let start = (start..end)
+                        .find(|&off| self.buf.iter_at_offset(off).char() != '\n')
+                        .unwrap_or(end);
                     if end > start {
                         let depth = (depth as u8).clamp(1, crate::tags::MAX_QUOTE_DEPTH);
                         self.apply_tag_per_line(

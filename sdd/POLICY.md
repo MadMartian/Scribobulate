@@ -568,6 +568,17 @@ every line as portable unless it lives in a platform seam (§ Platform seams).
   pipeline's path-legality gate exists because one illegal character blocks every
   Windows clone of the tree). Where a facility is genuinely absent, that is a platform
   seam, not an `#[cfg]` sprinkled through shared code.
+- **Line endings are a property of the DOCUMENT, not of the host.** A CRLF file opens
+  on Linux and an LF file opens on Windows, so never branch on the platform to decide
+  what a line separator is, and never assume the host's convention for text this
+  application did not write. The one rule the project holds about the shape a buffer may
+  take is `lineendings.rs`'s — applied at the doors documents arrive by and never at a
+  parse site — so do not re-derive it at a third site. Code downstream of that may depend
+  on a separator being exactly `"\n"`, but **only where the code that EMITTED it is in
+  view** (the preview renderer's own `newline()` is the standing case). Say so at the
+  site and pin it with a test that renders the CRLF twin and compares: without one, the
+  next reader cannot tell a measured invariant from an unexamined platform assumption,
+  and neither can the seat asked to ratify it.
 - **A capability a test needs may be unavailable rather than absent.** Skip loudly
   through the project's one skip marker so the run reports the limb as unverified — never
   let a guard compile to an empty passing function on the platform that most needs it.

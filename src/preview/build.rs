@@ -1356,6 +1356,39 @@ mod gtk_integration_tests {
              outer={outer:?} inner={inner:?}"
         );
 
+        // …and the inner level must START ON ITS OWN FIRST LINE, not on the parent's
+        // last one. The bar is drawn from the span's line yrange, so a start left where
+        // the level was OPENED — the end of whatever the parent last wrote, before the
+        // separator newlines that move the nested text onto its own line even exist —
+        // draws the inner bar up over the parent's text and the blank line under it.
+        assert_eq!(
+            buf.iter_at_offset(inner.span.start).line(),
+            buf.iter_at_offset(char_off(&slice, "inner line")).line(),
+            "the nested level's span must open on the line its own text opens on, or its \
+             bar overlaps the parent's last line: inner={inner:?} slice={slice:?}"
+        );
+
+        // The same source with WINDOWS line endings must produce the byte-identical
+        // buffer and the byte-identical spans. This is asserted rather than assumed
+        // because the normalisation that makes it true is invisible from here: the
+        // preview buffer's newlines are all emitted by the renderer itself, never
+        // copied from the document, and `lineendings.rs` deliberately does NOT run at
+        // a parse site. Without this guard the start-normalisation above reads like a
+        // platform assumption about `\n` — a reviewer would have to re-derive that a
+        // CRLF document cannot put a `\r` in the separator gap.
+        let crlf =
+            build_render_products("> outer line\r\n>\r\n> > inner line\r\n", None, 1.0, false);
+        assert_eq!(
+            buffer_slice(&crlf.buf),
+            slice,
+            "a CRLF document must render to the same preview buffer as its LF twin — \
+             the buffer's separators are the renderer's own, not the document's"
+        );
+        assert_eq!(
+            crlf.install.blockquote_ranges, *spans,
+            "…and therefore to the same per-level quote spans, on every platform"
+        );
+
         // (2)+(3) Resolved geometry, not tag properties: the inner line must sit exactly
         // one quote step right of the outer line.
         let view = gtk::TextView::with_buffer(buf);
