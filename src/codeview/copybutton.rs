@@ -24,6 +24,7 @@
 //! drawn, which the theme model deliberately does not reach — and the two colours are
 //! the page's own ink and the card's own fill, taken from the caller.
 
+use crate::decorplan::{any_copy_button_shown, copy_button_shown};
 use gtk::prelude::*;
 use gtk::{cairo, gdk, graphene};
 
@@ -114,4 +115,65 @@ pub(crate) fn draw_copy_button(
     super::gutter::set_source(&cr, paint.fg);
     super::gutter::rounded_rect(&cr, fx, fy, sheet, sheet, sheet_r);
     let _ = cr.stroke();
+}
+
+/// **Paint the copy button of every code block that should be showing one**, from the
+/// card rectangles the below-text pass recorded, and record this frame's hit-boxes.
+///
+/// Lifted out of `snapshot_layer` whole, and sited here beside the drawing it drives:
+/// the module already owned *how* a button looks, and `crate::affordance` owns where
+/// it goes — this is the loop that turns one into the other.
+pub(super) fn draw_all(snapshot: &gtk::Snapshot, ctx: &super::paint::PaintCtx) {
+    let view = ctx.view;
+    let bg = *ctx.imp.bg.borrow();
+    // The code-block copy button, drawn ABOVE the text because it sits in
+    // the card's top-right corner and a long first line runs underneath it
+    // (its fill is the card's own, so it masks what it covers). Revealed for
+    // the block under the pointer, and kept for a moment after a copy so the
+    // checkmark is seen — the two states the reader can be in.
+    let mut copy_hits: Vec<(graphene::Rect, usize)> = Vec::new();
+    let hovered_block = ctx.imp.hovered_code_block.get();
+    let copied_block = ctx.imp.copied_block.get();
+    if any_copy_button_shown(hovered_block, copied_block) {
+        let zoom = ctx.imp.gutter_zoom.get();
+        // The block's own inner padding, through the same `px()` the
+        // `code-block` tag's margins take — one value, so the button's inset
+        // and the text's inset cannot drift apart.
+        let pad = crate::theme::px(crate::config::config().code.block_padding, zoom) as f32;
+        // One text row in the view's own CSS-zoomed font: a fresh Pango
+        // layout, which validates nothing (GTK4Rs/AP-22), exactly as the
+        // gutter's soft-wrap clamp measures it.
+        let (_, row_h) = view.create_pango_layout(Some("0")).pixel_size();
+        let row_h = row_h as f32;
+        let fg = view.style_context().color();
+        let accent = view
+            .style_context()
+            .lookup_color("theme_selected_bg_color")
+            .or_else(|| view.style_context().lookup_color("accent_bg_color"))
+            .unwrap_or(fg);
+        for &(card, bi) in ctx.imp.code_block_rects.borrow().iter() {
+            if !copy_button_shown(bi, hovered_block, copied_block) {
+                continue;
+            }
+            let Some(rect) = crate::affordance::copy_button_rect(&card, pad, row_h) else {
+                continue;
+            };
+            draw_copy_button(
+                snapshot,
+                &rect,
+                zoom,
+                &CopyButtonPaint {
+                    fill: &bg,
+                    fg: &fg,
+                    // Only the button the pointer is actually ON adopts the
+                    // accent border; a revealed-but-not-pointed-at button
+                    // stays at rest, the same split the checkbox draws.
+                    hover: (ctx.imp.pointer_on_copy_button.get() == Some(bi)).then_some(&accent),
+                    copied: copied_block == Some(bi),
+                },
+            );
+            copy_hits.push((rect, bi));
+        }
+    }
+    *ctx.imp.copy_button_hitboxes.borrow_mut() = copy_hits;
 }

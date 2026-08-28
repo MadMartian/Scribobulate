@@ -56,6 +56,7 @@ mod colorscheme;
 mod config;
 mod copymap;
 mod cssfrag;
+mod decorplan;
 mod docio;
 mod export;
 mod farscroll;
