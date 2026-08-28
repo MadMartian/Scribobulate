@@ -24,7 +24,6 @@ entry can still be the worst thing in the register.
 | G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
-| M | Any | Project | `sprite::scaled`'s per-`(path, width, height)` texture cache has no eviction policy | Low |
 | R | Any | Production | Pixel Quest's `link_color` and `list_task_color` sit below their legibility floor and are carried as named exceptions the operator intends to revisit, not as settled choices | Low |
 
 ## A. Tables are selection islands
@@ -230,7 +229,17 @@ without debug support, so every informational `GTK_DEBUG`/`GDK_DEBUG`/`GSK_DEBUG
 debug-enabled GTK loaded ahead of the distribution one; `sdd/PLAN.profiling.md` records the
 cost and the alternatives.
 
-**Mitigation options**:
+**PREREQUISITE — [`sdd/PLAN.profiling.md`](PLAN.profiling.md) is implemented FIRST, not
+alongside** (operator, 2026-08-28). This entry is the one place in the register with no
+oracle: the trace says where the CPU goes and not what keeps scheduling the pass, the
+`GTK_DEBUG=geometry` key that would answer it is dark on this host, and every mitigation
+below opens with "take several samples". Doing that with ad-hoc instrumentation is how the
+work becomes open-ended — which is why the budget for it has to be agreed up front. Build
+the instrument, then aim it. The plan is also the place that records what a debug-enabled
+GTK costs, so the decision about whether to pay it is made once, in the open, rather than
+midway through a bisect.
+
+**Mitigation options** (all of them assume the instrument above exists):
 - **Root-cause the driver** (recommended; not yet done): take several samples to confirm the
   loop consistently sits in shaping/layout — `perf record` against the unstripped debug binary
   gives named application frames today, with no change to the tree, and is the substitute for
@@ -559,28 +568,6 @@ here because this entry exists in order to be deleted when the defect is fixed, 
 evidence must outlive it. Do not restate its figures here; several carry caveats that do not
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
-
-## M. `sprite::scaled`'s texture cache has no eviction policy
-
-**Severity**: Low. Inert today — every current call site (list-marker sprites, the
-heading-band tiled sprite) resolves at a small, bounded set of sizes per document —
-but the cache itself does not know that, and would silently misbehave for a future
-caller that doesn't share the property.
-
-`sprite::scaled`'s `RESAMPLED` thread-local (`src/sprite.rs:113-114`) is keyed by
-`(PathBuf, width, height)` and only ever grows — nothing evicts an entry or bounds
-the cache's size. The first decoration that scales a sprite to a *continuously
-variable* dimension (a rect that tracks a resizable pane width, for instance, rather
-than a marker size or a tile's natural size) would mint a new cached texture on
-every intermediate width during a drag, retaining all of them for the process's
-life.
-
-**Mitigation options**:
-- Bound the cache (LRU with a small cap) before any call site scales to a
-  window-derived or otherwise continuously-variable dimension.
-- Accept the limitation until such a call site actually exists — nothing today
-  triggers it — and note the constraint at `sprite::scaled`'s call sites as they're
-  added, so a future author checks before assuming any size is safe to pass.
 
 ## R. Pixel Quest's link and task-marker inks are provisional exceptions, not settled ones
 

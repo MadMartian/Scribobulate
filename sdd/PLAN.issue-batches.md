@@ -60,8 +60,8 @@ by `D` — the only High, and the largest thing outstanding.
 - **`D` is the only High and the only open-ended item.** It is the one place where the
   timebox matters more than the fix, and it is worth agreeing the budget with the operator
   before starting rather than after.
-- **`R` and `M` are not engineering tasks.** They are decisions the operator owns; do not
-  start either without an answer.
+- **`R` is not an engineering task.** It is a decision the operator owns, a palette
+  question about Pixel Quest, so do not start it without an answer.
 - **Four of the five batches closed at least one issue WITHOUT writing a fix** — by
   disproving a recorded root cause, by finding the contract already stated, or by the
   operator ruling something out of scope. Read an entry sceptically before building on it:
@@ -88,7 +88,7 @@ by `D` — the only High, and the largest thing outstanding.
 
 | Issue | Severity | Why it stands alone |
 |---|:-:|---|
-| **D** | **High** | The only High in the register, and the largest thing outstanding: a large document pegs a CPU core at ~100% while idle. Shares a mechanism with nothing here. Related in *instrument* to [PLAN.profiling.md](PLAN.profiling.md), which exists because this class of defect has no oracle |
+| **D** | **High** | The only High in the register, and the largest thing outstanding: a large document pegs a CPU core at ~100% while idle. Shares a mechanism with nothing here. **[PLAN.profiling.md](PLAN.profiling.md) is a PREREQUISITE, not a companion** (operator, 2026-08-28): this class of defect has no oracle, so the instrument is built and its cost agreed BEFORE the hunt starts, otherwise the open-ended part of D is the measuring rather than the fixing |
 | **B** | Low | A nesting defect in strikethrough parsing — the parser, touching nothing else here |
 | **E** | Low | A click inside an existing selection never reaches the pane's affordances. Interaction/gesture routing; no sibling |
 | **G** | Low | `Test` scope, not `Production`: two wall-clock growth-ratio guards go red on a loaded machine. A gate-design problem, not an application one — the fix is to stop measuring an exponent with a stopwatch on a small baseline |
@@ -103,17 +103,21 @@ by `D` — the only High, and the largest thing outstanding.
 | ~~X~~ | **Dropped by the operator, 2026-08-28**, as never having been a defect. Its confirmed behaviour was that a click collapses the selection which *is* the current-match indicator, re-asserting on the next Next/Prev — ordinary text-buffer behaviour, and the remedy once proposed for it would have taken the caret back from the user |
 | **F**, **I** | `Upstream` — the defect is in a third-party library and the repair is not ours to make. A workaround may exist; the fix does not belong to this project |
 | **R** | Not an engineering task at all: an operator decision about Pixel Quest's palette (retune both inks, retune one, or settle both permanently and close). Blocked on the operator, not on effort |
-| **M** | Inert today — every current call site resolves at a bounded set of sizes, so the missing cache eviction cannot fire. Either a small LRU cap or a documented constraint at the call sites; confirm it is worth spending anything on before doing so |
+| ~~M~~ | **Dropped by the operator, 2026-08-28**, as never having been a defect: the entry's own premise was false. It claimed `sprite::scaled`'s cache "only ever grows, nothing evicts an entry or bounds the cache's size"; both halves are wrong. `sprite::clear_cache()` drops all three caches and `theme::set_active()` calls it on every theme change (a production path, with the reasoning written at both ends), so the cache's lifetime is ONE THEME rather than the process. The size is bounded too, by a clamp at each call site: `round(13·zoom).max(9)` gives 9 keys and `clamp(w,6,14) × clamp(h,8,18)` gives at most 99. And the memoisation is load-bearing rather than incidental, since the module docs state `scaled` is REQUIRED at this project's GTK floor: handing GSK a correctly-sized texture is the only way pixel art stays crisp (`append_scaled_texture` is 4.10). Recorded here rather than nowhere because the entry read as a plausible latent leak for months, and the thing that refutes it is a function in a different module |
 
 ## Recommendation
 
-**Only `D` is left that is both real work and unblocked.** It goes first on severity alone
-— it is the only High, it is the one entry a user feels as the application being broken
-rather than as a detail being wrong, and nothing else in the register competes with it. It
-is also the one most likely to need the researcher and the profiling instrument, so
-starting it early overlaps its waits with other work. `B`, `E` and `G` are the cheap
-standalone remainder; `H` needs the Mac seat's hands. `R` and `M` are decisions rather than
-tasks and can be taken at any point.
+**`D` is the largest thing left, and it is no longer unblocked.** It leads on severity, the
+only High and the one entry a user feels as the application being broken rather than as a
+detail being wrong, but [PLAN.profiling.md](PLAN.profiling.md) is now its stated
+prerequisite (operator, 2026-08-28), so the order is **profiling, then D**. The reason is
+the shape of D rather than its size: every mitigation it lists opens with "take several
+samples", the one GTK key that would answer it is dark on this host, and an open-ended
+budget spent on ad-hoc measurement is the failure mode. Build the instrument, agree what it
+costs, then aim it.
+
+`B`, `E` and `G` are the cheap standalone remainder and need none of that; `H` needs the
+Mac seat's hands. `R` is a decision rather than a task and can be taken at any point.
 
 **A note on what this ordering is not.** It is not a commitment to do them all: the
 register is meant to *empty*, but several of these entries are correctly parked. A batch
