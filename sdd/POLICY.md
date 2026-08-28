@@ -1091,6 +1091,23 @@ caught it, which is the gate working, not friction to route around.
 
 ## Prohibited actions
 
+- **Never run `git checkout` against a FILE or a path.** Not to revert a mutation, not
+  to undo an experiment, not to "clean up" a scratch edit. It overwrites the working tree
+  from the index and there is **no way back**: no reflog entry, no stash, no dangling
+  object, nothing. Every other destructive git operation this project might reach for
+  leaves a recovery path; this one does not.
+  **MEASURED 2026-08-28**, and it cost real work: a seat mid-way through a multi-file
+  change used `git checkout src/tags.rs` to back out a one-line *mutation test*, and
+  discarded the entire uncommitted implementation in that file along with it — twice, in
+  two files, before noticing. The mutation run that followed then reported the guard as
+  PASSING, because what it was actually exercising was the reverted build (the ScrAP-239
+  family: a control run silently driving the wrong artefact). The work was only
+  recoverable because the patches happened to still be readable in that session's
+  transcript, which is luck, not a procedure.
+  **Instead: copy the file aside first** (`cp src/x.rs /tmp/x.rs.good`) and restore with
+  `cp`. It is one extra command, it is reversible, and it does not care whether the file
+  had other uncommitted work in it. The same goes for reverting a whole experiment: prefer
+  a copy or an explicit reverse edit over asking git to erase a file you have not committed.
 - Do not use `sudo` in build, test, or run commands — the agent cannot enter a
   password and the command will hang. If a system development library is
   missing, ask the human to install it (e.g. via a `!`-prefixed session command).
