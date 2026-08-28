@@ -47,6 +47,53 @@
 //! junction is a **directory**, so a check whose subject is the link's own *name*
 //! (the sprite extension allowlist, `chip.png → notes.txt`) has no junction form and
 //! correctly still skips here.
+//!
+//! # Reading the skip report: REACHABLE debt vs INHERENT limits
+//!
+//! The pipeline's skip list is a flat set of `SKIPPED [...]` lines, and a flat list
+//! cannot say which of two very different things a line means. **"Nobody has got to
+//! this yet" and "this platform cannot express it" look identical in that report**,
+//! and the difference is the whole of what a reader needs: one is work, the other is
+//! a fact to stop re-litigating. Stated here rather than in a register because the
+//! person who needs it is standing in this file.
+//!
+//! **REACHABLE** — a mechanism exists on the platform and the limb can be closed.
+//! Every one of these was a symlink-shaped skip on Windows and now goes through
+//! [`escaping_reference_or_skip`]: sprite containment (SCHEMA), image containment
+//! (TDD 2.7), link containment and link resolution (TDD 19.2 / 19.3), and path
+//! identity through a link. They share one property that makes the junction work —
+//! the subject is where the link **leads**, and a directory hop leads there just as
+//! a file symlink does.
+//!
+//! **INHERENT** — no mechanism exists, and a skip is the honest answer rather than a
+//! placeholder for effort:
+//! - **The subject is the link's own NAME.** The sprite extension allowlist checks
+//!   `chip.png → notes.txt`; a junction is a directory, so the authored name and the
+//!   target's name cannot differ in extension the way the check requires.
+//! - **The subject is the link AS THE RENAME TARGET.** `atomic_io`'s save-through-a-link
+//!   check exists because `rename` replaces the *link itself* unless the path is
+//!   canonicalised first — so the link has to be the file being renamed over. Through a
+//!   junction the rename lands on a file *inside* the target directory and never touches
+//!   the reparse point, which makes the hazard unreachable. MEASURED rather than argued:
+//!   with `write_atomic`'s canonicalisation neutered, a junction-shaped fixture still
+//!   reports the link surviving and the real file updated — it passes with the guard
+//!   removed. A conversion here would be a **vacuous** test, which is strictly worse
+//!   than the skip it replaced.
+//! - **No FIFO.** The sprite FIFO-admission limb needs a named pipe as a filesystem
+//!   entry that `metadata` reports with length zero; Windows named pipes are not
+//!   filesystem entries in that sense.
+//! - **POSIX mode bits against ACLs.** The TDD 21.12 crash-report, seen-marker and
+//!   log permission checks and the TDD 21.2 rotation-failure check induce their
+//!   condition with mode bits. Windows privacy is a DACL question and needs its own
+//!   *assertion*, not a translated fixture — the rubric is real here, the test body
+//!   is not portable, and that is a genuinely different piece of work.
+//! - **Absent fonts.** TDD 25.25 needs `DejaVu Serif` / `DejaVu Sans Mono` present to
+//!   tell a named face from the generic fall-through. A property of the host, not of
+//!   the platform, and not fixable in code.
+//!
+//! The test to apply to a new skip: **ask what the check's subject is, not what its
+//! fixture is.** Every REACHABLE entry above was written as "a symlink test" and is
+//! not one — the symlink was the fixture, and the subject survived changing it.
 
 use std::path::Path;
 
