@@ -290,6 +290,12 @@ mod gtk_integration_tests {
             let (w, h) = (texture.width() as usize, texture.height() as usize);
             let mut data = vec![0u8; w * h * 4];
             texture.download(&mut data, w * 4);
+            // Not optional, and not symmetry for its own sake: dropping a realized
+            // CairoRenderer does not honour the object's teardown contract, and on a
+            // build with GLib assertions compiled in that aborts rather than leaks
+            // (GTK4Rs/AP-272). The two sibling probes -- codeview's `framebuffer_of`
+            // and widgets/rule.rs -- already pair it; this one did not.
+            renderer.unrealize();
             let idx = ((h / 2) * w + w / 2) * 4;
             // Cairo ARGB32 on a little-endian host: B, G, R, A.
             Some((data[idx + 2], data[idx + 1], data[idx]))
