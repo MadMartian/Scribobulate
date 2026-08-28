@@ -8,7 +8,7 @@
 | 4 | Editing & saving | 4.1 – 4.9 |
 | 5 | Reconciliation (conflict handling) | 5.1 – 5.4 |
 | 6 | Resource footprint (viability gate) | 6.1 – 6.5 |
-| 7 | Window & layout | 7.0b – 7.18 |
+| 7 | Window & layout | 7.0b – 7.21 |
 | 8 | Single-instance lifecycle | 8.1 – 8.7 |
 | 9 | Menu bar, toolbar, and actions | 9.1 – 9.36 |
 | 10 | Markdown formatting commands | 10.1 – 10.20 |
@@ -709,6 +709,8 @@
 - **Given** the user has scrolled partway through a document in one view mode
 - **When** they switch to another mode (preview, edit, or side-by-side)
 - **Then** the new view stays at approximately the same relative position rather than jumping back toward the top
+- **And given** the user repeats the mode round trip several times
+- **Then** the reading position does not accumulate — after several round trips it is still within tolerance of where it started, not several steps away from it, and in particular has not been walked to the end of the document
 - **And given** side-by-side split with a document of uneven block heights (headings/code/tables mixed with prose)
 - **When** the user scrolls either pane
 - **Then** the other follows so the **same document position** stays aligned across both panes (the heading/line at the top of one is at the top of the other) — **line-accurate**, not merely the same 0–1 fraction, which drifts when a source line renders taller than the next; typing (which re-renders the preview) neither breaks the alignment nor blanks the preview
@@ -821,6 +823,12 @@
 - **And** the tabs that were already there stay evenly spaced, whatever changed their widths earlier in the session
 
 ---
+
+### 7.21 A freshly opened document puts the working position at its beginning
+- **Given** a document is opened, restored from the previous session, or reloaded from disk
+- **When** it is first shown in the editor — by the view-mode action, the toolbar button, or session restore
+- **Then** the caret sits at the beginning of the document, and the footer's line/column indicator reads the first line
+- **And** the outline sidebar highlights the document's first section, not its last
 
 ## 8. Single-instance lifecycle
 

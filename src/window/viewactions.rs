@@ -189,8 +189,11 @@ fn register_view_mode_action(window: &ApplicationWindow) {
             let md = st.source().clone();
 
             // Capture the reading position BEFORE the swap (content_box still shows
-            // the old content) so it can be carried onto the new view.
-            let old_frac = content_scroll_fraction(&window);
+            // the old content) so it can be carried onto the new view. A DOCUMENT
+            // position, not a scroll fraction: the two panes have different content
+            // heights, so a fraction re-derived on each crossing loses precision at
+            // both ends and ACCUMULATES over repeated round trips (TDD 7.5).
+            let old_pos = content_reading_position(&window);
 
             // ScrAP-58: the reused editor is NEVER
             // reparented on a mode switch (that was the use-after-free — reparenting
@@ -243,7 +246,7 @@ fn register_view_mode_action(window: &ApplicationWindow) {
             }
 
             // Carry the reading position across the mode switch.
-            apply_content_scroll(&window, new_mode, old_frac);
+            apply_content_reading_position(&window, new_mode, old_pos);
 
             // Put keyboard focus in the editor when it becomes visible so vertical
             // navigation (PageUp/PageDown, arrows) operates on it — in split mode

@@ -77,6 +77,7 @@ mod palette;
 mod pangospan;
 mod platform;
 mod preview;
+mod readingpos;
 mod renderer;
 mod saferizer;
 mod session;

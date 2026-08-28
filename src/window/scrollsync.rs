@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::preview::scrib_render_data;
-use crate::span::CleanedByteOffset;
+use crate::readingpos::{self, DocPosition};
 /// The `(editor_sw, preview_sw)` scrollers of the split `SplitView`, when in
 /// split mode. Both are distinct persistent widgets on the SplitView (the editor
 /// scroller is permanent; the preview scroller is rebuilt per mode switch), so
@@ -152,27 +152,19 @@ fn project_scroll(window: &ApplicationWindow) {
             // Editor drives: editor top char -> ORIGINAL byte -> CLEANED byte ->
             // preview buffer char (inverse map, binary-searched).
             ScrollDriver::Editor => {
-                let top_char = view_top_offset(&st.editor);
-                let orig_byte = char_to_byte(original, top_char as usize);
-                let cleaned_byte = crate::annotate::original_to_cleaned(
-                    &rd.shifts,
-                    crate::span::OriginalByteOffset::new(orig_byte),
-                )
-                .raw();
-                let buf_char = src_byte_to_buf_char(&rd.source_map_inv, cleaned_byte);
+                let pos = readingpos::from_editor_char(original, view_top_offset(&st.editor));
+                let buf_char = readingpos::to_preview_char(&rd.source_map_inv, &rd.shifts, pos);
                 (preview_sw.clone(), preview_view.clone().upcast(), buf_char)
             }
             // Preview drives: preview top buffer char -> CLEANED byte (forward map)
             // -> ORIGINAL byte -> editor char (the editor buffer IS the original).
             ScrollDriver::Preview => {
-                let top_char = view_top_offset(&preview_view);
-                let cleaned_byte = buf_char_to_src_byte(&rd.source_map, top_char);
-                let orig_byte = crate::annotate::cleaned_to_original(
+                let pos = readingpos::from_preview_char(
+                    &rd.source_map,
                     &rd.shifts,
-                    CleanedByteOffset::new(cleaned_byte),
-                )
-                .raw();
-                let ed_char = byte_to_char(original, orig_byte);
+                    view_top_offset(&preview_view),
+                );
+                let ed_char = readingpos::to_editor_char(original, pos);
                 (editor_sw.clone(), st.editor.clone().upcast(), ed_char)
             }
         }
@@ -234,38 +226,6 @@ fn view_top_offset(view: &impl IsA<gtk::TextView>) -> i32 {
     crate::saferizer::viewport::ViewportTopIter::top_offset(view)
 }
 
-/// Byte offset in `text` of the char at `char_off` (clamped to the end).
-fn char_to_byte(text: &str, char_off: usize) -> usize {
-    text.char_indices()
-        .nth(char_off)
-        .map_or(text.len(), |(b, _)| b)
-}
-
-/// Char offset in `text` of the char containing `byte_off`.
-///
-/// Delegates to the shared seam (QA round 3, P-1). This used to slice raw, which
-/// PANICKED — i.e. aborted the process, from a tick callback on a C trampoline —
-/// on a byte offset that landed inside a multi-byte character. Byte offsets here
-/// come from the shift table, which does arithmetic and proves nothing about
-/// character boundaries.
-fn byte_to_char(text: &str, byte_off: usize) -> i32 {
-    crate::saferizer::buffer_text::char_offset_at_byte(text, byte_off)
-}
-
-/// Forward map: preview buffer char offset -> source byte offset. Largest waypoint
-/// whose buffer offset is <= `buf_char` (the map is sorted by buffer offset).
-fn buf_char_to_src_byte(map: &[(i32, usize)], buf_char: i32) -> usize {
-    let i = map.partition_point(|&(bc, _)| bc <= buf_char);
-    i.checked_sub(1).map_or(0, |j| map[j].1)
-}
-
-/// Inverse map: source byte offset -> preview buffer char offset. Binary-searches
-/// the render's `source_map_inv` (sorted by source byte) for the waypoint with the
-/// largest source byte offset <= `src_byte`.
-fn src_byte_to_buf_char(inv: &[(usize, i32)], src_byte: usize) -> i32 {
-    let i = inv.partition_point(|&(sb, _)| sb <= src_byte);
-    i.checked_sub(1).map_or(0, |j| inv[j].1)
-}
 /// Mark `pane` as the active sync driver whenever the user genuinely interacts with
 /// it — wheel/touchpad (`EventControllerScroll`), a press anywhere in the pane incl.
 /// the scrollbar (`GestureClick`, capture phase), or keyboard focus
@@ -424,65 +384,211 @@ fn arm_first_content_repaint(overlay: &gtk::Overlay) {
     *slot.borrow_mut() = Some(id);
 }
 
-/// Fraction scrolled of whatever scroller `content_box` currently shows — the
-/// preview, the editor, or (in split) the editor pane.  Used to carry the reading
-/// position across a view-mode switch.
-pub(super) fn content_scroll_fraction(window: &ApplicationWindow) -> f64 {
-    let Some(st) = state(window) else { return 0.0 };
-    // In editor-visible modes the editor is the reading position that matters
-    // (and, in split, the scroll-sync driver); in pure preview it's the preview.
+/// Where the reader is, as a [`DocPosition`] — captured BEFORE a view-mode swap,
+/// from whichever pane the OLD mode was showing.
+///
+/// The editor is preferred whenever it is visible: in split it is the scroll-sync
+/// driver, and in edit it is the only pane there is. Pure preview reads the
+/// preview.
+///
+/// **This deliberately does not return a scroll fraction, which is what it used
+/// to.** A fraction is a ratio of view-specific content heights, and the two panes
+/// never share one, so every switch re-derived the position from geometry and lost
+/// precision doing it. Repeated round trips then accumulated the loss in one
+/// direction — measured at four preview↔split trips walking a 40-section fixture's
+/// top line 79 → 110 → 152 → 158, terminating clamped at the document's end rather
+/// than settling. A document position has no such error to accumulate: it is the
+/// same byte offset however many times it is handed across.
+pub(super) fn content_reading_position(window: &ApplicationWindow) -> DocPosition {
+    let Some(st) = state(window) else {
+        return DocPosition::start();
+    };
     if st.view_mode.get().is_editor_visible() {
-        preview_scroll_fraction(&st.split.editor_scroller())
-    } else {
-        st.split
-            .preview_scroller()
-            .map(|sw| preview_scroll_fraction(&sw))
-            .unwrap_or(0.0)
+        // The editor buffer IS the original source, so no map is involved.
+        return readingpos::from_editor_char(&st.editor_text(), view_top_offset(&st.editor));
     }
+    let Some(preview_view) = st
+        .split
+        .preview_scroller()
+        .and_then(|sw| sw.child())
+        .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
+    else {
+        return DocPosition::start();
+    };
+    let Some(rd) = scrib_render_data(&preview_view) else {
+        return DocPosition::start();
+    };
+    let rd = rd.borrow();
+    readingpos::from_preview_char(&rd.source_map, &rd.shifts, view_top_offset(&preview_view))
 }
-/// Restore a scroll `fraction` onto the freshly built content for `mode`, so the
-/// reading position is preserved across a view-mode switch.  Different content
-/// (source vs rendered) has different heights, hence a fraction rather than an
-/// absolute offset. Applies to whichever panes are visible in `mode` (both in
-/// split, where the editor drives and the preview follows).
-pub(super) fn apply_content_scroll(window: &ApplicationWindow, mode: ViewMode, fraction: f64) {
+
+/// Put the reader back at `pos` in whichever panes `mode` shows, AFTER the swap has
+/// built them. The counterpart of [`content_reading_position`].
+///
+/// Each pane resolves the same document position into its own coordinates — the
+/// editor directly (its buffer is the original source), the preview through the
+/// fresh render's waypoint map. Both then restore by buffer LINE through
+/// `restore_preview_scroll_to_line`, which is the validation-safe path
+/// (ScrAP-65/ScrAP-13): a freshly built preview has unvalidated line heights, so a
+/// raw adjustment write here would land near the top.
+pub(super) fn apply_content_reading_position(
+    window: &ApplicationWindow,
+    mode: ViewMode,
+    pos: DocPosition,
+) {
     let Some(st) = state(window) else { return };
     if mode.is_editor_visible() {
-        restore_preview_scroll(&st.split.editor_scroller(), fraction);
+        let char_off = readingpos::to_editor_char(&st.editor_text(), pos);
+        let line = st.editor_buf.iter_at_offset(char_off).line();
+        restore_preview_scroll_to_line(&st.split.editor_scroller(), line);
     }
     if mode.is_preview_visible() {
-        if let Some(preview) = st.split.preview_scroller() {
-            restore_preview_scroll(&preview, fraction);
+        if let Some(preview_sw) = st.split.preview_scroller() {
+            let line = preview_sw
+                .child()
+                .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
+                .and_then(|view| {
+                    let rd = scrib_render_data(&view)?;
+                    let rd = rd.borrow();
+                    let buf_char = readingpos::to_preview_char(&rd.source_map_inv, &rd.shifts, pos);
+                    Some(view.buffer().iter_at_offset(buf_char).line())
+                })
+                .unwrap_or(0);
+            restore_preview_scroll_to_line(&preview_sw, line);
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{byte_to_char, char_to_byte};
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
 
-    /// QA round 3, P-1: the shift table hands `byte_to_char` offsets that are
-    /// byte ARITHMETIC, not proven character boundaries. Pinned here at the call
-    /// site as well as in the seam's own tests, because what matters locally is
-    /// that THIS function delegates — an inlined re-implementation would pass
-    /// the seam's tests while re-arming the abort here.
-    #[test]
-    fn a_byte_offset_inside_a_multibyte_char_floors_instead_of_panicking() {
-        let text = "aé→😀b";
-        assert_eq!(byte_to_char(text, 2), 1, "inside 'é'");
-        assert_eq!(byte_to_char(text, 5), 2, "inside '→'");
-        assert_eq!(byte_to_char(text, 8), 3, "inside '😀'");
-        assert_eq!(byte_to_char(text, 9_999), 5, "past the end clamps");
+    /// Build a window on a fixture tall enough that a drift is visible, mapped and
+    /// pumped to a real scroll range.
+    fn windowed(app_id: &str) -> (ApplicationWindow, std::rc::Rc<crate::winstate::TabState>) {
+        let app = gtk::Application::new(Some(app_id), gtk::gio::ApplicationFlags::NON_UNIQUE);
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let mut md = String::new();
+        for n in 1..=40 {
+            md.push_str(&format!(
+                "## Section {n}\n\nSome prose for section {n}.\n\n"
+            ));
+        }
+        let window = crate::window::new_window(&app, "IT", &md, None);
+        window.set_default_size(800, 600);
+        window.present();
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(400),
+        );
+        let st = state(&window).expect("tab state");
+        (window, st)
     }
 
-    /// The paired direction was already total (`nth` yields `None` past the
-    /// end); pinned so the pair keeps agreeing at the boundaries.
-    #[test]
-    fn char_to_byte_round_trips_with_byte_to_char_on_boundaries() {
-        let text = "aé→😀b";
-        for c in 0..=5 {
-            let b = char_to_byte(text, c);
-            assert_eq!(byte_to_char(text, b), c as i32, "round trip at char {c}");
+    fn round_trip(window: &ApplicationWindow, via: &str) {
+        for mode in [via, "preview"] {
+            crate::window::change_action_state(window, "view-mode", &mode.to_variant());
+            crate::testpump::drain_for(
+                crate::testpump::Clock::Frame,
+                std::time::Duration::from_millis(250),
+            );
+        }
+    }
+
+    /// **TDD 7.5: repeated view-mode round trips do not accumulate a drift.**
+    ///
+    /// The position used to cross the switch as a scroll fraction — a ratio of two
+    /// view-specific content heights — so every crossing re-derived it from
+    /// geometry and lost precision at both ends. MEASURED on the pre-fix binary
+    /// with this exact fixture: the top line went 79 → 110 → 152 → 158 over four
+    /// preview↔split trips and terminated CLAMPED at the end of the document.
+    ///
+    /// **Why this asserts over four trips and not one.** One round trip is passed
+    /// by any conversion accurate to its own rounding, which the fraction was — the
+    /// defect is only visible in the REPEAT. A single-trip assertion would have
+    /// been green against the code this test exists to prevent coming back.
+    ///
+    /// **Why the reader is parked mid-document.** The pre-fix drift terminates by
+    /// clamping at `upper`. A fixture parked near the bottom clamps on trip one and
+    /// then reads as perfectly stable — a stationary measurement taken exactly
+    /// where the defect is worst.
+    #[gtktest::test]
+    fn repeated_view_mode_round_trips_do_not_walk_the_reading_position() {
+        let (window, st) = windowed("com.extollit.scribobulate.integrationtest.driftsplit");
+        let sw = st.split.preview_scroller().expect("preview mounted");
+        let adj = sw.vadjustment();
+        crate::saferizer::scrollpos::jump(&adj, adj.upper() * 0.5);
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(300),
+        );
+        let start = crate::preview::preview_top_line(&sw).expect("a top line");
+
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            round_trip(&window, "split");
+            let sw = st.split.preview_scroller().expect("preview re-mounted");
+            seen.push(crate::preview::preview_top_line(&sw).expect("a top line"));
+        }
+
+        // Tolerance, not equality: the preview is rebuilt on every entry and the
+        // render map's waypoints are per-block, so landing on the block that
+        // contains the captured position is the contract (TDD 7.5's "approximately
+        // the same relative position"). What must NOT happen is a walk.
+        const TOLERANCE: i32 = 8;
+        for (trip, line) in seen.iter().enumerate() {
+            assert!(
+                (line - start).abs() <= TOLERANCE,
+                "round trip {} moved the reading position from line {start} to {line} \
+                 (whole sequence {seen:?}); the hand-off is accumulating again",
+                trip + 1
+            );
+        }
+        // The monotonic walk is the signature of the fraction hand-off, and it is
+        // worth catching on its own: a fix that merely made each step smaller would
+        // satisfy the tolerance above for a while and still be the same defect.
+        let walked = seen.windows(2).all(|w| {
+            let (prev, next) = (w[0], w[1]);
+            next > prev
+        });
+        assert!(
+            !walked,
+            "the reading position advanced on every single round trip {seen:?} — \
+             that is the accumulating hand-off, whatever its step size"
+        );
+    }
+
+    /// The same guarantee for the edit round trip, which drifted the OPPOSITE way
+    /// before the fix — so a repair that assumed one direction would have moved
+    /// this one further rather than fixing it.
+    #[gtktest::test]
+    fn repeated_edit_round_trips_do_not_walk_the_reading_position_either() {
+        let (window, st) = windowed("com.extollit.scribobulate.integrationtest.driftedit");
+        let sw = st.split.preview_scroller().expect("preview mounted");
+        let adj = sw.vadjustment();
+        crate::saferizer::scrollpos::jump(&adj, adj.upper() * 0.5);
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(300),
+        );
+        let start = crate::preview::preview_top_line(&sw).expect("a top line");
+
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            round_trip(&window, "edit");
+            let sw = st.split.preview_scroller().expect("preview re-mounted");
+            seen.push(crate::preview::preview_top_line(&sw).expect("a top line"));
+        }
+
+        const TOLERANCE: i32 = 8;
+        for (trip, line) in seen.iter().enumerate() {
+            assert!(
+                (line - start).abs() <= TOLERANCE,
+                "edit round trip {} moved the reading position from line {start} to \
+                 {line} (whole sequence {seen:?})",
+                trip + 1
+            );
         }
     }
 }

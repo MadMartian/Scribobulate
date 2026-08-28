@@ -114,6 +114,7 @@ src/preview/qdata.rs
 src/preview/render.rs
 src/preview/scroll.rs
 src/preview/sourcemap.rs
+src/readingpos.rs
 src/renderer/blockquote.rs
 src/renderer/emit.rs
 src/renderer/end.rs

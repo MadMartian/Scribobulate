@@ -7,9 +7,9 @@ use crate::format::{self, FormatCmd};
 use crate::outline::{build_tree, extract_headings};
 use crate::outline_view::build_outline_content;
 use crate::preview::{
-    cell_search_targets, preview_scroll_fraction, preview_top_line, re_render,
-    refresh_annotations_in_place, render, restore_preview_scroll, restore_preview_scroll_to_line,
-    restore_preview_scroll_to_line_fresh, scroll_preview_to_heading,
+    cell_search_targets, preview_top_line, re_render, refresh_annotations_in_place, render,
+    restore_preview_scroll_to_line, restore_preview_scroll_to_line_fresh,
+    scroll_preview_to_heading,
 };
 use crate::winstate::{
     self, edit_actions_enabled, save_enabled, save_is_safe, state, FmtInsertKind, ScrollDriver,

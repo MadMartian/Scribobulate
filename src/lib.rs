@@ -95,6 +95,7 @@ pub(crate) mod preview;
 /// The PRIMARY-selection policy: what a selection change owes the display-global
 /// selection. Display-free, because its decisive case — a FOREIGN owner — cannot be
 /// staged inside this process at all.
+pub(crate) mod readingpos;
 pub(crate) mod renderer;
 pub(crate) mod saferizer;
 pub(crate) mod session;

@@ -31,8 +31,6 @@ entry can still be the worst thing in the register.
 | R | Any | Production | Pixel Quest's `link_color` and `list_task_color` sit below their legibility floor and are carried as named exceptions the operator intends to revisit, not as settled choices | Low |
 | S | Any | Project | The horizontal rule's thickness is the one styling value no theme can state — a literal in the PDF sink and the separator's own CSS default on screen | Low |
 | T | Any | Production | A live theme change never reaches a tab that has not been activated yet — its page fill updates, its ink and face do not | Medium |
-| U | Any | Production | The caret sits on the document's LAST line the first time the editor view is materialised, and the outline follows it there | Medium |
-| V | Any | Production | The reading position drifts by one block on every view-mode round trip, cumulatively | Medium |
 | W | Any | Production | The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`, so both shipped washes print as flat colour | Low |
 | X | Any | Production | The find bar's "current match" indicator drops on an in-session edit (any mode); self-heals on the next Next/Prev — the originally-reported stronger form did not reproduce | Low |
 | Y | Any | Production | In Edit/Split mode, a search match inside annotated text is counted but its "all matches" highlight is invisible, buried under the annotation's own tag | Medium |
@@ -784,61 +782,6 @@ merge-base, pixel-identical across five captures. Not caused by the decoration w
 - Accept it: a user who switches theme and then visits an untouched tab sees it wrong once
   per switch.
 
-## U. The caret sits on the document's last line when the editor view is first materialised
-
-**Severity**: Medium. Nothing is lost and `Ctrl+Home` clears it, but the working position
-is wrong the moment the editor appears, and the outline highlights the last heading to
-match — so the sidebar actively misreports where the user is.
-
-A 27-line document that fits entirely on screen, opened in preview and switched to edit,
-scrolls nowhere and yet reports `Ln 28, Col 1`. Reproduced on three routes into edit mode —
-the action, the toolbar button, and session restore — and on three documents of different
-lengths, each time landing on that document's own last line. The scroll position restores
-correctly; only the caret is at the far end.
-
-The signature matches the known GTK trap where a line-for-coordinate query against a view
-that has not been allocated answers the last line, which would explain the cold case. It
-also reproduces **warm** (preview → edit → preview → edit), which that explanation does not
-cover, so the warm path needs its own account before either is fixed.
-
-**PRE-EXISTING, measured.** Identical on a binary built at this branch's merge-base.
-
-**Mitigation options**:
-- Defer the caret placement until the view has an allocation, and establish separately why
-  the warm path lands in the same place.
-- Place the caret from the restored reading position explicitly rather than letting it fall
-  out of a coordinate query.
-
-## V. The reading position drifts one block per view-mode round trip
-
-**Severity**: Medium. Each round trip is a small correction the reader can undo, but it
-**accumulates**: three preview↔split trips walk the position through three consecutive
-blocks and it never returns.
-
-Switching preview → split → preview moves the reading position by one block, and repeating
-the round trip moves it again in the same direction. The edit round trip drifts the
-opposite way.
-
-**Record the magnitude as one block, not as pixels.** The figure first measured (~90 px)
-is exactly one section block in the fixture that produced it, and the drift's *direction*
-proved fixture-dependent — a 40-section fixture drifted forward where a shorter one drifted
-back. The same binary produced two different sequences across two runs, varying by one to
-two outline rows. Whatever this is, it is quantised to blocks and is not deterministic in
-pixels, so a pixel-valued regression guard would be flaky by construction.
-
-Fails TDD 7.5's "stays at approximately the same relative position", and takes 12.13 with
-it, since the entry re-selected after a mode switch is chosen from the drifted position.
-
-**PRE-EXISTING, measured.** The same drift sequence appears on a binary built at this
-branch's merge-base.
-
-**Mitigation options**:
-- Carry the reading position across a mode switch as a document position resolved once,
-  rather than re-deriving it from each view's geometry on the way in and out — the round
-  trip is losing precision at both ends.
-- Establish first why the two directions differ; a fix that assumes one direction will move
-  the other trip further.
-
 ## W. The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`
 
 **Severity**: Low. Both keys still export and both still read; they print as a flat colour
@@ -908,7 +851,7 @@ fixed only by closing the bar) is UNCONFIRMED** after this pass. Candidates not 
 ruled out: a timing race with the 300 ms Split-mode live-preview debounce
 (`window::livepreview::wire_live_preview` → `preview::re_render`) that a
 scripted, instant edit can't hit; a real-compositor/KDE-specific rendering gap
-invisible under Xvfb+openbox (per GTK4Rs skill AP-56, a clean Xvfb result doesn't
+invisible under Xvfb+openbox (per GTK4Rs/AP-56, a clean Xvfb result doesn't
 clear the compositor/WM class of bug); or an interaction sequence not yet tried.
 
 **Mitigation options**:
@@ -958,7 +901,7 @@ over — the exact GTK4Rs/AP-84 shape. `GtkSourceSearchContext`'s own "all match
 style is a tag in that *same* editor buffer's tag table, added independently of
 this reassertion, so wherever `AnnotationHighlight` sits above it, the search
 tag's background is buried the same way inline code's would have been —
-`AnnotationHighlight`'s fix for one collision (AP-84 vs. code spans) creates the
+`AnnotationHighlight`'s fix for one collision (GTK4Rs/AP-84 vs. code spans) creates the
 identical collision against the search engine's own tag.
 
 **Preview mode does NOT reproduce this** — confirmed on the same fixture. The
