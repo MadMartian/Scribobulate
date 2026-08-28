@@ -625,7 +625,7 @@ gtk4-rs skill's dev-loop doc on why geometry/rendering bugs leave no warning.
 - [ ] **1.4d** **A slow read must not delay a crash-recovery snapshot.** With the slow mount from 1.4c (note the state directory must NOT be on it — that is the point): open ~12 documents from it, type into one so it is dirty (arming a snapshot), then touch every one of those files externally at the same instant (`touch /slow/*.md`) so the watcher re-reads them all at once. Within a couple of seconds the dirty document's swap file must appear/refresh under `$XDG_STATE_HOME/scribobulate/swap/` (`ls -l --time-style=full-iso`). A snapshot that only lands once the reads finish is a FAIL (TDD 1.4d; the bound is `docio/pool.rs`'s, ScrAP-243).
 - [ ] **1.5** From a blank/untouched window, File ▸ Open a file → loads into the existing blank tab, no new tab/window created (test with the blank tab NOT active, to cover "every tab, not just active")
 - [ ] **1.9** **A UTF-8 BOM does not eat the first heading.** Write the *same* content twice, once with a BOM and once without, and compare them in one session — a single-file run cannot tell this defect from a bad fixture. On Windows: `Set-Content -Path bom.md -Encoding utf8 -Value "# BomHeading`n`nbody"` (5.1's `utf8` **is** BOM-ful; that is the point) and `[IO.File]::WriteAllText("$PWD\nobom.md", "# BomHeading`r`n`r`nbody`r`n")`. Elsewhere: `printf '\xEF\xBB\xBF# BomHeading\n\nbody\n' > bom.md`. Confirm the bytes with `Format-Hex bom.md | Select -First 1` / `xxd -l4 bom.md` → `EF BB BF`. Open both → **both** render "BomHeading" as a heading and **both** list it in the outline sidebar; the `#` must not appear as literal text and the outline must not say "No headings". Then save `bom.md` (Ctrl+S after any edit) → it is rewritten without the BOM, which is intended, and no "File changed on disk" prompt appears at any point (TDD 1.9).
-- [ ] **1.6** `-n` forces `NON_UNIQUE` (POLICY / `main.rs`) so a `-n`-launched instance never owns the D-Bus name and can never RECEIVE a forward — this is the one item in this document where BOTH launches must omit `-n`, since 1.6 tests the batch-forward path itself, not File ▸ Open (see TDD 1.6). After `cargo build --release` (so the primary is a fresh binary — the usual staleness risk `-n` guards against doesn't apply here since the primary is what actually runs the test): launch the primary with `./target/release/scribobulate <file1.md> &`, track its PID, dirty its only tab, then run `./target/release/scribobulate <file2.md>` (foreground, no `-n`) — it D-Bus-forwards to the primary and exits immediately itself → `file2.md` opens in a brand-new window OF THE SAME (tracked) PID; the original window/tab is left untouched, not reused
+- [ ] **1.6** `-n` forces `NON_UNIQUE` (POLICY / `main.rs`) so a `-n`-launched instance never registers as primary and can never RECEIVE a forward — this is the one item in this document where BOTH launches must omit `-n`, since 1.6 tests the batch-forward path itself, not File ▸ Open (see TDD 1.6). After `cargo build --release` (so the primary is a fresh binary — the usual staleness risk `-n` guards against doesn't apply here since the primary is what actually runs the test): launch the primary with `./target/release/scribobulate <file1.md> &`, track its PID, dirty its only tab, then run `./target/release/scribobulate <file2.md>` (foreground, no `-n`) — **it hands its argument to the running instance and exits immediately itself** → `file2.md` opens in a brand-new window OF THE SAME (tracked) PID; the original window/tab is left untouched, not reused. **The behaviour above is the check; the transport is per-platform and is not** — GIO negotiates over a D-Bus session bus on Linux, and a platform that runs no session bus needs an app-side substitute feeding the same `open`/`activate` handlers (macOS: an `flock`-elected primary plus a `$TMPDIR` Unix socket, `src/platform/mac/single_instance.rs`; POLICY § Architecture rules, *One process, many windows*). Naming one platform's transport in the assertion is what made this item read as inapplicable off Linux, when the behaviour it tests holds everywhere
 
 ### §2 Rendering fidelity
 - [ ] **2.1** Open a doc mixing headings/bold/italic/lists/links/blockquotes → each renders with correct styling
@@ -1884,6 +1884,18 @@ should resolve into `$(brew --prefix)/bin`.
 
 **6. Tokened (desktop-integrated) launch.** Finder ▸ Open With, or
 `open -a Scribobulate.app <file>`.
+
+⚠️ **A LaunchServices launch does NOT inherit your shell's environment**, and
+`XDG_STATE_HOME` is the one that costs you. Every other procedure here runs the binary
+from a shell, so pointing that variable at a scratch directory is enough to keep the
+suite off the tester's real state; `open` bypasses the shell entirely, so the bundle
+resolves the **real** state directory and **rewrites `session.toml`** — the operator's
+open tabs, geometry and theme — on its next graceful quit. MEASURED during an 8.2 run:
+the file's hash changed and was only recoverable because it had been copied first.
+`open` has no environment flag to fix this, so the discipline is the fix: **hash
+`session.toml` and copy it aside before any tokened launch, and restore it after.**
+The same applies to any item combining a tokened launch with a quit — 8.2, 8.2m, and
+anything reaching 15.10 through the bundle.
 
 **7. Reading the GTK log.** **Expected, but unverified on this platform** — no GTK
 warning has actually been reproduced and grepped here, so this is analogy from
