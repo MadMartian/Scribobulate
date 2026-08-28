@@ -130,6 +130,22 @@ Before any change is considered valid, run these steps in order:
    it hide behind the exclusion — that extraction is the mechanism by which the floor
    rises. The excluded set and its per-module rationale live beside the regex, in the
    script.
+   **The measured scope is itself gated, and it is reported FIRST.** The set of files
+   the gate measures is recorded in `scripts/coverage.scope`, re-derived on every run
+   from the same invocation that produces the percentage, and compared. When it differs
+   the gate names the files that entered or left, states that the SCOPE changed, and
+   **withholds the floor verdict entirely** — a ratchet compared across two different
+   scopes measures nothing. This exists because every `IGNORE` term names a directory
+   *depth*, so a new subdirectory under an excluded tree used to pull its files into
+   scope at 0% and the ratchet then failed as *"your change reduced coverage"*, sending
+   the reader after untested code they had just written; when the entering files were
+   small it cleared the floor and said nothing at all, which is worse. It catches the
+   opposite direction too — a floor that climbs because an exclusion was widened is now
+   a failure rather than a success. Update the manifest with
+   `scripts/coverage.sh --update-scope`, after deciding which side each named file
+   belongs on, in the same commit as the layout change, exactly as raising `FLOOR` is.
+   The manifest records what IS measured; `IGNORE` remains the policy about what should
+   be, and the manifest is never passed to llvm-cov.
    Tooling is `cargo-llvm-cov`, a dev subcommand rather than a crate dependency:
    `rustup component add llvm-tools-preview && cargo install cargo-llvm-cov`.
 7. **UI-behaviour coverage alignment** — if the change adds, alters, or removes any
