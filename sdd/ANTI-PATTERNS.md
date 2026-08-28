@@ -2,20 +2,37 @@
 
 Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file is now a compact **project index**: per entry — *symptom* · *where Scribobulate implements the fix* · *pointer into the `gtk4-rs` skill* (+ findings doc). The full transferable lesson, dead ends, and GTK source tracing live in the **`gtk4-rs` skill** — the standing GTK4/Rust anti-pattern knowledge base this project was originally built alongside and which is highly recommended (though not required) when working here. It is referred to **by name only, never by filesystem path**: the skill may not be installed on every machine this repository lives on, so a path would rot. AGENTS.md carries what it is and where to find it; the original self-contained essays remain in this file's **git history**.
 
-**Citation convention.** Two anti-pattern registers are in play and their numbering spaces are unrelated. An entry in **this** file is cited **`ScrAP-N`**; an entry in the `gtk4-rs` skill is cited **`GTK4Rs/AP-N`**, and one of that skill's numbered *techniques* (its `T-n` register — how-to recipes rather than traps, frozen and never reused, exactly like its `AP-n`) is cited **`GTK4Rs/T-N`**. **A bare `AP-N` is illegal anywhere in the tree** — not "it means the skill", illegal — and `lint-references` **check 8** fails on one. Both legal forms are deliberately SINGLE TOKENS with no space: a two-word form is split by any Markdown or `rustfmt` wrap, and two such citations were already broken that way when the gate was written. `ScrAP-` and `GTK4Rs/` are both unique, so a citation resolves to the same register whether it appears in a code comment, in `sdd/`, or inside this file. A bare `#N` inside **this file's own body** is the local shorthand for an entry here (never a skill entry); write `ScrAP-N` in full everywhere outside this file. When a lesson is held by BOTH registers, cite `ScrAP-N`: this register is always resolvable, whereas the skill may not be installed on the machine — which is also why a `GTK4Rs/AP-N` is checked for FORM only and its correctness rests on a human audit of a greppable list (#231). **`GTK4Rs/T-N` inherits that treatment, and its prefix is load-bearing in a way `AP-`'s is not:** a bare `T-N` is NOT gated and cannot be, because this tree already uses bare `T-n` for an unrelated purpose (four in `src/window/outline_nav.rs`, citing a testing register that does not exist here), so a bare-`T-N` check would fire on those and a check with false positives gets disabled. Always write the `GTK4Rs/` prefix on a technique citation; nothing will catch you if you don't. The retired forms — a bare `AP-N` meaning a project entry, `ANTI-PATTERNS #N`, and the two-word `skill AP-N` — are gone from the tree as of 2026-08-01, this time measured rather than asserted (#231 records why the first sweep's identical claim was false).
+**Citation convention.** Two anti-pattern registers are in play and their numbering spaces are unrelated. An entry in **this** file is cited **`ScrAP-N`**; an entry in the `gtk4-rs` skill is cited **`GTK4Rs/AP-N`**; an entry in the `general-engineering-principles` skill is cited **`GEP-N`** (its own native form, already a single unambiguous token, and deliberately NOT gated — a lesson routed there leaves no ScrAP behind to check it against), and one of that skill's numbered *techniques* (its `T-n` register — how-to recipes rather than traps, frozen and never reused, exactly like its `AP-n`) is cited **`GTK4Rs/T-N`**. **A bare `AP-N` is illegal anywhere in the tree** — not "it means the skill", illegal — and `lint-references` **check 8** fails on one. Both legal forms are deliberately SINGLE TOKENS with no space: a two-word form is split by any Markdown or `rustfmt` wrap, and two such citations were already broken that way when the gate was written. `ScrAP-` and `GTK4Rs/` are both unique, so a citation resolves to the same register whether it appears in a code comment, in `sdd/`, or inside this file. A bare `#N` inside **this file's own body** is the local shorthand for an entry here (never a skill entry); write `ScrAP-N` in full everywhere outside this file. When a lesson is held by BOTH registers, cite `ScrAP-N`: this register is always resolvable, whereas the skill may not be installed on the machine — which is also why a `GTK4Rs/AP-N` is checked for FORM only and its correctness rests on a human audit of a greppable list (#231). **`GTK4Rs/T-N` inherits that treatment, and its prefix is load-bearing in a way `AP-`'s is not:** a bare `T-N` is NOT gated and cannot be, because this tree already uses bare `T-n` for an unrelated purpose (four in `src/window/outline_nav.rs`, citing a testing register that does not exist here), so a bare-`T-N` check would fire on those and a check with false positives gets disabled. Always write the `GTK4Rs/` prefix on a technique citation; nothing will catch you if you don't. The retired forms — a bare `AP-N` meaning a project entry, `ANTI-PATTERNS #N`, and the two-word `skill AP-N` — are gone from the tree as of 2026-08-01, this time measured rather than asserted (#231 records why the first sweep's identical claim was false).
 
 > **ROUTING RULE — apply it when you MINT an entry, not in a migration later.** A lesson only
-> leaves this register if it has somewhere reusable to go, and today the **only** such destination
-> is the `gtk4-rs` skill. So one question decides it: **is this a lesson about gtk4-rs itself?**
+> leaves this register if it has somewhere reusable to go, and there are now **two** such
+> destinations. Two questions decide it, in this order:
 >
-> - **Yes** → weave it into the skill, and keep a stub here citing `GTK4Rs/AP-N`.
-> - **No** → **it stays here, in full.** That is Scribobulate's own internals *and* equally every
->   dependency that is not gtk4-rs — **Pango**, **GtkSourceView**, **pulldown-cmark/CommonMark**,
->   **librsvg**, **syntect**, **serde/`toml`**, the OS, the toolchain — *and* every process/tooling
->   concern (testing, CI, packaging, review discipline). None of those components is reused outside
->   Scribobulate, so extracting their lessons would buy no reuse and cost a hop. **Do not fold them
->   into the core skill.** (A separate home for the purely general engineering-discipline lessons is
->   under consideration but undecided; until it exists, they stay here too.)
+> 1. **Is this a lesson about gtk4-rs itself?** → weave it into the `gtk4-rs` skill and keep a
+>    stub here citing `GTK4Rs/AP-N`.
+> 2. **Is it general software-engineering discipline** — verification and gate design, experiment
+>    and diagnosis method, claims and relay hygiene, remedy reachability, cross-platform toolchain
+>    hazards, trust-boundary and state design — **that would hold in a project with none of this
+>    project's code in it?** → route it to the **`general-engineering-principles` skill**
+>    (**`gep`** in the ToasterTalk `skills` room), cited **`GEP-N`**.
+> - **Neither** → **it stays here, in full.** That is Scribobulate's own internals *and* equally
+>   every dependency that is not gtk4-rs — **Pango**, **GtkSourceView**, **pulldown-cmark/CommonMark**,
+>   **librsvg**, **syntect**, **serde/`toml`**, the OS, the toolchain — and any process or tooling
+>   concern whose specifics are OURS (this project's pipeline, its packaging, its review protocol).
+>   None of those components is reused outside Scribobulate, so extracting their lessons would buy
+>   no reuse and cost a hop. **Do not fold them into either skill.**
+>
+> **`GEP` was ratified as the `B` destination by the operator, 2026-08-27**, closing the "under
+> consideration but undecided" hold this rule carried until then. The test between 2 and "neither"
+> is whether the lesson survives deleting every Scribobulate-specific noun from it: *"a mutation
+> harness that restores with a VCS checkout destroys the uncommitted subject"* survives, so it went
+> to GEP; *"our pipeline step 5 SIGTRAPs with no accessibility bus"* does not, so it stayed (in
+> POLICY, in fact, beside the step it kills).
+>
+> **A GEP entry does not require a `ScrAP-N` for provenance** (operator, 2026-08-27): a lesson
+> routed OUT was ruled not to be a ScrAP, and minting a number purely to satisfy a citation regime
+> would undo the routing. Provenance travels as the commit SHA, branch and repository path. The
+> skill's own citation regime records that some of its entries carry no project number.
 >
 > **`glib`/`gio` are IN scope for the skill** (operator, 2026-08): its stated coverage is *gtk4,
 > glib, gio, gdk*, so a GLib or GIO lesson routes there like any other gtk4-rs lesson — the earlier
@@ -75,10 +92,13 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 >   home, this line reads *"project-specific; the fix + rationale live in a code comment
 >   at <site>."*
 >
-> **When to stub.** At MINT time, per the routing rule above — a lesson about gtk4-rs
-> itself is woven into the skill and stubbed here in the same change, never written full
-> and compressed later. A `B`/`C` lesson (no reusable home) stays here **in full** and is
-> not a stub; those are the entries legitimately running to dozens of lines.
+> **When to stub.** At MINT time, per the routing rule above — a lesson with a reusable
+> home is woven into that skill and stubbed here in the same change, never written full
+> and compressed later. **Only a `C` lesson stays here in full**; those are the entries
+> legitimately running to dozens of lines. A `B` lesson now has a home
+> (`general-engineering-principles`), so from 2026-08-27 a newly minted one is routed and
+> not written here at all — and unlike an `A`, it needs no stub, because the operator ruled
+> a routed-out general lesson is not a ScrAP. Nothing to point at means nothing to rot.
 >
 > **One caveat when stubbing at mint time:** the usual "the full essay lives in this
 > file's git history" does not apply, because it was never committed in full. Say where
@@ -137,10 +157,13 @@ Lessons from building Scribobulate's native GTK4/Rust rendering stack. This file
 > held is resolved above. **Keep this the only copy.**
 
 ---
-**Disposition tags (migration bucket, provisional).** `A` = GTK4-core, belongs in the `gtk4-rs`
-skill (body here becomes a pointer stub); `B` = general-engineering discipline, destination ON
-HOLD pending operator review — treat as provisional; `C` = stays in this register, per the
-routing rule above; `D` = dead landing-spot stub for a merged/superseded number. **Numbers are immutable: never renumbered,
+**Disposition tags (migration bucket).** `A` = GTK4-core, belongs in the `gtk4-rs`
+skill (body here becomes a pointer stub); `B` = general-engineering discipline, belongs in the
+**`general-engineering-principles`** skill — **destination ratified by the operator 2026-08-27**,
+no longer provisional; `C` = stays in this register, per the routing rule above; `D` = dead
+landing-spot stub for a merged/superseded number. **Every existing `B` row is therefore a
+migration candidate, not a resident** — route new ones at mint time and migrate the standing ones
+as they are next touched, rather than in one sweep nobody has budget for. **Numbers are immutable: never renumbered,
 never reused; a deleted entry keeps its `## N.` heading forever.**
 
 | #   | Anti-pattern | Disp |
@@ -450,6 +473,14 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 321 | The spurious kill — a mutation run that scores its own breakage as detection, and so certifies coverage that does not exist | B |
 | 322 | A control is a property of a CLAIM, not of a probe — one control makes every other claim in the same probe feel covered | B |
 | 323 | `Clipboard::formats()` is a UNION with deserializer-reachable gtypes, so `contains_type` answers "has this gtype been initialised in the process", not "is the content that type" | A |
+| 324 | A compiled-in asset resolved against a runtime directory is absent everywhere that directory isn't — a built-in theme's sprite path was resolved only on the user-file load path, never the compiled-in one | C |
+| 325 | A whole-struct `{:?}` in a completeness digest degenerates the guard into a restatement of what the PRODUCER already guarantees, and the sweep passes whatever the consumer does | B |
+| 326 | A `const`-evaluated constructor scores ZERO in llvm-cov, so code exercised at every build reads as dead and invites a ratchet to be lowered around it | B |
+| 327 | `TextTag::property_value("*-rgba")` formats a POINTER under `Debug`, so a tag digest built that way compares heap addresses | A |
+| 328 | A gdk-pixbuf dimension probe must `set_size(0, 0)`; any non-zero size still allocates the bomb while reporting the right dimensions and passing its own test | A |
+| 329 | A gate read through a PIPE reports the pipe's LAST stage, so `$?` after `gate | tail` is tail's verdict — and it agreed with a floor set from the wrong summary column | B |
+| 330 | A seam that EXISTS is not a seam that is CALLED — a debt closed on the seam's existence, while the one consumer the debt was about still bypassed it | B |
+| 331 | A vocabulary rename that reaches a SELECTOR produces a well-formed rule matching nothing, and no assertion over generated rule TEXT can tell the two apart | B |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -926,6 +957,7 @@ GTK4 is single-threaded, yet many pitfalls below present as **races** — interm
 **Symptom**: math (`$E=mc^2$`) rendered as nothing, footnote refs (`[^1]`) vanished, and YAML/`+++` frontmatter leaked into the body as a stray paragraph — silent content loss, no warning.
 **Root cause**: `Options::all()` turns on EVERY pulldown-cmark extension, including ones the renderer has no handler for; the dispatcher's catch-all silently drops standalone events and leaks a container's inner `Text`.
 **Resolution**: the Markdown-options setup is an explicit ALLOWLIST of only the extensions actually handled (`TABLES | TASKLISTS | SMART_PUNCTUATION | HEADING_ATTRIBUTES | GFM`); anything else degrades to literal `Text` rather than vanishing.
+**Live recurrence, 2026-08-27 — a GUARDED arm that fails its guard falls through to the catch-all.** The allowlist above bounds what the parser EMITS; it says nothing about a dispatcher's own `_ => {}`. `Event::Html(t) if self.in_html_block` looked handled and was not: with the flag false the arm was skipped and the event silently dropped, and the `TagEnd` twin left `in_html_block` true with stale bytes for the next block to inherit — a real instance, not a future one. Corrective: the three renderer dispatchers match `Event`/`Tag`/`TagEnd` EXHAUSTIVELY with no guard on any arm, so a pulldown-cmark upgrade stops compiling instead of absorbing new variants. Routing only the known-inert variants to a named sink and KEEPING the `_` was tried and rejected — it reads as sufficient, but a surviving `_` absorbs every variant added later, which is the whole thing deleting it buys. Commit `3b6bdee`.
 
 ## 79. A container-level `GtkGestureClick` also fires on presses that land on a child `GtkButton` — a bar-wide "activate" gesture activates a tab even when the press was on its × close button
 **Symptom**: clicking a BACKGROUND tab's × close button closed the right tab but also silently switched the active document — the closed tab's neighbour became active instead of the previously-active tab staying active.
@@ -3973,7 +4005,7 @@ SKIPPED [TDD 24.13 stored spelling]: test copymap::tests::within_heading_exclude
 **Symptom**: an exported document breaks its lines after almost every token inside a numbered or bulleted list — `POLICY.md`, then a line break, then the next four words, then a break, then a comma on its own line. Only *inside* list items; the same prose at top level is fine.
 **Root cause**: pulldown-cmark wraps a **loose** list item's content in `Tag::Paragraph` and a **tight** item's in nothing at all — the inline events arrive directly inside `Tag::Item`. A consumer that reaches for "no inline container is open, so start a paragraph" therefore starts a *new* paragraph for every inline event the item contains: one for the text run, one for the inline code, one for the link, one for the soft break. Plain prose survives because a whole text run is one `Text` event; the moment an item contains a second inline of any kind, it shatters.
 
-**Why it survived the tests, which is the transferable half.** Every list fixture in the suite used single-word items (`- one`, `- two`). For an item whose content is **one** inline event the broken path emits exactly one paragraph — byte-identical to correct. The defect is invisible below two inline runs per item, so a fixture has to contain inline code, a link, emphasis or a soft break *inside a list item* to detect it at all. It took exporting a real document (`sdd/PLAN.preview-decoration.md`, whose every numbered item cites a filename in backticks) for the operator to see it. **A fixture that cannot distinguish the broken output from the correct one is not coverage**, and "the list tests pass" read as though it were.
+**Why it survived the tests, which is the transferable half.** Every list fixture in the suite used single-word items (`- one`, `- two`). For an item whose content is **one** inline event the broken path emits exactly one paragraph — byte-identical to correct. The defect is invisible below two inline runs per item, so a fixture has to contain inline code, a link, emphasis or a soft break *inside a list item* to detect it at all. It took exporting a real document — an SDD plan, whose every numbered item cites a filename in backticks — for the operator to see it. **A fixture that cannot distinguish the broken output from the correct one is not coverage**, and "the list tests pass" read as though it were.
 
 **Scribobulate**: `src/export/walk.rs` carries an implicit-paragraph frame — `Open::ImplicitParagraph`, opened lazily by `Builder::push_inline` the first time an inline arrives with an empty inline stack, and closed by `Builder::flush_implicit` into the enclosing block frame. **Both halves are load-bearing and the second is the subtle one**: the flush fires only at **block** boundaries, gated by `is_block_start`/`is_block_end`. Flushing on every `Start`/`End` was the first attempt and it re-split the item at every link, because a link is an inline construct whose edges are not paragraph boundaries — it belongs *inside* the paragraph. Those two predicates are written as "not one of the inline set" rather than by enumerating block tags, so a construct pulldown adds later defaults to *block* and closes a paragraph, which is the safe direction. `flush_implicit` also runs before `Event::Rule` and in `Builder::finish`, so nothing is left unflushed. Regression guards: four tests in `export::doc::export_doc_tests` (a tight item with several inlines; a tight item containing a link; a **loose** item keeping each of its paragraphs, which confirms loose was never affected; a tight item with a sublist flushing its own text first), `tests/MANUAL-TEST.md` §25.3a, and TDD 25.3, whose predicate now states outright that **the fixture must give an item two or more inline runs**.
 
@@ -4289,3 +4321,105 @@ D and E are the load-bearing arms. D is clean because `static_type()` registers 
 **Symptom**: `formats().contains_type(TextBuffer)` is **true** for a clipboard holding only a plain string, so a test asserting plain text fails against correct code while a test asserting rich content passes vacuously — and the answer flips with test ORDER, because the type appears only once `GtkTextBuffer`'s class has initialised somewhere in the binary.
 **Scribobulate**: assert `clipboard.content()`'s provider formats, never the clipboard's — `clipboard::a_preview_selection_still_publishes_gtks_default_rich_content_to_primary` does, and carries the reasoning at the assertion (mutation-checked: publishing plain text over the same selection makes it report `gchararray` alone); `window::tabs::lifecycle::every_editor_this_application_builds_arrives_fully_wired` deliberately does not assert the CLIPBOARD half and says why.
 **See**: gtk4-rs skill → controllers-and-bindings (GTK4Rs/AP-306), placed beside GTK4Rs/AP-285, which is the same deserializer union on the DROP side. Canonical text was never committed in full here — the mechanism, the before/after measurement and the corrective went to the skill directly.
+
+## 324. A compiled-in asset resolved against a runtime directory is absent everywhere that directory isn't
+
+**Symptom**: a shipped theme's sprite renders as its flat fallback on a fresh install, a developer build run with no user config, and a macOS bundle — no warning, no crash, green suite throughout. The reference was never invalid; it was simply never resolved.
+
+**Root cause**: two ways a resource can be *named* — compiled into the binary, or read from disk — but only one way it was *resolved*: against a themes-file's own directory, a step that only the disk-file case ever ran. `Themes::builtin()` parsed the compiled-in theme TOML and handed its sprite strings straight through, unresolved, because the resolution call was wired into the user-file load path and never into the built-in one. Nothing rejected the unresolved string either: it became a relative `PathBuf`, opened against the process's current working directory — meaning a build run from the source tree with `data/` reachable at that relative path would have *appeared* to work, which is the `CARGO_MANIFEST_DIR`-shaped trap arriving by accident rather than by anyone reaching for it.
+
+**Two transferable halves.** (1) **An inert-by-default fallback makes a whole defect class unobservable.** "The theme stated no sprite" and "the reference resolved nowhere" produce identical pixels and identical logs, so every gate — visual or automated — passes either way. Where a feature degrades silently on failure, at least one guard must inspect what the *input* said, never only what the *output* did. (2) **A resolution step wired for one origin and forgotten for the other survives even a proud single-loop enumeration.** The loop that resolved every sprite *key* for a disk-read theme was already exactly the discipline this register recommends elsewhere — one place, every key, add a key and the loop catches it. It was still only ever *called* on one of the two paths a `ThemeSpec` can arrive by. Enumerating every key inside a function protects against a forgotten key; it says nothing about a forgotten caller of that function.
+
+**Corrective, Scribobulate**: resolution moved to construction time — `Themes::parse` is now the sole place a `ThemeSpec`'s sprite fields exist, in a form (`SpriteRef`/`SpriteOrigin`, `src/sprite.rs`) that cannot be *stated* without already being resolved, so a second caller cannot forget the step because there is no unresolved shape left to skip it on. Built-in sprite bytes are `include_bytes!`-compiled into the binary (mirroring how the built-in theme TOML itself is `include_str!`-compiled) rather than materialised to a runtime directory — the alternative considered and rejected, because it would have made a *compiled-in* decoration contingent on a writable state directory existing, which is the same class of silent absence one layer down. Five mutation-tested guards pin the fix, including one that asks the struct itself whether every sprite key reached the enumeration, since a list-driven guard is blind to a key missing *from* the list it drives. **That guard was itself defective as first written** — it dumped whole sub-structs with `{:?}`, which degenerated it into a restatement of what the producer already guarantees; see ScrAP-325. Commit `5c2d2b7`.
+
+**See**: kin to ScrAP-317/319/320/321 (this register's own family of checks/mechanisms that cannot go red for the right reason) — here the mechanism that went silently right was a *resolution step*, not a test. Not a gtk4-rs lesson: the two GTK-adjacent calls involved (`Texture::from_bytes`, `Pixbuf::from_stream` as the embedded-bytes twins of `from_filename`/`from_file`) are already covered by GTK4Rs/AP-66 and GTK4Rs/AP-292, and no user-theme sprite's decode route changed.
+
+## 325. A whole-struct `{:?}` in a completeness digest degenerates the guard into a restatement of what the producer already guarantees
+
+**Symptom**: a surface sweep built to prove "every declared key actually reaches every renderer" passes for every key, including keys the renderer demonstrably ignores. The guard is present, its intent is documented, its diff looks thorough, and it cannot go red for the reason it was written.
+
+**Root cause**: the digest it compares was built by dumping a whole sub-struct with `{:?}` rather than enumerating the fields the CONSUMER reads. A whole-struct dump is a function of the resolved model alone, so the question the sweep actually answers is "did this key survive resolution" — which resolution already guarantees — and the consumer never enters the comparison at all. The guard is not weak; it is asking a different question, and the two questions produce identical green.
+
+**MEASURED**: with the resolved typography sub-struct dumped into the digest, deleting the preview's `bold_weight` read left the sweep green. The mutation that should have killed it changed nothing the digest could see.
+
+**Corrective**: name the fields the consumer reads, one by one, and read them at the boundary the consumer reads them at — for a preview whose typography reaches the screen through a `GtkTextTag`, that means the tag's own properties, not the model's. Enumerating explicitly also makes adding a field a deliberate claim rather than a silent inheritance, which is the property the `{:?}` was reached for in the first place and the one it does not deliver.
+
+**Scribobulate**: `src/theme/tests/sinks.rs` — `decoration_digest` enumerates the metrics the preview's paint pass scales and nothing else, with the measurement above stated in the function's own comment so the next agent does not "simplify" it back; everything typographic is proven through the tag digest beside it, at the tag.
+
+**See**: kin — ScrAP-321 (a check that cannot fail, in its optimistic direction) and ScrAP-322 (a control belongs to the CLAIM, not the probe). This is the same family narrowed to one mechanism: **a digest is only as strong as the narrowest thing that can change it**, and a whole-struct dump silently widens the subject back to the producer. Direct correction to ScrAP-324's own corrective, which shipped this defect in its first form.
+
+## 326. A `const`-evaluated constructor scores ZERO in llvm-cov, so code exercised at every build reads as dead
+
+**Symptom**: a module's line coverage collapses — here 100% to 74.5% — for code that has not changed behaviour and that every single build executes. Nothing is untested; the report simply cannot see it.
+
+**Root cause**: llvm-cov instruments code the RUNTIME executes. A constructor evaluated in a `const` context runs in the compiler, emits no instrumented counters, and so contributes lines with a zero execution count exactly as unreachable code would. The two are indistinguishable in the report, and the report is the thing a ratchet reads.
+
+**Why it is dangerous rather than merely wrong**: the honest-looking response is to lower the floor to accommodate "code that cannot be covered", which permanently blinds the ratchet by the size of the misreading. The second-most-likely response — an exclusion pragma — hides the module from the gate for real. Both convert a measurement artefact into a lasting hole.
+
+**Corrective**: add a unit test that CONSTRUCTS the value at runtime and asserts its shape — the count, the ordering, the invariant the const form is relied upon to hold. That earns the lines back honestly, and it is worth having independently of the number: a const-evaluated table is precisely the kind of thing nothing else checks, because it "obviously" cannot be wrong. Never lower a floor to accommodate a const-eval gap without first trying to construct the value at runtime.
+
+**Scribobulate**: `src/theme/keys.rs`'s registry is the const-evaluated table; its runtime-construction test asserts the registry's shape as well as restoring the measurement, and `scripts/coverage.sh`'s FLOOR was re-armed upward (81.45) rather than relaxed. Commit `4b17fde`.
+
+**See**: project tooling — cargo-llvm-cov. Kin to ScrAP-321's family (a number that reads as evidence and is not), and a direct sibling of the coverage-scope trap `scripts/coverage.sh` already documents in its own header: a sibling `mod tests;` leaving the measured scope. Both make the gate green while measuring something other than what it claims.
+
+## 327. `TextTag::property_value("*-rgba")` formats a POINTER under `Debug`, not the colour
+**Symptom**: a digest built from a `GtkTextTag`'s colour properties never compares equal across two resolutions of the SAME theme, so the guard is permanently red — and the natural "fix" is to drop the colours from it, silently neutering the check.
+**Scribobulate**: `src/theme/tests/sinks.rs`'s tag digest reads colours typed as `property::<Option<gdk::RGBA>>` and formats the RGBA; the `Debug` spelling is confined to the non-colour properties beside it, where it is faithful.
+**See**: gtk4-rs skill → ui-testing-verification (GTK4Rs/AP-310). Woven at mint time — the canonical text is skill-side and was never committed in full here.
+
+## 328. A gdk-pixbuf dimension probe must `set_size(0, 0)`; any non-zero size still allocates the bomb
+**Symptom**: a probe that reads a PNG's declared dimensions in order to REFUSE a decompression bomb reports the right dimensions, refuses the image, passes its own test, and has already allocated the bomb — the only observable is peak RSS, which no in-process oracle can assert on.
+**Scribobulate**: `src/sprite.rs`'s decoded-pixel cap probes with `set_size(0, 0)` in its `size-prepared` handler and carries the measured RSS figures and the failing spelling in its rustdoc, because the correct and incorrect forms are indistinguishable from the gate's own verdict.
+**See**: gtk4-rs skill → app-lifecycle-and-env (GTK4Rs/AP-311, beside GTK4Rs/AP-66's loader-chain entry). Woven at mint time — the canonical text is skill-side and was never committed in full here.
+
+## 329. A gate read through a pipe reports the pipe's last stage, not the gate
+
+**Symptom**: a coverage ratchet was set from a measurement, re-run to confirm, and reported green twice — while actually failing. Two independent mechanisms had to line up, and both fail in the green direction.
+
+**Root cause, part one — the pipe.** The gate was invoked as `scripts/coverage.sh | tail -2; echo $?`. In a POSIX shell `$?` after a pipeline is the exit status of its LAST command, so the `0` printed was `tail`'s, and `tail` succeeds whatever the gate decided. The output looked right because `tail` faithfully showed the gate's own summary lines; only the VERDICT was substituted. `set -o pipefail` was not in effect, and would have fixed it.
+
+**Root cause, part two — the column.** The floor was set from the leading column of `cargo llvm-cov --summary-only`, which is **Regions**; `--fail-under-lines` reads **Lines**, roughly a point lower. So the floor was set about a point too high and the gate genuinely failed — which the pipe then hid.
+
+**The compounding is the finding.** Either mechanism alone is recoverable: a wrong floor fails loudly on the next run, and a swallowed exit status is caught the first time the gate legitimately fails. Together they cancel — the wrong floor produced the failure and the pipe erased it, so the run that would have exposed the first was the run silenced by the second. Neither is exotic and neither announces itself.
+
+**Resolution**: invoke a gate directly and read its own exit status; where a pipeline is genuinely wanted, `set -o pipefail` first. Read a coverage floor from the column the gate reads, never the column the summary leads with.
+
+**Prior instance, which is why this has a number**: the column half was ALREADY documented at the top of `scripts/coverage.sh` — including a note from a previous agent recording that they "walked straight into it" — and it was walked into again anyway. A warning in the file being read is not a guard; it is only reachable by someone who reads before acting, which is precisely who does not need it. The durable half is the gate's own exit status, and only the invocation can carry that.
+
+**Scribobulate**: `scripts/coverage.sh`'s header carries the column warning and its instances; the FLOOR (82.15) is set from the Lines column and verified by running the script directly.
+
+**See**: project tooling — cargo-llvm-cov and shell invocation. Kin — ScrAP-321's family (a green that means nothing), and ScrAP-326 beside it, which is the other way a coverage number misleads: 326 is a real number read as the wrong fact, this is a verdict that was never the gate's at all.
+
+## 330. A seam that exists is not a seam that is called
+
+**Symptom**: a known defect is reported fixed, the fix is verified by confirming the corrective seam exists, and the defect is still live — in the exact consumer the defect was about.
+
+**Root cause**: the promotion was checked against the wrong proposition. "A single de-quoting projection now exists" and "every consumer routes through it" are different claims, and only the first was tested. The one consumer that did not call it was the one the debt named, because that is what the debt *was*.
+
+**The measured instance**: a helper existed precisely to strip a CSS-quoted font stack before Pango sees it, and the export sink passed the raw quoted stack straight to `set_family` at both of its call sites. The helper was `pub(super)` in another module and **unreachable** from the sink, so the code as written could not have called it — visible from the visibility modifier alone, had anyone asked "who calls this?" rather than "does this exist?".
+
+**Why the verification felt sufficient**: existence is cheap to check and reads as the whole job, because the seam is the thing that was built. A caller list is the part nobody looks at, and it is the only part that carries the property.
+
+**Compounding, and worth its own line**: the failure hid because the wrong answer was FLATTERING. The quoted stack fell through to its generic terminator, so the artefact rendered in a serif rather than the default sans — which reads as "the theme's serif choice was honoured". The one test aimed at the area used a bare generic, which the sanitiser leaves unquoted, so the fixture and the assertion were wrong in the same direction and agreed with each other.
+
+**Corrective**: closing a debt about a consumer requires an enumeration of that seam's callers, not the seam. Where the language can express it, make the wrong call unspellable rather than merely corrected — the fix here moved the projection onto the value type so the CSS spelling cannot reach `set_family` at all. POLICY § Typed GTK seams already says "prove the wrapped call, not just the type"; this is the measured cost of proving only the type.
+
+**Scribobulate**: `CssSafeFontStack::pango_family` (`src/theme/value.rs`) is the sole projection, and the PDF sink's layout specs carry that type rather than `String`. The guard asserts the face Pango *resolved* in the artefact, and separately asserts its own fixture came back quoted so it cannot rot into the weaker shape.
+
+**See**: kin — ScrAP-321's family (a check that cannot fail), and ScrAP-272 (an obligation phrased as a property of an artefact reads as done once the artefact exists). Distinct from both: this check *could* fail, was aimed at a real property, and was aimed one proposition short.
+
+## 331. A vocabulary rename that reaches a selector
+
+**Symptom**: a styling rule stops applying to one widget shape while every neighbouring shape stays correct. The rule is still generated, still well-formed, and still present in every test's expected output. The whole suite is green.
+
+**Root cause**: a project's own vocabulary and a toolkit's CSS class namespace can share a spelling, and a blanket rename across the tree cannot tell them apart. Renaming the vocabulary term rewrote a selector's **class name** — the toolkit's, not the project's — into one that is syntactically valid and matches no widget. Nothing rejects it: a CSS selector that matches nothing is not an error at any layer.
+
+**Why no test caught it, which is the transferable half**: every guard over a generated stylesheet asserted on the rule **TEXT**. Text is exactly what a rename preserves. MEASURED: with the regression re-applied, **1279 tests stayed green** and the only red came from a guard written afterwards. An assertion over generated CSS proves the generator ran; it says nothing about what the rule selects, so it cannot distinguish a rule that styles a widget from one that styles nothing.
+
+**Corrective, two halves**:
+- A guard for a generated stylesheet must read the **resolved style off a real widget** — build the widget as the producer does, read the property before the provider is installed so a coincidental match fails the fixture rather than passing the test, install, read again.
+- A rename sweep must treat a **selector as a foreign namespace**. The blast radius question is not "which occurrences are ours" but "which occurrences are inside a string the toolkit parses", and those must each be resolved by hand.
+
+**Scribobulate**: the table-cell link selectors (`src/preview/css.rs`) name GTK's own `link` class on `GtkLinkButton`, not this project's `link_color` key; the constant carries a warning saying so, because the two are one blanket rename apart. Pinned by a guard that reads the button's resolved colour off a constructed cell.
+
+**See**: kin — ScrAP-132 (a guard whose input set is narrower than its hazard). The GTK-side facts underneath this (which class `GtkLinkButton` carries, and that `color` inherits to its caption while `text-decoration-*` does not) are routed to the `gtk4-rs` skill separately; the lesson here is about renaming across a namespace boundary, which is not a GTK lesson.

@@ -189,8 +189,27 @@ pub fn stub_keeps_implementation_line(tree: &Tree) -> bool {
 /// above the measured state at the time they were written, not at it — a ratchet you trip
 /// on the commit that installs it teaches people to raise the number rather than to
 /// consolidate.
-const REGISTER_WARN: u64 = 520_000;
-const REGISTER_FAIL: u64 = 650_000;
+///
+/// **Raised once, 2026-08-27, by operator decision — 520_000/650_000 -> 675_000/700_000.**
+/// Recorded because the paragraph above predicted exactly this move and a silent bump would
+/// make that warning look unheeded. What actually happened: the ceiling was reached by
+/// QA-round entries that had nowhere else to go, and the consolidation the gate asks for was
+/// available but not free — see below. The soft limit moved WITH the ceiling on purpose: at
+/// 520_000 against a 657_000B file the WARN tier could never fire (the file was already past
+/// FAIL), so the two-tier design had quietly collapsed to one tier. A warning that is always
+/// on is not a warning.
+///
+/// **The relief this gate exists to force is still unspent, and a third raise should not
+/// happen before it is.** MEASURED 2026-08-27: 29 entries tagged `A` in the index carry
+/// ~150_000B of full essays that are migration backlog — their canonical text already lives
+/// in the `gtk4-rs` skill, and the routing rule says the body here should be a four-line
+/// stub. Six of the largest (ScrAP-193, 238, 252, 258, 259, 268) were spot-checked against
+/// the installed skill and confirmed carried there; stubbing just those reclaims ~45_000B.
+/// The reason that was not simply done here is that it deletes prose from a tracked register
+/// whose only fallback is git history plus a skill that is not installed on every machine
+/// this repository lives on — an operator call, not a lint fix.
+const REGISTER_WARN: u64 = 675_000;
+const REGISTER_FAIL: u64 = 700_000;
 const ENTRY_WARN: u64 = 11_000;
 const ENTRY_FAIL: u64 = 15_000;
 

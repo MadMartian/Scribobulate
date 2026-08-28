@@ -288,9 +288,15 @@ disarm.macos integration  permanent  G_DEBUG=fatal-criticals is absent from the 
 #
 # Linux-canonical BY DESIGN. See the header's "record the semantic reason" note: the
 # declarations below cite the semantics, never the missing tool.
+#
+# TWO invariants, and their ORDER is load-bearing. The gate first proves it is measuring
+# the same set of files it measured last time (scripts/coverage.scope), and only then
+# renders a verdict on the percentage — because a change in what is MEASURED used to
+# arrive disguised as a change in coverage, and a ratchet compared across two different
+# scopes measures nothing. The script owns both; this line states the invariant.
 # ---------------------------------------------------------------------------
 step   6  coverage
-intent coverage  Scoped line coverage has not regressed below the ratchet floor
+intent coverage  The measured file set is the one recorded in scripts/coverage.scope, and scoped line coverage over that set has not regressed below the ratchet floor
 verdict coverage  exit
 class  coverage  required
 cmd.linux   coverage  scripts/coverage.sh

@@ -941,7 +941,8 @@ mod tests {
             .iter()
             .map(|&(a, b)| (a as usize, b as usize))
             .collect();
-        let markup = crate::renderer::annotate_markup(plain, &hl);
+        let theme = crate::theme::active();
+        let markup = crate::renderer::annotate_markup(plain, &hl, &theme);
         // Built from the same generator the code under test uses — this test is about
         // WHICH characters get highlighted, not what colour they get (the colour is
         // the active theme's, and `theme` owns testing its resolution).
@@ -949,7 +950,7 @@ mod tests {
             markup,
             format!(
                 "the earth is {}flat</span> here",
-                crate::renderer::ann_hl_open()
+                crate::renderer::ann_hl_open(&theme)
             )
         );
     }
@@ -993,9 +994,10 @@ mod tests {
             .iter()
             .map(|&(a, b)| (a as usize, b as usize))
             .collect();
-        let markup = crate::renderer::annotate_markup(plain, &hl);
+        let theme = crate::theme::active();
+        let markup = crate::renderer::annotate_markup(plain, &hl, &theme);
         assert!(
-            markup.contains(&crate::renderer::ann_hl_open()),
+            markup.contains(&crate::renderer::ann_hl_open(&theme)),
             "markup must carry the annotation highlight span: {markup}"
         );
         assert!(

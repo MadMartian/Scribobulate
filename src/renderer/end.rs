@@ -14,11 +14,23 @@ use pulldown_cmark::TagEnd;
 impl Renderer {
     pub(super) fn end_tag(&mut self, end: TagEnd) {
         match end {
-            TagEnd::Heading(_) => {
+            TagEnd::Heading(level) => {
                 // Compute this heading's GitHub-style anchor slug and record its
                 // position so `#slug` links can scroll here.
                 let slug = unique_slug(&slugify(&self.heading_text), &mut self.slug_seen);
                 self.headings.push((slug, self.heading_start));
+                // …and its EXTENT, for the drawn band (TDD 18.25). Recorded BEFORE the
+                // terminating newline, so the span covers the heading's content only —
+                // the same content-not-separator discipline the blockquote range below
+                // follows, and what keeps a band from reaching into the blank line after
+                // the heading.
+                self.heading_spans.push(crate::renderer::HeadingSpan {
+                    span: crate::span::BufferSpan::new(self.heading_start, self.end_offset()),
+                    // h5 and h6 share the deepest slot, the same fold `emit.rs`
+                    // applies when it picks the heading's tag — the same call, so
+                    // they cannot disagree about it.
+                    level_index: crate::theme::heading_slot(level as u8),
+                });
                 self.newline();
                 self.heading = None;
             }
@@ -52,6 +64,17 @@ impl Renderer {
                         let end = self.end_offset();
                         if end > start {
                             self.apply_tag_per_line(crate::tags::TagName::Blockquote, start, end);
+                            // The quote's own ink (TDD 18.29) rides the same per-line
+                            // pass on its own, LOWEST-priority tag, so a link, heading
+                            // or `==mark==` inside the quote keeps its colour
+                            // (`tags::TagName::BlockquoteInk`). Applied unconditionally:
+                            // the tag carries no foreground at all unless the theme
+                            // states one, so a theme that states none re-inks nothing.
+                            self.apply_tag_per_line(
+                                crate::tags::TagName::BlockquoteInk,
+                                start,
+                                end,
+                            );
                             self.blockquote_ranges
                                 .push(crate::span::BufferSpan::new(start, end));
                         }
@@ -117,6 +140,7 @@ impl Renderer {
                             &ts.cell_content_evs,
                             &self.cleaned,
                             &self.ann_highlights,
+                            &self.theme,
                         );
                     }
                     let cell_widget: gtk::Widget =
@@ -208,7 +232,7 @@ impl Renderer {
             TagEnd::Strong => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</b>");
+                        ts.cell_markup.push_str(super::BOLD_CLOSE);
                     }
                 } else {
                     self.inline_tags
@@ -227,8 +251,9 @@ impl Renderer {
             }
             TagEnd::Strikethrough => {
                 if self.in_table_cell() {
+                    let (_open, close) = super::strike_tags(&self.theme);
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</s>");
+                        ts.cell_markup.push_str(close);
                     }
                 } else {
                     self.inline_tags
@@ -238,7 +263,7 @@ impl Renderer {
             TagEnd::Superscript => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</sup>");
+                        ts.cell_markup.push_str(super::SUPERSCRIPT_CLOSE);
                     }
                 } else {
                     self.inline_tags
@@ -248,7 +273,7 @@ impl Renderer {
             TagEnd::Subscript => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</sub>");
+                        ts.cell_markup.push_str(super::SUBSCRIPT_CLOSE);
                     }
                 } else {
                     self.inline_tags
@@ -283,13 +308,29 @@ impl Renderer {
             // rendering any `<picture>`/`<img>` images, else dropped (sanitize by
             // omission). Flush a `<picture>` left open by a malformed/unclosed block.
             // See ScrAP-147 / TDD 2.23.
-            TagEnd::HtmlBlock if self.in_html_block => {
-                self.in_html_block = false;
-                let html = std::mem::take(&mut self.html_acc);
-                self.feed_html(&html);
-                self.flush_open_picture();
+            // TOTAL, not guarded, for the reason `events.rs`'s twin gives — and here
+            // a failed guard was worse than a dropped event: it left `in_html_block`
+            // true and `html_acc` holding stale bytes, which the next block would
+            // then inherit.
+            TagEnd::HtmlBlock => {
+                if self.in_html_block {
+                    self.in_html_block = false;
+                    let html = std::mem::take(&mut self.html_acc);
+                    self.feed_html(&html);
+                    self.flush_open_picture();
+                } else {
+                    self.dropped_construct("an HTML-block close with no open block");
+                }
             }
-            _ => {}
+
+            // Inert BY OPTION, matching `start.rs`'s arms one for one — the two
+            // halves of one construct's absence, so neither can be added without the
+            // other.
+            TagEnd::FootnoteDefinition => self.dropped_construct("a footnote definition"),
+            TagEnd::DefinitionList
+            | TagEnd::DefinitionListTitle
+            | TagEnd::DefinitionListDefinition => self.dropped_construct("a definition list"),
+            TagEnd::MetadataBlock(_) => self.dropped_construct("a metadata block"),
         }
     }
 }

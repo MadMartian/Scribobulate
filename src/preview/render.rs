@@ -5,8 +5,8 @@
 //! [`super::interactions`].
 
 use super::build::{
-    apply_preview_margins, build_render_products, build_render_products_into,
-    install_products_into_view, RenderProducts,
+    apply_preview_margins, attach_anchored, build_render_products, build_render_products_into,
+    install_annotations, install_content, RenderProducts,
 };
 use super::cells::{attach_cell_marker_widgets, collect_cell_labels, collect_table_anchors};
 use super::interactions::{
@@ -37,18 +37,11 @@ pub(crate) fn render(
         links,
         anchored,
         image_tints,
-        width_bounded,
-        image_bounded,
-        tables,
-        code_blocks,
-        code_block_bg,
-        blockquote_ranges,
-        blockquote_bar,
+        install,
         heading_offsets,
         heading_slugs,
         heading_map,
         mut markers,
-        list_markers,
         cell_src_spans,
         highlight_ranges: _,
         shifts,
@@ -110,19 +103,8 @@ pub(crate) fn render(
     // `re_render` mirrors exactly (D4). Fixed-height anchored children (the
     // horizontal-rule separators) get bound to the live content column; tables
     // use the custom churn-free widget (GTK4Rs/AP-23).
-    install_products_into_view(
-        &view,
-        code_blocks,
-        code_block_bg,
-        blockquote_ranges,
-        blockquote_bar,
-        &anchored,
-        width_bounded,
-        image_bounded,
-        tables,
-        list_markers,
-        zoom,
-    );
+    install_content(&view, install, zoom);
+    attach_anchored(&view, &anchored);
     // Cell-marker pairing: pair cell-claim markers with their GtkLabel (widgets now exist).
     attach_cell_marker_widgets(&mut markers, &anchored, &cell_src_spans);
     view.set_markers(markers);
@@ -270,18 +252,11 @@ pub(crate) fn re_render(
         links,
         anchored,
         image_tints,
-        width_bounded,
-        image_bounded,
-        tables,
-        code_blocks,
-        code_block_bg,
-        blockquote_ranges,
-        blockquote_bar,
+        install,
         heading_offsets,
         heading_slugs,
         heading_map,
         mut markers,
-        list_markers,
         cell_src_spans,
         highlight_ranges: _,
         shifts,
@@ -325,19 +300,8 @@ pub(crate) fn re_render(
     // and possibly theme-changed colors, anchored children, width/image bounds) —
     // the SAME lockstep sequence `render` applies (D4).
     let new_aw: Vec<gtk::Widget> = anchored.iter().map(|(_, w)| w.clone()).collect();
-    install_products_into_view(
-        &view,
-        code_blocks,
-        code_block_bg,
-        blockquote_ranges,
-        blockquote_bar,
-        &anchored,
-        width_bounded,
-        image_bounded,
-        tables,
-        list_markers,
-        zoom,
-    );
+    install_content(&view, install, zoom);
+    attach_anchored(&view, &anchored);
     attach_cell_marker_widgets(&mut markers, &anchored, &cell_src_spans);
     view.set_markers(markers);
     if let Some(aw) = anchor_widgets_rc {
@@ -456,15 +420,19 @@ pub(crate) fn refresh_annotations_in_place(
     }
     view.set_markers(markers);
 
-    // Refresh the drawn list-marker gutter. A task-checkbox toggle
-    // reaches this fast path — the rendered text is byte-identical (the `[ ]`/`[x]`
-    // marker is gutter-drawn, not buffer text), so the structural guard above passes —
-    // but the checkbox's CHECKED state lives in `products.list_markers`, not in any
-    // buffer tag. Without re-installing them here the drawn box keeps its stale state
-    // and the toggle appears to do nothing in preview-only mode (in split, the editor
-    // buffer's `changed` fires a full `re_render` that masks the gap). `set_list_markers`
-    // also clears the now-stale checkbox hit-boxes; the next paint repopulates them.
-    view.set_list_markers(products.list_markers, zoom);
+    // The ANNOTATION half of the install, by name (F-CHOKE-001). This route does not
+    // rebuild the buffer, so it does not install the content half — but "which of the
+    // nine things does this route install?" is now a stated choice rather than two
+    // setters picked out of a longer list, and the render-generation bump travels with
+    // it instead of being skipped.
+    //
+    // The list markers matter here specifically because a task-checkbox toggle reaches
+    // this fast path: the rendered text is byte-identical (the `[ ]`/`[x]` marker is
+    // gutter-drawn, not buffer text), so the structural guard above passes — but the
+    // checkbox's CHECKED state lives in the markers, not in any buffer tag. Without
+    // re-installing them the drawn box keeps its stale state and the toggle appears to do
+    // nothing in preview-only mode.
+    install_annotations(&view, products.install.list_markers, zoom);
 
     // Refresh the offset-based render maps (source↔buffer / copy / shift), which DO change
     // — the source shifted by the inserted/removed CriticMarkup even though the buffer did
@@ -740,6 +708,71 @@ mod gtk_integration_tests {
         assert!(
             !text.contains("First body paragraph."),
             "the previous render's content must be gone, got {text:?}"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod choke_point_tests {
+    use super::*;
+
+    /// The `CodePreviewView` inside a rendered preview widget.
+    fn view_of(widget: &gtk::Widget) -> CodePreviewView {
+        widget
+            .downcast_ref::<gtk::Overlay>()
+            .and_then(|o| o.child())
+            .and_then(|c| c.downcast::<ScrolledWindow>().ok())
+            .and_then(|sw| sw.child())
+            .and_then(|c| c.downcast::<CodePreviewView>().ok())
+            .expect("Overlay > ScrolledWindow > CodePreviewView")
+    }
+
+    /// **Every route that installs anything bumps the render generation** — including
+    /// the annotation refresh, which is the route that used to skip it.
+    ///
+    /// `install_products_into_view`'s rustdoc carried the claim that "because the bump
+    /// lives in the same choke point that rebuilds the content, no render path can
+    /// forget to invalidate." A THIRD route falsified it: `refresh_annotations_in_place`
+    /// rebuilds render products and installed a hand-picked TWO of the nine things the
+    /// choke point installs, calling neither the choke point nor the bump. It was safe
+    /// only because of a structural-identity guard — which says the BUFFER TEXT is
+    /// unchanged, and says nothing about the find hit list, whose entries an annotation
+    /// edit moves in the SOURCE.
+    ///
+    /// Asserted on the generation rather than on the two setters, because the invariant
+    /// is about invalidation and not about which setters a route happens to call today.
+    #[gtktest::test]
+    fn the_annotation_refresh_route_invalidates_like_every_other_route() {
+        let md = "A paragraph with {==a claim==}{>>a note<<} in it.\n";
+        let widget = render(md, None, 1.0, false);
+        let view = view_of(&widget);
+        let sw = widget
+            .downcast_ref::<gtk::Overlay>()
+            .and_then(|o| o.child())
+            .and_then(|c| c.downcast::<ScrolledWindow>().ok())
+            .expect("the preview's scroller");
+
+        let before = view.render_generation();
+        // The SAME rendered text with a different annotation — the structural guard has
+        // to pass, or this exercises the full re-render fallback instead of the route
+        // under test.
+        let refreshed = refresh_annotations_in_place(
+            &sw,
+            "A paragraph with {==a claim==}{>>a different note<<} in it.\n",
+            None,
+            1.0,
+            false,
+        );
+        assert!(
+            refreshed,
+            "the fast path must have been taken — otherwise this test is about the \
+             full re-render, which was never the route in question"
+        );
+        assert_ne!(
+            view.render_generation(),
+            before,
+            "the annotation route installed a render without invalidating what the \
+             previous one derived"
         );
     }
 }

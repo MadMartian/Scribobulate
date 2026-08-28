@@ -168,10 +168,27 @@ impl std::fmt::Display for LoadRefusal {
 /// the caller is about to open the file anyway, and re-`stat`ing a path it will
 /// then open by name is a TOCTOU seam this function has no business adding.
 pub(crate) fn is_regular_file_within_limit(meta: &std::fs::Metadata) -> Result<(), LoadRefusal> {
+    is_regular_file_within(meta, MAX_DOCUMENT_BYTES)
+}
+
+/// The same two-halves admission test against a **caller-supplied** byte cap.
+///
+/// Exists because a document is not the only untrusted file this application opens:
+/// `crate::sprite` admits a theme-named image under its own, much smaller cap. That
+/// caller reimplemented the size half and dropped the type half — the FIFO bug this
+/// module's docs name verbatim — so the halves live here, once, and the cap is the
+/// only thing a second caller supplies.
+///
+/// The returned [`LoadRefusal`]'s `Display` is worded for a **document**; a caller
+/// passing a different cap matches the variant and words its own diagnostic.
+pub(crate) fn is_regular_file_within(
+    meta: &std::fs::Metadata,
+    cap: u64,
+) -> Result<(), LoadRefusal> {
     if !meta.is_file() {
         return Err(LoadRefusal::NotARegularFile);
     }
-    if meta.len() > MAX_DOCUMENT_BYTES {
+    if meta.len() > cap {
         return Err(LoadRefusal::TooLarge { bytes: meta.len() });
     }
     Ok(())

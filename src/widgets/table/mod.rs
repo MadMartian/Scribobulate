@@ -278,6 +278,98 @@ mod gtk_integration_tests {
     use super::*;
     use gtk::subclass::prelude::*;
 
+    /// A display-wide CSS provider, removed again when this value drops. A provider on
+    /// the display is PROCESS-global state and libtest runs the whole suite in one
+    /// process, so it must come off even on a panic (POLICY § Unit tests).
+    struct DisplayCss(gtk::CssProvider);
+
+    impl DisplayCss {
+        fn install(css: &str) -> Self {
+            let display = gdk::Display::default().expect("this test needs a display");
+            let provider = gtk::CssProvider::new();
+            provider.load_from_data(css);
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_USER,
+            );
+            Self(provider)
+        }
+    }
+
+    impl Drop for DisplayCss {
+        fn drop(&mut self) {
+            if let Some(display) = gdk::Display::default() {
+                gtk::style_context_remove_provider_for_display(&display, &self.0);
+            }
+        }
+    }
+
+    /// **The preview's link-cell rules reach the widget** — asserted on the colour the
+    /// button node RESOLVES to, which is the only observable that can see whether a
+    /// selector matched anything.
+    ///
+    /// TDD 18.45. Every other test of these rules asserts on the generated stylesheet
+    /// TEXT, and that is a check of the same defect one layer up: a blanket rename of the
+    /// theme vocabulary turned `scribtable button.cell.link` — where `link` is GTK's own
+    /// class on `GtkLinkButton`, not this project's `link_color` key — into
+    /// `scribtable button.cell.link_color`, a perfectly well-formed selector matching
+    /// nothing. The rule still generated, every text assertion still passed, and a
+    /// link-only cell silently reverted to the desktop's link colour beside a mixed cell
+    /// that stayed themed.
+    ///
+    /// Two readings, and the first is what makes the second mean anything: the same
+    /// button is read BEFORE the provider goes on, so a colour that happened to match by
+    /// coincidence would fail the fixture rather than pass the test.
+    ///
+    /// **What this cannot reach**, stated rather than papered over: the third selector,
+    /// `scribtable button.cell.link label`, exists for `text-decoration-*`, which does
+    /// not inherit to the caption and which gtk4-rs exposes no style-context accessor
+    /// for. Its effect is covered by the driven pixel comparison recorded at TDD 18.45,
+    /// not here — adding another rule-text assertion for it would be the very thing this
+    /// test exists to stop.
+    #[gtktest::test]
+    fn a_link_only_cells_button_wears_the_themes_link_colour() {
+        use crate::palette::Palette;
+
+        // A link colour no fallback theme is going to land on by accident, and one that
+        // is not the theme's body ink either — so `color` inherited from an ancestor
+        // cannot satisfy the assertion.
+        let mut themes = crate::theme::Themes::builtin();
+        themes.merge_over_for_test("[themes.probe]\nlink_color = \"#2de1ff\"\n");
+        let theme = themes.resolve("probe");
+        let palette = Palette::for_paper(&theme);
+        let want = palette.link_fg;
+
+        // Built exactly as `preview::build` builds a pure-link cell.
+        let link = crate::widgets::table::link_cell_button(
+            "https://example.com/handbook",
+            "Handbook",
+            crate::mdtable::Align::Left,
+        );
+        link.set_has_frame(false);
+        link.add_css_class("cell");
+        let _table = ScribTableWidget::new(vec![vec![link.clone().upcast()]]);
+
+        let before = link.style_context().color();
+        assert_ne!(
+            (before.red(), before.green(), before.blue()),
+            (want.red(), want.green(), want.blue()),
+            "fixture no longer discriminates: the ambient theme already paints this \
+             button the probe theme's link colour, so the assertion below cannot fail"
+        );
+
+        let _css = DisplayCss::install(&crate::preview::theme_css(&theme, &palette));
+        let after = link.style_context().color();
+        assert_eq!(
+            (after.red(), after.green(), after.blue()),
+            (want.red(), want.green(), want.blue()),
+            "the preview's link-cell rule did not reach a pure-link cell's button — a \
+             selector that matches nothing generates and asserts exactly like one that \
+             matches, so this is the only place the difference is visible"
+        );
+    }
+
     /// **A pure-link cell's border box fills its column** — the live half of the
     /// regression the operator reported: a link cell's `.cell` border shrink-wrapped to
     /// its caption and floated inside the column, so the table's vertical rules moved

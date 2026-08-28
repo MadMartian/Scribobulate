@@ -21,9 +21,18 @@
 # Also round DOWN by 0.01: the printed figure is rounded, so a floor set to the
 # displayed value fails against the unrounded one (76.49% printed, 76.48 here).
 #
+# THE GATE HAS TWO VERDICTS AND THEY ARE NOT INTERCHANGEABLE. The SCOPE verdict comes
+# first: the set of files being measured is recorded in `scripts/coverage.scope` and
+# compared on every run, because a change in WHAT IS MEASURED used to arrive disguised as
+# a change in the percentage — see that file's header for the mechanism and the three
+# times it happened. Only if the scope is unchanged is the FLOOR verdict rendered at all;
+# a ratchet compared across two different scopes measures nothing.
+#
 # Usage:
-#   scripts/coverage.sh                 # run the gate (summary + fail-under)
+#   scripts/coverage.sh                 # run the gate (summary + scope + fail-under)
 #   scripts/coverage.sh --html          # + HTML report (extra args pass through)
+#   scripts/coverage.sh --update-scope  # rewrite scripts/coverage.scope from this run,
+#     # then carry on to the floor verdict. Consumed here, not passed to cargo.
 #   scripts/coverage.sh --features gtk-integration-tests   # UNSCOPED-ish; note the
 #     # floor is defined WITHOUT this feature (unit-only) — don't gate with it on.
 set -euo pipefail
@@ -238,7 +247,143 @@ cd "$(dirname "$0")/.."
 # extraction-raises-the-floor mechanism the scope rule below describes, and the second
 # recorded instance of it after `primarysel.rs`. Measured 80.22% before, 80.64% after.
 # Raised by half the gain, keeping the margin the 2026-08-20 entry explains.
-FLOOR=79.95
+#
+# 2026-08-25, 79.95 -> 80.20, TDD 18.21-18.23 (the Phase 1 decoration keys). No code
+# moved between files this time — every gain is test-side, on already-scoped modules:
+# `theme/` picked up the per-level heading fold, the line-style vocabulary and their
+# clamp/merge/floor cases; `export/html.rs`, `export/markup.rs` and `preview/css.rs`
+# each gained sink tests for the new keys, including two that assert the generated Pango
+# markup PARSES rather than merely spelling right. Measured 80.97% before (at `35aab05`,
+# in a clean worktree), 81.46% after. Raised by half the gain, per the 2026-08-20 entry.
+# Worth noting for whoever reads this next: the floor was already ~1pt behind the tree
+# at 79.95, and this entry does not close that gap — closing it is a deliberate decision
+# about how much margin the ratchet should carry, not something a feature commit should
+# make on the way past.
+#
+# 2026-08-26, 80.20 -> 80.30, TDD 18.26 (depth-tiered bullet colour/glyph/sprite, plus the
+# PDF marker-ink prerequisite). Test-only again, on already-scoped modules: `theme/`
+# picked up the tier map and the shallower-tier fallback cases, `codeview/gutter.rs` the
+# per-depth substitution and ink, `export/pdf/decide.rs` the marker ink and the per-depth
+# arms, and `export/html.rs` the depth-scoped selectors. Measured 81.45% before (at
+# `ed0f7c3`, in a clean worktree), 81.67% after. Raised by half the gain, per the
+# 2026-08-20 entry above. The ~1pt standing margin the 2026-08-25 entry names is
+# unchanged and still deliberate.
+#
+# 2026-08-26, 80.30 -> 80.33, TDD 18.27/18.28 plus 18.25's band-padding fix. The SMALLEST
+# move this log records, and deliberately made rather than skipped: the work added about
+# as much code as it did test (three decorations across the theme model, the gutter and
+# both sinks), so measured 81.68% before (at `51caea6`, clean worktree) and 81.74% after.
+# Half the gain is +0.03. Skipping a move because it is small is how a ratchet quietly
+# stops tracking; the ~1.4pt standing margin the 2026-08-25 entry names absorbs it either
+# way.
+#
+# 2026-08-27, 80.33 -> 81.45, QA round 1's mitigations (TDD 18.36-18.44, 2.25, 25.9's two
+# new clauses) — and the entry that closes the standing margin rather than adding to it.
+#
+# THREE things, because this entry answers a finding rather than logging a feature:
+#
+#   1. THE 0.9pt DROP THE LOG NEVER RECORDED. The previous entry claims 81.74% at
+#      `51caea6`. MEASURED at `7f6b09d` — the branch tip this round started from, in a
+#      clean worktree — the tree was at 80.85%, and the gate stayed green the whole way
+#      because the slack absorbed it. The three commits between them (`f61a7fa`'s
+#      panel/header/rule, `595d517`'s registry rewrite, `7f6b09d`'s module split) added
+#      about 780 gated lines and their tests did not keep pace. Nothing was wrong with
+#      the gate; the gate simply was not tracking, which is exactly what the 2026-08-26
+#      entry above warns a small skipped move leads to.
+#
+#   2. THE MARGIN IS NOW ~0.3pt, DELIBERATELY. 1.4pt of a ~23k-line gated scope is
+#      roughly 320 lines that can evaporate with the gate green — larger than most
+#      changes it is meant to gate, and `src/theme/` alone is ~2,300 new lines this
+#      branch. A gate whose margin exceeds the size of the change it gates is not gating
+#      that change. This supersedes the "raise by half the gain" convention for this one
+#      move: half-the-gain is a rule for keeping headroom, and the headroom had become
+#      the problem. Future entries can go back to it from here.
+#
+#   3. A CONST-EVALUATED CONSTRUCTOR SCORES ZERO, AND THAT IS AN INSTRUMENT ARTEFACT.
+#      `theme/keys.rs` fell from 100% to 74.5% purely because `Reach`'s and `Bound`'s
+#      `const fn` constructors are evaluated inside the `keys!` table at COMPILE time, so
+#      llvm-cov sees no run-time execution and scores every line of them zero. They are
+#      exercised at every build. The answer was to call them from a unit test that also
+#      asserts the shape each one builds — a `preview_only` that quietly set `pdf: true`
+#      would silently licence a key on a surface it never reaches — which makes the
+#      number honest AND adds a guard. Worth knowing before someone reads a similar drop
+#      as untested code.
+#
+# Where the gain came from: `theme/decor.rs` and `pangospan.rs` are new and both 100%;
+# `theme/resolve.rs` and `theme/model.rs` are 100%; `theme/keys.rs` 98.4%;
+# `export/pdf/ink.rs` 71.9% -> 87.1% and `export/pdf/measure.rs` 95.1% -> 99.2% from the
+# sprite-paint and PDF-key tests. `codeview/`'s exclusion needed no narrowing after all:
+# `marker_substitute` — the one pure decision function the exclusion was swallowing —
+# moved OUT of `codeview/gutter.rs` into `theme/decor.rs` as part of the sprite-seam
+# work, which is precisely the extraction POLICY step 6 describes as the mechanism by
+# which the floor rises. Measured 81.78% after, at a clean worktree.
+#
+# RAISED 81.45 -> 82.15 by QA round 1's Medium mitigation batch. 82.16 printed in the
+# LINES column, rounded DOWN per the rule at the top — and the rule's own warning was
+# earned again here: the first attempt read 82.68 off the REGIONS column, which leads
+# the row, and set a floor no run could ever reach. The gain is the extraction rule working
+# as designed rather than a windfall — three decision cores came OUT of files this scope
+# excludes and landed with their unit tests:
+#
+#   * `window/find/plan.rs` — the preview find highlight's hit->attribute mapping, which
+#     was interleaved with GTK mutation inside `window/find.rs` (excluded), so neither
+#     the suite nor this gate could see it. NOTE the path: `window/<name>.rs` is
+#     excluded and `window/find/<name>.rs` is NOT, because the IGNORE pattern names its
+#     three excluded subdirectories explicitly.
+#   * `widgets/mod.rs`'s `tile_texture`/`draw_sprite_into` — one seam replacing three
+#     open-coded copies in `codeview/` (excluded).
+#   * `cssfrag.rs` — the fragments the preview sheet and the HTML sink genuinely share.
+#
+# The rest is test bodies in already-scoped modules: `theme/tests/diagnostics.rs`,
+# `theme/tests/registry.rs`, `palette/tests.rs` (the palette split its tests out at the
+# 500-line limit; both halves stay in scope) and the sprite/PDF guards.
+#
+# `tags/spec.rs` is the last extraction of the batch — the theme->tag decisions came out
+# of `tags.rs`, which this scope EXCLUDES, so the ink floor's condition and the band
+# inset's per-level gate went from unassertable-without-a-view to five unit tests.
+#
+# 82.15 -> 82.18 with TDD 25.25's named-face guard. The rise is +0.01 and the other
+# 0.02 was the floor being stale, and the two are recorded separately on purpose: this
+# figure was measured on the parent commit as well (82.17 Lines, in a clean worktree)
+# rather than inferred from "the change looks coverage-neutral", so the ratchet is
+# closing a known gap rather than quietly crediting one change with another's ground.
+#
+# 82.18 -> 82.21 with TDD 18.46's shadowed-key diagnostic. Measured 82.18 Lines on the
+# parent commit in a clean worktree and 82.24 after, so the gain is +0.06 and real: the
+# predicate (`Key::bare_shadow`) and the sweep over it (`Themes::warn_on_shadowed_keys`)
+# are pure decision logic in already-scoped files, plus their guards in
+# `theme/tests/diagnostics.rs`. No code moved between files and the scope is untouched,
+# so this is not a floor climbing by exclusion. Raised by half the gain rather than to
+# the measurement, keeping the deliberate margin the 2026-08-20 entry explains.
+#
+# 82.21 -> 82.31 with the `snapshot_layer` decomposition (F-GOD-001's deferred half).
+# Measured 82.25 Lines on the parent commit in a clean worktree and 82.38 after, so the
+# gain is +0.13 and real. Raised by roughly half the gain, per the 2026-08-20 margin.
+#
+# This is the scope rule working exactly as step 6 describes it, and worth recording
+# BECAUSE the arithmetic looks wrong at first glance: the change ADDS seven files under
+# `codeview/`, every one of them excluded here, and the number still went up. The reason
+# is that nothing was moved INTO the exclusion — the 774-line draw callback was already
+# inside it, so its painters cost this gate nothing on the way out. What came out to the
+# other side is `src/decorplan.rs` (98% Lines, 22 unit tests): the paint's ordered step
+# list, the viewport gates, the heading band's corner-radius clamp and level slot, the
+# copy button's reveal rule, and the pending-popover precedence between expiry, the
+# scroll landing and the chip painting. None of those could be asserted at all while
+# they lived in a draw callback; all of them can now be asserted without a display.
+#
+# `codeview/`'s exclusion needed no narrowing and got none. The new painters are flat
+# files directly under it, so they match the existing `codeview[/\\][a-z_]+` term as
+# written — deliberately, since a `codeview/paint/` DIRECTORY would have stopped matching
+# and silently pulled seven view-bound files into scope at 0%, which is the trap the
+# `tabs/`, `editbar/` and `navhistory/` entries above were each written after hitting.
+#
+# THAT REASONING IS NOW A MACHINE CHECK rather than an author's care. `scripts/coverage.scope`
+# records the measured set, and the SCOPE verdict below fails on any drift in it, by name,
+# before this gate says anything about the percentage. Keeping the new painters flat was
+# still the right call — but it is no longer the only thing standing between a new
+# subdirectory and a silent scope change, which is what the four warnings above were each
+# trying and failing to be.
+FLOOR=82.31
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:
@@ -321,6 +466,12 @@ FLOOR=79.95
 #                   (line/cell buffer-Y reads), markers (popover UI) are all
 #                   view-bound → excluded. The one pure piece, group_by_line, keeps
 #                   its unit tests but rides along inside the excluded markers.rs.
+#                   `marker_substitute` used to be a second such piece, and QA round 1
+#                   named the exclusion swallowing it. It is no longer here: the
+#                   marker's precedence moved to `theme::decor`, which is gated and at
+#                   100%. That is the shape POLICY step 6 asks for — extract the
+#                   decision core rather than widen the gate — and it is why this
+#                   exclusion did not need narrowing.
 #   outline_view.rs the outline sidebar's GObject subclass (HeadingObject), its
 #                   GtkTreeListModel/GtkSignalListItemFactory wiring, and the
 #                   expand-all TreeListRow walk — all live widget construction and
@@ -374,4 +525,140 @@ FLOOR=79.95
 # `cargo llvm-cov` reports native Windows paths regardless of who invokes it.
 IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app[/\\](appactions|menubar|openbatch|open|setup)|clipboard|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|widgets[/\\](table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
 
-exec cargo llvm-cov --summary-only --fail-under-lines "$FLOOR" --ignore-filename-regex "$IGNORE" "$@"
+# SCOPE_FILE — the measured set, recorded. Its own header states its role; the one thing
+# worth repeating HERE, where the enforcement lives, is what keeps the two files from
+# becoming two policies: this script never passes SCOPE_FILE to llvm-cov. `IGNORE` above
+# is the only filter, and the manifest is only ever an argument to `comm`.
+SCOPE_FILE="scripts/coverage.scope"
+
+UPDATE_SCOPE=0
+PASSTHRU=()
+for arg in "$@"; do
+    case "$arg" in
+        --update-scope) UPDATE_SCOPE=1 ;;
+        *)              PASSTHRU+=("$arg") ;;
+    esac
+done
+
+# --------------------------------------------------------------------------------------
+# 1. MEASURE. This is the run: it builds, executes the unit tests, and leaves the profile
+#    data behind. Everything after it is a `report` against that same data — sub-second,
+#    and derived from ONE `IGNORE`, so no verdict below can be reading a different scope
+#    than another (a gate is its pattern, its input set, AND the invocation consuming
+#    both; a second enumeration here would be the defect this whole change is about).
+#    Deliberately WITHOUT --fail-under-lines: the floor verdict must not pre-empt the
+#    scope verdict.
+# --------------------------------------------------------------------------------------
+cargo llvm-cov --summary-only --ignore-filename-regex "$IGNORE" ${PASSTHRU[@]+"${PASSTHRU[@]}"}
+
+# --------------------------------------------------------------------------------------
+# 2. SCOPE verdict — reported first, and separately, from any verdict about the number.
+# --------------------------------------------------------------------------------------
+# llvm-cov reports absolute, host-native paths. Normalise to repo-relative `/` form, and
+# TRIPWIRE on anything that will not normalise: a path this cannot anchor is a file from
+# somewhere the gate has never measured, and silently dropping it would make the scope
+# check leniently incomplete without saying so. Same rule as the scan set's `maxdepth`.
+measured_scope() {
+    cargo llvm-cov report --lcov --summary-only --ignore-filename-regex "$IGNORE" \
+        | awk -v root="$PWD/" '
+            /^SF:/ {
+                p = substr($0, 4)
+                gsub(/\\/, "/", p)
+                if (index(p, root) == 1)    p = substr(p, length(root) + 1)
+                else if (match(p, /.*\/src\//)) p = substr(p, RSTART + RLENGTH - 4)
+                if (p !~ /^src\//) {
+                    print "coverage: SCOPE CHECK REFUSED — cannot make this repo-relative: " p > "/dev/stderr"
+                    exit 3
+                }
+                print p
+            }' \
+        | LC_ALL=C sort -u
+}
+
+now="$(measured_scope)"
+if [ -z "$now" ]; then
+    echo "coverage: SCOPE CHECK REFUSED — llvm-cov reported no files at all." >&2
+    echo "coverage: an empty measured set is not a passing one. Check IGNORE and the run above." >&2
+    exit 2
+fi
+
+if [ "$UPDATE_SCOPE" = 1 ]; then
+    [ -f "$SCOPE_FILE" ] || { echo "coverage: $SCOPE_FILE missing; cannot preserve its header." >&2; exit 2; }
+    # Keep the file's own header (everything above its first path) and replace the list.
+    tmp="$SCOPE_FILE.tmp.$$"
+    awk '/^[^#]/ && !/^[[:space:]]*$/ { exit } { print }' "$SCOPE_FILE" > "$tmp"
+    printf '%s\n' "$now" >> "$tmp"
+    mv "$tmp" "$SCOPE_FILE"
+    echo "coverage: rewrote $SCOPE_FILE from this run ($(printf '%s\n' "$now" | wc -l) files measured)."
+fi
+
+if [ ! -f "$SCOPE_FILE" ]; then
+    echo "coverage: SCOPE CHECK REFUSED — $SCOPE_FILE is missing." >&2
+    echo "coverage: the gate does not know what it is supposed to be measuring, so it will" >&2
+    echo "coverage: not report on how much of it is covered. Regenerate with --update-scope." >&2
+    exit 2
+fi
+recorded="$(grep -vE '^[[:space:]]*(#|$)' "$SCOPE_FILE" | LC_ALL=C sort -u || true)"
+if [ -z "$recorded" ]; then
+    echo "coverage: SCOPE CHECK REFUSED — $SCOPE_FILE records no files." >&2
+    exit 2
+fi
+
+entered="$(LC_ALL=C comm -13 <(printf '%s\n' "$recorded") <(printf '%s\n' "$now"))"
+departed="$(LC_ALL=C comm -23 <(printf '%s\n' "$recorded") <(printf '%s\n' "$now"))"
+
+if [ -n "$entered" ] || [ -n "$departed" ]; then
+    {
+        echo
+        echo "=== coverage: SCOPE CHANGED ==="
+        echo "The set of files this gate MEASURES no longer matches $SCOPE_FILE."
+        echo "This is NOT a statement about how well-tested anything is. What changed is"
+        echo "WHAT IS BEING MEASURED, and the percentage moving is a consequence of that."
+        if [ -n "$entered" ]; then
+            echo
+            echo "ENTERED scope — now measured, and at 0% until tested:"
+            printf '%s\n' "$entered" | sed 's/^/  + /'
+        fi
+        if [ -n "$departed" ]; then
+            echo
+            echo "LEFT scope — no longer measured. Coverage here is surrendered, not earned:"
+            printf '%s\n' "$departed" | sed 's/^/  - /'
+        fi
+        cat <<'EOF'
+
+Decide which side each file belongs on, then record the decision:
+  * it holds pure decision logic -> it is IN scope. Test it, then re-run with
+    --update-scope in the same commit.
+  * it is GTK signal-wiring that cannot be exercised headlessly -> extend IGNORE in
+    scripts/coverage.sh with the NARROWEST term that names it, and its rationale beside
+    the others, then re-run with --update-scope in the same commit.
+
+Do not widen IGNORE merely to restore the number. POLICY step 6's scope rule is to
+extract the decision core out of the excluded file instead; every widened exclusion is
+coverage quietly surrendered, and this gate now makes you say so out loud.
+
+The FLOOR verdict is WITHHELD: a ratchet compared across two different scopes measures
+nothing, and would report this as a coverage regression, which it is not.
+EOF
+    } >&2
+    exit 1
+fi
+echo "coverage: SCOPE OK — $(printf '%s\n' "$now" | wc -l) files measured, matching $SCOPE_FILE."
+
+# --------------------------------------------------------------------------------------
+# 3. FLOOR verdict — only now, and only over a scope that has been shown to be unchanged.
+#    `--fail-under-lines` stays the authority on the comparison (it reads the right column
+#    by construction); the number below is echoed for the reader, not used to decide.
+# --------------------------------------------------------------------------------------
+lines_pct="$(cargo llvm-cov report --summary-only --ignore-filename-regex "$IGNORE" \
+             | awk '$1 == "TOTAL" { print $10 }')"
+if cargo llvm-cov report --summary-only --fail-under-lines "$FLOOR" \
+       --ignore-filename-regex "$IGNORE" >/dev/null; then
+    echo "coverage: FLOOR OK — scoped LINES ${lines_pct:-?} >= FLOOR $FLOOR."
+    exit 0
+fi
+echo "coverage: FLOOR FAILED — scoped LINES ${lines_pct:-?} is below FLOOR=$FLOOR." >&2
+echo "coverage: the measured scope is UNCHANGED (SCOPE OK above), so this is a real" >&2
+echo "coverage: coverage regression: the same files are being measured and less of them" >&2
+echo "coverage: is covered. Add tests; do not lower the floor and do not widen IGNORE." >&2
+exit 1

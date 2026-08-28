@@ -50,6 +50,8 @@ pub(crate) mod codeview;
 pub(crate) mod colorscheme;
 pub(crate) mod config;
 pub(crate) mod copymap;
+pub(crate) mod cssfrag;
+pub(crate) mod decorplan;
 pub(crate) mod docio;
 pub(crate) mod export;
 pub(crate) mod farscroll;
@@ -81,6 +83,11 @@ pub(crate) mod mdtable;
 pub(crate) mod outline;
 pub(crate) mod outline_view;
 pub(crate) mod palette;
+/// Every themed **Pango span** this application emits, in one place — the third
+/// representation of an inline style beside the preview's tags and the HTML sink's CSS,
+/// reached from two unrelated directions (a table cell's `GtkLabel`, and the PDF sink's
+/// layout) that were each building it independently.
+pub(crate) mod pangospan;
 /// Per-platform seams, one directory per target OS. Each child module is
 /// `#[cfg]`-gated inside `platform/mod.rs`, at its own declaration.
 pub(crate) mod platform;
@@ -92,6 +99,8 @@ pub(crate) mod renderer;
 pub(crate) mod saferizer;
 pub(crate) mod session;
 pub(crate) mod span;
+/// Sprite decoration: a theme naming an image file.
+pub(crate) mod sprite;
 /// The registry `#[gtktest::test]` submits into. Gated on `test` as well as the
 /// feature so it never reaches the shipped library: a `harness = false` target is
 /// built `--cfg test`, so this one gate covers both the lib-test target and the
@@ -103,6 +112,11 @@ pub(crate) mod suite_registry;
 pub(crate) mod swapfile;
 pub(crate) mod tags;
 pub(crate) mod tasklist;
+/// Test-only. Capture of the `log` facade, so a test can assert a refusal was
+/// *diagnosed* and not merely that the decoration is absent — the two are
+/// pixel-identical in this project's inert-by-default vocabulary (ScrAP-324).
+#[cfg(test)]
+pub(crate) mod testlog;
 /// Test-only. The one shared main-loop pump for every `gtk-integration-tests` body —
 /// see the module's own rustdoc for why ~24 hand-rolled copies across 19 files needed
 /// replacing (M31). Gated on the GTK-suite feature, not bare `#[cfg(test)]`: every
@@ -212,9 +226,9 @@ pub fn run() -> glib::ExitCode {
     // ourselves, set NON_UNIQUE (same app-id, so icon/WM-class/settings identity is
     // unchanged — it just never does single-instance negotiation), and strip the
     // switch so the remaining args still flow into HANDLES_OPEN as file paths.
-    let mut args: Vec<String> = std::env::args().collect();
-    let force_new = args.iter().any(|a| a == "--new-instance" || a == "-n");
-    args.retain(|a| a != "--new-instance" && a != "-n");
+    // The decision itself is `app::new_instance_argv` — pure, and unit-tested there
+    // rather than here, where the coverage gate cannot reach it.
+    let (force_new, args) = app::new_instance_argv(std::env::args().collect());
 
     let mut flags = ApplicationFlags::HANDLES_OPEN;
     if force_new {

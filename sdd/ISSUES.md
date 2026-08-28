@@ -17,16 +17,25 @@ entry can still be the worst thing in the register.
 | ID | Platform | Scope | Issue | Severity |
 |----|----------|-------|-------|----------|
 | A | Any | Upstream | Tables are selection islands; cells are individually selectable but not part of the continuous buffer | Closed |
-| D | Any | Production | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
-| E | Linux | Production | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
-| G | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
-| N | Any | Production | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
-| O | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in about two runs in three, most often on the one focus-churning test | Medium |
-| Q | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
-| R | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
-| S | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
-| T | Any | Production | The find bar's "current match" indicator drops on an in-session edit (any mode); self-heals on the next Next/Prev — the originally-reported stronger form did not reproduce | Low |
-| U | Any | Production | In Edit/Split mode, a search match inside annotated text is counted but its "all matches" highlight is invisible, buried under the annotation's own tag | Medium |
+| B | Any | Production | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
+| C | Linux | Production | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
+| D | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
+| E | Any | Production | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
+| F | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in roughly one full run in four, at a varying site | Medium |
+| G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
+| H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
+| I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
+| M | Any | Project | `sprite::scaled`'s per-`(path, width, height)` texture cache has no eviction policy | Low |
+| N | Any | Production | A long heading overflows the preview pane horizontally instead of wrapping to it | Low |
+| P | Any | Production | A multi-paragraph blockquote's accent bar draws as one continuous rect per span, unconfirmed for every span shape a blockquote can produce | Low |
+| R | Any | Production | Pixel Quest's `link_color` and `list_task_color` sit below their legibility floor and are carried as named exceptions the operator intends to revisit, not as settled choices | Low |
+| S | Any | Project | The horizontal rule's thickness is the one styling value no theme can state — a literal in the PDF sink and the separator's own CSS default on screen | Low |
+| T | Any | Production | A live theme change never reaches a tab that has not been activated yet — its page fill updates, its ink and face do not | Medium |
+| U | Any | Production | The caret sits on the document's LAST line the first time the editor view is materialised, and the outline follows it there | Medium |
+| V | Any | Production | The reading position drifts by one block on every view-mode round trip, cumulatively | Medium |
+| W | Any | Production | The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`, so both shipped washes print as flat colour | Low |
+| X | Any | Production | The find bar's "current match" indicator drops on an in-session edit (any mode); self-heals on the next Next/Prev — the originally-reported stronger form did not reproduce | Low |
+| Y | Any | Production | In Edit/Split mode, a search match inside annotated text is counted but its "all matches" highlight is invisible, buried under the annotation's own tag | Medium |
 
 ## A. Tables are selection islands
 
@@ -125,7 +134,7 @@ free today, as the probe's control demonstrates — to un-break a Low-severity l
 nobody has asked for. It would be a deliberate project chosen on product grounds, not an
 increment, and it should not be started from this entry.
 
-## D. A strikethrough fence wrapping other inline markup renders the `~~` literally
+## B. A strikethrough fence wrapping other inline markup renders the `~~` literally
 
 **Severity**: Low (rare authoring pattern; plain `~~struck~~` is unaffected)
 
@@ -152,7 +161,7 @@ A related, rarer edge: `x\^2\^` (escaped literal carets) cannot be distinguished
   boundary explicit — it blesses the plain `~~struck~~` case as a contract and scopes
   the wrapping case (`~~a **bold** b~~`) OUT as this accepted limitation.
 
-## E. Live desktop dark↔light toggle doesn't repaint a running instance on KDE/X11
+## C. Live desktop dark↔light toggle doesn't repaint a running instance on KDE/X11
 
 **Severity**: Low (cosmetic; the new scheme applies on the next launch, and users
 rarely retheme mid-session — but a visible inconsistency with libadwaita/Qt apps,
@@ -218,7 +227,7 @@ flipping the scheme):**
 - **Accept the limitation**: the scheme applies on the next launch, users seldom
   retheme mid-session, and nothing is broken — only slower to follow than native apps.
 
-## G. A large document pegs a CPU core at ~100% while idle (GTK/Pango relayout loop that never converges)
+## D. A large document pegs a CPU core at ~100% while idle (GTK/Pango relayout loop that never converges)
 
 **Severity**: High (the symptom is a full CPU core held at ~100% **indefinitely while idle**,
 which directly contradicts the product's negligible-footprint thesis — but it is gated to
@@ -313,7 +322,7 @@ cost and the alternatives.
   primary use case (large agent-generated documents) defeats the negligible-footprint thesis the
   project exists to honour.
 
-## N. A click inside an existing selection never reaches the preview's click affordances
+## E. A click inside an existing selection never reaches the preview's click affordances
 
 **Severity**: Low (one wasted click, self-correcting — the click clears the selection and
 the next one works; no data at risk)
@@ -359,7 +368,14 @@ affordance cannot observe the click at all.
   itself, and every route past it trades a silent no-op for a silent loss of the drag.
 
 
-## O. A GTK4/Quartz autorelease-pool crash intermittently SIGABRTs the macOS integration suite
+## F. A GTK4/Quartz autorelease-pool crash intermittently SIGABRTs the macOS integration suite
+
+**Re-measured 2026-08-27, and the rate and shape are both narrower than first recorded.**
+Roughly **one abort in four FULL pipeline runs**, not two in three, and the abort site varies
+rather than concentrating on the focus-churning test — the observed one was a find-cursor
+test. The discriminator: `gtk_suite` run standalone, three times consecutively, passed clean
+every time (323 passed). So this is a property of the FULL run rather than of any one test,
+which is what a fix would have to account for and what a bisect-by-test would never find.
 
 **Severity**: Medium (the macOS GTK suite cannot be trusted to complete; no data at risk,
 and no Scribobulate code is implicated — but a red run there means nothing until re-run)
@@ -433,7 +449,7 @@ evidence is machine-local and not transferable:
 
 ---
 
-## Q. A wall-clock growth-ratio guard fails on a loaded machine
+## G. A wall-clock growth-ratio guard fails on a loaded machine
 
 **Severity**: Low (nothing shipped is affected; a required pipeline step goes red on a
 correct tree, and the failure text accuses a specific, already-fixed regression by name,
@@ -481,7 +497,7 @@ being a timing test.
 
 ---
 
-## R. macOS: the preview's hover cursor sometimes does not take over body text or a link
+## H. macOS: the preview's hover cursor sometimes does not take over body text or a link
 
 **Severity**: Low (nothing is unreachable — links still activate on click and the copy
 button still copies; what is lost is the *affordance*, i.e. every link on the page looks
@@ -578,11 +594,25 @@ sampling loop over blank space with no hover target and seeing the same climb. A
 inside its own measurement, and the artefact it produced happened to match the hypothesis
 under test.
 
-## S. Every native file chooser invocation grows RSS on macOS
+## I. Every native file chooser invocation grows RSS on macOS
 
-**Severity**: Medium. Unbounded within everything measured — no plateau observed — but the
+**Severity**: Medium. Monotonic within everything measured at the per-invocation scale, but the
 cost is overwhelmingly AppKit's own price for presenting an `NSSavePanel`, and it is not
 reachable by any change this project can make.
+
+**Re-measured 2026-08-27 with a control, which sharpened the claim in both directions.** Ten
+`File ▸ Open` invocations, CANCELLED every time so no document ever loaded, grew RSS
+222,432 → 232,288 KiB — monotonic, never reclaimed, **≈985 KiB per invocation**. The control
+is what makes that a cause rather than a coincidence: ten cycles at the same cadence, same
+frontmost-and-Escape driving, chooser never opened, moved RSS by **+32 KiB total**. So the
+growth is the chooser, not elapsed time and not the driving method.
+
+**And the counter-evidence, recorded because it is the half that would otherwise be
+mis-read.** A separately-observed instance sitting at 257 MiB after ~1.5 h of ordinary use
+was NOT this issue accumulating: watched across a further window it went 257 → 251.5 →
+230.5 MiB — *downward*. "Idle instance at a high RSS" reads as corroboration and is the
+opposite. The per-invocation leak is real; something reclaims at a larger scale, and the
+shape of that reclamation is unmeasured. Do not describe this entry as unbounded growth.
 
 **Symptom**: opening a `GtkFileChooserNative` and cancelling it grows resident memory on
 macOS, per invocation, and the memory never returns. Neither Linux nor Windows reproduces it.
@@ -606,7 +636,232 @@ evidence must outlive it. Do not restate its figures here; several carry caveats
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
 
-## T. The find bar's "current match" indicator drops on an in-session edit, in every mode
+## M. `sprite::scaled`'s texture cache has no eviction policy
+
+**Severity**: Low. Inert today — every current call site (list-marker sprites, the
+heading-band tiled sprite) resolves at a small, bounded set of sizes per document —
+but the cache itself does not know that, and would silently misbehave for a future
+caller that doesn't share the property.
+
+`sprite::scaled`'s `RESAMPLED` thread-local (`src/sprite.rs:113-114`) is keyed by
+`(PathBuf, width, height)` and only ever grows — nothing evicts an entry or bounds
+the cache's size. The first decoration that scales a sprite to a *continuously
+variable* dimension (a rect that tracks a resizable pane width, for instance, rather
+than a marker size or a tile's natural size) would mint a new cached texture on
+every intermediate width during a drag, retaining all of them for the process's
+life.
+
+**Mitigation options**:
+- Bound the cache (LRU with a small cap) before any call site scales to a
+  window-derived or otherwise continuously-variable dimension.
+- Accept the limitation until such a call site actually exists — nothing today
+  triggers it — and note the constraint at `sprite::scaled`'s call sites as they're
+  added, so a future author checks before assuming any size is safe to pass.
+
+## N. A long heading overflows the preview pane horizontally instead of wrapping
+
+**Severity**: Low. Reproduces identically under System with no theme keys set, so it
+predates all theming work — surfaced incidentally while driving TDD 18.25's heading
+band, not caused by it.
+
+At a narrow pane width (measured at 700×1000 with the outline sidebar open), a
+sufficiently long heading extends past the preview pane's right edge instead of
+soft-wrapping to it, while body paragraphs at the same width wrap correctly. Not
+investigated further — possibly related to the outline/split-pane sizing
+interaction named in ScrAP-23a's neighbourhood, but that is a guess, not a finding.
+
+**Mitigation options**:
+- Reproduce deliberately (a document whose only content is one long heading, at a
+  matrix of pane widths and outline-open/closed states) to isolate whether it is
+  heading-specific or a wrap-mode/minimum-width issue shared with any single
+  long unbreakable run.
+- Accept the limitation until reproduced deliberately — a control run is not yet a
+  diagnosis.
+
+## P. A multi-paragraph blockquote's bar continuity is unconfirmed for every span shape
+
+**Severity**: Low. A flat colour never made a discontinuity visible; TDD 18.28's
+textured bar (a tiled sprite) would.
+
+The blockquote accent bar is drawn as one rect per recorded span
+(`codeview/mod.rs`), which is correct for the common case, but it was not
+re-verified against every shape a blockquote's span can take (nested quotes,
+a quote interrupted by a non-quote block, quotes separated by a blank line)
+while adding the sprite-tile option. A flat-colour bar hides a small vertical
+gap between two spans that should read as one continuous quote; a tiled
+texture would show a visible seam or restart.
+
+**Mitigation options**:
+- Render each of the span shapes above under a sprite-backed `blockquote_bar`
+  and confirm the tile continues (or deliberately restarts) consistently.
+- Accept the limitation until a real document surfaces a visible seam.
+
+## R. Pixel Quest's link and task-marker inks are provisional exceptions, not settled ones
+
+**Severity**: Low. Both are legible enough to use and both have a second, non-colour
+signal carrying their meaning — the link's underline is held to the graphic floor, and
+the task marker's glyph carries taken-or-not. Neither is a blocker; the debt is that
+they occupy a permanent-looking slot in a list of decisions while actually awaiting one.
+
+`src/theme/tests/contrast.rs`'s `DELIBERATE` allow-list names five pairings that sit below
+the floor TDD 18.8 holds their role to. Three are settled: Terminal's `rule_color` (ANSI 8
+grey on true black — correcting it stops it being ANSI 8, operator-accepted 2026-08-27),
+and Bedtime's `mark_fg` and `rule_color` (that theme's palette is owned by a different
+operator and is not this project's to retune). **Pixel Quest's two are not settled** —
+the operator's ruling on 2026-08-27 was "we'll address those later", which is a different
+statement from the reasons recorded beside the other three, and the list as written cannot
+tell them apart.
+
+The risk is the one TDD 18.8's own last clause describes from the other direction: a named
+exception is a licence, and a licence inherited by a future reader reads as a decision
+somebody made rather than one somebody postponed.
+
+**Mitigation options**:
+- Retune Pixel Quest's `link_color` and `list_task_color` to clear their floors and delete
+  both rows — the arcade look is the constraint to preserve, and the page's low ceiling for
+  light inks is what makes it hard, so this is a palette question rather than a code one.
+- Retune only `list_task_color` (the newer of the two, changed 2026-08-26) and keep the link
+  as a period-look exception with its reason unchanged.
+- Accept both permanently: rewrite the two rows to state a settled reason and close this.
+
+## S. The horizontal rule's thickness is the one styling value no theme can state
+
+**Severity**: Low. Every rule still draws, at a sane weight, on both surfaces. The gap is
+that TDD 25.9 requires every colour, typeface and decoration metric in an exported artefact
+to resolve through the theme engine, and this one does not.
+
+`RULE_THICKNESS_PT = 0.75` (`src/export/pdf/mod.rs`, read at `pdf/ink.rs`) is a literal, and
+the preview's flat rule is a stock `GtkSeparator` taking its own CSS default. The rule's
+colour, its spacing and — since TDD 18.31 — its sprite tiling are all themeable; its weight
+alone is not.
+
+The sprite-tiled rule narrowed this rather than causing it: a tiled rule takes its tile's own
+height, so a theme that states `rule_sprite` already controls the weight implicitly. The flat
+rule is now the only rule, on either surface, whose thickness cannot be stated.
+
+**The two halves are not independently valid.** Adding a `rule_thickness` metric key without
+routing the preview's separator through it gives one decoration two sources of truth on two
+surfaces, which POLICY's "one theme key, every application path" exists to prevent — and a
+PDF that obeys a key the screen ignores is worse than one where neither does, because only
+the first looks correct in a review.
+
+**Mitigation options**:
+- Add a `rule_thickness` metric key and route BOTH the PDF sink and the preview separator's
+  generated CSS through it, in one change.
+- Derive the flat rule's thickness from an existing metric rather than minting a key — the
+  vocabulary is already large, and a weight that tracks something the theme already states
+  may be preferable to a knob nobody turns.
+- Accept it: a theme wanting a specific rule weight can state `rule_sprite` and get it from
+  the tile.
+
+## T. A live theme change never reaches a tab that has not been activated yet
+
+**Severity**: Medium. The document is still readable — the page takes the new fill — but
+it is readable in the wrong ink and the wrong face, which reads as a rendering fault
+rather than as a stale tab. It does not heal: switching away and back leaves it wrong, and
+only a second theme change repairs it.
+
+Reproduced from clean state with no user themes file. Open two documents in one window
+without activating the second, select a theme, then switch to the second tab: its page
+background is the new theme's, its body ink is pure black and its face is the desktop
+sans. Two discriminators bound it — activating both tabs *before* the switch leaves both
+correct, and launching with the theme already in `session.toml` leaves the late tab
+correct. So the fault is specific to a **live** switch reaching a view that does not exist
+yet.
+
+The fill and the ink land on the two different CSS nodes the preview splits a page across,
+which is the obvious place to look: one node is being restyled on the live path and the
+other is not.
+
+**PRE-EXISTING, measured.** Reproduced identically on a binary built at this branch's own
+merge-base, pixel-identical across five captures. Not caused by the decoration work.
+
+**Mitigation options**:
+- Make the live theme-change path restyle every node it owns, for views not yet built as
+  well as those already realised.
+- Make a view adopt the current theme at materialisation time rather than relying on having
+  received the change, so the two paths converge on one answer.
+- Accept it: a user who switches theme and then visits an untouched tab sees it wrong once
+  per switch.
+
+## U. The caret sits on the document's last line when the editor view is first materialised
+
+**Severity**: Medium. Nothing is lost and `Ctrl+Home` clears it, but the working position
+is wrong the moment the editor appears, and the outline highlights the last heading to
+match — so the sidebar actively misreports where the user is.
+
+A 27-line document that fits entirely on screen, opened in preview and switched to edit,
+scrolls nowhere and yet reports `Ln 28, Col 1`. Reproduced on three routes into edit mode —
+the action, the toolbar button, and session restore — and on three documents of different
+lengths, each time landing on that document's own last line. The scroll position restores
+correctly; only the caret is at the far end.
+
+The signature matches the known GTK trap where a line-for-coordinate query against a view
+that has not been allocated answers the last line, which would explain the cold case. It
+also reproduces **warm** (preview → edit → preview → edit), which that explanation does not
+cover, so the warm path needs its own account before either is fixed.
+
+**PRE-EXISTING, measured.** Identical on a binary built at this branch's merge-base.
+
+**Mitigation options**:
+- Defer the caret placement until the view has an allocation, and establish separately why
+  the warm path lands in the same place.
+- Place the caret from the restored reading position explicitly rather than letting it fall
+  out of a coordinate query.
+
+## V. The reading position drifts one block per view-mode round trip
+
+**Severity**: Medium. Each round trip is a small correction the reader can undo, but it
+**accumulates**: three preview↔split trips walk the position through three consecutive
+blocks and it never returns.
+
+Switching preview → split → preview moves the reading position by one block, and repeating
+the round trip moves it again in the same direction. The edit round trip drifts the
+opposite way.
+
+**Record the magnitude as one block, not as pixels.** The figure first measured (~90 px)
+is exactly one section block in the fixture that produced it, and the drift's *direction*
+proved fixture-dependent — a 40-section fixture drifted forward where a shorter one drifted
+back. The same binary produced two different sequences across two runs, varying by one to
+two outline rows. Whatever this is, it is quantised to blocks and is not deterministic in
+pixels, so a pixel-valued regression guard would be flaky by construction.
+
+Fails TDD 7.5's "stays at approximately the same relative position", and takes 12.13 with
+it, since the entry re-selected after a mode switch is chosen from the drifted position.
+
+**PRE-EXISTING, measured.** The same drift sequence appears on a binary built at this
+branch's merge-base.
+
+**Mitigation options**:
+- Carry the reading position across a mode switch as a document position resolved once,
+  rather than re-deriving it from each view's geometry on the way in and out — the round
+  trip is losing precision at both ends.
+- Establish first why the two directions differ; a fix that assumes one direction will move
+  the other trip further.
+
+## W. The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`
+
+**Severity**: Low. Both keys still export and both still read; they print as a flat colour
+where the theme asked for a wash, so a highlight covers the text it was meant to tint.
+
+Two of the roughly twenty-five colour sites in the HTML sink convert through the opaque
+projection rather than the RGBA one, so `#ff000044` exports as `background: #ff0000`. It
+needs no override to fire: both shipped defaults are deliberately translucent
+(`#fff59d_88`, `#FFD133_61`), so every export of a document with a `==mark==` or an
+annotation already shows it. The PDF sink keeps the alpha, so the two exports of one
+document disagree.
+
+**PRE-EXISTING, measured.** The exported declarations are byte-identical on a binary built
+at this branch's merge-base; the same opaque call sits at both revisions.
+
+**Mitigation options**:
+- Route both sites through the RGBA projection, and add a guard that the two export sinks
+  agree on a translucent key — the divergence between them is the part no single-sink test
+  can see.
+- Make the opaque projection unreachable from the sink where alpha is meaningful, so the
+  wrong conversion cannot be spelled rather than merely being corrected here.
+
+## X. The find bar's "current match" indicator drops on an in-session edit, in every mode
 
 **Severity**: Low (revised down from Medium after reproduction — see below; the
 gap is real but self-heals on the very next Next/Prev press, not on reopening the
@@ -667,7 +922,7 @@ clear the compositor/WM class of bug); or an interaction sequence not yet tried.
   change while find stays open), which would close the milder, confirmed gap
   either way.
 
-## U. In Edit/Split mode, a match inside annotated text is counted but invisible
+## Y. In Edit/Split mode, a match inside annotated text is counted but invisible
 
 **Severity**: Medium (a real match that reads as "not found" — the operator's own
 description, "find seems to ignore annotated text", because the one cue a user

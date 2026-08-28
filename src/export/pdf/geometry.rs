@@ -14,7 +14,8 @@
 //!
 //! # The bound is the point
 //!
-//! `indent` is **not** bounded by its producer. It grows [`INDENT_PT`] per nesting level,
+//! `indent` is **not** bounded by its producer. It grows by the theme's own step per
+//! nesting level,
 //! and Markdown imposes no nesting limit, so a document can drive it past the page width
 //! — at which point an unbounded block draws entirely beyond the right margin, invisible
 //! rather than merely cramped, and a width computed from it goes negative and reaches
@@ -28,8 +29,19 @@
 /// scale factor downstream.
 pub(crate) const MIN_PRINTABLE_PT: f64 = 1.0;
 
-/// Points added per level of list or block-quote nesting.
-pub(crate) const INDENT_PT: f64 = 18.0;
+/// A theme's design-time **pixel** metric, in PostScript points.
+///
+/// Every geometry key in the vocabulary is "design-time px at zoom 1.0" (SCHEMA §
+/// Key naming), and this sink measures in points — so a key read straight into a point
+/// value is a **unit error**, not merely a different number. It was one: `list_step`,
+/// `list_item_gap` and `blockquote_text_gap` did not reach this sink at all, and the
+/// two metrics that did (`blockquote_bar_width`, `heading_band_padding`) were read as
+/// points while the image path beside them converted through [`PT_PER_PX`].
+///
+/// One conversion, so the artefact and the screen express one geometry.
+pub(crate) fn px_to_pt(px: i32) -> f64 {
+    f64::from(px) * PT_PER_PX
+}
 
 /// CSS reference pixels to PostScript points.
 ///
@@ -70,6 +82,12 @@ const fn pango_scale() -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// A representative nesting step, for the tests that need one. **Not a style
+    /// value**: the real step is the theme's (`list_step` for a list, the quote bar
+    /// plus `blockquote_text_gap` for a quote), and this exists only so a bound test
+    /// can walk depths without depending on which of those it is.
+    const INDENT_PT: f64 = 18.0;
+
     use super::*;
 
     /// The width a page actually offers, at the depths a document can really reach.

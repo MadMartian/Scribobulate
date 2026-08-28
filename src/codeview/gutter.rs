@@ -23,11 +23,11 @@
 //! the widget foreground (research §7 — deliberately libadwaita-free, no accent tint).
 
 use crate::renderer::ListMarkerKind;
-use crate::theme::Metrics;
+use crate::theme::{ListGlyphs, MarkerSubstitute, Metrics, Sprites};
 use gtk::prelude::*;
 use gtk::{cairo, gdk, graphene};
 
-/// The per-level step / inter-item gap for one paint, as floats.
+/// The per-level step for one paint, as a float.
 ///
 /// Both come from the ACTIVE THEME's `Metrics` — the SAME two keys `tags.rs` builds the
 /// `li-{depth}` tags from — so the tag and this gutter cannot drift apart (POLICY "One
@@ -38,9 +38,6 @@ use gtk::{cairo, gdk, graphene};
 /// below stays pure and headlessly unit-testable at any metric.
 fn step_f(m: &Metrics) -> f32 {
     m.list_step as f32
-}
-fn gap_f(m: &Metrics) -> f32 {
-    m.list_item_gap as f32
 }
 
 /// Content margin (buffer x, px) for a list item at `depth` inside a container whose own
@@ -56,7 +53,7 @@ fn gap_f(m: &Metrics) -> f32 {
 /// column instead of left of the quote's accent bar (POLICY Document Rendering CAM row 2).
 /// Pure — unit-tested without a display; GTK stays at the edges.
 pub(crate) fn list_content_margin_px(base: f32, depth: usize, zoom: f64, m: &Metrics) -> f32 {
-    base + ((depth as i32 * m.list_step) as f64 * zoom).round() as f32
+    base + crate::theme::px(depth as i32 * m.list_step, zoom) as f32
 }
 
 /// The checkbox square (buffer coordinates) for a `Task` marker at `content_margin`,
@@ -105,7 +102,10 @@ pub(crate) fn first_display_line(line: (f32, f32), single_line_h: f32, gap: f32)
 /// One definition so [`first_display_line`]'s clamp and [`draw_list_marker`]'s `text_top`
 /// use the identical value (they must agree, or the clamp cuts the wrong band).
 pub(crate) fn marker_gap_px(m: &Metrics, zoom: f64) -> f32 {
-    (gap_f(m) * zoom as f32).round()
+    // Through `theme::px`, in f64, because `tags.rs` sets `pixels_above_lines` through
+    // it too and the two MUST be the same integer — the doc above says so and the code
+    // did the arithmetic in f32, which is a different rounding for the same metric.
+    crate::theme::px(m.list_item_gap, zoom) as f32
 }
 
 /// Everything about HOW to paint one marker, other than where: the resting `fg`,
@@ -118,6 +118,66 @@ pub(crate) struct MarkerPaint<'a> {
     pub fg: &'a gdk::RGBA,
     pub hover: Option<&'a gdk::RGBA>,
     pub metrics: &'a Metrics,
+    /// The item's 1-based nesting depth. Only the BULLET's decoration varies by it
+    /// (TDD 18.26); it rides in this bundle rather than as an argument for the reason
+    /// the bundle exists at all — a new paint input must not change the call arity.
+    pub depth: usize,
+    /// Glyph strings standing in for the drawn markers (TDD 18.24); empty on a theme
+    /// that states none, which is every shipped theme unless one opts in.
+    pub glyphs: &'a ListGlyphs,
+    /// Sprite files standing in for the drawn markers. A sprite outranks a glyph for
+    /// the same marker — see [`marker_substitute`].
+    pub sprites: &'a Sprites,
+}
+
+/// Draw a marker substitution, or report that it could not be produced.
+///
+/// `true` when ink reached the snapshot. `false` means the caller should try the next
+/// candidate — which is the whole of `F-MARKER-001`'s fix: a sprite that clears every
+/// admission check and then fails to decode used to erase the decoration outright,
+/// taking the theme's own glyph with it.
+fn paint_substitute(
+    snapshot: &gtk::Snapshot,
+    view: &gtk::TextView,
+    what: MarkerSubstitute<'_>,
+    geometry: (f32, f32, f32),
+    fg: &gdk::RGBA,
+    rect: graphene::Rect,
+) -> bool {
+    let (col_cx, text_cy, _z) = geometry;
+    match what {
+        // Through the SHARED resample-and-draw seam — the twin of `tile_texture`, and
+        // the reason "which of the two does this decoration take?" is now a named
+        // choice rather than two open-coded idioms. It carries the zero-size guard and
+        // the nearest-neighbour rationale; see `widgets::draw_sprite_into`.
+        MarkerSubstitute::Sprite(sprite) => {
+            crate::widgets::draw_sprite_into(snapshot, &rect, sprite)
+        }
+        MarkerSubstitute::Glyph(glyph) => {
+            // CENTRED in the marker column, like the bullet — not right-aligned like the
+            // numeral it may be replacing. A glyph is a fixed shape rather than a
+            // variable-width ordinal, so there is no period to line up, and centring is
+            // what makes bullet/ordered/task glyphs agree with each other down the page.
+            //
+            // `create_pango_layout` takes PLAIN TEXT and parses no markup, which is why
+            // `as_plain()` is the right projection here and the only place it is (see
+            // `MarkerGlyph`). The layout uses the view's own CSS-zoomed font, so the
+            // glyph tracks the item text's size for free.
+            let layout = view.create_pango_layout(Some(glyph.as_plain()));
+            let (lw, lh) = layout.pixel_size();
+            snapshot.save();
+            snapshot.translate(&graphene::Point::new(
+                col_cx - lw as f32 / 2.0,
+                text_cy - lh as f32 / 2.0,
+            ));
+            snapshot.append_layout(&layout, fg);
+            snapshot.restore();
+            true
+        }
+        // The terminal candidate. Answering `false` hands the caller back to its own
+        // drawn primitive, which always produces something.
+        MarkerSubstitute::Drawn => false,
+    }
 }
 
 /// Draw one list item's marker in the gutter left of `content_margin`, aligned to the
@@ -149,6 +209,38 @@ pub(crate) fn draw_list_marker(
     // Bullets/checkboxes center in the band half a step left of the content margin
     // (Word's hanging-indent gutter is half the per-level step).
     let col_cx = content_margin - (step_f(m) / 2.0) * z;
+
+    // A theme may stand a sprite or a glyph in for any of the three drawn primitives
+    // (TDD 18.24). Both are substitutions WITHIN this existing marker paint, not a new
+    // paint vector: the gutter already runs for every render, so nothing here touches
+    // `snapshot_layer`'s early-return gate and there is no new span vector to install.
+    //
+    // **The candidates are walked, not resolved to a winner.** Precedence between two
+    // STATED values (`theme::MarkerChoice`) is one question; what to do when the winner
+    // cannot be PRODUCED is another, and it is answered here, at the only place that
+    // can tell. Before this walk a sprite that passed every admission check and then
+    // failed to decode erased the marker outright — no glyph, no drawn primitive — and
+    // a task checkbox that failed to resample became an invisible but still clickable
+    // hit-box, because `checkbox_rect` had already been recorded.
+    //
+    // The SAME box the checkbox uses — themed step, zoom-correct, already the marker
+    // column's shared geometry — so bullet, numeral and checkbox sprites all land in
+    // one place rather than each inventing a size.
+    let sprite_rect = checkbox_rect(content_margin, line, zoom, m);
+    let choice =
+        crate::theme::marker_choice(kind.theme_kind(), paint.depth, paint.glyphs, paint.sprites);
+    for candidate in choice.candidates() {
+        if paint_substitute(
+            snapshot,
+            view,
+            candidate,
+            (col_cx, text_cy, z),
+            fg,
+            sprite_rect,
+        ) {
+            return;
+        }
+    }
 
     match kind {
         ListMarkerKind::Bullet => {
@@ -270,6 +362,39 @@ mod tests {
     /// real data file, not to a copy of it that could drift.
     fn sys() -> Metrics {
         Themes::builtin().resolve(crate::theme::SYSTEM_ID).metrics
+    }
+
+    /// **The drawn gutter and the `GtkTextTag` must scale a themed metric IDENTICALLY.**
+    ///
+    /// `marker_gap_px` is documented as "= `px(list_item_gap)`", and the clamp in
+    /// `first_display_line` only cuts the right band while that holds — but the gutter
+    /// computed it in `f32` while `tags.rs` set `pixels_above_lines` from the `f64`
+    /// `theme::px`, so the two are a different rounding of the same number.
+    ///
+    /// MEASURED divergence, which is what makes this a behaviour test and not a
+    /// tautology: `list_item_gap = 15` at zoom 2.1 is 32 through `f64` and **31**
+    /// through `f32`. The sweep then covers the whole metric range, because one case
+    /// proves the pair can disagree and says nothing about how often.
+    #[test]
+    fn the_gutter_gap_is_the_same_pixel_the_heading_tag_uses() {
+        let mut m = sys();
+        m.list_item_gap = 15;
+        assert_eq!(
+            marker_gap_px(&m, 2.1),
+            32.0,
+            "the gutter must agree with tags.rs's px(15, 2.1); f32 arithmetic answers 31"
+        );
+        for gap in 0..=64i32 {
+            m.list_item_gap = gap;
+            for zi in 25..=400i32 {
+                let zoom = f64::from(zi) / 100.0;
+                assert_eq!(
+                    marker_gap_px(&m, zoom),
+                    crate::theme::px(gap, zoom) as f32,
+                    "gap {gap} at zoom {zoom}"
+                );
+            }
+        }
     }
 
     #[test]

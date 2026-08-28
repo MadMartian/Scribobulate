@@ -143,6 +143,14 @@ if (Test-Path "$GtkPrefix\share\gtksourceview-5") {
 New-Item -ItemType Directory -Force -Path "$OutDir\share\scribobulate" | Out-Null
 Copy-Item "$RepoRoot\data\themes.toml" "$OutDir\share\scribobulate\"
 
+# The sprite copy every platform ships. WHY it is shipped is stated once, in
+# install.sh, beside the Linux copy of this same step -- read it there rather than
+# trusting a second copy here. All three packaging scripts once carried that rationale
+# verbatim, which hid the fact that the commands underneath the three copies did three
+# different things with an empty directory, a subdirectory, and a filename with a space.
+# `-Recurse -Force` already survives all three; the two shell scripts now do too.
+Copy-Item "$RepoRoot\data\sprites" "$OutDir\share\scribobulate\" -Recurse -Force
+
 $files = Get-ChildItem $OutDir -Recurse -File
 $size  = ($files | Measure-Object Length -Sum).Sum
 Write-Host ("Staged {0} files, {1:N1} MB -> {2}" -f $files.Count, ($size / 1MB), (Resolve-Path $OutDir))

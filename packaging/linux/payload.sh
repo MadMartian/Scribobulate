@@ -15,10 +15,17 @@
 PKG="scribobulate"
 APP_ID="com.extollit.scribobulate"
 
+# This file's own directory, two levels below the repository root. Every path below is
+# anchored to it, the way install.sh anchors to $REPO_DIR and stage.ps1 to $RepoRoot.
+# Both consumers happen to `cd` to the repo root before sourcing, so the CWD-relative
+# paths this replaces looked correct -- but build-rpm.sh `cd`s again mid-run, and a
+# SOURCED file that only works from one directory is a trap laid for its next caller.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
 # The [package] version. `exit` after the first hit is load-bearing: Cargo.toml carries
 # several [[test]] tables further down, and a bare grep eventually matches the wrong one.
 read_version() {
-    awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version[[:space:]]*=/{gsub(/[",]/,"");print $3;exit}' Cargo.toml
+    awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version[[:space:]]*=/{gsub(/[",]/,"");print $3;exit}' "$REPO_DIR/Cargo.toml"
 }
 
 # The libc floor, DERIVED from the binary's own versioned symbols rather than guessed.
@@ -41,7 +48,7 @@ require_fresh_binary() {
         return 1
     fi
     local newer
-    newer="$(find src Cargo.toml -newer "$bin" -print -quit 2>/dev/null || true)"
+    newer="$(find "$REPO_DIR/src" "$REPO_DIR/Cargo.toml" -newer "$bin" -print -quit 2>/dev/null || true)"
     if [ -n "$newer" ]; then
         echo "package: $bin is older than $newer — rebuild before packaging" >&2
         return 1
@@ -57,20 +64,28 @@ stage_payload() {
     # Ships VERBATIM. install.sh rewrites Exec/TryExec to an absolute path because
     # ~/.local/bin may not be on the launcher's PATH; /usr/bin always is, so the
     # unmodified entry is correct here and stays byte-identical to the one in data/.
-    install -Dm644 "data/$PKG.desktop" "$root/usr/share/applications/$PKG.desktop"
+    install -Dm644 "$REPO_DIR/data/$PKG.desktop" "$root/usr/share/applications/$PKG.desktop"
 
     # The same SVG the binary compiles into its GResource, so the icon the window
     # resolves internally and the one the shell reads off disk cannot diverge. The
     # shell is a separate process and cannot see our GResource, which is why this
     # copy exists at all.
-    install -Dm644 "data/icons/scalable/apps/$APP_ID.svg" \
+    install -Dm644 "$REPO_DIR/data/icons/scalable/apps/$APP_ID.svg" \
         "$root/usr/share/icons/hicolor/scalable/apps/$APP_ID.svg"
 
     # Preview reading themes. Found via glib::system_data_dirs() — never hard-code
     # /usr/share on the READING side; on a KDE box its first entry is
     # /usr/share/plasma. The same file is compiled into the binary as a fallback, so
     # this copy is an override rather than a requirement.
-    install -Dm644 "data/themes.toml" "$root/usr/share/$PKG/themes.toml"
+    install -Dm644 "$REPO_DIR/data/themes.toml" "$root/usr/share/$PKG/themes.toml"
+
+    # The sprite copy every platform ships. WHY it is shipped, and why this exact
+    # `find`/`install` form rather than a glob, is stated once in install.sh -- read it
+    # there. This command is deliberately CHARACTER-IDENTICAL to install.sh's but for
+    # the destination, so the two cannot diverge on an empty directory, a subdirectory
+    # or a filename with a space without the difference being visible at a glance.
+    find "$REPO_DIR/data/sprites" -type f \
+        -exec install -Dm644 -t "$root/usr/share/$PKG/sprites" {} +
 
     # A binary on $PATH with no `man` entry is an incomplete install on a system where
     # `man` is how you ask. Generated rather than carried as a source file: everything

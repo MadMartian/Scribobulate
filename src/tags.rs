@@ -16,8 +16,13 @@
 //!   scaled explicitly on every render/zoom. The theme states design-time px at
 //!   zoom 1.0; `px()` below is the one place they are scaled.
 
+/// The theme→tag DECISIONS, display-free, so the priority ladder and the metrics can be
+/// asserted without standing up a view (`sdd/POLICY.md` § coverage gate — extract the
+/// decision core; F-TAGS-001).
+mod spec;
+
 use crate::config::config;
-use crate::palette::{to_hex, Palette};
+use crate::palette::{to_hex_opaque, Palette};
 use crate::theme::Theme;
 use gtk::prelude::*;
 use gtk::{TextBuffer, TextTag};
@@ -73,6 +78,16 @@ const LI_CONT_NAMES: [&str; MAX_LIST_DEPTH as usize] = [
 /// own `apply_tag_by_name` path in `renderer::emit::insert_code_block`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TagName {
+    /// The ink quoted BODY text takes when a theme states `blockquote_fg` (TDD 18.29).
+    ///
+    /// **First on purpose.** A `GtkTextTag` gets its priority from the order it is added
+    /// to the table, and the highest-priority tag that sets `foreground` wins — so this
+    /// one is registered before every other ink-setting tag and is beaten by all of
+    /// them. That is the whole reason it is not simply a `foreground` on
+    /// [`TagName::Blockquote`]: that tag is registered AFTER `link` (it has to be, so
+    /// its margin still wins over a code block's inside a quote), so an ink on it would
+    /// repaint every link, heading and `==mark==` in the quote in the panel's ink.
+    BlockquoteInk,
     /// Heading levels h1–h5. h6-and-deeper are mapped onto [`TagName::H5`] upstream
     /// (see `renderer::emit`), the same fold GTK-side would apply to any over-max
     /// level, matching the five heading tags registered here.
@@ -118,6 +133,7 @@ impl TagName {
     /// clamp before constructing the variant.
     pub(crate) fn name(self) -> &'static str {
         match self {
+            TagName::BlockquoteInk => "blockquote-ink",
             TagName::H1 => "h1",
             TagName::H2 => "h2",
             TagName::H3 => "h3",
@@ -171,12 +187,14 @@ impl TagName {
     }
 }
 
-pub(crate) fn setup_tags(buf: &TextBuffer, palette: &Palette, zoom: f64) {
-    setup_tags_with_theme(buf, palette, zoom, &crate::theme::active())
-}
-
-/// [`setup_tags`] against an explicit theme — the seam headless tests use to build
-/// a buffer under a chosen theme without touching the app-wide active theme.
+/// Register the preview's whole `GtkTextTag` vocabulary on `buf`, at `zoom`, under
+/// `theme`.
+///
+/// **There is no ambient-theme sibling any more.** There was one — `setup_tags`, reading
+/// `crate::theme::active()` — and it was the last thing keeping the render-products
+/// construction tied to a process global (F-BUILDPRODUCTS-001). Its one caller now
+/// resolves the theme once and hands it down, so a render is a function of what it was
+/// given rather than of what the process happened to have selected.
 pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f64, theme: &Theme) {
     let add = |name: &str, setup: &dyn Fn(&TextTag)| {
         let tag = TextTag::new(Some(name));
@@ -184,28 +202,82 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
         buf.tag_table().add(&tag);
     };
 
-    let code_inline_bg = to_hex(palette.code_inline_bg);
+    let code_inline_bg = to_hex_opaque(palette.code_inline_bg);
     // Note: the code-*block* background is self-drawn by codeview::CodePreviewView
     // (GTK4Rs/AP-21), not set here as a paragraph_background.
-    let link_fg = to_hex(palette.link_fg);
+    let link_fg = to_hex_opaque(palette.link_fg);
 
-    let px = |n: i32| (n as f64 * zoom).round() as i32;
+    // `theme::px` — THE design-time→pixel conversion. Not re-declared here: four
+    // sites used to spell it themselves and two had drifted onto different rounding,
+    // so a themed metric landed a pixel apart on the tag and on the marker beside it.
+    let px = |n: i32| crate::theme::px(n, zoom);
     let typo = &theme.typography;
     let metrics = &theme.metrics;
+
+    // The quote panel's INK (TDD 18.29), registered first so its priority is the lowest
+    // of every tag that sets a foreground — see `TagName::BlockquoteInk`. Inert until a
+    // theme states `blockquote_fg`: the tag is registered either way (so the vocabulary
+    // does not vary by theme), but the property is only ever SET when asked for, which
+    // is the same discipline the heading tags follow and what keeps System's tags
+    // byte-identical (TDD 18.2), not merely its pixels.
+    let quote_fg = theme.blockquote_fg;
+    add(TagName::BlockquoteInk.name(), &move |t| {
+        if let Some(c) = quote_fg {
+            t.set_foreground_rgba(Some(&c));
+        }
+    });
+
+    // **The ink floor the quote panel creates.** SCHEMA's `blockquote_fg` row promises
+    // that a link, A HEADING and a `==mark==` inside a quote keep their own colour. The
+    // link tag delivers that by setting its foreground unconditionally; the heading and
+    // mark tags set theirs only `if let Some(…)`, so a theme that states `blockquote_fg`
+    // and leaves `heading_color`/`mark_fg` unstated left NO tag above `blockquote-ink`
+    // setting a foreground on those runs — and the quote re-inked two of the three
+    // constructs the row exempts.
+    //
+    // The fix is a floor rather than an unconditional set, because the two contracts
+    // pull opposite ways and both are real. TDD 18.2 says a theme that states nothing
+    // leaves System's tags BYTE-IDENTICAL — not merely its pixels — so these tags must
+    // keep setting no foreground at all when nothing asks them to. They only need one
+    // when something ELSE is about to claim the run, which is exactly when the theme has
+    // stated a quote ink. So the floor is `Some(body_fg)` only then, and `None`
+    // otherwise: the resolved body ink is what "the heading's own colour" MEANS for a
+    // theme that states no heading colour, and it is what the run would have inherited
+    // from the page if `blockquote-ink` were not underneath it.
+    let ink_floor = spec::ink_floor(theme, palette);
 
     // h1–h5. FIVE tags, not six: `emit.rs` maps h6-and-deeper onto "h5" before a tag
     // is ever chosen, so `heading_scale`/`heading_space_below` are 5-element by
     // design — a theme could not differentiate h6 from h5 however it were keyed.
-    // A theme may colour headings; omitted, they inherit the body foreground (the
-    // tag sets no foreground, so it falls through to the page's `color`). A link
-    // inside a heading is added later ⇒ higher priority, so its colour still wins.
-    let heading_color = theme.heading_color;
-    // A theme may also give headings their own font FAMILY. GTK merges a tag's font
-    // description onto the CSS base with replace_existing=TRUE, so `set_family` overrides
-    // ONLY the family — the CSS-driven size/zoom and the tag's own `set_scale` both
-    // survive the merge (researcher-verified). So a display heading face composes with
-    // the body font and zoom for free.
-    let heading_font = theme.heading_font.clone();
+    // A theme may colour headings PER LEVEL; omitted, a level takes the theme's single
+    // `heading_color`, and omitting that too leaves the tag with no foreground so it
+    // falls through to the page's `color` (TDD 18.21 — the fold is done once in
+    // `Theme::resolve`, so this only indexes). A link inside a heading is added later
+    // ⇒ higher priority, so its colour still wins over any of them.
+    //
+    // A theme may also give headings their own font FAMILY, per level the same way. GTK
+    // merges a tag's font description onto the CSS base with replace_existing=TRUE, so
+    // `set_family` overrides ONLY the family — the CSS-driven size/zoom and the tag's own
+    // `set_scale` both survive the merge (researcher-verified). So a display heading face
+    // composes with the body font and zoom for free.
+    //
+    // A theme may also draw a RULE above and/or below the heading text, and open space
+    // above it (TDD 18.22). Both are inert until asked for: `heading_rule` is
+    // `LineStyle::None` on both sides and `heading_space_above` is 0 on every level
+    // unless a theme states otherwise, so an untouched theme registers the same tag it
+    // always did. The rule is `overline`/`underline` — a decoration line over the glyph
+    // run, sharing the run's own ink unless the theme colours it — NOT a drawn divider;
+    // a column-width band is a different, tier-K+D decoration.
+    // The heading text's inset from its BAND, the per-level rule sides, the ink floor and
+    // the pixel arithmetic are all `spec::heading_spec`'s — pure, and asserted without a
+    // view. What is left here is application (F-TAGS-001).
+    //
+    // The view's own margins are read ONCE and handed in, so the spec stays a function of
+    // its arguments rather than of the process's config.
+    let view_margins = (
+        px(config().view.left_margin),
+        px(config().view.right_margin),
+    );
     for (i, level) in [
         TagName::H1,
         TagName::H2,
@@ -216,27 +288,40 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     .into_iter()
     .enumerate()
     {
-        let scale = typo.heading_scale[i];
-        let weight = typo.heading_weight;
-        let below = px(metrics.heading_space_below[i]);
-        let hfont = heading_font.clone();
+        let h = spec::heading_spec(theme, palette, zoom, i, view_margins);
         add(level.name(), &move |t| {
-            t.set_scale(scale);
-            t.set_weight(weight);
-            t.set_pixels_below_lines(below);
-            if let Some(c) = heading_color {
+            t.set_scale(h.scale);
+            t.set_weight(h.weight);
+            t.set_pixels_below_lines(h.space_below);
+            t.set_pixels_above_lines(h.space_above);
+            if let Some(inset) = h.band_inset {
+                t.set_left_margin(inset.left);
+                t.set_right_margin(inset.right);
+            }
+            // Set only when the theme asks. Calling the setter with `None`/`NONE` would
+            // still mark the property SET on the tag, which is a different tag from the
+            // one this code registered before the key existed — and 18.2 is a claim
+            // about the tag, not only about the pixels it happens to produce today.
+            // The overline is deliberately UNCOLOURED — it takes the heading's own ink.
+            // A run carrying a coloured overline AND a coloured underline double-frees
+            // inside GTK 4.6 (measured; `theme::HeadingRule` carries the whole finding),
+            // and a link inside a heading is exactly such a run, since the link tag
+            // colours an underline. `set_overline_rgba` is clippy-banned so this cannot
+            // be "improved" back into a heap bug.
+            if !h.overline.is_none() {
+                t.set_overline(h.overline.overline());
+            }
+            if !h.underline.is_none() {
+                t.set_underline(h.underline.underline());
+                if let Some(c) = h.underline_color {
+                    t.set_underline_rgba(Some(&c));
+                }
+            }
+            if let Some(c) = h.foreground {
                 t.set_foreground_rgba(Some(&c));
             }
-            if let Some(f) = &hfont {
-                // `set_family` feeds a Pango font description, NOT CSS: Pango wants a
-                // plain comma-separated family list and does its OWN ordered fallback
-                // across it (down to the generic terminator), but the CSS double-quotes
-                // that `sanitize_font_family` adds for multi-word names break that
-                // parsing — so a themed heading font silently dropped to the default
-                // sans instead of walking the stack to the first installed face. Strip
-                // the quotes to hand Pango a clean list; the sanitiser already
-                // guaranteed it is injection-safe and generic-terminated.
-                t.set_family(Some(&f.replace('"', "")));
+            if let Some(f) = &h.family {
+                t.set_family(Some(&f.pango_family()));
             }
         });
     }
@@ -247,7 +332,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // (`renderer::ann_hl_open`), which is what stops the two paths drifting (TDD
     // 18.6). It must be theme-sourced rather than a fixed amber because a warm
     // reading page makes the system yellow a near-invisible wash (TDD 18.5).
-    let ann_hl = theme.annotation_hl.rgba();
+    let ann_hl = theme.annotation_hl_color.rgba();
     add(TagName::AnnotationHighlight.name(), &move |t| {
         t.set_background_rgba(Some(&ann_hl));
     });
@@ -256,9 +341,20 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     add(TagName::Italic.name(), &|t| {
         t.set_style(gtk::pango::Style::Italic)
     });
-    add(TagName::Strike.name(), &|t| t.set_strikethrough(true));
-    // `strikethrough_rgba` is deliberately left unset: the line then follows the
-    // body foreground, which is already themed via the page's `color` rule.
+    // A theme may give the strike line its OWN colour (TDD 18.23). Omitted — the case
+    // for every theme that has not asked — the property stays UNSET and the line follows
+    // the struck text's foreground, which is already themed via the page's `color` rule;
+    // that used to be the whole story here, and is now the default rather than the only
+    // behaviour. The SAME key feeds the table-cell Pango path (`renderer::strike_tags`)
+    // and both export sinks, so a struck word cannot be one colour in prose and another
+    // in a table (POLICY "One theme key, every application path").
+    let strike_rgba = theme.strikethrough_color;
+    add(TagName::Strike.name(), &move |t| {
+        t.set_strikethrough(true);
+        if let Some(c) = strike_rgba {
+            t.set_strikethrough_rgba(Some(&c));
+        }
+    });
     // `==highlight==` (mark): a translucent background wash behind the marked text,
     // theme-sourced (`mark_bg`, per-theme — the toxic green on Synthwave, a warm wash
     // on Sepia). `background_rgba` (not `background`) so the alpha lets the body text
@@ -277,7 +373,11 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     let mark_fg = theme.mark_fg;
     add(TagName::Mark.name(), &move |t| {
         t.set_background_rgba(Some(&mark_bg));
-        if let Some(fg) = mark_fg {
+        // `.or(ink_floor)` for the same reason the heading tag takes it: a `==mark==`
+        // inside a quote keeps its own colour, and a wash that states no ink of its own
+        // leaves the body ink showing through — which is how a highlighter behaves on
+        // paper, and is NOT the quote's ink.
+        if let Some(fg) = mark_fg.or(ink_floor) {
             t.set_foreground_rgba(Some(&fg));
         }
     });
@@ -339,8 +439,23 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     add(TagName::CodeBlockBottom.name(), &|t| {
         t.set_pixels_below_lines(code_pad)
     });
-    add(TagName::Link.name(), &|t| {
-        t.set_underline(gtk::pango::Underline::Single);
+    // The link's underline is a themed STYLE with its own optional colour (TDD 18.23),
+    // not the hardcoded single line it was — `none`/`single`/`double`/`wavy`, floored at
+    // `single`, which is what the app has always drawn. The colour is independent of the
+    // link's ink: omitted, the line follows the ink, exactly as before.
+    //
+    // This tag is why the heading rule's overline carries no colour of its own: a link
+    // inside a heading is ONE RUN wearing both tags, and a run with a coloured overline
+    // and a coloured underline is double-freed by GTK 4.6 (`theme::HeadingRule`). Two
+    // tags both setting `underline-rgba` — this one and a heading rule — is measured
+    // clean, which is what makes the below-side rule colourable.
+    let link_underline = theme.link_underline;
+    let link_underline_rgba = theme.link_underline_color;
+    add(TagName::Link.name(), &move |t| {
+        t.set_underline(link_underline.underline());
+        if let Some(c) = link_underline_rgba {
+            t.set_underline_rgba(Some(&c));
+        }
         t.set_foreground(Some(&link_fg));
     });
     // Blockquote: an indent that leaves room on the left for the accent bar + gap
@@ -353,8 +468,21 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // The bar width/gap are the SAME theme keys `codeview::mod`'s snapshot draws the
     // bar from and `codeview::gutter` offsets a quoted list's markers by, so a themed
     // bar cannot land beside a differently-indented quote (GTK4Rs/AP-96's failure mode).
+    //
+    // The PANEL behind the quote (TDD 18.29) is NOT here, and deliberately so. It began
+    // as a `paragraph_background_rgba` on this tag — which buys vertical padding and a
+    // continuous band across a soft-wrapped paragraph for free — but GTK fills that
+    // background PER PARAGRAPH, at each line's resolved text column
+    // (`gtktextlayout.c:3932-3939`). A quote holding an intro paragraph plus a nested
+    // list is many paragraphs, so it rendered as several disconnected rectangles with
+    // the page showing through the gaps, alongside an accent bar that was already drawn
+    // continuously from the quote's ONE `BufferSpan`. The panel is now drawn from that
+    // same span, beside the bar (`codeview::mod`'s `snapshot_layer`), which is the only
+    // way the two can agree; it keeps the padding and the soft-wrap band, because both
+    // come from `line_yrange`. The FOREGROUND deliberately does not live here either —
+    // see `TagName::BlockquoteInk`.
     let bq_indent = px(metrics.blockquote_bar_width + metrics.blockquote_text_gap);
-    add(TagName::Blockquote.name(), &|t| {
+    add(TagName::Blockquote.name(), &move |t| {
         t.set_left_margin(view_lm + bq_indent);
         t.set_right_margin(view_rm + bq_indent);
     });

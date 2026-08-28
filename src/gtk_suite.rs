@@ -55,6 +55,8 @@ mod codeview;
 mod colorscheme;
 mod config;
 mod copymap;
+mod cssfrag;
+mod decorplan;
 mod docio;
 mod export;
 mod farscroll;
@@ -72,6 +74,7 @@ mod mdtable;
 mod outline;
 mod outline_view;
 mod palette;
+mod pangospan;
 mod platform;
 mod preview;
 mod renderer;
@@ -91,6 +94,8 @@ mod testpump;
 // Test-only in `lib.rs` (`#[cfg(test)]`); this root is always built `--cfg test`, so
 // it needs no gate here — but it does need the declaration, or the suite build breaks
 // the moment a symlink test in it reaches the shared helper.
+mod sprite;
+mod testlog;
 mod testsymlink;
 mod theme;
 mod widgets;
@@ -291,7 +296,14 @@ fn parse_args(args: &[String]) -> Result<Cli<'_>, String> {
                     // including the case that was meant to be carved out.
                     return Err(format!("{flag} requires a value"));
                 }
-                _ => {}
+                (flag, Some(_)) => {
+                    // Unreachable while VALUE_FLAGS holds exactly the two arms above —
+                    // and REJECTING rather than ignoring is the point: adding a third
+                    // entry to VALUE_FLAGS without an arm here would otherwise consume
+                    // its value and discard the instruction, which is the whole defect
+                    // this function was written to close.
+                    return Err(format!("{flag} is declared in VALUE_FLAGS but unhandled"));
+                }
             }
             if inline.is_none() {
                 i += 1; // the value is consumed, never a filter

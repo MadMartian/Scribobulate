@@ -102,6 +102,22 @@ Before any change is considered valid, run these steps in order:
    body registered with one harness and not the other. Write bodies as
    `#[gtktest::test]`; see the testing section below for that rule, for when a check
    needs its own `harness = false` target instead, and for why the choice matters.
+   **In a session with no accessibility bus — any agent session, and any session
+   whose `at-spi-dbus-bus.service` has gone stale — this step SIGTRAPs before it
+   tests anything.** GTK emits `Unable to connect to the accessibility bus` as a
+   `Gtk-CRITICAL`, and `G_DEBUG=fatal-criticals` promotes it. The failure names
+   accessibility and is not about accessibility, is not about the change under test,
+   and reproduces identically on an untouched tree — so it costs a control build to
+   disbelieve, every time, unless it is written down. Run the step under
+   `dbus-run-session`, which lets at-spi autolaunch on a bus of its own; the contract
+   command is unchanged, only the bus around it. On the operator's live session the
+   other repair is `systemctl --user restart at-spi-dbus-bus.service`, which is needed
+   when the unit reports `active (running)` while its socket no longer exists —
+   `org.a11y.Bus.GetAddress` then returns an address for a socket that is not there,
+   so the service looks healthy from every angle except use. MEASURED twice this way,
+   once after a nested `dbus-run-session` in a test rig unlinked
+   `/run/user/1000/at-spi/bus_0` on teardown: a rig that claims that path takes the
+   operator's session down with it.
 6. **Coverage gate** — `scripts/coverage.sh` must pass. Scoped line coverage is a
    no-regression **ratchet**, not a target: the script owns both the floor (`FLOOR`)
    and the scope (`IGNORE`), and is the only place either is written down. **Do not
@@ -114,6 +130,22 @@ Before any change is considered valid, run these steps in order:
    it hide behind the exclusion — that extraction is the mechanism by which the floor
    rises. The excluded set and its per-module rationale live beside the regex, in the
    script.
+   **The measured scope is itself gated, and it is reported FIRST.** The set of files
+   the gate measures is recorded in `scripts/coverage.scope`, re-derived on every run
+   from the same invocation that produces the percentage, and compared. When it differs
+   the gate names the files that entered or left, states that the SCOPE changed, and
+   **withholds the floor verdict entirely** — a ratchet compared across two different
+   scopes measures nothing. This exists because every `IGNORE` term names a directory
+   *depth*, so a new subdirectory under an excluded tree used to pull its files into
+   scope at 0% and the ratchet then failed as *"your change reduced coverage"*, sending
+   the reader after untested code they had just written; when the entering files were
+   small it cleared the floor and said nothing at all, which is worse. It catches the
+   opposite direction too — a floor that climbs because an exclusion was widened is now
+   a failure rather than a success. Update the manifest with
+   `scripts/coverage.sh --update-scope`, after deciding which side each named file
+   belongs on, in the same commit as the layout change, exactly as raising `FLOOR` is.
+   The manifest records what IS measured; `IGNORE` remains the policy about what should
+   be, and the manifest is never passed to llvm-cov.
    Tooling is `cargo-llvm-cov`, a dev subcommand rather than a crate dependency:
    `rustup component add llvm-tools-preview && cargo install cargo-llvm-cov`.
 7. **UI-behaviour coverage alignment** — if the change adds, alters, or removes any
@@ -501,6 +533,49 @@ single-instance handoff emits the same `open`/`activate` the D-Bus path does, an
 the appearance module writes the same `GtkSettings` properties a desktop would,
 re-theming nothing itself.
 
+## Cross-platform by default
+
+**This project ships on Linux, macOS and Windows, and all three are first-class.**
+Linux is the canonical platform for the gates (§ Build), which is a statement about
+where verification happens — not about which platform the code is written for. Write
+every line as portable unless it lives in a platform seam (§ Platform seams).
+
+- **Reach for the standard library's portable abstraction before the platform's own.**
+  `std::path::Path`/`PathBuf` over string concatenation with a separator; `std::fs`
+  over an OS call; a portable IPC choice over a hand-picked transport. Where the
+  toolkit or the standard library already spans the three platforms, use it and do not
+  re-derive the difference.
+- **Never hardcode a path separator, a path shape, or a filesystem root.** Not in
+  production code, and — the case that actually bites — **not in a test fixture**. A
+  POSIX-shaped literal like `/etc/passwd` reads as a constant and is not one: it is an
+  absolute path on unix and a rooted, drive-relative path on Windows, so a test using it
+  exercises a *different* case on each platform while looking identical everywhere. A
+  fixture that encodes one platform's grammar must be `#[cfg]`-selected per platform, so
+  each tests its own shape (a drive-qualified path and a UNC path on Windows, the POSIX
+  one on unix) — not one platform's literal inherited by the others.
+- **A predicate over a path is a question about the HOST's grammar, not about the
+  string.** `Path::is_absolute` is the standing example: on Windows it requires a volume
+  prefix, so a rooted path with no drive answers `false` there and `true` on unix.
+  Reason about what the platform means by the term, not about what the method name
+  suggests.
+- **Filesystem and IPC facilities are not universal.** A unix domain socket is a named
+  pipe elsewhere; a FIFO has no Windows form at all; POSIX mode bits are ACLs on
+  Windows; a symlink needs privilege there while a directory junction does not; case
+  sensitivity, path length limits and legal filename characters all differ (§ Build
+  pipeline's path-legality gate exists because one illegal character blocks every
+  Windows clone of the tree). Where a facility is genuinely absent, that is a platform
+  seam, not an `#[cfg]` sprinkled through shared code.
+- **A capability a test needs may be unavailable rather than absent.** Skip loudly
+  through the project's one skip marker so the run reports the limb as unverified — never
+  let a guard compile to an empty passing function on the platform that most needs it.
+  Before accepting a skip, ask whether a different mechanism reaches the same guarantee
+  on that platform.
+- **Verification is per platform, and the peer seats own it.** A change that touches
+  the filesystem, IPC, packaging or a path is not ratified by passing on Linux; it is
+  ratified when the macOS and Windows seats have run it (§ Verifying a change on macOS,
+  § Cross-machine seat branches). Never weaken a shared rule — a lint, a gate, a floor —
+  to make one platform pass.
+
 ## Code style
 
 - Format with `rustfmt`; keep `cargo clippy` clean. Use `Result`/`?`; no
@@ -764,9 +839,19 @@ full account is ScrAP-225; the rule above is what stops it recurring.
   where an otherwise-hardcoded value lives, and it is an ordinary theme — **no key
   is system-only and no theme is second-class**. The rule covers geometry
   deliberately: a value that is hardcoded is hardcoded regardless of its type, and
-  exempting geometry would make this rule mean less than it says. Bounds: a theme
-  sets the *metric of a decoration*; it does not change *what is drawn* or *how
-  layout is computed* (a bounded/centred "measure" is layout behaviour, and out).
+  exempting geometry would make this rule mean less than it says. **Bounds:
+  a theme selects from a closed vocabulary of decorations the engine already knows
+  how to draw, and states their appearance and metric. It does not describe new
+  drawing, and it does not change how layout is computed** (a bounded/centred
+  "measure" is layout behaviour, and out). Two invariants make the wider bound safe,
+  and a decoration that breaks either is out of the vocabulary regardless of how it
+  is spelled: the engine holds **no per-theme knowledge** (TDD 18.14 — a new theme
+  needs no code change), and every decoration is either **inert** (absent unless a
+  theme asks for it, leaving System byte-identical — TDD 18.2) or occupies space the
+  engine reserves for it **unconditionally**. An unset key means *not present*, never
+  *guess*. The previous, narrower bound — "a theme sets the metric of a decoration;
+  it does not change what is drawn" — is superseded; it is recorded here because
+  code and comments written under it are still correct, just no longer the limit.
   Themed geometry is a **design-time value at zoom 1.0**, applied through the
   existing `px(n) = (n * zoom).round()` path — pixel metrics are widget/Pango
   properties and do **not** follow the CSS `font-size` rule, so they must be scaled
@@ -792,6 +877,13 @@ full account is ScrAP-225; the rule above is what stops it recurring.
   the resolved pixel** (`iter_location().x()` on a realized view), never by
   tag-property equality — that bug class is invisible to tag-level tests
   (ScrAP-121).
+- **Bundled decoration art is an original design.** A sprite or glyph shipped in
+  `data/themes.toml` may evoke an idiom but must not reproduce another work's
+  expression: no franchise names, no copied character, block or tile art, and no
+  edited derivative of one — a trace is still a copy. A bare colour is the stated
+  exception, carrying no copyrightable expression. This is a merge gate rather than
+  a taste note, and it is not recoverable after the fact: art produced from a
+  reference has to be discarded and redrawn, not sanitised.
 - **Every menubar nested-submenu action must call `window::dismiss_stray_menubar_popovers`**
   after it fires (on the active window, for an app-scoped action). Otherwise GTK
   4.6–4.12 leaks the activation onto a top-level menu (ScrAP-116). It is

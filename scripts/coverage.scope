@@ -1,0 +1,185 @@
+# Measured-scope manifest for the coverage gate.
+#
+# READ BY `scripts/coverage.sh`. Every path below is a file that gate currently
+# MEASURES — the set llvm-cov reports after `IGNORE` has removed the excluded ones.
+# The gate re-derives that set on every run and FAILS, naming the files, when it
+# differs from this list.
+#
+# IT RECORDS WHAT IS MEASURED. IT DOES NOT DECIDE WHAT SHOULD BE.
+# The policy — which files are out of scope and why — is `IGNORE` in
+# `scripts/coverage.sh`, argued entry by entry beside the regex, and this file is
+# not a second copy of it. It is never passed to llvm-cov: the gate COMPARES it,
+# never APPLIES it, so deleting a line here cannot exclude a file from measurement,
+# it can only make the next run fail and say so. That asymmetry is the whole design.
+#
+# WHY IT EXISTS. Every term in `IGNORE` names a directory depth
+# (`codeview[/\\][a-z_]+\.rs` matches flat files directly under `codeview/` and
+# nothing deeper), so introducing `codeview/paint/` makes seven view-bound files stop
+# matching and silently enter the measured scope at 0%. The ratchet does fail — but it
+# fails as "your change reduced coverage", so the reader goes hunting for untested code
+# they just wrote, when the event was a change in WHAT IS BEING MEASURED. The
+# `window/`  term's `tabs/`, `editbar/` and `navhistory/` alternatives are each scar
+# tissue from exactly that, added after the fact; the comments warning about it did not
+# prevent the third recurrence, which is the tell that a comment was the wrong
+# instrument. This file makes the scope change fail in its own register, first and by
+# name.
+#
+# It catches the other direction too, and that direction has also happened here: a
+# commit once raised `FLOOR` in the same change that added `clipboard` to `IGNORE`, so
+# the floor climbed by NARROWING the scope rather than by testing anything (found by QA,
+# not by a gate — see the 2026-08-21 entry in `scripts/coverage.sh`). A file leaving this
+# list is coverage surrendered, and it now has to be stated to land.
+#
+# UPDATING IT IS A DELIBERATE ACT, in the same commit as the layout change, exactly as
+# raising `FLOOR` is. Decide which side each named file belongs on FIRST — test it, or
+# extend `IGNORE` with the narrowest term that names it and its rationale — then record
+# the decision with:
+#
+#     scripts/coverage.sh --update-scope
+#
+# FORMAT: one repo-relative, `/`-separated path per line, `LC_ALL=C` sorted; `#`
+# comments and blank lines ignored. The separator is `/` even though llvm-cov reports
+# native paths (`src\theme\decor.rs` on Windows) — the gate normalises before it
+# compares, so this file is identical on every platform.
+src/a11y.rs
+src/accel.rs
+src/affordance.rs
+src/annotate/anchored.rs
+src/annotate/mod.rs
+src/annotate/mutate.rs
+src/annotate/scan.rs
+src/annotations.rs
+src/annotations_view.rs
+src/app/commands.rs
+src/app/mnemonics.rs
+src/app/mod.rs
+src/app/shortcuts.rs
+src/atomic_io.rs
+src/config.rs
+src/copymap.rs
+src/cssfrag.rs
+src/decorplan.rs
+src/docio/mod.rs
+src/docio/pool.rs
+src/docio/rename.rs
+src/export/doc.rs
+src/export/html.rs
+src/export/markup.rs
+src/export/mod.rs
+src/export/paginate.rs
+src/export/pdf/decide.rs
+src/export/pdf/geometry.rs
+src/export/pdf/ink.rs
+src/export/pdf/measure.rs
+src/export/pdf/measure/table.rs
+src/export/pdf/mod.rs
+src/export/pdftable.rs
+src/export/walk.rs
+src/farscroll.rs
+src/forensics/identity.rs
+src/forensics/mod.rs
+src/forensics/rawbuf.rs
+src/forensics/report.rs
+src/forensics/ring.rs
+src/forensics/signal.rs
+src/forensics/sink.rs
+src/forensics/timefmt.rs
+src/format/codeblock.rs
+src/format/continuation.rs
+src/format/heading.rs
+src/format/hr.rs
+src/format/inline.rs
+src/format/insert.rs
+src/format/list.rs
+src/format/mod.rs
+src/format/quote.rs
+src/format/text.rs
+src/icons.rs
+src/imagefetch.rs
+src/keynav.rs
+src/limits.rs
+src/lineendings.rs
+src/links.rs
+src/macwordnav.rs
+src/mdtable.rs
+src/outline.rs
+src/palette/mod.rs
+src/pangospan.rs
+src/preview/annotate.rs
+src/preview/build.rs
+src/preview/cells.rs
+src/preview/css.rs
+src/preview/interactions.rs
+src/preview/qdata.rs
+src/preview/render.rs
+src/preview/scroll.rs
+src/preview/sourcemap.rs
+src/renderer/blockquote.rs
+src/renderer/emit.rs
+src/renderer/end.rs
+src/renderer/events.rs
+src/renderer/image.rs
+src/renderer/mod.rs
+src/renderer/normalize.rs
+src/renderer/picture.rs
+src/renderer/scan.rs
+src/renderer/start.rs
+src/saferizer/buffer_mark.rs
+src/saferizer/buffer_text.rs
+src/saferizer/click_activation.rs
+src/saferizer/file_monitor.rs
+src/saferizer/native_dialog.rs
+src/saferizer/persistent_popover.rs
+src/saferizer/popover_anchor.rs
+src/saferizer/qdata_key.rs
+src/saferizer/scrollpos.rs
+src/saferizer/viewport.rs
+src/session.rs
+src/span.rs
+src/sprite.rs
+src/swapfile/codec.rs
+src/swapfile/digest.rs
+src/swapfile/mod.rs
+src/swapfile/naming.rs
+src/swapfile/recovery.rs
+src/tags/spec.rs
+src/tasklist.rs
+src/testlog.rs
+src/testsymlink.rs
+src/theme/decor.rs
+src/theme/keys.rs
+src/theme/mod.rs
+src/theme/model.rs
+src/theme/resolve.rs
+src/theme/sources.rs
+src/theme/spec.rs
+src/theme/value.rs
+src/widgets/comment_entry.rs
+src/widgets/mod.rs
+src/widgets/rule.rs
+src/widgets/tab/layout.rs
+src/widgets/table/layout.rs
+src/widgets/table/linkcell.rs
+src/widgets/textfield.rs
+src/window/find/plan.rs
+src/winstate/busynotice.rs
+src/winstate/chrome.rs
+src/winstate/decisions.rs
+src/winstate/docepoch.rs
+src/winstate/fmtinsert.rs
+src/winstate/ids.rs
+src/winstate/infotoast.rs
+src/winstate/navhistory/decide.rs
+src/winstate/navhistory/maintain.rs
+src/winstate/navhistory/mod.rs
+src/winstate/navhistory/place.rs
+src/winstate/navhistory/record.rs
+src/winstate/registry.rs
+src/winstate/scrollsync.rs
+src/winstate/selfdelete.rs
+src/winstate/status.rs
+src/winstate/swap.rs
+src/winstate/tab.rs
+src/winstate/viewmode.rs
+src/winstate/writegate.rs
+src/workaround.rs
