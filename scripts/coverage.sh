@@ -21,9 +21,18 @@
 # Also round DOWN by 0.01: the printed figure is rounded, so a floor set to the
 # displayed value fails against the unrounded one (76.49% printed, 76.48 here).
 #
+# THE GATE HAS TWO VERDICTS AND THEY ARE NOT INTERCHANGEABLE. The SCOPE verdict comes
+# first: the set of files being measured is recorded in `scripts/coverage.scope` and
+# compared on every run, because a change in WHAT IS MEASURED used to arrive disguised as
+# a change in the percentage — see that file's header for the mechanism and the three
+# times it happened. Only if the scope is unchanged is the FLOOR verdict rendered at all;
+# a ratchet compared across two different scopes measures nothing.
+#
 # Usage:
-#   scripts/coverage.sh                 # run the gate (summary + fail-under)
+#   scripts/coverage.sh                 # run the gate (summary + scope + fail-under)
 #   scripts/coverage.sh --html          # + HTML report (extra args pass through)
+#   scripts/coverage.sh --update-scope  # rewrite scripts/coverage.scope from this run,
+#     # then carry on to the floor verdict. Consumed here, not passed to cargo.
 #   scripts/coverage.sh --features gtk-integration-tests   # UNSCOPED-ish; note the
 #     # floor is defined WITHOUT this feature (unit-only) — don't gate with it on.
 set -euo pipefail
@@ -367,6 +376,13 @@ cd "$(dirname "$0")/.."
 # written — deliberately, since a `codeview/paint/` DIRECTORY would have stopped matching
 # and silently pulled seven view-bound files into scope at 0%, which is the trap the
 # `tabs/`, `editbar/` and `navhistory/` entries above were each written after hitting.
+#
+# THAT REASONING IS NOW A MACHINE CHECK rather than an author's care. `scripts/coverage.scope`
+# records the measured set, and the SCOPE verdict below fails on any drift in it, by name,
+# before this gate says anything about the percentage. Keeping the new painters flat was
+# still the right call — but it is no longer the only thing standing between a new
+# subdirectory and a silent scope change, which is what the four warnings above were each
+# trying and failing to be.
 FLOOR=82.31
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
@@ -509,4 +525,140 @@ FLOOR=82.31
 # `cargo llvm-cov` reports native Windows paths regardless of who invokes it.
 IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app[/\\](appactions|menubar|openbatch|open|setup)|clipboard|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|widgets[/\\](table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
 
-exec cargo llvm-cov --summary-only --fail-under-lines "$FLOOR" --ignore-filename-regex "$IGNORE" "$@"
+# SCOPE_FILE — the measured set, recorded. Its own header states its role; the one thing
+# worth repeating HERE, where the enforcement lives, is what keeps the two files from
+# becoming two policies: this script never passes SCOPE_FILE to llvm-cov. `IGNORE` above
+# is the only filter, and the manifest is only ever an argument to `comm`.
+SCOPE_FILE="scripts/coverage.scope"
+
+UPDATE_SCOPE=0
+PASSTHRU=()
+for arg in "$@"; do
+    case "$arg" in
+        --update-scope) UPDATE_SCOPE=1 ;;
+        *)              PASSTHRU+=("$arg") ;;
+    esac
+done
+
+# --------------------------------------------------------------------------------------
+# 1. MEASURE. This is the run: it builds, executes the unit tests, and leaves the profile
+#    data behind. Everything after it is a `report` against that same data — sub-second,
+#    and derived from ONE `IGNORE`, so no verdict below can be reading a different scope
+#    than another (a gate is its pattern, its input set, AND the invocation consuming
+#    both; a second enumeration here would be the defect this whole change is about).
+#    Deliberately WITHOUT --fail-under-lines: the floor verdict must not pre-empt the
+#    scope verdict.
+# --------------------------------------------------------------------------------------
+cargo llvm-cov --summary-only --ignore-filename-regex "$IGNORE" ${PASSTHRU[@]+"${PASSTHRU[@]}"}
+
+# --------------------------------------------------------------------------------------
+# 2. SCOPE verdict — reported first, and separately, from any verdict about the number.
+# --------------------------------------------------------------------------------------
+# llvm-cov reports absolute, host-native paths. Normalise to repo-relative `/` form, and
+# TRIPWIRE on anything that will not normalise: a path this cannot anchor is a file from
+# somewhere the gate has never measured, and silently dropping it would make the scope
+# check leniently incomplete without saying so. Same rule as the scan set's `maxdepth`.
+measured_scope() {
+    cargo llvm-cov report --lcov --summary-only --ignore-filename-regex "$IGNORE" \
+        | awk -v root="$PWD/" '
+            /^SF:/ {
+                p = substr($0, 4)
+                gsub(/\\/, "/", p)
+                if (index(p, root) == 1)    p = substr(p, length(root) + 1)
+                else if (match(p, /.*\/src\//)) p = substr(p, RSTART + RLENGTH - 4)
+                if (p !~ /^src\//) {
+                    print "coverage: SCOPE CHECK REFUSED — cannot make this repo-relative: " p > "/dev/stderr"
+                    exit 3
+                }
+                print p
+            }' \
+        | LC_ALL=C sort -u
+}
+
+now="$(measured_scope)"
+if [ -z "$now" ]; then
+    echo "coverage: SCOPE CHECK REFUSED — llvm-cov reported no files at all." >&2
+    echo "coverage: an empty measured set is not a passing one. Check IGNORE and the run above." >&2
+    exit 2
+fi
+
+if [ "$UPDATE_SCOPE" = 1 ]; then
+    [ -f "$SCOPE_FILE" ] || { echo "coverage: $SCOPE_FILE missing; cannot preserve its header." >&2; exit 2; }
+    # Keep the file's own header (everything above its first path) and replace the list.
+    tmp="$SCOPE_FILE.tmp.$$"
+    awk '/^[^#]/ && !/^[[:space:]]*$/ { exit } { print }' "$SCOPE_FILE" > "$tmp"
+    printf '%s\n' "$now" >> "$tmp"
+    mv "$tmp" "$SCOPE_FILE"
+    echo "coverage: rewrote $SCOPE_FILE from this run ($(printf '%s\n' "$now" | wc -l) files measured)."
+fi
+
+if [ ! -f "$SCOPE_FILE" ]; then
+    echo "coverage: SCOPE CHECK REFUSED — $SCOPE_FILE is missing." >&2
+    echo "coverage: the gate does not know what it is supposed to be measuring, so it will" >&2
+    echo "coverage: not report on how much of it is covered. Regenerate with --update-scope." >&2
+    exit 2
+fi
+recorded="$(grep -vE '^[[:space:]]*(#|$)' "$SCOPE_FILE" | LC_ALL=C sort -u || true)"
+if [ -z "$recorded" ]; then
+    echo "coverage: SCOPE CHECK REFUSED — $SCOPE_FILE records no files." >&2
+    exit 2
+fi
+
+entered="$(LC_ALL=C comm -13 <(printf '%s\n' "$recorded") <(printf '%s\n' "$now"))"
+departed="$(LC_ALL=C comm -23 <(printf '%s\n' "$recorded") <(printf '%s\n' "$now"))"
+
+if [ -n "$entered" ] || [ -n "$departed" ]; then
+    {
+        echo
+        echo "=== coverage: SCOPE CHANGED ==="
+        echo "The set of files this gate MEASURES no longer matches $SCOPE_FILE."
+        echo "This is NOT a statement about how well-tested anything is. What changed is"
+        echo "WHAT IS BEING MEASURED, and the percentage moving is a consequence of that."
+        if [ -n "$entered" ]; then
+            echo
+            echo "ENTERED scope — now measured, and at 0% until tested:"
+            printf '%s\n' "$entered" | sed 's/^/  + /'
+        fi
+        if [ -n "$departed" ]; then
+            echo
+            echo "LEFT scope — no longer measured. Coverage here is surrendered, not earned:"
+            printf '%s\n' "$departed" | sed 's/^/  - /'
+        fi
+        cat <<'EOF'
+
+Decide which side each file belongs on, then record the decision:
+  * it holds pure decision logic -> it is IN scope. Test it, then re-run with
+    --update-scope in the same commit.
+  * it is GTK signal-wiring that cannot be exercised headlessly -> extend IGNORE in
+    scripts/coverage.sh with the NARROWEST term that names it, and its rationale beside
+    the others, then re-run with --update-scope in the same commit.
+
+Do not widen IGNORE merely to restore the number. POLICY step 6's scope rule is to
+extract the decision core out of the excluded file instead; every widened exclusion is
+coverage quietly surrendered, and this gate now makes you say so out loud.
+
+The FLOOR verdict is WITHHELD: a ratchet compared across two different scopes measures
+nothing, and would report this as a coverage regression, which it is not.
+EOF
+    } >&2
+    exit 1
+fi
+echo "coverage: SCOPE OK — $(printf '%s\n' "$now" | wc -l) files measured, matching $SCOPE_FILE."
+
+# --------------------------------------------------------------------------------------
+# 3. FLOOR verdict — only now, and only over a scope that has been shown to be unchanged.
+#    `--fail-under-lines` stays the authority on the comparison (it reads the right column
+#    by construction); the number below is echoed for the reader, not used to decide.
+# --------------------------------------------------------------------------------------
+lines_pct="$(cargo llvm-cov report --summary-only --ignore-filename-regex "$IGNORE" \
+             | awk '$1 == "TOTAL" { print $10 }')"
+if cargo llvm-cov report --summary-only --fail-under-lines "$FLOOR" \
+       --ignore-filename-regex "$IGNORE" >/dev/null; then
+    echo "coverage: FLOOR OK — scoped LINES ${lines_pct:-?} >= FLOOR $FLOOR."
+    exit 0
+fi
+echo "coverage: FLOOR FAILED — scoped LINES ${lines_pct:-?} is below FLOOR=$FLOOR." >&2
+echo "coverage: the measured scope is UNCHANGED (SCOPE OK above), so this is a real" >&2
+echo "coverage: coverage regression: the same files are being measured and less of them" >&2
+echo "coverage: is covered. Add tests; do not lower the floor and do not widen IGNORE." >&2
+exit 1
