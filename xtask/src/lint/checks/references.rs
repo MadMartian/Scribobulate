@@ -244,7 +244,10 @@ pub fn citation_targets(line: &str) -> Vec<String> {
 /// that mentions it: `README.md`, the SVG, the manual-test plan and the port READMEs all
 /// name it in prose, where a mention is not a declaration.
 const APP_ID_FILES: [&str; 5] = [
-    "install.sh",
+    // The Linux install, which is where the ID is declared -- NOT the root `install.sh`,
+    // which is a `uname -s` router carrying no install logic and therefore no ID to drift.
+    // Listing the router instead would make this check pass on a file that cannot fail it.
+    "packaging/linux/install.sh",
     "uninstall.sh",
     "data/scribobulate.desktop",
     "data/resources.gresource.xml",

@@ -61,7 +61,7 @@ stage_payload() {
 
     install -Dm755 "$bin" "$root/usr/bin/$PKG"
 
-    # Ships VERBATIM. install.sh rewrites Exec/TryExec to an absolute path because
+    # Ships VERBATIM. The Linux install rewrites Exec/TryExec to an absolute path because
     # ~/.local/bin may not be on the launcher's PATH; /usr/bin always is, so the
     # unmodified entry is correct here and stays byte-identical to the one in data/.
     install -Dm644 "$REPO_DIR/data/$PKG.desktop" "$root/usr/share/applications/$PKG.desktop"
@@ -80,10 +80,11 @@ stage_payload() {
     install -Dm644 "$REPO_DIR/data/themes.toml" "$root/usr/share/$PKG/themes.toml"
 
     # The sprite copy every platform ships. WHY it is shipped, and why this exact
-    # `find`/`install` form rather than a glob, is stated once in install.sh -- read it
-    # there. This command is deliberately CHARACTER-IDENTICAL to install.sh's but for
-    # the destination, so the two cannot diverge on an empty directory, a subdirectory
-    # or a filename with a space without the difference being visible at a glance.
+    # `find`/`install` form rather than a glob, is stated once in
+    # packaging/linux/install.sh -- read it there. This command is deliberately
+    # CHARACTER-IDENTICAL to that script's but for the destination, so the two cannot
+    # diverge on an empty directory, a subdirectory or a filename with a space without
+    # the difference being visible at a glance.
     find "$REPO_DIR/data/sprites" -type f \
         -exec install -Dm644 -t "$root/usr/share/$PKG/sprites" {} +
 
