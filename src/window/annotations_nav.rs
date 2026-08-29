@@ -262,9 +262,13 @@ fn editor_caret_src_byte(buf: &sourceview::Buffer) -> OriginalByteOffset {
 /// Recomputed wholesale from the action states (source of truth), not patched from a
 /// delta signal, so it is correct at every lifecycle boundary — a toggle, a window build,
 /// a tab switch, a session restore (GTK4Rs/AP-47). The section/sidebar widgets are reached from
-/// the two scrollers' ancestry (`scroller → section → sidebar_box`), the same tree the
+/// the two scrollers' ancestry (`scroller → section → sidebar_paned`), the same tree the
 /// build wires and the restore test already asserts against — so no extra widget handles
-/// need threading through the typed state.
+/// need threading through the typed state. That walk is by DEPTH, so the sidebar's
+/// container may change type (it is a vertical `GtkPaned` since TDD 20.21) but never
+/// gain or lose a level; `the_sidebar_container_is_the_pane_one_level_above_a_section`
+/// pins it, because a nested container would leave this function setting `:visible` on
+/// the wrong widget with nothing failing to compile.
 pub(crate) fn reconcile_sidebar_visibility(window: &ApplicationWindow) {
     let Some(st) = state(window) else { return };
     let outline_on = bool_action_state(window, "outline", true);

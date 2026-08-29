@@ -383,7 +383,7 @@ cd "$(dirname "$0")/.."
 # still the right call — but it is no longer the only thing standing between a new
 # subdirectory and a silent scope change, which is what the four warnings above were each
 # trying and failing to be.
-FLOOR=82.70
+FLOOR=82.75
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

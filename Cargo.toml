@@ -23,6 +23,17 @@ edition = "2021"
 description = "A native Linux Markdown viewer/editor that renders on the CPU with live reload"
 license = "Apache-2.0"
 publish = false
+# Which binary a bare `cargo run` means. Required, not cosmetic: putting `xtask` in
+# `default-members` above (contract step 9's gate) put a SECOND binary in the default
+# set, and cargo then refuses to guess — `cargo run` fails with "could not determine
+# which binary to run" on every platform. Nothing in the pipeline catches that, because
+# no gate runs the app: fmt, clippy, build and the whole test suite pass either way.
+# `packaging/windows/build.bat run <file>` breaks too, and cannot be worked around at the
+# call site (its `:run` passes everything after `--`, so `--bin` can never be threaded
+# through). One manifest key fixes every entry point at once, including the bare
+# `cargo run` `packaging/windows/README.md` promises. Reported by the Windows seat,
+# reproduced on Linux.
+default-run = "scribobulate"
 
 [dependencies]
 # `v4_6` matches the project's documented GTK floor (POLICY § Build) — it does not

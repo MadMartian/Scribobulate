@@ -89,7 +89,8 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
   *in* the Markdown as portable markup the author (or the next agent) can read
   inline. No side channel, no extra tool.
   - Margin markers to open, edit, or remove a comment
-  - Annotations sidebar lists every comment in the document (F8)
+  - Annotations sidebar lists every comment in the document (F8), sharing the
+    sidebar's height with the outline on a divider you drag where you want it
   - Walk the comments from the keyboard, without hunting for margin markers
     (Ctrl+Alt+N / Ctrl+Alt+P)
 - **Take the document with you** — File ▸ Export writes what you are reading as
@@ -113,7 +114,8 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
     sections within them, so following a table-of-contents link is a step you can
     take back — on the keys and mouse buttons your browser uses (Alt+←/→, or the
     thumb switches)
-  - Session restore brings back windows, tabs, zoom, split, and sidebars
+  - Session restore brings back windows, tabs, zoom, split, and sidebars —
+    including where each window's sidebar divider sat
 - **Safe by default**
   - Links and images stay inside the document's folder unless you opt in
   - Remote images are off until you enable them for documents you trust

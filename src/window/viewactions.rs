@@ -139,7 +139,7 @@ pub(super) fn register_view_actions(
 pub(super) struct SidebarSections<'a> {
     pub outline_section: &'a gtk::Box,
     pub annotations_section: &'a gtk::Box,
-    pub sidebar_box: &'a gtk::Box,
+    pub sidebar_paned: &'a gtk::Paned,
 }
 
 /// `win.view-mode` — the string-state action driving the Preview/Edit/Split swap
@@ -328,7 +328,7 @@ fn register_sidebar_actions(
     sidebar.outline_section.set_visible(outline_initial);
     sidebar.annotations_section.set_visible(annotations_initial);
     sidebar
-        .sidebar_box
+        .sidebar_paned
         .set_visible(outline_initial || annotations_initial);
 
     // ── win.outline-expand-all / win.outline-collapse-all ─────────────────────

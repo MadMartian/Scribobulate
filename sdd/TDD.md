@@ -2638,7 +2638,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 ### 20.9 Outline and annotations toggle independently; an empty sidebar disappears
 - **Given** the outline and annotations panes
 - **When** each is toggled on or off
-- **Then** they stack (bold headers, no draggable divider) when both are shown, either fills the sidebar alone when it's the only one shown, and the **whole sidebar is hidden** — content reclaims the full width — only when both are hidden
+- **Then** they stack (bold headers, and — since 20.21 — a draggable divider between them) when both are shown, either fills the sidebar alone when it's the only one shown, and the **whole sidebar is hidden** — content reclaims the full width — only when both are hidden
 
 ### 20.10 The viewer does not scroll-spy, and claims nothing it was not told
 - **Given** the annotations viewer is shown with a selected row
@@ -2699,6 +2699,14 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** the annotations list holds the keyboard focus, having opened an annotation's comment card
 - **When** the user presses Escape
 - **Then** the card is dismissed and the focus returns to the document pane (the editor in pure-edit mode, the preview otherwise), so Escape means the same thing here as it does in the card itself (§17.39)
+
+### 20.21 The reader decides how the sidebar's height is shared
+- **Given** both sidebar sections are shown, stacked outline-over-annotations
+- **When** the user drags the divider between them
+- **Then** the two sections take the shares the drag gives them, each still scrolling its own list; the divider **cannot take either section away** — it stops at a section's minimum height, so a section leaves the screen only by its own `win.outline` / `win.annotations` toggle and the toggle's state never disagrees with what is displayed (20.9)
+- **And** hiding one section and showing it again returns to the divider position the reader chose, rather than resetting the split
+- **And** with only one section shown there is no divider at all — that section fills the sidebar (20.9), and a window-height change is shared between the two rather than taken entirely from one
+- **And** the state persists across app restarts — each window remembers its own divider position, restored with that window's session; it is stored as a *fraction* of the sidebar's height, so a window restored at a different height keeps the reader's ratio rather than a stale pixel count. A session predating the field, or one whose value is corrupt, restores to the even split rather than to a jammed divider
 
 ## 21. Crash forensics
 

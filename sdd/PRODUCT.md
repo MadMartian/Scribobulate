@@ -91,7 +91,10 @@ editor with the resource footprint of a native desktop application.
    jump to any section with a click (toggle it from the View menu or with F9), and
    the **annotations viewer** beneath it to see every comment in the document at
    once and jump to any one — so a document under review no longer hides its feedback
-   in the margins. Either sidebar hands the keyboard over when you show it, and the
+   in the margins. With both shown, a divider between them
+   decides how the sidebar's height is shared — a heading-dense document and a
+   heavily annotated one want different answers, and the one each window is given
+   is remembered for it. Either sidebar hands the keyboard over when you show it, and the
    comments can be walked forwards and backwards without the pointer at all, which
    matters because the margin markers are drawn rather than built from widgets and a
    screen reader cannot reach them directly. Choose a **reading theme** for the preview — the default follows the desktop, or

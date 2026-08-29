@@ -11,7 +11,8 @@ use std::time::Duration;
 /// every view-mode change. See the module doc for why [`TabState`](super::TabState)
 /// holds a back-reference to this instead of every call site doing a second lookup.
 pub(crate) struct WindowChrome {
-    /// The outline sidebar's scroller (the `GtkPaned` start child). Its inner
+    /// The outline sidebar's scroller (the first section of the sidebar `GtkPaned`).
+    /// Its inner
     /// child (the heading tree / "No headings" placeholder) is rebuilt whenever
     /// the document changes; the scroller itself persists and is hidden/shown by
     /// the `win.outline` toggle. The whole sidebar box (header + this scroller)
@@ -143,6 +144,18 @@ pub(crate) struct WindowChrome {
     /// zoom is an accessibility accommodation and should not vary as the user
     /// switches documents in the same window.
     pub(crate) zoom_level: Cell<f64>,
+    /// Where this window's sidebar divider sits, as the fraction of the sidebar's
+    /// height given to the outline (TDD 20.21) — the value `read_window_chrome`
+    /// persists and `inherit_from` hands to a new window.
+    ///
+    /// Cached here rather than read off the `GtkPaned` at save time, because the
+    /// paned cannot answer at the one moment that matters: a window closed with
+    /// both sidebar sections hidden has a zero-height sidebar, and the reading
+    /// would be meaningless exactly when it is being written down for good. The
+    /// cache is refreshed from the paned's own `notify::position` whenever the
+    /// reading IS meaningful, so it holds the last value the reader actually chose
+    /// (`session::sidebar_split_fraction` owns the "is it meaningful" test).
+    pub(crate) sidebar_split: Cell<f64>,
     /// Per-window CSS provider that holds this window's single zoom rule,
     /// `.scrib-win-<id> textview.scrib-preview { font-size: Xem; }` (built by
     /// `window::zoom::zoom_css_rule`). Added to the shared display once at window

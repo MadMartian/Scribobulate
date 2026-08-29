@@ -230,6 +230,13 @@ pub(crate) fn read_window_chrome(window: &ApplicationWindow) -> crate::session::
         show_statusbar: bool_action_state(window, "show-statusbar", true),
         outline_visible: bool_action_state(window, "outline", true),
         annotations_visible: bool_action_state(window, "annotations", false),
+        // The divider is geometry, not an action, so it is the one chrome field with
+        // no `win.*` toggle to read it off — it comes from the live cache the paned
+        // keeps up to date (see `WindowChrome::sidebar_split` for why not the widget).
+        sidebar_split: crate::winstate::chrome(window).map_or(
+            crate::session::ChromeSession::default().sidebar_split,
+            |ch| ch.sidebar_split.get(),
+        ),
         toolbar_sections,
     }
 }
@@ -427,6 +434,7 @@ fn build_window(
         doc_dir,
         zoom_level,
         init.show_unsafe_images,
+        init.chrome.sidebar_split,
     );
 
     // Bind the open-documents combo box to THIS window's `documents_menu` — the
@@ -460,7 +468,7 @@ fn build_window(
         &SidebarSections {
             outline_section: &chrome.outline_section,
             annotations_section: &chrome.annotations_section,
-            sidebar_box: &chrome.sidebar_box,
+            sidebar_paned: &chrome.sidebar_paned,
         },
         &ChromeVisibility {
             show_toolbar: chrome_init.show_toolbar,
@@ -520,6 +528,7 @@ fn build_window(
         format_overlay,
         ov_edit_btns,
         zoom_level,
+        chrome_init.sidebar_split,
         zoom_css_provider,
     );
     let tab_id = winstate::alloc_tab_id();
@@ -619,6 +628,7 @@ fn build_window_chrome_state(
     format_overlay: gtk::Popover,
     ov_edit_btns: Vec<(FmtInsertKind, gtk::Button)>,
     zoom_level: f64,
+    sidebar_split: f64,
     zoom_css_provider: gtk::CssProvider,
 ) -> Rc<winstate::WindowChrome> {
     Rc::new(winstate::WindowChrome {
@@ -644,6 +654,7 @@ fn build_window_chrome_state(
         focused_pane: Cell::new(winstate::FocusedPane::Editor),
         ctx_link: RefCell::new(None),
         zoom_level: Cell::new(zoom_level),
+        sidebar_split: Cell::new(sidebar_split),
         zoom_css_provider,
         tabs: chrome.tabs.clone(),
         documents_menu: chrome.documents_menu.clone(),
@@ -946,6 +957,7 @@ pub(crate) mod gtk_integration_tests {
                 show_statusbar: false,
                 outline_visible: false,
                 annotations_visible: false,
+                sidebar_split: crate::session::ChromeSession::default().sidebar_split,
                 toolbar_sections: crate::session::ToolbarSections::default(),
             };
             crate::session::save(&crate::session::Session {
@@ -1052,6 +1064,216 @@ pub(crate) mod gtk_integration_tests {
         assert!(sidebar.is_visible());
         assert!(outline_section.is_visible());
         assert!(!annotations_section.is_visible());
+    }
+
+    /// The sidebar `GtkPaned`, resolved the way production resolves it: by ancestry
+    /// from a section's scroller, never from a stored handle.
+    ///
+    /// Deliberately the same walk as `reconcile_sidebar_visibility`, so a layout change
+    /// that breaks that function breaks these tests too — a helper that took a shortcut
+    /// the production code cannot take would assert about a tree nobody navigates.
+    fn sidebar_paned_of(scroller: &gtk::ScrolledWindow) -> gtk::Paned {
+        scroller
+            .parent()
+            .expect("scroller sits in its section")
+            .parent()
+            .expect("section sits in the sidebar")
+            .downcast::<gtk::Paned>()
+            .expect("the sidebar is the vertical GtkPaned, one level above a section")
+    }
+
+    /// The sidebar container is a `GtkPaned` exactly ONE level above each section
+    /// (TDD 20.21).
+    ///
+    /// `reconcile_sidebar_visibility` resolves it by ancestry rather than by a stored
+    /// handle, so this is the shape that function assumes and nothing else checks:
+    /// wrapping the two sections in one more container would leave it setting
+    /// `:visible` on an inner widget while the real sidebar stayed shown — a
+    /// four-state rule that silently stops working, with the build still compiling.
+    #[gtktest::test]
+    fn the_sidebar_container_is_the_pane_one_level_above_a_section() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.sidebarshape");
+        let win = new_window(&app, "IT-shape", "# H\n\ntext {>>note<<}", None);
+        let ch = winstate::chrome(&win).expect("chrome registered");
+        for scroller in [&ch.outline_scroller, &ch.annotations_scroller] {
+            let sidebar = sidebar_paned_of(scroller);
+            assert_eq!(sidebar.orientation(), gtk::Orientation::Vertical);
+        }
+        assert_eq!(
+            sidebar_paned_of(&ch.outline_scroller),
+            sidebar_paned_of(&ch.annotations_scroller),
+            "both sections hang off the SAME paned — one divider, not two sidebars"
+        );
+    }
+
+    /// Hiding a section and showing it again returns the reader to the divider position
+    /// they chose (TDD 20.21).
+    ///
+    /// GtkPaned only holds this because `size_allocate` skips `calc_position` entirely
+    /// while one child is invisible (gtkpaned.c 4.6.9 `:1380-1408`) — a property of the
+    /// widget, not of anything this code does, which is exactly why it is asserted here
+    /// rather than assumed: a future re-layout that hid a section by some other means
+    /// (rebuilding the pane, reparenting it) would lose the position with nothing else
+    /// to notice.
+    #[gtktest::test]
+    fn the_sidebar_divider_position_survives_a_pane_toggle_round_trip() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.sidebardivider");
+        let win = new_window(&app, "IT-divider", "# H\n\ntext {>>note<<}", None);
+        win.set_default_size(800, 600);
+        win.present();
+        change_action_state(&win, "annotations", &true.to_variant());
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(400),
+        );
+        let ch = winstate::chrome(&win).expect("chrome registered");
+        let sidebar = sidebar_paned_of(&ch.outline_scroller);
+
+        // Move the divider somewhere the default split would never land on its own.
+        let chosen = sidebar.position() + 40;
+        sidebar.set_position(chosen);
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(200),
+        );
+        assert_eq!(
+            sidebar.position(),
+            chosen,
+            "precondition: the divider took the position we asked for"
+        );
+
+        for on in [false, true] {
+            change_action_state(&win, "annotations", &on.to_variant());
+            crate::testpump::drain_for(
+                crate::testpump::Clock::Frame,
+                std::time::Duration::from_millis(200),
+            );
+        }
+        assert_eq!(
+            sidebar.position(),
+            chosen,
+            "hiding a section and showing it again keeps the reader's split"
+        );
+    }
+
+    /// A window opens on the divider position it was restored with, and reports back the
+    /// position the reader dragged it to (TDD 20.21) — the two halves of "per window,
+    /// across process lifecycles", each of which is silently useless without the other.
+    ///
+    /// The restore half needs a REAL allocation to be meaningful: a fraction has nothing
+    /// to multiply until the sidebar has a height, which is why `restore_sidebar_split`
+    /// hangs off `notify::max-position` rather than build time or `map`. So this test
+    /// presents the window and pumps the frame clock rather than asserting on a freshly
+    /// built tree, where the position would be a clamped zero for either implementation
+    /// and the assertion could not tell them apart (ScrAP-78).
+    #[gtktest::test]
+    fn the_sidebar_divider_is_restored_from_the_session_and_read_back_for_it() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.sidebarpersist");
+        let win = build_window(
+            &app,
+            "IT-persist",
+            "# H\n\ntext {>>note<<}",
+            None,
+            &WindowInit {
+                chrome: crate::session::ChromeSession {
+                    annotations_visible: true,
+                    sidebar_split: 0.25,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        win.set_default_size(800, 600);
+        win.present();
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(400),
+        );
+        let ch = winstate::chrome(&win).expect("chrome registered");
+        let sidebar = sidebar_paned_of(&ch.outline_scroller);
+
+        let quarter = crate::session::sidebar_divider_position(0.25, sidebar.height())
+            .expect("the sidebar has a height once presented");
+        assert_eq!(
+            sidebar.position(),
+            quarter,
+            "the window opened on its restored split, not the even default"
+        );
+
+        // ...and the read-back half: drag it somewhere else, and that is what a session
+        // save would write down for THIS window.
+        let moved = sidebar.height() * 2 / 3;
+        sidebar.set_position(moved);
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(200),
+        );
+        let persisted = read_window_chrome(&win).sidebar_split;
+        let expected = crate::session::sidebar_split_fraction(sidebar.position(), sidebar.height())
+            .expect("a dragged divider is a meaningful reading");
+        assert!(
+            (persisted - expected).abs() < 1e-9,
+            "read_window_chrome persists the dragged split ({persisted} vs {expected})"
+        );
+        assert!(
+            (persisted - 0.25).abs() > 1e-9,
+            "precondition: the drag actually moved the divider off its restored value"
+        );
+    }
+
+    /// The divider cannot take a section away — only its action can (TDD 20.21).
+    ///
+    /// This is what `shrink_*_child(false)` buys, and it is load-bearing rather than
+    /// cosmetic: a section draggable to zero would be gone from the screen while
+    /// `win.outline` / `win.annotations` still reported it shown, which is precisely the
+    /// divergence the four-state rule (TDD 20.9) exists to prevent.
+    #[gtktest::test]
+    fn the_divider_cannot_crush_a_sidebar_section_away() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.sidebarfloor");
+        let win = new_window(&app, "IT-floor", "# H\n\ntext {>>note<<}", None);
+        win.set_default_size(800, 600);
+        win.present();
+        change_action_state(&win, "annotations", &true.to_variant());
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(400),
+        );
+        let ch = winstate::chrome(&win).expect("chrome registered");
+        let sidebar = sidebar_paned_of(&ch.outline_scroller);
+
+        // The scroller's own min-content-height, which `shrink=false` promotes into the
+        // divider's travel limit. Named rather than repeated, so the two cannot drift.
+        const SECTION_FLOOR: i32 = 80;
+        // Assert on the PANED'S POSITION, never on a section's `height()`. A crushed
+        // child does not report a small height: `gtk_paned_size_allocate` hands it its
+        // NATURAL height and shifts it off the top of the pane instead
+        // (`start_child_allocation.y -= …`, gtkpaned.c 4.6.9 `:1370-1374`), so a section
+        // dragged to nothing still measures its full ~110px while being invisible on
+        // screen. Measured: with `shrink=true` this test PASSED on `height()` alone
+        // (ScrAP-336) — the guard's original form could not see the very thing it was
+        // written to catch. The position IS the start child's allocated share, and it is
+        // what GTK clamps, so it answers the question `height()` only appears to.
+        for extreme in [0, i32::MAX / 2] {
+            sidebar.set_position(extreme);
+            crate::testpump::drain_for(
+                crate::testpump::Clock::Frame,
+                std::time::Duration::from_millis(200),
+            );
+            let (split, total) = (sidebar.position(), sidebar.height());
+            assert!(
+                split >= SECTION_FLOOR,
+                "dragging the divider to {extreme} left the outline {split}px of \
+                 {total}px, below its {SECTION_FLOOR}px floor — it can now be hidden by \
+                 drag, behind its action's back"
+            );
+            assert!(
+                total - split >= SECTION_FLOOR,
+                "dragging the divider to {extreme} left the annotations {}px of \
+                 {total}px, below its {SECTION_FLOOR}px floor — it can now be hidden by \
+                 drag, behind its action's back",
+                total - split
+            );
+        }
     }
 
     /// Viewer navigation resolves to the correct chip by SPAN IDENTITY, even with a
