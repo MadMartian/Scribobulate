@@ -356,11 +356,17 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     // Through `cssfrag`, because the HTML sink decides the same thing and the two had
     // each spelled it out — including the `solid` carve-out, which is CSS's own initial
     // value and would otherwise move a rule that has never carried a style (TDD 18.2).
-    let link_line = format!(
-        "{}{}",
-        crate::cssfrag::link_underline_line(theme.link_underline),
-        crate::cssfrag::link_underline_style_decl(theme.link_underline)
-    );
+    let link_line = crate::cssfrag::link_underline_line(theme.link_underline);
+    // `link_underline_style_decl` returns a WHOLE declaration (leading space, trailing
+    // semicolon), so it is spliced after `text-decoration-line`'s semicolon, never into
+    // its value. Concatenating the two produced
+    // `text-decoration-line: underline text-decoration-style: double;;`, which GTK
+    // rejects as "Not a valid value" and then drops the entire declaration: under Pixel
+    // Quest (`link_underline = "double"`) every table-cell link lost its line while the
+    // body's `GtkTextTag` kept drawing one. The text-level tests below could not see it,
+    // because that malformed string still `contains` both fragments they look for; the
+    // `parses` module at the bottom of this file is what catches it now.
+    let link_line_style = crate::cssfrag::link_underline_style_decl(theme.link_underline);
     let link_line_color = crate::cssfrag::decl(
         "text-decoration-color",
         theme.link_underline_color.map(to_hex_opaque),
@@ -378,7 +384,8 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     // it is what the desktop theme's own `button.link` styling has to lose against.
     for selector in LINK_CELL_SELECTORS {
         out.push_str(&format!(
-            "{selector} {{ color: {link_fg}; text-decoration-line: {link_line};{link_line_color} }}\n"
+            "{selector} {{ color: {link_fg}; text-decoration-line: {link_line};\
+             {link_line_style}{link_line_color} }}\n"
         ));
     }
 
@@ -975,5 +982,50 @@ mod tests {
             !c.contains("background-color: red"),
             "injection succeeded:\n{c}"
         );
+    }
+
+    /// Does GTK itself accept the sheet this module generates? Every assertion above
+    /// reads the generated TEXT, and text-matching cannot see a malformed declaration:
+    /// `text-decoration-line: underline text-decoration-style: double;` satisfies
+    /// `contains("text-decoration-line: underline")` and
+    /// `contains("text-decoration-style: double;")` both, and GTK drops it on the floor.
+    /// That is not hypothetical — it is how Pixel Quest's `link_underline = "double"`
+    /// shipped with a flat link in every table cell while the body underlined correctly.
+    ///
+    /// Loading a `GtkCssProvider` needs GTK initialised, so this lives behind
+    /// `gtk-integration-tests` while its neighbours run under plain `cargo test`.
+    #[cfg(feature = "gtk-integration-tests")]
+    mod parses {
+        use super::css_for;
+        use crate::theme::Themes;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        /// **Every builtin theme's sheet parses clean**, not just the two the text-level
+        /// tests sample. A theme is the unit of variation here: the keys that change the
+        /// sheet's SHAPE (an underline style, a stated colour) are exactly the ones only
+        /// some themes state, so a sample of two leaves the interesting sheets unparsed.
+        #[gtktest::test]
+        fn every_builtin_theme_sheet_parses_without_a_css_error() {
+            for entry in Themes::builtin().chooser_list() {
+                let sheet = css_for(&entry.id);
+                let errors: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+                let provider = gtk::CssProvider::new();
+                let sink = Rc::clone(&errors);
+                provider.connect_parsing_error(move |_, section, error| {
+                    sink.borrow_mut()
+                        .push(format!("{section}: {}", error.message()));
+                });
+                provider.load_from_data(&sheet);
+                assert!(
+                    errors.borrow().is_empty(),
+                    "theme `{}` generates CSS GTK refuses, so the declarations in the \
+                     offending rule are silently dropped and the theme's intent never \
+                     reaches the screen: {:?}\n{sheet}",
+                    entry.id,
+                    errors.borrow()
+                );
+            }
+        }
     }
 }
