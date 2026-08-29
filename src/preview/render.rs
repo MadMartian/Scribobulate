@@ -604,6 +604,33 @@ mod gtk_integration_tests {
     /// `set_bound_inset` call) makes `upper` exceed `page_size` and fails the assert.
     #[gtktest::test]
     fn indented_wide_table_does_not_force_a_horizontal_scrollbar() {
+        indented_wide_table_stays_within_the_column(1.0);
+    }
+
+    /// The same invariant AT ZOOM, which is a genuinely separate failure and not a
+    /// second sample of the one above: `block_inset` and the `bq-{depth}` / `li-{depth}`
+    /// tags must round each metric AT THE SAME STEP of the arithmetic. `theme::px`
+    /// rounds, so `px(a + b) != px(a) + px(b)` and `n * px(a) != px(n * a)` — and the
+    /// two sides multiply by depth on OPPOSITE sides of the scale (the list tag scales
+    /// `depth * step`, the quote tag scales `bar + gap` and then multiplies). Summing
+    /// every metric and scaling the total once therefore under-reserves the inset by up
+    /// to a pixel per term, which is ENOUGH: the Automatic h-scrollbar appears on
+    /// `upper > page_size`, at any magnitude.
+    ///
+    /// Zoom 1.5 with the default metrics is the measured case — `bar + gap = 13` scales
+    /// to `round(19.5) = 20` per side on the tag (40 for the pair) against
+    /// `round(26 * 1.5) = 39` from a single scaling of the sum. **Mutation check
+    /// (measured):** restoring `px(list + quote, zoom)` in `Renderer::block_inset` fails
+    /// this body by exactly 1px and leaves the zoom-1.0 body above GREEN — which is why
+    /// the zoom case is written out rather than trusted to the existing guard
+    /// (GTK4Rs/AP-160's shape on the zoom axis: a guard is evidence about the zoom it
+    /// runs at).
+    #[gtktest::test]
+    fn indented_wide_table_does_not_force_a_horizontal_scrollbar_at_zoom() {
+        indented_wide_table_stays_within_the_column(1.5);
+    }
+
+    fn indented_wide_table_stays_within_the_column(zoom: f64) {
         // Long cells → each table's natural width ≥ the content column, so fit_columns
         // fills it to the bound and the enclosing indent is what would overflow.
         const WIDE_ROW: &str =
@@ -615,11 +642,13 @@ mod gtk_integration_tests {
              {WIDE_ROW}\n    |---|---|\n    {WIDE_ROW}\n\n\
              > A blockquote that introduces its own table:\n>\n> \
              {WIDE_ROW}\n> |---|---|\n> {WIDE_ROW}\n\n\
+             > > A nested quote's table, where the per-level indent compounds:\n> >\n> > \
+             {WIDE_ROW}\n> > |---|---|\n> > {WIDE_ROW}\n\n\
              A plain top-level table for contrast:\n\n\
              {WIDE_ROW}\n|---|---|\n{WIDE_ROW}\n"
         );
 
-        let widget = render(&md, None, 1.0, false);
+        let widget = render(&md, None, zoom, false);
         let view = view_of(&widget);
         let window = gtk::Window::new();
         window.set_default_size(700, 600);
@@ -646,8 +675,9 @@ mod gtk_integration_tests {
         assert!(
             upper <= page,
             "GTK4Rs/AP-23a / TDD 12.8: an indented (list/blockquote) wide table must not push \
-             the preview over-wide — hadjustment upper={upper} must not exceed page_size={page} \
-             (over by {:.0}px → spurious Automatic h-scrollbar → GTK4Rs/AP-22/23 churn/blank)",
+             the preview over-wide at zoom {zoom} — hadjustment upper={upper} must not exceed \
+             page_size={page} (over by {:.0}px → spurious Automatic h-scrollbar → \
+             GTK4Rs/AP-22/23 churn/blank)",
             upper - page,
         );
     }

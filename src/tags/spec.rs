@@ -114,9 +114,80 @@ pub(super) fn heading_spec(
     }
 }
 
+/// The left indent (device px at `zoom`) the `li-{depth}` tag applies for a list item at
+/// `depth`, and the per-side indent the `bq-{depth}` tag applies for a blockquote at
+/// `depth`.
+///
+/// They are separate functions because **the two multiply by depth on opposite sides of
+/// the rounding**, and that asymmetry is the whole reason this pair exists rather than one
+/// helper with a flag. `px` rounds, so `px(a + b) != px(a) + px(b)` and
+/// `n * px(a) != px(n * a)`; a caller that scales a summed metric once lands up to a pixel
+/// short per term. `codeview::gutter::list_content_margin_px` already carried that warning
+/// for the list half ("do NOT fold this into one `round(base + depth*STEP*zoom)`") — the
+/// quote half had no such home, so `Renderer::block_inset` computed it its own way and
+/// drifted from the tag by exactly the rounding (a table inside a quote then overflowed
+/// the viewport by 1px at zoom 1.5, summoning the Automatic h-scrollbar and re-arming the
+/// GTK4Rs/AP-22/23 churn — ScrAP-23a's failure through a new door).
+///
+/// So this is the single supplier POLICY's "One theme key, every application path" asks
+/// for, at the ARITHMETIC rather than at the key: every path that needs to know how far a
+/// block's tag pushes its text reads it here.
+pub(crate) fn list_indent_px(depth: i32, zoom: f64, m: &crate::theme::Metrics) -> i32 {
+    // Depth multiplied BEFORE the scale — one accumulative tag carrying `depth * step`.
+    px(depth * m.list_step, zoom)
+}
+
+/// See [`list_indent_px`] — the quote's per-side indent, depth multiplied AFTER the scale.
+///
+/// One `bq-{depth}` tag carries its level's FULL indent on both sides, built from a
+/// per-level step that is itself rounded (`tags.rs`: `bq_step = px(bar + gap)`, then
+/// `bq_step * depth`). A blockquote therefore narrows the usable column by TWICE this.
+pub(crate) fn quote_indent_px(depth: i32, zoom: f64, m: &crate::theme::Metrics) -> i32 {
+    px(m.blockquote_bar_width + m.blockquote_text_gap, zoom) * depth
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two indents round at DIFFERENT steps, and that is the contract — not an
+    /// implementation detail. A caller that scales a summed metric once (what
+    /// `Renderer::block_inset` used to do) disagrees with the tags by the rounding, and
+    /// under-reserves the anchored-child bound by up to a pixel per level.
+    ///
+    /// Default metrics: `list_step = 28`, `bar + gap = 3 + 10 = 13`. At zoom 1.5 the
+    /// quote step is `round(19.5) = 20` per level, so a depth-1 quote costs 40 across the
+    /// pair, while a single scaling of the summed pair gives `round(26 * 1.5) = 39`.
+    /// That 1px is the whole defect.
+    #[test]
+    fn the_two_indents_round_where_their_tags_round() {
+        let theme = themed("background = \"#ffffff\"\nforeground = \"#000000\"\n");
+        let m = &theme.metrics;
+        assert_eq!(m.list_step, 28, "fixture assumption");
+        assert_eq!(
+            m.blockquote_bar_width + m.blockquote_text_gap,
+            13,
+            "fixture assumption"
+        );
+
+        // Quote: depth multiplied AFTER the scale.
+        assert_eq!(quote_indent_px(1, 1.5, m), 20);
+        assert_eq!(quote_indent_px(2, 1.5, m), 40);
+        assert_ne!(
+            2 * quote_indent_px(1, 1.5, m),
+            crate::theme::px(2 * (m.blockquote_bar_width + m.blockquote_text_gap), 1.5),
+            "scaling the summed pair once must NOT equal the tags' arithmetic — if these \
+             ever agree the regression this guards is unreachable and the test is vacuous"
+        );
+
+        // List: depth multiplied BEFORE the scale.
+        assert_eq!(list_indent_px(2, 1.5, m), crate::theme::px(56, 1.5));
+
+        // Zoom 1.0 is the case that hides the defect: everything is integral, so both
+        // spellings agree and only a non-integral zoom can discriminate.
+        assert_eq!(quote_indent_px(2, 1.0, m), 26);
+    }
+
     use crate::theme::Themes;
 
     fn palette_for(theme: &Theme) -> Palette {

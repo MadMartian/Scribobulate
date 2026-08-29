@@ -208,10 +208,16 @@ pub fn stub_keeps_implementation_line(tree: &Tree) -> bool {
 /// The reason that was not simply done here is that it deletes prose from a tracked register
 /// whose only fallback is git history plus a skill that is not installed on every machine
 /// this repository lives on — an operator call, not a lint fix.
-const REGISTER_WARN: u64 = 675_000;
-const REGISTER_FAIL: u64 = 700_000;
-const ENTRY_WARN: u64 = 11_000;
-const ENTRY_FAIL: u64 = 15_000;
+/// **Lowered 2026-08-29 by operator decision — 675_000/700_000 -> 240_000/260_000, and the
+/// per-entry pair 11_000/15_000 -> 3_000/4_000.** The register was cut from 679 KB to ~220 KB
+/// (every routed entry is now a stub or a `**Routed**` tombstone; a resident entry is at most
+/// six single-line fields) and the ratchet moved DOWN with it so the file cannot regrow to
+/// the size that was overloading every session's context. Tightening is the ratchet's
+/// intended direction; only a loosening needs the paragraph above.
+const REGISTER_WARN: u64 = 240_000;
+const REGISTER_FAIL: u64 = 260_000;
+const ENTRY_WARN: u64 = 3_000;
+const ENTRY_FAIL: u64 = 4_000;
 
 /// Check 11 — register growth, in bytes.
 pub fn growth(tree: &Tree) -> bool {

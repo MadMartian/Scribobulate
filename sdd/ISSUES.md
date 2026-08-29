@@ -36,6 +36,7 @@ described from a different vantage point.
 | G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
+| J | Any | Upstream | A paragraph that mixes fonts (any inline-code span) can lay out a few pixels wider than the wrap width it was given, summoning the preview's Automatic horizontal scrollbar and intermittently blanking the pane until a resize | Closed |
 
 ## A. Tables are selection islands
 
@@ -533,3 +534,70 @@ here because this entry exists in order to be deleted when the defect is fixed, 
 evidence must outlive it. Do not restate its figures here; several carry caveats that do not
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
+
+## J. A paragraph that mixes fonts lays out wider than the wrap width it was given
+
+**Severity**: Closed (no public API at the GTK 4.6 floor makes the layout report a width the
+wrap budget respects; the two reachable correctives both cost more than the defect)
+
+**Platform**: Any — the mechanism is Pango's line-extent accounting, not a backend's. Only
+Linux/GTK 4.6.9 was measured; font metrics differ per platform, so *which* window widths
+exhibit it will differ, not *whether* it can.
+
+A `GtkTextTag` that changes the font FAMILY over a character range — in this project, every
+inline-code span — splits the paragraph into separate Pango items at the tag boundary. A space
+that lands on a wrap point is granted for free by the break logic (`find_break_extra_width`),
+but the routine that collapses that hanging space afterwards (`zero_line_final_space`) is keyed
+on the last run's last glyph, which is a different object once the items are split. The space
+therefore stays, sitting a few pixels past the wrap width, and `GtkTextLayout` reports the
+line's LOGICAL extent — hanging space included — as the layout width. That becomes
+`hadjustment.upper`, which exceeds `page_size`, which summons the Automatic horizontal
+scrollbar, whose appearance and disappearance re-arms the width↔height-for-width churn that
+leaves the preview stuck blank until a manual resize (ScrAP-22, ScrAP-23).
+
+MEASURED (GTK 4.6.9, gtk4-rs 0.10, X11/Xvfb, `#[gtktest::test]`, this repository's own
+`sdd/ANTI-PATTERNS.md` as the corpus): a sweep of 41 window widths (600–1000 step 10) at zoom
+1.0 found 2 widths over-wide, by 5px and 7px. Isolation is decisive in both directions —
+removing ONLY the tag's `set_family` takes the overflow to zero at every width and zoom tried;
+removing ONLY the tag's `set_wrap_mode` changes nothing (wrap mode is a paragraph attribute
+taken from the view, so a character-range tag never alters it), and the tag's background does
+not participate in width.
+
+Impact is narrow and real: on roughly 5% of window widths for a code-dense document the reader
+gets a horizontal scrollbar it cannot use and a pane that intermittently blanks while
+scrolling. It is invisible at every other width.
+
+**What walls each exit** — recorded so the dead ends are not re-explored:
+
+- **Reserve slack in the wrap budget** (extra `right_margin`, CSS padding, or the private
+  `gtk_text_layout_set_screen_width`) — REFUTED BY MEASUREMENT, not by argument. Any change to
+  the wrap budget moves the breakpoint, so the failure RELOCATES rather than clearing: the same
+  41-width sweep failed at exactly 2 widths with 0px, 8px and 16px of extra right margin, only
+  at different widths each time. A single-width control cannot see this, and reads as a fix.
+- **Derive the slack from the fonts' space advances** — the quantity does not exist. The hang is
+  however much of the granted glyph sits past the wrap point plus accumulated shaping error at
+  the item seams plus the layout's `ceil`, not a glyph metric: measured hangs of 4px and 6px
+  against a body space of 3px and a code space of 8px. Any constant is a guess, and it would
+  relocate anyway per the point above.
+- **Clamp `hadjustment.upper` down to `page_size` when the excess is below a threshold**, from a
+  `size_allocate` override after chaining up. This one WOULD close the invariant without
+  relocating, and does not re-arm the churn. Declined: it is a symptom gate, not a wrap fix; the
+  threshold can only ever be an observed bound from a width sweep rather than a derived
+  quantity; and because the hang is not always pure whitespace it may clip 1–3px off a real
+  glyph — trading a rare scrollbar for rare silent truncation of the reader's text.
+- **Drop the monospace family on inline code** — removes the trigger completely and is the
+  positive control that proves the mechanism. Declined: inline code reading as code is the
+  product, so this trades a rare layout defect for a permanent, universal regression in what the
+  reader sees.
+- **`hscrollbar_policy = Never`** — banned outright and independently of this entry: it makes
+  `GtkScrolledWindow` adopt the child's minimum width and ratchet, so the window can no longer
+  shrink to fit (ScrAP-23a).
+
+**Mitigation options**:
+- Accept the limitation (chosen). A reader who hits it can resize the window a little; the
+  defect is a property of the width, so any nearby width clears it.
+- Revisit if the toolkit floor rises — this was checked against GTK 4.12 and the width
+  computation is unchanged, so a fix would have to come from Pango's collapse logic rather than
+  from GTK.
+- Revisit if the clamp above stops being a symptom gate — if a way appears to distinguish a
+  hanging space from a clipped glyph, the clamp becomes safe and this reopens.

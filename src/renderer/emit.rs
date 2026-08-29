@@ -76,12 +76,22 @@ impl Renderer {
     pub(super) fn block_inset(&self) -> i32 {
         let theme = crate::theme::active();
         let m = &theme.metrics;
-        let list = (self.lists.len() as i32) * m.list_step;
+        // BOTH terms come from `tags::spec`, which is the single supplier of how far a
+        // block's tag pushes its text — including WHERE each term rounds. That is the
+        // whole fix: this used to sum the raw metrics and scale the total once, which is
+        // a different number from what the tags apply (`px` rounds, so `px(a + b)` is not
+        // `px(a) + px(b)` and `n * px(a)` is not `px(n * a)`), leaving the inset up to a
+        // pixel short per level. One pixel is enough — the Automatic h-scrollbar appears
+        // on `upper > page_size`, at any magnitude — so the child overflowed the viewport
+        // and re-armed the GTK4Rs/AP-22/23 churn (ScrAP-23a, through the rounding rather
+        // than through the indent).
+        //
+        // A list adds only a LEFT margin; a blockquote sets BOTH, so it costs twice.
+        let list = crate::tags::list_indent_px(self.lists.len() as i32, self.zoom, m);
         // Clamped exactly as the tag family is, so the inset can never claim more
         // margin than `bq-{depth}` actually applies on a pathologically nested document.
         let quote_depth = (self.blockquote_depth as u8).min(crate::tags::MAX_QUOTE_DEPTH) as i32;
-        let quote = 2 * quote_depth * (m.blockquote_bar_width + m.blockquote_text_gap);
-        crate::theme::px(list + quote, self.zoom)
+        list + 2 * crate::tags::quote_indent_px(quote_depth, self.zoom, m)
     }
 
     pub(super) fn end_offset(&self) -> i32 {

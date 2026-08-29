@@ -23,7 +23,7 @@ layout, or scrolling code.
 
 Refer to it **by name only, never by a filesystem path** — it may not be installed
 on the machine this repo currently lives on, so a path would rot. If it is
-unavailable, the `sdd/ANTI-PATTERNS.md` stubs (root cause + citations inline) plus
+unavailable, the `sdd/ANTI-PATTERNS.md` stubs (implementation pointer + citation) plus
 this repo's git history (which holds the original self-contained essays) carry
 enough to proceed. The two registers' citation convention (`ScrAP-N` here vs `AP-N`
 in the skill) is under **Task triggers** below.

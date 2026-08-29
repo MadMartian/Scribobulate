@@ -20,6 +20,7 @@
 /// asserted without standing up a view (`sdd/POLICY.md` § coverage gate — extract the
 /// decision core; F-TAGS-001).
 mod spec;
+pub(crate) use spec::{list_indent_px, quote_indent_px};
 
 use crate::config::config;
 use crate::palette::{to_hex_opaque, Palette};
@@ -526,9 +527,10 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // depth's margin with no per-line depth arithmetic anywhere (TDD 2.11b).
     //
     // At depth 1 this is byte-identical to the single `blockquote` tag it replaced.
-    let bq_step = px(metrics.blockquote_bar_width + metrics.blockquote_text_gap);
     for depth in 1..=MAX_QUOTE_DEPTH {
-        let indent = bq_step * i32::from(depth);
+        // Through `spec` so the renderer's anchored-child inset reads the SAME arithmetic
+        // (rounding included) rather than reconstructing it — see `spec::quote_indent_px`.
+        let indent = spec::quote_indent_px(i32::from(depth), zoom, metrics);
         add(TagName::Blockquote { depth }.name(), &move |t| {
             t.set_left_margin(view_lm + indent);
             t.set_right_margin(view_rm + indent);
@@ -583,7 +585,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     // marker centres on the text BELOW this gap.
     let li_gap = px(metrics.list_item_gap);
     for depth in 1..=MAX_LIST_DEPTH {
-        let indent = px((depth as i32) * metrics.list_step);
+        let indent = spec::list_indent_px(depth as i32, zoom, metrics);
         add(TagName::ListItem { depth, cont: false }.name(), &|t| {
             t.set_accumulative_margin(true);
             t.set_left_margin(indent);
