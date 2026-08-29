@@ -8,7 +8,7 @@
 | 4 | Editing & saving | 4.1 – 4.9 |
 | 5 | Reconciliation (conflict handling) | 5.1 – 5.4 |
 | 6 | Resource footprint (viability gate) | 6.1 – 6.5 |
-| 7 | Window & layout | 7.0b – 7.18 |
+| 7 | Window & layout | 7.0b – 7.21 |
 | 8 | Single-instance lifecycle | 8.1 – 8.7 |
 | 9 | Menu bar, toolbar, and actions | 9.1 – 9.36 |
 | 10 | Markdown formatting commands | 10.1 – 10.20 |
@@ -226,6 +226,18 @@
 - **When** it is rendered
 - **Then** **every** line of the quote — first, middle, last, and every wrapped continuation — sits at the same left inset past the accent bar, at any window width; no line collapses toward the bar (regression guard for the GtkTextView `one_style_cache` dropped-margin artifact — the tag is applied per line, content-only, ScrAP-76)
 
+### 2.11b A nested blockquote gets its own bar and its own indent
+- **Given** a blockquote containing a further `>` level (and a third below that), including one whose inner quote is followed by more outer-level content
+- **When** it is rendered, and separately exported to HTML and PDF
+- **Then** **each nesting level draws its own accent bar** at its own left offset, and every level's bar is visible **simultaneously** — the outer bar runs the full height of the outer quote, past the inner region rather than stopping where the inner one begins
+- **And** each level's bar **starts and ends on that level's own text** — a nested bar begins level with the first line the nested level itself contributes, never reaching up over the parent's preceding line or the blank line separating them
+- **And** the quoted text steps in by exactly one level's worth per depth, on **both** sides (a blockquote sets a left *and* a right margin), with every wrapped continuation line at its own level's inset — 2.11a holds per level, not only at depth 1
+- **And** the per-level indent is carried by the **depth's own tag**, exactly as `li-{depth}` carries `depth · list_step`: one quote tag per logical line, holding that line's full depth, rather than one tag per level accumulating onto each other. That keeps the quote's margin out-prioritising a code block's inside it, which is why the quote tag is registered where it is and must stay non-accumulative (ScrAP-121, GTK4Rs/AP-96) — and a **list inside a quote** still nests correctly, because `li-{depth}` is accumulative and adds onto whichever quote depth is the line's base
+- **And** the **background does not nest**: `blockquote_bg` paints ONE continuous panel over the outermost quote and every level inside it inherits that fill (operator, 2026-08-28). Depth is carried by the bars alone, so 18.29's single-panel contract is unchanged and an inner level never paints a second fill over its parent's
+- **And** depth is **clamped at `MAX_QUOTE_DEPTH`** (6, mirroring `MAX_LIST_DEPTH`): past the cap a level renders at the cap's indent and bar rather than stepping further, so a pathologically nested document still opens and stays responsive (1.4b) and can never narrow the content column to nothing nor push the preview over-wide (2.2·a11y)
+- **And** a **sprite-tiled** bar (18.28) tiles per level, each keeping the document-anchored phase, so the levels cannot drift against one another while scrolling
+- **And** a **single-level** quote is byte-identical to before this rubric existed
+
 ### 2.10 Block separation after tables
 - **Given** a Markdown table followed immediately by a heading or paragraph
 - **When** it is rendered
@@ -327,6 +339,14 @@
 - **And** a swipe that begins *and* ends inside one link's caption (selecting the caption to copy it) likewise does not activate it — travelling further than the desktop's drag threshold makes it a drag, not a click
 - **And** an ordinary click — press and release on the same link without dragging — activates it exactly as before (2.6, 2.17, §19)
 - **And** the same rule holds for every pointer affordance the panes draw themselves: a gutter task checkbox (2.4), a right-margin comment marker (§17) and a code block's copy button (2.3b) each require their press and release to land on the same one, so a selection drag that happens to end over any of them leaves it alone
+
+### 2.24a A press inside an existing selection belongs to the drag, not to the affordance under it
+- **Given** a selection in the preview that covers a pointer affordance — a link, a right-margin comment marker, a gutter task checkbox, or a code block's copy button
+- **When** the reader presses inside that selection, on the affordance
+- **Then** the affordance does **not** activate: the click clears the selection instead, and the next click on it behaves normally (2.24). One wasted click, self-correcting, nothing at risk
+- **And** this is **GTK's behaviour, deliberately left in place, not a defect of this application**: `gtk_text_view_click_gesture_pressed` claims the sequence for its own drag gesture on any single non-touch press whose iter lies inside the selection, in order to start a drag-and-drop, and it does so unconditionally rather than gated on the view being editable. A claim sets `DENIED` on every other gesture handling that sequence, `DENIED` is terminal, and it is **not** a cancellation — so the application's gesture receives `pressed` and then neither `released` nor `cancel`, which is why the click cannot be observed at all rather than merely arriving late (the same arbitration wall as ScrAP-142; measured on an instrumented build against GTK 4.6.9)
+- **And** it is **priced and deliberately not worked around**: claiming the sequence ourselves is the only way to out-rank GTK's claim, and it would buy this one self-correcting click at the cost of the case it steals — a press over an affordance would no longer be available to begin a selection drag, and because intent is unknowable at the moment the claim must be made, a press that *did* become a drag would end in nothing happening at all. A silent no-op that fixes itself is the better of the two silences
+- **And** the rule does not reach a press **outside** the selection: that press is the application's as usual, and 2.24's complete-click contract governs it
 
 ### 2.22 Hovering a link reveals its target
 - **Given** a rendered document containing a hyperlink whose caption differs from its URL
@@ -709,6 +729,8 @@
 - **Given** the user has scrolled partway through a document in one view mode
 - **When** they switch to another mode (preview, edit, or side-by-side)
 - **Then** the new view stays at approximately the same relative position rather than jumping back toward the top
+- **And given** the user repeats the mode round trip several times
+- **Then** the reading position does not accumulate — after several round trips it is still within tolerance of where it started, not several steps away from it, and in particular has not been walked to the end of the document
 - **And given** side-by-side split with a document of uneven block heights (headings/code/tables mixed with prose)
 - **When** the user scrolls either pane
 - **Then** the other follows so the **same document position** stays aligned across both panes (the heading/line at the top of one is at the top of the other) — **line-accurate**, not merely the same 0–1 fraction, which drifts when a source line renders taller than the next; typing (which re-renders the preview) neither breaks the alignment nor blanks the preview
@@ -821,6 +843,12 @@
 - **And** the tabs that were already there stay evenly spaced, whatever changed their widths earlier in the session
 
 ---
+
+### 7.21 A freshly opened document puts the working position at its beginning
+- **Given** a document is opened, restored from the previous session, or reloaded from disk
+- **When** it is first shown in the editor — by the view-mode action, the toolbar button, or session restore
+- **Then** the caret sits at the beginning of the document, and the footer's line/column indicator reads the first line
+- **And** the outline sidebar highlights the document's first section, not its last
 
 ## 8. Single-instance lifecycle
 
@@ -2202,6 +2230,9 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** an open document rendered under System
 - **When** the user selects Sepia
 - **Then** the preview repaints book-like — an off-white yellowish page, a serif body face, and body text in black or a soft brown — in the same window, without re-reading the file from disk and without losing the reading position
+- **And given** the window has other tabs open, including one the user has never activated
+- **When** the user switches to any of them afterwards
+- **Then** that tab shows the newly selected theme in full — page, ink and typeface together — never the new page under the previous theme's ink, and without needing a second theme change to correct it
 
 ### 18.4 The theme reaches everything the preview draws
 - **Given** a document containing a blockquote, inline code, a fenced code block, a link, a table, an image, a horizontal rule, and an annotation
@@ -2352,6 +2383,8 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** a theme setting a sprite image for the blockquote accent bar (theme-relative, validated the same way every sprite key is)
 - **When** a blockquoted document is rendered, and separately exported to HTML and PDF
 - **Then** the bar fills with the sprite tiled at its natural size in place of the flat `blockquote_bar_color` colour
+- **And** the tile grid is anchored to the **document**, not to the viewport: scrolling a quote taller than the pane moves the pattern with the quoted text by the same number of pixels, and the grid does not re-phase at the moment the quote's top leaves the pane. (A viewport-anchored grid leaves the tiles nailed to the screen while the text slides underneath — the defect the flat bar could never show, since a flat fill carries no phase)
+- **And** the tile is not sliced along the bar's left edge: the grid's horizontal anchor is the bar's own left edge, so a decoration that does not begin on a tile boundary still shows whole tiles across the bar's width
 - **And** omitted, the bar stays the flat themed colour exactly as today
 
 ### 18.29 A theme can give a blockquote its own background and ink

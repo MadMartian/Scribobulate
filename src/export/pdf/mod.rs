@@ -67,28 +67,6 @@ const BASE_PT: f64 = 11.0;
 /// Space between blocks, in points.
 const BLOCK_GAP_PT: f64 = 6.0;
 
-/// How thick a horizontal rule is drawn, in points.
-///
-/// **A named const rather than a themed metric, and the reason is that there is nothing to
-/// theme it FROM.** The preview renders its rule as a `GtkSeparator` whose thickness comes
-/// from GTK's own CSS, not from a `metrics` key — so there is no existing key for this sink
-/// to read, and inventing one here would give the two surfaces separate sources for one
-/// decoration, which is precisely what POLICY's "one theme key, every application path" rule
-/// forbids. Closing this properly means adding the key AND routing the preview's separator
-/// through it, in one change; until then a named constant states the value once instead of
-/// burying it in a `cr.rectangle` call.
-///
-/// The genuine defect here was the WIDTH, which was the literal `400.0` — a fixed length
-/// that over- or under-ran the margin depending on page setup and nesting depth. That is now
-/// derived from the page and the block's own indent, matching what the preview does when it
-/// insets a nested rule by its enclosing content margin.
-///
-/// **The gap narrowed when `rule_sprite` landed.** A tiled rule takes its height from the
-/// tile's own pixels, so the FLAT rule is now the only rule on either surface whose
-/// thickness no theme can state — the argument above still holds, but it now excuses one
-/// case out of two rather than the whole decoration.
-const RULE_THICKNESS_PT: f64 = 0.75;
-
 /// Pango's numeric weight for normal text, named because a bare `400` in a font
 /// descriptor reads as a magic number.
 const PANGO_WEIGHT_NORMAL: i32 = 400;
@@ -125,15 +103,31 @@ pub(crate) struct Line {
 
 /// Which blockquote a line belongs to, and where that quote's own column starts.
 ///
-/// One value per `Block::Quote` in document order; a nested quote gets its own, so its
-/// lines report the INNER quote, which is what has always been drawn for them.
+/// One value per `Block::Quote` in document order. A line reports its INNERMOST quote,
+/// and `depth` plus `root` are what let the painter reconstruct the rest of the ancestry
+/// without the line carrying a list of them.
 #[derive(Clone, Copy)]
 struct QuoteRef {
-    /// Distinct per blockquote, in document order. Compared, never counted.
-    id: u32,
     /// Where this quote's own content starts, in points from the page margin — already
     /// bounded to the page by `indent_on_page`, exactly as a line's own indent is.
     indent: f64,
+    /// 1-based nesting depth of THIS quote. Every level steps the indent in by the same
+    /// `quote_step_pt()`, so an enclosing level `k` steps out sits at
+    /// `indent - k * step` — which is how one bar per level gets drawn on every line
+    /// inside them (TDD 2.11b) from a single ref, rather than the innermost bar alone
+    /// and the outer ones breaking wherever a nested quote interrupts them.
+    depth: u8,
+    /// Identity of the OUTERMOST quote this one belongs to: a fresh id at depth 1,
+    /// inherited unchanged by every level inside it. **This is the whole identity a
+    /// painter needs**, which is why the per-quote `id` it replaced is gone rather than
+    /// kept beside it.
+    ///
+    /// The block-gap correction compares this: two adjacent lines at different depths of
+    /// one quote tree are still the same quote to a reader, so comparing a per-LEVEL id
+    /// there would open a seam in the outer bar and the panel at every nesting boundary.
+    /// Two genuinely separate quotes one blank line apart still differ here, which is
+    /// the case that comparison exists for. Compared, never counted.
+    root: u32,
 }
 
 /// A fill painted behind one line: a sprite tiled across it, or the flat/gradient
@@ -345,7 +339,11 @@ impl Line {
             "{kind}|{:.3}|{:.3}|{:?}|{}|{}",
             self.indent,
             self.height,
-            self.quote.map(|q| (q.id, q.indent)),
+            // Every field of the ref, enumerated: this digest is a guard, and a field
+            // it cannot see is a field a change can move without the guard going red
+            // (ScrAP-325). `depth` and `root` decide how many bars get drawn and where
+            // the panel starts, so both belong here beside the indent.
+            self.quote.map(|q| (q.root, q.depth, q.indent)),
             self.fill
                 .as_ref()
                 .map(|f| format!("{}/{:.3}", wash_digest(&f.wash), f.padding))

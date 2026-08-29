@@ -40,12 +40,13 @@ impl Renderer {
             Tag::BlockQuote(_) => {
                 if self.blockquote_depth == 0 {
                     self.block_sep();
-                    // Blockquote content now flows into the buffer as normal text +
-                    // tags (selectable, links work, no anchored widget to churn —
-                    // GTK4Rs/AP-23). Record where it starts; the range is closed and the
-                    // `blockquote` indent tag applied at the matching TagEnd.
-                    self.blockquote_start = Some(self.end_offset());
                 }
+                // Blockquote content flows into the buffer as normal text + tags
+                // (selectable, links work, no anchored widget to churn — GTK4Rs/AP-23).
+                // EVERY level records where it starts, not just the outermost: each one
+                // closes into its own span so it can draw its own accent bar at its own
+                // offset (TDD 2.11b). Innermost is last, so the matching TagEnd pops.
+                self.blockquote_starts.push(self.end_offset());
                 self.blockquote_depth += 1;
             }
             Tag::List(start) => {

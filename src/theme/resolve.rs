@@ -148,6 +148,7 @@ impl Theme {
                 heading_space_above: src.ints(&keys::HEADING_SPACE_ABOVE),
                 heading_band_radius: src.ints(&keys::HEADING_BAND_RADIUS),
                 heading_band_padding: src.ints(&keys::HEADING_BAND_PADDING),
+                rule_thickness: src.int(&keys::RULE_THICKNESS),
                 blockquote_bar_width: src.int(&keys::BLOCKQUOTE_BAR_WIDTH),
                 blockquote_text_gap: src.int(&keys::BLOCKQUOTE_TEXT_GAP),
                 list_step: src.int(&keys::LIST_STEP),

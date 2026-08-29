@@ -40,6 +40,9 @@ pub(crate) fn re_render_all_windows(app: &Application) {
         // Sweep EVERY tab in the window, not just the
         // active one — a background tab must not keep showing the old theme's
         // colours until the user happens to switch to it.
+        // Which tab is showing. Every OTHER tab is re-armed rather than trusted
+        // (see below), so this is read once per window rather than per tab.
+        let active = crate::winstate::state(app_win).map(|st| st.id);
         for st in crate::winstate::tabs_for_window(app_win) {
             crate::window::apply_editor_style_scheme(&st.editor_buf, dark);
             // Re-render each tab's preview IN PLACE (reusing the SplitView's
@@ -51,11 +54,32 @@ pub(crate) fn re_render_all_windows(app: &Application) {
             // scroll-spy / split-sync handlers valid (same preview widget, no
             // rewire). A no-op for edit-mode tabs (no preview to re-theme).
             let mode = st.view_mode.get();
-            if mode.is_preview_visible() {
+            if !mode.is_preview_visible() {
+                continue; // edit-mode tab: no preview to re-theme
+            }
+            if Some(st.id) == active {
                 let zoom = st.chrome().zoom_level.get();
                 let allow_unsafe = st.allow_unsafe_images.get();
                 rerender_tab_preview_in_place(&st, mode, zoom, allow_unsafe);
+                continue;
             }
+            // A BACKGROUND tab is re-armed, not re-rendered in place: drop its
+            // preview and mark it deferred, so it is rebuilt from scratch under
+            // the new theme by the same path a never-yet-shown tab takes.
+            //
+            // Re-rendering it in place looks equivalent and is not. It is correct
+            // headlessly — three separate driven shapes of the background-tab
+            // scenario all come out with the right ink — and wrong on a real
+            // compositor, where the tab takes the new page fill and keeps the
+            // PREVIOUS theme's ink, leaving body text near-white on a light page.
+            // Re-arming sidesteps the question of why: a tab that is rebuilt on
+            // the way in cannot be showing a theme it was never rendered under,
+            // whatever the cascade did to the widget it used to hold. It is also
+            // cheaper — nothing is rendered for a tab the user may never open —
+            // and the pump below restores the warmth that buys back.
+            st.split.set_preview(None);
+            st.needs_render.set(true);
+            st.chrome().tabs.set_tab_busy(&st.content_box, true);
         }
         connect_buf_to_copy_action(app_win);
         // The preview buffer (and its heading offsets) was just rebuilt — refresh
@@ -71,6 +95,9 @@ pub(crate) fn re_render_all_windows(app: &Application) {
         // Keep the theme-button label in step with the (possibly just-switched) theme.
         crate::window::refresh_theme_button(app_win);
     }
+    // Warm every tab just re-armed above, one per timer tick, so a background tab
+    // is ready before the user reaches it. Idempotent and self-stopping.
+    crate::window::start_deferred_prerender_pump(app);
 }
 
 // ── application wiring ────────────────────────────────────────────────────────
@@ -391,4 +418,78 @@ pub(super) async fn recover_if_cold_start(app: &Application, cold_start: bool) {
         return;
     }
     crate::window::recover_after_restore(app).await;
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+    use crate::winstate;
+
+    /// **TDD 18.3: a live theme change reaches a tab that has never been shown.**
+    ///
+    /// A background tab used to be re-rendered IN PLACE by the sweep, which is
+    /// correct headlessly — three separately driven shapes of this scenario all
+    /// produced the right ink — and wrong on a real compositor, where the tab took
+    /// the new page fill and kept the PREVIOUS theme's ink, leaving body text
+    /// near-white on a light page. Because the defect is invisible to this harness,
+    /// asserting the *colour* here would pass on the broken code and guard nothing.
+    ///
+    /// So this asserts the MECHANISM the fix installs instead: after a theme
+    /// change, a non-active preview tab holds no preview and is marked for a fresh
+    /// render, so whatever it is later shown with was rendered under the new theme
+    /// by construction. That is checkable headlessly and is exactly what the
+    /// pre-fix code did not do.
+    #[gtktest::test]
+    fn a_theme_change_re_arms_every_background_tab_rather_than_re_rendering_it() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.themerearm"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        crate::theme::set_active("system");
+        let window = crate::window::new_window(&app, "IT", "# A\n\nbody prose", None);
+        let tab_a = winstate::state(&window).expect("tab A");
+        let b_id =
+            crate::window::create_tab_in_window(&window, "# B\n\nbody prose", None, false, false)
+                .expect("tab B");
+        let tab_b = winstate::tab_by_id(b_id).expect("tab B state");
+
+        // Resolve which tab is ACTIVE rather than assuming: creating a tab also
+        // shows it, so the newcomer is the foreground one and the FIRST tab is the
+        // background one this test is about. Asserting the roles the wrong way
+        // round passes for the wrong reason, which is how this test first failed.
+        let active = winstate::state(&window).expect("some tab is active");
+        let background = if active.id == tab_b.id { tab_a } else { tab_b };
+        let tab_b = background;
+        assert!(
+            tab_b.split.preview_scroller().is_some(),
+            "precondition: the background tab starts WITH a preview, or this test \
+             is asserting against the deferred case it does not mean to cover"
+        );
+        assert!(
+            !tab_b.needs_render.get(),
+            "precondition: and is not already deferred"
+        );
+
+        crate::theme::set_active("sepia");
+        re_render_all_windows(&app);
+
+        assert!(
+            tab_b.needs_render.get(),
+            "the background tab must be re-armed by a theme change, so it is rebuilt \
+             under the new theme on the way in rather than re-rendered in place"
+        );
+        assert!(
+            tab_b.split.preview_scroller().is_none(),
+            "and its stale preview must be released — a retained one is what kept \
+             showing the previous theme's ink on a real compositor"
+        );
+        // The ACTIVE tab is still re-rendered eagerly: it is on screen, so deferring
+        // it would show the user the old theme until they touched something.
+        assert!(
+            !active.needs_render.get() && active.split.preview_scroller().is_some(),
+            "the active tab must be re-rendered in place, never re-armed"
+        );
+    }
 }

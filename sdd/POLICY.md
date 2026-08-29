@@ -108,9 +108,12 @@ Before any change is considered valid, run these steps in order:
    `Gtk-CRITICAL`, and `G_DEBUG=fatal-criticals` promotes it. The failure names
    accessibility and is not about accessibility, is not about the change under test,
    and reproduces identically on an untouched tree — so it costs a control build to
-   disbelieve, every time, unless it is written down. Run the step under
-   `dbus-run-session`, which lets at-spi autolaunch on a bus of its own; the contract
-   command is unchanged, only the bus around it. On the operator's live session the
+   disbelieve, every time, unless it is written down. **The runner now handles this** —
+   `scripts/run-integration.sh`, which the contract points step 5 at on Linux, wraps the
+   suite in `dbus-run-session` so at-spi autolaunches on a bus of its own. This paragraph
+   used to instruct the reader to do that by hand, with nothing in the toolchain doing it,
+   so every caller either supplied the wrapper themselves or ate the SIGTRAP; the helper's
+   header records what else it owns and why none of it fits on a command line. On the operator's live session the
    other repair is `systemctl --user restart at-spi-dbus-bus.service`, which is needed
    when the unit reports `active (running)` while its socket no longer exists —
    `org.a11y.Bus.GetAddress` then returns an address for a socket that is not there,
@@ -565,6 +568,17 @@ every line as portable unless it lives in a platform seam (§ Platform seams).
   pipeline's path-legality gate exists because one illegal character blocks every
   Windows clone of the tree). Where a facility is genuinely absent, that is a platform
   seam, not an `#[cfg]` sprinkled through shared code.
+- **Line endings are a property of the DOCUMENT, not of the host.** A CRLF file opens
+  on Linux and an LF file opens on Windows, so never branch on the platform to decide
+  what a line separator is, and never assume the host's convention for text this
+  application did not write. The one rule the project holds about the shape a buffer may
+  take is `lineendings.rs`'s — applied at the doors documents arrive by and never at a
+  parse site — so do not re-derive it at a third site. Code downstream of that may depend
+  on a separator being exactly `"\n"`, but **only where the code that EMITTED it is in
+  view** (the preview renderer's own `newline()` is the standing case). Say so at the
+  site and pin it with a test that renders the CRLF twin and compares: without one, the
+  next reader cannot tell a measured invariant from an unexamined platform assumption,
+  and neither can the seat asked to ratify it.
 - **A capability a test needs may be unavailable rather than absent.** Skip loudly
   through the project's one skip marker so the run reports the limb as unverified — never
   let a guard compile to an empty passing function on the platform that most needs it.
@@ -1016,6 +1030,32 @@ diffing the trees, not by trusting a record of what was picked** (`git diff HEAD
 -- <paths>` before deleting a branch), because a seat that is still working moves the target
 under a confirmation that was accurate when it was sent.
 
+## One commit per batch
+
+**A batch of debt-register work lands as exactly one commit on the integration branch, or it
+has not landed.** A batch is a set of issues sharing a mechanism, a fixture or a verification
+rig — they are fixed together or not at all — so develop on a `feature/<batch>` branch with as
+many working commits as the work wants, then land with `git merge --squash` and one commit
+whose message names the batch and enumerates what it closes. Never fast-forward a batch
+branch, and never cherry-pick half of one.
+
+The reason is what a *published* revision is for. Splitting a batch into several commits
+publishes intermediate states in which the mechanism is half-replaced — the old hand-off gone
+and the new one not yet read by every consumer — and those are exactly the revisions a
+`git bisect` lands on and a peer seat fetches mid-flight. One commit per batch keeps every
+revision on the branch a state the whole batch's tests describe.
+
+**A group of issues that merely shares a SUBSYSTEM is not a batch.** The test is a shared
+mechanism, fixture or verification rig; two issues in one file that need two different
+mechanisms are two batches. Stated because the subsystem reading is the tempting one and it
+produces batches that cannot land as one commit.
+
+**A batch that will not fit one commit is not one batch** — that is the signal to re-cut it,
+not to relax the rule. Two mechanisms wearing one batch's name is the thing this prevents.
+Seat branches (§ Cross-machine seat branches) are unaffected: a seat's branch is integrated
+into the batch branch and the squash carries it, so its work reaches the integration branch
+inside the batch's single commit rather than beside it.
+
 ## SDD register writes
 
 `sdd/ANTI-PATTERNS.md` and `sdd/ISSUES.md` have **one writer**. When work is split
@@ -1067,6 +1107,23 @@ caught it, which is the gate working, not friction to route around.
 
 ## Prohibited actions
 
+- **Never run `git checkout` against a FILE or a path.** Not to revert a mutation, not
+  to undo an experiment, not to "clean up" a scratch edit. It overwrites the working tree
+  from the index and there is **no way back**: no reflog entry, no stash, no dangling
+  object, nothing. Every other destructive git operation this project might reach for
+  leaves a recovery path; this one does not.
+  **MEASURED 2026-08-28**, and it cost real work: a seat mid-way through a multi-file
+  change used `git checkout src/tags.rs` to back out a one-line *mutation test*, and
+  discarded the entire uncommitted implementation in that file along with it — twice, in
+  two files, before noticing. The mutation run that followed then reported the guard as
+  PASSING, because what it was actually exercising was the reverted build (the ScrAP-239
+  family: a control run silently driving the wrong artefact). The work was only
+  recoverable because the patches happened to still be readable in that session's
+  transcript, which is luck, not a procedure.
+  **Instead: copy the file aside first** (`cp src/x.rs /tmp/x.rs.good`) and restore with
+  `cp`. It is one extra command, it is reversible, and it does not care whether the file
+  had other uncommitted work in it. The same goes for reverting a whole experiment: prefer
+  a copy or an explicit reverse edit over asking git to erase a file you have not committed.
 - Do not use `sudo` in build, test, or run commands — the agent cannot enter a
   password and the command will hang. If a system development library is
   missing, ask the human to install it (e.g. via a `!`-prefixed session command).

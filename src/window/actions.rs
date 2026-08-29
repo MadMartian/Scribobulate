@@ -631,6 +631,21 @@ pub(crate) fn load_into_editor(buf: &sourceview::Buffer, text: &str) {
     buf.begin_irreversible_action();
     buf.set_text(&text);
     buf.end_irreversible_action();
+    // Put the caret at the START of the load baseline (TDD 7.21).
+    //
+    // `gtk_text_buffer_set_text` deletes then inserts, and the insert mark ends up
+    // at the END of the inserted text — so without this line every freshly loaded
+    // document opens with its working position on the last line. MEASURED: a
+    // 27-line document reports `Ln 28, Col 1` the instant it loads, and the outline
+    // sidebar follows the caret there and highlights the last heading, actively
+    // misreporting where the reader is.
+    //
+    // It has to be HERE rather than at each of the routes in (the view-mode action,
+    // the toolbar button, session restore, live reload, swap recovery), because the
+    // caret is not misplaced by any of them — it is misplaced by the `set_text`
+    // above, which is the one thing they all share. A caller wanting a different
+    // caret sets one after; none currently does.
+    buf.place_cursor(&buf.start_iter());
 }
 /// Re-bind the copy action to the now-active text view after a content swap.
 ///
@@ -682,6 +697,64 @@ mod gtk_integration_tests {
         assert!(
             !buffer.can_undo(),
             "a file load is a baseline, never an undoable edit"
+        );
+    }
+
+    /// **TDD 7.21: a freshly loaded document puts the caret at its START.**
+    ///
+    /// `gtk_text_buffer_set_text` deletes then inserts, and the insert mark ends up
+    /// at the END of the inserted text — so before the `place_cursor` in
+    /// `load_into_editor` every document opened with its working position on the
+    /// last line, and the outline sidebar followed it there and highlighted the last
+    /// heading. MEASURED pre-fix: a 27-line document reported `cursor-position=207`,
+    /// line 27 (0-based) of a 28-line buffer, i.e. the `Ln 28, Col 1` the defect was
+    /// reported as.
+    ///
+    /// Asserted on the BUFFER rather than through a window, because that is where
+    /// the defect lives: it is not specific to any route into edit mode (the action,
+    /// the toolbar, session restore and live reload all reproduced it identically),
+    /// since none of them places the caret — they all share this one `set_text`.
+    #[gtktest::test]
+    fn a_freshly_loaded_document_leaves_the_caret_at_its_start() {
+        let body: String = (1..=27).map(|n| format!("line {n}\n")).collect();
+        let buffer = sourceview::Buffer::new(None);
+        load_into_editor(&buffer, &body);
+
+        let pos = buffer.property::<i32>("cursor-position");
+        assert_eq!(
+            pos,
+            0,
+            "the caret must be at the start of a load baseline, not wherever \
+             set_text parked it (buffer holds {} chars over {} lines)",
+            buffer.char_count(),
+            buffer.line_count()
+        );
+        assert_eq!(
+            buffer.iter_at_offset(pos).line(),
+            0,
+            "and therefore on the FIRST line — the outline reads this to decide \
+             which heading to highlight"
+        );
+        // The control the assertion above needs to mean anything: the buffer really
+        // did receive a long document, so `0` is a placed caret and not an empty
+        // buffer's only possible answer.
+        assert_eq!(
+            buffer.line_count(),
+            28,
+            "27 lines plus the trailing empty one"
+        );
+    }
+
+    /// The placement must not land on the undo stack, and must not cost the load
+    /// baseline its irreversibility — a caret move is not an edit, but it is applied
+    /// next to `begin/end_irreversible_action` and could be dragged inside it.
+    #[gtktest::test]
+    fn placing_the_caret_at_load_leaves_nothing_to_undo() {
+        let buffer = sourceview::Buffer::new(None);
+        load_into_editor(&buffer, "# Title\n\nprose\n");
+        assert!(
+            !buffer.can_undo(),
+            "a file load is a baseline, and placing its caret does not make it an edit"
         );
     }
 

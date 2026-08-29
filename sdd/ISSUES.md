@@ -14,28 +14,28 @@ FIX it** — a workaround may exist, but the repair is not ours to make, so an `
 entry is not work waiting to be scheduled here. It is orthogonal to severity: an `Upstream`
 entry can still be the worst thing in the register.
 
+**Read an entry sceptically before building on it.** Across the five batches that emptied
+this register down from eighteen entries, **four** recorded root causes were measured and
+found WRONG, and three entries turned out not to be defects at all — one whose stated worry
+was structurally impossible while a different, real defect sat underneath it, reachable only
+because the reproduction was built anyway. An entry is a report plus somebody's best
+inference at the time, and the inference ages worse than the symptom. Reproduce first; fix
+the thing you measured, not the thing that was written down.
+
+**One defect can be filed twice.** A missing reading position, seen from two ends, was
+carried here as two unrelated entries and was nearly fixed twice before anyone noticed they
+were one thing. Before opening work on an entry, scan the others for the same mechanism
+described from a different vantage point.
+
 | ID | Platform | Scope | Issue | Severity |
 |----|----------|-------|-------|----------|
 | A | Any | Upstream | Tables are selection islands; cells are individually selectable but not part of the continuous buffer | Closed |
 | B | Any | Production | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
-| C | Linux | Production | A running instance doesn't repaint when the desktop switches dark↔light on KDE/X11; the new scheme only applies on restart | Low |
 | D | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
-| E | Any | Production | A click that lands *inside* an existing preview selection never reaches the pane's own click affordances — the first click on a link/marker/checkbox under a selection does nothing | Low |
 | F | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in roughly one full run in four, at a varying site | Medium |
 | G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
-| M | Any | Project | `sprite::scaled`'s per-`(path, width, height)` texture cache has no eviction policy | Low |
-| N | Any | Production | A long heading overflows the preview pane horizontally instead of wrapping to it | Low |
-| P | Any | Production | A multi-paragraph blockquote's accent bar draws as one continuous rect per span, unconfirmed for every span shape a blockquote can produce | Low |
-| R | Any | Production | Pixel Quest's `link_color` and `list_task_color` sit below their legibility floor and are carried as named exceptions the operator intends to revisit, not as settled choices | Low |
-| S | Any | Project | The horizontal rule's thickness is the one styling value no theme can state — a literal in the PDF sink and the separator's own CSS default on screen | Low |
-| T | Any | Production | A live theme change never reaches a tab that has not been activated yet — its page fill updates, its ink and face do not | Medium |
-| U | Any | Production | The caret sits on the document's LAST line the first time the editor view is materialised, and the outline follows it there | Medium |
-| V | Any | Production | The reading position drifts by one block on every view-mode round trip, cumulatively | Medium |
-| W | Any | Production | The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`, so both shipped washes print as flat colour | Low |
-| X | Any | Production | The find bar's "current match" indicator drops on an in-session edit (any mode); self-heals on the next Next/Prev — the originally-reported stronger form did not reproduce | Low |
-| Y | Any | Production | In Edit/Split mode, a search match inside annotated text is counted but its "all matches" highlight is invisible, buried under the annotation's own tag | Medium |
 
 ## A. Tables are selection islands
 
@@ -161,72 +161,6 @@ A related, rarer edge: `x\^2\^` (escaped literal carets) cannot be distinguished
   boundary explicit — it blesses the plain `~~struck~~` case as a contract and scopes
   the wrapping case (`~~a **bold** b~~`) OUT as this accepted limitation.
 
-## C. Live desktop dark↔light toggle doesn't repaint a running instance on KDE/X11
-
-**Severity**: Low (cosmetic; the new scheme applies on the next launch, and users
-rarely retheme mid-session — but a visible inconsistency with libadwaita/Qt apps,
-which *do* update live)
-
-With the app's reading theme left on **System**, switching the KDE global colour
-scheme from dark to light (or back) while an instance is running leaves that
-instance's chrome unchanged; the new scheme is only picked up when a fresh instance
-launches. Confirmed on the operator's live KDE/X11 session (2026-07-19): a running
-window stayed dark across a desktop dark→light switch, while a freshly-launched
-instance rendered light. Native GNOME/libadwaita and Qt/KDE apps repaint live under
-the same toggle, so the gap is app-visible.
-
-**Root cause is a propagation-channel gap, not a missing feature.** The app already
-wires a live-update path: it subscribes to `GtkSettings` `gtk-application-prefer-dark-theme`
-and `gtk-theme-name` notifications and, on either, re-probes the desktop colours and
-re-renders every window. The failure is upstream of that handler — KDE-on-X11 does
-**not** push a live colour-scheme change through the **XSettings** channel that backs
-those `GtkSettings` properties, so the notify never fires on a running client (a fresh
-launch reads the current value once, which is why restart works). The apps that update
-live listen on a *different* channel: the XDG desktop portal signal
-`org.freedesktop.portal.Settings` → `SettingChanged("org.freedesktop.appearance",
-"color-scheme")` (libadwaita's `AdwStyleManager` watches exactly this). Scribobulate is
-pure gtk4-rs (no libadwaita), so it isn't listening there.
-
-**The detection channel is now researcher-confirmed (2026-07-19, empirically on the
-operator's own KDE/X11 box).** `xdg-desktop-portal-kde` 5.27.11 is installed, running,
-and routed (`kde-portals.conf`: `org.freedesktop.impl.portal.Settings=kde`); a direct
-`gdbus call … Settings.Read org.freedesktop.appearance color-scheme` returns the live
-value. Its source derives `color-scheme` from Qt's `paletteChanged` (no X11/Wayland
-branch) and `Q_EMIT`s `SettingChanged`, so the scheme rides the **portal**, exactly
-what libadwaita/Qt watch and what our `GtkSettings`/XSettings handler cannot see. The
-signal is `SettingChanged(namespace s, key s, value v)` on the session bus at
-`org.freedesktop.portal.Desktop` `/org/freedesktop/portal/desktop`, iface
-`org.freedesktop.portal.Settings`; value maps `0=no-preference, 1=dark, 2=light`. A
-version gotcha for the *initial* read: `Read` double-wraps the variant and `ReadOne`
-(single-wrap) exists only at interface **version ≥ 2** (xdg-desktop-portal ≥ 1.18);
-the operator's box is version 1, so the initial read needs a double-unwrap (the
-`SettingChanged` signal is single-wrapped on every version).
-
-**Two gates remain before the fix can be committed (both need the operator's live
-session — a `gdbus monitor --session --dest org.freedesktop.portal.Desktop` while
-flipping the scheme):**
-1. Confirm the live *push* actually fires (the static `Read` only proves the value is
-   readable; the go/no-go is watching `SettingChanged` arrive on the toggle).
-2. **Whether the app's existing re-render even reflects the new scheme once the signal
-   fires.** The desktop-dark truth comes from `palette::desktop_is_dark()`, which
-   probes `GtkStyleContext` colours — and on KDE/X11 *those are also stale* on a live
-   flip (GTK never reloads the KDE theme without the XSettings/portal push). So the
-   portal handler must likely use the signal's `color-scheme` value **directly** as the
-   desktop-dark truth (overriding the stale probe) rather than re-probing; and the
-   GTK-themed chrome (editor/toolbar, rendered by the KDE Breeze GTK CSS) may still not
-   follow live without forcing a GTK theme reload — the reading-area palette we control
-   can, the base-theme chrome is the open question. Confirm on the live session which
-   surfaces actually switch before deciding whether the fix is "preview follows" or
-   "everything follows".
-
-**Mitigation options**:
-- **Subscribe to the XDG desktop-portal `color-scheme` signal** (gio `DBusProxy` on the
-  session bus, no new deps) alongside the two existing `GtkSettings` subscriptions, and
-  on change drive the desktop-dark truth from the signal value + re-render. Gate on the
-  two live checks above.
-- **Accept the limitation**: the scheme applies on the next launch, users seldom
-  retheme mid-session, and nothing is broken — only slower to follow than native apps.
-
 ## D. A large document pegs a CPU core at ~100% while idle (GTK/Pango relayout loop that never converges)
 
 **Severity**: High (the symptom is a full CPU core held at ~100% **indefinitely while idle**,
@@ -306,7 +240,17 @@ without debug support, so every informational `GTK_DEBUG`/`GDK_DEBUG`/`GSK_DEBUG
 debug-enabled GTK loaded ahead of the distribution one; `sdd/PLAN.profiling.md` records the
 cost and the alternatives.
 
-**Mitigation options**:
+**PREREQUISITE — [`sdd/PLAN.profiling.md`](PLAN.profiling.md) is implemented FIRST, not
+alongside** (operator, 2026-08-28). This entry is the one place in the register with no
+oracle: the trace says where the CPU goes and not what keeps scheduling the pass, the
+`GTK_DEBUG=geometry` key that would answer it is dark on this host, and every mitigation
+below opens with "take several samples". Doing that with ad-hoc instrumentation is how the
+work becomes open-ended — which is why the budget for it has to be agreed up front. Build
+the instrument, then aim it. The plan is also the place that records what a debug-enabled
+GTK costs, so the decision about whether to pay it is made once, in the open, rather than
+midway through a bisect.
+
+**Mitigation options** (all of them assume the instrument above exists):
 - **Root-cause the driver** (recommended; not yet done): take several samples to confirm the
   loop consistently sits in shaping/layout — `perf record` against the unstripped debug binary
   gives named application frames today, with no change to the tree, and is the substitute for
@@ -321,52 +265,6 @@ cost and the alternatives.
 - **Accept the limitation**: not viable long-term — an idle full-core spin on the product's own
   primary use case (large agent-generated documents) defeats the negligible-footprint thesis the
   project exists to honour.
-
-## E. A click inside an existing selection never reaches the preview's click affordances
-
-**Severity**: Low (one wasted click, self-correcting — the click clears the selection and
-the next one works; no data at risk)
-
-With text selected in the preview, a primary click whose press lands **inside** that
-selection does not activate the affordance under it: a link does not open, a margin
-comment marker does not open its card, a gutter checkbox does not toggle, a code block's
-copy button does not copy. The click clears the selection instead, and a second click
-behaves normally.
-
-**Measured, and pre-existing.** Reproduced identically on the binary from before the
-complete-click fix (ScrAP-238) and on the one after, under Xvfb: press+release on a
-fragment link with a selection covering it produced no scroll on either build, while the
-same click with nothing selected navigated on both. So the seam that now pairs press with
-release neither introduced nor addresses it.
-
-**Cause — measured, then traced to the two lines that implement it.** Instrumented build,
-Xvfb: on the swallowed click the app's gesture receives `pressed` and then **nothing** — no
-`released`, and no `cancel` either, which is why it fails silently.
-
-`gtk_text_view_click_gesture_pressed` (`gtktextview.c`, GTK 4.6.9) handles a single
-non-touch press whose iter lies inside the selection by claiming the sequence for its own
-drag gesture — *"Claim the sequence on the drag gesture, but attach no selection data,
-this is a special case to start DnD"* — unconditionally, not gated on the view being
-editable. A claim denies every other gesture handling that sequence, and
-`gtk_gesture_click_end` (`gtkgestureclick.c`) emits `released` only
-`if (current == sequence && state != GTK_EVENT_SEQUENCE_DENIED && interpreted)`. DENIED is
-terminal (the same arbitration wall issue A documents), and it is not a cancellation, so
-no `cancel` fires to tell the app anything happened.
-
-So the release is not late or misrouted — GTK deliberately withholds it, and the app's
-affordance cannot observe the click at all.
-
-**Mitigation options**:
-- Claim the sequence ourselves on a press that lands on an affordance — **priced and not
-  recommended**. It is the only way to out-rank GTK's claim, and it buys one click at the
-  cost of the case it steals from: a press on a link is then no longer available to start
-  a drag, so dragging the selection (GTK's DnD) from a point that happens to sit over a
-  link stops working, and — since intent is unknowable at press time — a press that does
-  turn into a drag would end in nothing happening at all, which is worse than today. The
-  press cannot be disambiguated at the moment the decision must be made.
-- Leave it, which is the standing choice: the failure is one wasted click that fixes
-  itself, and every route past it trades a silent no-op for a silent loss of the drag.
-
 
 ## F. A GTK4/Quartz autorelease-pool crash intermittently SIGABRTs the macOS integration suite
 
@@ -635,349 +533,3 @@ here because this entry exists in order to be deleted when the defect is fixed, 
 evidence must outlive it. Do not restate its figures here; several carry caveats that do not
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
-
-## M. `sprite::scaled`'s texture cache has no eviction policy
-
-**Severity**: Low. Inert today — every current call site (list-marker sprites, the
-heading-band tiled sprite) resolves at a small, bounded set of sizes per document —
-but the cache itself does not know that, and would silently misbehave for a future
-caller that doesn't share the property.
-
-`sprite::scaled`'s `RESAMPLED` thread-local (`src/sprite.rs:113-114`) is keyed by
-`(PathBuf, width, height)` and only ever grows — nothing evicts an entry or bounds
-the cache's size. The first decoration that scales a sprite to a *continuously
-variable* dimension (a rect that tracks a resizable pane width, for instance, rather
-than a marker size or a tile's natural size) would mint a new cached texture on
-every intermediate width during a drag, retaining all of them for the process's
-life.
-
-**Mitigation options**:
-- Bound the cache (LRU with a small cap) before any call site scales to a
-  window-derived or otherwise continuously-variable dimension.
-- Accept the limitation until such a call site actually exists — nothing today
-  triggers it — and note the constraint at `sprite::scaled`'s call sites as they're
-  added, so a future author checks before assuming any size is safe to pass.
-
-## N. A long heading overflows the preview pane horizontally instead of wrapping
-
-**Severity**: Low. Reproduces identically under System with no theme keys set, so it
-predates all theming work — surfaced incidentally while driving TDD 18.25's heading
-band, not caused by it.
-
-At a narrow pane width (measured at 700×1000 with the outline sidebar open), a
-sufficiently long heading extends past the preview pane's right edge instead of
-soft-wrapping to it, while body paragraphs at the same width wrap correctly. Not
-investigated further — possibly related to the outline/split-pane sizing
-interaction named in ScrAP-23a's neighbourhood, but that is a guess, not a finding.
-
-**Mitigation options**:
-- Reproduce deliberately (a document whose only content is one long heading, at a
-  matrix of pane widths and outline-open/closed states) to isolate whether it is
-  heading-specific or a wrap-mode/minimum-width issue shared with any single
-  long unbreakable run.
-- Accept the limitation until reproduced deliberately — a control run is not yet a
-  diagnosis.
-
-## P. A multi-paragraph blockquote's bar continuity is unconfirmed for every span shape
-
-**Severity**: Low. A flat colour never made a discontinuity visible; TDD 18.28's
-textured bar (a tiled sprite) would.
-
-The blockquote accent bar is drawn as one rect per recorded span
-(`codeview/mod.rs`), which is correct for the common case, but it was not
-re-verified against every shape a blockquote's span can take (nested quotes,
-a quote interrupted by a non-quote block, quotes separated by a blank line)
-while adding the sprite-tile option. A flat-colour bar hides a small vertical
-gap between two spans that should read as one continuous quote; a tiled
-texture would show a visible seam or restart.
-
-**Mitigation options**:
-- Render each of the span shapes above under a sprite-backed `blockquote_bar`
-  and confirm the tile continues (or deliberately restarts) consistently.
-- Accept the limitation until a real document surfaces a visible seam.
-
-## R. Pixel Quest's link and task-marker inks are provisional exceptions, not settled ones
-
-**Severity**: Low. Both are legible enough to use and both have a second, non-colour
-signal carrying their meaning — the link's underline is held to the graphic floor, and
-the task marker's glyph carries taken-or-not. Neither is a blocker; the debt is that
-they occupy a permanent-looking slot in a list of decisions while actually awaiting one.
-
-`src/theme/tests/contrast.rs`'s `DELIBERATE` allow-list names five pairings that sit below
-the floor TDD 18.8 holds their role to. Three are settled: Terminal's `rule_color` (ANSI 8
-grey on true black — correcting it stops it being ANSI 8, operator-accepted 2026-08-27),
-and Bedtime's `mark_fg` and `rule_color` (that theme's palette is owned by a different
-operator and is not this project's to retune). **Pixel Quest's two are not settled** —
-the operator's ruling on 2026-08-27 was "we'll address those later", which is a different
-statement from the reasons recorded beside the other three, and the list as written cannot
-tell them apart.
-
-The risk is the one TDD 18.8's own last clause describes from the other direction: a named
-exception is a licence, and a licence inherited by a future reader reads as a decision
-somebody made rather than one somebody postponed.
-
-**Mitigation options**:
-- Retune Pixel Quest's `link_color` and `list_task_color` to clear their floors and delete
-  both rows — the arcade look is the constraint to preserve, and the page's low ceiling for
-  light inks is what makes it hard, so this is a palette question rather than a code one.
-- Retune only `list_task_color` (the newer of the two, changed 2026-08-26) and keep the link
-  as a period-look exception with its reason unchanged.
-- Accept both permanently: rewrite the two rows to state a settled reason and close this.
-
-## S. The horizontal rule's thickness is the one styling value no theme can state
-
-**Severity**: Low. Every rule still draws, at a sane weight, on both surfaces. The gap is
-that TDD 25.9 requires every colour, typeface and decoration metric in an exported artefact
-to resolve through the theme engine, and this one does not.
-
-`RULE_THICKNESS_PT = 0.75` (`src/export/pdf/mod.rs`, read at `pdf/ink.rs`) is a literal, and
-the preview's flat rule is a stock `GtkSeparator` taking its own CSS default. The rule's
-colour, its spacing and — since TDD 18.31 — its sprite tiling are all themeable; its weight
-alone is not.
-
-The sprite-tiled rule narrowed this rather than causing it: a tiled rule takes its tile's own
-height, so a theme that states `rule_sprite` already controls the weight implicitly. The flat
-rule is now the only rule, on either surface, whose thickness cannot be stated.
-
-**The two halves are not independently valid.** Adding a `rule_thickness` metric key without
-routing the preview's separator through it gives one decoration two sources of truth on two
-surfaces, which POLICY's "one theme key, every application path" exists to prevent — and a
-PDF that obeys a key the screen ignores is worse than one where neither does, because only
-the first looks correct in a review.
-
-**Mitigation options**:
-- Add a `rule_thickness` metric key and route BOTH the PDF sink and the preview separator's
-  generated CSS through it, in one change.
-- Derive the flat rule's thickness from an existing metric rather than minting a key — the
-  vocabulary is already large, and a weight that tracks something the theme already states
-  may be preferable to a knob nobody turns.
-- Accept it: a theme wanting a specific rule weight can state `rule_sprite` and get it from
-  the tile.
-
-## T. A live theme change never reaches a tab that has not been activated yet
-
-**Severity**: Medium. The document is still readable — the page takes the new fill — but
-it is readable in the wrong ink and the wrong face, which reads as a rendering fault
-rather than as a stale tab. It does not heal: switching away and back leaves it wrong, and
-only a second theme change repairs it.
-
-Reproduced from clean state with no user themes file. Open two documents in one window
-without activating the second, select a theme, then switch to the second tab: its page
-background is the new theme's, its body ink is pure black and its face is the desktop
-sans. Two discriminators bound it — activating both tabs *before* the switch leaves both
-correct, and launching with the theme already in `session.toml` leaves the late tab
-correct. So the fault is specific to a **live** switch reaching a view that does not exist
-yet.
-
-The fill and the ink land on the two different CSS nodes the preview splits a page across,
-which is the obvious place to look: one node is being restyled on the live path and the
-other is not.
-
-**PRE-EXISTING, measured.** Reproduced identically on a binary built at this branch's own
-merge-base, pixel-identical across five captures. Not caused by the decoration work.
-
-**Mitigation options**:
-- Make the live theme-change path restyle every node it owns, for views not yet built as
-  well as those already realised.
-- Make a view adopt the current theme at materialisation time rather than relying on having
-  received the change, so the two paths converge on one answer.
-- Accept it: a user who switches theme and then visits an untouched tab sees it wrong once
-  per switch.
-
-## U. The caret sits on the document's last line when the editor view is first materialised
-
-**Severity**: Medium. Nothing is lost and `Ctrl+Home` clears it, but the working position
-is wrong the moment the editor appears, and the outline highlights the last heading to
-match — so the sidebar actively misreports where the user is.
-
-A 27-line document that fits entirely on screen, opened in preview and switched to edit,
-scrolls nowhere and yet reports `Ln 28, Col 1`. Reproduced on three routes into edit mode —
-the action, the toolbar button, and session restore — and on three documents of different
-lengths, each time landing on that document's own last line. The scroll position restores
-correctly; only the caret is at the far end.
-
-The signature matches the known GTK trap where a line-for-coordinate query against a view
-that has not been allocated answers the last line, which would explain the cold case. It
-also reproduces **warm** (preview → edit → preview → edit), which that explanation does not
-cover, so the warm path needs its own account before either is fixed.
-
-**PRE-EXISTING, measured.** Identical on a binary built at this branch's merge-base.
-
-**Mitigation options**:
-- Defer the caret placement until the view has an allocation, and establish separately why
-  the warm path lands in the same place.
-- Place the caret from the restored reading position explicitly rather than letting it fall
-  out of a coordinate query.
-
-## V. The reading position drifts one block per view-mode round trip
-
-**Severity**: Medium. Each round trip is a small correction the reader can undo, but it
-**accumulates**: three preview↔split trips walk the position through three consecutive
-blocks and it never returns.
-
-Switching preview → split → preview moves the reading position by one block, and repeating
-the round trip moves it again in the same direction. The edit round trip drifts the
-opposite way.
-
-**Record the magnitude as one block, not as pixels.** The figure first measured (~90 px)
-is exactly one section block in the fixture that produced it, and the drift's *direction*
-proved fixture-dependent — a 40-section fixture drifted forward where a shorter one drifted
-back. The same binary produced two different sequences across two runs, varying by one to
-two outline rows. Whatever this is, it is quantised to blocks and is not deterministic in
-pixels, so a pixel-valued regression guard would be flaky by construction.
-
-Fails TDD 7.5's "stays at approximately the same relative position", and takes 12.13 with
-it, since the entry re-selected after a mode switch is chosen from the drifted position.
-
-**PRE-EXISTING, measured.** The same drift sequence appears on a binary built at this
-branch's merge-base.
-
-**Mitigation options**:
-- Carry the reading position across a mode switch as a document position resolved once,
-  rather than re-deriving it from each view's geometry on the way in and out — the round
-  trip is losing precision at both ends.
-- Establish first why the two directions differ; a fix that assumes one direction will move
-  the other trip further.
-
-## W. The HTML export drops the alpha of `mark_bg` and `annotation_hl_color`
-
-**Severity**: Low. Both keys still export and both still read; they print as a flat colour
-where the theme asked for a wash, so a highlight covers the text it was meant to tint.
-
-Two of the roughly twenty-five colour sites in the HTML sink convert through the opaque
-projection rather than the RGBA one, so `#ff000044` exports as `background: #ff0000`. It
-needs no override to fire: both shipped defaults are deliberately translucent
-(`#fff59d_88`, `#FFD133_61`), so every export of a document with a `==mark==` or an
-annotation already shows it. The PDF sink keeps the alpha, so the two exports of one
-document disagree.
-
-**PRE-EXISTING, measured.** The exported declarations are byte-identical on a binary built
-at this branch's merge-base; the same opaque call sits at both revisions.
-
-**Mitigation options**:
-- Route both sites through the RGBA projection, and add a guard that the two export sinks
-  agree on a translucent key — the divergence between them is the part no single-sink test
-  can see.
-- Make the opaque projection unreachable from the sink where alpha is meaningful, so the
-  wrong conversion cannot be spelled rather than merely being corrected here.
-
-## X. The find bar's "current match" indicator drops on an in-session edit, in every mode
-
-**Severity**: Low (revised down from Medium after reproduction — see below; the
-gap is real but self-heals on the very next Next/Prev press, not on reopening the
-bar)
-
-Operator-reported: with the find bar open, altering the document leaves stale
-highlights and a Next/Prev that neither scrolls nor highlights, recoverable only
-by closing and reopening the bar.
-
-**Driven live (Xvfb + openbox, release build) across the three plausible mutation
-paths and the reported strong form did NOT reproduce.** Fixture: a document with a
-repeated body term ("bodyneedle", 3 occurrences), a task checkbox, and a comment
-annotation, opened `-n` under a private display.
-
-- **Preview mode, task-checkbox toggle** (a same-buffer edit at a location that
-  does not overlap the current match): the "1 of 3" current-match selection, the
-  yellow all-matches tags, and Next/Prev cycling all stayed correct through the
-  toggle — no staleness.
-- **Preview mode, creating a new annotation** (via the selection→Annotate→comment
-  flow, which inserts a margin-marker anchor and shifts every later offset): the
-  current-match GRAY selection dropped to plain yellow immediately after — but
-  this is confounded by the annotation flow's OWN selection (drag-selecting the
-  annotated phrase necessarily replaces whatever was previously selected, which is
-  what the current-match indicator *is*). Pressing Next afterward landed correctly
-  on the third occurrence at its new (shifted) offset — the hit list rebuilt
-  correctly against the mutated buffer.
-- **Split mode, typing directly into the editor** (`window::livepreview::wire_live_preview`'s
-  debounce path, editor is the find target here per `find_target`): typing a new
-  line above the matches dropped the current-match indicator (expected — typing
-  moves the caret) but a subsequent Next correctly found the first occurrence at
-  its shifted line/column and re-highlighted it.
-
-**What IS confirmed, and is milder than reported**: any caret-moving action
-(a click, a drag-select, typing) collapses whatever "current match" selection was
-showing, because that selection is the *only* mechanism marking the current
-match — nothing re-asserts it until the next Next/Prev press. This is normal
-text-buffer behaviour (selecting or typing elsewhere always abandons a prior
-selection) rather than a find-specific defect, and CAM.md's Derived-view CAM row 7
-column-A obligation is met on the very next find action, not left broken until the
-bar is closed and reopened.
-
-**The originally reported strong form (Next/Prev itself broken; scroll frozen;
-fixed only by closing the bar) is UNCONFIRMED** after this pass. Candidates not yet
-ruled out: a timing race with the 300 ms Split-mode live-preview debounce
-(`window::livepreview::wire_live_preview` → `preview::re_render`) that a
-scripted, instant edit can't hit; a real-compositor/KDE-specific rendering gap
-invisible under Xvfb+openbox (per GTK4Rs skill AP-56, a clean Xvfb result doesn't
-clear the compositor/WM class of bug); or an interaction sequence not yet tried.
-
-**Mitigation options**:
-- Ask the operator for the exact steps (view mode, what kind of edit, whether the
-  find bar had focus) before spending more engineering time on a hypothesis three
-  reproduction attempts didn't support.
-- If reproduced live, re-drive the same scenario under Xvfb first to rule the
-  timing race in or out.
-- Independent of the above: make the current-match indicator survive an
-  intervening caret move (re-select the current hit's range after any buffer
-  change while find stays open), which would close the milder, confirmed gap
-  either way.
-
-## Y. In Edit/Split mode, a match inside annotated text is counted but invisible
-
-**Severity**: Medium (a real match that reads as "not found" — the operator's own
-description, "find seems to ignore annotated text", because the one cue a user
-watches, the highlight, never appears, even though the count and Next/Prev both
-work correctly underneath)
-
-Operator-reported: find does not match a query term that only occurs inside text
-carrying a comment annotation, in a table cell or in body text.
-
-**Reproduced and root-caused, in Edit/Split mode specifically** (Xvfb + openbox,
-release build; fixture: a body phrase and a table-cell phrase each wrapped in a
-`{==…==}{>>…<<}` annotation). Screenshot-confirmed, in the editor pane:
-
-- The match COUNT is correct (`GtkSourceSearchContext` reports it, e.g. "1
-  matches"/"1 of 1") and Next/Prev correctly selects it (`buf.select_range`, a real
-  buffer selection, not a tag).
-- The "all matches" highlight — the cue the operator is watching for — never
-  appears over the annotated span. An identical, unannotated match ("bodyneedle")
-  highlights yellow the instant it's typed, with no Enter needed; the annotated
-  one ("annotneedle"/"cellannotneedle") never gets a visible tint, typed or not.
-- The CURRENT-match selection (a different rendering path — an actual buffer
-  selection, not a tag) *does* show over annotated text, which is why the count
-  and cycling "work" while the highlight silently doesn't — two independent
-  mechanisms, one broken.
-
-**Root cause, source-confirmed**: `tags.rs:435-436` explicitly raises the
-`AnnotationHighlight` `GtkTextTag` to the tag table's highest priority
-(`table.size() - 1`) — deliberately, per its own comment, so an annotation's wash
-"is always visible, even over a span that carries its own opaque background"
-(inline code). GTK text-tag backgrounds do not alpha-composite; the
-highest-priority tag's background wins outright and every lower one is painted
-over — the exact GTK4Rs/AP-84 shape. `GtkSourceSearchContext`'s own "all matches"
-style is a tag in that *same* editor buffer's tag table, added independently of
-this reassertion, so wherever `AnnotationHighlight` sits above it, the search
-tag's background is buried the same way inline code's would have been —
-`AnnotationHighlight`'s fix for one collision (AP-84 vs. code spans) creates the
-identical collision against the search engine's own tag.
-
-**Preview mode does NOT reproduce this** — confirmed on the same fixture. The
-preview's own highlighting (`window::find::apply_preview_highlights`) composes
-its overlay directly (a buffer tag for body text; a Pango `AttrColor` layered on
-top of the cell's markup for table cells) rather than going through
-`AnnotationHighlight`'s tag-table priority, so both body and cell annotated
-matches highlight correctly there, current and non-current alike.
-
-**Mitigation options**:
-- Give the editor's search-match tag priority above `AnnotationHighlight` — set it
-  explicitly after `GtkSourceSearchContext` creates it (or re-raise
-  `AnnotationHighlight` to sit just below whatever `GtkSourceSearchContext` uses,
-  never above it), rather than pinning `AnnotationHighlight` to an unconditional
-  max.
-- Or drop the editor-buffer annotation wash to a lower, code-span-only priority
-  and give the code-span tag the max slot only when no search is active — more
-  invasive, and reintroduces the case tags.rs's reassertion exists to prevent
-  unless done carefully.
-- Either way, add a regression check pinning the ORDER (tag-priority comparison,
-  not just a pixel diff — this is invisible to `compare -metric AE` on a
-  screenshot without a fixture as deliberate as the one used here).

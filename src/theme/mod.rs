@@ -59,6 +59,10 @@ pub(crate) use decor::{
     MarkerSubstitute,
 };
 pub(crate) use keys::{heading_slot, BULLET_TIERS, HEADING_LEVELS};
+/// Re-exported for tests that build a translucent key by hand; production reaches
+/// `ThemeColor` through the resolved `Theme`, never by naming the type.
+#[cfg(test)]
+pub(crate) use model::ThemeColor;
 pub(crate) use model::{ListGlyphs, Metrics, Sprites, Theme};
 pub(crate) use spec::ThemeSpec;
 pub(crate) use value::{

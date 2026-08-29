@@ -481,6 +481,10 @@ never reused; a deleted entry keeps its `## N.` heading forever.**
 | 329 | A gate read through a PIPE reports the pipe's LAST stage, so `$?` after `gate | tail` is tail's verdict — and it agreed with a floor set from the wrong summary column | B |
 | 330 | A seam that EXISTS is not a seam that is CALLED — a debt closed on the seam's existence, while the one consumer the debt was about still bypassed it | B |
 | 331 | A vocabulary rename that reaches a SELECTOR produces a well-formed rule matching nothing, and no assertion over generated rule TEXT can tell the two apart | B |
+| 332 | Re-styling a BACKGROUND view in place is correct headlessly and wrong on a real compositor — rebuild it on the way in instead of proving why | A |
+| 333 | A repeating pattern anchored to a viewport-CLAMPED extent is pinned to the screen, not the document — the clamp is right for every position-invariant draw and wrong for the one that carries a phase | A |
+| 334 | A desktop-wide repaint failure reproduced in an UNRELATED application is upstream — the expensive platform seam it invites is the wrong response, and nothing in our own code says so | C |
+| 335 | A generated stylesheet GTK REFUSES loads silently — `load_from_data` has no failure path, and the guard that could see it was scoped to the one property with an accessor | A |
 
 
 Stub legend: **Symptom** (one line) · **Scribobulate** (the project's implementation pointer) · **See** (skill module, and findings doc where one exists).
@@ -4423,3 +4427,63 @@ D and E are the load-bearing arms. D is clean because `static_type()` registers 
 **Scribobulate**: the table-cell link selectors (`src/preview/css.rs`) name GTK's own `link` class on `GtkLinkButton`, not this project's `link_color` key; the constant carries a warning saying so, because the two are one blanket rename apart. Pinned by a guard that reads the button's resolved colour off a constructed cell.
 
 **See**: kin — ScrAP-132 (a guard whose input set is narrower than its hazard). The GTK-side facts underneath this (which class `GtkLinkButton` carries, and that `color` inherits to its caption while `text-decoration-*` does not) are routed to the `gtk4-rs` skill separately; the lesson here is about renaming across a namespace boundary, which is not a GTK lesson.
+
+## 332. Re-styling a background view in place, and trusting a headless run to prove it
+
+**Symptom**: after a live reading-theme switch, a tab the user has never activated shows the
+new theme's **page fill** with the **previous** theme's **ink and typeface** — on a dark
+desktop switching to a light theme, near-white body text on a cream page, barely readable.
+It does not self-heal on a tab switch; only a *second* theme change repairs it. The active
+tab is always correct, which makes it read as a rendering fault in one tab rather than as a
+theming bug.
+
+**Why it resisted diagnosis**: it does not reproduce headlessly. Three separately driven
+Xvfb shapes of the same scenario — a deferred tab activated after the switch, a tab
+pre-rendered by the prerender pump and left in the background, and the pump sequence run end
+to end — all produced the **correct** ink (Sepia's `#5b4636` and its Charter stack, identical
+to the active tab). The defect appears only under a real compositor, which is
+GTK4Rs/AP-56's class. A code reading produced a confident and **wrong** suspect first: the
+sweep's silent early return for a tab with no preview scroller is real, but harmless, because
+such a tab still carries `needs_render` and is rendered against the current theme when it
+materialises.
+
+**What makes it hard to reason about**: the ink (`textview.scrib-preview { color; font-family }`)
+and the fill (`> text { background-color }`) are emitted by `preview::css::theme_css` into
+**one** provider and installed by **one** `load_from_data`. Any explanation of "the sheet did
+not reach the widget" has to account for half of it arriving. The mechanism is still not
+established, and this entry deliberately does not guess at one.
+
+**Scribobulate**: `app::setup::re_render_all_windows` re-renders only the **active** tab in
+place; every other preview-visible tab has its preview released and `needs_render` set, then
+`start_deferred_prerender_pump` warms them. A tab that is rebuilt on the way in cannot be
+showing a theme it was never rendered under, whatever the cascade did to the widget it used
+to hold — so the corrective does not depend on the mechanism being known. It is also cheaper
+than the in-place sweep (nothing is rendered for a tab the user may never open). Guard:
+`a_theme_change_re_arms_every_background_tab_rather_than_re_rendering_it`, which asserts the
+**mechanism** and not the colour — a colour assertion passes on the broken code here, so it
+would guard nothing. Rubric TDD 18.3; MANUAL-TEST §18.3b carries the live check and says why
+it cannot be automated.
+
+**The transferable half**: when a defect is invisible to the harness, an assertion over the
+*symptom* is worthless and an assertion over the *corrective's mechanism* is not. Reach for a
+repair whose correctness is structural — "it cannot be stale because it is rebuilt" — rather
+than one that needs the mechanism understood, and pin the structure. The alternative is
+spending the investigation budget proving why a cascade misbehaves on one windowing system in
+order to justify a fix that is cheaper than the investigation.
+
+## 333. A repeating pattern anchored to a viewport-CLAMPED extent is pinned to the screen, not the document
+**Symptom**: a theme's tiled sprite behind a decoration stays nailed to the screen while the text scrolls underneath it, and the tile grid re-phases the moment the decoration's own top leaves the pane — MEASURED on the blockquote bar as a bar column pixel-identical (AE=0) across a 176px scroll while the text column at the same rows differed by over 22,000 pixels.
+**Scribobulate**: `widgets::tile_texture` anchors the grid at `(rect.x(), 0.0)` for every caller (`codeview::quotes::draw_accent_bar`, `codeview::bands::draw`, `widgets::rule`) instead of taking a per-site `TileOrigin` whose two answers were both wrong and whose own docs asserted the opposite of what each did; guarded by `widgets::tile_tests::the_tile_grid_is_anchored_at_the_rects_x_and_the_document_origin` (mutation-checked on each axis singly), TDD 18.28's two anchor clauses and MANUAL-TEST 18.28's scroll case. The project-specific half: `codeview::geometry::span_card_y_extent`'s viewport clamp is CORRECT for every position-invariant consumer (the quote panel fill, the flat bar, the band fill) and wrong for the one that carries a phase — one extent, one more consumer than it was designed for, and nothing in its type says which kind a caller is.
+**See**: gtk4-rs skill → textview-layout-and-drawing (GTK4Rs/AP-315).
+
+## 334. A repaint failure that also happens in an unrelated application is upstream, and the platform seam it invites is the wrong response
+**Symptom**: on a KDE/X11 desktop, toggling the system dark↔light theme leaves parts of the application drawn in the previous scheme until something forces a repaint. It reads exactly like a defect in this project's own theme fan-out, and it is not: the same failure occurs on the same desktop in an unrelated GNOME application that shares none of this code.
+**Scribobulate**: NOT fixed, and deliberately not investigated further (operator, 2026-08-28). The remedy it invites is a new `src/platform/linux/` portal seam to observe the desktop's appearance signal directly, which is a real module with a real maintenance cost, built to work around somebody else's bug. The cheap disproof is the one that is easy to skip: reproduce the symptom in an application that is not yours before writing any code, because a desktop-wide fault and an application fault present identically from inside the application.
+**See**: kin to the `Upstream` scope rule in `sdd/ISSUES.md`'s header, which exists for the same reason — an upstream defect is not work waiting to be scheduled here. Not a gtk4-rs lesson: the mechanism is a desktop/compositor one, and the transferable half is the DISPROOF METHOD rather than anything about GTK.
+
+## 335. A generated stylesheet GTK refuses loads silently, and the guard that could see it was scoped to one property
+**Symptom**: under one theme only, links inside table cells lost their underline while the identical link in body prose kept it. Nothing failed: the sheet loaded, the app started, 1600+ tests stayed green, and the defect reached the operator, who reported it from the screen.
+**Root cause, project half**: two sibling helpers in the shared CSS-fragment module return different GRANULARITIES — one a bare keyword, one a complete declaration with its own leading space and trailing semicolon — and the call site concatenated them into a single declaration's VALUE. Their names do not say which is which, and only the themes that state a non-default value make the difference observable, so the trap is invisible until a theme file changes. The GTK half (`load_from_data` reports failure only through `parsing-error`, and drops the bad declaration while keeping the rule) is routed to the skill.
+**Why the existing guards missed it**: every assertion over these rules reads the generated TEXT, and the malformed string still `contains` each fragment such a test looks for (the #331 lesson, a second time and from the other direction: 331's rule matched nothing, this one was rejected outright). The resolved-style guard #331 introduced is the right technique and DID cover these very selectors — for `color` only, because gtk4-rs exposes no style-context accessor for `text-decoration-*`. That hole was stated in the guard's own doc comment and handed to a manual pixel check, which was never re-run when a builtin theme later took up the non-default value. **A coverage hole a guard documents is still a coverage hole**, and pairing it with a manual check only defers the failure to whoever forgets to run it (kin: ScrAP-132, a guard whose input set is narrower than its hazard).
+**Scribobulate**: the whole declaration is spliced after the preceding semicolon, never into a value (`preview::css::theme_css`). Every builtin theme's sheet is now loaded into a real `CssProvider` with `connect_parsing_error` armed first, and any error fails the test naming the theme and quoting GTK's own words (`preview::css::tests::parses`); mutation-checked in both directions. This is a VALIDITY guard and does not replace the resolved-style one — a rule GTK accepts can still match nothing.
+**See**: gtk4-rs skill → theming-and-css (GTK4Rs/AP-316); kin — ScrAP-331 (the same stylesheet, the same blind text assertions, the other failure axis), ScrAP-132.

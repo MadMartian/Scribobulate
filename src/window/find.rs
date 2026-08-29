@@ -1083,6 +1083,81 @@ mod gtk_integration_tests {
     use crate::codeview::CodePreviewView;
     use crate::preview::cell_search_targets;
     use gtk::prelude::*;
+    use sourceview::prelude::*;
+
+    /// **An annotated match is highlighted exactly like an unannotated one, in the
+    /// editor pane** (TDD 11.x, Edit/Split find).
+    ///
+    /// A defect was filed saying a search term occurring only inside `{==…==}`
+    /// annotated text was counted but never visibly highlighted in Edit/Split, and
+    /// root-caused to `tags::setup_tags_with_theme` raising `annotation-highlight`
+    /// to the tag table's top priority and burying `GtkSourceSearchContext`'s own
+    /// match tag. **That root cause does not hold**: `setup_tags_with_theme` runs on
+    /// the PREVIEW buffer only, so the editor's tag table contains no
+    /// `annotation-highlight` tag to bury anything with — measured, the editor's
+    /// table holds two anonymous GtkSourceView tags and nothing else. The symptom
+    /// does not reproduce either, on the tag level here or visually in a driven
+    /// Xvfb run of both Edit and Split.
+    ///
+    /// This pins the behaviour so it cannot regress quietly: both matches must carry
+    /// the same highlight tag with the same background. Asserting only that the
+    /// annotated match is *found* would miss the reported symptom entirely — the
+    /// count was always right; it was the tint that was said to be absent.
+    #[gtktest::test]
+    fn an_annotated_match_carries_the_same_search_highlight_as_a_plain_one() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.annotfind"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let md = "# T\n\nplain bodyneedle here.\n\n{==annotneedle inside==}{>>a note<<}\n";
+        let window = crate::window::new_window(&app, "IT", md, None);
+        crate::window::change_action_state(&window, "view-mode", &"edit".to_variant());
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(300),
+        );
+        let st = crate::winstate::state(&window).expect("tab state");
+        st.search_context.set_highlight(true);
+
+        let mut seen: Vec<(String, Option<gtk::gdk::RGBA>)> = Vec::new();
+        for term in ["bodyneedle", "annotneedle"] {
+            st.search_settings.set_search_text(Some(term));
+            crate::testpump::drain_for(
+                crate::testpump::Clock::Frame,
+                std::time::Duration::from_millis(200),
+            );
+            let start = st.editor_buf.start_iter();
+            let (ms, _me, _) = st
+                .search_context
+                .forward(&start)
+                .unwrap_or_else(|| panic!("{term} must be found at all"));
+            let bg = ms
+                .tags()
+                .into_iter()
+                .find(|t| t.property::<bool>("background-set"))
+                .map(|t| t.property::<Option<gtk::gdk::RGBA>>("background-rgba"))
+                .unwrap_or(None);
+            seen.push((term.to_string(), bg));
+        }
+
+        let (plain_term, plain_bg) = &seen[0];
+        let (annot_term, annot_bg) = &seen[1];
+        assert!(
+            plain_bg.is_some(),
+            "control: the UNANNOTATED match {plain_term} must carry a highlight \
+             background, or this test cannot tell a missing tint from a harness \
+             that never highlights anything"
+        );
+        assert_eq!(
+            annot_bg, plain_bg,
+            "the annotated match {annot_term} must be tinted exactly like the plain \
+             match {plain_term} — a match that is counted but not visibly marked \
+             reads to the user as 'find ignores annotated text'"
+        );
+        window.destroy();
+    }
 
     /// A body mention of "cell" plus a one-row table whose cell also says "cell", so
     /// find highlights BOTH a buffer body match and a `GtkLabel` cell match.

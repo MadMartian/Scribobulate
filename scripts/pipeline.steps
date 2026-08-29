@@ -268,6 +268,19 @@ cmd.windows skipreport  cargo test -- --nocapture
 # are private and unbound, and masking that domain would also silence a latent defect in the
 # same file at the version macOS ships (ScrAP-318).
 #
+# LINUX DELEGATES TO `scripts/run-integration.sh`, for the same reason step 6 delegates to
+# `scripts/coverage.sh`: the step owns three things a command line cannot carry, and the
+# helper's header is the authority on all three. In short — it ARMS `dbus-run-session`,
+# which POLICY has prescribed since it was measured and which this contract's command did
+# NOT run, so the instruction lived in prose and every caller either supplied it by hand or
+# ate a SIGTRAP before the first test (the same unarmed-gate failure this very step records
+# two paragraphs up about `G_DEBUG=fatal-criticals`, committed again one line below it). It
+# keeps the crowd of bus-activated daemons OFF the caller's stdout, without which the
+# pipeline hangs a reader forever on a PASSING run — measured at 70 minutes against a
+# pipeline that finished in 12. And it BOUNDS the run, so a wedged suite reports as a wedge
+# rather than as a slow pass. The `G_DEBUG=fatal-criticals` and `xvfb-run -a` above are
+# unchanged; they moved into the helper, they did not go away.
+#
 # THE DEATH CODE DIFFERS BY PLATFORM AND A FAILURE IS EASY TO MISREAD. A promoted critical
 # kills the process via `G_BREAKPOINT()`, which is `SIGTRAP` (exit 133) on Linux and
 # `0xC0000409 STATUS_STACK_BUFFER_OVERRUN` — Windows' fast-fail — under MSVC, where the
@@ -278,7 +291,7 @@ step   5  integration
 intent integration  The GTK integration suite passes against a real display, through Cargo so the [env] pins apply
 verdict integration  exit
 class  integration  required
-cmd.linux   integration  G_DEBUG=fatal-criticals xvfb-run -a cargo test --features gtk-integration-tests
+cmd.linux   integration  scripts/run-integration.sh
 cmd.macos   integration  cargo test --features gtk-integration-tests --test gtk_suite --test icon_resolution --test macos_dark_mode --test popover_deferred_focus
 cmd.windows integration  G_DEBUG=fatal-criticals cargo test --features gtk-integration-tests -- --test-threads=1
 disarm.macos integration  permanent  G_DEBUG=fatal-criticals is absent from the macOS command above, and this line is why: GDK's Quartz backend freezes a surface once per CONSTRUCTION and thaws once per MAP, and gdk_macos_surface_hide never freezes, so the second map thaws at zero and the suite emits gdk_surface_thaw_updates assertions on every popover open or dismiss. Present 4.22.4 through main; the freeze/thaw pair is private and absent from the gdk4 bindings, so no application-side fix exists. Do NOT arm it by masking Gdk-CRITICAL: that would also silence ScrAP-318, a leaked update-freeze that stops a surface repainting, which is the only signal anybody would get if it happened. See also ScrAP-268 before reaching for a g_log_set_writer_func allowlist.

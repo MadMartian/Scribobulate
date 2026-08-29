@@ -100,6 +100,7 @@ blockquote_text_gap  = 10            # bar → quoted text
 list_step            = 28            # per-nesting-level list indent
 list_item_gap        = 8             # space between consecutive list items
 rule_space           = 4             # above/below a horizontal rule
+rule_thickness       = 1             # the flat rule's weight (a sprite rule uses its tile's height)
 table_cell_padding_v = 4
 table_cell_padding_h = 10
 table_border_width   = 1
@@ -522,21 +523,25 @@ rule_space    = 6
 [themes.pixelquest]
 name       = "Pixel Quest"
 symbol     = "🕹️"
-background = "#5c94fc"   # saturated daylight sky blue — mid-luminance (L≈0.30), not pale
-foreground = "#17263b"   # near-navy ink — unchanged from the page's first draft; already
-                          # dark enough to clear the new, harder page: 5.15:1 (was 12.51:1
-                          # on the original paler blue)
+# PALE daylight sky (L≈0.67). It was a saturated mid-luminance blue (#5c94fc, L≈0.30)
+# until 2026-08-28, and raising it is what finally let this theme's two long-standing
+# legibility exceptions be DELETED rather than renewed. The old page was caught between
+# its own inks: the accent inks sat LIGHTER than it and the body/heading inks DARKER, so
+# no single page luminance could satisfy both, and it had been tuned to the exact floor
+# the dark inks needed — leaving every light ink permanently short. On a pale page the
+# accents simply become dark inks too, and the whole palette stops being squeezed.
+background = "#bcd7ff"
+foreground = "#17263b"   # near-navy ink — unchanged since the theme's first draft, and
+                          # now with room to spare: 10.39:1 (it was 5.15:1, a hair over
+                          # the floor, on the old mid-luminance page)
 accent_color = "#b23a2e"   # warm brick-red — seeds blockquote_bar/selection where not overridden below
-# Operator's call 2026-08-26: a lighter, brighter blue than the forest green this theme
-# shipped with. ⚠️ Stated knowingly against the floor this page's own luminance sets:
-# this page (L≈0.30) cannot carry ANY light ink at the 4.5:1 text floor — even white
-# tops out at 2.96:1 here — so a light link colour is a deliberate legibility trade,
-# not an oversight (contrast with the near-black body ink around it does the heavy
-# lifting). `link_underline_color` is UNSTATED on purpose so the underline follows this
-# same colour, per the operator's ask that the two match.
-link_color = "#3ddbff"   # bright cyan-blue — visually distinct from the page's own
-                          # duller mid-blue, which is what keeps a link readable as a
-                          # link despite the low arithmetic contrast above
+# A saturated blue, and it clears the 4.5:1 TEXT floor outright at 6.08:1 — no exception,
+# no licence. It used to be a neon cyan (#3ddbff) at 1.80:1, carried in
+# `theme::tests::contrast`'s DELIBERATE list because the old page could not carry ANY
+# light ink at the text floor (even white topped out at 2.96:1 there). That was true, and
+# it stopped being true when the page moved. `link_underline_color` is UNSTATED on
+# purpose so the underline follows this colour, per the operator's ask that the two match.
+link_color = "#0035c9"
 
 # Rounded, friendly display faces — illegible as body text, exactly what a heading
 # wants. Neither is packaged on a stock Linux box; both stacks fall through to the
@@ -552,12 +557,17 @@ heading_font = 'Fredoka, "Baloo 2", Quicksand, Cantarell, "Noto Sans", sans-seri
 # voices, not five competing ones. It is NO LONGER the table header's ink — this theme
 # states `table_head_fg` below (TDD 18.30), which is what let the header take a fill of
 # its own without dragging the dark red onto it.
-heading_color  = "#5f1010"                                    # h4/h5 — SHADED darker
-                                                               # for the new page (was #7a1414) — 4.53:1
+heading_color  = "#5f1010"                                    # h4/h5 — 9.12:1. It was
+                                                               # shaded down from #7a1414 to
+                                                               # scrape 4.53:1 on the old
+                                                               # mid-luminance page; the pale
+                                                               # page removed that pressure,
+                                                               # so the brighter original is
+                                                               # available again if wanted
 heading_color_h1 = "#ffd400"  # h1 gold, h2 cream, h3 deep blue (h3 SHADED
 heading_color_h2 = "#fff3c4"
 heading_color_h3 = "#0a2d62"
-                                                                # darker for the new page, was #0e3e86 — 4.54:1;
+                                                                # darker for the old page, was #0e3e86 — now 9.14:1;
                                                                 # h1/h2 ink is unchanged, checked against their
                                                                 # BAND fill below, not the page)
 heading_font_h1 = '"Titan One", "Luckiest Guy", sans-serif'
@@ -572,20 +582,30 @@ heading_band_color_h1 = "#2b2d6b"
 heading_band_color_h2 = "#5b2e1c"
 heading_band_radius = 10
 
-# A furniture-blue rule under every heading (band or not) and taper the space above
-# it with the level, same shape Synthwave uses. SHADED darker for the new page (was
-# #3e6fa0) to keep clearing the 3:1 non-text floor with margin — 3.30:1 — a decoration
-# line is graphic, not text, so it answers to the lower bar, not the 4.5:1 text one.
-heading_underline      = "single"
-heading_underline_color = "#274665"
+# NO heading rule, above or below. This theme carried a furniture-blue underline
+# (#274665) until 2026-08-28; it was briefly an overline instead, and the operator then
+# dropped the rule entirely — on the pale page the bands and the per-level inks already
+# separate the levels, and a rule on top of both was one signal too many.
+#
+# `heading_overline` and `heading_underline` are simply not stated, so both fall through
+# to [themes.system]'s "none" — which is also the app's own hardcoded answer. The space
+# tapering below is kept: it is what spaces the levels now that no line does.
+#
+# ⚠️ If a rule is ever wanted back, it has to be the UNDERLINE if it is to carry a
+# colour. There is no overline colour key at any level, deliberately: GTK 4.6.9's
+# `gtk_text_attributes_copy_values` guards on `overline_rgba` and then frees
+# `underline_rgba` (a C-source typo), so a run carrying both coloured is a DOUBLE FREE
+# and a coloured overline alone leaks — and a link inside a heading is exactly such a
+# run. The project never sets `overline-rgba` anywhere (`src/theme/model.rs`,
+# `HeadingRule`; SCHEMA's `heading_overline` row).
 heading_space_above_h1 = 16
 heading_space_above_h2 = 12
 heading_space_above_h3 = 8
 heading_space_above_h4 = 6
 heading_space_above_h5 = 6
 
-# Strikethrough theme independently of link (TDD 18.23). SHADED darker for the new
-# page (was #b23a2e) and clears 3:1 with margin (3.32:1).
+# Strikethrough theme independently of link (TDD 18.23). Shaded down from #b23a2e for
+# the OLD page, where it cleared 3:1 at 3.32:1; on the pale page it reads 6.69:1.
 strikethrough_color = "#79281f"
 link_underline      = "double"
 
@@ -604,7 +624,8 @@ link_underline      = "double"
 list_marker_color        = "#0035c9"
 # DEPTH-TIERED bullets (TDD 18.26). A nested list reads as a route through the level,
 # and a sub-branch in a second colour is the cheapest way to say "this hangs off that".
-# SHADED darker for the new page (was #d32011) — 3.01:1, clearing the 3:1 floor a
+# Shaded down from #d32011 for the OLD page, where it cleared the 3:1 floor by 0.01 at
+# 3.01:1; on the pale page it reads 6.06:1 —
 # non-text graphic answers to — and it is deliberately NOT the brick `accent_color`
 # (#b23a2e), the strikethrough ink (#79281f), or the dark `heading_color` (#5f1010):
 # four reds now share this page and value is what tells them apart.
@@ -623,13 +644,13 @@ list_task_checked_glyph  = "★"
 # bullets. ONE colour for both states: a checked and an unchecked star are the same
 # collectible, taken or not, and the GLYPH already carries which.
 #
-# Operator's call 2026-08-26: a lighter, full-luminance red rather than the shaded-dark
-# tone this key first shipped with — same trade the link colour above makes, deliberately,
-# against this page's own low ceiling for light inks. A marker glyph is graphic rather
-# than text, so it answers to the 3:1 floor; this is 1.19:1 on the page and is therefore
-# a NAMED exception in `theme::tests::contrast`'s DELIBERATE list, with this reason.
-# (It used to say "nothing automated gates it either way" — that is no longer true.)
-list_task_marker_color   = "#ff3b3b"
+# A deep vermilion that clears the 3:1 GRAPHIC floor outright at 4.05:1 — a marker glyph
+# is graphic rather than text, so 3:1 is the bar it answers to. It was a full-luminance
+# #ff3b3b at 1.19:1, carried as a NAMED exception in `theme::tests::contrast`'s
+# DELIBERATE list. That exception is gone: on the old mid-luminance page the red sat just
+# BELOW the page and no page move short of near-white could separate them, which is why
+# it stood for so long; the pale page puts it comfortably clear.
+list_task_marker_color   = "#c81000"
 
 blockquote_bar_color = "#0a2d62"   # matches the new h3 shade (was #0e3e86). KEPT beside the
                                    # sprite below, not replaced: the sprite outranks it, and
@@ -639,8 +660,8 @@ blockquote_bar_color = "#0a2d62"   # matches the new h3 shade (was #0e3e86). KEP
 # comfortably clear of the text floor regardless of this page's own low ceiling, because
 # the panel is its own surface, not the page. Independent of the bar's colour on purpose —
 # a themed accent bar and a themed panel are two different decisions.
-blockquote_bg        = "#0a1830"
-blockquote_fg        = "#ffffff"
+blockquote_bg        = "#2b8ff0"
+blockquote_fg        = "#17263b"
 # A riveted copper plate tiled down the quote bar (TDD 18.28) — the one piece of the
 # arcade idiom this theme draws rather than states, and an original seamless tile.
 # Tiled at its NATURAL size and clipped to the bar, so the bar has to be as wide as the
@@ -658,14 +679,28 @@ rule_color           = "#274665"   # matches the new heading-rule shade (was #3e
 # at natural size, seamless left-to-right.
 rule_sprite          = "sprites/grass-platform.png"
 rule_space           = 6
-# Deep evergreen header fill with its own gold text (`table_head_fg`, TDD 18.30) —
-# now that the header's ink is independent of `heading_color`, the header-text trap
-# the singular dark red used to set (1.08:1 on the old candidate fill) no longer
-# applies; 6.83:1 for the gold stated below. Grass-green reads as its own "info panel"
-# family, distinct from every heading/band colour already on this page.
-table_border_color   = "#274665"   # a border carries no text, so no floor governs it
-table_head_bg        = "#1b4d2e"
-table_head_fg        = "#ffd400"   # the theme's collectible gold, reused — 6.83:1 on the fill
+# A green header fill with its own gold text (`table_head_fg`, TDD 18.30) — now that the
+# header's ink is independent of `heading_color`, the header-text trap the singular dark
+# red used to set (1.08:1 on the old candidate fill) no longer applies. Grass-green reads
+# as its own "info panel" family, distinct from every heading/band colour on this page.
+#
+# ⚠️ THE GOLD IS WHAT CAPS THIS FILL'S BRIGHTNESS, and the ceiling is closer than it
+# looks. Header text answers to the 4.5:1 TEXT floor, so #ffd400 holds only while the
+# fill stays below L=0.113 — #22603a is L=0.090 at 5.23:1, and it is very nearly the
+# lightest green the gold survives. Above that there is a DEAD BAND with no usable ink
+# at all: the sprite's own mid-green #2f7d2f (L=0.155) measures 3.58:1 for the gold,
+# 2.97:1 for the body navy and 3.20:1 for near-black — every one short. A genuinely
+# brighter header is reachable only past L≈0.24 (the sprite's #3a9d3a, near-black ink at
+# 4.73:1), and that means giving up the gold. Lightening this key is therefore not a
+# one-line change; it is a change of header ink.
+table_border_color   = "#744a25"   # the grass-platform sprite's own soil brown, sampled
+                                    # from the file — the border ties the table to the
+                                    # rule and to the quote bars' copper rather than
+                                    # outlining it in a blue that matches nothing since
+                                    # the page went pale (it was #274665). A border
+                                    # carries no text, so no floor governs it
+table_head_bg        = "#22603a"
+table_head_fg        = "#ffd400"   # the theme's collectible gold, reused — 5.23:1 on the fill
 table_cell_radius    = 6
 table_border_width   = 2
 table_cell_padding_v = 6

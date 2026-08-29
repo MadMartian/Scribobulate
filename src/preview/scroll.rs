@@ -2,6 +2,15 @@
 //! scrollers. All restores go through a `GtkTextMark` + `scroll_to_mark` (never a
 //! one-shot adjustment `set_value`), the pattern that survives GtkTextView's lazy
 //! line-height validation without wedging input (ScrAP-14/22/65).
+//!
+//! **Every restore here takes a LINE, never a fraction.** The fraction-based pair
+//! this module used to carry (`adj_fraction`/`set_adj_fraction` and the
+//! `restore_preview_scroll` built on them) is gone: a fraction is a ratio of
+//! view-specific content heights, so carrying a reading position across two panes
+//! that never share a height lost precision on every crossing and ACCUMULATED it
+//! over repeated view-mode round trips. What crosses that boundary now is a
+//! `readingpos::DocPosition` — a document coordinate both panes can resolve — and
+//! each pane converts it to its own line before calling in here.
 
 use super::qdata::scrib_render_data;
 use crate::codeview::CodePreviewView;
@@ -10,37 +19,6 @@ use gtk::{ScrolledWindow, TextView};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
-
-/// Fractional scroll position of a `GtkAdjustment`: 0.0 (top) … 1.0 (bottom).
-/// A fraction is stable across re-renders even though the absolute pixel range
-/// changes — the basis for both reload-position restore and split-pane sync.
-pub(crate) fn adj_fraction(adj: &gtk::Adjustment) -> f64 {
-    let max = adj.upper() - adj.page_size();
-    if max > 0.0 {
-        (adj.value() / max).clamp(0.0, 1.0)
-    } else {
-        0.0
-    }
-}
-
-/// Set a `GtkAdjustment` to a fractional position, returning whether it could.
-///
-/// A freshly built scroller has no scroll range until it lays out — and a
-/// `GtkTextView` measures its height lazily, so `upper` is a stale estimate at
-/// first. During that window `upper - page_size` is ≤ 0, and applying the
-/// fraction would compute `fraction * 0 = 0` and snap the view to the **top**
-/// (the bug seen when switching edit → split). So when the range is not yet
-/// established we leave the value untouched and report `false`, letting the
-/// caller retry on the adjustment's next `changed` once a real range exists.
-pub(crate) fn set_adj_fraction(adj: &gtk::Adjustment, fraction: f64) -> bool {
-    let max = adj.upper() - adj.page_size();
-    if max > 0.0 {
-        crate::saferizer::scrollpos::jump(adj, fraction * max);
-        true
-    } else {
-        false
-    }
-}
 
 /// Scroll a preview scroller (a `ScrolledWindow` wrapping the `CodePreviewView`) so
 /// the heading at document-order index `doc_index` sits at the top of the view.
@@ -147,11 +125,6 @@ pub(crate) fn preview_heading_slugs(sw: &ScrolledWindow) -> Option<HashSet<Strin
     let rd = scrib_render_data(&view)?;
     let slugs = rd.borrow().heading_map.keys().cloned().collect();
     Some(slugs)
-}
-
-/// Fractional scroll position of a preview/editor scroller.
-pub(crate) fn preview_scroll_fraction(sw: &ScrolledWindow) -> f64 {
-    adj_fraction(&sw.vadjustment())
 }
 
 /// The top visible buffer line of a preview/editor scroller (a `ScrolledWindow`
@@ -404,93 +377,6 @@ fn restore_textview_scroll_to_line_progressive(sw: &ScrolledWindow, view: &TextV
     });
 }
 
-/// Restore a captured scroll `fraction` onto a freshly rendered scroller (TDD
-/// 3.2 / 7.4 — reading position survives an external reload or a mode switch).
-///
-/// When the scroller wraps a `GtkTextView` (the preview *and* the editor are both
-/// TextViews) the restore goes through a mark + `scroll_to_mark`, never an
-/// adjustment `set_value` (ScrAP-14). A fresh `GtkTextView` validates line heights
-/// over many idle passes, so its adjustment `upper` is a *draft* at the first
-/// `changed`; `set_value(fraction × (upper − page))` then lands on a pre-validation
-/// height and is overwritten by the next pass — the view snaps back toward the top.
-/// Wrapping the content in the outline `GtkPaned` made this worse, because the
-/// paned defers its position to `connect_map`, re-allocating the content width
-/// (hence re-validating heights) *after* a one-shot adjustment restore had already
-/// fired and disconnected — the mode-switch scroll-reset regression.
-/// `scroll_to_mark` records the target line and GTK re-applies it after every
-/// validation pass and re-allocation until stable, so it is robust to both.
-///
-/// The target line is `fraction × line_count` (a line-fraction, not the old
-/// pixel-fraction). Source and rendered views have different per-line heights, so
-/// no offset is exact across a mode switch anyway; a line-fraction is stable and
-/// close, and — crucially — survives validation, which the pixel-fraction did not.
-pub(crate) fn restore_preview_scroll(sw: &ScrolledWindow, fraction: f64) {
-    if fraction <= 0.0 {
-        return;
-    }
-    // Preferred path: a GtkTextView (preview CodePreviewView or the editor View,
-    // both TextView subclasses). This is the CROSS-buffer restore (a view-mode
-    // switch: the rendered preview and the source editor have different line
-    // counts and per-line heights), so the captured pixel fraction is mapped to a
-    // LINE fraction — an accepted approximation across that boundary (a zoom
-    // re-render uses `restore_preview_scroll_to_line` instead, which is exact).
-    // The restore itself is validation-safe and input-wedge-proof
-    // (ScrAP-65) via the shared core.
-    //
-    // The `CodePreviewView` arm is tried FIRST, exactly as
-    // `restore_preview_scroll_to_line` does. It is not an optimisation: that
-    // subclass routes through `schedule_scroll_idle`, which coalesces, cancels
-    // the previous idle, weak-captures and gates on `is_realized` (ScrAP-152).
-    // Downcasting straight to the base `TextView` — which this function used to
-    // do — silently skipped all of that for the ONE view most likely to be torn
-    // down mid-restore, since a view-mode switch destroys and rebuilds the
-    // preview. The two callers must not disagree about which path the same
-    // widget takes.
-    if let Some(child) = sw.child() {
-        if let Ok(cpv) = child.clone().downcast::<CodePreviewView>() {
-            let lines = cpv.buffer().line_count();
-            if lines > 0 {
-                let target = ((fraction * lines as f64).round() as i32).clamp(0, lines - 1);
-                let offset = cpv
-                    .buffer()
-                    .iter_at_line(target)
-                    .map(|i| i.offset())
-                    .unwrap_or(0);
-                cpv.scroll_to_buffer_offset(offset);
-            }
-            return;
-        }
-        // Any other GtkTextView scroller (the source editor) — generic
-        // validation-safe restore, itself weak-captured and realize-gated.
-        if let Ok(view) = child.downcast::<TextView>() {
-            let lines = view.buffer().line_count();
-            if lines > 0 {
-                let target = ((fraction * lines as f64).round() as i32).clamp(0, lines - 1);
-                restore_textview_scroll_to_line(sw, &view, target);
-            }
-            return;
-        }
-    }
-    // Fallback (non-TextView scroller): adjustment fraction, applied once a real
-    // range exists. Applying exactly once (not on every `changed`) is deliberate —
-    // a persistent restorer would keep yanking the view back to the captured
-    // position whenever its content changed.
-    let vadj = sw.vadjustment();
-    if set_adj_fraction(&vadj, fraction) {
-        return; // range already known — applied immediately
-    }
-    let handler: Rc<RefCell<Option<gtk::glib::SignalHandlerId>>> = Rc::new(RefCell::new(None));
-    let handler_inner = Rc::clone(&handler);
-    let id = vadj.connect_changed(move |adj| {
-        if set_adj_fraction(adj, fraction) {
-            if let Some(hid) = handler_inner.borrow_mut().take() {
-                adj.disconnect(hid);
-            }
-        }
-    });
-    *handler.borrow_mut() = Some(id);
-}
-
 /// GTK-object tests: building a `GtkTextView`/`ScrolledWindow` and driving a
 /// `GtkTextBuffer` need an initialized GTK, so — like `window/reload.rs` — these
 /// use `#[gtktest::test]` behind the `gtk-integration-tests` feature.
@@ -701,46 +587,47 @@ mod gtk_integration_tests {
         );
     }
 
-    /// F-AP3-027: `restore_preview_scroll` must route a `CodePreviewView` through
-    /// that subclass's guarded `scroll_to_buffer_offset`, not through the generic
-    /// base-`TextView` fallback.
+    /// F-AP3-027: a restore must route a `CodePreviewView` through that subclass's
+    /// guarded `scroll_to_buffer_offset`, not through the generic base-`TextView`
+    /// fallback.
     ///
-    /// It used to downcast straight to `TextView`, which a `CodePreviewView`
-    /// satisfies — so the preview, the one view a mode switch destroys and
-    /// rebuilds, silently skipped the coalescing, cancel-on-reschedule,
-    /// weak-capture and realize gate that `schedule_scroll_idle` exists to
-    /// provide. Its sibling `restore_preview_scroll_to_line` got this right, 160
-    /// lines earlier in the same file.
+    /// The routing used to downcast straight to `TextView`, which a
+    /// `CodePreviewView` satisfies — so the preview, the one view a mode switch
+    /// destroys and rebuilds, silently skipped the coalescing, cancel-on-reschedule,
+    /// weak-capture and realize gate that `schedule_scroll_idle` exists to provide.
+    ///
+    /// **Retargeted from the deleted `restore_preview_scroll`** (the fraction-based
+    /// sibling) onto `restore_preview_scroll_to_line`, which now carries every
+    /// restore in the app: the view-mode hand-off, the zoom/theme re-render and the
+    /// external reload all end here. The property being guarded is the same one and
+    /// it matters more than it did, not less — deleting the test with its old
+    /// subject would have retired a live guarantee along with a dead function.
     ///
     /// `reading_line()` is the observable: `scroll_to_buffer_offset` records the
     /// programmatic target in `restore_target_line` SYNCHRONOUSLY (only the scroll
     /// itself is deferred), and `reading_line()` returns that when set. Under the
-    /// old routing it stays unset and `reading_line()` falls back to reading the
-    /// live viewport, so the two paths return different lines — which is the
+    /// unguarded routing it stays unset and `reading_line()` falls back to reading
+    /// the live viewport, so the two paths return different lines — which is the
     /// discrimination, without reaching into `imp`.
     ///
-    /// Mutation-tested: disabling the `CodePreviewView` arm gives 1000 against an
-    /// expected 501. (1000 rather than 0 because the fallback reads
-    /// `line_at_y(0)` on a view that has never been allocated; the number is not
-    /// the point, the disagreement is.)
+    /// Mutation-tested at the retarget: neutering the `CodePreviewView` arm of
+    /// `restore_preview_scroll_to_line` makes this fail (the fallback reads
+    /// `line_at_y(0)` on a never-allocated view and answers a different line; the
+    /// number is not the point, the disagreement is).
     #[gtktest::test]
-    fn restore_preview_scroll_routes_a_code_preview_view_through_its_guarded_path() {
+    fn a_line_restore_routes_a_code_preview_view_through_its_guarded_path() {
         let view = CodePreviewView::new();
         let body: String = (0..1_000).map(|n| format!("line {n}\n")).collect();
         view.buffer().set_text(&body);
         let sw = ScrolledWindow::new();
         sw.set_child(Some(&view));
 
-        // 1000 body lines + the trailing empty line = 1001 → 0.5 rounds to 501.
-        let lines = view.buffer().line_count();
-        let expected = ((0.5 * lines as f64).round() as i32).clamp(0, lines - 1);
-
-        restore_preview_scroll(&sw, 0.5);
+        restore_preview_scroll_to_line(&sw, 501);
 
         assert_eq!(
             view.reading_line(),
-            expected,
-            "the fraction restore did not go through CodePreviewView's guarded \
+            501,
+            "the line restore did not go through CodePreviewView's guarded \
              scroll_to_buffer_offset — it took the unguarded base-TextView path"
         );
     }

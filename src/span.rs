@@ -206,3 +206,20 @@ mod tests {
         assert!(!s.is_outside(0, 10), "start == vis_end");
     }
 }
+
+/// One blockquote LEVEL's buffer extent, together with how deeply it is nested.
+///
+/// The preview records a span per LEVEL rather than one per outermost quote, because
+/// each level draws its own accent bar at its own offset (TDD 2.11b). `depth` is
+/// 1-based and already clamped to `tags::MAX_QUOTE_DEPTH` by the renderer, so a painter
+/// can index or multiply by it without re-checking the bound.
+///
+/// Deliberately a named struct rather than a `(BufferSpan, u8)`: both fields are read at
+/// the paint site, and a positional tuple there reads as arithmetic on anonymous numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct QuoteSpan {
+    /// The level's own extent, from its `>` to the end of the content it encloses.
+    pub(crate) span: BufferSpan,
+    /// 1-based nesting depth: 1 is an unnested quote.
+    pub(crate) depth: u8,
+}

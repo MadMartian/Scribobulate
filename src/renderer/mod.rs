@@ -399,14 +399,16 @@ pub(crate) struct Renderer {
     /// (anchor slug, buffer offset) for every heading — drives `#fragment` links.
     pub headings: Vec<(String, i32)>,
     blockquote_depth: usize,
-    /// Buffer offset where the current top-level blockquote began (recorded at the
-    /// depth 0→1 transition), used to record its range at the 1→0 transition.
-    blockquote_start: Option<i32>,
-    /// The buffer span of every top-level blockquote.
+    /// Buffer offset where each currently-open blockquote LEVEL began, innermost last.
+    /// A stack rather than a single `Option`, because every level records its own span:
+    /// a nested quote draws its own bar at its own offset (TDD 2.11b), which the old
+    /// "remember only the 0→1 transition" shape could not express.
+    blockquote_starts: Vec<i32>,
+    /// The buffer span of every blockquote LEVEL, with its depth.
     /// Blockquotes are buffer TEXT now (selectable, links work, no anchored widget
     /// to churn — GTK4Rs/AP-23); the preview view draws the left accent bar over each
     /// range in `snapshot_layer`, the same proven pattern as code-block backgrounds.
-    pub blockquote_ranges: Vec<crate::span::BufferSpan>,
+    pub blockquote_ranges: Vec<crate::span::QuoteSpan>,
     /// Every heading's buffer extent, for the drawn heading band (TDD 18.25). Collected
     /// unconditionally — the scan is a push per heading, and gating it on a theme key
     /// would make the render's OUTPUT depend on the theme, so a theme switch would need
@@ -547,7 +549,7 @@ impl Renderer {
             slug_seen: HashMap::new(),
             headings: Vec::new(),
             blockquote_depth: 0,
-            blockquote_start: None,
+            blockquote_starts: Vec::new(),
             blockquote_ranges: Vec::new(),
             heading_spans: Vec::new(),
             link_start: None,

@@ -25,7 +25,7 @@ use std::collections::HashMap;
 pub(super) struct ViewInstall {
     pub(super) code_blocks: Vec<crate::span::BufferSpan>,
     pub(super) code_block_bg: gtk::gdk::RGBA,
-    pub(super) blockquote_ranges: Vec<crate::span::BufferSpan>,
+    pub(super) blockquote_ranges: Vec<crate::span::QuoteSpan>,
     pub(super) blockquote_bar: gtk::gdk::RGBA,
     pub(super) heading_spans: Vec<crate::renderer::HeadingSpan>,
     pub(super) width_bounded: Vec<(gtk::Widget, i32)>,
@@ -1187,15 +1187,19 @@ mod gtk_integration_tests {
         let buf = &products.buf;
         let tag = buf
             .tag_table()
-            .lookup("blockquote")
-            .expect("blockquote tag exists");
+            .lookup(crate::tags::TagName::Blockquote { depth: 1 }.name())
+            .expect("depth-1 blockquote tag exists");
         let chars: Vec<char> = buf
             .slice(&buf.start_iter(), &buf.end_iter(), true)
             .chars()
             .collect();
-        let crate::span::BufferSpan {
-            start: bstart,
-            end: bend,
+        let crate::span::QuoteSpan {
+            span:
+                crate::span::BufferSpan {
+                    start: bstart,
+                    end: bend,
+                },
+            ..
         } = *products
             .install
             .blockquote_ranges
@@ -1306,6 +1310,116 @@ mod gtk_integration_tests {
         }
     }
 
+    /// **A nested blockquote gets its own indent and its own bar** (TDD 2.11b).
+    ///
+    /// Before this, `renderer::end` recorded ONE span at the outermost
+    /// `TagEnd::BlockQuote` and applied ONE margin tag to it, so a nested quote was
+    /// indistinguishable from its parent: same indent, one bar, nesting invisible.
+    ///
+    /// Three independent things are asserted, because each fails on its own:
+    ///
+    /// 1. **A span per LEVEL.** The painter draws one bar per recorded span, so a
+    ///    missing span is a missing bar. The outer span must also CONTAIN the inner one
+    ///    (not stop where it begins), which is what makes the outer bar run past the
+    ///    nested region rather than leaving a hole in it.
+    /// 2. **The deeper tag wins on the inner line.** Every enclosing level tags its own
+    ///    range, so an inner line carries both `bq-1` and `bq-2`; the family is
+    ///    registered deepest-last so GTK resolves the margin to the deeper one. This is
+    ///    asserted as RESOLVED GEOMETRY (`iter_location().x()`) rather than as tag
+    ///    properties, because a tag-level assertion passes even when the priority order
+    ///    that makes it true has been reversed (ScrAP-121).
+    /// 3. **The step is one level's worth**, not a doubling or a re-based absolute.
+    ///
+    /// Mutation check (measured): recording only the outermost span leaves one span and
+    /// fails (1); registering the `bq-*` family shallowest-last inverts the priority and
+    /// fails (2) while leaving (1) green.
+    #[gtktest::test]
+    fn a_nested_blockquote_indents_and_bars_at_its_own_depth() {
+        let products = build_render_products("> outer line\n>\n> > inner line\n", None, 1.0, false);
+        let buf = &products.buf;
+        let slice = buffer_slice(buf);
+
+        // (1) One span per level, and the outer contains the inner.
+        let spans = &products.install.blockquote_ranges;
+        assert_eq!(
+            spans.len(),
+            2,
+            "one span per LEVEL — the painter draws a bar per span, so a level with no \
+             span is a level with no bar: {spans:?}"
+        );
+        let outer = spans.iter().find(|q| q.depth == 1).expect("a depth-1 span");
+        let inner = spans.iter().find(|q| q.depth == 2).expect("a depth-2 span");
+        assert!(
+            outer.span.start <= inner.span.start && outer.span.end >= inner.span.end,
+            "the outer level's extent must CONTAIN the inner one, or the outer bar stops \
+             where the nested quote begins and the quote reads as two with a hole: \
+             outer={outer:?} inner={inner:?}"
+        );
+
+        // …and the inner level must START ON ITS OWN FIRST LINE, not on the parent's
+        // last one. The bar is drawn from the span's line yrange, so a start left where
+        // the level was OPENED — the end of whatever the parent last wrote, before the
+        // separator newlines that move the nested text onto its own line even exist —
+        // draws the inner bar up over the parent's text and the blank line under it.
+        assert_eq!(
+            buf.iter_at_offset(inner.span.start).line(),
+            buf.iter_at_offset(char_off(&slice, "inner line")).line(),
+            "the nested level's span must open on the line its own text opens on, or its \
+             bar overlaps the parent's last line: inner={inner:?} slice={slice:?}"
+        );
+
+        // The same source with WINDOWS line endings must produce the byte-identical
+        // buffer and the byte-identical spans. This is asserted rather than assumed
+        // because the normalisation that makes it true is invisible from here: the
+        // preview buffer's newlines are all emitted by the renderer itself, never
+        // copied from the document, and `lineendings.rs` deliberately does NOT run at
+        // a parse site. Without this guard the start-normalisation above reads like a
+        // platform assumption about `\n` — a reviewer would have to re-derive that a
+        // CRLF document cannot put a `\r` in the separator gap.
+        let crlf =
+            build_render_products("> outer line\r\n>\r\n> > inner line\r\n", None, 1.0, false);
+        assert_eq!(
+            buffer_slice(&crlf.buf),
+            slice,
+            "a CRLF document must render to the same preview buffer as its LF twin — \
+             the buffer's separators are the renderer's own, not the document's"
+        );
+        assert_eq!(
+            crlf.install.blockquote_ranges, *spans,
+            "…and therefore to the same per-level quote spans, on every platform"
+        );
+
+        // (2)+(3) Resolved geometry, not tag properties: the inner line must sit exactly
+        // one quote step right of the outer line.
+        let view = gtk::TextView::with_buffer(buf);
+        let window = gtk::Window::new();
+        window.set_default_size(600, 400);
+        window.set_child(Some(&view));
+        window.present();
+        let ctx = glib::MainContext::default();
+        for _ in 0..400 {
+            ctx.iteration(false);
+        }
+
+        let x_at = |needle: &str| {
+            let off = char_off(&slice, needle);
+            view.iter_location(&buf.iter_at_offset(off)).x()
+        };
+        let (outer_x, inner_x) = (x_at("outer line"), x_at("inner line"));
+        window.destroy();
+
+        let m = &crate::theme::active().metrics;
+        let step = crate::theme::px(m.blockquote_bar_width + m.blockquote_text_gap, 1.0);
+        assert_eq!(
+            inner_x - outer_x,
+            step,
+            "a nested quote steps in by exactly ONE level's worth ({step}px = \
+             blockquote_bar_width + blockquote_text_gap, the same two keys the bar is \
+             drawn from), so the bar cannot drift from the column it marks: \
+             outer_x={outer_x} inner_x={inner_x}"
+        );
+    }
+
     /// POLICY Document Rendering CAM row 2 (correct inside every container markup): a list
     /// inside a BLOCKQUOTE must render nested INSIDE the quote, not break out to the left of
     /// it. The item's lines carry BOTH the `blockquote` and `li-{depth}` tags, which both set
@@ -1324,7 +1438,24 @@ mod gtk_integration_tests {
         let buf = &products.buf;
         let table = buf.tag_table();
         let li = table.lookup("li-1").expect("li-1 tag exists");
-        let bq = table.lookup("blockquote").expect("blockquote tag exists");
+        // The depth-1 quote tag: the family is `bq-{depth}` now (TDD 2.11b), and this
+        // test's fixture is a single, unnested quote.
+        let bq_name = crate::tags::TagName::Blockquote { depth: 1 }.name();
+        let bq = table
+            .lookup(bq_name)
+            .expect("depth-1 blockquote tag exists");
+
+        // The quote tag must stay NON-accumulative, which is the other half of what makes
+        // the nesting below resolve correctly: it supplies the BASE margin that `li-1`
+        // accumulates onto, and it has to keep out-prioritising a code block's own
+        // absolute margin inside a quote. If it ever became accumulative this test's
+        // arithmetic would still pass while every quoted code block shifted right by
+        // `code_block_padding`, so state it here rather than infer it.
+        assert!(
+            !bq.is_accumulative_margin(),
+            "the quote tag supplies the BASE margin a quoted list accumulates onto; \
+             making it accumulative silently moves every quoted code block"
+        );
 
         // The item's indent is RELATIVE to its container, so it must accumulate.
         assert!(
@@ -1337,7 +1468,7 @@ mod gtk_integration_tests {
         let q = char_off(&slice, "quoted item");
         let iq = buf.iter_at_offset(q);
         assert!(iq.has_tag(&li), "quoted item carries li-1");
-        assert!(iq.has_tag(&bq), "quoted item carries blockquote");
+        assert!(iq.has_tag(&bq), "quoted item carries bq-1");
 
         // The renderer flags it for the gutter, so the marker uses the quoted base.
         let m = products

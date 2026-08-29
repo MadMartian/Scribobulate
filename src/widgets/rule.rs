@@ -111,11 +111,9 @@ mod imp {
             // by the tile itself.
             let rect = graphene::Rect::new(0.0, 0.0, w, h);
             crate::widgets::tile_texture(
-                snapshot,
-                &rect,
+                snapshot, &rect,
                 // A standalone widget: its rect IS its own coordinate space, so the
                 // origin and the rect coincide and the phase is fixed either way.
-                crate::widgets::TileOrigin::Widget,
                 tex,
             );
         }

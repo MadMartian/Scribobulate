@@ -652,6 +652,126 @@ mod gtk_integration_tests {
         );
     }
 
+    /// **No TEXT construct produces an over-wide line, at any pane width** — the
+    /// second half of TDD 2.2·a11y, which asserts that `WrapMode::Char` "also never
+    /// produces an over-wide line, preserving the no-horizontal-overflow invariant
+    /// §2.2 / ScrAP-22 depends on (regression test in `preview::render`)".
+    ///
+    /// **That claimed regression test did not exist.** Its sibling
+    /// [`indented_wide_table_does_not_force_a_horizontal_scrollbar`] covers the
+    /// ANCHORED-CHILD axis (a table bounded to the content column); nothing covered the
+    /// buffer-TEXT axis the wrap mode actually governs. A rubric naming a guard nobody
+    /// wrote reads exactly like a rubric that passes, which is why this is a guard and
+    /// not a comment.
+    ///
+    /// The cases are the ones `render`'s own wrap-mode comment names as the hazard —
+    /// "long unbreakable tokens (URLs, paths, long identifiers)" — plus the heading
+    /// shapes, since a heading carries a scaled font and its own margins and so reaches
+    /// the wrap width differently from body prose. A control paragraph rides along, and
+    /// a `page_size == 0` reading is reported as a failure, so a view that laid nothing
+    /// out cannot clear this assert vacuously (ScrAP-209).
+    ///
+    /// **Mutation check (measured):** reverting `render`'s
+    /// `view.set_wrap_mode(WrapMode::Char)` to `WrapMode::Word` fails this test —
+    /// `unbreakable-heading` overflows by 1300px at a 400px pane and by 800px at 900px,
+    /// `heading-in-list` by 1328px, `long-inline-code` by 514px, `long-url` by 327px.
+    ///
+    /// **It is NOT independent of the guard above, and the first draft of this comment
+    /// claimed it was.** The claim was that `Word` is in `PangoWrapMode` range so the
+    /// a11y guard would stay green; measured, that guard FAILS on the same mutation,
+    /// because it pins `Char` by equality rather than merely excluding `WordChar`. Under
+    /// today's code no reachable mutation separates the two — buffer text under `Char`
+    /// cannot go over-wide, so the wrap mode is the only route in, and the guard above
+    /// already watches it (ScrAP-254: an invariant held by two sufficient mechanisms is
+    /// mutation-proof one at a time).
+    ///
+    /// It is kept for two reasons that do not depend on that. First, TDD 2.2·a11y
+    /// asserts this test exists, and until now it did not — the rubric's consequence
+    /// clause named a guard nobody had written. Second, the guard above is pinned to a
+    /// value that is *scheduled to change*: `render`'s comment says to restore
+    /// `WordChar` once the toolkit floor reaches 4.8. On that day `assert_eq!(Char)`
+    /// becomes wrong and will be edited to match the new setting, and this test is the
+    /// only remaining statement of what must still be TRUE afterwards — that whatever
+    /// mode is chosen, no line goes over-wide (ScrAP-234: asserting one of a feature's
+    /// two representations and reading the green suite as evidence about both).
+    #[gtktest::test]
+    fn no_text_construct_produces_an_over_wide_line() {
+        const LONG_RUN: &str = "Supercalifragilisticexpialidociousantidisestablishmentarianismpneumonoultramicroscopicsilicovolcanoconiosis";
+        const LONG_WORDS: &str = "A very long heading made entirely of ordinary words that should soft wrap to the pane rather than run past its right edge";
+        let long_url = format!("https://example.com/{LONG_RUN}/{LONG_RUN}");
+        let cases: Vec<(&str, String)> = vec![
+            ("heading-h1-words", format!("# {LONG_WORDS}\n\nBody.\n")),
+            ("heading-h3-words", format!("### {LONG_WORDS}\n\nBody.\n")),
+            ("unbreakable-heading", format!("# {LONG_RUN}\n\nBody.\n")),
+            ("unbreakable-paragraph", format!("{LONG_RUN}\n")),
+            ("heading-in-list", format!("# H\n\n- # {LONG_RUN}\n")),
+            ("heading-in-blockquote", format!("# H\n\n> # {LONG_RUN}\n")),
+            (
+                "long-inline-code",
+                format!("Prose around `{LONG_RUN}` and after.\n"),
+            ),
+            ("long-url", format!("See <{long_url}> for more.\n")),
+            (
+                "control-paragraph",
+                "An ordinary paragraph, long enough that it must soft wrap at every pane \
+                 width under test, several times over.\n"
+                    .to_string(),
+            ),
+        ];
+
+        let ctx = glib::MainContext::default();
+        let mut offenders: Vec<String> = Vec::new();
+        for pane_w in [400i32, 500, 700, 900] {
+            for (name, md) in &cases {
+                let widget = render(md, None, 1.0, false);
+                let view = view_of(&widget);
+                let window = gtk::Window::new();
+                window.set_default_size(pane_w, 600);
+                window.set_child(Some(&widget));
+                window.present();
+
+                let sw = view
+                    .parent()
+                    .and_then(|c| c.downcast::<ScrolledWindow>().ok())
+                    .expect("view parent is the ScrolledWindow");
+                {
+                    let view = view.clone();
+                    let sw = sw.clone();
+                    pump_until(&ctx, 2000, move || {
+                        view.is_mapped() && sw.vadjustment().upper() > 0.0
+                    });
+                }
+                pump_until(&ctx, 200, || false);
+
+                let hadj = sw.hadjustment();
+                let (upper, page) = (hadj.upper(), hadj.page_size());
+                window.destroy();
+
+                if page <= 0.0 {
+                    offenders.push(format!(
+                        "{name} @ {pane_w}px: nothing was laid out (page_size=0) — this \
+                         test cannot speak for this case"
+                    ));
+                } else if upper > page {
+                    offenders.push(format!(
+                        "{name} @ {pane_w}px: over-wide by {:.0}px (upper={upper:.0} \
+                         page={page:.0})",
+                        upper - page
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "TDD 2.2·a11y: the preview must never produce an over-wide line — one \
+             summons the Automatic h-scrollbar, whose appear/disappear re-arms the \
+             width↔height-for-width churn that leaves the pane blank (ScrAP-22, \
+             ScrAP-23). Offenders:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
     fn scroller_of(widget: &gtk::Widget) -> ScrolledWindow {
         widget
             .downcast_ref::<gtk::Overlay>()

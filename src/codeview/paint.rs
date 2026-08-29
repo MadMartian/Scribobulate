@@ -72,7 +72,7 @@ pub(super) struct PaintCtx<'a> {
     /// Every visible quote's clamped y-extent, or empty on the above-text pass, which
     /// needs none of them. See [`super::quotes::visible_extents`] for why one value is
     /// shared rather than measured twice.
-    pub(super) quote_extents: Vec<(f32, f32)>,
+    pub(super) quote_extents: Vec<super::quotes::QuoteExtent>,
 }
 
 impl<'a> PaintCtx<'a> {

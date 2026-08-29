@@ -610,6 +610,7 @@ keys! {
     RULE_COLOR             = "rule_color"              : Color;
     RULE_SPRITE            = "rule_sprite"             : Sprite;
     RULE_SPACE             = "rule_space"              : Int    | int(&[4], METRIC);
+    RULE_THICKNESS         = "rule_thickness"          : Int    | int(&[1], METRIC);
 
     // ── selection ────────────────────────────────────────────────────────────
     SELECTION_BG           = "selection_bg"            : Color,

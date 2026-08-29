@@ -54,9 +54,24 @@ impl ThemeColor {
     pub(crate) fn rgba(self) -> gdk::RGBA {
         self.0
     }
-    /// `#rrggbb`, alpha dropped — for the paths that take colour and alpha apart.
+    /// `#rrggbb`, alpha dropped — for the paths that take colour and alpha apart,
+    /// which is what the Pango-markup path does (colour here, `alpha_pct` there).
+    ///
+    /// **Not for a sink that can express alpha itself.** A key whose whole point is
+    /// translucency — `mark_bg`, `annotation_hl_color` — read through here exports a
+    /// wash as a flat colour, so the highlight covers the text it was meant to tint
+    /// rather than tinting it. Use [`css_hex`](Self::css_hex) wherever the output
+    /// format carries alpha.
     pub(crate) fn hex(self) -> String {
         crate::palette::to_hex_opaque(self.rgba())
+    }
+    /// `#rrggbb`, or `#rrggbbaa` when the colour is translucent — for a sink whose
+    /// format can carry alpha, which CSS can.
+    ///
+    /// Spelled six digits when opaque so a theme stating no alpha produces
+    /// byte-identical output (TDD 18.2); only the sheets that were wrong change.
+    pub(crate) fn css_hex(self) -> String {
+        crate::palette::to_hex_rgba(self.rgba())
     }
     /// Alpha as a Pango percentage attribute value, e.g. `38%`.
     pub(crate) fn alpha_pct(self) -> String {
@@ -236,6 +251,16 @@ pub(crate) struct Metrics {
     /// edge by this much on each side, while the band itself keeps the content column it
     /// shares with both export sinks. Only consulted where a band exists.
     pub heading_band_padding: [i32; HEADING_LEVELS],
+    /// The flat horizontal rule's weight, in design pixels at zoom 1.0 — the one
+    /// decoration metric BOTH surfaces read: the preview separator's generated CSS
+    /// and the PDF sink's stroke. Default `1`, which is GTK's own separator height
+    /// and converts to exactly the 0.75 pt the sink used to hard-code, so a theme
+    /// stating nothing leaves both surfaces byte-identical (TDD 18.2).
+    ///
+    /// A sprite-tiled rule ignores this and takes its tile's height instead: a theme
+    /// that states `rule_sprite` is stating the weight implicitly, and two sources
+    /// for one decoration is what this key exists to avoid.
+    pub rule_thickness: i32,
     pub blockquote_bar_width: i32,
     pub blockquote_text_gap: i32,
     /// The ONE definition both the `li-{depth}` tag's `left_margin` and the drawn
