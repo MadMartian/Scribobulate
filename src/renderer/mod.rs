@@ -10,8 +10,11 @@
 //! The former monolith is split into a pure, unit-tested core and the GTK walk:
 //!
 //! * **Pure (GTK-free, unit-tested, in the coverage gate):**
-//!   * [`scan`] — the tight `^sup^`/`~sub~`/`~~strike~~` tokenizer (`scan_scripts`,
-//!     `Script`, `script_tag`; ScrAP-66).
+//!   * [`scan`] — the tight `^sup^`/`~sub~`/`~~strike~~`/`==mark==` tokenizer
+//!     (`scan_script_spans`, `Script`, `script_tag`; ScrAP-66).
+//!   * [`segments`] — [`BlockScripts`], the block-scope pass that lets one of those
+//!     fences WRAP other inline markup by scanning a block's stitched `Text` runs
+//!     instead of one event at a time.
 //!   * [`normalize`] — the shared parse flags (`md_options`) and [`NormalizedMd`],
 //!     the length/position-preserving inline-tab pre-pass (ScrAP-75) promoted to a
 //!     type: its constructor is the only route to a normalised document string.
@@ -46,12 +49,14 @@ mod image;
 mod normalize;
 pub(crate) mod picture;
 mod scan;
+pub(crate) mod segments;
 mod start;
 
 pub(crate) use image::image_placeholder_tooltip;
 pub(crate) use normalize::{md_options, NormalizedMd};
 pub(crate) use picture::{scan_image_tags, ImgTag};
-pub(crate) use scan::{scan_script_spans, scan_scripts, Script, ScriptSpan};
+pub(crate) use scan::{scan_script_spans, Script, ScriptSpan};
+pub(crate) use segments::{is_inline_tag, segments_of, BlockScripts, Seg};
 
 // ── table-cell annotation markup (table-cell annotation display path) ───────────────────────
 
@@ -374,6 +379,14 @@ pub(crate) struct Renderer {
     /// Source byte range of the event currently being processed (set by the
     /// build loop before each [`Self::process`] call).
     pub(crate) event_src: std::ops::Range<usize>,
+    /// Every tight construct in `cleaned`, cut per `Text` event.
+    ///
+    /// Scanned ONCE here rather than per event, because a `~~ … ~~` / `== … ==`
+    /// fence may wrap other inline markup and is therefore invisible from inside
+    /// any single event (`segments`, ScrAP-66). Shared with the copymap build by
+    /// `Rc` so the buffer the renderer fills and the map that indexes it cannot
+    /// disagree about which bytes were delimiters.
+    pub(crate) scripts: std::rc::Rc<BlockScripts>,
     /// The fixed inline [`TagName`](crate::tags::TagName)s currently open, applied to
     /// every [`Self::insert`](self) until their `TagEnd` pops them. Typed (not raw
     /// strings) so the name that reaches the buffer can only come from the enum (N6).
@@ -534,6 +547,7 @@ impl Renderer {
             buf,
             theme,
             ann_highlights,
+            scripts: std::rc::Rc::new(BlockScripts::scan(&cleaned)),
             cleaned,
             zoom,
             event_src: 0..0,

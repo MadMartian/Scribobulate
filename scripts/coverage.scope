@@ -124,6 +124,7 @@ src/renderer/mod.rs
 src/renderer/normalize.rs
 src/renderer/picture.rs
 src/renderer/scan.rs
+src/renderer/segments.rs
 src/renderer/start.rs
 src/saferizer/buffer_mark.rs
 src/saferizer/buffer_text.rs

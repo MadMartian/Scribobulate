@@ -28,7 +28,7 @@
 //! the existing `source_map` honours (the copymap is purely additive to it).
 
 use crate::limits;
-use crate::renderer::{scan_scripts, Script};
+use crate::renderer::{BlockScripts, Script, Seg};
 use pulldown_cmark::{Event, Tag, TagEnd};
 use std::ops::Range;
 
@@ -252,18 +252,31 @@ impl Node {
 pub(crate) struct CopyTree {
     root: Node,
     char_count: i32,
+    /// The tight constructs of the document this map was built from.
+    ///
+    /// Held rather than re-scanned because [`wrap_span`] must widen an annotation
+    /// to a WHOLE construct, and a fence that spans several events is not one node
+    /// of the tree below — it is two half-delimited branches with the nested markup
+    /// between them, so the tree alone cannot answer "what is the whole of this".
+    scripts: std::rc::Rc<BlockScripts>,
 }
 
 // ── building ──────────────────────────────────────────────────────────────────
 
 /// Build the copymap from the classified render-event stream. `char_count` is
 /// the finished buffer's char count. Pure: no GTK, fully unit-testable.
-pub(crate) fn build(md: &str, evs: &[RawEv], char_count: i32) -> CopyTree {
+pub(crate) fn build(
+    md: &str,
+    evs: &[RawEv],
+    char_count: i32,
+    scripts: &std::rc::Rc<BlockScripts>,
+) -> CopyTree {
     let mut b = Builder {
         md,
         evs,
         i: 0,
         depth: 0,
+        scripts,
     };
     let children = b.children(None);
     let root = Node::Branch {
@@ -273,7 +286,11 @@ pub(crate) fn build(md: &str, evs: &[RawEv], char_count: i32) -> CopyTree {
         kind: BranchKind::Container,
         children,
     };
-    CopyTree { root, char_count }
+    CopyTree {
+        root,
+        char_count,
+        scripts: std::rc::Rc::clone(scripts),
+    }
 }
 
 /// Report a copymap drift: **fatal under test, loud everywhere else.**
@@ -368,6 +385,9 @@ struct Builder<'a> {
     /// (measured; see [`limits::MAX_NEST_DEPTH`]). A stack overflow is not a
     /// catchable panic, so this has to be prevented rather than handled.
     depth: usize,
+    /// The document's tight constructs, so this map's nodes agree byte-for-byte
+    /// with the runs the renderer actually inserted.
+    scripts: &'a std::rc::Rc<BlockScripts>,
 }
 
 impl Builder<'_> {
@@ -396,8 +416,9 @@ impl Builder<'_> {
                 }
                 RawKind::Text(t) => {
                     let (buf, src, t) = (ev.buf, ev.src.clone(), t.clone());
+                    let segs = self.scripts.segments(src.start, &t);
                     self.i += 1;
-                    out.extend(text_nodes(self.md, buf, src, &t));
+                    out.extend(text_nodes(self.md, buf, src, &t, &segs));
                 }
                 RawKind::Code(t) => {
                     let node = code_node(self.md, ev.buf, ev.src.clone(), t);
@@ -477,8 +498,9 @@ impl Builder<'_> {
                 }
                 RawKind::Text(t) => {
                     let (buf, src, t) = (ev.buf, ev.src.clone(), t.clone());
+                    let segs = self.scripts.segments(src.start, &t);
                     self.i += 1;
-                    children.extend(text_nodes(self.md, buf, src, &t));
+                    children.extend(text_nodes(self.md, buf, src, &t, &segs));
                 }
                 RawKind::Code(t) => {
                     let node = code_node(self.md, ev.buf, ev.src.clone(), t);
@@ -742,7 +764,13 @@ fn leaf(md: &str, buf: (i32, i32), src: Range<usize>) -> Node {
 /// today drives it deep, so a "deep escapes do not overflow" test would pass on
 /// both versions — `ScrAP-209`'s shape, an assertion that cannot fail. The change is
 /// justified by removing an unowned assumption, not by a defect it fixes.
-fn text_nodes(md: &str, buf: (i32, i32), src: Range<usize>, rendered: &str) -> Vec<Node> {
+fn text_nodes(
+    md: &str,
+    buf: (i32, i32),
+    src: Range<usize>,
+    rendered: &str,
+    segs: &[Seg],
+) -> Vec<Node> {
     // CommonMark backslash-escape: pulldown splits the Text run AT an escape and
     // drops the `\` from every token's range (it belongs to no event — ScrAP-73), so
     // an escaped character begins this run with its escaping backslash sitting
@@ -760,9 +788,17 @@ fn text_nodes(md: &str, buf: (i32, i32), src: Range<usize>, rendered: &str) -> V
     let mut buf = buf;
     let mut src = src;
     let mut rendered = rendered;
+    let mut peeled = 0usize;
     while let Some(ch) = rendered.chars().next() {
         let clen = ch.len_utf8();
         if !escaped_at(md, src.start) || sl(md, src.start..src.start + clen) != ch.to_string() {
+            break;
+        }
+        // Never peel into a construct. A delimiter and its content are one node
+        // below and their offsets are relative to the WHOLE run, so peeling a
+        // prefix out from under them would misalign every segment after it — and
+        // an escape that lands inside a construct is not a leading escape anyway.
+        if !at_plain_offset(segs, peeled) {
             break;
         }
         nodes.push(Node::Leaf {
@@ -773,62 +809,128 @@ fn text_nodes(md: &str, buf: (i32, i32), src: Range<usize>, rendered: &str) -> V
         buf = (buf.0 + 1, buf.1);
         src = (src.start + clen)..src.end;
         rendered = &rendered[clen..];
+        peeled += clen;
     }
-    nodes.extend(text_nodes_unescaped(md, buf, src, rendered));
+    nodes.extend(text_nodes_unescaped(
+        md,
+        buf,
+        src,
+        rendered,
+        &rebase(segs, peeled),
+    ));
     nodes
 }
 
-/// The remainder of [`text_nodes`] once any leading escapes have been peeled:
-/// split the run into script segments and emit one node per segment. Separate
-/// only so the peel above can be a loop with a single exit.
-fn text_nodes_unescaped(md: &str, buf: (i32, i32), src: Range<usize>, rendered: &str) -> Vec<Node> {
-    let segments = scan_scripts(rendered);
+/// Whether byte `at` of the un-peeled run sits in a plain, undecorated segment.
+fn at_plain_offset(segs: &[Seg], at: usize) -> bool {
+    segs.iter()
+        .find(|s| s.range.contains(&at))
+        .is_none_or(|s| !s.marker && s.script == Script::None)
+}
 
-    // Reconstruct the pre-scan source by reinstating the stripped markers; if it
-    // matches the real source, every segment aligns 1:1 (no escapes/entities).
-    let mut expected = String::new();
-    for (run, script) in &segments {
-        let m = marker(*script);
-        expected.push_str(m);
-        expected.push_str(run);
-        expected.push_str(m);
+/// The segments of a run whose first `peeled` bytes have been taken off, rebased
+/// onto the remainder. Empty leftovers are dropped, so the result still partitions
+/// what is left.
+fn rebase(segs: &[Seg], peeled: usize) -> Vec<Seg> {
+    if peeled == 0 {
+        return segs.to_vec();
     }
-    if expected != sl(md, src.clone()) {
+    segs.iter()
+        .filter(|s| s.range.end > peeled)
+        .map(|s| Seg {
+            range: s.range.start.max(peeled) - peeled..s.range.end - peeled,
+            script: s.script,
+            marker: s.marker,
+        })
+        .collect()
+}
+
+/// The remainder of [`text_nodes`] once any leading escapes have been peeled:
+/// one node per segment of the run.
+///
+/// A construct's delimiters become a `Paired` branch around its content, so a
+/// selection crossing out of `~~struck~~` reconstructs both halves (2.8b). When a
+/// fence WRAPS other inline markup its two halves land in different events, and
+/// each event then carries only the half it owns — an opener with an empty
+/// `close`, or a closer with an empty `open`, with the nested markup's own nodes
+/// sitting between them as ordinary siblings of the paragraph. That is what makes
+/// a cross-event fence expressible in a tree at all, and `renderer::segments`
+/// refuses any fence for which it would not be (an interleaved one, or one whose
+/// delimiter shares its event with no content).
+fn text_nodes_unescaped(
+    md: &str,
+    buf: (i32, i32),
+    src: Range<usize>,
+    rendered: &str,
+    segs: &[Seg],
+) -> Vec<Node> {
+    // The segments partition the run, so their concatenation IS `rendered`; if
+    // that is not byte-identical to the source it came from, an escape or an
+    // entity intervened and the whole run is atomic — the no-half-token guarantee.
+    if rendered != sl(md, src.clone()) {
         return vec![Node::Opaque { buf, src }];
     }
 
     let mut out = Vec::new();
-    let mut sb = src.start;
-    let mut cb = buf.0;
-    for (run, script) in &segments {
-        let m = marker(*script);
-        let mlen = m.len();
-        let run_chars = run.chars().count() as i32;
-        let content_src = (sb + mlen)..(sb + mlen + run.len());
-        let child_buf = (cb, cb + run_chars);
-        if mlen == 0 {
+    let mut sb = src.start; // source cursor
+    let mut cb = buf.0; // buffer cursor
+    let mut i = 0;
+    while i < segs.len() {
+        let seg = &segs[i];
+        // A plain run: its own leaf, char-precise.
+        if !seg.marker && seg.script == Script::None {
+            let text = seg.text(rendered);
+            let chars = text.chars().count() as i32;
             out.push(Node::Leaf {
-                buf: child_buf,
-                src: content_src,
+                buf: (cb, cb + chars),
+                src: sb..sb + text.len(),
                 one_to_one: true,
             });
-        } else {
-            let full = sb..(sb + 2 * mlen + run.len());
-            let child = Node::Leaf {
-                buf: child_buf,
-                src: content_src.clone(),
-                one_to_one: true,
-            };
-            out.push(Node::Branch {
-                buf: child_buf,
-                open: sb..sb + mlen,
-                close: content_src.end..full.end,
-                kind: BranchKind::Paired, // script marker (^sup^/~sub~/~~strike~~)
-                children: vec![child],
-            });
+            sb += text.len();
+            cb += chars;
+            i += 1;
+            continue;
         }
-        sb += 2 * mlen + run.len();
-        cb += run_chars;
+        // Otherwise a construct: an optional opening delimiter, its content, and
+        // an optional closing delimiter — whichever of the three this event holds.
+        let mut open = sb..sb;
+        if seg.marker {
+            let len = seg.text(rendered).len();
+            open = sb..sb + len;
+            sb += len;
+            i += 1;
+        }
+        let Some(content) = segs.get(i).filter(|s| !s.marker) else {
+            // Refused by `renderer::segments`, so unreachable — but a delimiter
+            // with no content would otherwise silently drop source bytes.
+            continue;
+        };
+        let text = content.text(rendered);
+        let chars = text.chars().count() as i32;
+        let content_src = sb..sb + text.len();
+        let child_buf = (cb, cb + chars);
+        sb = content_src.end;
+        cb += chars;
+        i += 1;
+        let mut close = content_src.end..content_src.end;
+        if let Some(m) = segs.get(i).filter(|s| s.marker) {
+            let len = m.text(rendered).len();
+            close = sb..sb + len;
+            sb += len;
+            i += 1;
+        }
+        let child = Node::Leaf {
+            buf: child_buf,
+            src: content_src,
+            one_to_one: true,
+        };
+        out.push(Node::Branch {
+            buf: child_buf,
+            open,
+            close,
+            kind: BranchKind::Paired, // script marker (^sup^/~sub~/~~strike~~/==mark==)
+            children: vec![child],
+        });
     }
     out
 }
@@ -873,17 +975,6 @@ fn escaped_at(md: &str, pos: usize) -> bool {
     run % 2 == 1
 }
 
-/// The source marker `scan_scripts` strips for each script kind.
-fn marker(script: Script) -> &'static str {
-    match script {
-        Script::None => "",
-        Script::Superscript => "^",
-        Script::Subscript => "~",
-        Script::Strikethrough => "~~",
-        Script::Highlight => "==",
-    }
-}
-
 // ── resolving ─────────────────────────────────────────────────────────────────
 
 /// Translate a preview buffer selection `[a, b)` (char offsets) into the
@@ -909,11 +1000,16 @@ pub(crate) fn resolve_cell(tree: &CopyTree, md: &str, a: i32, b: i32) -> String 
 /// contributes to its table-cell label — the offset basis a per-cell copymap is
 /// built on (the label's plain text, which `label.selection_bounds()` indexes).
 /// Only `Text`/`Code` add glyphs; construct wrappers add none.
-pub(crate) fn cell_width(kind: &RawKind) -> i32 {
+pub(crate) fn cell_width(scripts: &BlockScripts, src_start: usize, kind: &RawKind) -> i32 {
     match kind {
-        RawKind::Text(t) => scan_scripts(t)
+        // Segmented, not counted raw: a tight construct's delimiters are stripped
+        // by the renderer, so counting them here would push every later offset in
+        // the cell one or two characters to the right.
+        RawKind::Text(t) => scripts
+            .segments(src_start, t)
             .iter()
-            .map(|(run, _)| run.chars().count() as i32)
+            .filter(|seg| !seg.marker)
+            .map(|seg| seg.text(t).chars().count() as i32)
             .sum(),
         RawKind::Code(t) => t.chars().count() as i32,
         _ => 0,
@@ -929,7 +1025,34 @@ pub(crate) fn cell_width(kind: &RawKind) -> i32 {
 /// (paragraph/list/heading) are recursed into, contributing only their touched
 /// content. `None` when the selection overlaps nothing.
 pub(crate) fn wrap_span(tree: &CopyTree, md: &str, a: i32, b: i32) -> Option<Range<usize>> {
-    wrap_span_node(md, &tree.root, a, b)
+    let span = wrap_span_node(md, &tree.root, a, b)?;
+    Some(widen_to_constructs(&tree.scripts, span))
+}
+
+/// Grow `span` until it contains every tight construct it touches, whole.
+///
+/// The tree above cannot do this on its own for a fence that WRAPS other inline
+/// markup: pulldown splits it across events, so its two delimiters are separate
+/// half-`Paired` branches with the nested markup's nodes between them, and
+/// `wrap_span_node` reaches only one of them. Iterated because widening onto one
+/// construct can newly touch the next; the construct list is finite and each pass
+/// either grows the span or stops.
+fn widen_to_constructs(scripts: &BlockScripts, span: Range<usize>) -> Range<usize> {
+    let mut cur = span;
+    for _ in 0..crate::limits::MAX_NEST_DEPTH {
+        let mut next = cur.clone();
+        for outer in scripts.outers() {
+            if outer.start < next.end && next.start < outer.end {
+                next.start = next.start.min(outer.start);
+                next.end = next.end.max(outer.end);
+            }
+        }
+        if next == cur {
+            break;
+        }
+        cur = next;
+    }
+    cur
 }
 
 fn wrap_span_node(md: &str, node: &Node, a: i32, b: i32) -> Option<Range<usize>> {
@@ -1012,11 +1135,14 @@ fn wrap_span_node(md: &str, node: &Node, a: i32, b: i32) -> Option<Range<usize>>
 /// ScrAP-66/ScrAP-75) — pulldown has no highlight option at all and its
 /// caret/tilde flanking rules never match the tight Pandoc forms — so they arrive
 /// here as plain `Text` with no event to match, and a pulldown-only walk sees
-/// nothing to balance (ScrAP-195). Hence the second pass below, over each `Text`
-/// event's source slice, using the very scanner that owns those constructs. Note
+/// nothing to balance (ScrAP-195). Hence the second source, below: the block-scope
+/// table `renderer::segments` builds, whose whole-construct ranges are what an
+/// annotation must swallow entire. It is scanned ONCE, outside the fixpoint loop —
+/// a construct's extent does not depend on the selection being balanced against it,
+/// and re-deriving it per pass would re-parse the document up to 32 times. Note
 /// there is deliberately no `Tag::Strikethrough` arm: `md_options()` does not
 /// enable pulldown's strikethrough, so such an event can never be emitted — the
-/// scanner pass is what covers `~~`.
+/// table is what covers `~~`.
 pub(crate) fn balance_source_span(
     md: &crate::renderer::NormalizedMd<'_>,
     sel: Range<usize>,
@@ -1031,6 +1157,11 @@ pub(crate) fn balance_source_span(
     // text; that is what makes normalising upstream safe rather than a coordinate
     // change.
     let text = md.as_str();
+    // The tight constructs, whole. Sourced from the block-scope table rather than
+    // a per-`Text`-event scan so a fence that WRAPS other inline markup
+    // (`~~a **bold** b~~`) is one indivisible extent here too — annotating `bold`
+    // must not land `{==…==}` between the fence's halves.
+    let outers = BlockScripts::scan(text);
     let mut cur = sel;
     // Nesting is finite; the guard only stops a pathological non-convergence.
     for _ in 0..32 {
@@ -1056,19 +1187,9 @@ pub(crate) fn balance_source_span(
                 swallow(src, &mut next);
                 continue;
             }
-            // A `Text` event's source slice is verbatim (pulldown emits escapes and
-            // entities as their own events), so a span the scanner finds within it is
-            // directly a source range once shifted by the event's start.
-            if matches!(&ev, Event::Text(_)) {
-                // `sl()` (not a raw `md[..]`): every other slice in this module
-                // goes through it, and this one did not (QA round 3, P-8).
-                for found in crate::renderer::scan_script_spans(sl(text, src.clone())) {
-                    swallow(
-                        src.start + found.outer.start..src.start + found.outer.end,
-                        &mut next,
-                    );
-                }
-            }
+        }
+        for outer in outers.outers() {
+            swallow(outer.clone(), &mut next);
         }
         if next == cur {
             break;

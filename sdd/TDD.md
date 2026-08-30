@@ -1301,14 +1301,24 @@
 - **When** the user looks at it
 - **Then** it reads `(Hn)` with no tier selected, and its menu lists H1–H6; picking a level applies it and the caption returns to `(Hn)`
 
-### 10.10 Superscript and subscript render raised/lowered and smaller
+### 10.10 Superscript and subscript render raised and lowered
 - **Given** a document containing `E=mc^2^` and `H~2~O`
 - **When** it is rendered in the preview
 - **Then** the `2` after `^…^` appears **raised and smaller** (superscript) and the `2` in `~…~` appears **lowered and smaller** (subscript), with the `^`/`~` markers removed
-- **And given** `~~struck~~` text in the same document
-- **When** it is rendered
-- **Then** it is still rendered as strikethrough — a single `~` is subscript, a double `~~` is strikethrough, and the two do not interfere
-- **And** this strikethrough contract is scoped to a **plain** `~~…~~` run: a `~~` fence that *wraps other inline markup* (e.g. `~~a **bold** b~~`) is explicitly **out of scope** — by design the `~~` render literally while the inner markup still renders (accepted limitation; root cause: `scan_scripts` runs per pulldown `Text` event and nested markup fragments the fence across events, ScrAP-66)
+- **And** recognition is **tight** in the Pandoc sense — a marker opens a run only when its partner arrives before any whitespace — so `2^10` (never closed), `1~2` and `a^b c^d` (a space inside) stay **literal**
+
+### 10.10a Strikethrough renders struck, and one tilde never becomes two
+- **Given** a document containing `~~struck~~`
+- **When** it is rendered in the preview
+- **Then** it appears **struck through** with the `~~` markers removed, and its content may contain spaces (`~~several words gone~~`) — unlike the tight `^`/`~` runs of 10.10
+- **And** a single `~` is subscript while a double `~~` is strikethrough, and the two do not interfere: a multi-tilde line `H~2~O and CO~2~` renders **both** subscripts and no strike
+
+### 10.10b A tight fence spans the inline markup it wraps
+- **Given** a `~~` or `==` fence that *wraps other inline markup* — `~~a **bold** b~~`, `==a *em* b==`, a fence around a link, or one spanning a soft line break
+- **When** it is rendered in the preview
+- **Then** the whole run is struck (or highlighted) **including the nested markup**, which keeps its own formatting, and the `~~`/`==` markers are removed — the fence is recognised across the inline markup it wraps, not only within one unbroken run
+- **And** the same run copies back as its original source with both delimiters intact, exports struck, and reads without markers in the outline; annotating any part of it wraps the **whole** fence rather than landing `{==…==}` between its halves
+- **And** a fence that *interleaves* with the markup rather than nesting inside or around it (`~~a **b~~ c**`, whose closing `~~` sits inside a `**` that opened inside the fence) stays **literal** — it describes no tree, so it is refused rather than rendered as a guess; likewise a `~~`/`==` that would have to span a **block** boundary (two table cells, two paragraphs) or that is really the content of a code span
 
 ### 10.11 Insert Link / Image / Table prompt for fields and splice once
 - **Given** the editor pane is focused, with an optional selection

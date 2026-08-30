@@ -346,7 +346,7 @@ fn build_products(
                 cell_off = 0;
             }
             Event::End(TagEnd::TableCell) => {
-                cell_maps.push(crate::copymap::build(md, &cell_evs, cell_off));
+                cell_maps.push(crate::copymap::build(md, &cell_evs, cell_off, &r.scripts));
                 let span = if cell_evs.is_empty() {
                     0..0
                 } else {
@@ -359,7 +359,7 @@ fn build_products(
             }
             _ if cell_active => {
                 if let Some(kind) = &copy_kind {
-                    let w = crate::copymap::cell_width(kind);
+                    let w = crate::copymap::cell_width(&r.scripts, src_start, kind);
                     cell_evs.push(crate::copymap::RawEv {
                         buf: (cell_off, cell_off + w),
                         src: src_range.clone(),
@@ -385,7 +385,7 @@ fn build_products(
     }
     let char_count = buf.char_count();
     let source_map = finalize_source_map(source_map, char_count, md_owned.len());
-    let copymap = crate::copymap::build(md, &raw_evs, char_count);
+    let copymap = crate::copymap::build(md, &raw_evs, char_count, &r.scripts);
     attach_cell_copymaps(&r.anchored, &cell_maps);
     // Build-time drift guard (debug only): assert the copymap's 1:1 leaves match
     // the buffer the renderer just filled (copy-as-Markdown consistency guard).
