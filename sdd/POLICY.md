@@ -102,6 +102,25 @@ Before any change is considered valid, run these steps in order:
    body registered with one harness and not the other. Write bodies as
    `#[gtktest::test]`; see the testing section below for that rule, for when a check
    needs its own `harness = false` target instead, and for why the choice matters.
+   **In a session with no accessibility bus — any agent session, and any session
+   whose `at-spi-dbus-bus.service` has gone stale — this step SIGTRAPs before it
+   tests anything.** GTK emits `Unable to connect to the accessibility bus` as a
+   `Gtk-CRITICAL`, and `G_DEBUG=fatal-criticals` promotes it. The failure names
+   accessibility and is not about accessibility, is not about the change under test,
+   and reproduces identically on an untouched tree — so it costs a control build to
+   disbelieve, every time, unless it is written down. **The runner now handles this** —
+   `scripts/run-integration.sh`, which the contract points step 5 at on Linux, wraps the
+   suite in `dbus-run-session` so at-spi autolaunches on a bus of its own. This paragraph
+   used to instruct the reader to do that by hand, with nothing in the toolchain doing it,
+   so every caller either supplied the wrapper themselves or ate the SIGTRAP; the helper's
+   header records what else it owns and why none of it fits on a command line. On the operator's live session the
+   other repair is `systemctl --user restart at-spi-dbus-bus.service`, which is needed
+   when the unit reports `active (running)` while its socket no longer exists —
+   `org.a11y.Bus.GetAddress` then returns an address for a socket that is not there,
+   so the service looks healthy from every angle except use. MEASURED twice this way,
+   once after a nested `dbus-run-session` in a test rig unlinked
+   `/run/user/1000/at-spi/bus_0` on teardown: a rig that claims that path takes the
+   operator's session down with it.
 6. **Coverage gate** — `scripts/coverage.sh` must pass. Scoped line coverage is a
    no-regression **ratchet**, not a target: the script owns both the floor (`FLOOR`)
    and the scope (`IGNORE`), and is the only place either is written down. **Do not
@@ -126,6 +145,22 @@ Before any change is considered valid, run these steps in order:
    it hide behind the exclusion — that extraction is the mechanism by which the floor
    rises. The excluded set and its per-module rationale live beside the regex, in the
    script.
+   **The measured scope is itself gated, and it is reported FIRST.** The set of files
+   the gate measures is recorded in `scripts/coverage.scope`, re-derived on every run
+   from the same invocation that produces the percentage, and compared. When it differs
+   the gate names the files that entered or left, states that the SCOPE changed, and
+   **withholds the floor verdict entirely** — a ratchet compared across two different
+   scopes measures nothing. This exists because every `IGNORE` term names a directory
+   *depth*, so a new subdirectory under an excluded tree used to pull its files into
+   scope at 0% and the ratchet then failed as *"your change reduced coverage"*, sending
+   the reader after untested code they had just written; when the entering files were
+   small it cleared the floor and said nothing at all, which is worse. It catches the
+   opposite direction too — a floor that climbs because an exclusion was widened is now
+   a failure rather than a success. Update the manifest with
+   `scripts/coverage.sh --update-scope`, after deciding which side each named file
+   belongs on, in the same commit as the layout change, exactly as raising `FLOOR` is.
+   The manifest records what IS measured; `IGNORE` remains the policy about what should
+   be, and the manifest is never passed to llvm-cov.
    Tooling is `cargo-llvm-cov`, a dev subcommand rather than a crate dependency:
    `rustup component add llvm-tools-preview && cargo install cargo-llvm-cov`.
 7. **UI-behaviour coverage alignment** — if the change adds, alters, or removes any
@@ -148,70 +183,75 @@ Before any change is considered valid, run these steps in order:
    diagram as a broken-image placeholder (ScrAP-130). Then check it on a
    light **and** a dark background; most rasterisers — librsvg included — ignore
    `prefers-color-scheme`, so the light defaults must read on their own.
-9. **Cross-reference gate** — `scripts/lint-references.sh` must pass (Windows: the
-   equivalent `scripts/lint-references.ps1`, which `packaging/windows/pipeline.ps1`
-   runs as this same step). **A gate is its pattern *and* the set of files it runs
-   over, and parity is required in both.** The two scripts share (a) one pattern and
-   one `--self-test`/`-SelfTest` corpus, string-for-string, and (b) one file
-   enumeration, `scripts/lint-references.scan`, which both read rather than restate —
-   *one* enumeration, which **every** check consumes and which `--list-scan` prints
-   exactly, ordinal-sorted so a clean parity diff is an empty one. The contract's
-   `maxdepth` is a tripwire, not a filter: a file past the budget makes both gates
-   refuse to run and name it, because a budget that silently truncated the set would
-   make a check leniently incomplete without saying so.
-   Neither half is optional, and (b) is here because it was learned the hard way: this
-   step once claimed the shared corpus alone meant "neither can drift into being the
-   lenient one", while the corpus pinned only the check-1 regex and the two scripts had
-   *already* drifted on enumeration — `.agents/`, `docs/` and `THIRD-PARTY-LICENSES.md`
-   were linted on Linux and invisible on Windows, so a dangling link in any of them
-   failed one gate and passed the other. **CI now performs that comparison on every
-   push** — see [§ Continuous integration](#continuous-integration) — so it is a gate
-   rather than the errand it was, and this step no longer asks you to run `--list-scan` /
-   `-ListScan` by hand. Two things it is worth knowing the shape of: the diff is over
-   three *platforms* and not two *ports*, because the contract names the bash script for
-   Linux **and** macOS and BSD tooling is not GNU's; and a claim of parity that nothing
-   checks is worse than no claim, because the next author trusts it. It enforces
-   ten rules mechanically — three over citations into the SDD registers, two over
-   the test architecture, both of whose failure modes are silent (that
-   `src/gtk_suite.rs`'s duplicated module list has not drifted from `src/lib.rs`'s — a
-   module missing there drops every test body inside it from the main-thread run, with
-   nothing failing — and that `#[gtk::test]` has not returned in place of
-   `#[gtktest::test]`, check 5, nor been PRESCRIBED in the documents a developer acts
-   on, check 5b — a lint's input set is source, so until 5b existed nothing in the
-   toolchain could read the prose telling someone to write the banned attribute, and
-   this file did exactly that for as long as check 5 had existed, ScrAP-222), and one
-   over document paths: every file the tree points at must
-   exist. That last is what a plan retirement breaks, since a `PLAN.*.md` is deleted by
-   design once implemented and every pointer written while it existed dangles at once —
-   including the bare `PLAN.<topic>` **section** citations code comments actually write
-   (`PLAN.<topic> D3`, no `.md`), which is the form that let 21 danglers survive a sweep
-   that believed itself complete. It deliberately ignores a bare document name used as a
-   *mention* in prose, which resolves against nothing. The seventh is over the
+9. **Cross-reference gate** — `cargo xtask lint-references` must pass. One command on
+   every platform, and that is the point of it being a `cargo` subcommand: this gate was
+   a bash script plus a hand-synced PowerShell port, ~3,400 lines implementing one rule
+   twice, and the premise that forced the split — "neither platform has the other's
+   shell" — was measured false, while a single QA round found seven defects that existed
+   only because there were two ports. `cargo` is on PATH wherever this repository builds.
+   The gate crate is a workspace **default member**, so steps 1, 2 and 4 format, lint and
+   test it like any other code; its corpora are ordinary `#[test]` cases rather than a
+   bespoke `--self-test` mode, which is where those defects concentrated.
+   **A gate is its pattern *and* the set of files it runs over.** The set is a data file,
+   `scripts/lint-references.scan`, which the binary reads rather than restates — *one*
+   enumeration, which **every** check consumes. Its `maxdepth` is a tripwire, not a
+   filter: a file past the budget makes the gate refuse to run and name it, because a
+   budget that silently truncated the set would make a check leniently incomplete without
+   saying so. That the set is half the gate was learned the hard way — the two ports had
+   drifted on enumeration while POLICY claimed a shared pattern meant neither could be
+   the lenient one, so `.agents/`, `docs/` and `THIRD-PARTY-LICENSES.md` were linted on
+   Linux and invisible on Windows (ScrAP-207).
+   It enforces its rules mechanically — the crate owns the check definitions and **the
+   count is deliberately not restated here**, for the same reason as the coverage floor
+   and the input limits: this sentence said "nine" while the gate implemented fourteen,
+   and no reader could tell. The run output enumerates every check by number and title as
+   it executes. The classes are citations into the SDD registers; two over the test
+   architecture, both of whose failure modes are silent (that `src/gtk_suite.rs`'s
+   duplicated module list has not drifted from `src/lib.rs`'s — a module missing there
+   drops every test body inside it from the main-thread run, with nothing failing — and
+   that `#[gtk::test]` has not returned in place of `#[gtktest::test]`, check 5, nor been
+   PRESCRIBED in the documents a developer acts on, check 5b: a lint's input set is
+   source, so until 5b existed nothing in the toolchain could read the prose telling
+   someone to write the banned attribute, and this file did exactly that for as long as
+   check 5 had existed, ScrAP-222); one over document paths, that every file the tree
+   points at must exist. That last is what a plan retirement breaks, since a `PLAN.*.md`
+   is deleted by design once implemented and every pointer written while it existed
+   dangles at once — including the bare `PLAN.<topic>` **section** citations code
+   comments actually write (no `.md`), which is the form that let 21 danglers survive a
+   sweep that believed itself complete. It deliberately ignores a bare document name used
+   as a *mention* in prose, which resolves against nothing. Another is over the
    **application ID**: `src/icons.rs` is its source of truth and Rust derives it from
    there, but the desktop entry, GResource manifest, `Info.plist` template and the
-   install/uninstall scripts each restate the literal, and a change to one of them
-   fails no build while breaking a different platform's icon or Launch Services
-   registration. The eighth is over the **citation FORM**, and it is the one rule here
-   that bans a spelling rather than checking a target: an entry in
-   `sdd/ANTI-PATTERNS.md` is cited `ScrAP-N`, one in the `gtk4-rs` skill is cited
-   `GTK4Rs/AP-N`, and **a bare `AP-N` is illegal anywhere in the tree** (check 8).
-   Illegal, not "means the skill" — it was this project's spelling historically and the
-   skill's later, so its correct and incorrect uses are textually identical and no
-   reader can tell a deliberate citation from one a sweep missed. Both legal forms are
-   deliberately **single tokens**: a two-word form is split by any Markdown or
-   `rustfmt` wrap, and since a `GTK4Rs/AP-N` can only ever be checked for *form* (the
-   skill need not be installed), its whole value is that a grep can **enumerate** the
-   set a human must audit — which a wrapped citation silently drops. When a lesson is
-   held by both registers, cite `ScrAP-N`; this one is always resolvable. ScrAP-231
-   records what the previous, laxer version of this rule cost. Checks 4, 5, 6, 7 and 8
-   were each mutation-tested when written.
-   The ninth is over **tracked PATH LEGALITY**: `< > : " | ? *` and a trailing dot or
+   install/uninstall scripts each restate the literal, and a change to one of them fails
+   no build while breaking a different platform's icon or Launch Services registration.
+   Another is over the **citation FORM**, and it is the one rule here that bans a
+   spelling rather than checking a target: an entry in `sdd/ANTI-PATTERNS.md` is cited
+   `ScrAP-N`, one in the `gtk4-rs` skill `GTK4Rs/AP-N` and one of its techniques
+   `GTK4Rs/T-N`, one in the `general-engineering-principles` skill `GEP-N`, and **a bare
+   `AP-N` or `T-N` is illegal anywhere in the tree** (check 8). Illegal, not "means the skill" — it was this
+   project's spelling historically and the skill's later, so its correct and incorrect
+   uses are textually identical and no reader can tell a deliberate citation from one a
+   sweep missed. **`sdd/ANTI-PATTERNS.md`'s own header is the authority on this list, and
+   this paragraph is a summary of it** — read that one before concluding a form is
+   unsanctioned. Said because this sentence enumerated only the first two for as long as
+   it existed, and a seat holding the register's pen answered from it rather than from the
+   register, told a peer that `GEP-N` was illegal, and was corrected by the peer quoting
+   the header back with line numbers — with about eighty `GEP-N` tombstones already in the
+   file. Every legal form is deliberately a **single token**: a two-word form is
+   split by any Markdown or `rustfmt` wrap, and since a `GTK4Rs/AP-N` can only ever be
+   checked for *form* (the skill need not be installed), its whole value is that a grep
+   can **enumerate** the set a human must audit — which a wrapped citation silently
+   drops. When a lesson is held by both registers, cite `ScrAP-N`; this one is always
+   resolvable. ScrAP-231 records what the previous, laxer version of this rule cost.
+   Checks 4, 5, 6, 7 and 8 were each mutation-tested when written, and so were the
+   corpora that now stand in for the old self-test.
+   One check is over **tracked PATH LEGALITY**: `< > : " | ? *` and a trailing dot or
    space are illegal in a Win32 filename, so **one such path makes `git checkout` refuse
    the entire tree** — not that file, the whole tree — blocking every Windows clone and
    anyone bisecting through the commit. MEASURED: an unquoted `sed -i 's|a|b|'` had its
    `|` eaten by the shell, wrote the replacement half to disk as a filename, and
-   `git add -A` committed it; fmt, clippy, the whole suite and the other eleven checks
-   all passed, and only the Windows seat could see it, one fetch later, by being blocked.
+   `git add -A` committed it; fmt, clippy, the whole suite and every other check all
+   passed, and only the Windows seat could see it, one fetch later, by being blocked.
    **Its input set is `git ls-files`, deliberately NOT `lint-references.scan`** — the
    offending path landed in the repository root, outside the curated scan, and a check
    whose input is narrower than its hazard is ScrAP-132's species.
@@ -235,11 +275,11 @@ Before any change is considered valid, run these steps in order:
    were found in a single 103-line change *after* fmt, clippy `-D warnings` and 625
    passing tests had all gone green, and the third was found by hand during a
    cross-branch transfer — every other gate passes identically whether the citations
-   are right or wrong. The script owns the check definitions and the
-   PLAN exclusion; do not restate them here. **A PASS does not mean the citations are
-   correct** — check 2 proves an entry exists, never that it is the right one; a real
-   number naming the wrong lesson passes. That residue is a review obligation, and
-   the reason it arises is documented in the script.
+   are right or wrong. The crate owns the check definitions and the PLAN exclusion; do
+   not restate them here. **A PASS does not mean the citations are correct** — check 2
+   proves an entry exists, never that it is the right one; a real number naming the wrong
+   lesson passes. That residue is a review obligation, and the reason it arises is
+   documented at the check.
 
 10. **Installer artefact** — OPT-IN (`--package` / `-Package`), and the only step that is.
     Every other gate answers "is this change valid?" and belongs after every edit; this
@@ -410,7 +450,7 @@ silently returning in a future change.
   test body serialized with a single init, so many GTK-object tests coexist and
   **no `--test-threads=1` is needed**. The test body then needs no `gtk::init()`
   of its own.
-  **Never `#[gtk::test]`** — it is superseded, `lint-references.sh` check 5
+  **Never `#[gtk::test]`** — it is superseded, `cargo xtask lint-references` check 5
   rejects it outright, and the reason it must be the *portable* attribute is in
   [Verifying a change on macOS](#verifying-a-change-on-macos). That section is
   the authority on this rule; it is cross-linked from here because a reader
@@ -511,7 +551,7 @@ libtest's concurrency, not which thread the binding's own pool uses).
 
 Choosing `#[gtk::test]` over `#[gtktest::test]` is **invisibly** wrong: the test
 passes on Linux, so nothing fails, while the body is silently absent from the portable
-run. `lint-references.sh` check 5 therefore rejects the attribute outright — a lint is
+run. `cargo xtask lint-references` check 5 therefore rejects the attribute outright — a lint is
 the strongest available rung, since a clippy `disallowed-methods` ban cannot reach an
 attribute macro. Check 5b rejects *prescribing* it in these documents, which is the
 same failure one level up (ScrAP-222).
@@ -566,6 +606,60 @@ of its own, or the platforms drift. Both existing seams follow this — the
 single-instance handoff emits the same `open`/`activate` the D-Bus path does, and
 the appearance module writes the same `GtkSettings` properties a desktop would,
 re-theming nothing itself.
+
+## Cross-platform by default
+
+**This project ships on Linux, macOS and Windows, and all three are first-class.**
+Linux is the canonical platform for the gates (§ Build), which is a statement about
+where verification happens — not about which platform the code is written for. Write
+every line as portable unless it lives in a platform seam (§ Platform seams).
+
+- **Reach for the standard library's portable abstraction before the platform's own.**
+  `std::path::Path`/`PathBuf` over string concatenation with a separator; `std::fs`
+  over an OS call; a portable IPC choice over a hand-picked transport. Where the
+  toolkit or the standard library already spans the three platforms, use it and do not
+  re-derive the difference.
+- **Never hardcode a path separator, a path shape, or a filesystem root.** Not in
+  production code, and — the case that actually bites — **not in a test fixture**. A
+  POSIX-shaped literal like `/etc/passwd` reads as a constant and is not one: it is an
+  absolute path on unix and a rooted, drive-relative path on Windows, so a test using it
+  exercises a *different* case on each platform while looking identical everywhere. A
+  fixture that encodes one platform's grammar must be `#[cfg]`-selected per platform, so
+  each tests its own shape (a drive-qualified path and a UNC path on Windows, the POSIX
+  one on unix) — not one platform's literal inherited by the others.
+- **A predicate over a path is a question about the HOST's grammar, not about the
+  string.** `Path::is_absolute` is the standing example: on Windows it requires a volume
+  prefix, so a rooted path with no drive answers `false` there and `true` on unix.
+  Reason about what the platform means by the term, not about what the method name
+  suggests.
+- **Filesystem and IPC facilities are not universal.** A unix domain socket is a named
+  pipe elsewhere; a FIFO has no Windows form at all; POSIX mode bits are ACLs on
+  Windows; a symlink needs privilege there while a directory junction does not; case
+  sensitivity, path length limits and legal filename characters all differ (§ Build
+  pipeline's path-legality gate exists because one illegal character blocks every
+  Windows clone of the tree). Where a facility is genuinely absent, that is a platform
+  seam, not an `#[cfg]` sprinkled through shared code.
+- **Line endings are a property of the DOCUMENT, not of the host.** A CRLF file opens
+  on Linux and an LF file opens on Windows, so never branch on the platform to decide
+  what a line separator is, and never assume the host's convention for text this
+  application did not write. The one rule the project holds about the shape a buffer may
+  take is `lineendings.rs`'s — applied at the doors documents arrive by and never at a
+  parse site — so do not re-derive it at a third site. Code downstream of that may depend
+  on a separator being exactly `"\n"`, but **only where the code that EMITTED it is in
+  view** (the preview renderer's own `newline()` is the standing case). Say so at the
+  site and pin it with a test that renders the CRLF twin and compares: without one, the
+  next reader cannot tell a measured invariant from an unexamined platform assumption,
+  and neither can the seat asked to ratify it.
+- **A capability a test needs may be unavailable rather than absent.** Skip loudly
+  through the project's one skip marker so the run reports the limb as unverified — never
+  let a guard compile to an empty passing function on the platform that most needs it.
+  Before accepting a skip, ask whether a different mechanism reaches the same guarantee
+  on that platform.
+- **Verification is per platform, and the peer seats own it.** A change that touches
+  the filesystem, IPC, packaging or a path is not ratified by passing on Linux; it is
+  ratified when the macOS and Windows seats have run it (§ Verifying a change on macOS,
+  § Cross-machine seat branches). Never weaken a shared rule — a lint, a gate, a floor —
+  to make one platform pass.
 
 ## Code style
 
@@ -741,12 +835,24 @@ full account is ScrAP-225; the rule above is what stops it recurring.
     [`CAM.md`](CAM.md) — the two SSOT rows of those matrices *are* this
     rule, not a second copy of it.
 - **Keyboard accelerators are part of the single-source-of-truth contract.** Each
-  command's accelerator is declared **once** in its descriptor (`Cmd`/`FmtCmd`) and
-  registered from there via `set_accels_for_action`; the *same* string drives the
-  menu/context-menu accel **hint**, so the active binding and its displayed hint can
+  command's accelerator is declared **once** in its descriptor (`Cmd`/`FmtCmd`/
+  `InlineCmd`) and registered from there via `set_accels_for_action`, which is what
+  every displayed hint derives from — so the active binding and its displayed hint can
   never diverge. This holds for both the editor/view actions and the formatting
   actions. Adding or changing a command — or its shortcut — means editing its single
   descriptor, not each surface and not a separate accel-registration list.
+  **The menubar model therefore sets NO `accel` attribute, and adding one is a
+  regression even though it looks like an improvement.** GTK already draws the hint
+  from the registered accelerator (`gtk_menu_tracker_item_get_accel` falls through to
+  `gtk_action_muxer_get_primary_accel`, i.e. `accels[0]`) — on the `GtkPopoverMenuBar`
+  *and* on the macOS system menu bar, which is a different renderer calling the same
+  accessor. So an attribute cannot add a hint; it can only restate one, and where the
+  two disagree **the attribute wins silently**. MEASURED: removing the whole mechanism
+  left the View menu pixel-identical (AE=0), and a build that set `<Primary><Alt>F12`
+  on Zoom In displayed exactly that while `Ctrl++` went on working. `menubar.rs`'s
+  `no_menu_item_declares_its_own_accel_attribute` holds it. The context menu is the
+  deliberate exception — it is hand-built widgets rather than a `GMenu`, gets no
+  fallback, and so reads the descriptor itself.
 - **Prefer extending an existing code path over adding a parallel one.** Before
   introducing a new function, action, save/write path, or render pass, scan the
   codebase for a path that already performs the equivalent work and extend it.
@@ -818,9 +924,19 @@ full account is ScrAP-225; the rule above is what stops it recurring.
   where an otherwise-hardcoded value lives, and it is an ordinary theme — **no key
   is system-only and no theme is second-class**. The rule covers geometry
   deliberately: a value that is hardcoded is hardcoded regardless of its type, and
-  exempting geometry would make this rule mean less than it says. Bounds: a theme
-  sets the *metric of a decoration*; it does not change *what is drawn* or *how
-  layout is computed* (a bounded/centred "measure" is layout behaviour, and out).
+  exempting geometry would make this rule mean less than it says. **Bounds:
+  a theme selects from a closed vocabulary of decorations the engine already knows
+  how to draw, and states their appearance and metric. It does not describe new
+  drawing, and it does not change how layout is computed** (a bounded/centred
+  "measure" is layout behaviour, and out). Two invariants make the wider bound safe,
+  and a decoration that breaks either is out of the vocabulary regardless of how it
+  is spelled: the engine holds **no per-theme knowledge** (TDD 18.14 — a new theme
+  needs no code change), and every decoration is either **inert** (absent unless a
+  theme asks for it, leaving System byte-identical — TDD 18.2) or occupies space the
+  engine reserves for it **unconditionally**. An unset key means *not present*, never
+  *guess*. The previous, narrower bound — "a theme sets the metric of a decoration;
+  it does not change what is drawn" — is superseded; it is recorded here because
+  code and comments written under it are still correct, just no longer the limit.
   Themed geometry is a **design-time value at zoom 1.0**, applied through the
   existing `px(n) = (n * zoom).round()` path — pixel metrics are widget/Pango
   properties and do **not** follow the CSS `font-size` rule, so they must be scaled
@@ -846,6 +962,13 @@ full account is ScrAP-225; the rule above is what stops it recurring.
   the resolved pixel** (`iter_location().x()` on a realized view), never by
   tag-property equality — that bug class is invisible to tag-level tests
   (ScrAP-121).
+- **Bundled decoration art is an original design.** A sprite or glyph shipped in
+  `data/themes.toml` may evoke an idiom but must not reproduce another work's
+  expression: no franchise names, no copied character, block or tile art, and no
+  edited derivative of one — a trace is still a copy. A bare colour is the stated
+  exception, carrying no copyrightable expression. This is a merge gate rather than
+  a taste note, and it is not recoverable after the fact: art produced from a
+  reference has to be discarded and redrawn, not sanitised.
 - **Every menubar nested-submenu action must call `window::dismiss_stray_menubar_popovers`**
   after it fires (on the active window, for an app-scoped action). Otherwise GTK
   4.6–4.12 leaks the activation onto a top-level menu (ScrAP-116). It is
@@ -978,6 +1101,32 @@ diffing the trees, not by trusting a record of what was picked** (`git diff HEAD
 -- <paths>` before deleting a branch), because a seat that is still working moves the target
 under a confirmation that was accurate when it was sent.
 
+## One commit per batch
+
+**A batch of debt-register work lands as exactly one commit on the integration branch, or it
+has not landed.** A batch is a set of issues sharing a mechanism, a fixture or a verification
+rig — they are fixed together or not at all — so develop on a `feature/<batch>` branch with as
+many working commits as the work wants, then land with `git merge --squash` and one commit
+whose message names the batch and enumerates what it closes. Never fast-forward a batch
+branch, and never cherry-pick half of one.
+
+The reason is what a *published* revision is for. Splitting a batch into several commits
+publishes intermediate states in which the mechanism is half-replaced — the old hand-off gone
+and the new one not yet read by every consumer — and those are exactly the revisions a
+`git bisect` lands on and a peer seat fetches mid-flight. One commit per batch keeps every
+revision on the branch a state the whole batch's tests describe.
+
+**A group of issues that merely shares a SUBSYSTEM is not a batch.** The test is a shared
+mechanism, fixture or verification rig; two issues in one file that need two different
+mechanisms are two batches. Stated because the subsystem reading is the tempting one and it
+produces batches that cannot land as one commit.
+
+**A batch that will not fit one commit is not one batch** — that is the signal to re-cut it,
+not to relax the rule. Two mechanisms wearing one batch's name is the thing this prevents.
+Seat branches (§ Cross-machine seat branches) are unaffected: a seat's branch is integrated
+into the batch branch and the squash carries it, so its work reaches the integration branch
+inside the batch's single commit rather than beside it.
+
 ## SDD register writes
 
 **Route the lesson before you write it, and there are three destinations.** A lesson
@@ -1047,6 +1196,23 @@ caught it, which is the gate working, not friction to route around.
 
 ## Prohibited actions
 
+- **Never run `git checkout` against a FILE or a path.** Not to revert a mutation, not
+  to undo an experiment, not to "clean up" a scratch edit. It overwrites the working tree
+  from the index and there is **no way back**: no reflog entry, no stash, no dangling
+  object, nothing. Every other destructive git operation this project might reach for
+  leaves a recovery path; this one does not.
+  **MEASURED 2026-08-28**, and it cost real work: a seat mid-way through a multi-file
+  change used `git checkout src/tags.rs` to back out a one-line *mutation test*, and
+  discarded the entire uncommitted implementation in that file along with it — twice, in
+  two files, before noticing. The mutation run that followed then reported the guard as
+  PASSING, because what it was actually exercising was the reverted build (the ScrAP-239
+  family: a control run silently driving the wrong artefact). The work was only
+  recoverable because the patches happened to still be readable in that session's
+  transcript, which is luck, not a procedure.
+  **Instead: copy the file aside first** (`cp src/x.rs /tmp/x.rs.good`) and restore with
+  `cp`. It is one extra command, it is reversible, and it does not care whether the file
+  had other uncommitted work in it. The same goes for reverting a whole experiment: prefer
+  a copy or an explicit reverse edit over asking git to erase a file you have not committed.
 - Do not use `sudo` in build, test, or run commands — the agent cannot enter a
   password and the command will hang. If a system development library is
   missing, ask the human to install it (e.g. via a `!`-prefixed session command).
@@ -1131,7 +1297,18 @@ ScrAP-277 records the run that found both this and the `change_action_state` def
 corrects its own first reading of the trade. Windows carries it too, having confirmed its own suite clean **and mutation-tested the
 gate** — reverting one of the three fixes above makes the suite pass with the flag off and
 die with it on, which is the only evidence that distinguishes an armed gate from a quiet
-one. Note the **death code differs by platform**: a promoted critical is `SIGTRAP` (exit
+one.
+
+**LINUX IS NOW MUTATION-TESTED TOO, and it was not when this paragraph first claimed the
+flag was armed here.** That gap is worth naming rather than quietly closing: this document
+states mutation testing to be the only admissible evidence that a gate can fail, Windows
+supplied it, and the CANONICAL platform did not — so the strongest claim in this section
+rested on the platform with the least evidence behind it. MEASURED 2026-08-21, on the
+`a11y` walk's setup: reverting `activate_action(&window, "find-replace", None)` to the
+`change_action_state` call it replaced gives `test result: ok. 13 passed` with the flag
+off, and `signal: 5, SIGTRAP` with `G_DEBUG=fatal-criticals` set. Restored, the same suite
+passes under the flag. Passing, dying, and passing again is the three-state evidence; a
+green run alone would have been the thing this paragraph warns about. Note the **death code differs by platform**: a promoted critical is `SIGTRAP` (exit
 133) on Linux and `0xC0000409 STATUS_STACK_BUFFER_OVERRUN` under MSVC, where the harness
 reports only "test exited abnormally".
 

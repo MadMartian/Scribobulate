@@ -48,10 +48,13 @@ impl SidebarPane {
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .min_content_width(min_content_width)
-            // A short min-content-height so that when BOTH panes are shown neither
-            // ScrolledWindow crushes the other to ~0 (a ScrolledWindow reports a tiny
-            // minimum — the collapsible-sections analogue of the Paned hazard the plan
-            // warns about); both vexpand, so they still share the sidebar height.
+            // A short min-content-height, because a ScrolledWindow otherwise reports a
+            // tiny minimum and would let the other section crush it to ~0. Since the
+            // sidebar became a vertical GtkPaned (TDD 20.21) this value does a second
+            // job: with `shrink_*_child(false)`, each section's minimum IS the divider's
+            // travel limit, so it is what stops a drag from hiding a section the pane's
+            // action still reports as shown. Both still vexpand, for the single-section
+            // case where the Paned allocates one child the whole height.
             .min_content_height(80)
             .vexpand(true)
             .build();

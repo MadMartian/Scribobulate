@@ -37,6 +37,24 @@ waiting for you when you reopen it.
 > *One thing we're both very proud of is using Scribobulate to improve Scribobulate!*
 > -- *MadMartian*
 
+## Why I built it
+
+I run my models locally. [Ollama](https://ollama.com/), on my own hardware, and I want that option to stay
+open, because freedom from cloud computing and cloud providers should always be
+available to a developer. That is the first reason Scribobulate renders on the CPU
+and holds 0 MiB of VRAM: every megabyte of GPU memory it leaves alone is a megabyte
+your models get to use.
+
+The second reason is that I wanted it to look beautiful. A tool for humans working
+with AI should be a pleasant place for the human to sit, so the reading themes
+(Sepia, Bedtime, Synthwave, Terminal, Candy) and the theming system behind them got
+real attention, and the theme you choose travels into the HTML and PDF you export.
+
+The third reason is annotations. Reviewing what an agent wrote used to mean copying
+a paragraph into a chat window and explaining where it came from. Now I select the
+claim, leave a comment on it, and the comment is saved in the Markdown itself, so
+the next agent reads my objection exactly where I made it and answers it in place.
+
 ## Features
 
 *(Shortcuts below are shown in Linux/Windows form. On macOS, Ctrl becomes ⌘ —
@@ -71,7 +89,8 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
   *in* the Markdown as portable markup the author (or the next agent) can read
   inline. No side channel, no extra tool.
   - Margin markers to open, edit, or remove a comment
-  - Annotations sidebar lists every comment in the document (F8)
+  - Annotations sidebar lists every comment in the document (F8), sharing the
+    sidebar's height with the outline on a divider you drag where you want it
   - Walk the comments from the keyboard, without hunting for margin markers
     (Ctrl+Alt+N / Ctrl+Alt+P)
 - **Take the document with you** — File ▸ Export writes what you are reading as
@@ -95,7 +114,8 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
     sections within them, so following a table-of-contents link is a step you can
     take back — on the keys and mouse buttons your browser uses (Alt+←/→, or the
     thumb switches)
-  - Session restore brings back windows, tabs, zoom, split, and sidebars
+  - Session restore brings back windows, tabs, zoom, split, and sidebars —
+    including where each window's sidebar divider sat
 - **Safe by default**
   - Links and images stay inside the document's folder unless you opt in
   - Remote images are off until you enable them for documents you trust
@@ -165,8 +185,16 @@ Homebrew libraries at runtime. More: [`packaging/macos/README.md`](packaging/mac
 ### Windows
 
 Run the installer (`Scribobulate-<version>-x64-setup.exe`) — per-user, no admin
-prompt, runtime included. Building from source:
+prompt, GTK runtime included. Building from source:
 [`packaging/windows/README.md`](packaging/windows/README.md).
+
+**Microsoft's Visual C++ runtime is a separate prerequisite** and the installer
+does not ship it. Scribobulate and the bundled GTK libraries import
+`VCRUNTIME140.dll`, which Windows does not include — the UCRT that *is* part of
+Windows 10 and later is a different runtime. Most machines already have it from
+some other application, so if the install completes and the app then fails to
+start, install [Microsoft's Visual C++ Redistributable
+(x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) and launch it again.
 
 ### Tips (all platforms)
 
@@ -200,6 +228,14 @@ Detailed documentation lives in the `sdd/` directory:
 - `sdd/POLICY.md` — Development rules and constraints
 - `sdd/ANTI-PATTERNS.md` — Why the native-widget stack was chosen
 - `sdd/ISSUES.md` — Known issues
+
+## How this project is built
+
+Scribobulate is built with AI agents working under human direction, and
+[AI-DILIGENCE.md](AI-DILIGENCE.md) is the full accounting: what tooling is used,
+what is disclosed, and what has to pass before a change reaches you. Short
+version: the application itself ships no AI features, no telemetry, and one
+opt-in outbound connection.
 
 ## License
 

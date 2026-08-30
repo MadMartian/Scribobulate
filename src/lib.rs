@@ -27,8 +27,8 @@
 //! is instead a **second crate root**, `src/gtk_suite.rs` — compiled `--cfg test`
 //! from the same sources, beside this file, so it sees the whole `pub(crate)` tree
 //! directly with no widening and no `pub` seam of any kind. Its one real cost is
-//! re-declaring this file's module list (`scripts/lint-references.sh` checks the two
-//! stay in sync) and compiling the tree a second time — paid deliberately, so that
+//! re-declaring this file's module list (`cargo xtask lint-references` check 4 keeps the
+//! two in sync) and compiling the tree a second time — paid deliberately, so that
 //! nothing built for testing ever compiles into the shipped library.
 
 pub(crate) mod a11y;
@@ -50,6 +50,8 @@ pub(crate) mod codeview;
 pub(crate) mod colorscheme;
 pub(crate) mod config;
 pub(crate) mod copymap;
+pub(crate) mod cssfrag;
+pub(crate) mod decorplan;
 pub(crate) mod docio;
 pub(crate) mod export;
 pub(crate) mod farscroll;
@@ -63,13 +65,21 @@ pub(crate) mod lineendings;
 pub(crate) mod links;
 pub(crate) mod logging;
 // Option+Left/Right word navigation in the editor — a macOS-only convention GTK
-// itself does not bind on any backend (see the module doc comment). Top-level and
-// cfg-gated at this declaration, not under `platform/mac/`: that directory's
-// contract (below) is narrow plumbing, whereas this is a keybinding-semantics
-// difference — the same kind of cross-platform behavioural divergence `accel.rs`
-// already centralizes at the top level, not under `platform/`.
-#[cfg(target_os = "macos")]
+// itself does not bind on any backend (see the module doc comment). Top-level rather
+// than under `platform/mac/`: that directory's contract (below) is narrow plumbing,
+// whereas this is a keybinding-semantics difference — the same kind of cross-platform
+// behavioural divergence `accel.rs` already centralizes at the top level.
+//
+// **Declared unconditionally, and only the WIRING inside it is `cfg`-gated.** The
+// module was gated here, which deleted its decision function's tests from every
+// platform but the target: `cargo test --lib -- --list` reported zero cases under it
+// on the platform POLICY names as canonical. A `cfg`'d-out test is not skipped, it is
+// deleted (ScrAP-212), and `word_movement` is pure data — the one thing that has no
+// reason to be platform-bound. This is NOT the `platform/` seam rule below: that rule
+// gates a module whose every line is a platform's plumbing, and this module's decision
+// core is not.
 pub(crate) mod macwordnav;
+pub(crate) mod mdtable;
 /// Test-only. Renders `THIRD-PARTY-LICENSES.md` from `notices/*.md` plus `two-face`'s
 /// acknowledgement listing, and gates the committed copy against it. Generator and gate
 /// are one code path so they cannot drift; `UPDATE_NOTICES=1 cargo test` rewrites the
@@ -79,14 +89,25 @@ pub(crate) mod notices;
 pub(crate) mod outline;
 pub(crate) mod outline_view;
 pub(crate) mod palette;
+/// Every themed **Pango span** this application emits, in one place — the third
+/// representation of an inline style beside the preview's tags and the HTML sink's CSS,
+/// reached from two unrelated directions (a table cell's `GtkLabel`, and the PDF sink's
+/// layout) that were each building it independently.
+pub(crate) mod pangospan;
 /// Per-platform seams, one directory per target OS. Each child module is
 /// `#[cfg]`-gated inside `platform/mod.rs`, at its own declaration.
 pub(crate) mod platform;
 pub(crate) mod preview;
+/// The PRIMARY-selection policy: what a selection change owes the display-global
+/// selection. Display-free, because its decisive case — a FOREIGN owner — cannot be
+/// staged inside this process at all.
+pub(crate) mod readingpos;
 pub(crate) mod renderer;
 pub(crate) mod saferizer;
 pub(crate) mod session;
 pub(crate) mod span;
+/// Sprite decoration: a theme naming an image file.
+pub(crate) mod sprite;
 /// The registry `#[gtktest::test]` submits into. Gated on `test` as well as the
 /// feature so it never reaches the shipped library: a `harness = false` target is
 /// built `--cfg test`, so this one gate covers both the lib-test target and the
@@ -98,6 +119,18 @@ pub(crate) mod suite_registry;
 pub(crate) mod swapfile;
 pub(crate) mod tags;
 pub(crate) mod tasklist;
+/// Test-only. Capture of the `log` facade, so a test can assert a refusal was
+/// *diagnosed* and not merely that the decoration is absent — the two are
+/// pixel-identical in this project's inert-by-default vocabulary (ScrAP-324).
+#[cfg(test)]
+pub(crate) mod testlog;
+/// Test-only. The one shared main-loop pump for every `gtk-integration-tests` body —
+/// see the module's own rustdoc for why ~24 hand-rolled copies across 19 files needed
+/// replacing (M31). Gated on the GTK-suite feature, not bare `#[cfg(test)]`: every
+/// consumer blocks on `glib::MainContext`, which a plain `cargo test` body has no use
+/// for.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) mod testpump;
 /// Test-only. Shared symlink setup with a runtime skip, so a test whose subject is a
 /// symlink is *skipped and counted* where the platform refuses one rather than
 /// `#[cfg(unix)]`-deleted (ScrAP-212). Not gated on the GTK-suite feature: its
@@ -207,9 +240,9 @@ pub fn run() -> glib::ExitCode {
     // ourselves, set NON_UNIQUE (same app-id, so icon/WM-class/settings identity is
     // unchanged — it just never does single-instance negotiation), and strip the
     // switch so the remaining args still flow into HANDLES_OPEN as file paths.
-    let mut args: Vec<String> = std::env::args().collect();
-    let force_new = args.iter().any(|a| a == "--new-instance" || a == "-n");
-    args.retain(|a| a != "--new-instance" && a != "-n");
+    // The decision itself is `app::new_instance_argv` — pure, and unit-tested there
+    // rather than here, where the coverage gate cannot reach it.
+    let (force_new, args) = app::new_instance_argv(std::env::args().collect());
 
     let mut flags = ApplicationFlags::HANDLES_OPEN;
     if force_new {

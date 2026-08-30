@@ -2,7 +2,7 @@
 
 | # | Functional area | Rubrics |
 |---|-----------------|---------|
-| 1 | Opening & displaying documents | 1.1 – 1.8 |
+| 1 | Opening & displaying documents | 1.1 – 1.11a |
 | 2 | Rendering fidelity | 2.1 – 2.24 |
 | 3 | Live reload (external edits) | 3.1 – 3.4 |
 | 4 | Editing & saving | 4.1 – 4.9 |
@@ -17,9 +17,9 @@
 | 13 | Preview zoom | 13.1 – 13.10 |
 | 14 | Show Unsafe Images | 14.1 – 14.10 |
 | 15 | Tabbed documents | 15.1 – 15.22 |
-| 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.6 |
+| 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.9 |
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.53 |
-| 18 | Preview reading themes | 18.1 – 18.16 |
+| 18 | Preview reading themes | 18.1 – 18.47 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.18 |
 | 21 | Crash forensics | 21.1 – 21.12 |
@@ -54,20 +54,17 @@
 - **Then** the document renders and the window stays responsive (no indefinite freeze)
 
 ### 1.4c Document file access never freezes the window
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** a document on a slow or unresponsive filesystem (a stalled network share, a spun-down drive, a synced folder)
 - **When** it is opened, saved, reloaded, or re-read because it changed on disk
 - **Then** the window keeps redrawing and responding to input for the whole time the filesystem takes to answer — the operation completes, fails or is refused when the answer arrives, and nothing is lost by waiting
 - **And** this holds for a session restore of many documents too: the windows already on screen stay live while the remaining tabs' files are read
 
 ### 1.4d A document read the application is still waiting on cannot delay a crash-recovery snapshot
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** several open documents whose files are being read at once — a checkout or a sync rewriting a whole tree — on a filesystem that is slow to answer
 - **When** a crash-recovery snapshot of an unsaved document falls due
 - **Then** it is written promptly rather than queued behind the document reads: the application's own file access never occupies enough of the shared I/O capacity to delay the mechanism that protects unsaved work
 
 ### 1.4e A document operation that takes a moment says so
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** an Open, Save, Save As or Reload whose filesystem is slow to answer
 - **When** the operation has been outstanding for about half a second
 - **Then** the status bar reports it ("Saving…", "Reloading…", "Opening…") and stops reporting it the moment the operation ends, however it ends
@@ -117,7 +114,6 @@
 - **And** the file on disk is untouched until the user saves it; an explicit save then writes the buffer, so the mark is not restored — the application holds no per-document encoding state and its own writes are BOM-less UTF-8
 
 ### 1.10 A document containing lone carriage returns
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by the macOS agent 2026-08-20 for the lone-CR ingress repair. -->
 - **Given** text whose lines are separated by a bare `\r` with no `\n` — the classic Mac OS convention, which a keyboard/mouse sharing tool's clipboard bridge still converts to when the receiving machine is a Mac, and which macOS itself abandoned in 2001
 - **When** it arrives by ANY route — a file being opened, reloaded, restored from a session or recovered from a crash snapshot, or text pasted, dropped or middle-click-pasted into the editor
 - **Then** it renders exactly as the same document written with `\n`: headings are headings, blank lines separate blocks, and lists are lists — rather than the whole document collapsing into a single heading in the preview and a single entry in the outline while the editor pane beside it shows the lines laid out correctly
@@ -134,6 +130,15 @@
 - **And** a cut removes the selection and is a **single** undo step — one Ctrl+Z restores the document exactly as it was, never half of it
 - **And** the same holds for the PRIMARY selection on the platforms that have one: selecting text publishes it, and clearing the selection **releases** PRIMARY rather than claiming it for an empty string, so other applications' middle-click paste is unaffected
 - **And** none of this depends on rich formatting surviving an in-application paste — a Markdown document cannot represent a syntax-highlight tag, so carrying one was never meaningful
+
+### 1.11a What a middle-click paste inserts
+- **Given** a PRIMARY selection on a platform that has one, published by **any** application including this one
+- **When** the reader middle-clicks in the **editor**
+- **Then** the text is inserted as **plain text** at the click position, exactly once, and as a **single** undo step — one Ctrl+Z removes the whole paste
+- **And** the bytes arrive unchanged: a selection containing `\r\n` inserts `\r\n`, because a rich buffer-to-buffer transfer is what used to split a paste into one edit per syntax-highlight tag and corrupt line endings across the split (ScrAP-312)
+- **And** a middle-click in the **preview** does nothing — it is not an editable surface, and it must not paste, scroll or move the caret
+- **And** every other text field in the application keeps the platform's own middle-click paste; this changes one view, not the process
+- *(Not verified on every platform: PRIMARY middle-click is an X11 convention that Quartz and Win32 do not share, so this rubric is exercised on Linux. The unaffected memory behaviour of selecting is ScrAP-313's, not this rubric's.)*
 
 ---
 
@@ -177,6 +182,13 @@
 - **When** it is rendered
 - **Then** the header row's cells are **bold on a faint grayish, theme-aware fill** (the `cell-head` CSS class), distinguishing the header from the body rows, which are plain
 
+### 2.2d A column's delimiter-row alignment reaches the page AND the preview
+- **Given** a GFM table whose delimiter row states alignments — `|:---|---:|:---:|---|`
+- **When** it is rendered in the preview and exported to PDF and HTML
+- **Then** each column's cells are aligned as its delimiter stated — flush left for `:---` and for a bare `---`, flush right for `---:`, centred for `:---:` — **in all three**, and a cell that is nothing but a link is aligned the same way as a text cell
+- **And** the preview and the export agree column for column: this is Document Rendering CAM row 17, and it was previously broken in the direction that rule does not look — the exports honoured the delimiter row and the preview hardcoded flush-left, so the same document read differently on screen and on the page
+- **And** aligning a link-only cell **moves its text, never its box**: the cell's border still spans the full width of its column, so the table's column rules stay straight down the page (§2.2's "even cell borders"). An alignment that resizes the cell instead shrink-wraps its border to the caption and the rules step in and out row by row — the shape the first fix for this rubric shipped
+
 ### 2.2b Tab-separated tables render as tables
 - **Given** a table whose cells and/or `---` delimiter row are separated by hard tabs (e.g. pasted from a spreadsheet), which GFM alone would reject as a table
 - **When** it is rendered
@@ -213,6 +225,18 @@
 - **Given** a multi-line blockquote (several `>` source lines in one quoted paragraph) that wraps at the current viewport width
 - **When** it is rendered
 - **Then** **every** line of the quote — first, middle, last, and every wrapped continuation — sits at the same left inset past the accent bar, at any window width; no line collapses toward the bar (regression guard for the GtkTextView `one_style_cache` dropped-margin artifact — the tag is applied per line, content-only, ScrAP-76)
+
+### 2.11b A nested blockquote gets its own bar and its own indent
+- **Given** a blockquote containing a further `>` level (and a third below that), including one whose inner quote is followed by more outer-level content
+- **When** it is rendered, and separately exported to HTML and PDF
+- **Then** **each nesting level draws its own accent bar** at its own left offset, and every level's bar is visible **simultaneously** — the outer bar runs the full height of the outer quote, past the inner region rather than stopping where the inner one begins
+- **And** each level's bar **starts and ends on that level's own text** — a nested bar begins level with the first line the nested level itself contributes, never reaching up over the parent's preceding line or the blank line separating them
+- **And** the quoted text steps in by exactly one level's worth per depth, on **both** sides (a blockquote sets a left *and* a right margin), with every wrapped continuation line at its own level's inset — 2.11a holds per level, not only at depth 1
+- **And** the per-level indent is carried by the **depth's own tag**, exactly as `li-{depth}` carries `depth · list_step`: one quote tag per logical line, holding that line's full depth, rather than one tag per level accumulating onto each other. That keeps the quote's margin out-prioritising a code block's inside it, which is why the quote tag is registered where it is and must stay non-accumulative (ScrAP-121, GTK4Rs/AP-96) — and a **list inside a quote** still nests correctly, because `li-{depth}` is accumulative and adds onto whichever quote depth is the line's base
+- **And** the **background does not nest**: `blockquote_bg` paints ONE continuous panel over the outermost quote and every level inside it inherits that fill (operator, 2026-08-28). Depth is carried by the bars alone, so 18.29's single-panel contract is unchanged and an inner level never paints a second fill over its parent's
+- **And** depth is **clamped at `MAX_QUOTE_DEPTH`** (6, mirroring `MAX_LIST_DEPTH`): past the cap a level renders at the cap's indent and bar rather than stepping further, so a pathologically nested document still opens and stays responsive (1.4b) and can never narrow the content column to nothing nor push the preview over-wide (2.2·a11y)
+- **And** a **sprite-tiled** bar (18.28) tiles per level, each keeping the document-anchored phase, so the levels cannot drift against one another while scrolling
+- **And** a **single-level** quote is byte-identical to before this rubric existed
 
 ### 2.10 Block separation after tables
 - **Given** a Markdown table followed immediately by a heading or paragraph
@@ -269,7 +293,9 @@
 - **Then** the image is displayed inline at its location — the path is resolved against the **document's directory**, not the process working directory
 - **And** an image whose path resolves *outside* the document's directory (an absolute path elsewhere, a `..` traversal, or a symlink under the folder that points outside) is **blocked**: a broken-image placeholder icon (`image-missing`) is shown in its place — see 2.7 and §14
 - **And** when the image renders, its alt text is **not** also shown (the picture stands in for it); when the image **cannot** be shown — blocked by policy, unresolvable path, or a file/URL that fails to decode — a broken-image placeholder icon is shown in its place (never a silent fallback to bare alt text), with the reason in its tooltip (see §14.9)
+- **And** a **destination is a URL, not a raw path**: `![](A%20file.svg)` displays the file named `A file.svg`, as it does on GitHub — and the app's own **Insert Image / Insert Link ▸ Browse** writes that encoded form, so a file chosen from the picker is one the app can read back. A raw space (`![](A file.svg)`) is **not** an image in Markdown and is deliberately not made into one: it renders as literal text, which is what the reader's own Markdown says
 - **And** a contained local image whose **path contains a colon** — a colon in the filename (`assets/notes:v2.png`), or a Windows drive letter (`C:\pics\x.png`) — still renders: the colon is **not** mistaken for a URL scheme and the reference wrongly refused (a genuine `file://`/`smb://` scheme is still blocked; ScrAP-151)
+*(The "raw space stays literal" half is a deliberate decision, not an unimplemented case: making it render means rewriting the buffer before parsing, and that pre-pass is contractually length-preserving — `%20` adds two bytes per space and would drift scroll-sync, copy offsets and annotation spans (ScrAP-75).)*
 
 ### 2.21 Wide images fit the preview pane
 - **Given** a document with an image wider than the current preview viewport (a narrow window or a split pane)
@@ -288,6 +314,14 @@
 - **And** raw HTML that is **not** a `<picture>`/`<source>`/`<img>` image element (e.g. `<script>`, `<iframe>`, `<div>`) continues to be dropped entirely — neither rendered nor shown as literal text (sanitize-by-omission is unchanged)
 - **And** an animated GIF/WebP shows its **static first frame** (frame animation is out of scope)
 
+### 2.25 A Markdown construct the renderer cannot render is visible, never silently dropped
+- **Given** a document containing constructs from parser extensions this build does not handle — math (`$E=mc^2$`, `$$…$$`), footnotes (`[^1]` and its definition), a definition list, a wikilink, and YAML or TOML front matter
+- **When** it is rendered, and when it is exported
+- **Then** each appears as its own **literal source text** — the reader sees what they wrote, unstyled — and nothing vanishes
+- **And** the parser is asked for **only** the extensions the renderer has handlers for, so those constructs never become parser events at all
+- **And** the three event dispatchers match the parser's `Event`, `Tag` and `TagEnd` vocabularies **exhaustively**: a parser upgrade that adds a construct fails to compile rather than rendering it as nothing
+- **Rationale** the failure mode this pins is *silence*: an enabled-but-unhandled extension is dropped, not degraded, so `$E=mc^2$` rendered empty and `[^1]` vanished with every gate green (ScrAP-78)
+
 ### 2.12 Links within blockquotes
 - **Given** a blockquote containing a Markdown hyperlink
 - **When** the user activates that link
@@ -305,6 +339,14 @@
 - **And** a swipe that begins *and* ends inside one link's caption (selecting the caption to copy it) likewise does not activate it — travelling further than the desktop's drag threshold makes it a drag, not a click
 - **And** an ordinary click — press and release on the same link without dragging — activates it exactly as before (2.6, 2.17, §19)
 - **And** the same rule holds for every pointer affordance the panes draw themselves: a gutter task checkbox (2.4), a right-margin comment marker (§17) and a code block's copy button (2.3b) each require their press and release to land on the same one, so a selection drag that happens to end over any of them leaves it alone
+
+### 2.24a A press inside an existing selection belongs to the drag, not to the affordance under it
+- **Given** a selection in the preview that covers a pointer affordance — a link, a right-margin comment marker, a gutter task checkbox, or a code block's copy button
+- **When** the reader presses inside that selection, on the affordance
+- **Then** the affordance does **not** activate: the click clears the selection instead, and the next click on it behaves normally (2.24). One wasted click, self-correcting, nothing at risk
+- **And** this is **GTK's behaviour, deliberately left in place, not a defect of this application**: `gtk_text_view_click_gesture_pressed` claims the sequence for its own drag gesture on any single non-touch press whose iter lies inside the selection, in order to start a drag-and-drop, and it does so unconditionally rather than gated on the view being editable. A claim sets `DENIED` on every other gesture handling that sequence, `DENIED` is terminal, and it is **not** a cancellation — so the application's gesture receives `pressed` and then neither `released` nor `cancel`, which is why the click cannot be observed at all rather than merely arriving late (the same arbitration wall as ScrAP-142; measured on an instrumented build against GTK 4.6.9)
+- **And** it is **priced and deliberately not worked around**: claiming the sequence ourselves is the only way to out-rank GTK's claim, and it would buy this one self-correcting click at the cost of the case it steals — a press over an affordance would no longer be available to begin a selection drag, and because intent is unknowable at the moment the claim must be made, a press that *did* become a drag would end in nothing happening at all. A silent no-op that fixes itself is the better of the two silences
+- **And** the rule does not reach a press **outside** the selection: that press is the application's as usual, and 2.24's complete-click contract governs it
 
 ### 2.22 Hovering a link reveals its target
 - **Given** a rendered document containing a hyperlink whose caption differs from its URL
@@ -453,14 +495,12 @@
 - **Then** a brief, button-less "File saved." toast appears for ~2.5 s and then auto-dismisses, and "File saved" is announced in the status bar — the same acknowledgement shape a reload gets (5.4), because otherwise a successful save's only feedback is the unsaved indicator *ceasing* to be shown, and an absence is easy to miss. The save and reload notices share one widget, so they can never overlap: whichever happened most recently is the one shown.
 
 ### 4.10 A second Save while one is still being written is dropped, not raced
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** a save of a document that has not finished being written (a slow filesystem)
 - **When** Save is invoked again for the same document
 - **Then** exactly one write happens: the second request is discarded rather than started alongside the first
 - **And** nothing is lost by discarding it — the document is still shown as having unsaved changes and Save is still available, so pressing it again once the first write lands writes the newest text
 
 ### 4.11 A save always writes the document it was invoked for
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** a save that has been invoked for a document
 - **When** the user switches to a different tab before the write completes
 - **Then** the written file, the cleared unsaved-changes state, and the retired recovery data all belong to the document Save was invoked for — not to whichever document is on screen when the write finishes
@@ -505,8 +545,8 @@
 - **And** Save As remains available in every mode regardless of dirty state (it can write a copy of even a clean document to a new path)
 
 ### 4.13 Option+Left/Right moves the caret by a word in every text surface, on macOS
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-20 in response to a reported defect: Option+Left/Right in the editor silently ran GtkSourceView's own `move-words` binding — a word-TRANSPOSITION edit, not navigation — instead of moving the caret, because macOS has no other claim on that key and, ON QUARTZ, GtkSourceView's own class binding wins over the app's Back/Forward accelerator (§23.6) declared on the same keystroke — an ordering measured to be REVERSED on Win32 and X11 (ScrAP-311), so this rubric is macOS-scoped by mechanism and not merely by convention. See accel.rs MAC_RESERVED and macwordnav.rs for the full mechanism, sourced to `gtksourceview.c:953`. -->
-- **Given** any of this application's text surfaces has focus, on macOS — the document editor, the find field, the replace field, the annotation comment entry, or the shared prompt field behind Go To Line and Insert Link/Image/Table
+<!-- Why this rubric is macOS-scoped BY MECHANISM rather than by convention: Option+Left/Right in the editor silently ran GtkSourceView's own `move-words` binding — a word-TRANSPOSITION edit, not navigation — instead of moving the caret, because macOS has no other claim on that key and, ON QUARTZ, GtkSourceView's own class binding wins over the app's Back/Forward accelerator (§23.6) declared on the same keystroke — an ordering measured to be REVERSED on Win32 and X11 (ScrAP-311), so this rubric is macOS-scoped by mechanism and not merely by convention. See accel.rs MAC_RESERVED and macwordnav.rs for the full mechanism, sourced to `gtksourceview.c:953`. -->
+- **Given** any of this application's text surfaces has focus, on macOS — the document editor, the find field, the replace field, the annotation comment entry, or the shared prompt field behind Go To Line, Rename and Insert Link/Image/Table
 - **When** the reader presses Option+Left or Option+Right
 - **Then** the caret moves one word back or forward, exactly as Ctrl+Left/Ctrl+Right already do on every platform (Linux/Windows convention) — Option is the macOS spelling of the same movement, not a second, different one
 - **And** the buffer's content and word order are completely unchanged — this is caret movement only, never the word-transposition edit `GtkSourceView` itself would otherwise perform on this key (that edit is what wins the key on Quartz with no interceptor; on Win32 and X11 the accelerator wins instead and this rubric has nothing to guard — ScrAP-311)
@@ -551,14 +591,12 @@
 ---
 
 ### 5.5 A document that stops being admissible is refused on re-read, not read anyway
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** an open document whose file has since grown past the load limit, or been replaced by something that is not a regular file
 - **When** the application re-reads it — an explicit Reload, a save's check for external changes, or the live-reload watcher noticing it changed
 - **Then** the read is refused rather than attempted: Reload reports why, a save asks before overwriting rather than assuming it is safe, and the watcher does nothing
 - **And** the application never waits on it — the same admission test that guards the first read guards every later one
 
 ### 5.6 Overlapping re-reads of one document never apply an older answer
-<!-- HUMAN-AUTHOR CONFIRM: rubric drafted by agent 2026-08-02 for the off-main-thread document I/O change. -->
 - **Given** a document being rewritten repeatedly on disk, so several reads of it are outstanding at once
 - **When** those reads complete in an order other than the one they were started in
 - **Then** only the newest read's content is applied; an older one is discarded rather than replacing the buffer with stale text and recording it as the saved baseline
@@ -691,6 +729,8 @@
 - **Given** the user has scrolled partway through a document in one view mode
 - **When** they switch to another mode (preview, edit, or side-by-side)
 - **Then** the new view stays at approximately the same relative position rather than jumping back toward the top
+- **And given** the user repeats the mode round trip several times
+- **Then** the reading position does not accumulate — after several round trips it is still within tolerance of where it started, not several steps away from it, and in particular has not been walked to the end of the document
 - **And given** side-by-side split with a document of uneven block heights (headings/code/tables mixed with prose)
 - **When** the user scrolls either pane
 - **Then** the other follows so the **same document position** stays aligned across both panes (the heading/line at the top of one is at the top of the other) — **line-accurate**, not merely the same 0–1 fraction, which drifts when a source line renders taller than the next; typing (which re-renders the preview) neither breaks the alignment nor blanks the preview
@@ -813,6 +853,12 @@
 - **And** installing does not widen permissions on directories it did not create — a user-private directory under the install prefix keeps the mode the user gave it
 
 ---
+
+### 7.21 A freshly opened document puts the working position at its beginning
+- **Given** a document is opened, restored from the previous session, or reloaded from disk
+- **When** it is first shown in the editor — by the view-mode action, the toolbar button, or session restore
+- **Then** the caret sits at the beginning of the document, and the footer's line/column indicator reads the first line
+- **And** the outline sidebar highlights the document's first section, not its last
 
 ## 8. Single-instance lifecycle
 
@@ -1265,14 +1311,24 @@
 - **When** the user looks at it
 - **Then** it reads `(Hn)` with no tier selected, and its menu lists H1–H6; picking a level applies it and the caption returns to `(Hn)`
 
-### 10.10 Superscript and subscript render raised/lowered and smaller
+### 10.10 Superscript and subscript render raised and lowered
 - **Given** a document containing `E=mc^2^` and `H~2~O`
 - **When** it is rendered in the preview
 - **Then** the `2` after `^…^` appears **raised and smaller** (superscript) and the `2` in `~…~` appears **lowered and smaller** (subscript), with the `^`/`~` markers removed
-- **And given** `~~struck~~` text in the same document
-- **When** it is rendered
-- **Then** it is still rendered as strikethrough — a single `~` is subscript, a double `~~` is strikethrough, and the two do not interfere
-- **And** this strikethrough contract is scoped to a **plain** `~~…~~` run: a `~~` fence that *wraps other inline markup* (e.g. `~~a **bold** b~~`) is explicitly **out of scope** — by design the `~~` render literally while the inner markup still renders (accepted limitation; root cause: `scan_scripts` runs per pulldown `Text` event and nested markup fragments the fence across events, ScrAP-66)
+- **And** recognition is **tight** in the Pandoc sense — a marker opens a run only when its partner arrives before any whitespace — so `2^10` (never closed), `1~2` and `a^b c^d` (a space inside) stay **literal**
+
+### 10.10a Strikethrough renders struck, and one tilde never becomes two
+- **Given** a document containing `~~struck~~`
+- **When** it is rendered in the preview
+- **Then** it appears **struck through** with the `~~` markers removed, and its content may contain spaces (`~~several words gone~~`) — unlike the tight `^`/`~` runs of 10.10
+- **And** a single `~` is subscript while a double `~~` is strikethrough, and the two do not interfere: a multi-tilde line `H~2~O and CO~2~` renders **both** subscripts and no strike
+
+### 10.10b A tight fence spans the inline markup it wraps
+- **Given** a `~~` or `==` fence that *wraps other inline markup* — `~~a **bold** b~~`, `==a *em* b==`, a fence around a link, or one spanning a soft line break
+- **When** it is rendered in the preview
+- **Then** the whole run is struck (or highlighted) **including the nested markup**, which keeps its own formatting, and the `~~`/`==` markers are removed — the fence is recognised across the inline markup it wraps, not only within one unbroken run
+- **And** the same run copies back as its original source with both delimiters intact, exports struck, and reads without markers in the outline; annotating any part of it wraps the **whole** fence rather than landing `{==…==}` between its halves
+- **And** a fence that *interleaves* with the markup rather than nesting inside or around it (`~~a **b~~ c**`, whose closing `~~` sits inside a `**` that opened inside the fence) stays **literal** — it describes no tree, so it is refused rather than rendered as a guess; likewise a `~~`/`==` that would have to span a **block** boundary (two table cells, two paragraphs) or that is really the content of a code span
 
 ### 10.11 Insert Link / Image / Table prompt for fields and splice once
 - **Given** the editor pane is focused, with an optional selection
@@ -1366,6 +1422,9 @@
 - **Given** a search term with multiple matches in the active view (editor or preview)
 - **When** the user presses Enter or clicks Next (or Shift+Enter / Prev)
 - **Then** the selection advances to the next (or previous) match and scrolls it into view, wrapping past the last match to the first (and before the first to the last) — find-**next** must genuinely advance, not re-select the current match
+- **And given** a document large enough that the editor is still counting when the first Next is pressed (the counter shows "…" rather than a number)
+- **When** the user steps through several matches without waiting for that count to settle
+- **Then** the position reported for each step is the match actually landed on — or, where it genuinely cannot yet be known, none at all — never a "1" standing in for "not known yet"; so when the count does settle, the counter names the match the selection is sitting on rather than the first one
 
 ### 11.6 Find works on the preview pane
 - **Given** pure-preview mode (the editor is not visible)
@@ -1384,8 +1443,8 @@
 - **Given** the find bar is open
 - **When** the user switches view mode
 - **Then** the bar stays open (it is not part of the swappable content area)
-- **And** the preview find-match highlights **survive every boundary that rebuilds the preview buffer** — view-mode switch, runtime theme switch, and external reload — re-applied for the active tab rather than left bare until the next match is cycled (Document Rendering CAM row 8; ScrAP-38) *(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-07-19)*
-- **And** a match position is never carried from one pane's occurrence list into the other's: the editor's list and the preview's unified body+cell list are numbered independently, so after a mode switch the counter and the next Next/Prev either resume in the list the visible pane actually owns or start from the top — never at a number that was a position in the *other* list *(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-01)*
+- **And** the preview find-match highlights **survive every boundary that rebuilds the preview buffer** — view-mode switch, runtime theme switch, and external reload — re-applied for the active tab rather than left bare until the next match is cycled (Document Rendering CAM row 8; ScrAP-38)
+- **And** a match position is never carried from one pane's occurrence list into the other's: the editor's list and the preview's unified body+cell list are numbered independently, so after a mode switch the counter and the next Next/Prev either resume in the list the visible pane actually owns or start from the top — never at a number that was a position in the *other* list
 - **And when** the user presses Escape or the close button
 - **Then** the bar hides, match highlighting clears (both body text and inside table cells), and focus returns to the editor
 - **And given** pure-preview mode scrolled to an arbitrary reading position (including within a tall table)
@@ -1400,7 +1459,7 @@
 ### 11.9 Find matches every piece of text the reader can see, links included
 - **Given** pure-preview mode showing a document whose link text appears in each context it can — a body paragraph, a heading, a list item, a blockquote, a table cell **alongside other text**, and a table cell that is **nothing but the link**
 - **When** the user searches for a word that occurs in every one of those link captions
-- **Then** the count includes them all and Next/Prev navigates to each in turn, highlighting it — a link's caption is text on the page, so which widget happens to render it (buffer text, a cell label, or the caption inside a table cell's link button) can never decide whether find sees it (ScrAP-250) *(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-04)*
+- **Then** the count includes them all and Next/Prev navigates to each in turn, highlighting it — a link's caption is text on the page, so which widget happens to render it (buffer text, a cell label, or the caption inside a table cell's link button) can never decide whether find sees it (ScrAP-250)
 
 ### 11.8 Find never acts on a pane the user cannot see
 - **Given** pure-preview mode, and a preview view the application cannot resolve (a widget-tree change has broken the lookup)
@@ -1578,7 +1637,6 @@
 - **Given** the user has scrolled partway through a document in preview or split mode
 - **When** the user changes the zoom level
 - **Then** the viewport stays approximately at the same relative position in the document rather than jumping to the top
-<!-- HUMAN-AUTHOR CONFIRM: clause below added by agent for ScrAP-65. -->
 - **And** this holds for **repeated, rapid** zoom steps (and a zoom taken immediately after a scroll), not only a single well-spaced step — successive zooms do not accumulate an upward drift toward the top
 
 ### 13.8 Zoom is isolated per window (multi-window)
@@ -1592,7 +1650,6 @@
 - **Then** the moved preview re-renders fully at the destination window's zoom — **both** the font and the pixel geometry (heading scale, spacing, and especially table-cell layout) scale together, with no residual garble from the source zoom — and the source window is otherwise unaffected (ScrAP-64)
 
 ### 13.10 The editor stays responsive after switching out of a zoomed preview
-<!-- HUMAN-AUTHOR CONFIRM: added by agent for ScrAP-65. -->
 - **Given** the user changed the zoom level while in preview mode
 - **When** they switch to edit (or split) mode
 - **Then** the editor pane is immediately navigable — the mouse wheel, PageUp/PageDown, and the caret all scroll it normally (the reading position carries over and the scroll range is never left frozen/collapsed)
@@ -1839,18 +1896,24 @@
 - **Then** the change is announced politely (the status region carries an accessible "status" role) without stealing keyboard focus
 
 ### 16.7 Every control assistive technology can reach has a name
-*(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-01)*
 - **Given** a screen reader is active, and a window's toolbar, find bar, sidebars and tab strip
 - **When** the user moves focus through the controls
 - **Then** every icon-only button, dropdown and label-less text field announces a name describing the command it runs — not silence, and not the file path or availability note that a tooltip may separately carry
+- **And** the same holds for a control in a transient **dialog** — the Go To Line / Insert Link / Insert Image / Insert Table prompt fields — which a window-scoped audit does not reach; a field sitting beside a visible `GtkLabel` still announces its own name rather than relying on the reader to associate the two
 - **And** a control whose visible label shows a *value* rather than its purpose (the reading-theme and open-documents dropdowns, which display the active theme and document) announces its purpose, so the name does not change as the value does
 - **And** a shortcut is announced as a shortcut rather than as part of the control's name
 
 ### 16.8 A timed status notice clears from the window that showed it
-*(HUMAN-AUTHOR CONFIRM — agent-drafted 2026-08-02)*
 - **Given** a transient status-bar notice is up in a window (a "File reloaded"/"File saved" announcement, a link-navigation error, or "File deleted on disk"), and it clears itself after a few seconds
 - **When** the tab that raised it is dragged to another window, or closed, before the notice's time is up
 - **Then** the notice still clears from the window it appeared in, leaving that window's persistent status (§4.4) intact underneath — it is never left on screen permanently, and it never appears in the window the tab moved to
+
+### 16.9 A menu item's shortcut hint is the key that command is bound to
+*(Drafted for a review finding that measurement refuted, and aimed at what survived. The finding was that two View-menu items set no `accel` attribute and therefore showed no key. They showed the right key: GTK derives the hint from the registered accelerator when the model declares none, MEASURED on two release binaries driven identically (GTK 4.6.9/X11) and read off the live macOS system menu bar by the `mac` seat through the Accessibility API. The attribute was then removed everywhere, since it could only restate the binding or silently contradict it — a third binary proved an attribute WINS over the binding. The reachable defect is therefore a command whose accelerator is never registered, which is the one state that yields a hintless item.)*
+- **Given** a command that has a keyboard shortcut and a menu-bar item
+- **When** the user opens the menu containing it
+- **Then** that item shows the command's shortcut beside its label, in the platform's own spelling (Cmd on macOS, Ctrl elsewhere), and the key shown is the key that command is actually bound to — agreeing with the shortcuts window (§16.2) and the toolbar tooltip (§16.4), the other two discoverability surfaces
+- **And** a command that has no shortcut shows no hint, so a blank is information rather than an omission
 
 ### 16.6 Online Markdown reference is reachable from Help
 - **Given** any open window
@@ -2176,6 +2239,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** the app as installed with its shipped themes
 - **When** the user opens the theme chooser (menu or toolbar)
 - **Then** at least "System" and "Sepia" are offered, with the active one indicated — and both surfaces always show the same choice
+- **And** a theme's **name and picker symbol are its own**: a theme that states no symbol is offered by name alone on *both* surfaces, never wearing the base theme's glyph on one of them
 
 ### 18.2 System renders exactly as it did before themes existed
 - **Given** a fresh profile where no theme has ever been chosen
@@ -2186,6 +2250,9 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** an open document rendered under System
 - **When** the user selects Sepia
 - **Then** the preview repaints book-like — an off-white yellowish page, a serif body face, and body text in black or a soft brown — in the same window, without re-reading the file from disk and without losing the reading position
+- **And given** the window has other tabs open, including one the user has never activated
+- **When** the user switches to any of them afterwards
+- **Then** that tab shows the newly selected theme in full — page, ink and typeface together — never the new page under the previous theme's ink, and without needing a second theme change to correct it
 
 ### 18.4 The theme reaches everything the preview draws
 - **Given** a document containing a blockquote, inline code, a fenced code block, a link, a table, an image, a horizontal rule, and an annotation
@@ -2211,6 +2278,10 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** every installed theme
 - **When** body text is rendered on its page
 - **Then** the contrast clears a legibility floor, so a later "warm it up a bit" tweak cannot quietly degrade readability
+- **And** the floor reaches **every ink a theme states**, not a hand-picked few — the link, the mark, the table header, the list markers, the rule, the quote bar and the annotation chip as well as the body and the headings — each measured on the surface it is actually read on, with the theme's own translucent washes composited first
+- **And** each ink answers to the floor its ROLE takes: 4.5:1 where a reader parses words, WCAG's 3:1 non-text floor where the ink is a drawn mark
+- **And** a heading's ink is measured against **every appearance its band can take** — both endpoints of a gradient, not just the first — and skipped with a named reason where a sprite outranks the fill, because no ratio describes reading text on arbitrary pixels
+- **And** a pairing that is deliberately below its floor is **named**, with its reason, and a named exception that is no longer below its floor is a failure: a licence standing over nothing is inherited silently by the next theme to state that key
 
 ### 18.9 Theme and zoom compose
 - **Given** a document under Sepia
@@ -2258,6 +2329,202 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** the selected text is drawn in a colour the THEME owns — never the desktop's selected-text ink — and its contrast against that theme's selection fill clears the same legibility floor as body text (18.8), on both the body and the in-cell path
 - **And** a theme may state that ink outright (`selection_fg`); omitted, it is derived from the page and its own ink, so a theme that states only a fill still cannot strand its selected text
 - **And** under System, where no page is stated, both paths keep the desktop's own selection colours together, exactly as before themes existed (18.2)
+
+### 18.18 A table cell and the export sinks render themed emphasis identically to the body
+- **Given** a document with bold, superscript, or subscript both in body prose and inside a table cell, under a theme setting `bold_weight` and `supsub_scale`
+- **When** it is rendered, and separately exported to PDF and HTML
+- **Then** the table cell matches the body exactly, and the PDF's Pango markup carries the same weight/size/rise the body tag applied
+
+- **And** the TABLE HEADER takes the same `bold_weight`, and the same `heading_font` where the theme states one, on all three surfaces — it is bold text like any other, and hardcoding a weight per surface (`font-weight: bold`, a browser default, a Pango `<b>`) means three different numbers for one key
+### 18.19 A theme can restyle the annotation chip by colour or by sprite
+- **Given** a theme setting `annotation_chip_bg`/`annotation_chip_fg`, or a `annotation_chip_sprite` file (theme-relative, validated the same way every sprite key is — no absolute path, no traversal, symlink-contained, allowlisted extension, size-capped)
+- **When** a document with a CriticMarkup comment is rendered
+- **Then** the gutter chip shows the theme's colours, or the sprite in place of the flat fill — with the overflow-count numeral still legible on top
+- **And** under System, where no chip key is set, the chip stays the exact hardcoded amber/white it always was (18.2)
+- **And** the HTML export's claim-back-link takes the same colours (or the sprite, embedded so the artefact stays self-contained); the PDF export's comment note takes the same colours — a sprite has no expression in the PDF's inline Pango markup, which is a stated scope limit, not a silent gap
+
+### 18.20 A broken image is never left on desktop colours
+- **Given** a document referencing a missing or refused image, under a non-System reading theme
+- **When** it is rendered
+- **Then** the placeholder's fill and border resolve from the theme, closing the one construct 18.4 currently misses
+
+### 18.21 A theme can give headings per-level colour and face
+- **Given** a theme setting distinct colours and/or faces for h1–h5
+- **When** a document with headings at every level is rendered
+- **Then** each level shows its own colour/face; a link inside a heading still wins over it (existing priority); and a level the theme leaves unset falls back to the theme's single `heading_color`/`heading_font`, unchanged from today
+
+### 18.22 A theme can decorate a heading with a rule and control the space above it
+- **Given** a theme setting a heading overline and/or underline rule, and `heading_space_above`
+- **When** headings are rendered
+- **Then** the rule(s) appear on the stated side and the stated space above is honoured — closing the asymmetry where only space-*below* existed before
+
+### 18.23 A theme can style strikethrough and link underline independently of colour
+- **Given** a theme setting `strikethrough_color`, and a link-underline style (`none`/`double`/`wavy`) with its own colour
+- **When** struck-through text and a link are rendered
+- **Then** both apply without perturbing bold, italic, or mark, which stay themed exactly as today
+
+### 18.24 A theme can replace list markers with a glyph string, or a sprite
+- **Given** a theme setting bullet/ordered/task glyphs (sanitised, length-clamped), or bullet/ordered/task sprite files (theme-relative, validated the same way every sprite key is — no absolute path, no traversal, symlink-contained, allowlisted extension, size-capped)
+- **When** a document with all three list kinds is rendered, and separately exported to HTML and PDF
+- **Then** the gutter draws the glyph, or the sprite, in place of the dot/numeral/checkbox
+- **And** the same glyph reaches the HTML export HTML-escaped, and the PDF export Pango-escaped; a sprite reaches the HTML export embedded (the artefact stays self-contained) and the PDF export drawn as an image — one key, three renderings (TDD §25's completeness rule)
+- **And** where a sprite marker applies, the item's own text run carries **no** marker prefix — a picture *instead of* the bullet, never both
+- **And** a marker whose sprite **cannot be produced** — admitted but undecodable — falls back to the theme's glyph, and then to the drawn dot/numeral/checkbox. It never leaves the marker absent, which for a task item would leave an invisible checkbox behind a hit-box that is still clickable
+
+- **And** an item whose FIRST block is not a paragraph — a fenced code block, a nested list — still carries its marker in every medium, glyph or picture alike; the drawn gutter marks every item whatever it contains, and the page must agree
+### 18.41 Every decoration degrades when its sprite cannot be produced
+- **Given** a theme naming a sprite for any decoration — heading band, blockquote bar, horizontal rule, annotation chip, or any list marker — whose file is admitted but cannot be decoded
+- **When** the document is rendered, and separately exported to HTML and PDF
+- **Then** each falls back to what it would have been without the sprite: the band to its gradient then its fill, the bar and the chip to their flat colours, the rule to a plain separator, a marker to its glyph and then to the drawn primitive
+- **And** the fallback is never a *partial* render and never a gap — `sdd/THEMING.md` § Untrusted input's inert-by-default rule
+- **And** the failure is logged, because an absent decoration is otherwise indistinguishable from a theme that named none (ScrAP-324)
+
+### 18.25 A theme can band a heading, with a fill or a sprite
+- **Given** a theme setting a heading band (fill, and optionally radius/gradient within the closed decoration vocabulary), or a sprite image as the band's fill (theme-relative, validated the same way every sprite key is)
+- **When** a heading — including one that soft-wraps — is rendered, and separately exported to HTML and PDF
+- **Then** the band spans the stated extent and survives soft-wrap as one continuous band, whichever fill it carries
+- **And** the band appears in both export sinks, the PDF resolving at System-light per 25.9, a sprite embedded in the HTML sink and drawn as an image in the PDF sink
+- **And** a **sprite alone bands the level**: `heading_band_sprite_hN` with no `heading_band_color_hN` beside it paints the band, reserves the heading's inset, and does so identically on all three surfaces — a sprite outranks the fill and does not depend on one
+- **And** a `heading_band_gradient_to_color` with no fill beneath it is **ignored and logged**: a gradient is a second stop and needs a first one, so the key renders nothing, and a key that renders nothing says so
+
+### 18.26 A theme can vary a bullet's colour, glyph and sprite by nesting depth
+- **Given** a theme setting a bullet colour/glyph/sprite for depth 1, and distinct overrides for depth 2 and depth 3-and-deeper (each optional, unset falling back to the shallower depth)
+- **When** a document with a bullet list nested three-or-more levels deep is rendered, and separately exported to HTML and PDF
+- **Then** each depth paints with its own resolved colour/glyph/sprite in the gutter
+- **And** it reaches the HTML export via a depth-scoped `::marker` selector, and the PDF export via a themed colour on the marker text — closing a pre-existing gap where the PDF sink coloured no marker at all, of any kind, at any depth
+
+### 18.27 A theme can colour task checkboxes independently of bullets and numerals
+- **Given** a theme setting a task-marker colour distinct from `list_marker_color`
+- **When** a document with a checked and an unchecked task item is rendered, and separately exported to HTML and PDF
+- **Then** both checkbox states take the stated colour while bullets and ordered numerals in the same document keep `list_marker_color`'s colour
+- **And** omitted, task markers fall back to `list_marker_color` exactly as today (TDD 18.2)
+
+### 18.28 A theme can tile a sprite behind the blockquote bar
+- **Given** a theme setting a sprite image for the blockquote accent bar (theme-relative, validated the same way every sprite key is)
+- **When** a blockquoted document is rendered, and separately exported to HTML and PDF
+- **Then** the bar fills with the sprite tiled at its natural size in place of the flat `blockquote_bar_color` colour
+- **And** the tile grid is anchored to the **document**, not to the viewport: scrolling a quote taller than the pane moves the pattern with the quoted text by the same number of pixels, and the grid does not re-phase at the moment the quote's top leaves the pane. (A viewport-anchored grid leaves the tiles nailed to the screen while the text slides underneath — the defect the flat bar could never show, since a flat fill carries no phase)
+- **And** the tile is not sliced along the bar's left edge: the grid's horizontal anchor is the bar's own left edge, so a decoration that does not begin on a tile boundary still shows whole tiles across the bar's width
+- **And** omitted, the bar stays the flat themed colour exactly as today
+
+### 18.29 A theme can give a blockquote its own background and ink
+- **Given** a theme setting `blockquote_bg` and/or `blockquote_fg`, independent of the accent bar's own colour
+- **When** a blockquoted document is rendered, and separately exported to HTML and PDF
+- **Then** quoted text paints on the stated background in the stated ink, alongside the existing bar
+- **And** the background is ONE continuous panel over the whole quote — every block it contains (paragraphs, a nested list, a fenced code block), in every medium — never a separate fill per block with page colour showing between them
+- **And** the ink re-inks the quote's PROSE ONLY: a link, **a heading** and **a `==mark==`** inside the quote each keep their own colour — and where the theme states no colour for one of them, "its own colour" is the resolved BODY ink, never the quote's
+- **And** omitted, quoted text stays plain body text on the page background exactly as today (TDD 18.2) — and the heading and mark tags set no foreground at all, so a theme stating no quote ink leaves them byte-identical
+
+### 18.30 A theme can colour table header text independently of heading_color
+- **Given** a theme setting `table_head_fg`
+- **When** a table is rendered, and separately exported to HTML and PDF
+- **Then** the header row's text takes the stated colour instead of `heading_color`
+- **And** omitted, the header text falls back to `heading_color` exactly as today — **and this parity now genuinely holds in the PDF too**: before this rubric the PDF sink read no header colour at all (every cell painted in body ink), so "falls back to heading_color" was true of the preview and HTML but not the artefact until this landed
+
+### 18.31 A theme can tile a sprite across the horizontal rule
+- **Given** a theme setting a sprite image for the horizontal rule (theme-relative, validated the same way every sprite key is)
+- **When** a document containing a `---` rule is rendered, and separately exported to HTML and PDF
+- **Then** the rule fills with the sprite tiled at its natural size in place of the flat `rule_color`
+- **And** omitted, the rule stays the flat themed colour exactly as today
+
+### 18.32 A heading key can be stated once for every level, or narrowed to one
+- **Given** a theme stating a bare heading key and the same key narrowed to a level (`heading_color` plus `heading_color_h2`)
+- **When** a document with headings at every level is rendered, and separately exported to HTML and PDF
+- **Then** the narrowed level takes its own value and every other level takes the bare one, on all three surfaces
+- **And** a level the theme leaves unset takes the bare key; a key stated in neither form takes its own default; and h6 still renders as h5 throughout, as it always has
+
+### 18.33 An unrecognised theme key is reported, never silently swallowed
+- **Given** a `themes.toml` carrying a key this build does not recognise — a misspelling, or a key from a later version
+- **When** themes are loaded
+- **Then** every recognised key in that theme still applies, and one `warn` record naming the theme id and the offending key is logged
+- **And** the rendering is unchanged: an unknown key is inert, exactly like an unset one
+
+### 18.34 A theme's own bare key outranks the system theme's narrowed one
+- **Given** `[themes.system]` stating a narrowed key (`heading_color_h1`) while the selected theme states only the bare `heading_color`
+- **When** an h1 is rendered
+- **Then** it takes the selected theme's bare value — source order decides between two themes, narrowing decides only within one
+- **And** with the selected theme silent on both forms, that h1 takes `[themes.system]`'s narrowed value
+
+### 18.35 The key vocabulary has one spelling, and a retired one is not it
+- **Given** a theme written against a pre-rename spelling (`sprite_rule`, `heading_colors`, `link`, `strikethrough_rgba`, an array-valued `heading_scale`)
+- **When** themes are loaded
+- **Then** each such key is reported by 18.33's unknown-key path and applies nothing — a retired spelling is never quietly honoured, so a theme file that looks like it works cannot be one that does not
+
+### 18.46 A theme key that can never apply says so
+- **Given** a themes file stating a key that is shadowed at **every** level it could reach — the bare `heading_space_above` in a user's `[themes.system]`, over a built-in that states `heading_space_above_h1` through `_h5`
+- **When** themes are loaded
+- **Then** one `warn` record names the theme id, the key, and the narrower spellings that beat it — and the key still applies nothing, exactly as the resolution order says it should
+- **And** a bare key that still wins at *any* level, a key beaten only by a *different* theme, and a key some surface reads bare regardless of levelling (`heading_color`, `heading_font`, `list_marker_color`) are each reported by nothing
+- **And** the shipped `data/themes.toml` states no such key
+- **Rationale** the third refusal class, and the one that was silent: the key is spelled right, is the right type, and parses — so 18.33's unknown-key path and 18.35's wrong-type path both pass it through. Without a record, a key that never applies is indistinguishable from one that applied and did nothing
+
+### 18.44 A declared key reaches a surface, or says why it does not
+- **Given** the registry of keys a themes file may speak
+- **When** any one of them is stated at a value nothing ships
+- **Then** the output of **every surface that key claims** changes — the preview's CSS, tag set or drawn decoration; the HTML artefact; the laid-out page
+- **And** a key that reaches a surface it does not claim is equally a failure: the exception is stale and must be wired or restated
+- **And** every excluded surface carries a **reason**, because an unexplained exclusion is indistinguishable from a key somebody forgot to wire
+- **Rationale** a key declared and never read is worse than an unknown one: an unknown key warns (18.33), while a declared-but-inert key is accepted, documented, and silent
+
+### 18.42 A themed inline style is one span, whichever surface builds it
+- **Given** a theme stating `mark_fg`, a strike colour, a bold weight, a superscript rise, a link colour or an annotation wash
+- **When** the same construct is rendered in a table cell (which the preview styles with Pango markup, not a tag) and exported to PDF (which lays every run out through Pango)
+- **Then** both carry the **same span** — the two are one builder reading one theme, not two copies reading two sources
+- **And** every span's opening and closing tag come from **one** call, because a strike's plain form closes `</s>` and its themed form closes `</span>`, and a mismatched pair fails `pango_parse_markup` and renders the whole run empty with no warning (ScrAP-163)
+
+### 18.43 A translucent theme colour stays translucent in every artefact
+- **Given** a theme stating a colour with alpha — `blockquote_bg = "#0a183080"`, or either of the two shipped translucent defaults
+- **When** the document is rendered, exported to HTML and exported to PDF
+- **Then** all three show a **wash**: the preview composites it, the HTML sheet carries eight-digit hex, and the page composites it onto the paper
+- **And** a colour with no alpha is unchanged on every surface, in its six-digit spelling — so a theme that states none is byte-identical to before this held (TDD 18.2)
+
+### 18.40 The themes file is found by a stated search path, first match wins
+- **Given** a host that may carry a themes file in the user's configuration directory, in the per-user data directory, or in any system data directory
+- **When** themes are loaded
+- **Then** the candidates are tried in that order — user override, per-user install, then each `$XDG_DATA_DIRS` entry in the order the platform lists them — and the **first one that exists wins whole**
+- **And** a later candidate is **not merged over** an earlier one, so a system install cannot add keys to a user's own themes file
+- **And** every system data directory is a candidate: the list is iterated, never hard-coded to `/usr/share` (on KDE its first entry is `/usr/share/plasma`)
+- **And** the directory a theme's sprite references resolve against is **the found file's own parent**, not the first candidate tried and never the working directory
+- **And** on a host where no candidate exists, the compiled-in themes stand alone
+
+### 18.36 A sprite reference is admitted by what it IS, not only by how big it is
+- **Given** a themes file on disk whose sprite reference names a FIFO, or a symlink to a file whose real extension is not on the allowlist, or a path that leaves the theme's own directory in any spelling
+- **When** themes are loaded
+- **Then** each is refused and logged, and the decoration is absent — a size test alone would admit the FIFO (whose reported length is zero) and then block the main thread on the read forever
+- **And** an ordinary contained reference beside the same file still resolves, so the refusals are about the hazard and not about the directory
+
+### 18.37 A sprite is bounded by its decoded size, not only by its file size
+- **Given** a sprite file inside the byte cap whose header declares more pixels than the decoded-raster cap (a decompression bomb: a 20000×20000 PNG is under 512 KiB)
+- **When** any surface asks for that sprite — the preview's texture, the pre-resampled marker, or the PDF sink's image surface
+- **Then** it is refused before being decoded, and one `warn` naming the sprite and its declared dimensions is logged
+- **And** the decoration degrades to absent, the same answer every other refusal in this vocabulary gives
+
+### 18.38 A sprite that cannot be produced says so
+- **Given** a sprite file that passes every admission check but cannot be decoded — truncated, corrupt, or a `.png` that is not one
+- **When** it is asked for through either decode path
+- **Then** a `warn` naming the reference is logged on **both**, and neither path silently answers "absent"
+- **Rationale** an inert-by-default decoration makes "the theme stated no sprite" and "the reference resolved but would not decode" produce identical pixels; the log record is the only observable that distinguishes them (ScrAP-324)
+
+### 18.39 A sprite's admission is re-established when it is read, not only when it is resolved
+- **Given** a sprite that passed resolution and has since grown past the byte cap, or ceased to be a regular file
+- **When** it is read — at first paint, at a theme swap, or at an export
+- **Then** it is refused on the open handle and logged, and the read is bounded by the cap rather than predicting it
+- **Rationale** resolution runs once at load and the read happens many times afterwards; between them the guarantee is a path and nothing else
+
+### 18.45 A themed rule reaches the widget, not only the stylesheet
+- **Given** a reading theme that states a `link_color` (and, where it states them, `link_underline` / `link_underline_color`)
+- **When** a table cell whose ENTIRE content is a link is rendered — the `GtkLinkButton` shape, not the mixed cell's label
+- **Then** the button node RESOLVES to the theme's link ink, and its caption carries the theme's underline, exactly as the body link and the mixed cell beside it do
+- **And** the check reads the resolved style off a real widget, never the generated rule text: a selector naming a class no widget carries generates, formats and asserts identically to one that matches, so rule-text assertions are blind to the whole failure (a blanket rename of the theme vocabulary spelled GTK's own `link` class as this project's `link_color` key, and 1279 tests stayed green)
+- **Rationale** a stylesheet is an instruction, not an effect; a test of the instruction is a test of the same defect one layer up
+
+### 18.47 Two decorations that overlap composite in one stated order
+- **Given** a document that nests one drawn decoration inside another — a heading band, a code-block card or a list marker inside a blockquote; a marker on the row a band or a card covers; a code block's copy button inside its own card
+- **When** the preview paints
+- **Then** the CONTAINED decoration lands ON the containing one: the quote panel is the ground for everything a quote holds, the accent bar and the gutter markers run over the band and the card they cross, and the copy button is drawn over its card
+- **And** that order is stated ONCE, as data the paint iterates, so changing it is an edit to a value a reviewer reads rather than a rearrangement of statements in a draw callback
+- **And** two decorations whose drawn columns cannot intersect are ordered by nothing and are recorded as such rather than left unmentioned — the right-margin annotation chip against anything in the content column, and a quoted list's markers against the accent bar they are deliberately placed clear of
+- **Rationale** the pairs are derived from the vectors the paint draws from, not enumerated by hand: a pair overlaps only if the two constructs nest in Markdown AND their rectangles intersect in x. Both halves are measurable — the nestings against the renderer's own products, the columns against the arithmetic the painters share — so the list is auditable rather than remembered, which is what a decoration added later needs
 
 ## 19. Local document-link navigation
 
@@ -2391,7 +2658,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 ### 20.9 Outline and annotations toggle independently; an empty sidebar disappears
 - **Given** the outline and annotations panes
 - **When** each is toggled on or off
-- **Then** they stack (bold headers, no draggable divider) when both are shown, either fills the sidebar alone when it's the only one shown, and the **whole sidebar is hidden** — content reclaims the full width — only when both are hidden
+- **Then** they stack (bold headers, and — since 20.21 — a draggable divider between them) when both are shown, either fills the sidebar alone when it's the only one shown, and the **whole sidebar is hidden** — content reclaims the full width — only when both are hidden
 
 ### 20.10 The viewer does not scroll-spy, and claims nothing it was not told
 - **Given** the annotations viewer is shown with a selected row
@@ -2452,6 +2719,14 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Given** the annotations list holds the keyboard focus, having opened an annotation's comment card
 - **When** the user presses Escape
 - **Then** the card is dismissed and the focus returns to the document pane (the editor in pure-edit mode, the preview otherwise), so Escape means the same thing here as it does in the card itself (§17.39)
+
+### 20.21 The reader decides how the sidebar's height is shared
+- **Given** both sidebar sections are shown, stacked outline-over-annotations
+- **When** the user drags the divider between them
+- **Then** the two sections take the shares the drag gives them, each still scrolling its own list; the divider **cannot take either section away** — it stops at a section's minimum height, so a section leaves the screen only by its own `win.outline` / `win.annotations` toggle and the toggle's state never disagrees with what is displayed (20.9)
+- **And** hiding one section and showing it again returns to the divider position the reader chose, rather than resetting the split
+- **And** with only one section shown there is no divider at all — that section fills the sidebar (20.9), and a window-height change is shared between the two rather than taken entirely from one
+- **And** the state persists across app restarts — each window remembers its own divider position, restored with that window's session; it is stored as a *fraction* of the sidebar's height, so a window restored at a different height keeps the reader's ratio rather than a stale pixel count. A session predating the field, or one whose value is corrupt, restores to the even split rather than to a jammed divider
 
 ## 21. Crash forensics
 
@@ -2667,7 +2942,6 @@ created by an act of navigation, and traversing history is not one of them.**
 - **And** their sensitivity is correct immediately after every event that can change it — a navigation, a traversal, a tab closing, a tab moving to another window — never only after some later unrelated interaction
 
 ### 23.6 The browser's own inputs work
-<!-- HUMAN-AUTHOR CONFIRM: macOS spelling added by agent 2026-08-20, in response to a reported defect — see TDD §4.13. -->
 - **Given** a window with history in both directions
 - **When** the reader presses Alt+Left / Alt+Right (Cmd+[ / Cmd+] on macOS — see below), or the dedicated Back / Forward keys a keyboard may carry (`XF86Back` / `XF86Forward`), or the two thumb buttons a mouse may carry (buttons 8 and 9)
 - **Then** each drives the same navigation as the menu item — one action, several inputs, no per-input behaviour
@@ -2845,6 +3119,7 @@ up doing.
 - **Then** each appears in the export with the content and structure the preview gives it — none silently omitted, none doubled
 - **And** a construct that renders through more than one widget shape in the preview (a table cell is a link button when its whole content is a link and a label otherwise) exports the same either way — the shapes are indistinguishable to a reader, so they must be indistinguishable in the artefact
 - **And** a **list item's content stays one paragraph**: an item holding several inline runs — text, inline code, a link, a soft break — is one block, not one block per run. A *tight* item's content reaches the exporter as bare inline events with no paragraph around it, unlike a loose item's, so the two arrive differently and must leave identically. **The fixture must give an item two or more inline runs**: with a single run the broken and correct paths produce the same output, which is why this went unnoticed until a real document was exported
+- **And** a list **mixing** task items with plain ones exports **every plain item's marker** — a bullet or number, exactly as the preview draws it in the gutter. Deciding "does this LIST contain a task" and "does this ITEM need its own marker suppressed" are different questions; answering the second with the first strips the marker from every item once any one of them is a task, and that failure has **no on-screen symptom** — the preview is unaffected because it draws markers per item — so only comparing an exported file against the preview catches it
 
 ### 25.4 Raw HTML is dropped exactly as the preview drops it
 - **Given** a document containing `<script>`, `<iframe>` and `<div>`, and a `<picture>` / `<source>` / `<img>` group
@@ -2878,7 +3153,11 @@ up doing.
 - **When** a document is exported to HTML
 - **Then** every colour, typeface and decoration metric in the artefact resolves through the theme engine from the **active reading theme** — a literal styling value anywhere in either sink is a defect
 - **And** the PDF resolves through the same engine against the **System theme's light resolution** by default, paper having no dark mode; "default to System-light" is a resolution request, not a licence for a literal
+- **And** the PDF sink expresses **every** key the other two surfaces express, not four of five: a heading's ink and face as well as its scale, weight, band and rule; the mark ink; both code fills; and the three metrics — list step, list-item gap, and the gap between a quote's bar and its text — which were `INDENT_PT`, `BLOCK_GAP_PT` and "whatever the bar's own width happened to be"
+- **And** a design-time **pixel** metric reaches the page converted to **points**, never read as a point count
 
+- **And** a design-time PIXEL metric is converted to points before it reaches the page, EVERY key without exception: the unit error is coherent per key, so a sink that converts some and not others looks correct from whichever key a reader checks
+- **And** an embedded sprite's payload appears in the artefact ONCE per distinct image, however many constructs use it — a payload emitted per USE is linear in the document's length and turns one 512 KiB image into hundreds of megabytes of HTML
 ### 25.10 The default filename cannot destroy the source
 - **Given** a document named `notes.md`
 - **When** the destination chooser opens for either target
@@ -2955,6 +3234,14 @@ up doing.
 - **Given** a completed PDF export
 - **Then** success is concluded from the operation's return value **and** the count of pages drawn against pages expected
 - **And** never from `is_finished()` or `status()`, which are inverted in both directions — success never reports finished, and finished means aborted
+
+### 25.25 A named font reaches the PDF as that named face
+- **Given** `[themes.system]` states a multi-word `font_family` and a multi-word `heading_font`, both installed on the host
+- **When** the document is exported to PDF
+- **Then** the artefact's embedded fonts are those faces by NAME, body and heading alike
+- **And** the check asserts the face Pango RESOLVED, never the requested string, the laid-out width, or "not the default font": the theme holds a CSS font stack in which a multi-word family is quoted, Pango's own list parser rejects quotes and falls through to the stack's generic terminator, so a totally broken sink lands on plain `serif` — a real face, a different width, and exactly what a reader would expect a serif theme to look like
+- **And** the fixture goes through `sanitize_font_family` and asserts the value came back QUOTED, since a bare generic (`monospace`) is left unquoted and so passes on the broken sink
+- **Rationale** the de-quoting seam existed for the preview's tag sink and was `pub(super)` inside `tags/`; the PDF sink could not reach it and handed Pango the CSS spelling verbatim. The debt was closed on the strength of the seam existing, which is a claim about the seam and not about its callers
 
 ### 25.21 A cancelled or failed export leaves the destination untouched
 - **Given** a destination that already holds a PDF

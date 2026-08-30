@@ -232,6 +232,10 @@ impl From<LegacySession> for Session {
                     // A legacy file predates the annotations viewer entirely, so
                     // it restores hidden — its default.
                     annotations_visible: false,
+                    // ...and therefore predates a divider between the two sidebar
+                    // sections, there having been only one. The even split is the
+                    // default, and the first drag records a real one.
+                    sidebar_split: ChromeSession::default().sidebar_split,
                 },
                 tabs: vec![TabSession {
                     path: None,
@@ -353,19 +357,80 @@ pub(crate) struct ChromeSession {
     /// pane on every window would be gratuitous — a reviewer turns it on when
     /// reviewing. A pre-annotations session file (no key) restores to that default.
     pub annotations_visible: bool,
+    /// Where the reader last left the divider between the two sidebar sections, as
+    /// the FRACTION of the sidebar's height given to the outline (TDD 20.21).
+    ///
+    /// A fraction rather than `GtkPaned`'s absolute px, for the same reason
+    /// `SplitView` stores one: the ratio then survives a window resize, and a
+    /// restore into a window that is not the height the value was recorded at —
+    /// which a session restore routinely is, since the window geometry it is
+    /// restored alongside can itself have been clamped by a smaller screen.
+    ///
+    /// Per window, like every other field here. Read through
+    /// [`sidebar_divider_position`] rather than used directly, so a hand-edited or
+    /// corrupt value cannot reach the layout (POLICY: a malformed file must never
+    /// break layout, on the same principle that a malformed config never prevents
+    /// startup). A session file predating this key restores to the even split.
+    pub sidebar_split: f64,
     pub toolbar_sections: ToolbarSections,
+}
+
+/// The divider position in px for `fraction` of a sidebar `height` px tall, or
+/// `None` when the sidebar has no usable height yet (unmapped, or hidden entirely)
+/// and the question therefore has no answer worth acting on.
+///
+/// **This is the only route from the stored fraction to a `GtkPaned` position**, so
+/// it is also where a value that never came from us is made harmless: a NaN, a
+/// negative, a zero or a 3.7 all resolve to the even split rather than to a divider
+/// jammed against an edge. Clamping at the point of USE rather than at parse is
+/// deliberate — a file is not the only way a bad value can arrive, and a clamp on
+/// the parse path alone would leave the arithmetic below trusting its input.
+///
+/// GTK clamps the result again to the two children's minimums (`shrink=false`), so
+/// this function is not where the section floor is enforced — ScrAP-336 is.
+pub(crate) fn sidebar_divider_position(fraction: f64, height: i32) -> Option<i32> {
+    if height <= 0 {
+        return None;
+    }
+    let fraction = if fraction.is_finite() && fraction > 0.0 && fraction < 1.0 {
+        fraction
+    } else {
+        ChromeSession::default().sidebar_split
+    };
+    Some((f64::from(height) * fraction).round() as i32)
+}
+
+/// The fraction to store for a divider sitting at `position` in a sidebar `height`
+/// px tall, or `None` when the reading is not meaningful — an unmapped or hidden
+/// sidebar (`height <= 0`), or a position GTK has pinned to an edge.
+///
+/// The `None` cases matter more than the arithmetic: a window closed with both
+/// sidebar sections hidden has a zero-height sidebar, and reading `0.0` out of it
+/// would overwrite a perfectly good remembered split with a degenerate one every
+/// time — the reader would lose their layout by the act of hiding the sidebar
+/// before quitting. Refusing to answer leaves the last good value standing.
+pub(crate) fn sidebar_split_fraction(position: i32, height: i32) -> Option<f64> {
+    if height <= 0 || position <= 0 || position >= height {
+        return None;
+    }
+    Some(f64::from(position) / f64::from(height))
 }
 
 impl Default for ChromeSession {
     /// A fresh window (and a session file with no `chrome` table) shows the
     /// toolbar, statusbar, and outline; the annotations viewer starts hidden
-    /// (see `annotations_visible`).
+    /// (see `annotations_visible`) and the two sections split the sidebar evenly.
+    ///
+    /// `0.5` is also what `GtkPaned` derives on its own from the two sections'
+    /// equal minimums when no position was ever set, so a restored default window
+    /// and a never-persisted one look identical rather than merely similar.
     fn default() -> Self {
         Self {
             show_toolbar: true,
             show_statusbar: true,
             outline_visible: true,
             annotations_visible: false,
+            sidebar_split: 0.5,
             toolbar_sections: ToolbarSections::default(),
         }
     }
@@ -433,7 +498,7 @@ fn migrate_v2_app_wide_chrome(session: &mut Session, v2: &V2AppWideChrome) {
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
 #[serde(default)]
 pub(crate) struct Session {
-    /// The selected preview reading theme's id (`src/theme.rs`). Genuinely
+    /// The selected preview reading theme's id (`src/theme/`). Genuinely
     /// app-wide, unlike the per-window chrome in [`ChromeSession`]: the theme is
     /// one app-wide CSS provider, so there is exactly one value and no
     /// "which window's?" question to answer. Defaults to the base theme, so an
@@ -889,8 +954,9 @@ mod tests {
     }
 
     use super::{
-        load, parse, save, session_path, with_state_home_for_test, ChromeSession, Session,
-        TabSession, ToolbarSections, ViewMode, WindowSession,
+        load, parse, save, session_path, sidebar_divider_position, sidebar_split_fraction,
+        with_state_home_for_test, ChromeSession, Session, TabSession, ToolbarSections, ViewMode,
+        WindowSession,
     };
 
     fn with_state_home<T>(dir: &std::path::Path, f: impl FnOnce() -> T) -> T {
@@ -913,6 +979,7 @@ mod tests {
                         show_statusbar: true,
                         outline_visible: false,
                         annotations_visible: true,
+                        sidebar_split: 0.25,
                         toolbar_sections: ToolbarSections {
                             file: true,
                             edit: false,
@@ -954,6 +1021,7 @@ mod tests {
                         show_statusbar: false,
                         outline_visible: true,
                         annotations_visible: false,
+                        sidebar_split: 0.75,
                         toolbar_sections: ToolbarSections {
                             file: false,
                             edit: true,
@@ -1119,6 +1187,67 @@ mod tests {
         })
         .unwrap();
         assert_eq!(parse(&text).windows[0].chrome.toolbar_sections, ts);
+    }
+
+    #[test]
+    fn sidebar_split_defaults_to_an_even_split_and_round_trips() {
+        assert_eq!(ChromeSession::default().sidebar_split, 0.5);
+
+        let s = parse("[[windows]]\nwidth = 900\n");
+        assert_eq!(
+            s.windows[0].chrome.sidebar_split, 0.5,
+            "a file predating the divider restores the even split"
+        );
+
+        let s = parse("[[windows]]\nwidth = 900\n[windows.chrome]\nsidebar_split = 0.3\n");
+        assert_eq!(s.windows[0].chrome.sidebar_split, 0.3);
+
+        let text = toml::to_string(&Session {
+            windows: vec![WindowSession {
+                chrome: ChromeSession {
+                    sidebar_split: 0.75,
+                    ..ChromeSession::default()
+                },
+                ..WindowSession::default()
+            }],
+            ..Session::default()
+        })
+        .unwrap();
+        assert_eq!(parse(&text).windows[0].chrome.sidebar_split, 0.75);
+    }
+
+    /// The stored fraction reaches the layout only through `sidebar_divider_position`,
+    /// so that is where a value we did not write has to become harmless — a
+    /// hand-edited or corrupt session file must not be able to jam the divider
+    /// against an edge, or drive it off the pane entirely.
+    #[test]
+    fn a_corrupt_sidebar_split_falls_back_to_the_even_split() {
+        for bad in [f64::NAN, f64::INFINITY, -1.0, 0.0, 1.0, 3.7] {
+            assert_eq!(
+                sidebar_divider_position(bad, 400),
+                Some(200),
+                "a stored {bad} must resolve to the even split, not to itself"
+            );
+        }
+        // ...while a sane value is honoured rather than flattened along with them.
+        assert_eq!(sidebar_divider_position(0.25, 400), Some(100));
+    }
+
+    /// Both directions decline to answer when the sidebar has no height to express a
+    /// fraction against. This is not defensiveness: a window closed with BOTH sidebar
+    /// sections hidden has exactly that shape, and answering `0.0` there would
+    /// overwrite the reader's remembered split every time they tidied the sidebar away
+    /// before quitting.
+    #[test]
+    fn a_sidebar_with_no_height_yields_no_split_reading() {
+        assert_eq!(sidebar_divider_position(0.5, 0), None);
+        assert_eq!(sidebar_divider_position(0.5, -10), None);
+        assert_eq!(sidebar_split_fraction(120, 0), None);
+        // A position pinned to either edge is GTK reporting a degenerate layout, not a
+        // ratio the reader chose.
+        assert_eq!(sidebar_split_fraction(0, 400), None);
+        assert_eq!(sidebar_split_fraction(400, 400), None);
+        assert_eq!(sidebar_split_fraction(100, 400), Some(0.25));
     }
 
     #[test]

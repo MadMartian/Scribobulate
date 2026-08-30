@@ -164,8 +164,11 @@ pub(crate) fn editor_selection_target(
     }
     // Balance BEFORE the block-crossing test: swallowing a construct can only widen
     // the span, and the widened span is what actually gets wrapped — so it is the one
-    // that must be tested for the cross-block point-comment fallback.
-    let span = crate::copymap::balance_source_span(source, start..end);
+    // that must be tested for the cross-block point-comment fallback. The caller
+    // normalises (ScrAP-75, `NormalizedMd`'s doc): the substitution is length- and
+    // position-preserving, so the returned range still indexes `source` unchanged.
+    let normalized = crate::renderer::NormalizedMd::new(source);
+    let span = crate::copymap::balance_source_span(&normalized, start..end);
     // Same reasoning as the cleaned-side sibling above (QA round 3, P-3):
     // `balance_source_span` returns byte arithmetic over the source, not a
     // proven char boundary.
@@ -241,7 +244,12 @@ mod tests {
                 kind: RawKind::End(Construct::Paragraph),
             },
         ];
-        build(md, &evs, n)
+        build(
+            md,
+            &evs,
+            n,
+            &std::rc::Rc::new(crate::renderer::BlockScripts::scan(md)),
+        )
     }
 
     /// A copymap for two plain paragraphs "para one\n\npara two" (the `\n\n` separator
@@ -280,7 +288,8 @@ mod tests {
                 kind: RawKind::End(Construct::Paragraph),
             },
         ];
-        (build(&md, &evs, 18), md)
+        let scripts = std::rc::Rc::new(crate::renderer::BlockScripts::scan(&md));
+        (build(&md, &evs, 18, &scripts), md)
     }
 
     #[test]
@@ -690,7 +699,13 @@ mod tests {
                 kind: RawKind::End(Construct::Paragraph),
             },
         ];
-        (build(&cleaned, &evs, n), ext.shifts, cleaned, original)
+        let scripts = std::rc::Rc::new(crate::renderer::BlockScripts::scan(&cleaned));
+        (
+            build(&cleaned, &evs, n, &scripts),
+            ext.shifts,
+            cleaned,
+            original,
+        )
     }
 
     /// **The multi-block-over-existing-annotation defect, proven at the pure boundary.** A
@@ -778,6 +793,7 @@ mod tests {
         let mut content: Vec<(usize, usize, i32, i32)> = Vec::new();
         let mut plain = String::new();
         let mut off = 0i32;
+        let scripts = std::rc::Rc::new(crate::renderer::BlockScripts::scan(cleaned));
         for (ev, src) in Parser::new_ext(cleaned, crate::renderer::md_options()).into_offset_iter()
         {
             let kind = crate::copymap::classify(&ev);
@@ -790,12 +806,16 @@ mod tests {
                     off = 0;
                 }
                 Event::End(TagEnd::TableCell) => {
-                    out.push((build(cleaned, &evs, off), content.clone(), plain.clone()));
+                    out.push((
+                        build(cleaned, &evs, off, &scripts),
+                        content.clone(),
+                        plain.clone(),
+                    ));
                     active = false;
                 }
                 _ if active => {
                     if let Some(k) = &kind {
-                        let w = crate::copymap::cell_width(k);
+                        let w = crate::copymap::cell_width(&scripts, src.start, k);
                         let before = off;
                         let after = off + w;
                         evs.push(RawEv {
@@ -938,7 +958,8 @@ mod tests {
             .iter()
             .map(|&(a, b)| (a as usize, b as usize))
             .collect();
-        let markup = crate::renderer::annotate_markup(plain, &hl);
+        let theme = crate::theme::active();
+        let markup = crate::renderer::annotate_markup(plain, &hl, &theme);
         // Built from the same generator the code under test uses — this test is about
         // WHICH characters get highlighted, not what colour they get (the colour is
         // the active theme's, and `theme` owns testing its resolution).
@@ -946,7 +967,7 @@ mod tests {
             markup,
             format!(
                 "the earth is {}flat</span> here",
-                crate::renderer::ann_hl_open()
+                crate::renderer::ann_hl_open(&theme)
             )
         );
     }
@@ -990,9 +1011,10 @@ mod tests {
             .iter()
             .map(|&(a, b)| (a as usize, b as usize))
             .collect();
-        let markup = crate::renderer::annotate_markup(plain, &hl);
+        let theme = crate::theme::active();
+        let markup = crate::renderer::annotate_markup(plain, &hl, &theme);
         assert!(
-            markup.contains(&crate::renderer::ann_hl_open()),
+            markup.contains(&crate::renderer::ann_hl_open(&theme)),
             "markup must carry the annotation highlight span: {markup}"
         );
         assert!(

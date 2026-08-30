@@ -67,10 +67,13 @@ jobs:
   # artefact (what list does it derive?). Conformance is established here, on the port's own
   # platform; the `parity` job below can only compare.
   #
-  # None of them provisions a toolchain. Every runner exits from `--list-steps` and
-  # `--self-test` before touching its environment, deliberately, so a parity artefact does
-  # not depend on whether the box has GTK installed — which is what makes a three-platform
-  # matrix affordable enough to run on every push.
+  # None of them provisions a GTK toolchain. Every runner exits from `--list-steps` and
+  # `--self-test` before touching its environment, deliberately, and the cross-reference
+  # gate's `--list-scan` exits before any check runs, so a parity artefact does not depend
+  # on whether the box has GTK installed — which is what makes a three-platform matrix
+  # affordable enough to run on every push. `cargo` is used, and only `cargo`: it is
+  # preinstalled on all three runner images, and `xtask` is a small crate with a `regex`
+  # dependency, not the application.
   # --------------------------------------------------------------------------------------
   contract-linux:
     name: contract (linux)
@@ -79,13 +82,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Pipeline runner derives its steps from the contract
         run: scripts/pipeline.sh --self-test
-      - name: Cross-reference gate derives its scan set from the contract
-        run: scripts/lint-references.sh --self-test
+      - name: Cross-reference gate's corpora prove its patterns discriminate
+        run: cargo test --package xtask
       - name: Emit parity artefacts
         run: |
           mkdir -p artefacts
           scripts/pipeline.sh --list-steps > artefacts/steps.linux.txt
-          scripts/lint-references.sh --list-scan > artefacts/scan.linux.txt
+          cargo xtask lint-references --list-scan > artefacts/scan.linux.txt
       - uses: actions/upload-artifact@v4
         with:
           name: parity-linux
@@ -98,18 +101,18 @@ jobs:
       - uses: actions/checkout@v4
       - name: Pipeline runner derives its steps from the contract
         run: packaging/macos/pipeline.sh --self-test
-      # The cross-reference gate has two PORTS but runs on three PLATFORMS: the contract
-      # names scripts/lint-references.sh for both Linux and macOS. That makes macOS a place
-      # the bash port can silently diverge — BSD find/sed/sort are not GNU's — and a
-      # divergence there is ScrAP-207's shape on an axis nobody had looked at. So its scan
-      # set is compared too, rather than assumed to follow from sharing a file.
-      - name: Cross-reference gate derives its scan set from the contract
-        run: scripts/lint-references.sh --self-test
+      # The cross-reference gate is ONE binary on all three platforms now, and its scan set
+      # is still compared on all three. One implementation removes PORT divergence, not
+      # PLATFORM divergence: the set is derived by walking a filesystem, and case folding,
+      # symlink resolution and directory order are the host's answer, not the program's.
+      # Assuming parity follows from sharing a file is ScrAP-207's shape exactly.
+      - name: Cross-reference gate's corpora prove its patterns discriminate
+        run: cargo test --package xtask
       - name: Emit parity artefacts
         run: |
           mkdir -p artefacts
           packaging/macos/pipeline.sh --list-steps > artefacts/steps.macos.txt
-          scripts/lint-references.sh --list-scan > artefacts/scan.macos.txt
+          cargo xtask lint-references --list-scan > artefacts/scan.macos.txt
       - uses: actions/upload-artifact@v4
         with:
           name: parity-macos
@@ -125,13 +128,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Pipeline runner derives its steps from the contract
         run: packaging/windows/pipeline.ps1 -SelfTest
-      - name: Cross-reference gate derives its scan set from the contract
-        run: scripts/lint-references.ps1 -SelfTest
+      - name: Cross-reference gate's corpora prove its patterns discriminate
+        run: cargo test --package xtask
       - name: Emit parity artefacts
         run: |
           New-Item -ItemType Directory -Force -Path artefacts | Out-Null
           packaging/windows/pipeline.ps1 -ListSteps > artefacts/steps.windows.txt
-          scripts/lint-references.ps1 -ListScan > artefacts/scan.windows.txt
+          cargo xtask lint-references --list-scan > artefacts/scan.windows.txt
       - uses: actions/upload-artifact@v4
         with:
           name: parity-windows
@@ -296,9 +299,10 @@ jobs:
   # `brew install`, minutes and no build, where Windows needs a multi-gigabyte gvsbuild.
   #
   # WHAT THIS JOB IS EVIDENCE OF, beyond "the code compiles on a Mac". `packaging/macos/
-  # pipeline.sh` is a THIRD bash port of the same contract, and macOS is the one place
-  # BSD-versus-GNU divergence can hide in it — the scan-set comparison already covers
-  # `lint-references.sh` on this platform, but that is a different script. It is also the
+  # pipeline.sh` is a SECOND bash port of the same contract, and macOS is the one place
+  # BSD-versus-GNU divergence can hide in it — the scan-set comparison covers the
+  # cross-reference gate on this platform, but that is a Rust binary with no shell in it,
+  # so it says nothing about this port's `awk`/`sed`/`sort`. It is also the
   # first automated evidence for ScrAP-171's dual-harness split, which until now was
   # measured only by hand on the operator's own machine.
   #

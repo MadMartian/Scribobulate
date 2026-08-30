@@ -74,3 +74,11 @@ XDG_STATE_HOME = { value = "target/test-state", relative = true }
 #
 # NOT `force = true` and `relative = true`, both for the reasons given above.
 XDG_CONFIG_HOME = { value = "target/test-config", relative = true }
+
+# `cargo xtask <gate>` — the build-pipeline gate binary in `xtask/`. An alias rather than a
+# path so the contract's step commands are IDENTICAL on all three platforms: `cargo` is on
+# PATH everywhere a build happens, which is the property that let one binary replace the
+# two hand-synced shell/PowerShell ports of the cross-reference gate (POLICY § Build
+# pipeline step 9).
+[alias]
+xtask = "run --quiet --package xtask --"

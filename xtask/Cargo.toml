@@ -1,0 +1,21 @@
+# The build-gate binary. It is a WORKSPACE MEMBER rather than a script because the gate
+# it implements has to run identically on Linux, macOS and Windows, and `cargo` is the one
+# interpreter all three already have: eighteen contract commands invoke it and a Rust
+# toolchain is a prerequisite everywhere. A shell or Perl port adds a locate-it step on
+# Windows even where the interpreter is present, which is what the two hand-synced ports
+# this crate replaced were paying for (POLICY § Build pipeline step 9).
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+description = "Build-pipeline gates for Scribobulate (cargo xtask ...)"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+# Both are already in Cargo.lock via the application's own tree (syntect pulls `regex`,
+# and `walkdir` arrives with it), so this crate adds NOTHING to fetch or to audit — the
+# dependency rule in POLICY § Dependencies is about what the shipped binary carries, and
+# neither of these reaches it: nothing in the application depends on this crate.
+regex = "1"
+walkdir = "2"

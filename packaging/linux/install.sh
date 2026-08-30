@@ -29,7 +29,17 @@
 #   packaging/linux/install.sh          # build, then install into ~/.local
 #   packaging/linux/install.sh --no-build   # install an existing release binary
 #
+# REACHED BY `./install.sh` AT THE REPO ROOT, which is a router that dispatches on
+# `uname -s`; running this file directly is equivalent. The root script holds no install
+# logic of its own, so the three platforms cannot answer an install question differently
+# by accident — each one's answer lives in its own packaging/<os>/ directory.
 set -euo pipefail
+
+# The router already dispatched on the platform, but this script is directly runnable and
+# a direct run must not be the lenient path. `install -D`, `xdg-mime` and the desktop
+# database are all Linux here: on macOS the first of them fails with a message naming a
+# path rather than the platform, minutes into a release build.
+[ "$(uname -s)" = "Linux" ] || { echo "error: Linux only (see packaging/macos/install.sh)" >&2; exit 1; }
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo"

@@ -2,7 +2,7 @@
 //! tags route to [`super::start`] / [`super::end`]; text/code/breaks/rules are
 //! handled inline here.
 
-use super::scan::{scan_scripts, script_tag, Script};
+use super::scan::{script_tag, Script};
 use super::Renderer;
 use gtk::glib;
 use gtk::prelude::*;
@@ -20,6 +20,10 @@ impl Renderer {
                 } else if let Some((_, ref mut acc)) = self.code {
                     acc.push_str(&t);
                 } else if self.in_table_cell() {
+                    // Segmented before the cell borrow: the table is scanned per
+                    // BLOCK, so the answer comes from `self`, not from `t` alone.
+                    let segs = self.scripts.segments(self.event_src.start, &t);
+                    let src = self.event_src.clone();
                     if let Some(ts) = &mut self.table {
                         // Text outside a link in a cell that already has/had a link = mixed.
                         if ts.in_link.is_none()
@@ -28,47 +32,68 @@ impl Renderer {
                             ts.cell_mixed = true;
                         }
                         let before = ts.cell_off;
-                        for (run, script) in scan_scripts(&t) {
-                            let esc = glib::markup_escape_text(&run);
+                        for seg in &segs {
+                            // A delimiter is source, never a glyph: it contributes
+                            // no markup, no plain text and no cell offset.
+                            if seg.marker {
+                                continue;
+                            }
+                            let run = seg.text(&t);
+                            let esc = glib::markup_escape_text(run);
                             // Highlight's open tag is theme-generated (`mark_open`,
                             // the cell twin of the `TagName::Mark` body tag, Document
                             // Rendering CAM row 12), so `open` is a `Cow`; the rest
                             // are static Pango tags.
-                            let (open, close): (std::borrow::Cow<str>, &str) = match script {
-                                Script::Superscript => ("<sup>".into(), "</sup>"),
-                                Script::Subscript => ("<sub>".into(), "</sub>"),
-                                Script::Strikethrough => ("<s>".into(), "</s>"),
-                                Script::Highlight => (super::mark_open().into(), super::MARK_CLOSE),
+                            // Superscript/highlight are theme-generated (TDD 18.18,
+                            // 18.6) — `open` is a `Cow` for exactly those two branches.
+                            let (open, close): (std::borrow::Cow<str>, &str) = match seg.script {
+                                Script::Superscript => (
+                                    super::superscript_open(&self.theme).into(),
+                                    super::SUPERSCRIPT_CLOSE,
+                                ),
+                                Script::Subscript => (
+                                    super::subscript_open(&self.theme).into(),
+                                    super::SUBSCRIPT_CLOSE,
+                                ),
+                                Script::Strikethrough => {
+                                    let (open, close) = super::strike_tags(&self.theme);
+                                    (open.into(), close)
+                                }
+                                Script::Highlight => {
+                                    (super::mark_open(&self.theme).into(), super::MARK_CLOSE)
+                                }
                                 Script::None => ("".into(), ""),
                             };
                             ts.cell_markup.push_str(&open);
                             ts.cell_markup.push_str(&esc);
                             ts.cell_markup.push_str(close);
-                            ts.cell_plain.push_str(&run);
+                            ts.cell_plain.push_str(run);
                             ts.cell_off += run.chars().count() as i32;
                         }
                         let after = ts.cell_off;
                         if after > before {
                             // Table-cell annotation: content event for map_cleaned_highlight_to_local.
-                            let src = self.event_src.clone();
                             ts.cell_content_evs
                                 .push((src.start, src.end, before, after));
                         }
                     }
                 } else {
-                    let runs = scan_scripts(&t);
+                    let segs = self.scripts.segments(self.event_src.start, &t);
                     if self.heading.is_some() {
                         // The slug mirrors the rendered text with markers dropped.
-                        for (run, _) in &runs {
-                            self.heading_text.push_str(run);
+                        for seg in segs.iter().filter(|s| !s.marker) {
+                            self.heading_text.push_str(seg.text(&t));
                         }
                     }
-                    for (run, script) in &runs {
-                        let tag = script_tag(*script);
+                    for seg in &segs {
+                        if seg.marker {
+                            continue;
+                        }
+                        let tag = script_tag(seg.script);
                         if let Some(name) = tag {
                             self.inline_tags.push(name);
                         }
-                        self.insert(run);
+                        self.insert(seg.text(&t));
                         if tag.is_some() {
                             self.inline_tags.pop();
                         }
@@ -141,7 +166,20 @@ impl Renderer {
             // (start.rs / end.rs); accumulate each line so the whole block is parsed
             // once, at its close, as a `<picture>`/`<img>` image or dropped. Guard on
             // `in_html_block` so a stray `Html` event outside a block can't leak.
-            Event::Html(t) if self.in_html_block => self.html_acc.push_str(&t),
+            // TOTAL, not guarded: an arm whose guard fails falls through to the
+            // catch-all, so while a `_ => {}` existed a block-HTML event arriving
+            // with `in_html_block` false was dropped in complete silence. There is
+            // no catch-all now, and there is no guard either.
+            Event::Html(t) => {
+                if self.in_html_block {
+                    self.html_acc.push_str(&t);
+                } else {
+                    // Block HTML outside a block: pulldown always brackets these
+                    // with `Tag::HtmlBlock`, so this is a parser-shape surprise
+                    // rather than a document one.
+                    self.dropped_construct("a block-HTML event outside an HTML block");
+                }
+            }
             // Inline raw HTML (mid-paragraph, e.g. a bare `<img …>`, or the separate
             // tags of a single-line `<picture>`): feed each tag through the scanner,
             // which honours the `<picture>` grouping carried across events. Non-image
@@ -150,20 +188,39 @@ impl Renderer {
 
             Event::Rule => {
                 self.block_sep();
-                let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
+                // A theme may tile a sprite across the rule instead of colouring it
+                // (TDD 18.31), and unlike every other sprite-vs-flat pair in this
+                // vocabulary the two cannot be one widget: the flat rule is a stock
+                // `GtkSeparator` filled by generated CSS, and a GTK CSS `url()` cannot
+                // reach a sprite compiled into the binary (ScrAP-324). The `else` arm
+                // below is therefore byte-for-byte the code that was here before this
+                // key existed — "unstated ⇒ unchanged" by construction, not by care.
+                let theme = crate::theme::active();
+                // The engine decides which of the rule's two appearances applies
+                // (`theme::Fill`); this site renders the answer. A sprite that will
+                // not decode falls through to the stock separator, which the theme's
+                // own `rule_color` styles through generated CSS — degrading, not
+                // erasing.
+                let rule_tile = theme.rule_decor().sprite.and_then(crate::sprite::texture);
+                let sep: gtk::Widget = match rule_tile {
+                    Some(tex) => crate::widgets::rule::SpriteRule::new(tex).upcast(),
+                    None => gtk::Separator::new(gtk::Orientation::Horizontal).upcast(),
+                };
                 // NO initial width_request: it must NOT start over-wide, or an
                 // Automatic preview scroller churns from frame 1 and the view never
                 // gets a clean allocation (GTK4Rs/AP-23). `CodePreviewView::size_allocate`
                 // grows it to the live content column before the first paint.
                 //
-                // A rule is a STOCK GtkSeparator — the only anchored widget the app
-                // doesn't build itself, and therefore the surface most likely to stay
+                // Unfilled, a rule is a STOCK GtkSeparator — the only anchored widget the
+                // app doesn't build itself, and therefore the surface most likely to stay
                 // system-coloured on a reading page. It carries a class so the generated
                 // theme CSS can recolour it (it has no tag and no snapshot of ours to
-                // theme through), and its margins are a themed decoration metric scaled
-                // by the live zoom like every other.
+                // theme through). The class goes on either widget so the two answer the
+                // same selector; the sprite one paints itself and takes nothing from that
+                // rule. Their margins are a themed decoration metric scaled by the live
+                // zoom like every other.
                 sep.add_css_class("scrib-rule");
-                let space = crate::theme::px(crate::theme::active().metrics.rule_space, self.zoom);
+                let space = crate::theme::px(theme.metrics.rule_space, self.zoom);
                 sep.set_margin_top(space);
                 sep.set_margin_bottom(space);
                 let mut iter = self.buf.end_iter();
@@ -172,15 +229,22 @@ impl Renderer {
                 // so it fills `content − inset`, not the whole column — an indented rule
                 // sized to the full column overflows by the indent → spurious Automatic
                 // h-scrollbar → GTK4Rs/AP-22/23 churn (GTK4Rs/AP-23a). 0 at top level.
-                self.width_bounded
-                    .push((sep.clone().upcast(), self.block_inset()));
-                self.anchored.push((anchor, sep.upcast()));
+                self.width_bounded.push((sep.clone(), self.block_inset()));
+                self.anchored.push((anchor, sep));
                 self.trailing_newlines = 0;
                 self.at_start = false;
                 self.newline();
             }
 
-            _ => {}
+            // Inert BY OPTION, spelled out rather than swept into a `_`.
+            // `normalize::md_options` enables neither MATH nor FOOTNOTES, so
+            // pulldown never emits these and the source text arrives as literal
+            // `Text` — which is the visible degradation ScrAP-78 is about. Listing
+            // them keeps the match exhaustive, so adding an option without adding a
+            // handler stops compiling instead of silently rendering nothing.
+            Event::InlineMath(_) => self.dropped_construct("inline math"),
+            Event::DisplayMath(_) => self.dropped_construct("display math"),
+            Event::FootnoteReference(_) => self.dropped_construct("a footnote reference"),
         }
     }
 }

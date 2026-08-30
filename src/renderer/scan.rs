@@ -4,7 +4,7 @@
 //! last has no pulldown option at all — `Options` has no highlight/mark flag — so
 //! tokenising it here is the only way `==text==` can render.
 
-/// One inline text run classified by `scan_scripts`.
+/// One inline decoration a run may carry.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Script {
     None,
@@ -38,15 +38,17 @@ pub(crate) struct ScriptSpan {
 /// Unmatched markers are literal text and yield no span.
 ///
 /// **This is the single definition of what these four constructs are**, and it is
-/// deliberately span-shaped rather than string-shaped: [`scan_scripts`] renders from
-/// it, and `copymap::balance_source_span` decides annotation boundaries from it.
+/// deliberately span-shaped rather than string-shaped: [`super::segments`] cuts
+/// rendered runs from it, and `copymap::balance_source_span` decides annotation
+/// boundaries from it.
 /// A consumer that walks only pulldown-cmark's event stream cannot see these
 /// constructs at all — they arrive as plain `Text` — so anything reasoning about
 /// inline-construct extent must consult this scanner too (ScrAP-195).
 ///
-/// Limitation (inherited by both callers): because the renderer runs per pulldown
-/// `Text` event, a fence that wraps other inline markup (`~~a **bold** b~~`) is
-/// split across events and will not span — the `~~` then render literally.
+/// **Scope: ONE run.** A fence that wraps other inline markup (`~~a **bold** b~~`)
+/// is split across several pulldown `Text` events and cannot be seen from any one
+/// of them; [`super::segments::BlockScripts`] is the caller that stitches a block's
+/// runs back together before calling this, and every consumer goes through it.
 pub(crate) fn scan_script_spans(text: &str) -> Vec<ScriptSpan> {
     let mut spans: Vec<ScriptSpan> = Vec::new();
     // `base` is the byte offset of `rest` within `text`, so every range pushed is
@@ -160,30 +162,6 @@ pub(crate) fn scan_script_spans(text: &str) -> Vec<ScriptSpan> {
     spans
 }
 
-/// Split a plain-text run into (text, script) segments for the renderer: the
-/// content of each construct [`scan_script_spans`] found, with the literal text
-/// between them as `Script::None` runs (markers stripped, since the renderer
-/// expresses them as `GtkTextTag`s instead).
-///
-/// Derived from `scan_script_spans` rather than re-scanning, so the renderer and
-/// the annotation balancer can never disagree about what a construct is.
-pub(crate) fn scan_scripts(text: &str) -> Vec<(String, Script)> {
-    let mut runs: Vec<(String, Script)> = Vec::new();
-    let mut at = 0usize;
-
-    for span in scan_script_spans(text) {
-        if span.outer.start > at {
-            runs.push((text[at..span.outer.start].to_string(), Script::None));
-        }
-        runs.push((text[span.inner.clone()].to_string(), span.script));
-        at = span.outer.end;
-    }
-    if at < text.len() {
-        runs.push((text[at..].to_string(), Script::None));
-    }
-    runs
-}
-
 /// The inline [`TagName`](crate::tags::TagName) that a non-`None` `Script` maps to,
 /// if any.
 pub(super) fn script_tag(script: Script) -> Option<crate::tags::TagName> {
@@ -198,11 +176,18 @@ pub(super) fn script_tag(script: Script) -> Option<crate::tags::TagName> {
 }
 
 #[cfg(test)]
-mod scan_scripts_tests {
-    use super::{scan_scripts, Script};
+mod tight_construct_tests {
+    use super::Script;
+    use crate::renderer::segments_of;
 
+    /// The rendered runs of `s` — every non-delimiter segment, markers stripped —
+    /// which is the view the renderer, the outline and the export walk all take.
     fn runs(s: &str) -> Vec<(String, Script)> {
-        scan_scripts(s)
+        segments_of(s)
+            .into_iter()
+            .filter(|g| !g.marker)
+            .map(|g| (g.text(s).to_string(), g.script))
+            .collect()
     }
 
     #[test]

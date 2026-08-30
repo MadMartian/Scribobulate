@@ -283,26 +283,25 @@ mod gtk_integration_tests {
         }
     }
 
-    /// Pump the main loop until `window` holds `n` tabs, or the budget is spent.
+    /// Pump the main loop until `window` holds `n` tabs, or panic.
     ///
     /// Following a document link now reads the target off the main thread
     /// (`crate::docio`), so the new tab appears when that read comes back rather
-    /// than before `activate_doc_link` returns. This waits for the completion the
-    /// same way the app does — by letting the main loop run — instead of sleeping,
-    /// which would be a wall-clock bound on a thread-pool event (GTK4Rs/AP-122).
+    /// than before `activate_doc_link` returns — a `gio::spawn_blocking` completion
+    /// posted to this context, hence `Clock::Worker`.
     ///
-    /// It blocks (`iteration(true)`) rather than spinning, because the wakeup comes
-    /// from a `gio::spawn_blocking` completion posted to this context and there may
-    /// genuinely be nothing else pending until it lands.
+    /// `crate::testpump::until` (M31). The pre-migration version here had NO watchdog
+    /// timeout source, only a 2000-iteration count while blocking on `iteration(true)`
+    /// — which is exactly the GTK4Rs/AP-79 hazard the rest of this crate's copies
+    /// guard against: with nothing ever becoming ready, the very first `iteration(true)`
+    /// blocks forever and the "budget" of 2000 is never reached. `until` closes that
+    /// gap with a real timeout source before the loop.
     fn pump_until_tabs(window: &ApplicationWindow, n: usize) {
-        let ctx = gtk::glib::MainContext::default();
-        for _ in 0..2000 {
-            if crate::winstate::tabs_for_window(window).len() >= n {
-                return;
-            }
-            ctx.iteration(true);
-        }
-        panic!("the link navigation never produced {n} tabs");
+        crate::testpump::until(
+            crate::testpump::Clock::Worker,
+            &format!("the link navigation to produce {n} tabs"),
+            || crate::winstate::tabs_for_window(window).len() >= n,
+        );
     }
 
     /// The buffer offset `view`'s "scrib-outline-target" mark currently sits

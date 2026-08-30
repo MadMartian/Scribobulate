@@ -224,16 +224,21 @@ mod gtk_integration_tests {
         (buf, view)
     }
 
-    fn pump(ctx: &glib::MainContext, budget: u32, done: impl Fn() -> bool) -> bool {
-        for _ in 0..budget {
-            if done() {
-                return true;
-            }
-            if !ctx.iteration(false) {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        }
-        done()
+    /// Pump the main loop until `done` reports true, or `budget` turns' worth of
+    /// wall-clock time elapses. `crate::testpump::until_or_for` under `Clock::Idle`
+    /// (M31) — the awaited work here (`insert-text` dispatch after a same-app paste)
+    /// is main-context idle-driven.
+    ///
+    /// **No turn budget.** This took one and multiplied it by 5. GTK4Rs/AP-261: turns
+    /// are not time — MEASURED by the macOS seat as an ~8x spread with machine load — so
+    /// a converging wait states its condition and nothing else, and a deliberate drain
+    /// states a real span.
+    fn settle(what: &str, done: impl FnMut() -> bool) {
+        crate::testpump::until(crate::testpump::Clock::Idle, what, done);
+    }
+
+    fn drain(span: std::time::Duration) {
+        crate::testpump::drain_for(crate::testpump::Clock::Idle, span);
     }
 
     fn text_of(buf: &sourceview::Buffer) -> String {
@@ -265,8 +270,7 @@ mod gtk_integration_tests {
         let win = gtk::Window::new();
         win.set_child(Some(&view));
         win.present();
-        let ctx = glib::MainContext::default();
-        pump(&ctx, 200, || win.is_mapped());
+        settle("the window to map", || win.is_mapped());
 
         // The trigger: real syntax tags over the region about to be copied.
         buf.ensure_highlight(&buf.start_iter(), &buf.end_iter());
@@ -278,13 +282,15 @@ mod gtk_integration_tests {
         let b = a + block.chars().count() as i32;
         buf.select_range(&buf.iter_at_offset(a), &buf.iter_at_offset(b));
         view.emit_copy_clipboard();
-        pump(&ctx, 200, || false);
+        // No state to observe here: this waits for the copy to reach the clipboard,
+        // which the test cannot see directly. A deliberate drain, spelled as one.
+        drain(std::time::Duration::from_millis(500));
 
         // Paste it back at the end of the document, exactly as "move this block" does.
         buf.place_cursor(&buf.end_iter());
         let before = buf.char_count();
         view.emit_paste_clipboard();
-        pump(&ctx, 600, || {
+        settle("the paste to reach the buffer", || {
             buf.char_count() >= before + block.chars().count() as i32
         });
 

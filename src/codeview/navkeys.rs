@@ -158,30 +158,10 @@ mod gtk_integration_tests {
         (view, cell, scroller, window)
     }
 
-    /// Pump until `done()`, bounded by a real glib timeout SOURCE rather than a
-    /// wall-clock check between iterations (GTK4Rs/AP-79), and with no sleep — a sleep
-    /// throttles the very idles this waits on.
-    fn pump_until(what: &str, mut done: impl FnMut() -> bool) {
-        use std::cell::Cell;
-        use std::rc::Rc;
-        let fired = Rc::new(Cell::new(false));
-        let f = Rc::clone(&fired);
-        let deadline =
-            glib::timeout_add_local_once(std::time::Duration::from_secs(20), move || f.set(true));
-        let ctx = glib::MainContext::default();
-        let mut deadline = Some(deadline);
-        while !done() {
-            assert!(
-                !fired.get(),
-                "pump watchdog (20s) fired waiting for: {what}"
-            );
-            ctx.iteration(false);
-        }
-        if let Some(id) = deadline.take() {
-            if !fired.get() {
-                id.remove();
-            }
-        }
+    /// Pump until `done()`, or panic naming `what`. `crate::testpump::until` under
+    /// `Clock::Idle` (M31), which already uses this module's own 20s default.
+    fn pump_until(what: &str, done: impl FnMut() -> bool) {
+        crate::testpump::until(crate::testpump::Clock::Idle, what, done);
     }
 
     /// **Ctrl+Home reaches the top of the document while a table cell holds the

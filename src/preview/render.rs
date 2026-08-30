@@ -5,8 +5,8 @@
 //! [`super::interactions`].
 
 use super::build::{
-    apply_preview_margins, build_render_products, build_render_products_into,
-    install_products_into_view, RenderProducts,
+    apply_preview_margins, attach_anchored, build_render_products, build_render_products_into,
+    install_annotations, install_content, RenderProducts,
 };
 use super::cells::{attach_cell_marker_widgets, collect_cell_labels, collect_table_anchors};
 use super::interactions::{
@@ -37,18 +37,11 @@ pub(crate) fn render(
         links,
         anchored,
         image_tints,
-        width_bounded,
-        image_bounded,
-        tables,
-        code_blocks,
-        code_block_bg,
-        blockquote_ranges,
-        blockquote_bar,
+        install,
         heading_offsets,
         heading_slugs,
         heading_map,
         mut markers,
-        list_markers,
         cell_src_spans,
         highlight_ranges: _,
         shifts,
@@ -80,6 +73,10 @@ pub(crate) fn render(
     view.add_css_class("scrib-preview");
     view.set_buffer(Some(&buf));
     view.set_editable(false);
+    // Found by the naming guard once its scope became the accessible ROLE rather than a
+    // list of widget types: this view publishes role TextBox and had no accessible name, so
+    // AT announced the rendered document as an unnamed text box.
+    crate::a11y::name_field(&view, "Rendered preview");
     // Char, NOT WordChar — a screen reader reading this preview aborts the app on
     // GTK 4.6: the AT-SPI text-attribute path casts the raw GtkWrapMode straight to
     // PangoWrapMode (gtkatspitextbuffer.c:77-78, Site A — GetDefaultAttributes), and
@@ -106,19 +103,8 @@ pub(crate) fn render(
     // `re_render` mirrors exactly (D4). Fixed-height anchored children (the
     // horizontal-rule separators) get bound to the live content column; tables
     // use the custom churn-free widget (GTK4Rs/AP-23).
-    install_products_into_view(
-        &view,
-        code_blocks,
-        code_block_bg,
-        blockquote_ranges,
-        blockquote_bar,
-        &anchored,
-        width_bounded,
-        image_bounded,
-        tables,
-        list_markers,
-        zoom,
-    );
+    install_content(&view, install, zoom);
+    attach_anchored(&view, &anchored);
     // Cell-marker pairing: pair cell-claim markers with their GtkLabel (widgets now exist).
     attach_cell_marker_widgets(&mut markers, &anchored, &cell_src_spans);
     view.set_markers(markers);
@@ -266,18 +252,11 @@ pub(crate) fn re_render(
         links,
         anchored,
         image_tints,
-        width_bounded,
-        image_bounded,
-        tables,
-        code_blocks,
-        code_block_bg,
-        blockquote_ranges,
-        blockquote_bar,
+        install,
         heading_offsets,
         heading_slugs,
         heading_map,
         mut markers,
-        list_markers,
         cell_src_spans,
         highlight_ranges: _,
         shifts,
@@ -321,19 +300,8 @@ pub(crate) fn re_render(
     // and possibly theme-changed colors, anchored children, width/image bounds) —
     // the SAME lockstep sequence `render` applies (D4).
     let new_aw: Vec<gtk::Widget> = anchored.iter().map(|(_, w)| w.clone()).collect();
-    install_products_into_view(
-        &view,
-        code_blocks,
-        code_block_bg,
-        blockquote_ranges,
-        blockquote_bar,
-        &anchored,
-        width_bounded,
-        image_bounded,
-        tables,
-        list_markers,
-        zoom,
-    );
+    install_content(&view, install, zoom);
+    attach_anchored(&view, &anchored);
     attach_cell_marker_widgets(&mut markers, &anchored, &cell_src_spans);
     view.set_markers(markers);
     if let Some(aw) = anchor_widgets_rc {
@@ -452,15 +420,19 @@ pub(crate) fn refresh_annotations_in_place(
     }
     view.set_markers(markers);
 
-    // Refresh the drawn list-marker gutter. A task-checkbox toggle
-    // reaches this fast path — the rendered text is byte-identical (the `[ ]`/`[x]`
-    // marker is gutter-drawn, not buffer text), so the structural guard above passes —
-    // but the checkbox's CHECKED state lives in `products.list_markers`, not in any
-    // buffer tag. Without re-installing them here the drawn box keeps its stale state
-    // and the toggle appears to do nothing in preview-only mode (in split, the editor
-    // buffer's `changed` fires a full `re_render` that masks the gap). `set_list_markers`
-    // also clears the now-stale checkbox hit-boxes; the next paint repopulates them.
-    view.set_list_markers(products.list_markers, zoom);
+    // The ANNOTATION half of the install, by name (F-CHOKE-001). This route does not
+    // rebuild the buffer, so it does not install the content half — but "which of the
+    // nine things does this route install?" is now a stated choice rather than two
+    // setters picked out of a longer list, and the render-generation bump travels with
+    // it instead of being skipped.
+    //
+    // The list markers matter here specifically because a task-checkbox toggle reaches
+    // this fast path: the rendered text is byte-identical (the `[ ]`/`[x]` marker is
+    // gutter-drawn, not buffer text), so the structural guard above passes — but the
+    // checkbox's CHECKED state lives in the markers, not in any buffer tag. Without
+    // re-installing them the drawn box keeps its stale state and the toggle appears to do
+    // nothing in preview-only mode.
+    install_annotations(&view, products.install.list_markers, zoom);
 
     // Refresh the offset-based render maps (source↔buffer / copy / shift), which DO change
     // — the source shifted by the inserted/removed CriticMarkup even though the buffer did
@@ -602,6 +574,12 @@ mod gtk_integration_tests {
             .expect("Overlay > ScrolledWindow > CodePreviewView")
     }
 
+    /// Not migrated to `crate::testpump` (M31 inventory): this is called BOTH as a
+    /// predicate wait (`Clock::Idle`-shaped) and, once below, as an unconditional
+    /// fixed-turn drain (`pump_until(&ctx, 200, || false)`) — routing the second
+    /// call through a predicate-driven blocking pump would turn a quick drain into an
+    /// unconditional block to whatever deadline was chosen, changing this test's
+    /// timing rather than just its spelling.
     fn pump_until(ctx: &glib::MainContext, budget: u32, done: impl Fn() -> bool) -> bool {
         for _ in 0..budget {
             if done() {
@@ -626,6 +604,33 @@ mod gtk_integration_tests {
     /// `set_bound_inset` call) makes `upper` exceed `page_size` and fails the assert.
     #[gtktest::test]
     fn indented_wide_table_does_not_force_a_horizontal_scrollbar() {
+        indented_wide_table_stays_within_the_column(1.0);
+    }
+
+    /// The same invariant AT ZOOM, which is a genuinely separate failure and not a
+    /// second sample of the one above: `block_inset` and the `bq-{depth}` / `li-{depth}`
+    /// tags must round each metric AT THE SAME STEP of the arithmetic. `theme::px`
+    /// rounds, so `px(a + b) != px(a) + px(b)` and `n * px(a) != px(n * a)` — and the
+    /// two sides multiply by depth on OPPOSITE sides of the scale (the list tag scales
+    /// `depth * step`, the quote tag scales `bar + gap` and then multiplies). Summing
+    /// every metric and scaling the total once therefore under-reserves the inset by up
+    /// to a pixel per term, which is ENOUGH: the Automatic h-scrollbar appears on
+    /// `upper > page_size`, at any magnitude.
+    ///
+    /// Zoom 1.5 with the default metrics is the measured case — `bar + gap = 13` scales
+    /// to `round(19.5) = 20` per side on the tag (40 for the pair) against
+    /// `round(26 * 1.5) = 39` from a single scaling of the sum. **Mutation check
+    /// (measured):** restoring `px(list + quote, zoom)` in `Renderer::block_inset` fails
+    /// this body by exactly 1px and leaves the zoom-1.0 body above GREEN — which is why
+    /// the zoom case is written out rather than trusted to the existing guard
+    /// (GTK4Rs/AP-160's shape on the zoom axis: a guard is evidence about the zoom it
+    /// runs at).
+    #[gtktest::test]
+    fn indented_wide_table_does_not_force_a_horizontal_scrollbar_at_zoom() {
+        indented_wide_table_stays_within_the_column(1.5);
+    }
+
+    fn indented_wide_table_stays_within_the_column(zoom: f64) {
         // Long cells → each table's natural width ≥ the content column, so fit_columns
         // fills it to the bound and the enclosing indent is what would overflow.
         const WIDE_ROW: &str =
@@ -637,11 +642,13 @@ mod gtk_integration_tests {
              {WIDE_ROW}\n    |---|---|\n    {WIDE_ROW}\n\n\
              > A blockquote that introduces its own table:\n>\n> \
              {WIDE_ROW}\n> |---|---|\n> {WIDE_ROW}\n\n\
+             > > A nested quote's table, where the per-level indent compounds:\n> >\n> > \
+             {WIDE_ROW}\n> > |---|---|\n> > {WIDE_ROW}\n\n\
              A plain top-level table for contrast:\n\n\
              {WIDE_ROW}\n|---|---|\n{WIDE_ROW}\n"
         );
 
-        let widget = render(&md, None, 1.0, false);
+        let widget = render(&md, None, zoom, false);
         let view = view_of(&widget);
         let window = gtk::Window::new();
         window.set_default_size(700, 600);
@@ -668,9 +675,130 @@ mod gtk_integration_tests {
         assert!(
             upper <= page,
             "GTK4Rs/AP-23a / TDD 12.8: an indented (list/blockquote) wide table must not push \
-             the preview over-wide — hadjustment upper={upper} must not exceed page_size={page} \
-             (over by {:.0}px → spurious Automatic h-scrollbar → GTK4Rs/AP-22/23 churn/blank)",
+             the preview over-wide at zoom {zoom} — hadjustment upper={upper} must not exceed \
+             page_size={page} (over by {:.0}px → spurious Automatic h-scrollbar → \
+             GTK4Rs/AP-22/23 churn/blank)",
             upper - page,
+        );
+    }
+
+    /// **No TEXT construct produces an over-wide line, at any pane width** — the
+    /// second half of TDD 2.2·a11y, which asserts that `WrapMode::Char` "also never
+    /// produces an over-wide line, preserving the no-horizontal-overflow invariant
+    /// §2.2 / ScrAP-22 depends on (regression test in `preview::render`)".
+    ///
+    /// **That claimed regression test did not exist.** Its sibling
+    /// [`indented_wide_table_does_not_force_a_horizontal_scrollbar`] covers the
+    /// ANCHORED-CHILD axis (a table bounded to the content column); nothing covered the
+    /// buffer-TEXT axis the wrap mode actually governs. A rubric naming a guard nobody
+    /// wrote reads exactly like a rubric that passes, which is why this is a guard and
+    /// not a comment.
+    ///
+    /// The cases are the ones `render`'s own wrap-mode comment names as the hazard —
+    /// "long unbreakable tokens (URLs, paths, long identifiers)" — plus the heading
+    /// shapes, since a heading carries a scaled font and its own margins and so reaches
+    /// the wrap width differently from body prose. A control paragraph rides along, and
+    /// a `page_size == 0` reading is reported as a failure, so a view that laid nothing
+    /// out cannot clear this assert vacuously (ScrAP-209).
+    ///
+    /// **Mutation check (measured):** reverting `render`'s
+    /// `view.set_wrap_mode(WrapMode::Char)` to `WrapMode::Word` fails this test —
+    /// `unbreakable-heading` overflows by 1300px at a 400px pane and by 800px at 900px,
+    /// `heading-in-list` by 1328px, `long-inline-code` by 514px, `long-url` by 327px.
+    ///
+    /// **It is NOT independent of the guard above, and the first draft of this comment
+    /// claimed it was.** The claim was that `Word` is in `PangoWrapMode` range so the
+    /// a11y guard would stay green; measured, that guard FAILS on the same mutation,
+    /// because it pins `Char` by equality rather than merely excluding `WordChar`. Under
+    /// today's code no reachable mutation separates the two — buffer text under `Char`
+    /// cannot go over-wide, so the wrap mode is the only route in, and the guard above
+    /// already watches it (ScrAP-254: an invariant held by two sufficient mechanisms is
+    /// mutation-proof one at a time).
+    ///
+    /// It is kept for two reasons that do not depend on that. First, TDD 2.2·a11y
+    /// asserts this test exists, and until now it did not — the rubric's consequence
+    /// clause named a guard nobody had written. Second, the guard above is pinned to a
+    /// value that is *scheduled to change*: `render`'s comment says to restore
+    /// `WordChar` once the toolkit floor reaches 4.8. On that day `assert_eq!(Char)`
+    /// becomes wrong and will be edited to match the new setting, and this test is the
+    /// only remaining statement of what must still be TRUE afterwards — that whatever
+    /// mode is chosen, no line goes over-wide (ScrAP-234: asserting one of a feature's
+    /// two representations and reading the green suite as evidence about both).
+    #[gtktest::test]
+    fn no_text_construct_produces_an_over_wide_line() {
+        const LONG_RUN: &str = "Supercalifragilisticexpialidociousantidisestablishmentarianismpneumonoultramicroscopicsilicovolcanoconiosis";
+        const LONG_WORDS: &str = "A very long heading made entirely of ordinary words that should soft wrap to the pane rather than run past its right edge";
+        let long_url = format!("https://example.com/{LONG_RUN}/{LONG_RUN}");
+        let cases: Vec<(&str, String)> = vec![
+            ("heading-h1-words", format!("# {LONG_WORDS}\n\nBody.\n")),
+            ("heading-h3-words", format!("### {LONG_WORDS}\n\nBody.\n")),
+            ("unbreakable-heading", format!("# {LONG_RUN}\n\nBody.\n")),
+            ("unbreakable-paragraph", format!("{LONG_RUN}\n")),
+            ("heading-in-list", format!("# H\n\n- # {LONG_RUN}\n")),
+            ("heading-in-blockquote", format!("# H\n\n> # {LONG_RUN}\n")),
+            (
+                "long-inline-code",
+                format!("Prose around `{LONG_RUN}` and after.\n"),
+            ),
+            ("long-url", format!("See <{long_url}> for more.\n")),
+            (
+                "control-paragraph",
+                "An ordinary paragraph, long enough that it must soft wrap at every pane \
+                 width under test, several times over.\n"
+                    .to_string(),
+            ),
+        ];
+
+        let ctx = glib::MainContext::default();
+        let mut offenders: Vec<String> = Vec::new();
+        for pane_w in [400i32, 500, 700, 900] {
+            for (name, md) in &cases {
+                let widget = render(md, None, 1.0, false);
+                let view = view_of(&widget);
+                let window = gtk::Window::new();
+                window.set_default_size(pane_w, 600);
+                window.set_child(Some(&widget));
+                window.present();
+
+                let sw = view
+                    .parent()
+                    .and_then(|c| c.downcast::<ScrolledWindow>().ok())
+                    .expect("view parent is the ScrolledWindow");
+                {
+                    let view = view.clone();
+                    let sw = sw.clone();
+                    pump_until(&ctx, 2000, move || {
+                        view.is_mapped() && sw.vadjustment().upper() > 0.0
+                    });
+                }
+                pump_until(&ctx, 200, || false);
+
+                let hadj = sw.hadjustment();
+                let (upper, page) = (hadj.upper(), hadj.page_size());
+                window.destroy();
+
+                if page <= 0.0 {
+                    offenders.push(format!(
+                        "{name} @ {pane_w}px: nothing was laid out (page_size=0) — this \
+                         test cannot speak for this case"
+                    ));
+                } else if upper > page {
+                    offenders.push(format!(
+                        "{name} @ {pane_w}px: over-wide by {:.0}px (upper={upper:.0} \
+                         page={page:.0})",
+                        upper - page
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "TDD 2.2·a11y: the preview must never produce an over-wide line — one \
+             summons the Automatic h-scrollbar, whose appear/disappear re-arms the \
+             width↔height-for-width churn that leaves the pane blank (ScrAP-22, \
+             ScrAP-23). Offenders:\n  {}",
+            offenders.join("\n  ")
         );
     }
 
@@ -730,6 +858,71 @@ mod gtk_integration_tests {
         assert!(
             !text.contains("First body paragraph."),
             "the previous render's content must be gone, got {text:?}"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod choke_point_tests {
+    use super::*;
+
+    /// The `CodePreviewView` inside a rendered preview widget.
+    fn view_of(widget: &gtk::Widget) -> CodePreviewView {
+        widget
+            .downcast_ref::<gtk::Overlay>()
+            .and_then(|o| o.child())
+            .and_then(|c| c.downcast::<ScrolledWindow>().ok())
+            .and_then(|sw| sw.child())
+            .and_then(|c| c.downcast::<CodePreviewView>().ok())
+            .expect("Overlay > ScrolledWindow > CodePreviewView")
+    }
+
+    /// **Every route that installs anything bumps the render generation** — including
+    /// the annotation refresh, which is the route that used to skip it.
+    ///
+    /// `install_products_into_view`'s rustdoc carried the claim that "because the bump
+    /// lives in the same choke point that rebuilds the content, no render path can
+    /// forget to invalidate." A THIRD route falsified it: `refresh_annotations_in_place`
+    /// rebuilds render products and installed a hand-picked TWO of the nine things the
+    /// choke point installs, calling neither the choke point nor the bump. It was safe
+    /// only because of a structural-identity guard — which says the BUFFER TEXT is
+    /// unchanged, and says nothing about the find hit list, whose entries an annotation
+    /// edit moves in the SOURCE.
+    ///
+    /// Asserted on the generation rather than on the two setters, because the invariant
+    /// is about invalidation and not about which setters a route happens to call today.
+    #[gtktest::test]
+    fn the_annotation_refresh_route_invalidates_like_every_other_route() {
+        let md = "A paragraph with {==a claim==}{>>a note<<} in it.\n";
+        let widget = render(md, None, 1.0, false);
+        let view = view_of(&widget);
+        let sw = widget
+            .downcast_ref::<gtk::Overlay>()
+            .and_then(|o| o.child())
+            .and_then(|c| c.downcast::<ScrolledWindow>().ok())
+            .expect("the preview's scroller");
+
+        let before = view.render_generation();
+        // The SAME rendered text with a different annotation — the structural guard has
+        // to pass, or this exercises the full re-render fallback instead of the route
+        // under test.
+        let refreshed = refresh_annotations_in_place(
+            &sw,
+            "A paragraph with {==a claim==}{>>a different note<<} in it.\n",
+            None,
+            1.0,
+            false,
+        );
+        assert!(
+            refreshed,
+            "the fast path must have been taken — otherwise this test is about the \
+             full re-render, which was never the route in question"
+        );
+        assert_ne!(
+            view.render_generation(),
+            before,
+            "the annotation route installed a render without invalidating what the \
+             previous one derived"
         );
     }
 }

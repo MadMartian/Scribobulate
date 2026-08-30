@@ -1,172 +1,129 @@
-# Shared scan-set contract for the cross-reference gate.
+# Scan-set contract for the cross-reference gate.
 #
-# READ BY BOTH scripts/lint-references.sh AND scripts/lint-references.ps1. It is the
-# one enumeration definition they consume, and it exists because they did not have
-# one: the shell side swept `find src tests sdd scripts packaging gtktest data .
-# -maxdepth 4`, where the bare `.` made check 6b repo-wide, while the PowerShell side
-# built its set from seven named directories plus four named files. `.agents/`,
-# `docs/` and `THIRD-PARTY-LICENSES.md` were therefore linted on Linux and invisible
-# on Windows, so a dangling link in any of them failed one gate and passed the other.
-# POLICY claimed at the time that neither script could "drift into being the lenient
-# one"; the shared corpus pinned only the check-1 regex, and enumeration is where they
-# had already drifted.
+# READ BY `cargo xtask lint-references` (xtask/src/lint/contract.rs). It is the one
+# enumeration definition the gate consumes, and it exists because there was none: the two
+# shell ports this gate replaced each swept their own list — one `find src tests sdd
+# scripts packaging gtktest data . -maxdepth 4`, whose bare `.` made check 6b repo-wide,
+# the other seven named directories plus four named files. `.agents/`, `docs/` and
+# `THIRD-PARTY-LICENSES.md` were therefore linted on Linux and invisible on Windows, so a
+# dangling link in any of them failed one gate and passed the other.
+#
+# IT STAYS A DATA FILE NOW THAT THERE IS ONE IMPLEMENTATION, and the reason is not
+# inertia. The set is a policy statement about what this repository is responsible for —
+# which trees, which loose files, which prefixes are generated rather than authored, which
+# documents a developer obeys. Moving it into Rust would make every such decision a code
+# change reviewed as code, and would put the enumeration back inside the thing it is meant
+# to constrain.
 #
 # ONE SET, CONSUMED BY EVERY CHECK. `root` and `file` together define a single
-# enumeration, and each port produces it exactly once: `--list-scan`/`-ListScan` prints
-# that set, and every check narrows it rather than walking the tree again. A check that
-# walks for itself is a second enumeration, and there is no such thing as a harmless
-# one — three of them coexisted here and disagreed with each other. What each check
-# narrows to is its own business and is documented at the check: 6a scans the whole set,
-# 6b its `.md` members, check 1 everything but the register and the two lint scripts,
-# checks 2 and 5 the `src/` members.
-#
-# AND THE ARTIFACT MUST BE READABLE. `--list-scan`/`-ListScan` is the only proof the two
-# ports agree — no test can run both, since neither platform has the other's shell — so
-# the clean state has to be an EMPTY diff, not a diff a human has to interpret. Both
-# ports therefore sort by ORDINAL byte value (`LC_ALL=C sort -u` / an ordinal
-# `SortedSet`). Before that, both enumerated the same 235 files and the diff still showed
-# fifteen changed lines, purely because one collated case-insensitively and the other by
-# locale. A parity proof whose clean state is noisy trains its reader to skim it.
+# enumeration, produced exactly once; every check narrows it rather than walking the tree
+# again. A check that walks for itself is a second enumeration, and there is no such thing
+# as a harmless one — three coexisted here and disagreed with each other (ScrAP-207). What
+# each check narrows to is its own business and is documented at the check: 6a scans the
+# whole set, 6b its `.md` members, check 1 everything but the register, checks 2 and 5 the
+# `src/` members.
 #
 # THREE CLASSES OF ENTRY, and the differences matter:
 #
 #   root / file — content this repository is responsible for.
 #
-#   exclude     — a repo-relative path PREFIX removed from both halves. These are
-#                 GENERATED or VENDORED trees, and the reason to exclude them is not
-#                 tidiness: every one of them is gitignored, so whether it is present
-#                 depends on what the developer happened to run locally. Sweeping
-#                 them makes the gate's verdict depend on the machine rather than on
-#                 the commit — `docs/` holds QA review artifacts, `.agents/skills`
-#                 holds installed third-party skill documents whose links this
-#                 project does not own, and `tests/reports/` holds manual-test output
-#                 absent on a fresh clone.
+#   exclude     — a repo-relative path PREFIX removed from the set. These are GENERATED or
+#                 VENDORED trees, and the reason to exclude them is not tidiness: every one
+#                 is gitignored, so whether it is present depends on what the developer
+#                 happened to run locally. Sweeping them makes the gate's verdict depend on
+#                 the machine rather than on the commit — `docs/` holds QA review
+#                 artifacts, `.agents/skills` holds installed third-party skill documents
+#                 whose links this project does not own, and `tests/reports/` holds
+#                 manual-test output absent on a fresh clone.
 #
 #   prescriptive — a LABEL ON A SET MEMBER: a document a reader could ACT on, scanned by
 #                 check 5b for prose that instructs the very attribute check 5 rejects.
 #                 It is a label rather than a reuse of `file` because the two answer
-#                 different questions: `file` means "this repository is responsible for
-#                 the links in it", `prescriptive` means "a developer obeys what it
-#                 says". Both ports REFUSE TO RUN if a path marked here is not in the
-#                 scan set. That check is the difference between a label and a fourth
-#                 enumeration: without it, 5b read a list that was neither the bounded
-#                 nor the unbounded set, so `--list-scan` did not print what 5b consumed
-#                 and the parity artifact certified one of three enumerations the gate
-#                 actually used.
-#                 `sdd/ANTI-PATTERNS.md` is emphatically in the `file` set and not this
-#                 one — the register DESCRIBES the banned attribute (it is an entry
-#                 title) and scanning it produced thirteen failures on correct text.
-#                 A gate that cries wolf on correct text is a gate someone deletes.
-#                 This class lives here, rather than as a literal list inside each
-#                 script, for the reason the whole file exists: two hard-coded lists
-#                 are two lists that drift, and check 5b would then be stricter on one
-#                 platform exactly as check 6 once was.
+#                 different questions: `file` means "this repository is responsible for the
+#                 links in it", `prescriptive` means "a developer obeys what it says". The
+#                 gate REFUSES TO RUN if a path marked here is not in the scan set. That
+#                 check is the difference between a label and a fourth enumeration: without
+#                 it, 5b read a list that was neither the bounded nor the unbounded set.
+#                 `sdd/ANTI-PATTERNS.md` is emphatically in the `file` set and not this one
+#                 — the register DESCRIBES the banned attribute (it is an entry title) and
+#                 scanning it produced thirteen failures on correct text. A gate that cries
+#                 wolf on correct text is a gate someone deletes.
 #
 # Deliberately NOT a `git ls-files` enumeration: a tracked-only list silently skips a
-# document that has been written but not yet added, which is exactly when its links
-# are least likely to have been checked.
+# document that has been written but not yet added, which is exactly when its links are
+# least likely to have been checked. (Check 12 is the deliberate exception and takes
+# `git ls-files` precisely because its hazard is wider than this curated set.)
 #
 # SYMLINKS ARE EXCLUDED — and the mechanism is not the obvious one.
 #
-# A symlinked path must never enter the scan set, because the two platforms do not
-# read the same bytes through one. Measured, not assumed, on
-# tests/fixtures/escapes-via-symlink.md (git mode 120000 -> ../other-fixtures/
-# outside-doc.md): on Linux, a symlink handed to `grep` AS AN EXPLICIT PATH ARGUMENT
-# is FOLLOWED — it reads the 12-line target, so the target is scanned twice under two
-# names and any dangler inside it is reported twice. Note the qualifier: `grep -r`
-# SKIPS symlinks encountered during directory traversal, as does `find -type f`, so
-# today's Linux enumeration never reaches that case and the exclusion below is a
-# deliberate no-op here. Anyone re-testing this with `grep -r` alone will see nothing
-# and wrongly conclude the rule is unnecessary; the two behaviours are different and
-# both were measured. On a Windows checkout with core.symlinks=false git materialises
-# the link as an ordinary 32-byte text file whose entire content is the target PATH,
-# so the gate lints a string nobody authored — no symlink semantics are involved at
-# all, which is why no filesystem test can catch it there. Same commit, same path,
-# different content, and the platform that reads the wrong bytes is the one whose
-# enumeration cannot tell it is doing so. Excluding the link
-# costs no coverage at all — the target is independently in the set via its own root
+# A symlinked path must never enter the scan set, because the two platforms do not read the
+# same bytes through one. Measured, not assumed, on tests/fixtures/escapes-via-symlink.md
+# (git mode 120000 -> ../other-fixtures/outside-doc.md): on Linux a symlink handed to a
+# reader AS AN EXPLICIT PATH is FOLLOWED, so the target is scanned twice under two names
+# and any dangler inside it is reported twice. On a Windows checkout with
+# core.symlinks=false git materialises the link as an ordinary 32-byte text file whose
+# entire content is the target PATH, so the gate lints a string nobody authored — no
+# symlink semantics are involved at all, which is why no filesystem test can catch it
+# there. Same commit, same path, different content. Excluding the link costs no coverage —
+# the target is independently in the set via its own root
 # (tests/other-fixtures/outside-doc.md) — and that, not tidiness, is why this is safe.
 #
-# The mechanism must be the git INDEX MODE (120000), not a filesystem test, and this
-# is the trap: each platform's filesystem test is blind in a different way. `find
-# -type l` sees the link on Linux and nothing on a core.symlinks=false checkout, where
-# LinkType is empty and the attributes are a plain file — so porting `-type l` to its
-# natural Windows equivalent (.LinkType / ReparsePoint / ResolveLinkTarget) excludes
-# NOTHING and the two gates still disagree, silently, while reading as parity. The
-# index mode is the only property both platforms agree on, because it is git's record
+# The mechanism must be the git INDEX MODE (120000) as well as a filesystem test, and this
+# is the trap: each platform's filesystem test is blind in a different way. A `-type l`
+# test sees the link on Linux and nothing on a core.symlinks=false checkout, where the
+# attributes are those of a plain file — so porting it to its natural Windows equivalent
+# (LinkType / ReparsePoint / ResolveLinkTarget) excludes NOTHING while reading as parity.
+# The index mode is the only property both platforms agree on, because it is git's record
 # rather than the OS's. Test BOTH (filesystem OR index): each covers the other's blind
-# spot, and the union degrades to "include" only when both are blind, which is the
-# safe direction — it can never silently skip an authored document, preserving the
-# rule stated immediately above.
+# spot, and the union degrades to "include" only when both are blind, which is the safe
+# direction — it can never silently skip an authored document.
 #
 # Consequence to accept knowingly: the symlink CLASSIFICATION consults git, though the
-# ENUMERATION still does not. Outside a git checkout (an exported tarball) the index
-# half is unavailable and only the filesystem half applies; that degrades to today's
-# Linux behaviour rather than to a wrong answer. We do not run the gate that way.
+# ENUMERATION still does not. Outside a git checkout (an exported tarball) the index half
+# is unavailable and only the filesystem half applies; that degrades to today's Linux
+# behaviour rather than to a wrong answer. We do not run the gate that way.
 #
-# There is deliberately no `symlink` FIELD below: the rule takes no value, so a field
-# would be a constant that both validators must learn for no gain. It is pinned by
-# `--self-test`/`-SelfTest` instead, which asserts that every mode-120000 path is
-# absent from the scan set AND that at least one such path exists — the second half
-# matters, because if the fixture is ever deleted the first half starts passing
-# vacuously, which is the exact defect this project already paid for once.
+# There is deliberately no `symlink` FIELD below: the rule takes no value, so a field would
+# be a constant the validator must learn for no gain. It is pinned by the corpus in
+# `xtask/src/lint/corpus.rs`, which asserts that every mode-120000 path is absent from the
+# scan set AND that at least one such path exists — the second half matters, because if the
+# fixture is ever deleted the first half starts passing vacuously, which is the exact
+# defect this project already paid for once.
 #
-# KNOW WHAT THAT ASSERTION DOES NOT PROVE ON LINUX. It tests the OUTCOME (no symlink
-# in the set), not the MECHANISM, and on Linux `find -type f` already produces that
-# outcome by itself. Verified by mutation: neutering the exclusion here and re-running
-# `--self-test` still PASSES; it only fails if the enumeration is ALSO broadened to
-# `\( -type f -o -type l \)`. So on this platform the exclusion is unfalsifiable dead
-# code and could be deleted with every gate staying green. That is not a defect in the
-# assertion — asserting the outcome is right, because Windows reaches the same outcome
-# ONLY via this mechanism, which is where it is load-bearing and where the mutation
-# does fail. It is a warning: do not read a green Linux self-test as evidence that
-# this code works, and do not "simplify it away" on the strength of one.
+# KNOW WHAT THAT ASSERTION DOES NOT PROVE ON LINUX. It tests the OUTCOME (no symlink in the
+# set), not the MECHANISM, and on Linux a `-type f` walk already produces that outcome by
+# itself. Verified by mutation: neutering the exclusion and re-running the corpus still
+# PASSES; it only fails if the enumeration is ALSO broadened to include link entries. So on
+# this platform the exclusion is unfalsifiable dead code and could be deleted with every
+# gate staying green. That is not a defect in the assertion — asserting the outcome is
+# right, because Windows reaches the same outcome ONLY via the index half, which is where
+# it is load-bearing and where the mutation does fail. It is a warning: do not read a green
+# Linux run as evidence that this code works, and do not "simplify it away" on the strength
+# of one.
 #
-# THE EXCLUSION NOW REACHES EVERY CHECK, and it did not always. Checks 1 and 5 used to
-# draw from their own unfiltered walk, and the asymmetry was written down here as
-# intended — safe, and argued: check 5 hunts a Rust construct while the only symlink is
-# `.md`, and check 1 hunts ISSUES references while the fixture's content is a bare
-# relative path with no ISSUES token. Both arguments still hold; they are simply no
-# longer load-bearing, because those checks now narrow the one set and inherit its
-# filters. That is a strict improvement over an argued-safe asymmetry: an unexplained
-# asymmetry is what the next person "fixes" into a bug, and an explained one still has
-# to be re-argued every time a check is added.
-#
-# The exclusion is applied where the contract set is PRODUCED — once per port, in the
-# one function each has for the job. That is the invariant to pin. Pinning the SHAPE of
-# the two implementations would only create a new thing to drift, which is this
-# contract's whole subject.
-#
-# maxdepth IS A TRIPWIRE, NOT A FILTER. Exceeding it is a HARD ERROR: both gates refuse
-# to run and name every offending path. Raise the budget here — then re-diff
-# `--list-scan` against `-ListScan` — or move the files.
+# maxdepth IS A TRIPWIRE, NOT A FILTER. Exceeding it is a HARD ERROR: the gate refuses to
+# run and names every offending path. Raise the budget here, or move the files.
 #
 # As a filter it was a silent coverage cliff, and the cliff is what made one shared set
-# unsafe. A file past the budget was simply absent, and "absent because the budget
-# dropped it" is indistinguishable from "absent because the tree does not contain it";
-# binding every check to one enumeration would therefore have REDUCED what check 1
-# caught, silently, which is the exact shape of the defects this file exists to close.
-# Failing loudly inverts that: the budget stops being a cliff and becomes a statement
-# that the tree has outgrown the contract.
+# unsafe. A file past the budget was simply absent, and "absent because the budget dropped
+# it" is indistinguishable from "absent because the tree does not contain it"; binding
+# every check to one enumeration would therefore have REDUCED what check 1 caught,
+# silently, which is the exact shape of the defects this file exists to close. Failing
+# loudly inverts that: the budget stops being a cliff and becomes a statement that the tree
+# has outgrown the contract.
 #
 # It is expressed in `find` terms, where `find <root> -maxdepth 1` means the root's
-# immediate children. There is no longer a `Get-ChildItem -Depth` off-by-one conversion:
-# both ports derive depth from the repo-relative PATH — segments below the root — rather
-# than from the walker. That conversion used to be the one place the two implementations
-# were licensed to differ, and this line once claimed `-SelfTest` asserted it, which the
-# Windows seat found to be untrue: what existed was a comment about blast radius, not a
-# check. Removing the difference is better than asserting it.
+# immediate children — depth is counted from the repo-relative PATH, as segments below the
+# root, rather than from the walker. `file` entries are named individually rather than
+# reached by a walk, so they match no root prefix and are never depth-counted.
 #
-# WHAT `--self-test`/`-SelfTest` NOW ASSERTS, each assertion able to fail on its own and
-# each mutation-tested against the defect it exists to catch:
+# WHAT THE CORPUS ASSERTS about this file, each assertion able to fail on its own and each
+# mutation-tested against the defect it exists to catch:
 #   - a file at exactly `maxdepth` is present in the scan set;
-#   - a file at `maxdepth`+1 makes the gate FAIL and names the path — not merely "is
-#     absent from the set", because absence is also what a broken enumerator produces;
-#   - `--list-scan`'s output is byte-identical to the set the checks consume. That is
-#     the assertion that would have caught the original defect, in which the parity
-#     artifact printed one enumeration while the checks ran over another.
-# `file` entries are named individually rather than reached by a walk, so they match no
-# root prefix and are never depth-counted.
+#   - a file at `maxdepth`+1 makes the gate FAIL and names the path — not merely "is absent
+#     from the set", because absence is also what a broken enumerator produces;
+#   - a garbled field name is a refusal to run rather than an absent value, since "absent"
+#     and "legitimately empty" are indistinguishable and the gate would run over nothing.
 
 root src
 root tests
@@ -182,13 +139,16 @@ root data
 # contract exists to close. Named as a root rather than a file so a new section is
 # covered the moment it is added, which is the whole point of the sections being files.
 root notices
-# `probes/` holds measurement rigs and their README — C sources, a nested Rust
-# workspace, and prose that cites the registers. It is enumerated for the same reason
-# every other root is: a gate is its pattern AND its file set, and a directory silently
-# outside the set is the exact drift this contract was written after. Depth 2 (the nested
-# crate's src/ costs a segment), well inside the maxdepth tripwire. Parity with the
-# PowerShell port proven by an identical ordinal-sorted list: 323 entries, 11 under
-# probes/, SHA256 F663...40ED on both platforms.
+# The gate's own crate. It is a root for the reason every other one is — a gate is its
+# pattern AND its file set, and the implementation of the gate is exactly the place a
+# citation or a plan pointer gets written and then rots. One file inside it,
+# `xtask/src/lint/corpus.rs`, is excluded by checks 1, 6a and 8 in code, because it quotes
+# the citation forms they hunt for; that is a linter's own fixtures, and it is ONE path
+# rather than the pair the shell ports had to keep in step by hand.
+root xtask
+# `probes/` holds measurement rigs and their README — C sources, a nested Rust workspace,
+# and prose that cites the registers. Depth 2 (the nested crate's src/ costs a segment),
+# well inside the maxdepth tripwire.
 root probes
 
 file AGENTS.md
@@ -226,22 +186,25 @@ exclude tests/reports/
 # developer has built -- exactly the machine-dependence this class exists to remove. Its
 # authored INPUTS are swept instead, via `root notices` above.
 exclude THIRD-PARTY-LICENSES.md
-# Check 13's fixtures are DELIBERATELY malformed -- one is a BOM-less .ps1 carrying an
-# em dash, which is the exact condition check 13 refuses. They are excluded from the
-# scan set so they do not fail the gate they exist to prove, and the self-test reaches
-# them by PATH, through check 13's own predicate, rather than through this set.
+# Check 14's fixtures are DELIBERATELY malformed -- one is a BOM-less .ps1 carrying an
+# em dash, which is the exact condition check 14 refuses. They are excluded from the
+# scan set so they do not fail the gate they exist to prove, and the corpus test reaches
+# them by PATH, through check 14's own predicate, rather than through this set.
 exclude tests/fixtures/encoding/
 # A nested crate's build tree, and the reason it needs its own line rather than being
 # covered by `exclude target/` above: the exclusions are repo-relative path PREFIXES, and
 # `probes/binding-shape-rs/target/` does not begin with `target/`. Adding `probes` as a
 # root therefore brought that crate's build output into the set for anyone who has ever
-# built the rig, and cargo's own artefacts go deeper than the maxdepth budget, so BOTH
-# gates refuse to run and name a `.o` file. Measured by the macOS seat on a real
-# `cargo build --manifest-path probes/binding-shape-rs/Cargo.toml`, and reproduced here
-# by hand. It is the same gitignored-tree reasoning as every exclusion above — the
-# verdict must depend on the commit, not on what the developer happened to build — and
-# it changes no scan set on a clean checkout, where the directory does not exist, so
-# the two ports' ordinal lists are untouched.
+# built the rig, and cargo's own artefacts go deeper than the maxdepth budget, so the gate
+# refuses to run and names a `.o` file. Measured by the macOS seat on a real
+# `cargo build --manifest-path probes/binding-shape-rs/Cargo.toml`, and reproduced here by
+# hand. It is the same gitignored-tree reasoning as every exclusion above — the verdict
+# must depend on the commit, not on what the developer happened to build — and it changes
+# no scan set on a clean checkout, where the directory does not exist.
 exclude probes/binding-shape-rs/target/
+# The gate's own build tree, for the same reason: `xtask/target/` does not begin with
+# `target/` either, and `cargo` puts a workspace member's artefacts in the shared root
+# `target/` only while it IS a member — a stray build with `--manifest-path` does not.
+exclude xtask/target/
 
 maxdepth 6

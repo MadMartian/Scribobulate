@@ -192,7 +192,6 @@ mod tests {
 /// Closes the loop between the registry and what the user actually sees.
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
-    use super::*;
     use gtk::prelude::*;
 
     /// Closes the loop between the registry and what the user sees, without
@@ -225,21 +224,31 @@ mod gtk_integration_tests {
         settings.set_gtk_application_prefer_dark_theme(restore);
     }
 
-    /// Pump the main loop until `cond` holds or `budget` iterations elapse.
-    /// Non-blocking `iteration(false)`, never `iteration(true)`, so a condition that
-    /// never becomes true returns promptly and the caller's assertion fires instead
-    /// of the suite hanging (GTK4Rs/AP-79).
-    fn pump_until(budget: u32, cond: impl Fn() -> bool) -> bool {
-        let ctx = glib::MainContext::default();
-        for _ in 0..budget {
-            if cond() {
-                return true;
-            }
-            ctx.iteration(false);
-            std::thread::sleep(std::time::Duration::from_millis(4));
-        }
-        cond()
+    /// Pump the main loop until `cond` holds, or `span` of wall clock elapses; reports
+    /// whether it converged. `Clock::Frame` — the repaint this waits on is frame-clock
+    /// driven, same family as the Linux popover-animation copies this replaces.
+    ///
+    /// **Takes a DURATION, not a turn budget.** It took one and multiplied it by 4 to
+    /// "keep the old worst-case ceiling", which assumes a turn costs 4 ms. It does not:
+    /// GTK4Rs/AP-261 is the entry, and the macOS seat MEASURED the spread on a sibling
+    /// copy of this helper — the same 200 turns cost 74 ms with one live toplevel and
+    /// 610 ms with three more alive, so the per-turn figure moves ~8x with machine load
+    /// and no constant converts one into the other. Every migrated helper in the tree
+    /// carried the same substitution with a different guessed multiplier.
+    ///
+    /// The tolerant (non-panicking) form is kept here deliberately, unlike most of its
+    /// siblings, because the caller below WANTS to continue on non-convergence: an
+    /// unlaid-out window reports itself as "no render node", which names the real cause
+    /// better than a timeout would.
+    fn pump_until(span: std::time::Duration, cond: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(crate::testpump::Clock::Frame, span, cond)
     }
+
+    /// How long to give a freshly presented window to acquire an allocation.
+    ///
+    /// A real duration chosen as one: generous against a first layout pass on a loaded
+    /// machine, and bounded because the caller degrades gracefully rather than hanging.
+    const LAYOUT_BOUND: std::time::Duration = std::time::Duration::from_millis(2_000);
 
     /// Present a small window, render it through GSK and return its centre pixel —
     /// the app's own painted output, with no screen capture in the loop.
@@ -264,7 +273,7 @@ mod gtk_integration_tests {
         // out. That failure is reported as "no render node" rather than as a wrong
         // colour, which is at least honest.
         window.present();
-        pump_until(100, || content.width() > 0);
+        pump_until(LAYOUT_BOUND, || content.width() > 0);
 
         let paintable = gtk::WidgetPaintable::new(Some(&window));
         let snapshot = gtk::Snapshot::new();
@@ -281,6 +290,12 @@ mod gtk_integration_tests {
             let (w, h) = (texture.width() as usize, texture.height() as usize);
             let mut data = vec![0u8; w * h * 4];
             texture.download(&mut data, w * 4);
+            // Not optional, and not symmetry for its own sake: dropping a realized
+            // CairoRenderer does not honour the object's teardown contract, and on a
+            // build with GLib assertions compiled in that aborts rather than leaks
+            // (GTK4Rs/AP-272). The two sibling probes -- codeview's `framebuffer_of`
+            // and widgets/rule.rs -- already pair it; this one did not.
+            renderer.unrealize();
             let idx = ((h / 2) * w + w / 2) * 4;
             // Cairo ARGB32 on a little-endian host: B, G, R, A.
             let pixel = (data[idx + 2], data[idx + 1], data[idx]);

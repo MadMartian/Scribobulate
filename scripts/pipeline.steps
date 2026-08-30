@@ -10,11 +10,12 @@
 #
 # DERIVATION, NOT COMPARISON. Every runner must BUILD its step list by reading this file,
 # and `--list-steps` / `-ListSteps` prints exactly that derived list. The distinction is
-# load-bearing and was paid for one level down: `--list-scan` proved the two lint ports
-# agreed WITH EACH OTHER and for a long time proved neither honoured
+# load-bearing and was paid for one level down: the cross-reference gate's scan-set diff
+# proved its two ports agreed WITH EACH OTHER and for a long time proved neither honoured
 # lint-references.scan — it printed a set some checks did not consume (ScrAP-207). It
 # worked only because both ports genuinely read the contract, so agreement and
-# conformance happened to coincide. Where a port RESTATES instead of deriving, a clean
+# conformance happened to coincide. (Those two ports are now one binary, which is the
+# stronger version of the same fix: nothing to compare.) Where a port RESTATES instead of deriving, a clean
 # diff proves only that two restatements match, which two people copying the same wrong
 # list also achieve. Comparison proves agreement; derivation proves conformance.
 #
@@ -53,7 +54,7 @@
 #   step      <ord>  <id>                  ordinal fixes the run order
 #   intent    <id>   <what must be true>   the invariant; never a command
 #   verdict   <id>   exit | marker:<text>  how the step is judged
-#   class     <id>   required | informational | review
+#   class     <id>   required | informational | review | packaging
 #   cmd.<plat> <id>  <command line>        how THIS platform satisfies the intent
 #                                          MAY carry leading `NAME=VALUE ` env prefixes;
 #                                          see ENV PREFIXES below — every port must
@@ -123,7 +124,10 @@
 # obligation with no command — announced in the run output so it cannot be silently
 # forgotten, but not something a script can judge. Step 7 is the only `review` step and
 # it is honest about that: pretending a script can decide whether a behaviour change
-# carries its MANUAL-TEST.md check would be a gate that always passes.
+# carries its MANUAL-TEST.md check would be a gate that always passes. `packaging` is
+# `required` that is also OPT-IN — it fails the run when asked for and does not run
+# otherwise; see the paragraph on it below for why that is its own class rather than a
+# flag on `required`.
 #
 # PROVENANCE TRAVELS WITH THE ARTEFACT. A packaging step is allowed to run in a run where
 # a required step was skipped by operator override — `--skip-integration` plus `--package`
@@ -264,6 +268,19 @@ cmd.windows skipreport  cargo test -- --nocapture
 # are private and unbound, and masking that domain would also silence a latent defect in the
 # same file at the version macOS ships (ScrAP-318).
 #
+# LINUX DELEGATES TO `scripts/run-integration.sh`, for the same reason step 6 delegates to
+# `scripts/coverage.sh`: the step owns three things a command line cannot carry, and the
+# helper's header is the authority on all three. In short — it ARMS `dbus-run-session`,
+# which POLICY has prescribed since it was measured and which this contract's command did
+# NOT run, so the instruction lived in prose and every caller either supplied it by hand or
+# ate a SIGTRAP before the first test (the same unarmed-gate failure this very step records
+# two paragraphs up about `G_DEBUG=fatal-criticals`, committed again one line below it). It
+# keeps the crowd of bus-activated daemons OFF the caller's stdout, without which the
+# pipeline hangs a reader forever on a PASSING run — measured at 70 minutes against a
+# pipeline that finished in 12. And it BOUNDS the run, so a wedged suite reports as a wedge
+# rather than as a slow pass. The `G_DEBUG=fatal-criticals` and `xvfb-run -a` above are
+# unchanged; they moved into the helper, they did not go away.
+#
 # THE DEATH CODE DIFFERS BY PLATFORM AND A FAILURE IS EASY TO MISREAD. A promoted critical
 # kills the process via `G_BREAKPOINT()`, which is `SIGTRAP` (exit 133) on Linux and
 # `0xC0000409 STATUS_STACK_BUFFER_OVERRUN` — Windows' fast-fail — under MSVC, where the
@@ -274,18 +291,25 @@ step   5  integration
 intent integration  The GTK integration suite passes against a real display, through Cargo so the [env] pins apply
 verdict integration  exit
 class  integration  required
-cmd.linux   integration  G_DEBUG=fatal-criticals xvfb-run -a cargo test --features gtk-integration-tests
+cmd.linux   integration  scripts/run-integration.sh
 cmd.macos   integration  cargo test --features gtk-integration-tests --test gtk_suite --test icon_resolution --test macos_dark_mode --test popover_deferred_focus
 cmd.windows integration  G_DEBUG=fatal-criticals cargo test --features gtk-integration-tests -- --test-threads=1
+disarm.macos integration  permanent  G_DEBUG=fatal-criticals is absent from the macOS command above, and this line is why: GDK's Quartz backend freezes a surface once per CONSTRUCTION and thaws once per MAP, and gdk_macos_surface_hide never freezes, so the second map thaws at zero and the suite emits gdk_surface_thaw_updates assertions on every popover open or dismiss. Present 4.22.4 through main; the freeze/thaw pair is private and absent from the gdk4 bindings, so no application-side fix exists. Do NOT arm it by masking Gdk-CRITICAL: that would also silence ScrAP-318, a leaked update-freeze that stops a surface repainting, which is the only signal anybody would get if it happened. See also ScrAP-268 before reaching for a g_log_set_writer_func allowlist.
 
 # ---------------------------------------------------------------------------
 # Step 6 — coverage ratchet
 #
 # Linux-canonical BY DESIGN. See the header's "record the semantic reason" note: the
 # declarations below cite the semantics, never the missing tool.
+#
+# TWO invariants, and their ORDER is load-bearing. The gate first proves it is measuring
+# the same set of files it measured last time (scripts/coverage.scope), and only then
+# renders a verdict on the percentage — because a change in what is MEASURED used to
+# arrive disguised as a change in coverage, and a ratchet compared across two different
+# scopes measures nothing. The script owns both; this line states the invariant.
 # ---------------------------------------------------------------------------
 step   6  coverage
-intent coverage  Scoped line coverage has not regressed below the ratchet floor
+intent coverage  The measured file set is the one recorded in scripts/coverage.scope, and scoped line coverage over that set has not regressed below the ratchet floor
 verdict coverage  exit
 class  coverage  required
 cmd.linux   coverage  scripts/coverage.sh
@@ -323,17 +347,27 @@ cmd.windows diagram  powershell -NoProfile -Command "$d = New-Object System.Xml.
 # ---------------------------------------------------------------------------
 # Step 9 — cross-reference gate
 #
-# A gate is its pattern AND the set of files it runs over, and parity is required in
-# both. The two ports share one pattern, one self-test corpus, and one file enumeration
-# (scripts/lint-references.scan) which both READ rather than restate.
+# ONE COMMAND ON ALL THREE PLATFORMS, which is the whole point of it being a cargo
+# subcommand. This step used to be a bash script plus a hand-synced PowerShell port —
+# ~3,400 lines implementing one rule twice, with a scan-set diff as the only available proof
+# they agreed, because "neither platform has the other's shell". One
+# QA round found seven defects that existed ONLY because there were two ports. cargo is on
+# PATH wherever this repository builds, so the interpreter argument that forced the split
+# is gone.
+#
+# The gate's own corpora are ordinary test cases run by step 4, not a bespoke `--self-test`
+# mode — a hand-rolled corpus runner is where that round's defects concentrated.
+#
+# A gate is its pattern AND the set of files it runs over. That set is still a data file,
+# scripts/lint-references.scan, which the binary READS rather than restates.
 # ---------------------------------------------------------------------------
 step   9  references
 intent references  Every cross-reference in the tree resolves, and the citation-form rules hold
 verdict references  exit
 class  references  required
-cmd.linux   references  scripts/lint-references.sh
-cmd.macos   references  scripts/lint-references.sh
-cmd.windows references  powershell -NoProfile -File scripts/lint-references.ps1
+cmd.linux   references  cargo xtask lint-references
+cmd.macos   references  cargo xtask lint-references
+cmd.windows references  cargo xtask lint-references
 
 # ---------------------------------------------------------------------------
 # Step 10 — the installer artefact

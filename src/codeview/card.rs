@@ -707,20 +707,48 @@ mod gtk_integration_tests {
             .expect("scroller holds the CodePreviewView")
     }
 
-    /// Pump the main loop until `done` reports true, or `budget` iterations elapse.
-    /// Non-blocking iteration + a short sleep, never `iteration(true)`, which starves
-    /// forever on an idle display when the condition never becomes true (GTK4Rs/AP-79).
-    fn pump_until(budget: u32, done: impl Fn() -> bool) -> bool {
-        let ctx = glib::MainContext::default();
-        for _ in 0..budget {
-            if done() {
-                return true;
-            }
-            ctx.iteration(false);
-            std::thread::sleep(std::time::Duration::from_millis(4));
-        }
-        done()
+    /// Pump the main loop until `done` reports true, or panic naming `what`.
+    /// `crate::testpump::until` under `Clock::Frame` — everything these tests wait on is
+    /// popover open/close, a re-anchor, or a repaint, all of which advance on the GTK
+    /// frame clock and so need real elapsed time rather than a tight spin (see that enum
+    /// variant's doc).
+    ///
+    /// **There is deliberately no turn budget.** The parameter this replaces was a turn
+    /// count multiplied by 4 ms to "keep the same worst-case ceiling", which is exactly
+    /// the substitution GTK4Rs/AP-261 rejects: turns are not time. The macOS seat
+    /// MEASURED the spread on the same 200 `iteration(false)` turns — 74 ms with one live
+    /// toplevel, 610 ms with three more alive — so the per-turn cost moves ~8x with
+    /// machine load and no constant converts one into the other. A budget picked on one
+    /// machine is therefore either a flake on a busier one or a needlessly slow suite on
+    /// an idle one, and neither reading is visible at the call site.
+    ///
+    /// Failing to converge is a test bug at every call site below, so `until`'s generous
+    /// per-clock failure bound (GTK4Rs/AP-122 — a bound, never the completion signal) is
+    /// the right shape: `done()` observing real state is always what ends the wait, and a
+    /// timeout panics naming what it was waiting FOR instead of letting the next
+    /// assertion fail for the wrong reason.
+    fn settle(what: &str, done: impl FnMut() -> bool) {
+        crate::testpump::until(crate::testpump::Clock::Frame, what, done);
     }
+
+    /// How long to watch for a wrong-show that would arrive DEFERRED.
+    ///
+    /// A negative claim's bound is the whole of its strength: too short and the test
+    /// manufactures its own pass. Measured against the same frame-clock-plus-idle chain a
+    /// wrong `reposition` would show the card through, with generous margin — never a turn
+    /// count reinterpreted as milliseconds (GTK4Rs/AP-261).
+    const DEFERRED_SHOW_WATCH: std::time::Duration = std::time::Duration::from_millis(500);
+
+    /// How long a deliberate drain gives a queued redraw to reach the screen.
+    ///
+    /// A real duration measured against the mechanism it waits on — the GTK frame clock,
+    /// which is what a `queue_draw` schedules against. A tick is one refresh period
+    /// apart (~17 ms at the 60 Hz the clock targets when it has no presentation time to
+    /// go on, as under Xvfb), and the paint that rewrites the marker hit-box map lands on
+    /// one of them. Fifteen periods is generous for one view's redraw while still costing
+    /// a quarter of a second. It is expressly NOT a turn count reinterpreted as
+    /// milliseconds — see [`settle`] for why that conversion has no valid multiplier.
+    const REDRAW_DRAIN: std::time::Duration = std::time::Duration::from_millis(250);
 
     /// Scroll the view the way a HAND does.
     ///
@@ -751,18 +779,17 @@ mod gtk_integration_tests {
         win.set_default_size(700, 300);
         win.set_child(Some(&pane));
         win.present();
-        assert!(
-            pump_until(300, || !view.imp().marker_hitboxes.borrow().is_empty()),
-            "precondition: the chip painted"
-        );
+        // Precondition: the hit-box map is written BY the paint, so there is nothing to
+        // open a card against until the view has actually painted once.
+        settle("the marker chip to be painted", || {
+            !view.imp().marker_hitboxes.borrow().is_empty()
+        });
         assert!(
             view.open_stepped_marker_popover(0, Direction::Next),
             "precondition: the fixture has an annotation"
         );
-        assert!(
-            pump_until(300, || view.has_open_marker_popover()),
-            "precondition: the card opened"
-        );
+        // Precondition: the card opened.
+        settle("the marker card to open", || view.has_open_marker_popover());
         let card = view
             .imp()
             .marker_card
@@ -791,7 +818,10 @@ mod gtk_integration_tests {
         // inside the viewport, so the card must RE-ANCHOR rather than take the hide branch.
         let delta = 20.0;
         scroll_like_a_user(&view, vadj.value() + delta);
-        pump_until(100, || anchor(&card).is_some_and(|r| r.y() != before.y()));
+        settle(
+            "the card's anchor to move off where it was before the scroll",
+            || anchor(&card).is_some_and(|r| r.y() != before.y()),
+        );
 
         let after = anchor(&card).expect("still anchored after the scroll");
         assert_eq!(
@@ -825,16 +855,17 @@ mod gtk_integration_tests {
         // lazily, so `upper` at this instant still describes a fraction of the document
         // and the value clamps to that fraction (GTK4Rs/AP-115). Re-aiming each frame is what
         // converges — and is what a hand-drag to the bottom does anyway.
-        let hid = pump_until(300, || {
-            if card.is_visible() {
-                scroll_like_a_user(&view, vadj.upper() - vadj.page_size());
-            }
-            !card.is_visible()
-        });
-        assert!(
-            hid,
-            "with its chip scrolled off the viewport the card must hide rather than sit \
-             pinned over unrelated text"
+        // Hiding is the behaviour under test: with its chip scrolled off the viewport the
+        // card must hide rather than sit pinned over unrelated text, so never converging
+        // here is the regression itself, not a slow machine.
+        settle(
+            "the card to hide once its chip is scrolled off the viewport",
+            || {
+                if card.is_visible() {
+                    scroll_like_a_user(&view, vadj.upper() - vadj.page_size());
+                }
+                !card.is_visible()
+            },
         );
         assert!(
             card.is_open(),
@@ -852,10 +883,9 @@ mod gtk_integration_tests {
         );
 
         scroll_like_a_user(&view, home);
-        assert!(
-            pump_until(200, || card.is_visible()),
-            "bringing the chip back into view must bring its card back"
-        );
+        // The re-show half: bringing the chip back into view must bring its card back —
+        // this is the assertion a "popdown on any scroll" patch fails.
+        settle("the card to come back with its chip", || card.is_visible());
         win.destroy();
     }
 
@@ -901,7 +931,9 @@ mod gtk_integration_tests {
 
         // Present, exactly as activating another annotation does while the card is up.
         card.present();
-        pump_until(100, || anchor(&card).is_some_and(|r| r.y() != poison.y()));
+        settle("presenting to replace the poisoned anchor", || {
+            anchor(&card).is_some_and(|r| r.y() != poison.y())
+        });
 
         let shown = anchor(&card).expect("the card points somewhere");
         assert_ne!(
@@ -985,10 +1017,8 @@ mod gtk_integration_tests {
             view.open_stepped_marker_popover(0, Direction::Next),
             "reopen with the sink installed"
         );
-        assert!(
-            pump_until(300, || card.is_open()),
-            "precondition: the card reopened with Edit/Remove"
-        );
+        // Precondition: the card reopened, this time with Edit/Remove.
+        settle("the card to reopen with Edit/Remove", || card.is_open());
 
         // The STACK's visible page is the discriminator throughout — never the presence of
         // a button or an entry. A GtkStack keeps every page parented whether shown or not,
@@ -1002,18 +1032,17 @@ mod gtk_integration_tests {
         find_button(&card, "Edit")
             .expect("the card offers Edit")
             .emit_clicked();
-        assert!(
-            pump_until(300, || {
-                stack.visible_child_name().as_deref() == Some("edit")
-            }),
-            "precondition: Edit put the card on the edit page (deferred to an idle)"
-        );
+        // Precondition: Edit put the card on the edit page. The page swap is deferred to
+        // an idle, so it is not observable on the turn the click is emitted.
+        settle("Edit to put the card on the edit page", || {
+            stack.visible_child_name().as_deref() == Some("edit")
+        });
         entry.set_text("a draft the user thinks better of");
 
         find_button(&card, "Cancel")
             .expect("the edit page offers Cancel")
             .emit_clicked();
-        pump_until(300, || {
+        settle("Cancel to return the card to the read page", || {
             stack.visible_child_name().as_deref() == Some("read")
         });
 
@@ -1060,10 +1089,8 @@ mod gtk_integration_tests {
             view.open_stepped_marker_popover(0, Direction::Next),
             "reopen with the sink installed"
         );
-        assert!(
-            pump_until(300, || card.is_open()),
-            "precondition: the card reopened"
-        );
+        // Precondition: the card reopened.
+        settle("the card to reopen", || card.is_open());
 
         let close = find_close_button(&card).expect("the card offers a corner close button");
         assert!(
@@ -1075,10 +1102,9 @@ mod gtk_integration_tests {
         );
 
         close.emit_clicked();
-        assert!(
-            pump_until(300, || !card.is_open()),
-            "clicking the corner × must dismiss the card, like Escape"
-        );
+        // Dismissal is the feature: clicking the corner × must dismiss the card, like
+        // Escape. Never converging here is that feature missing.
+        settle("the corner × to dismiss the card", || !card.is_open());
         win.destroy();
     }
 
@@ -1101,14 +1127,46 @@ mod gtk_integration_tests {
         // removed would. The identity now resolves to nothing.
         view.imp().markers.borrow_mut().clear();
         view.queue_draw();
-        pump_until(60, || false);
+        // A deliberate drain, not a wait for anything observable: the marker list is
+        // already empty synchronously, and what this gives time for is the queued redraw
+        // that repaints the view (and rewrites the hit-box map) without those markers.
+        // There is no predicate to converge on, so the bound IS the wait — see
+        // [`REDRAW_DRAIN`] for what that span is measured against.
+        crate::testpump::drain_for(crate::testpump::Clock::Frame, REDRAW_DRAIN);
 
         card.present();
-        pump_until(60, || !card.is_visible());
+
+        // With its annotation gone the card must have nothing to anchor to and stay down,
+        // not pin itself to a stale or reused position. `present` ends in `reposition`,
+        // which hides on an unresolvable anchor.
+        //
+        // **Watched for, not waited on — and the distinction is the whole guard.** This
+        // was `settle(.., || !card.is_visible())`. That form catches a SYNCHRONOUS
+        // wrong-show and nothing else: `present` ends in `reposition`, which hides on an
+        // unresolvable anchor before returning, so on the passing path the predicate is
+        // already true the first time the wait evaluates it (`testpump` checks `done()`
+        // ahead of its first `iteration`) and the loop pumps ZERO turns. It therefore
+        // spends no time at all in the window where a DEFERRED wrong-show would land —
+        // and `reposition` genuinely does run again off the frame clock, which is where
+        // such a show would come from.
+        //
+        // INFERRED from those two code paths, not measured: I did not manage to stage a
+        // deferred wrong-show that reproduces it, so the escape is argued rather than
+        // demonstrated. What IS measured is the corrective's strength — deleting the
+        // production `hide_transiently()` below makes this assertion fire. The general
+        // rule is worth more than this instance either way: a claim about a NON-event
+        // cannot be spelled as a wait for the good state, because such a wait is
+        // satisfied instantly and proves only that the bad state is not ALREADY true. It
+        // has to spend real time looking for the bad one.
+        let showed = crate::testpump::until_or_for(
+            crate::testpump::Clock::Frame,
+            DEFERRED_SHOW_WATCH,
+            || card.is_visible(),
+        );
         assert!(
-            !card.is_visible(),
-            "with its annotation gone the card must have nothing to anchor to and stay \
-             down, not pin itself to a stale or reused position"
+            !showed,
+            "a card whose annotation is gone must stay down — it came up, so it anchored \
+             to a stale or reused position instead of resolving to nothing"
         );
         win.destroy();
     }

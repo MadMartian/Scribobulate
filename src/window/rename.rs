@@ -294,6 +294,12 @@ mod gtk_integration_tests {
     /// so "N turns" is not a duration and can run out before the worker has answered
     /// (the GTK4Rs/AP-261 distinction — turns are not time). Measured landing time on
     /// inotify is ~60 ms; a full second is a generous bound, not a guess at the answer.
+    ///
+    /// Not migrated to `crate::testpump` (M31 inventory): `Clock::Worker` names the
+    /// same clock, but every `testpump::until*` needs a completion PREDICATE, and this
+    /// call site has none — it is a fixed span, not an "until" wait (same shape as
+    /// `crate::testpump::drain_for`, which this predates and which nothing else in
+    /// this file would gain from adopting).
     fn pump_for(ms: u64) {
         let ctx = gtk::glib::MainContext::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
@@ -520,7 +526,7 @@ mod gtk_integration_tests {
         drop(f);
 
         assert!(
-            crate::docio::settle(|| tab.source.borrow().contains("changed externally")),
+            crate::docio::settle(|| tab.source().contains("changed externally")),
             "a write to the NEW path must be picked up — the monitor has to have \
              moved with the file"
         );
@@ -576,7 +582,7 @@ mod gtk_integration_tests {
         pump_for(300);
         std::fs::write(&old_path, "# externally changed\n").unwrap();
         assert!(
-            crate::docio::settle(|| tab.source.borrow().contains("externally changed")),
+            crate::docio::settle(|| tab.source().contains("externally changed")),
             "the re-attached monitor must actually watch"
         );
 

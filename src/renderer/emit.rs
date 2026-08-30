@@ -8,8 +8,21 @@ use super::{syntect, Renderer};
 use crate::tags::TagName;
 use gtk::prelude::*;
 use gtk::TextTag;
-use pulldown_cmark::HeadingLevel;
 use syntect::easy::HighlightLines;
+
+/// The buffer tag each heading slot renders with, indexed by
+/// [`crate::theme::heading_slot`].
+///
+/// A table rather than a `match`, so the fold is not restated here: a `match` over
+/// `HeadingLevel` has to name the h5/h6 collapse itself, which is how this became one
+/// of five hand-rolled copies of one rule.
+const HEADING_TAGS: [TagName; crate::theme::HEADING_LEVELS] = [
+    TagName::H1,
+    TagName::H2,
+    TagName::H3,
+    TagName::H4,
+    TagName::H5,
+];
 
 /// Whether `iter`'s line has already been given a list-item content margin — i.e. it
 /// carries any tag from the `li-*` family. Used to keep the "exactly one `li-*` tag per
@@ -50,22 +63,35 @@ impl Renderer {
     /// column, because the bound is `content − inset` against the FULL column width:
     /// - a **list** adds only a `left_margin` (`tags.rs` `li-{depth}` sets no right
     ///   margin), accumulating per level → `depth * list_step`;
-    /// - a **blockquote** sets BOTH a left AND a right margin (`view_lm + bar+gap` and
-    ///   `view_rm + bar+gap`, `tags.rs`), so it narrows the usable column on BOTH sides →
-    ///   `2 * (bar+gap)`. It applies ONE tag regardless of nesting depth (end.rs
-    ///   `TagEnd::BlockQuote` tags only at the top level), so it is not multiplied by depth.
+    /// - a **blockquote** sets BOTH a left AND a right margin (`view_lm + depth*(bar+gap)`
+    ///   and `view_rm + depth*(bar+gap)`, `tags.rs`), so it narrows the usable column on
+    ///   BOTH sides → `2 * depth * (bar+gap)`. **It IS multiplied by depth**, and was not
+    ///   until nested quotes gained their own indent (TDD 2.11b): this clause used to read
+    ///   "it applies ONE tag regardless of nesting depth", which was true while every level
+    ///   shared one margin and became silently wrong the moment they stopped. A stale inset
+    ///   here does not fail loudly — it under-reserves, so an anchored child inside a
+    ///   nested quote overflows by exactly the levels this forgot (GTK4Rs/AP-23a).
     ///
     /// Zero at top level, so callers can apply it unconditionally.
     pub(super) fn block_inset(&self) -> i32 {
         let theme = crate::theme::active();
         let m = &theme.metrics;
-        let list = (self.lists.len() as i32) * m.list_step;
-        let quote = if self.blockquote_depth > 0 {
-            2 * (m.blockquote_bar_width + m.blockquote_text_gap)
-        } else {
-            0
-        };
-        crate::theme::px(list + quote, self.zoom)
+        // BOTH terms come from `tags::spec`, which is the single supplier of how far a
+        // block's tag pushes its text — including WHERE each term rounds. That is the
+        // whole fix: this used to sum the raw metrics and scale the total once, which is
+        // a different number from what the tags apply (`px` rounds, so `px(a + b)` is not
+        // `px(a) + px(b)` and `n * px(a)` is not `px(n * a)`), leaving the inset up to a
+        // pixel short per level. One pixel is enough — the Automatic h-scrollbar appears
+        // on `upper > page_size`, at any magnitude — so the child overflowed the viewport
+        // and re-armed the GTK4Rs/AP-22/23 churn (ScrAP-23a, through the rounding rather
+        // than through the indent).
+        //
+        // A list adds only a LEFT margin; a blockquote sets BOTH, so it costs twice.
+        let list = crate::tags::list_indent_px(self.lists.len() as i32, self.zoom, m);
+        // Clamped exactly as the tag family is, so the inset can never claim more
+        // margin than `bq-{depth}` actually applies on a pathologically nested document.
+        let quote_depth = (self.blockquote_depth as u8).min(crate::tags::MAX_QUOTE_DEPTH) as i32;
+        list + 2 * crate::tags::quote_indent_px(quote_depth, self.zoom, m)
     }
 
     pub(super) fn end_offset(&self) -> i32 {
@@ -92,17 +118,11 @@ impl Renderer {
             apply(tag);
         }
         if let Some(level) = self.heading {
-            apply(match level {
-                HeadingLevel::H1 => TagName::H1,
-                HeadingLevel::H2 => TagName::H2,
-                HeadingLevel::H3 => TagName::H3,
-                HeadingLevel::H4 => TagName::H4,
-                // h5 and h6 both fold onto the deepest rendered tag; there is no
-                // distinct h6 tier on any surface (a deliberate fold-into-deepest,
-                // the same GTK would apply to any over-max level). See TECH.md
-                // § "Heading levels (h1–h5; h6 folds to h5)".
-                _ => TagName::H5,
-            });
+            // Indexed by `theme::heading_slot`, the one definition of the h6→h5
+            // fold, rather than re-deriving it here — this arm was one of five
+            // hand-rolled copies. See TECH.md § "Heading levels (h1–h5; h6 folds
+            // to h5)".
+            apply(HEADING_TAGS[crate::theme::heading_slot(level as u8)]);
         }
         self.trailing_newlines = 0;
         self.at_start = false;
@@ -339,6 +359,7 @@ mod code_block_per_line_tests {
 
         let mut r = Renderer::new(
             buf.clone(),
+            crate::theme::active(),
             "InspiredGitHub".to_string(),
             None,
             false,

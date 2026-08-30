@@ -97,20 +97,32 @@ mod gtk_integration_tests {
         // never be armed while this line stood.
         app.register(gtk::gio::Cancellable::NONE)
             .expect("registering a NON_UNIQUE application cannot contact a bus or fail");
-        let window = ApplicationWindow::new(&app);
+        // Built through the PRODUCTION path. A bare `ApplicationWindow::new` never gets
+        // the CSS scope, so the assertions below would have been checking a window this
+        // application never builds — which is why the old version had to construct the
+        // class string itself and could only ever agree with itself.
+        let window = crate::window::new_window(&app, "IT", "", None);
 
         let a = WindowId::of(&window);
         let b = WindowId::of(&window);
         assert_eq!(a, b, "the same window must yield the same WindowId");
 
-        // The exact string window/mod.rs and zoom.rs build; its suffix must parse
-        // back to the raw id, proving registry key and CSS scope share one value.
-        let css_class = format!("scrib-win-{}", a.raw());
-        let suffix = css_class.strip_prefix("scrib-win-").unwrap();
-        assert_eq!(
-            suffix.parse::<u64>().unwrap(),
-            a.raw(),
-            "the CSS-class suffix must be exactly WindowId::raw()"
+        // READ the class the production path applied, rather than rebuilding the string
+        // here and parsing it back — which was a tautology over test code and would have
+        // held whatever `window/mod.rs` and `zoom.rs` actually did.
+        //
+        // This is what makes "registry key and CSS scope share one value" checkable: the
+        // scope is applied by `window::new_window` and the rule is built by
+        // `zoom::zoom_css_rule`, and both must land on `WindowId::raw()`.
+        let want = format!("scrib-win-{}", a.raw());
+        assert!(
+            window.css_classes().iter().any(|c| c.as_str() == want),
+            "the window carries no {want} class; applied classes were {:?}",
+            window.css_classes()
+        );
+        assert!(
+            crate::window::zoom_css_rule_for_test(&window, 1.0).starts_with(&format!(".{want} ")),
+            "the zoom rule is scoped to a different selector than the window's own class"
         );
     }
 }

@@ -173,7 +173,7 @@ async fn save_window(
     // check absorbs this self-write) and update the clean baseline — the
     // content-gated save guard (`save_is_safe`) compares future disk reads
     // against THIS baseline, not a recorded mtime (QA round-1 H3-H5).
-    *st.source.borrow_mut() = text.clone();
+    st.set_source(&text);
     *st.saved_baseline.borrow_mut() = text;
     // A reload's read may have gone out BEFORE this write and be about to come back
     // with pre-save content. Bumping here is what stops it applying: without it, that
@@ -868,16 +868,7 @@ mod gtk_integration_tests {
     use super::*;
 
     /// Build a registered, non-unique application for a test window to live in.
-    fn test_app(suffix: &str) -> gtk::Application {
-        let app = gtk::Application::new(
-            Some(&format!(
-                "com.extollit.scribobulate.integrationtest.{suffix}"
-            )),
-            gtk::gio::ApplicationFlags::NON_UNIQUE,
-        );
-        app.register(gtk::gio::Cancellable::NONE).expect("register");
-        app
-    }
+    use crate::window::testkit::test_app_suffixed as test_app;
 
     /// Run `adopt_and_save` — the whole of Save As after the chooser has answered —
     /// to completion, and report whether it wrote.
@@ -1339,8 +1330,12 @@ mod gtk_integration_tests {
                 "edited on the way past\n",
                 "the edited buffer must actually reach the file"
             );
+            // A test ASSERTING on the gate, not branching on it to write — the
+            // distinction clippy.toml's ban draws.
+            #[allow(clippy::disallowed_methods)]
+            let still_busy = st.write_gate.is_busy();
             assert!(
-                !st.write_gate.is_busy(),
+                !still_busy,
                 "the write gate must reopen, or Save is dead for this document for \
                  the rest of the session — silently"
             );

@@ -11,7 +11,6 @@ probes/binding-shape-rs/target/
 # life of the project while claiming to be generated. The authored INPUTS in notices/
 # are versioned; this output is rebuilt on every cargo build.
 /THIRD-PARTY-LICENSES.md
-/git.commit.txt
 /.claude/settings.local.json
 .agents/skills
 .claude/skills

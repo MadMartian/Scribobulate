@@ -39,7 +39,7 @@
 // A verbatim copy of `lib.rs`'s list, and the one hand-maintained thing about this
 // shape. Drift here is SILENT — a new top-level module added to `lib.rs` and not to
 // this list drops every body in it from the suite, with nothing failing — so
-// `scripts/lint-references.sh` compares the two lists as a build gate. Do not
+// `cargo xtask lint-references` check 4 compares the two lists as a build gate. Do not
 // "tidy" the duplication away without replacing that gate.
 mod a11y;
 mod accel;
@@ -55,6 +55,8 @@ mod codeview;
 mod colorscheme;
 mod config;
 mod copymap;
+mod cssfrag;
+mod decorplan;
 mod docio;
 mod export;
 mod farscroll;
@@ -67,15 +69,17 @@ mod limits;
 mod lineendings;
 mod links;
 mod logging;
-#[cfg(target_os = "macos")]
 mod macwordnav;
+mod mdtable;
 // Test-only in `lib.rs` (`#[cfg(test)]`); this root is always built `--cfg test`.
 mod notices;
 mod outline;
 mod outline_view;
 mod palette;
+mod pangospan;
 mod platform;
 mod preview;
+mod readingpos;
 mod renderer;
 mod saferizer;
 mod session;
@@ -84,9 +88,17 @@ mod suite_registry;
 mod swapfile;
 mod tags;
 mod tasklist;
+// Gated `#[cfg(all(test, feature = "gtk-integration-tests"))]` in `lib.rs`; this root
+// is always built `--cfg test` under that same feature (it only exists to run
+// gtk-integration-tests bodies), so it needs no gate here — but it does need the
+// declaration, or a body reaching `testpump` drops out of this main-thread run with
+// nothing failing (`cargo xtask lint-references` check 4).
+mod testpump;
 // Test-only in `lib.rs` (`#[cfg(test)]`); this root is always built `--cfg test`, so
 // it needs no gate here — but it does need the declaration, or the suite build breaks
 // the moment a symlink test in it reaches the shared helper.
+mod sprite;
+mod testlog;
 mod testsymlink;
 // Same story as `testsymlink` above: test-only in `lib.rs`, needs the declaration here or
 // the suite build breaks the moment a timing guard in it reaches the shared sampler.
@@ -290,7 +302,14 @@ fn parse_args(args: &[String]) -> Result<Cli<'_>, String> {
                     // including the case that was meant to be carved out.
                     return Err(format!("{flag} requires a value"));
                 }
-                _ => {}
+                (flag, Some(_)) => {
+                    // Unreachable while VALUE_FLAGS holds exactly the two arms above —
+                    // and REJECTING rather than ignoring is the point: adding a third
+                    // entry to VALUE_FLAGS without an arm here would otherwise consume
+                    // its value and discard the instruction, which is the whole defect
+                    // this function was written to close.
+                    return Err(format!("{flag} is declared in VALUE_FLAGS but unhandled"));
+                }
             }
             if inline.is_none() {
                 i += 1; // the value is consumed, never a filter

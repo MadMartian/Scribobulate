@@ -11,7 +11,8 @@ use std::time::Duration;
 /// every view-mode change. See the module doc for why [`TabState`](super::TabState)
 /// holds a back-reference to this instead of every call site doing a second lookup.
 pub(crate) struct WindowChrome {
-    /// The outline sidebar's scroller (the `GtkPaned` start child). Its inner
+    /// The outline sidebar's scroller (the first section of the sidebar `GtkPaned`).
+    /// Its inner
     /// child (the heading tree / "No headings" placeholder) is rebuilt whenever
     /// the document changes; the scroller itself persists and is hidden/shown by
     /// the `win.outline` toggle. The whole sidebar box (header + this scroller)
@@ -143,6 +144,18 @@ pub(crate) struct WindowChrome {
     /// zoom is an accessibility accommodation and should not vary as the user
     /// switches documents in the same window.
     pub(crate) zoom_level: Cell<f64>,
+    /// Where this window's sidebar divider sits, as the fraction of the sidebar's
+    /// height given to the outline (TDD 20.21) — the value `read_window_chrome`
+    /// persists and `inherit_from` hands to a new window.
+    ///
+    /// Cached here rather than read off the `GtkPaned` at save time, because the
+    /// paned cannot answer at the one moment that matters: a window closed with
+    /// both sidebar sections hidden has a zero-height sidebar, and the reading
+    /// would be meaningless exactly when it is being written down for good. The
+    /// cache is refreshed from the paned's own `notify::position` whenever the
+    /// reading IS meaningful, so it holds the last value the reader actually chose
+    /// (`session::sidebar_split_fraction` owns the "is it meaningful" test).
+    pub(crate) sidebar_split: Cell<f64>,
     /// Per-window CSS provider that holds this window's single zoom rule,
     /// `.scrib-win-<id> textview.scrib-preview { font-size: Xem; }` (built by
     /// `window::zoom::zoom_css_rule`). Added to the shared display once at window
@@ -210,7 +223,38 @@ pub(crate) struct WindowChrome {
     /// Last edit-kind applied to [`format_insert_menu`](Self::format_insert_menu),
     /// to skip redundant remove/insert churn (was a process-global thread-local
     /// before the per-window menubar migration).
+    ///
+    /// **"What the menu currently SHOWS", not "what was last requested"** — the two
+    /// diverge now that the mutation is deferred, and conflating them is how a
+    /// there-and-back toggle inside one main-loop turn leaves the menu displaying the
+    /// wrong label while this field claims otherwise. The requested value lives in
+    /// [`format_menu_pending`](Self::format_menu_pending); this one is written only by
+    /// the idle that actually performs the remove/insert.
     pub(crate) format_menu_kind: Cell<Option<FmtInsertKind>>,
+    /// The edit-kind most recently REQUESTED for
+    /// [`format_insert_menu`](Self::format_insert_menu), awaiting the coalesced idle.
+    ///
+    /// Separate from [`format_menu_kind`](Self::format_menu_kind) so the last request in
+    /// a turn wins and a request that returns to the displayed value costs no mutation
+    /// at all. Reading the LATEST value here is correct precisely because the menu must
+    /// end up matching the final state — the opposite of GTK4Rs/AP-185's "defer the
+    /// captured value", because the subject is a state to converge on rather than an
+    /// event to replay.
+    pub(crate) format_menu_pending: Cell<Option<FmtInsertKind>>,
+    /// Coalescing guard for [`format_insert_menu`](Self::format_insert_menu) relabels,
+    /// the exact twin of
+    /// [`documents_refresh_scheduled`](Self::documents_refresh_scheduled) below and for
+    /// the same reason.
+    ///
+    /// It did not exist until 2026-08-21, and its absence was the defect: the sibling
+    /// submenu of the SAME live-bound `GtkPopoverMenuBar` model was mutated straight
+    /// from three signal handlers — the `win.format` action's `notify::enabled`, the
+    /// window's `notify::is-active`, and the editor buffer's `mark-set`. The first of
+    /// those is the sharp one: `win.format`'s enabled state flips precisely when focus
+    /// moves INTO a menu popover, which is the mid-activation window GTK4Rs/AP-76 is
+    /// about. Either that rule is real and this site had to obey it, or the Documents
+    /// idle machinery beside it was unnecessary; both could not be true.
+    pub(crate) format_menu_refresh_scheduled: Cell<bool>,
     /// Coalescing guard for [`documents_menu`](Self::documents_menu) rebuilds:
     /// set true when a rebuild is scheduled, cleared when the single
     /// `glib::idle_add_local` fires. Mutating a GMenu bound to a realized (and
@@ -277,20 +321,17 @@ mod tests {
         app
     }
 
-    /// Pump the main loop until `done` or a bounded number of turns elapse.
-    ///
-    /// Bounded by turns, never by a wall-clock check between iterations: an
-    /// unbounded blocking pump hangs forever on an idle display, and a wall-clock
-    /// bound does not help because the loop simply never iterates (GTK4Rs/AP-79).
-    fn pump_until(done: impl Fn() -> bool) -> bool {
-        for _ in 0..2_000 {
-            if done() {
-                return true;
-            }
-            gtk::glib::MainContext::default().iteration(false);
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        done()
+    /// Pump the main loop until `done` or a 2s bound elapses; reports whether it
+    /// converged. `crate::testpump::until_or_for` under `Clock::Frame` (M31) —
+    /// the notice below is retracted by a real `glib::timeout_add` timer, which needs
+    /// actual wall-clock time to fire the same way a frame-clock animation does; `2_000
+    /// * 1ms` matches this function's old ceiling.
+    fn pump_until(done: impl FnMut() -> bool) -> bool {
+        crate::testpump::until_or_for(
+            crate::testpump::Clock::Frame,
+            Duration::from_millis(2_000),
+            done,
+        )
     }
 
     /// TDD 16.8 — a timed notice is retracted from the window that showed it,

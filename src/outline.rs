@@ -12,7 +12,7 @@
 //! trivially to the editor buffer, and the preview maps it through its existing
 //! `source_map` — so one extraction drives navigation in every mode.
 
-use crate::span::OriginalByteOffset;
+use crate::span::{CleanedByteOffset, OriginalByteOffset};
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
 /// One heading in document order.
@@ -151,15 +151,35 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
     // While inside a heading: (level, source-start offset, accumulated text).
     let mut current: Option<(u8, usize, String)> = None;
 
-    // Read the document the way the preview does: through the inline-tab pre-pass
-    // (ScrAP-75). Skipping it made the outline disagree with the rendered page about
-    // the document's block structure — MEASURED, a tab-padded GFM table followed by a
-    // setext underline: the preview showed a table and no heading, while the outline
-    // listed a phantom H1 whose text was the whole table. A tab inside a heading's own
-    // text diverged too (`# Chapter\tOne` → the sidebar showed the tab, the page a
-    // space). The substitution is length- and position-preserving, so `src_offset`
-    // still indexes the ORIGINAL source every caller navigates against.
-    let md = &*crate::renderer::normalize_inline_tabs(md);
+    // Read the document the way the preview does — and the page's reading is TWO
+    // pre-passes, not one.
+    //
+    // 1. The inline-tab pre-pass (ScrAP-75). Skipping it made the outline disagree with
+    //    the rendered page about the document's block structure — MEASURED, a
+    //    tab-padded GFM table followed by a setext underline: the preview showed a table
+    //    and no heading, while the outline listed a phantom H1 whose text was the whole
+    //    table. A tab inside a heading's own text diverged too (`# Chapter\tOne` → the
+    //    sidebar showed the tab, the page a space). The substitution is length- and
+    //    position-preserving.
+    // 2. The CriticMarkup lift. This one was MISSING, and the miss was visible: to
+    //    pulldown-cmark CriticMarkup is plain text, so `# {==Chapter One==}{>>revisit<<}`
+    //    put the whole marked-up string in the sidebar while the page and the PDF both
+    //    showed `Chapter One`. Both of those run the lift; the outline did not, and the
+    //    outline's source is the RAW document in every mode, so nothing upstream saved
+    //    it.
+    //
+    // Unlike the tab pre-pass, the lift DELETES bytes, so a heading's offset in the
+    // cleaned text is not its offset in the source the caller navigates against. That
+    // is what `cleaned_to_original` is for, and the offset newtypes make forgetting it
+    // a compile error rather than a scroll that lands in the wrong place.
+    let md_norm = crate::renderer::NormalizedMd::new(md);
+    let extraction = crate::annotate::extract(md_norm.as_str());
+    let md = extraction.cleaned.as_str();
+
+    // A tight construct's markers must be dropped from the label exactly as the
+    // renderer drops them, including one whose fence wraps other inline markup —
+    // so the outline consults the same block-scope table the preview does.
+    let scripts = crate::renderer::BlockScripts::scan(md);
 
     for (ev, range) in Parser::new_ext(md, crate::renderer::md_options()).into_offset_iter() {
         match ev {
@@ -171,16 +191,21 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
                     headings.push(Heading {
                         level,
                         text: text.trim().to_string(),
-                        src_offset: OriginalByteOffset::new(src_offset),
+                        src_offset: crate::annotate::cleaned_to_original(
+                            &extraction.shifts,
+                            CleanedByteOffset::new(src_offset),
+                        ),
                     });
                 }
             }
             Event::Text(t) => {
                 if let Some((_, _, ref mut text)) = current {
-                    // Mirror renderer.rs: drop tight super/sub-script markers so the
+                    // Mirror renderer.rs: drop tight construct markers so the
                     // outline label and heading slug match the rendered heading.
-                    for (run, _) in crate::renderer::scan_scripts(&t) {
-                        text.push_str(&run);
+                    for seg in scripts.segments(range.start, &t) {
+                        if !seg.marker {
+                            text.push_str(seg.text(&t));
+                        }
                     }
                 }
             }
@@ -199,6 +224,19 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
 mod tests {
     use super::*;
 
+    /// The sidebar label must match the rendered heading, including a fence that
+    /// WRAPS other inline markup — pulldown splits that across events, so a label
+    /// built one event at a time keeps the literal `~~` the page does not show.
+    #[test]
+    fn a_heading_drops_the_markers_of_a_markup_wrapping_fence() {
+        assert_eq!(
+            extract_headings("# ~~a **bold** b~~\n")
+                .first()
+                .map(|h| h.text.clone()),
+            Some("a bold b".to_string()),
+        );
+    }
+
     #[test]
     fn nested_headings_keep_level_text_and_order() {
         let md = "# Top\n\n## Middle\n\n### Deep\n\n## Another";
@@ -211,6 +249,38 @@ mod tests {
         );
         // Offsets are strictly increasing in document order.
         assert!(hs.windows(2).all(|w| w[0].src_offset < w[1].src_offset));
+    }
+
+    #[test]
+    fn criticmarkup_is_lifted_out_of_a_heading_label_the_way_the_page_lifts_it() {
+        // THE divergence (QA F-VIEW-001). CriticMarkup is plain text to pulldown-cmark,
+        // so a heading carrying an annotation listed the whole marked-up string in the
+        // sidebar while the page and the PDF — which both run the lift — showed the
+        // clean text. The outline's source is the raw document in every mode, so there
+        // was no upstream strip to save it.
+        let md = "# {==Chapter One==}{>>revisit<<}\n\nBody.\n";
+        let hs = extract_headings(md);
+        assert_eq!(hs.len(), 1);
+        assert_eq!(hs[0].text, "Chapter One");
+    }
+
+    #[test]
+    fn a_heading_after_criticmarkup_still_points_at_the_original_source() {
+        // The half a naive strip gets wrong. The lift DELETES bytes, so an offset taken
+        // in the cleaned text is short by everything removed before it — and the caller
+        // navigates the ORIGINAL. Without the mapping this heading's offset lands 22
+        // bytes early, inside the previous paragraph, and the sidebar scrolls to the
+        // wrong place with nothing failing.
+        let md = "{==Some claim==}{>>a note<<}\n\n# Later Heading\n";
+        let hs = extract_headings(md);
+        assert_eq!(hs.len(), 1);
+        let want = md.find("# Later Heading").expect("fixture");
+        assert_eq!(
+            hs[0].src_offset.raw(),
+            want,
+            "heading offset must index the original source, not the cleaned text"
+        );
+        assert_eq!(&md[hs[0].src_offset.raw()..][..1], "#");
     }
 
     #[test]

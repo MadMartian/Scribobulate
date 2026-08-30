@@ -3,12 +3,13 @@
 # Cross-platform parity comparator for the artefacts the three pipeline ports derive.
 #
 # WHY THIS EXISTS. `scripts/pipeline.steps` is consumed by three independently written
-# runners, and `scripts/lint-references.scan` by two. Each port DERIVES its list from the
-# contract, and each prints that derived list (`--list-steps` / `-ListSteps`,
-# `--list-scan` / `-ListScan`) so the ports can be diffed. Until now nothing performed the
-# diff: no single machine has all three ports, so the comparison was an errand a human
-# remembered rather than a gate. This script is the errand made mechanical; CI is what
-# finally puts all three artefacts in one place (.github/workflows/pipeline.yml).
+# runners; `scripts/lint-references.scan` by one binary running on three platforms. Each
+# DERIVES its list from the contract and prints that derived list (`--list-steps` /
+# `-ListSteps`, `cargo xtask lint-references --list-scan`) so the results can be diffed.
+# Until this existed nothing performed the diff: no single machine has all three platforms,
+# so the comparison was an errand a human remembered rather than a gate. This script is the
+# errand made mechanical; CI is what finally puts all three artefacts in one place
+# (.github/workflows/pipeline.yml).
 #
 # IT COMPARES; THE PORTS CONFORM. Comparison proves the ports agree, derivation proves
 # they conform, and only the second is worth having (ScrAP-207). This script is the
@@ -35,14 +36,17 @@
 # enumerates FILES, not ports, so there is nothing in it to read. The three names are a
 # constant here, with the self-test's missing-member mutation as their only guard.
 #
-# AND `scan` HAS THREE MEMBERS FOR TWO PORTS. The contract names scripts/lint-references.sh
-# for BOTH Linux and macOS, so the bash port runs on two platforms — and BSD find/sed/sort
-# are not GNU's, which makes macOS a place one port can diverge from itself. That is
-# ScrAP-207's shape (the platform nobody runs becomes the lenient one) on an axis sharing a
-# file was assumed to close. Compared per PLATFORM, therefore, not per port.
+# AND `scan` HAS THREE MEMBERS FOR ONE IMPLEMENTATION. That is not redundancy. Retiring the
+# two shell ports for a single `cargo xtask` binary removed PORT divergence and left PLATFORM
+# divergence untouched: the set is derived by WALKING A FILESYSTEM, and case folding, symlink
+# resolution and directory order are the host's answer rather than the program's. Assuming
+# parity follows from sharing an implementation is ScrAP-207's shape (the platform nobody
+# runs becomes the lenient one) on the one axis a shared file was assumed to close. Compared
+# per PLATFORM, therefore, and per platform is now the only unit there is.
 #
-# LINE ENDINGS AND BOM ARE NORMALISED, AUDIBLY. A PowerShell port emits CRLF, and a
-# byte-exact diff against a POSIX port's LF would then fail forever on a difference that
+# LINE ENDINGS AND BOM ARE NORMALISED, AUDIBLY. A PowerShell port emits CRLF (and so does a
+# Rust binary whose stdout PowerShell redirects), and a byte-exact diff against a POSIX LF
+# would then fail forever on a difference that
 # is the platform's line terminator rather than any drift in the list. Normalising is
 # therefore correct — but silent normalisation is how a comparator starts hiding things,
 # so a member that actually needed normalising is announced.

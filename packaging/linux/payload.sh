@@ -15,10 +15,17 @@
 PKG="scribobulate"
 APP_ID="com.extollit.scribobulate"
 
+# This file's own directory, two levels below the repository root. Every path below is
+# anchored to it, the way install.sh anchors to $REPO_DIR and stage.ps1 to $RepoRoot.
+# Both consumers happen to `cd` to the repo root before sourcing, so the CWD-relative
+# paths this replaces looked correct -- but build-rpm.sh `cd`s again mid-run, and a
+# SOURCED file that only works from one directory is a trap laid for its next caller.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
 # The [package] version. `exit` after the first hit is load-bearing: Cargo.toml carries
 # several [[test]] tables further down, and a bare grep eventually matches the wrong one.
 read_version() {
-    awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version[[:space:]]*=/{gsub(/[",]/,"");print $3;exit}' Cargo.toml
+    awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version[[:space:]]*=/{gsub(/[",]/,"");print $3;exit}' "$REPO_DIR/Cargo.toml"
 }
 
 # The libc floor, DERIVED from the binary's own versioned symbols rather than guessed.
@@ -41,7 +48,7 @@ require_fresh_binary() {
         return 1
     fi
     local newer
-    newer="$(find src Cargo.toml -newer "$bin" -print -quit 2>/dev/null || true)"
+    newer="$(find "$REPO_DIR/src" "$REPO_DIR/Cargo.toml" -newer "$bin" -print -quit 2>/dev/null || true)"
     if [ -n "$newer" ]; then
         echo "package: $bin is older than $newer — rebuild before packaging" >&2
         return 1
@@ -94,6 +101,29 @@ stage_payload() {
     # /usr/share/plasma. The same file is compiled into the binary as a fallback, so
     # this copy is an override rather than a requirement.
     install -Dm644 "data/themes.toml" "$base/share/$PKG/themes.toml"
+
+    # CANONICAL: why EVERY platform ships this copy of data/sprites/.
+    #
+    # The sprites that themes.toml's shipped themes name. NOT what makes those themes
+    # work -- a built-in theme's sprite is compiled into the binary (`include_bytes!`,
+    # src/sprite.rs) precisely so no install step can take a shipped decoration away.
+    # This copy exists because the installed themes.toml is itself read as a themes file
+    # (it lands on the themes search path), and its own sprite references resolve against
+    # its own directory; without the sprites beside it every launch would log a resolution
+    # failure for a decoration that is in fact rendering perfectly from the binary.
+    #
+    # packaging/windows/stage.ps1 ships the same copy and points HERE instead of
+    # restating this. All three packaging scripts once carried the rationale verbatim,
+    # and that is precisely how the commands underneath the copies drifted into different
+    # behaviours (empty directory, subdirectory, filename with a space) while the prose
+    # above them stayed identical and said nothing about it.
+    #
+    # `find ... -exec install -Dm644 -t ... {} +` rather than a glob: a glob with nothing
+    # to match stays literal and aborts the install, a glob that matches a subdirectory
+    # hands `install` an operand it refuses, and an unquoted glob word-splits a filename
+    # containing a space. This form survives all three. Staged HERE rather than in each
+    # route, so the three Linux routes cannot answer those three cases differently.
+    find "data/sprites" -type f -exec install -Dm644 -t "$base/share/$PKG/sprites" {} +
 
     # Third-party attribution, and it is an OBLIGATION rather than a courtesy: the
     # syntect syntax grammars reach the binary through the `two-face` crate and are
@@ -164,7 +194,8 @@ EOF
         # Same intent, bounded to what this function created: the four directories it
         # owns, never their ancestors and never their unrelated siblings.
         for d in "bin" "share/applications" "share/icons/hicolor/scalable/apps" \
-                 "share/$PKG" "share/doc/$PKG" "share/man/man1"; do
+                 "share/$PKG" "share/$PKG/sprites" "share/doc/$PKG" \
+                 "share/man/man1"; do
             [ -d "$base/$d" ] && chmod 755 "$base/$d"
         done
     fi

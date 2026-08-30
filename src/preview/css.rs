@@ -130,7 +130,7 @@ pub(crate) fn css() -> &'static str {
 
 // ── generated preview CSS ─────────────────────────────────────────────────────
 
-use crate::palette::{to_hex, Palette};
+use crate::palette::{to_hex_opaque, Palette};
 use crate::theme::Theme;
 
 /// An `rgba(r,g,b,a)` literal — for the few surfaces that must stay TRANSLUCENT
@@ -160,6 +160,34 @@ fn rgba_css(c: gtk::gdk::RGBA, alpha: f32) -> String {
 /// (`font-size`), so the two providers never write the same lookup slot and cannot
 /// interact (GTK4Rs/AP-101). Only zoom, which is per-window, needs a scope.
 ///
+/// **Every widget shape a link can wear inside a table cell.**
+///
+/// THREE, not two, and the third was found by looking at a driven render rather than by
+/// a test: `color` inherits to a `GtkLinkButton`'s caption label but `text-decoration-*`
+/// does not, so a rule on the button node alone leaves a pure-link cell wearing whatever
+/// underline the DESKTOP theme drew.
+///
+/// The list is a `const` and both tests iterate it rather than restating it. Two
+/// test-local literal arrays used to mirror this one, which meant they asserted *these
+/// three exist* and not *the production list is covered* — a fourth selector added here
+/// would have failed neither. The comment beside the loop records that this list grows.
+///
+/// ⚠️ **`link` here is GTK's OWN CSS class on `GtkLinkButton`, not this project's
+/// `link_color` theme key**, and the two are one blanket rename apart. A sweep that
+/// respelled the theme vocabulary turned `button.cell.link` into
+/// `button.cell.link_color`, which is a well-formed selector that matches nothing: the
+/// rules still generated, every test still passed (they assert on the rule TEXT), and a
+/// link-only cell silently reverted to the desktop's link colour and underline while the
+/// mixed cell beside it stayed themed. A theme key never appears in a selector — the
+/// theme's *values* are interpolated into the declarations, and the selector names GTK's
+/// node tree. `a_link_only_cell_wears_the_themes_link_colour` is the guard, and it is a
+/// driven one for the same reason: only a real widget can say whether a selector matched.
+pub(crate) const LINK_CELL_SELECTORS: [&str; 3] = [
+    "scribtable .cell link",
+    "scribtable button.cell.link",
+    "scribtable button.cell.link label",
+];
+
 /// Pure — takes its inputs, touches no display. Unit-tested headlessly.
 pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     let mut out = String::new();
@@ -190,7 +218,7 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     // silently clobbering both the theme's family and zoom's font-size.
     let mut page = String::new();
     if let Some(fg) = theme.foreground {
-        page.push_str(&format!("color: {};", to_hex(fg)));
+        page.push_str(&format!("color: {};", to_hex_opaque(fg)));
     }
     if let Some(font) = &theme.font_family {
         // `font_family` is a `CssSafeFontStack`: the type proves it was sanitised and
@@ -204,7 +232,7 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     if let Some(bg) = theme.background {
         out.push_str(&format!(
             "textview.scrib-preview > text {{ background-color: {}; }}\n",
-            to_hex(bg)
+            to_hex_opaque(bg)
         ));
         // The selection follows the theme too, so a selection on a sepia page is not
         // the desktop's blue.
@@ -217,8 +245,8 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
         // fill. `palette.selection_fg` derives it from colours the theme already owns.
         out.push_str(&format!(
             "textview.scrib-preview > text selection {{ background-color: {}; color: {}; }}\n",
-            to_hex(palette.selection_bg),
-            to_hex(palette.selection_fg)
+            to_hex_opaque(palette.selection_bg),
+            to_hex_opaque(palette.selection_fg)
         ));
         // Table cells are separate `GtkLabel`s outside the buffer (ScrAP-36/ScrAP-110), so
         // the `> text selection` rule above cannot reach them — each cell label draws
@@ -234,8 +262,8 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
         // paragraph above it took the theme's would be ScrAP-36 all over again.
         out.push_str(&format!(
             "scribtable .cell selection {{ background-color: {}; color: {}; }}\n",
-            to_hex(palette.selection_bg),
-            to_hex(palette.selection_fg)
+            to_hex_opaque(palette.selection_bg),
+            to_hex_opaque(palette.selection_fg)
         ));
     }
 
@@ -248,23 +276,34 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     // here instead: `alpha(fg, 0.25)` over the page is EXACTLY `mix(bg, fg, 0.25)`,
     // so System renders byte-identically while the derivation moves into Rust where
     // it is unit-testable (TDD 18.2).
+    //
+    // These four metrics are emitted at their DESIGN-TIME value and are deliberately
+    // NOT put through `theme::px(n, zoom)`, unlike every metric applied via a widget
+    // or Pango property. This sheet is the theme's provider, which is APP-WIDE, while
+    // zoom's is per-window; the two are collision-free only because their property
+    // sets are disjoint (ScrAP-127 — a cross-provider conflict is arbitrated by
+    // add-order, not specificity). A zoom factor here would make one app-wide sheet
+    // carry a per-window value. Documented as the standing exception in
+    // THEMING.md § Pixel metrics and zoom, so the rule and the code agree.
     out.push_str(&format!(
         "scribtable .cell {{ padding: {}px {}px; border-width: {}px; border-style: solid; \
          border-color: {}; border-radius: {}px; }}\n",
         m.table_cell_padding_v,
         m.table_cell_padding_h,
         m.table_border_width,
-        to_hex(palette.table_border),
+        to_hex_opaque(palette.table_border),
         m.table_cell_radius,
     ));
     // Table header row (the GFM row above the `---` delimiter): bold text on a faint
-    // fill, distinguishing it from body cells. When a theme colours its headings, the
-    // table header TEXT takes that same colour too (a table header IS a heading), from
-    // the one `heading_color` key — omitted, the header text inherits the body colour
-    // exactly as before.
+    // fill, distinguishing it from body cells. Its TEXT takes `table_head_fg`, which
+    // `Theme::resolve` has already folded down to `heading_color` where the theme states
+    // no header ink of its own (TDD 18.30) — so a theme that colours its headings and
+    // says nothing about tables gets exactly what it got before that key existed, and
+    // one that says nothing at all still inherits the body colour. The fold is not
+    // repeated here: this reads one resolved value, as both export sinks do.
     let head_fg = theme
-        .heading_color
-        .map(|c| format!(" color: {};", to_hex(c)))
+        .table_head_fg
+        .map(|c| format!(" color: {};", to_hex_opaque(c)))
         .unwrap_or_default();
     // A themed heading FONT reaches the table header too. `heading_font` is a
     // `CssSafeFontStack`, so it is injection-safe here by type, not by convention:
@@ -274,9 +313,14 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
         .as_ref()
         .map(|f| format!(" font-family: {};", f.as_str()))
         .unwrap_or_default();
+    // …and the themed BOLD WEIGHT. `bold_weight` was honoured for `**bold**` on all
+    // three surfaces and for the table header on none: this rule said `bold`, the HTML
+    // sink said nothing, and the PDF sink wrapped the cell in `<b>` — three independent
+    // hardcodings of one key that `Typography::bold_attr` already owns (F-BOLD-001).
     out.push_str(&format!(
-        "scribtable .cell-head {{ font-weight: bold; background-color: {};{}{} }}\n",
-        to_hex(palette.table_head_bg),
+        "scribtable .cell-head {{ font-weight: {}; background-color: {};{}{} }}\n",
+        theme.typography.bold_weight,
+        to_hex_opaque(palette.table_head_bg),
         head_fg,
         head_font
     ));
@@ -301,10 +345,47 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     // theme *did* underline (MEASURED on Breeze-dark: the two cell shapes disagreed
     // while the body agreed with neither — GTK4Rs/AP-102's "your art, not the user's" in
     // reverse). Three paths, one appearance, none of them the desktop's opinion.
-    let link_fg = to_hex(palette.link_fg);
-    for selector in ["scribtable .cell link", "scribtable button.cell.link"] {
+    //
+    // The underline's STYLE and COLOUR are themed too (TDD 18.23), from the same two
+    // keys the body `link` tag reads — so a `wavy` or a magenta underline reaches all
+    // three link shapes or none of them. `text-decoration-line` states `none` rather
+    // than being omitted when the theme turns the line off, because omitting it would
+    // hand the decision back to the desktop theme, which is the drift these rules exist
+    // to prevent.
+    let link_fg = to_hex_opaque(palette.link_fg);
+    // Through `cssfrag`, because the HTML sink decides the same thing and the two had
+    // each spelled it out — including the `solid` carve-out, which is CSS's own initial
+    // value and would otherwise move a rule that has never carried a style (TDD 18.2).
+    let link_line = crate::cssfrag::link_underline_line(theme.link_underline);
+    // `link_underline_style_decl` returns a WHOLE declaration (leading space, trailing
+    // semicolon), so it is spliced after `text-decoration-line`'s semicolon, never into
+    // its value. Concatenating the two produced
+    // `text-decoration-line: underline text-decoration-style: double;;`, which GTK
+    // rejects as "Not a valid value" and then drops the entire declaration: under Pixel
+    // Quest (`link_underline = "double"`) every table-cell link lost its line while the
+    // body's `GtkTextTag` kept drawing one. The text-level tests below could not see it,
+    // because that malformed string still `contains` both fragments they look for; the
+    // `parses` module at the bottom of this file is what catches it now.
+    let link_line_style = crate::cssfrag::link_underline_style_decl(theme.link_underline);
+    let link_line_color = crate::cssfrag::decl(
+        "text-decoration-color",
+        theme.link_underline_color.map(to_hex_opaque),
+    );
+    // THREE selectors, not two — see [`LINK_CELL_SELECTORS`]. `color` inherits to a
+    // `GtkLinkButton`'s caption label,
+    // but `text-decoration-*` does not — GTK registers those unhinherited and builds the
+    // Pango attributes from the node that OWNS the text, and a button owns none. So a
+    // rule on the button node styles nothing, the caption keeps whatever underline the
+    // desktop theme drew on the label, and a pure-link cell reads differently from the
+    // mixed cell beside it. MEASURED on a driven render (a wavy green underline in body
+    // prose and in a mixed cell, a solid cyan one in the pure-link cell) — and invisible
+    // to any test that asserts on the generated rule TEXT rather than on the pixels,
+    // which is why this needed a look and not another assertion. The button rule stays:
+    // it is what the desktop theme's own `button.link` styling has to lose against.
+    for selector in LINK_CELL_SELECTORS {
         out.push_str(&format!(
-            "{selector} {{ color: {link_fg}; text-decoration-line: underline; }}\n"
+            "{selector} {{ color: {link_fg}; text-decoration-line: {link_line};\
+             {link_line_style}{link_line_color} }}\n"
         ));
     }
 
@@ -315,9 +396,18 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     // without this it would keep the desktop's separator colour on a sepia page.
     out.push_str(&format!(
         "separator.scrib-rule {{ background-color: {}; }}\n",
-        to_hex(palette.rule)
+        to_hex_opaque(palette.rule)
     ));
-
+    // The flat rule's WEIGHT, from the same key the PDF sink strokes with — one theme
+    // key, both application paths (POLICY). `min-height` rather than `height`: a
+    // GtkSeparator's height is its CSS minimum, and stating only `height` leaves GTK's
+    // own 1px minimum to win. A sprite-tiled rule is a different widget entirely
+    // (`widgets::rule::SpriteRule`) and takes its tile's height, so this selector
+    // cannot reach it and the two cannot disagree.
+    out.push_str(&format!(
+        "separator.scrib-rule {{ min-height: {}px; }}\n",
+        m.rule_thickness.max(0)
+    ));
     // ── the image-selection tint ──────────────────────────────────────────────
     //
     // Shown over an anchored image when it falls inside the buffer selection (GTK
@@ -326,6 +416,22 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     out.push_str(&format!(
         ".scrib-image-sel {{ background-color: {}; border-radius: 3px; }}\n",
         rgba_css(palette.selection_bg, 0.40)
+    ));
+
+    // ── the broken-image placeholder ──────────────────────────────────────────
+    //
+    // TDD 18.20. Unreachable by mechanism A/B (it is a plain `GtkImage`, no tag and
+    // no drawn decoration) and previously unreachable by C too — it carried no CSS
+    // class at all, so it sat on desktop colours under every theme (the hole TDD
+    // 18.4's "no grey island" claim had). Same treatment `export/html.rs`'s
+    // `.missing-image` already gives the export's own broken-image marker — a
+    // dashed border in the theme's `rule` colour — so the two renderings agree
+    // rather than one being themed and the other not.
+    out.push_str(&format!(
+        ".scrib-broken-image {{ border: 1px dashed {}; border-radius: 3px; \
+         padding: 4px; background-color: {}; }}\n",
+        to_hex_opaque(palette.rule),
+        rgba_css(palette.code_inline_bg, 0.60)
     ));
 
     // ── preview-floating cards ────────────────────────────────────────────────
@@ -341,8 +447,8 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     // installed at a strictly higher priority: priority dominates, and equal-priority
     // add-order would otherwise decide it (GTK4Rs/AP-101).
     if theme.background.is_some() || theme.foreground.is_some() {
-        let card_bg = to_hex(palette.page_bg);
-        let card_border = to_hex(palette.table_border);
+        let card_bg = to_hex_opaque(palette.page_bg);
+        let card_border = to_hex_opaque(palette.table_border);
         // Only the PREVIEW's card — the editor's wears `.annotation-entry` alone and
         // stays on the desktop theme (TDD 18.7).
         out.push_str(&format!(
@@ -351,12 +457,12 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
         ));
         out.push_str(&format!(
             ".conflict-toast {{ background-color: {}; border-color: {card_border}; color: {}; }}\n",
-            to_hex(crate::palette::mix_rgba(
+            to_hex_opaque(crate::palette::mix_rgba(
                 palette.page_bg,
                 palette.selection_bg,
                 0.10
             )),
-            to_hex(palette.body_fg),
+            to_hex_opaque(palette.body_fg),
         ));
     }
 
@@ -395,7 +501,7 @@ mod tests {
     // testable with no display: build a theme, derive a palette, assert the text.
 
     use super::{theme_css, Palette};
-    use crate::palette::to_hex;
+    use crate::palette::to_hex_opaque;
     use crate::theme::{Themes, SYSTEM_ID};
 
     // Adwaita's real values on a light desktop. `theme_text_color` (body ink) and
@@ -421,7 +527,7 @@ mod tests {
             theme.background.unwrap_or(PROBE_BG),
             theme.foreground.unwrap_or_else(probe_fg),
             theme.foreground.unwrap_or_else(probe_chrome_fg),
-            theme.accent.unwrap_or_else(probe_accent),
+            theme.accent_color.unwrap_or_else(probe_accent),
             &theme,
         );
         theme_css(&theme, &palette)
@@ -469,6 +575,56 @@ mod tests {
     /// under Bedtime, that painted every selected glyph `#000000` on the themed fill.
     /// So the foreground is asserted here beside the background, and for the same
     /// parity reason: the two paths must agree on it too.
+    /// TDD 18.23 — a themed link underline reaches BOTH cell link shapes, and under a
+    /// theme that states neither key the rules are byte-identical to what they always
+    /// were (a solid underline, no stated colour).
+    ///
+    /// Both shapes are asserted because they are two different widgets — a mixed cell's
+    /// `GtkLabel` `link` node and a pure-link cell's `GtkLinkButton` — and a host theme
+    /// that decorates one and not the other is exactly what made two links in one table
+    /// look different before these rules existed.
+    #[test]
+    fn a_themed_link_underline_reaches_both_cell_link_shapes() {
+        // Iterated off the PRODUCTION list, never a copy of it: a mirrored array
+        // asserts "these three exist", which a fourth selector added to production
+        // would satisfy while going untested. ⚠️ Either way this assertion is over the
+        // generated rule TEXT — it CANNOT see whether the rule matched anything on
+        // screen, and the missing third selector was found by looking at a driven
+        // render, not here.
+        let sys = css_for(crate::theme::SYSTEM_ID);
+        for prefix in super::LINK_CELL_SELECTORS {
+            let rule = sys
+                .lines()
+                .find(|l| l.starts_with(prefix))
+                .unwrap_or_else(|| panic!("no `{prefix}` rule:\n{sys}"));
+            assert!(rule.contains("text-decoration-line: underline;"), "{rule}");
+            assert!(!rule.contains("text-decoration-style"), "{rule}");
+            assert!(!rule.contains("text-decoration-color"), "{rule}");
+        }
+
+        let mut themes = Themes::builtin();
+        themes.merge_over_for_test(
+            "[themes.sepia]\nlink_underline = \"double\"\nlink_underline_color = \"#00ff00\"\n",
+        );
+        let theme = themes.resolve("sepia");
+        let palette = Palette::from_base(
+            theme.background.unwrap(),
+            theme.foreground.unwrap(),
+            theme.foreground.unwrap(),
+            theme.accent_color.unwrap(),
+            &theme,
+        );
+        let themed = theme_css(&theme, &palette);
+        for prefix in super::LINK_CELL_SELECTORS {
+            let rule = themed
+                .lines()
+                .find(|l| l.starts_with(prefix))
+                .unwrap_or_else(|| panic!("no `{prefix}` rule:\n{themed}"));
+            assert!(rule.contains("text-decoration-style: double;"), "{rule}");
+            assert!(rule.contains("text-decoration-color: #00ff00;"), "{rule}");
+        }
+    }
+
     #[test]
     fn cell_selection_matches_the_body_selection_and_gates_with_it() {
         let prop_of = |line: &str, prop: &str| {
@@ -551,13 +707,14 @@ mod tests {
                 theme.background.unwrap_or(PROBE_BG),
                 theme.foreground.unwrap_or_else(probe_fg),
                 theme.foreground.unwrap_or_else(probe_chrome_fg),
-                theme.accent.unwrap_or_else(probe_accent),
+                theme.accent_color.unwrap_or_else(probe_accent),
                 &theme,
             );
             let c = theme_css(&theme, &palette);
             // The one key the body's `link` GtkTextTag is set from.
-            let expected = crate::preview::css::to_hex(palette.link_fg);
-            for prefix in ["scribtable .cell link", "scribtable button.cell.link"] {
+            let expected = crate::preview::css::to_hex_opaque(palette.link_fg);
+            // The production list, not a copy — see `LINK_CELL_SELECTORS`.
+            for prefix in crate::preview::css::LINK_CELL_SELECTORS {
                 let rule = c
                     .lines()
                     .find(|l| l.starts_with(prefix))
@@ -624,6 +781,7 @@ mod tests {
             "scribtable .cell-head",
             "separator.scrib-rule",
             ".scrib-image-sel",
+            ".scrib-broken-image",
             ".annotation-entry.scrib-preview-card",
             ".conflict-toast",
         ] {
@@ -633,6 +791,54 @@ mod tests {
         assert!(
             !c.contains("@theme_"),
             "a generated rule still binds to @theme_*"
+        );
+    }
+
+    /// TDD 18.30 / 18.2 — the table header's ink is its own key, and falls back to
+    /// `heading_color` exactly as it always did.
+    ///
+    /// Three cases, because two of them look identical from inside one theme: a theme
+    /// that states neither key (no `color` at all), one that states only
+    /// `heading_color` (the pre-18.30 behaviour, which is what "byte-identical" means
+    /// here), and one that states both (the header leaves the heading behind).
+    #[test]
+    fn the_table_header_ink_is_its_own_key_and_falls_back_to_heading_color() {
+        let sheet = |fragment: &str| {
+            let mut themes = Themes::builtin();
+            themes.merge_over_for_test(fragment);
+            let theme = themes.resolve("inked");
+            let palette = Palette::from_base(
+                theme.background.unwrap_or(PROBE_BG),
+                theme.foreground.unwrap_or_else(probe_fg),
+                theme.foreground.unwrap_or_else(probe_chrome_fg),
+                theme.accent_color.unwrap_or_else(probe_accent),
+                &theme,
+            );
+            theme_css(&theme, &palette)
+        };
+        let head_rule = |css: &str| {
+            css.lines()
+                .find(|l| l.starts_with("scribtable .cell-head"))
+                .expect("the header rule is generated for every theme")
+                .to_string()
+        };
+
+        assert!(
+            !head_rule(&sheet("[themes.inked]\n")).contains(" color:"),
+            "a theme stating neither key must leave the header on the body ink"
+        );
+        assert!(
+            head_rule(&sheet("[themes.inked]\nheading_color = \"#5f1010\"\n"))
+                .contains(" color: #5f1010;"),
+            "stating only heading_color must still reach the header, as it always did"
+        );
+        let both = head_rule(&sheet(
+            "[themes.inked]\nheading_color = \"#5f1010\"\ntable_head_fg = \"#ffd400\"\n",
+        ));
+        assert!(both.contains(" color: #ffd400;"), "{both}");
+        assert!(
+            !both.contains("#5f1010"),
+            "the header must leave heading_color behind entirely, not layer over it: {both}"
         );
     }
 
@@ -648,6 +854,10 @@ mod tests {
                 "{id} lost its rule colour"
             );
             assert!(c.contains(".scrib-image-sel"), "{id} lost its image tint");
+            assert!(
+                c.contains(".scrib-broken-image"),
+                "{id} lost its broken-image styling"
+            );
         }
     }
 
@@ -695,12 +905,12 @@ mod tests {
         let collapsed =
             Palette::from_base(PROBE_BG, probe_fg(), probe_fg(), probe_accent(), &theme);
         assert_ne!(
-            to_hex(from_chrome.table_head_bg),
-            to_hex(collapsed.table_head_bg),
+            to_hex_opaque(from_chrome.table_head_bg),
+            to_hex_opaque(collapsed.table_head_bg),
             "the two inks must be distinguishable, or this guard is vacuous"
         );
-        assert_eq!(to_hex(from_chrome.table_head_bg), "#eeefef");
-        assert_eq!(to_hex(collapsed.table_head_bg), "#ebebeb"); // the shipped drift
+        assert_eq!(to_hex_opaque(from_chrome.table_head_bg), "#eeefef");
+        assert_eq!(to_hex_opaque(collapsed.table_head_bg), "#ebebeb"); // the shipped drift
     }
 
     /// A named theme states ONE foreground, so both inks collapse onto it — the
@@ -717,8 +927,8 @@ mod tests {
         );
         // Sepia states no table_border, so it derives from its page + its own ink.
         assert_eq!(
-            to_hex(p.table_border),
-            to_hex(crate::palette::mix_rgba(
+            to_hex_opaque(p.table_border),
+            to_hex_opaque(crate::palette::mix_rgba(
                 theme.background.unwrap(),
                 theme.foreground.unwrap(),
                 0.25
@@ -772,5 +982,50 @@ mod tests {
             !c.contains("background-color: red"),
             "injection succeeded:\n{c}"
         );
+    }
+
+    /// Does GTK itself accept the sheet this module generates? Every assertion above
+    /// reads the generated TEXT, and text-matching cannot see a malformed declaration:
+    /// `text-decoration-line: underline text-decoration-style: double;` satisfies
+    /// `contains("text-decoration-line: underline")` and
+    /// `contains("text-decoration-style: double;")` both, and GTK drops it on the floor.
+    /// That is not hypothetical — it is how Pixel Quest's `link_underline = "double"`
+    /// shipped with a flat link in every table cell while the body underlined correctly.
+    ///
+    /// Loading a `GtkCssProvider` needs GTK initialised, so this lives behind
+    /// `gtk-integration-tests` while its neighbours run under plain `cargo test`.
+    #[cfg(feature = "gtk-integration-tests")]
+    mod parses {
+        use super::css_for;
+        use crate::theme::Themes;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        /// **Every builtin theme's sheet parses clean**, not just the two the text-level
+        /// tests sample. A theme is the unit of variation here: the keys that change the
+        /// sheet's SHAPE (an underline style, a stated colour) are exactly the ones only
+        /// some themes state, so a sample of two leaves the interesting sheets unparsed.
+        #[gtktest::test]
+        fn every_builtin_theme_sheet_parses_without_a_css_error() {
+            for entry in Themes::builtin().chooser_list() {
+                let sheet = css_for(&entry.id);
+                let errors: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+                let provider = gtk::CssProvider::new();
+                let sink = Rc::clone(&errors);
+                provider.connect_parsing_error(move |_, section, error| {
+                    sink.borrow_mut()
+                        .push(format!("{section}: {}", error.message()));
+                });
+                provider.load_from_data(&sheet);
+                assert!(
+                    errors.borrow().is_empty(),
+                    "theme `{}` generates CSS GTK refuses, so the declarations in the \
+                     offending rule are silently dropped and the theme's intent never \
+                     reaches the screen: {:?}\n{sheet}",
+                    entry.id,
+                    errors.borrow()
+                );
+            }
+        }
     }
 }

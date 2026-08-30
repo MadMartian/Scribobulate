@@ -1,10 +1,14 @@
 //! Shared parser options and the inline-tab normalisation pre-pass — both pure and
-//! unit-tested. The pre-pass runs at every parse site, and the sites are ENUMERATED
-//! rather than summarised: `preview/build.rs`, `export/doc.rs`, `outline.rs` and
-//! `copymap::balance_source_span`. The summary form ("used at every parse site") is
-//! what this comment used to say while reaching two of the four, and a claim like
-//! that terminates the audit it appears to serve — see
-//! `normalize_inline_tabs`'s own note on what holds it true now.
+//! unit-tested. [`NormalizedMd`] is the ONLY way to obtain a document string that has
+//! passed the pre-pass: its constructor runs it, so "parse this without normalising
+//! first" is unrepresentable at a seam site rather than a rule each call site has to
+//! remember. The sites are ENUMERATED rather than summarised: `preview/build.rs`,
+//! `export/doc.rs`, `outline.rs` and `copymap::balance_source_span`. The summary form
+//! ("used at every parse site") is what this comment used to say while reaching two
+//! of the four, and a claim like that terminates the audit it appears to serve — see
+//! `every_parse_site_reads_one_document` (below) for what still enforces it, and
+//! [`NormalizedMd`]'s own doc for the enforcement mechanism and why a `clippy.toml`
+//! ban was assessed and rejected.
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
@@ -47,6 +51,94 @@ pub(crate) fn md_options() -> Options {
         | Options::ENABLE_GFM
 }
 
+/// A document string guaranteed to have passed the inline-tab pre-pass (ScrAP-75).
+/// [`NormalizedMd::new`] is the ONLY constructor — it runs [`normalize_inline_tabs`],
+/// a module-private function reachable from nowhere else, so a caller cannot obtain
+/// one from an un-normalised `&str`. "Parse this document without normalising first"
+/// is therefore unrepresentable at this seam, rather than a rule each of the
+/// (currently four) production parse sites has to remember.
+///
+/// **Discipline: the CALLER normalises, once, at the point raw document text first
+/// enters a parse-adjacent function — never a callee further down the call chain.**
+/// This is the one discipline all four sites now share. Before this type existed,
+/// three of the four normalised as callers (`preview/build.rs`, `export/doc.rs`,
+/// `outline.rs`) and the fourth, `copymap::balance_source_span`, normalised
+/// internally as a callee — so a reader of one file could not infer the rule from
+/// the other, and nothing said which was authoritative. Caller-normalises was kept
+/// over callee-normalises for two reasons: it was already the majority shape, and a
+/// callee that normalises on every call is a latent perf trap for exactly the
+/// callee this project has — `balance_source_span` reparses in a fixpoint loop (up
+/// to 32 passes) and was re-running the structural code-span pre-parse inside
+/// `normalize_inline_tabs` on every one of those passes before this change hoisted
+/// normalisation out to its caller, once.
+///
+/// [`as_str`](Self::as_str) hands back the normalised text for a caller that must
+/// feed it to a further pre-parse step (CriticMarkup extraction, `annotate::extract`)
+/// before its own parse — three of the four sites do this, because the extraction
+/// step deletes bytes and its callers need the returned shift table alongside the
+/// cleaned text, not just an iterator. [`parse`](Self::parse) hands back a fresh,
+/// [`md_options`]-configured `pulldown_cmark::Parser` for a caller with nothing left
+/// to do before parsing — `copymap::balance_source_span` is the one site that reads
+/// this way, calling it once per fixpoint pass; a `Parser` cannot be cloned or
+/// replayed, so `parse()` builds a new one each call rather than caching.
+///
+/// **Why not also a `clippy.toml` ban on `pulldown_cmark::Parser::new_ext`:**
+/// assessed and rejected under the true-positive test in POLICY.md § Typed GTK
+/// seams. Enumerated against the tree at the time this type landed, EVERY existing
+/// caller of the raw constructor is legitimate, not a bypass: `normalize_inline_tabs`'s
+/// own structural pre-parse (which must read the UN-normalised text to find the
+/// verbatim-code ranges it is about to protect — the seam cannot apply to its own
+/// implementation), the three sites that parse CriticMarkup-cleaned text derived
+/// FROM a `NormalizedMd` (`preview/build.rs`, `export/doc.rs`, `outline.rs` — the
+/// cleaned text is a further transform of the normalised text, not the normalised
+/// text itself, so it is one step past what `parse()` can hand back), and eight
+/// test call sites exercising the tokeniser/options directly rather than a document
+/// entry point. A ban that fires on twelve legitimate calls to maybe catch one
+/// future bypass is the "trains everyone to reach for `#[allow]`" case POLICY warns
+/// against, so the enforcement here is encapsulation alone, same choice and same
+/// residual gap as `docio`'s `std::fs` encapsulation (POLICY.md § "Every document
+/// read and write goes through `docio`"): a fifth PRODUCTION site cannot construct a
+/// "normalised" string by calling `normalize_inline_tabs` directly the way two sites
+/// once did — it no longer compiles outside this module — but nothing stops a fifth
+/// site handing raw text straight to `pulldown_cmark::Parser::new_ext` without ever
+/// touching this module at all. Neither seam can make an external crate's public
+/// constructor unreachable; encapsulation closes "forgot to normalise while using
+/// the seam", not "never used the seam".
+///
+/// **That residual gap is now covered by enumeration rather than left standing**:
+/// `the_set_of_production_parse_sites_is_the_one_this_module_guards` fails when any
+/// production file gains or loses a `Parser::new_ext` mention, so a fifth site is a
+/// deliberate edit to a list rather than something that slips in. It is the same idiom
+/// the `GTK4Rs/AP-N` citation form is chosen for — when a construct cannot be banned,
+/// make the set a human must audit greppable, and fail when it moves.
+pub(crate) struct NormalizedMd<'a>(std::borrow::Cow<'a, str>);
+
+impl<'a> NormalizedMd<'a> {
+    /// Run the inline-tab pre-pass on `md`. The only constructor.
+    pub(crate) fn new(md: &'a str) -> Self {
+        Self(normalize_inline_tabs(md))
+    }
+
+    /// The normalised text, for a caller that must feed it to a further pre-parse
+    /// step (CriticMarkup extraction) before parsing.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Take the normalised text by value, for a caller that stores it (rather than
+    /// re-deriving it) alongside a render's other products.
+    pub(crate) fn into_owned(self) -> String {
+        self.0.into_owned()
+    }
+
+    /// A fresh `pulldown_cmark` iterator over the normalised text, configured with
+    /// [`md_options`]. Safe to call more than once — each call parses again, since a
+    /// `Parser` cannot be cloned or replayed.
+    pub(crate) fn parse(&self) -> Parser<'_> {
+        Parser::new_ext(&self.0, md_options())
+    }
+}
+
 /// Replace each hard tab (`\t`) with a single space, EXCEPT where a tab is
 /// structurally load-bearing and must stay verbatim:
 ///   * a **leading** tab (only whitespace precedes it on its line) — CommonMark
@@ -64,15 +156,18 @@ pub(crate) fn md_options() -> Options {
 /// `copymap` / `source_map` capture emits still indexes the same logical position in
 /// the editor's text — no scroll-sync or copy-offset drift. See ScrAP-75.
 ///
-/// **Every site that parses the document calls this first**, so all four read one
-/// document: `preview/build.rs`, `export/doc.rs`, `outline::extract_headings` and
-/// `copymap::balance_source_span`. Two of them did not, and the divergence was
-/// user-visible on both — the outline listed a phantom heading the page never showed,
-/// and an editor annotation wrapped a span across a table cell boundary. The
-/// enumeration above is backed by `every_parse_site_reads_one_document` (below)
-/// rather than by this sentence: a comment asserting a contract is a claim that needs
-/// a test behind it.
-pub(crate) fn normalize_inline_tabs(md: &str) -> std::borrow::Cow<'_, str> {
+/// **Module-private.** [`NormalizedMd::new`] is the only caller, anywhere in the
+/// crate — every parse site goes through that constructor now, so "call this
+/// first" is enforced by privacy rather than remembered as a rule. All four sites
+/// read one document this way: `preview/build.rs`, `export/doc.rs`,
+/// `outline::extract_headings` and `copymap::balance_source_span`. Before
+/// `NormalizedMd` existed, two of them called this function directly and two did
+/// not, and the divergence was user-visible on both — the outline listed a phantom
+/// heading the page never showed, and an editor annotation wrapped a span across a
+/// table cell boundary. The enumeration above is backed by
+/// `every_parse_site_reads_one_document` (below) rather than by this sentence: a
+/// comment asserting a contract is a claim that needs a test behind it.
+fn normalize_inline_tabs(md: &str) -> std::borrow::Cow<'_, str> {
     if !md.contains('\t') {
         return std::borrow::Cow::Borrowed(md);
     }
@@ -133,24 +228,131 @@ pub(crate) fn normalize_inline_tabs(md: &str) -> std::borrow::Cow<'_, str> {
     // what the old `bytes[..i]` slice expressed — hence the read-then-update
     // order below. A `\r` is not whitespace here, exactly as `all(' ' | '\t')`
     // treated it.
-    let mut leading_ws = true;
+    let mut leading = LeadingWhitespace::new();
     for (i, &b) in bytes.iter().enumerate() {
-        if b == b'\n' {
-            leading_ws = true;
+        // `step` reports the state BEFORE this byte and advances past it, which is what
+        // the old `bytes[..i]` slice expressed.
+        if leading.step(b) {
             continue;
         }
-        if b == b'\t' && !leading_ws && !in_code(i) {
+        if b == b'\t' && !in_code(i) {
             out_bytes[i] = b' ';
-        }
-        if b != b' ' && b != b'\t' {
-            leading_ws = false;
         }
     }
     std::borrow::Cow::Owned(out)
 }
 
+/// "Everything before byte `i` on its line is whitespace", carried forward as one bit.
+///
+/// **Extracted so the differential test can drive THIS and not a copy of it.** The test
+/// that guards this rule used to re-implement the state machine inside itself and compare
+/// its own two copies — the naive backwards walk against a hand-inlined forward scan — so
+/// the production loop was unguarded and a divergence introduced here would not have been
+/// seen. It is a one-bit state machine and the whole point of it is that it must agree
+/// with a walk nobody would ship.
+///
+/// Also stateful by construction: `at(i)` must be called for ascending `i`, once each,
+/// which is how the caller uses it and what makes it O(n) rather than the quadratic
+/// backwards walk it replaced.
+struct LeadingWhitespace {
+    leading: bool,
+}
+
+impl LeadingWhitespace {
+    fn new() -> Self {
+        Self { leading: true }
+    }
+
+    /// Whether byte `b` at index `i` is preceded on its line only by whitespace, and
+    /// advance the state past it. A `\n` resets; a `\r` is NOT whitespace here, exactly
+    /// as the `all(' ' | '\t')` predicate it replaced treated it.
+    fn step(&mut self, b: u8) -> bool {
+        if b == b'\n' {
+            self.leading = true;
+            return true;
+        }
+        let before = self.leading;
+        if b != b' ' && b != b'\t' {
+            self.leading = false;
+        }
+        before
+    }
+}
+
 #[cfg(test)]
 mod normalize_inline_tabs_tests {
+    /// The parse-site set is CLOSED — a fifth production site cannot appear unnoticed.
+    ///
+    /// `every_parse_site_reads_one_document` below proves the sites we know about read
+    /// normalised text. It cannot prove that is all of them, and that gap is stated
+    /// outright in [`NormalizedMd`]'s own doc: encapsulation closes "forgot to normalise
+    /// while using the seam", never "never used the seam", because no seam can make an
+    /// external crate's public constructor unreachable.
+    ///
+    /// So this enumerates instead. A `clippy.toml` ban was assessed and rejected (see
+    /// that doc), which leaves the project's other standing idiom for an unbannable
+    /// construct: make the set a human must audit GREPPABLE, and fail when it changes.
+    /// Adding a parse site is legitimate — it just has to be a decision someone took,
+    /// with this list and the membership test updated in the same change.
+    #[test]
+    fn the_set_of_production_parse_sites_is_the_one_this_module_guards() {
+        /// Files allowed to call `Parser::new_ext` in production code. Each reads
+        /// normalised text, and the test below proves it does.
+        const SANCTIONED: &[&str] = &[
+            "renderer/normalize.rs", // the seam itself, plus the pre-pass
+            "export/doc.rs",
+            "outline.rs",
+            "preview/annotate.rs",
+            "preview/build.rs",
+            "docio/mod.rs",
+            "renderer/segments.rs",
+        ];
+
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut found: Vec<String> = Vec::new();
+
+        fn walk(dir: &std::path::Path, src_root: &std::path::Path, found: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).expect("src/ is readable") {
+                let path = entry.expect("a readable dir entry").path();
+                if path.is_dir() {
+                    walk(&path, src_root, found);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                // Test-only files are out of scope: the contract is about what a
+                // DOCUMENT is parsed through, and a test parses fixtures on purpose.
+                let rel = path
+                    .strip_prefix(src_root)
+                    .expect("under src/")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if rel.ends_with("/tests.rs") || rel == "tests.rs" {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("a readable source file");
+                // Skip the module that DOCUMENTS the ban in prose — its mentions inside
+                // doc comments are not call sites. Its real calls keep it in the list.
+                if text.contains("Parser::new_ext") && !found.contains(&rel) {
+                    found.push(rel);
+                }
+            }
+        }
+        walk(&src, &src, &mut found);
+        found.sort();
+
+        let mut want: Vec<String> = SANCTIONED.iter().map(|s| (*s).to_string()).collect();
+        want.sort();
+
+        assert_eq!(
+            found, want,
+            "the set of files mentioning `Parser::new_ext` changed. A NEW file here must \
+             parse through `NormalizedMd` (see this module's header) and be added to \
+             `every_parse_site_reads_one_document` below AND to SANCTIONED, in the same \
+             change. A file that DISAPPEARED should just be removed from SANCTIONED."
+        );
+    }
 
     /// **Every parse site reads one document.** Checked by what each site CONCLUDES
     /// about a tab-padded table, not by the doc comment above saying so — the comment
@@ -198,13 +400,36 @@ mod normalize_inline_tabs_tests {
         // copymap::balance_source_span — `**a` and `b**` sit in DIFFERENT cells, so
         // there is no inline construct to widen to. Unnormalised the block was a
         // paragraph, pulldown emitted one Strong over `**a\t| b**`, and the selection
-        // widened across the cell boundary.
+        // widened across the cell boundary. The caller normalises (the discipline
+        // every site now shares, `NormalizedMd`'s own doc) — mirroring
+        // `preview/annotate.rs::editor_selection_target`, the one production caller.
         let at = TAB_TABLE.find("**a").expect("fixture");
         let sel = at..at + 3;
+        let normalized = NormalizedMd::new(TAB_TABLE);
         assert_eq!(
-            crate::copymap::balance_source_span(TAB_TABLE, sel.clone()),
+            crate::copymap::balance_source_span(&normalized, sel.clone()),
             sel,
             "copymap: widened across a table cell boundary"
+        );
+
+        // renderer/segments.rs — a tight fence may span a block's inline events but
+        // never a BLOCK boundary, and which boundaries exist is exactly what the
+        // pre-pass decides. Unnormalised, the tab table below is one paragraph, so a
+        // `~~` opening in one cell and closing in another forms a fence across them
+        // and strikes text the reader sees in two separate cells.
+        const TAB_FENCE: &str = "| ~~a\t| b~~\t|\n|---\t|---\t|\n| c | d |\n";
+        assert!(
+            crate::renderer::BlockScripts::scan(NormalizedMd::new(TAB_FENCE).as_str())
+                .outers()
+                .is_empty(),
+            "renderer/segments.rs: a fence formed across a table cell boundary"
+        );
+        assert!(
+            !crate::renderer::BlockScripts::scan(TAB_FENCE)
+                .outers()
+                .is_empty(),
+            "fixture: unnormalised, the straddling fence must form — otherwise the \
+             assertion above proves nothing"
         );
 
         // And the pre-pass keeps a heading's own text in step with the rendered one.
@@ -216,7 +441,7 @@ mod normalize_inline_tabs_tests {
         );
     }
 
-    use super::{md_options, normalize_inline_tabs};
+    use super::{md_options, normalize_inline_tabs, NormalizedMd};
     use pulldown_cmark::{Event, Parser, Tag};
 
     fn norm(md: &str) -> String {
@@ -280,17 +505,50 @@ mod normalize_inline_tabs_tests {
     /// gone); their raw source must survive in the `Text` stream instead.
     #[test]
     fn unsupported_extensions_degrade_to_literal_text_not_dropped_events() {
-        let md = "Euler $E=mc^2$ and a note[^1] and a [[WikiLink]].";
+        use pulldown_cmark::{Tag, TagEnd};
+        // Every construct whose renderer arm is a `dropped_construct` call, in one
+        // document. The three GTK dispatchers now match `Event`/`Tag`/`TagEnd`
+        // exhaustively, so a pulldown-cmark UPGRADE that adds a variant is a compile
+        // error — but nothing in the compiler notices an OPTION being enabled, which
+        // turns an existing variant from unreachable into reachable and lands it on a
+        // `dropped_construct` arm. This assertion is that half of the pairing, and it
+        // is why the block-level constructs are here beside the inline ones.
+        let md = concat!(
+            "---\ntitle: front matter\n---\n\n",
+            "+++\ntitle = \"toml front matter\"\n+++\n\n",
+            "Euler $E=mc^2$ and a note[^1] and a [[WikiLink]].\n\n",
+            "$$\n\\int_0^1 x\n$$\n\n",
+            "[^1]: the footnote body\n\n",
+            "Term\n\n: The definition\n",
+        );
         let evs: Vec<Event> = Parser::new_ext(md, md_options()).collect();
         // None of the drop-prone special events are produced.
+        let offenders: Vec<&str> = evs
+            .iter()
+            .filter_map(|e| match e {
+                Event::InlineMath(_) => Some("InlineMath"),
+                Event::DisplayMath(_) => Some("DisplayMath"),
+                Event::FootnoteReference(_) => Some("FootnoteReference"),
+                Event::Start(Tag::FootnoteDefinition(_)) => Some("FootnoteDefinition"),
+                Event::Start(Tag::DefinitionList) => Some("DefinitionList"),
+                Event::Start(Tag::DefinitionListTitle) => Some("DefinitionListTitle"),
+                Event::Start(Tag::DefinitionListDefinition) => Some("DefinitionListDefinition"),
+                Event::Start(Tag::MetadataBlock(_)) => Some("MetadataBlock"),
+                Event::End(TagEnd::FootnoteDefinition) => Some("end FootnoteDefinition"),
+                Event::End(TagEnd::MetadataBlock(_)) => Some("end MetadataBlock"),
+                _ => None,
+            })
+            .collect();
         assert!(
-            !evs.iter().any(|e| matches!(
-                e,
-                Event::InlineMath(_) | Event::DisplayMath(_) | Event::FootnoteReference(_)
-            )),
-            "math/footnote extensions must be OFF so their events are never emitted"
+            offenders.is_empty(),
+            "md_options() enabled an extension the renderer has no handler for: \
+             {offenders:?}. Either write the handler (and replace its \
+             `dropped_construct` arm) or take the option back out — an enabled, \
+             unhandled extension renders as NOTHING, not as its own source \
+             (ScrAP-78)"
         );
-        // The raw source survives as visible Text.
+        // The raw source survives as visible Text. Anti-vacuity as well as the
+        // contract: an empty event stream satisfies the assertion above.
         let text: String = evs
             .iter()
             .filter_map(|e| match e {
@@ -306,6 +564,18 @@ mod normalize_inline_tabs_tests {
         assert!(
             text.contains("[[WikiLink]]"),
             "wikilink renders as literal text"
+        );
+        assert!(
+            text.contains("title: front matter"),
+            "YAML front matter renders as literal text"
+        );
+        assert!(
+            text.contains("the footnote body"),
+            "a footnote definition renders as literal text"
+        );
+        assert!(
+            text.contains("The definition"),
+            "a definition list renders as literal text"
         );
     }
 
@@ -437,21 +707,22 @@ mod normalize_inline_tabs_tests {
             "\r\n\ta\tb\r\n\t",
             "  \t  \tq\tr\ts",
         ] {
+            // Drives the PRODUCTION state machine against the naive walk. This used to
+            // re-implement the forward scan here and compare two copies of test code, so
+            // the shipped loop was unguarded and a divergence introduced in it would not
+            // have been seen — the differential compared the test to itself.
             let bytes = src.as_bytes();
-            let mut leading_ws = true;
+            let mut leading = super::LeadingWhitespace::new();
             for (i, &b) in bytes.iter().enumerate() {
+                let got = leading.step(b);
                 if b == b'\n' {
-                    leading_ws = true;
                     continue;
                 }
                 assert_eq!(
-                    leading_ws,
+                    got,
                     old_leading(bytes, i),
                     "leading-whitespace predicate diverged at byte {i} of {src:?}"
                 );
-                if b != b' ' && b != b'\t' {
-                    leading_ws = false;
-                }
             }
         }
     }

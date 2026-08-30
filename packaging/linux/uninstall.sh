@@ -9,7 +9,17 @@
 # needs a remover. So when a file is added to `stage_payload`, add its removal here in
 # the same change. The list below is deliberately written in the same order as that
 # function, so the two can be read side by side.
+#
+# REACHED BY `./uninstall.sh` AT THE REPO ROOT, which is a router dispatching on
+# `uname -s`; running this file directly is equivalent. It takes the XDG paths from the
+# environment exactly as install.sh does, so it needs no repository anchor of its own and
+# correctly removes an install made from a different checkout.
 set -euo pipefail
+
+# The router already dispatched, but a direct run must not be the lenient path: every path
+# below is XDG, and on macOS this would delete nothing, report success, and leave the real
+# install (an .app plus a symlink in Homebrew's bin/) in place.
+[ "$(uname -s)" = "Linux" ] || { echo "error: Linux only (see packaging/macos/uninstall.sh)" >&2; exit 1; }
 
 APP_ID="com.extollit.scribobulate"
 PKG="scribobulate"
@@ -21,6 +31,12 @@ rm -fv "$BIN_DIR/$PKG"
 rm -fv "$APP_DIR/$PKG.desktop"
 rm -fv "$DATA_DIR/icons/hicolor/scalable/apps/$APP_ID.svg"
 rm -fv "$DATA_DIR/$PKG/themes.toml"
+# `rm -rf` on the sprite directory rather than naming its files: its contents change
+# between versions, so a named list would strand a sprite an older install shipped. The
+# directory is wholly ours; the one ABOVE it is not, which is why that one goes through
+# the `rmdir` sweep below instead. Left behind, these made an uninstall that printed
+# success while a later install silently reused stale theme data.
+rm -rfv "$DATA_DIR/$PKG/sprites"
 rm -fv "$DATA_DIR/doc/$PKG/THIRD-PARTY-LICENSES.md"
 rm -fv "$DATA_DIR/man/man1/$PKG.1.gz"
 

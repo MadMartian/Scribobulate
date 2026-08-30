@@ -205,6 +205,17 @@ if (Test-Path $sourceViewFonts) {
 New-Item -ItemType Directory -Force -Path "$OutDir\share\scribobulate" | Out-Null
 Copy-Item "$RepoRoot\data\themes.toml" "$OutDir\share\scribobulate\"
 
+# The sprite copy every platform ships. WHY it is shipped is stated once, in
+# packaging/linux/payload.sh beside the Linux copy of this step -- read it there rather
+# than trusting a second copy here. The packaging scripts once carried that rationale
+# verbatim, which hid the fact that the commands underneath the copies did different
+# things with an empty directory, a subdirectory, and a filename with a space.
+# `-Recurse -Force` survives all three; the Linux side now does too. `-Force` is
+# load-bearing rather than defensive: without it a second copy into an existing
+# destination throws ResourceExists per directory, which terminates under this script's
+# $ErrorActionPreference = 'Stop'.
+Copy-Item "$RepoRoot\data\sprites" "$OutDir\share\scribobulate\" -Recurse -Force
+
 # ---------------------------------------------------------------------------
 # The licence texts the product is obliged to carry. No scribobulate.iss change
 # is needed for any of them: line 76 already takes {#StageDir}\* with

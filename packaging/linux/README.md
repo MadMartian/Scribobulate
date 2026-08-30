@@ -67,9 +67,11 @@ to work and their system GTK to be used. Inheriting the host's GTK is a real
 constraint that follows from that — the app targets GTK 4.6+, so a distribution
 older than that is out of scope rather than accommodated by bundling.
 
-`install.sh` at the repo root is **not** this and should stay as it is: a
+`install.sh` in this directory is **not** this and should stay as it is: a
 from-source developer install into `~/.local`, requiring cargo and the `-dev`
-libraries.
+libraries. `./install.sh` at the repo root reaches it — that file is a `uname -s`
+router holding no install logic of its own, so each platform's answer lives in its
+own `packaging/<os>/` directory rather than in a shared script's branches.
 
 ## Notes
 

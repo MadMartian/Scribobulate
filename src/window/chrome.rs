@@ -26,10 +26,17 @@ pub(super) struct Chrome {
     pub outline_section: gtk::Box,
     /// The annotations collapsible section's container box; `:visible == annotations_visible`.
     pub annotations_section: gtk::Box,
-    /// The whole sidebar (both sections stacked) — the `GtkPaned` start child.
-    /// `:visible == (outline_visible || annotations_visible)` (the four-state rule,
-    /// TDD 20.9); recomputed by `reconcile_sidebar_visibility`.
-    pub sidebar_box: gtk::Box,
+    /// The whole sidebar — the vertical `GtkPaned` holding the two sections, and
+    /// itself `content_paned`'s start child. `:visible == (outline_visible ||
+    /// annotations_visible)` (the four-state rule, TDD 20.9); recomputed by
+    /// `reconcile_sidebar_visibility`.
+    ///
+    /// It is a `GtkPaned` rather than a `GtkBox` so the reader can give the two
+    /// sections whatever share of the height their document needs (TDD 20.21) — and
+    /// it must stay exactly ONE level above each section, because
+    /// `reconcile_sidebar_visibility` reaches it by ancestry (`scroller → section →
+    /// here`) rather than by handle.
+    pub sidebar_paned: gtk::Paned,
     pub status_label: gtk::Label,
     pub pos_label: gtk::Label,
     pub status_bar: gtk::Box,
@@ -60,6 +67,66 @@ pub(super) struct Chrome {
     pub menu_model: gtk::gio::Menu,
 }
 
+/// Put this window's remembered sidebar divider back, once the sidebar has a height
+/// to express it against (TDD 20.21).
+///
+/// **Not at build time, and not on `map`.** `gtk_paned_set_position` before the pane
+/// has been allocated is clamped against a zero-size allocation and lost — the trap
+/// `content_paned` below works around with a map-time re-apply, which is available to
+/// it only because its position is a fixed px width rather than a fraction of a height
+/// it cannot yet read. A fraction has nothing to multiply until the allocation exists.
+/// So the hook is `notify::max-position`, which `GtkPaned` emits from
+/// `gtk_paned_calc_position` — i.e. from a real `size_allocate`, which is precisely the
+/// first moment the question has an answer. One-shot: it disconnects itself, so the
+/// reader's later drags are never overwritten by a re-allocation (a window resize emits
+/// it again).
+fn restore_sidebar_split(paned: &gtk::Paned, fraction: f64) {
+    // The handler disconnects itself, so it needs its own id — which `connect` only
+    // returns after the closure has been built. The shared cell is the handover. It
+    // holds no widget, so it closes no reference cycle (ScrAP-60); the closure reaches
+    // the paned through the emitter argument, never a captured clone.
+    let handler: std::rc::Rc<std::cell::RefCell<Option<gtk::glib::SignalHandlerId>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let slot = handler.clone();
+    let id = paned.connect_max_position_notify(move |paned| {
+        let Some(position) = crate::session::sidebar_divider_position(fraction, paned.height())
+        else {
+            return; // no allocation yet — wait for the one that has a height
+        };
+        paned.set_position(position);
+        if let Some(id) = slot.borrow_mut().take() {
+            paned.disconnect(id);
+        }
+    });
+    *handler.borrow_mut() = Some(id);
+}
+
+/// Keep the window's cached divider fraction in step with what the reader dragged, so
+/// `read_window_chrome` has a meaningful value to persist at close (TDD 20.21).
+///
+/// Reads through `session::sidebar_split_fraction`, which declines to answer for a
+/// hidden or unmapped sidebar — so a toggle that zeroes the sidebar's height cannot
+/// overwrite the remembered split with a degenerate one.
+fn track_sidebar_split(paned: &gtk::Paned) {
+    paned.connect_position_notify(|paned| {
+        let Some(fraction) =
+            crate::session::sidebar_split_fraction(paned.position(), paned.height())
+        else {
+            return;
+        };
+        // Resolve the host window at emission time rather than capturing one: this
+        // widget outlives nothing here, but a captured window would be the ScrAP-60
+        // cycle and a stale one after a cross-window move (GTK4Rs/AP-52).
+        if let Some(chrome) = paned
+            .root()
+            .and_then(|r| r.downcast::<ApplicationWindow>().ok())
+            .and_then(|w| winstate::chrome(&w))
+        {
+            chrome.sidebar_split.set(fraction);
+        }
+    });
+}
+
 /// Render `md` into a preview widget wired the way every "swap this into
 /// content_box" call site needs it: context menu attached and `vexpand` set so
 /// it fills content_box vertically. Collapses the render+wire recipe that was
@@ -86,6 +153,7 @@ pub(super) fn build_chrome(
     doc_dir: Option<&std::path::Path>,
     zoom_level: f64,
     show_unsafe_images: bool,
+    sidebar_split: f64,
 ) -> Chrome {
     // ── layout ──────────────────────────────────────────────────────────────
     // content_box is the per-tab body / stack page. Its single child is the
@@ -149,14 +217,26 @@ pub(super) fn build_chrome(
     // child = the content overlay. The Paned is a *sibling* of content_box's
     // swappable slot, so the sidebar survives every content re-render / mode swap.
     //
-    // The sidebar stacks TWO `SidebarPane`s (outline over annotations) in one
-    // vertical box, separated by spacing + bold headers — NOT a nested GtkPaned
-    // (the GNOME HIG says not to use a draggable divider to group sidebar sections,
-    // and the panes toggle *independently*, which is visibility, not a shared split
-    // ratio). Each section's `:visible` is its own toggle's state; the whole
-    // `sidebar_box`'s `:visible` is `outline_visible || annotations_visible` — so an
-    // empty sidebar disappears entirely and the content reclaims the width (the
-    // four-state rule, TDD 20.9). `reconcile_sidebar_visibility` recomputes all three.
+    // The sidebar stacks TWO `SidebarPane`s (outline over annotations) in a nested
+    // VERTICAL GtkPaned, so the reader decides how the height is shared between them
+    // (TDD 20.21). This deliberately departs from the GNOME HIG's advice against a
+    // draggable divider between sidebar sections: these two are not fixed-size
+    // groupings but independently scrolling LISTS whose useful heights are a property
+    // of the document — a 60-heading outline beside two annotations wants nothing like
+    // the 50/50 the previous GtkBox gave them, and there is no rule the app could
+    // derive that would be right for the next document. The tool-window idiom
+    // (JetBrains, VS Code) is the closer prior art, and it is the one the header
+    // buttons already follow.
+    //
+    // Visibility is unchanged and remains the toggles' business, not the divider's:
+    // each section's `:visible` is its own toggle's state; the whole sidebar's is
+    // `outline_visible || annotations_visible` — so an empty sidebar disappears
+    // entirely and the content reclaims the width (the four-state rule, TDD 20.9).
+    // `reconcile_sidebar_visibility` recomputes all three. The two mechanisms cannot
+    // fight, because the drag cannot reach zero: `shrink_*_child(false)` floors each
+    // section at its own minimum (the header plus `SidebarPane`'s
+    // `min_content_height`), so a section is hidden only by its action — never by the
+    // divider, which would leave the action's state lying about what is on screen.
     //
     // Each pane's scroller inner child is (re)built from the current document —
     // `refresh_outline` / `refresh_annotations`.
@@ -194,11 +274,31 @@ pub(super) fn build_chrome(
         180,
     );
 
-    let sidebar_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    sidebar_box.add_css_class("sidebar");
-    sidebar_box.set_vexpand(true);
-    sidebar_box.append(&outline_pane.root);
-    sidebar_box.append(&annotations_pane.root);
+    let sidebar_paned = gtk::Paned::new(gtk::Orientation::Vertical);
+    sidebar_paned.add_css_class("sidebar");
+    sidebar_paned.set_vexpand(true);
+    sidebar_paned.set_start_child(Some(&outline_pane.root));
+    sidebar_paned.set_end_child(Some(&annotations_pane.root));
+    // Wide handle for the same reason `content_paned` below takes one, and it matters
+    // more here: the narrow handle's hit-area is inflated 6px on EACH side and its drag
+    // gesture runs in CAPTURE phase on the Paned, so a narrow handle would swallow
+    // presses on the outline's bottom row and the annotations list's top row — both of
+    // them navigation targets (ScrAP-119).
+    sidebar_paned.set_wide_handle(true);
+    // Neither section may be dragged away to nothing: `shrink=false` floors the divider
+    // at each child's own minimum, which keeps the pane's action the only thing that can
+    // hide it (see the four-state note above). No `set_position` call, deliberately —
+    // leaving `position-set` FALSE lets GtkPaned derive the split from the two minimums
+    // (equal here, so an even split), and it also keeps the position out of the
+    // set-before-allocation clamp `content_paned` has to work around below.
+    sidebar_paned.set_shrink_start_child(false);
+    sidebar_paned.set_shrink_end_child(false);
+    // Both resizable, so a window-height change is shared rather than taken entirely
+    // from one section.
+    sidebar_paned.set_resize_start_child(true);
+    sidebar_paned.set_resize_end_child(true);
+    restore_sidebar_split(&sidebar_paned, sidebar_split);
+    track_sidebar_split(&sidebar_paned);
 
     let outline_scroller = outline_pane.scroller.clone();
     let annotations_scroller = annotations_pane.scroller.clone();
@@ -206,7 +306,7 @@ pub(super) fn build_chrome(
     let annotations_section = annotations_pane.root.clone();
 
     let content_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-    content_paned.set_start_child(Some(&sidebar_box));
+    content_paned.set_start_child(Some(&sidebar_paned));
     content_paned.set_end_child(Some(&content_overlay));
     content_paned.set_vexpand(true);
     // Wide handle — NOT for looks: with the default (narrow) handle, GtkPaned INFLATES
@@ -272,17 +372,11 @@ pub(super) fn build_chrome(
     // A GtkRevealer in outer_box between the content area and the footer.
     // It survives mode/content swaps because it lives outside content_box.
 
-    let find_entry = gtk::SearchEntry::new();
-    find_entry.set_hexpand(true);
+    // A placeholder is not a name — GTK publishes it as `Placeholder`, which AT reads as
+    // a hint about the *content* rather than the field's identity, and which vanishes as
+    // soon as the user types. The constructor takes the name for that reason.
+    let find_entry = crate::widgets::textfield::named_search_entry("Find");
     find_entry.set_placeholder_text(Some("Find…"));
-    // A placeholder is not a name either — GTK publishes it as `Placeholder`, which AT
-    // reads as a hint about the *content*, not as the field's identity. Name it too.
-    crate::a11y::name_field(&find_entry, "Find");
-    // Option+Left/Right word navigation (`macwordnav`). A GtkSearchEntry delegates
-    // to a GtkText like any other wrapper, and a multi-word search term is exactly
-    // the case a Mac reader reaches for Option+Left in.
-    #[cfg(target_os = "macos")]
-    crate::macwordnav::wire_field_word_navigation(&find_entry);
 
     let find_prev_btn = gtk::Button::from_icon_name(Icon::GoUp.name());
     crate::a11y::name_with_tooltip(
@@ -315,12 +409,8 @@ pub(super) fn build_chrome(
     find_row.append(&match_count_label);
     find_row.append(&close_find_btn);
 
-    let replace_entry = gtk::Entry::new();
-    replace_entry.set_hexpand(true);
+    let replace_entry = crate::widgets::textfield::named_entry("Replace with", "");
     replace_entry.set_placeholder_text(Some("Replace with…"));
-    crate::a11y::name_field(&replace_entry, "Replace with");
-    #[cfg(target_os = "macos")]
-    crate::macwordnav::wire_field_word_navigation(&replace_entry);
 
     let replace_btn = gtk::Button::with_label("Replace");
     replace_btn.add_css_class("flat");
@@ -384,7 +474,7 @@ pub(super) fn build_chrome(
         annotations_scroller,
         outline_section,
         annotations_section,
-        sidebar_box,
+        sidebar_paned,
         status_label,
         pos_label,
         status_bar,

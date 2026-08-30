@@ -24,7 +24,7 @@
 //!
 //! ## What this module does not change
 //!
-//! The fetch still runs synchronously on the GTK main thread, which is ScrAP-34a
+//! The fetch still runs synchronously on the GTK main thread, which is ScrAP-34's 34a half
 //! and remains accepted for this opt-in path — but it is now **bounded**, where
 //! GVfs offered no timeout at all: [`CONNECT_TIMEOUT`] and [`GLOBAL_TIMEOUT`]
 //! cap the freeze, and [`limits::MAX_REMOTE_IMAGE_BYTES`] caps the allocation.
@@ -42,7 +42,7 @@ use std::time::Duration;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long the whole request may take, connection included. This is the number
-/// that bounds the main-thread freeze (ScrAP-34a), so it is deliberately short
+/// that bounds the main-thread freeze (ScrAP-34, its 34a half), so it is deliberately short
 /// enough to be survivable rather than generous enough for a large download over
 /// a bad link — an image that cannot arrive in this long renders as the ordinary
 /// "Could not load image" placeholder, which is a better outcome than a window

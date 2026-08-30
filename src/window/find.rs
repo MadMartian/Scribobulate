@@ -2,6 +2,11 @@
 //! pure-preview `TextIter` search path.
 
 use super::*;
+
+/// The pure decision behind the preview's find highlight, in its own module so the
+/// coverage gate can see it — `src/window/*.rs` is excluded from scope and this file's
+/// decision core is not GTK (`sdd/POLICY.md` § coverage gate, the extraction rule).
+mod plan;
 /// The find bar searches whichever text the user is actually looking at: the
 /// editor's `GtkSourceSearchContext` in edit/split (the editor is visible there),
 /// or the **preview**'s plain `GtkTextBuffer` in pure-preview mode (where the
@@ -165,7 +170,7 @@ fn preview_hl_tag(buf: &gtk::TextBuffer) -> gtk::TextTag {
         return t;
     }
     let tag = gtk::TextTag::new(Some(PREVIEW_HL_TAG));
-    tag.set_background_rgba(Some(&crate::theme::active().find_hl_all.rgba()));
+    tag.set_background_rgba(Some(&crate::theme::active().find_hl_all_color.rgba()));
     table.add(&tag);
     tag
 }
@@ -183,10 +188,10 @@ fn preview_hl_tag(buf: &gtk::TextBuffer) -> gtk::TextTag {
 // independent literals, each free to drift from its body twin (TDD 18.6; POLICY
 // "One theme key, every application path").
 fn cell_hl_all() -> (u16, u16, u16) {
-    crate::theme::active().find_hl_all.u16_triple()
+    crate::theme::active().find_hl_all_color.u16_triple()
 }
 fn cell_hl_current() -> (u16, u16, u16) {
-    crate::theme::active().find_hl_current.u16_triple()
+    crate::theme::active().find_hl_current_color.u16_triple()
 }
 
 /// One occurrence of the search term in the preview, in document order. Body
@@ -450,6 +455,38 @@ fn apply_preview_highlights(
     hits: &[PreviewHit],
     current: usize,
 ) {
+    // **The decision first, the mutation second.** Everything that could be WRONG about
+    // this — which body ranges are washed, which one also takes the caret selection,
+    // whether a stale selection must be dropped, which colour each cell span gets — is
+    // `plan::plan`, a pure function this file cannot reach into. What is left below is
+    // GTK: apply a tag, set an attribute list, force a repaint (F-HIGHLIGHT-001).
+    //
+    // The cell key is the label's object POINTER, and the pointers are stable and unique
+    // for the life of this function because `targets` holds a strong reference to every
+    // label in it. Keyed rather than scanned: both loops below used
+    // `matched.iter().find(|(l, _)| l == label)`, so the cost was quadratic in a table
+    // where most cells match, which is the common case for a short query.
+    let projected: Vec<plan::Hit> = hits
+        .iter()
+        .map(|hit| match hit {
+            PreviewHit::Body { start, end } => plan::Hit::Body {
+                start: *start,
+                end: *end,
+            },
+            PreviewHit::Cell {
+                label,
+                byte_start,
+                byte_end,
+                ..
+            } => plan::Hit::Cell {
+                cell: label.as_ptr() as usize,
+                byte_start: *byte_start,
+                byte_end: *byte_end,
+            },
+        })
+        .collect();
+    let painted = plan::plan(&projected, current);
+
     let buf = view.buffer();
     // CREATE the all-matches tag only when there is something to mark; merely LOOK IT UP
     // on the clear path, so clearing a buffer that was never searched does not add a tag
@@ -466,26 +503,14 @@ fn apply_preview_highlights(
     if let Some(tag) = &tag {
         let (b0, b1) = buf.bounds();
         buf.remove_tag(tag, &b0, &b1);
-
-        // Body: yellow tag on every body match; blue selection on the current one.
-        for (idx, hit) in hits.iter().enumerate() {
-            if let PreviewHit::Body { start, end } = hit {
-                let si = buf.iter_at_offset(*start);
-                let ei = buf.iter_at_offset(*end);
-                buf.apply_tag(tag, &si, &ei);
-                if idx + 1 == current {
-                    buf.select_range(&si, &ei);
-                }
-            }
+        for &(start, end) in &painted.tagged {
+            buf.apply_tag(tag, &buf.iter_at_offset(start), &buf.iter_at_offset(end));
+        }
+        if let Some((start, end)) = painted.selected {
+            buf.select_range(&buf.iter_at_offset(start), &buf.iter_at_offset(end));
         }
     }
-    // If the current hit is NOT a body match, drop any stale blue selection so only
-    // the cell's orange marker shows.
-    let current_is_body = current
-        .checked_sub(1)
-        .and_then(|i| hits.get(i))
-        .is_some_and(|h| matches!(h, PreviewHit::Body { .. }));
-    if !current_is_body {
+    if painted.drop_selection {
         let caret = buf.iter_at_offset(buf.property::<i32>("cursor-position"));
         buf.place_cursor(&caret);
     }
@@ -502,31 +527,18 @@ fn apply_preview_highlights(
     // identically (no reflow, no scroll shift) — so a removed or recoloured match still
     // repaints even though its `set_attributes` ink did not grow. Now a cell with no match
     // carries no attributes at all, and its text selection paints normally.
-    // Keyed on the label's object POINTER rather than scanned linearly. Both loops
-    // below used `matched.iter().find(|(l, _)| l == label)`, so the cost was
-    // (cell hits x matched cells) and again (cells x matched cells) — quadratic in a
-    // table where most cells match, which is the common case for a short query
-    // (QA round 4 §1.6). The pointers are stable and unique for the life of this
-    // function because `targets` holds a strong reference to every label in it.
-    let mut matched: std::collections::HashMap<usize, gtk::pango::AttrList> =
+    let mut matched: std::collections::HashMap<plan::CellKey, gtk::pango::AttrList> =
         std::collections::HashMap::new();
-    for (idx, hit) in hits.iter().enumerate() {
-        if let PreviewHit::Cell {
-            label,
-            byte_start,
-            byte_end,
-            ..
-        } = hit
-        {
-            let (r, g, b) = if idx + 1 == current {
-                cell_hl_current()
-            } else {
-                cell_hl_all()
+    for (key, spans) in &painted.cells {
+        let list = matched.entry(*key).or_default();
+        for span in spans {
+            let (r, g, b) = match span.wash {
+                plan::Wash::Current => cell_hl_current(),
+                plan::Wash::All => cell_hl_all(),
             };
             let mut attr = gtk::pango::AttrColor::new_background(r, g, b);
-            attr.set_start_index(*byte_start);
-            attr.set_end_index(*byte_end);
-            let list = matched.entry(label.as_ptr() as usize).or_default();
+            attr.set_start_index(span.byte_start);
+            attr.set_end_index(span.byte_end);
             list.insert(attr);
         }
     }
@@ -714,6 +726,87 @@ pub(super) fn find_step(
         FindTarget::PreviewUnresolved => warn_preview_unresolved("find step"),
     }
 }
+/// `GtkSourceSearchContext` answers `-1` while it is still scanning the buffer. It is
+/// not a count and not a position — it is "ask again later", and it is the state the
+/// engine is in on the FIRST Find-Next of any document large enough to matter.
+const SCANNING: i32 = -1;
+
+/// `occurrence_position()`'s second answer that is not a position: the region HAS been
+/// scanned, and the iters handed to it do not delimit an occurrence.
+const NOT_AN_OCCURRENCE: i32 = 0;
+
+/// What the counter shows while the engine is still scanning. Neither a number nor
+/// "No matches" — both of those would be a confidently wrong answer in place of a
+/// missing one.
+const SCANNING_LABEL: &str = "…";
+
+/// Decode a raw `occurrences-count`. Pure, so the whole rule is decidable — and
+/// testable — from data with no display.
+fn decode_occurrence_total(raw: i32) -> Option<i32> {
+    match raw {
+        n if n <= SCANNING => None,
+        n => Some(n),
+    }
+}
+
+/// Decode a raw `occurrence-position`. Two distinct foreign states collapse to `None`
+/// here, deliberately: both mean "this is not a position", and neither is a number a
+/// caller may index a match list with.
+fn decode_occurrence_index(raw: i32) -> Option<i32> {
+    match raw {
+        n if n <= SCANNING || n == NOT_AN_OCCURRENCE => None,
+        n => Some(n),
+    }
+}
+
+/// How many matches the editor's engine has found, or `None` while it is still
+/// scanning. **The only caller of `occurrences_count()` in the program**, which is what
+/// makes [`set_match_label`]'s "the sentinel never travels" true by construction rather
+/// than by every caller remembering.
+fn occurrence_total(sc: &sourceview::SearchContext) -> Option<i32> {
+    decode_occurrence_total(sc.occurrences_count())
+}
+
+/// Which occurrence `match_start`..`match_end` is, 1-based, or `None` while the engine
+/// cannot say. **The only caller of `occurrence_position()` in the program.**
+///
+/// This replaces a `sc.forward()` loop from the buffer start that ran on **every**
+/// Next/Prev press — O(document) per keystroke, and the loop that leaked the sentinel
+/// into its own bound. The engine already knows the answer: it maintains the occurrence
+/// numbering it reports through `occurrences-count`, and `occurrence_position` is the
+/// published way to ask it. Available at this project's floor (GtkSourceView 5.4.1
+/// exports `gtk_source_search_context_get_occurrence_position`; the `sourceview5`
+/// binding wraps it behind no version feature — checked, not assumed, per
+/// GTK4Rs/AP-114).
+///
+/// **This is why the two find engines are asymmetric, and the asymmetry is deliberate.**
+/// The preview path has no engine to ask — its hits are a `forward_search` sweep plus a
+/// per-cell scan this program performs itself — so it pays for the answer with a cache
+/// ([`PreviewFindCache`]) keyed on the render generation and the query. The editor path
+/// needs no cache because `GtkSourceSearchContext` *is* the cache, kept current by GTK.
+/// An unstated asymmetry is a defect; this one is stated.
+fn occurrence_index(
+    sc: &sourceview::SearchContext,
+    match_start: &gtk::TextIter,
+    match_end: &gtk::TextIter,
+) -> Option<i32> {
+    decode_occurrence_index(sc.occurrence_position(match_start, match_end))
+}
+
+/// The find cursor for a match the editor engine has just landed on.
+///
+/// `None` becomes [`FindCursor::None`] — never `Editor(0)`, and never a `1` minted from
+/// a sentinel. The type already carries "no current match", and that is the honest
+/// answer while the engine is still scanning: an under-claim is corrected by the next
+/// press, whereas a wrong claim is indistinguishable from a right one and persists as
+/// the tab's cursor state long after the scan finishes.
+fn editor_cursor_for(index: Option<i32>) -> FindCursor {
+    match index {
+        Some(n) => FindCursor::Editor(n),
+        None => FindCursor::None,
+    }
+}
+
 /// Advance to the next or previous match in the editor buffer and scroll to it.
 /// Updates the current-match index in `TabState` and refreshes the label.
 pub(super) fn do_find_next(
@@ -762,24 +855,11 @@ pub(super) fn do_find_next(
             0.0,
             0.5,
         );
-        // Approximate current-match index by counting matches from buffer start.
-        let total = sc.occurrences_count();
-        let start = buf.start_iter();
-        let mut n = 0i32;
-        let mut it = start;
-        while let Some((s, _e, _w)) = sc.forward(&it) {
-            n += 1;
-            if s.offset() >= ms.offset() {
-                break;
-            }
-            it = s;
-            it.forward_char();
-            if n > total {
-                break;
-            }
-        }
-        st.find_cursor.set(FindCursor::Editor(n));
-        update_match_count_label(sc, &st.chrome().match_count_label, n);
+        // Ask the engine WHICH occurrence this is, rather than re-deriving it by
+        // re-searching the whole document on every press (`occurrence_index`).
+        let cursor = editor_cursor_for(occurrence_index(sc, &ms, &me));
+        st.find_cursor.set(cursor);
+        update_match_count_label(sc, &st.chrome().match_count_label, cursor.editor_index());
     }
 }
 /// Format the "N of M" / "No matches" match-count label from raw totals.
@@ -791,12 +871,21 @@ pub(super) fn do_find_next(
 /// occurrences_count()` returns `-1` mid-scan. Nothing said so — the only way to learn
 /// it was to already know the GTK API (QA round 4 §1.10).
 ///
-/// The sentinel is a property of *that* foreign API, and exactly one of this
-/// function's nine callers ever saw one. So it is decoded where it ENTERS, in
-/// [`update_match_count_label`], and never travels: the other eight callers pass a
-/// count they computed themselves and cannot express "scanning" even by accident.
-/// Decoding a foreign sentinel at the boundary is what keeps it from becoming part of
-/// our own function's contract.
+/// The sentinel is a property of *that* foreign API, so it is decoded where it ENTERS
+/// and never travels. That used to be a claim about call sites — "exactly one caller
+/// ever sees one" — and it was **false**: `do_find_next` read `occurrences_count()`
+/// directly and used the raw value as a loop bound, so mid-scan its `n > total` test was
+/// `1 > -1` on the first pass, the loop broke after one iteration, and the tab's cursor
+/// was set to `Editor(1)` whichever match had actually been landed on. The label
+/// masked it (`"…"`), so a `1` minted from a sentinel outlived the scan as state.
+///
+/// It is now a claim about STRUCTURE: [`occurrence_total`] and [`occurrence_index`] are
+/// the only callers of `occurrences_count()` and `occurrence_position()` anywhere in the
+/// program, both return `Option<i32>`, and every other caller of this function passes a
+/// count it computed itself and cannot express "scanning" even by accident. Decoding a
+/// foreign sentinel at the boundary is what keeps it out of our own contract — but only
+/// while the boundary is the ONLY door, which is the part the previous wording assumed
+/// rather than arranged.
 pub(super) fn set_match_label(label: &gtk::Label, current: i32, total: i32) {
     debug_assert!(
         total >= 0,
@@ -817,18 +906,20 @@ pub(super) fn update_match_count_label(
     label: &gtk::Label,
     current: i32,
 ) {
-    // `occurrences_count()` is -1 while the context is still scanning the buffer. This
-    // is the one place that sentinel enters the program; it is turned into a state
-    // here rather than passed on as a negative count.
-    match sc.occurrences_count() {
-        n if n < 0 => label.set_text("…"),
-        n => set_match_label(label, current, n),
+    // `occurrence_total` has already turned the scanning sentinel into a state, so
+    // nothing negative can reach `set_match_label` from here.
+    match occurrence_total(sc) {
+        None => label.set_text(SCANNING_LABEL),
+        Some(total) => set_match_label(label, current, total),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ci_match_ranges, FindCursor, HitsKey};
+    use super::{
+        ci_match_ranges, decode_occurrence_index, decode_occurrence_total, editor_cursor_for,
+        FindCursor, HitsKey,
+    };
 
     /// The preview hit list's entire invalidation rule: a cached list answers only for
     /// the exact render it was built from AND the exact query it answers.
@@ -887,6 +978,60 @@ mod tests {
         assert_eq!(FindCursor::default(), FindCursor::None);
     }
 
+    /// `GtkSourceSearchContext`'s `-1` is a STATE, not a count, and it stops at the
+    /// decode. Everything downstream — the counter label, the loop bounds a caller might
+    /// derive — then works with a real number or with nothing, never with a negative one
+    /// that arithmetic silently accepts (`n > total` reading `1 > -1` as true is exactly
+    /// how it used to escape).
+    ///
+    /// Mutation check: widening the guard to `n < SCANNING` (so only values below `-1`
+    /// decode to `None`) makes the `-1` case return `Some(-1)` and fails here.
+    #[test]
+    fn a_scanning_occurrence_count_decodes_to_no_total() {
+        assert_eq!(decode_occurrence_total(-1), None, "the scanning sentinel");
+        assert_eq!(
+            decode_occurrence_total(-7),
+            None,
+            "any negative is not a count"
+        );
+        assert_eq!(decode_occurrence_total(0), Some(0), "zero IS a real count");
+        assert_eq!(decode_occurrence_total(42), Some(42));
+    }
+
+    /// `occurrence_position` has TWO answers that are not positions — `-1` (still
+    /// scanning) and `0` (scanned, but these iters delimit no occurrence) — and a
+    /// 1-based index list has no element for either. Both decode to `None`.
+    ///
+    /// Mutation check: dropping the `NOT_AN_OCCURRENCE` arm makes the `0` case return
+    /// `Some(0)`, which `FindCursor::Editor(0)` would then claim as a match position.
+    #[test]
+    fn a_position_that_is_not_a_position_decodes_to_none() {
+        assert_eq!(decode_occurrence_index(-1), None, "still scanning");
+        assert_eq!(decode_occurrence_index(0), None, "not an occurrence");
+        assert_eq!(
+            decode_occurrence_index(1),
+            Some(1),
+            "the first match is 1, not 0"
+        );
+        assert_eq!(decode_occurrence_index(9), Some(9));
+    }
+
+    /// The cursor decision itself: not knowing which match was landed on yields
+    /// [`FindCursor::None`], never a minted `Editor(1)`. This is the regression — the
+    /// old loop's `n` started at 0, hit `1` on its first pass, then broke on
+    /// `1 > -1` and stored `Editor(1)` for whichever match the user was actually on, and
+    /// the masked "…" label meant nothing on screen contradicted it.
+    ///
+    /// Mutation check: returning `FindCursor::Editor(index.unwrap_or(1))` (the old
+    /// behaviour, spelled honestly) fails the `None` case here.
+    #[test]
+    fn an_unknown_occurrence_position_leaves_the_cursor_claiming_nothing() {
+        assert_eq!(editor_cursor_for(None), FindCursor::None);
+        assert_eq!(editor_cursor_for(None).editor_index(), 0);
+        assert_eq!(editor_cursor_for(Some(2)), FindCursor::Editor(2));
+        assert_eq!(editor_cursor_for(Some(2)).editor_index(), 2);
+    }
+
     #[test]
     fn empty_needle_yields_no_matches() {
         assert!(ci_match_ranges("anything", "").is_empty());
@@ -938,6 +1083,81 @@ mod gtk_integration_tests {
     use crate::codeview::CodePreviewView;
     use crate::preview::cell_search_targets;
     use gtk::prelude::*;
+    use sourceview::prelude::*;
+
+    /// **An annotated match is highlighted exactly like an unannotated one, in the
+    /// editor pane** (TDD 11.x, Edit/Split find).
+    ///
+    /// A defect was filed saying a search term occurring only inside `{==…==}`
+    /// annotated text was counted but never visibly highlighted in Edit/Split, and
+    /// root-caused to `tags::setup_tags_with_theme` raising `annotation-highlight`
+    /// to the tag table's top priority and burying `GtkSourceSearchContext`'s own
+    /// match tag. **That root cause does not hold**: `setup_tags_with_theme` runs on
+    /// the PREVIEW buffer only, so the editor's tag table contains no
+    /// `annotation-highlight` tag to bury anything with — measured, the editor's
+    /// table holds two anonymous GtkSourceView tags and nothing else. The symptom
+    /// does not reproduce either, on the tag level here or visually in a driven
+    /// Xvfb run of both Edit and Split.
+    ///
+    /// This pins the behaviour so it cannot regress quietly: both matches must carry
+    /// the same highlight tag with the same background. Asserting only that the
+    /// annotated match is *found* would miss the reported symptom entirely — the
+    /// count was always right; it was the tint that was said to be absent.
+    #[gtktest::test]
+    fn an_annotated_match_carries_the_same_search_highlight_as_a_plain_one() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.annotfind"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let md = "# T\n\nplain bodyneedle here.\n\n{==annotneedle inside==}{>>a note<<}\n";
+        let window = crate::window::new_window(&app, "IT", md, None);
+        crate::window::change_action_state(&window, "view-mode", &"edit".to_variant());
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(300),
+        );
+        let st = crate::winstate::state(&window).expect("tab state");
+        st.search_context.set_highlight(true);
+
+        let mut seen: Vec<(String, Option<gtk::gdk::RGBA>)> = Vec::new();
+        for term in ["bodyneedle", "annotneedle"] {
+            st.search_settings.set_search_text(Some(term));
+            crate::testpump::drain_for(
+                crate::testpump::Clock::Frame,
+                std::time::Duration::from_millis(200),
+            );
+            let start = st.editor_buf.start_iter();
+            let (ms, _me, _) = st
+                .search_context
+                .forward(&start)
+                .unwrap_or_else(|| panic!("{term} must be found at all"));
+            let bg = ms
+                .tags()
+                .into_iter()
+                .find(|t| t.property::<bool>("background-set"))
+                .map(|t| t.property::<Option<gtk::gdk::RGBA>>("background-rgba"))
+                .unwrap_or(None);
+            seen.push((term.to_string(), bg));
+        }
+
+        let (plain_term, plain_bg) = &seen[0];
+        let (annot_term, annot_bg) = &seen[1];
+        assert!(
+            plain_bg.is_some(),
+            "control: the UNANNOTATED match {plain_term} must carry a highlight \
+             background, or this test cannot tell a missing tint from a harness \
+             that never highlights anything"
+        );
+        assert_eq!(
+            annot_bg, plain_bg,
+            "the annotated match {annot_term} must be tinted exactly like the plain \
+             match {plain_term} — a match that is counted but not visibly marked \
+             reads to the user as 'find ignores annotated text'"
+        );
+        window.destroy();
+    }
 
     /// A body mention of "cell" plus a one-row table whose cell also says "cell", so
     /// find highlights BOTH a buffer body match and a `GtkLabel` cell match.
@@ -1194,6 +1414,134 @@ mod gtk_integration_tests {
             3,
             "a preview re-render invalidates even when the query is unchanged"
         );
+    }
+
+    /// Enough filler that a single `sc.forward()` from the buffer start cannot scan the
+    /// whole buffer on its way to the first match — which is what keeps the engine in
+    /// its "still scanning" state for the whole unsettled half of the test below. A
+    /// short fixture is scanned to completion by that first call and cannot reach the
+    /// state under test at all.
+    const FIND_FILLER_LINES: usize = 4_000;
+    /// One occurrence of the search term every this many filler lines.
+    const FIND_MATCH_EVERY: usize = 1_000;
+
+    /// A document long enough to keep the editor's search engine mid-scan, carrying
+    /// `FIND_FILLER_LINES / FIND_MATCH_EVERY + 1` occurrences of "alpha".
+    fn long_doc_with_matches() -> String {
+        let mut md = String::new();
+        for i in 0..FIND_FILLER_LINES {
+            md.push_str(&format!("filler line {i} with words and more words\n"));
+            if i % FIND_MATCH_EVERY == 0 {
+                md.push_str("alpha here\n");
+            }
+        }
+        md
+    }
+
+    /// The editor find cursor names the occurrence actually landed on — **including
+    /// while `GtkSourceSearchContext` is still scanning**, which is the state the whole
+    /// `-1` sentinel exists to signal and the ordinary state on the first Find-Next of a
+    /// large document.
+    ///
+    /// The pre-fix code read `occurrences_count()` raw and used it as the bound of a
+    /// count-from-the-start loop, so mid-scan `n > total` was `1 > -1` on the first pass:
+    /// the loop broke after one iteration and the tab's cursor became `Editor(1)` for
+    /// whichever match had been landed on. Nothing on screen contradicted it — the
+    /// counter is masked to `"…"` in exactly this state (asserted below, because that
+    /// masking is why the wrong number survived the scan as the tab's state).
+    ///
+    /// Mutation check: restoring the old loop (`let total = sc.occurrences_count();` …
+    /// `if n > total { break; }` … `FindCursor::Editor(n)`) makes the second unsettled
+    /// step report `Editor(1)` where `Editor(2)` is owed, and fails here.
+    ///
+    /// What this test deliberately does NOT guard, stated because a reader will assume
+    /// it does: [`super::decode_occurrence_index`]. Neutering it (`Some(raw)` at the
+    /// seam) leaves this GREEN — MEASURED — because `occurrence_position` answers
+    /// correctly here even while `occurrences_count` is still `-1` (the engine scans
+    /// only as far as the match, not the whole buffer), so no sentinel ever reaches the
+    /// decode on this fixture. That is the fix being a strict improvement rather than a
+    /// trade of a wrong number for no number; the decode itself is a guard against a
+    /// documented API state this fixture cannot produce, and it is held by the pure
+    /// tests above, not by this one.
+    #[gtktest::test]
+    fn the_editor_find_cursor_names_the_occurrence_it_landed_on() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.findcursor"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register before building any window");
+        let md = long_doc_with_matches();
+        let window = crate::window::new_window(&app, "IT", &md, None);
+        // The editor engine owns find in edit/split; preview mode routes elsewhere.
+        window.change_action_state("view-mode", &"edit".to_variant());
+
+        let st = crate::winstate::state(&window).expect("the window has an active tab");
+        let sc = &st.search_context;
+        sourceview::prelude::SearchSettingsExt::set_search_text(&st.search_settings, Some("alpha"));
+
+        // ── Mid-scan ─────────────────────────────────────────────────────────────
+        // Nothing has pumped the main context, so the engine's own scan has not run.
+        assert_eq!(
+            super::occurrence_total(sc),
+            None,
+            "precondition: the engine is still scanning, which is the state under test — \
+             a fixture short enough to be scanned by the first forward() cannot reach it"
+        );
+        for expected in 1..=3 {
+            super::do_find_next(&window, sc, super::SearchDir::Forward);
+            assert_eq!(
+                st.find_cursor.get(),
+                super::FindCursor::Editor(expected),
+                "mid-scan, the cursor must name the match landed on (or claim nothing) — \
+                 never a 1 minted from the -1 sentinel"
+            );
+            assert_eq!(
+                super::occurrence_total(sc),
+                None,
+                "the engine is still scanning across the whole unsettled half"
+            );
+            assert_eq!(
+                st.chrome().match_count_label.text().as_str(),
+                super::SCANNING_LABEL,
+                "the counter is masked while scanning — so a wrong cursor has nothing on \
+                 screen to contradict it, which is why it used to outlive the scan"
+            );
+        }
+
+        // ── Settled ──────────────────────────────────────────────────────────────
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "the search context to finish scanning the buffer",
+            || super::occurrence_total(sc).is_some(),
+        );
+        let total = super::occurrence_total(sc).expect("scanned");
+        assert_eq!(
+            total as usize,
+            FIND_FILLER_LINES / FIND_MATCH_EVERY,
+            "sanity: the fixture's occurrence count"
+        );
+
+        st.find_cursor.set(super::FindCursor::None);
+        st.editor_buf.place_cursor(&st.editor_buf.start_iter());
+        for expected in 1..=total {
+            super::do_find_next(&window, sc, super::SearchDir::Forward);
+            assert_eq!(
+                st.find_cursor.get(),
+                super::FindCursor::Editor(expected),
+                "once scanned, the cursor walks the engine's own numbering"
+            );
+            assert_eq!(
+                st.chrome().match_count_label.text().as_str(),
+                format!("{expected} of {total}"),
+                "the counter agrees with the cursor"
+            );
+        }
+        // …and wraps back to the first, still by the engine's numbering.
+        super::do_find_next(&window, sc, super::SearchDir::Forward);
+        assert_eq!(st.find_cursor.get(), super::FindCursor::Editor(1));
+
+        window.destroy();
     }
 
     /// Whether `buf` carries the all-matches highlight tag anywhere.

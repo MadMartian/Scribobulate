@@ -31,11 +31,10 @@
 //! macOS and livelocked it on Windows.
 
 use crate::export::pdf::{finish, Outcome};
-use crate::export::{self, paginate};
+use crate::export::{self};
 use crate::winstate::{self, TabState};
 use gtk::prelude::*;
 use gtk::{ApplicationWindow, PrintOperation, PrintOperationAction};
-use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -82,49 +81,54 @@ pub(super) fn export_pdf(window: &ApplicationWindow, st: Rc<TabState>, path: Pat
     op.set_unit(gtk::Unit::Points);
     op.set_show_progress(false);
 
-    let laid: Rc<std::cell::RefCell<Option<export::pdf::Laid>>> =
+    // ONE value carrying the laid-out document AND its pages, produced by the one
+    // constructor that performs both stages — so the pagination cannot be computed
+    // against a different height than the layout was, and the draw handler cannot be
+    // handed a margin the layout did not use (F-PAGINATE-001).
+    let paged: Rc<std::cell::RefCell<Option<export::pdf::Paged>>> =
         Rc::new(std::cell::RefCell::new(None));
-    let pages: Rc<std::cell::RefCell<Vec<std::ops::Range<usize>>>> =
-        Rc::new(std::cell::RefCell::new(Vec::new()));
     // The application's OWN count of what it drew. GTK's own reporting cannot be
-    // trusted for this (see the module doc), so success is concluded from here.
-    let drawn = Rc::new(Cell::new(0usize));
+    // trusted for this (see the module doc), so success is concluded from here — and
+    // the tally only moves on presentation of a `PageDrawn`, which only `draw_page`
+    // can make. See its doc comment for what the hand-incremented version promoted.
+    let drawn = Rc::new(export::pdf::PageTally::default());
 
     op.connect_begin_print({
-        let laid = Rc::clone(&laid);
-        let pages = Rc::clone(&pages);
+        let paged = Rc::clone(&paged);
         let theme = Rc::clone(&theme);
         let doc = doc.clone();
         move |op, ctx| {
             let width = ctx.width() - MARGIN_PT * 2.0;
             let height = ctx.height() - MARGIN_PT * 2.0;
             let pango_ctx = ctx.create_pango_context();
-            let l = export::pdf::lay_out(&doc, &pango_ctx, width, height, &theme);
-            let p = paginate::paginate(&l.fragments, &export::pdf::metrics_for(height));
-            // At least one page: an empty document still produces a file, rather than
-            // a zero-page PDF that no reader will open.
-            let n = p.len().max(1);
-            op.set_n_pages(n as i32);
-            *laid.borrow_mut() = Some(l);
-            *pages.borrow_mut() = p;
+            // Both stages, and the at-least-one-page policy, in one call — see
+            // `Paged::prepare`, which is where that policy lives now (this file is
+            // outside the coverage gate's scope and could not be tested here).
+            let p = export::pdf::Paged::prepare(
+                &doc,
+                &pango_ctx,
+                width,
+                height,
+                Rc::clone(&theme),
+                MARGIN_PT,
+            );
+            op.set_n_pages(p.page_count() as i32);
+            *paged.borrow_mut() = Some(p);
         }
     });
 
     op.connect_draw_page({
-        let laid = Rc::clone(&laid);
-        let pages = Rc::clone(&pages);
-        let theme = Rc::clone(&theme);
+        let paged = Rc::clone(&paged);
         let drawn = Rc::clone(&drawn);
         move |_op, ctx, page| {
-            drawn.set(drawn.get() + 1);
             let cr = ctx.cairo_context();
-            let laid = laid.borrow();
-            let Some(l) = laid.as_ref() else { return };
-            let pages = pages.borrow();
-            let Some(range) = pages.get(page as usize) else {
-                return;
-            };
-            export::pdf::draw_page(&cr, l, range.clone(), &palette, &theme, MARGIN_PT);
+            let paged = paged.borrow();
+            let Some(p) = paged.as_ref() else { return };
+            // Tallied from what `draw` RETURNS, so neither this early return nor the
+            // out-of-range one inside it can count a page that was not drawn.
+            if let Some(proof) = p.draw(&cr, page as usize, &palette) {
+                drawn.record(proof);
+            }
         }
     });
 
@@ -137,7 +141,7 @@ pub(super) fn export_pdf(window: &ApplicationWindow, st: Rc<TabState>, path: Pat
     drop(busy);
 
     let expected = op.n_pages().max(0) as usize;
-    let outcome = finish(result, drawn.get(), expected);
+    let outcome = finish(result, drawn.count(), expected);
     let chrome = st.chrome();
     match outcome {
         Outcome::Promote => match publish.publish_external() {
@@ -249,6 +253,50 @@ mod export_destination_tests {
         assert!(
             after.starts_with(b"%PDF-"),
             "the partial is a structurally valid PDF, which is the whole problem"
+        );
+    }
+
+    /// **QA F-VIEW-002** — a run whose draw handler draws nothing must NOT promote.
+    ///
+    /// The scenario the tally could not see: `begin-print` never populates the layout,
+    /// so every `draw-page` takes an early return having drawn nothing at all. The
+    /// counter was incremented at the TOP of that handler, before the returns, so the
+    /// run reported `drawn == expected` and the gate promoted a blank PDF over the
+    /// reader's existing file — the exact outcome the staging apparatus exists to
+    /// prevent, reached THROUGH the gate rather than around it.
+    ///
+    /// This drives a real `PrintOperation` whose handler mimics that shape, and asserts
+    /// the gate discards and reports. It is the regression guard for the type change:
+    /// the tally now moves only on a `PageDrawn`, which only `draw_page` can produce.
+    #[gtktest::test]
+    fn a_run_that_draws_nothing_is_discarded_rather_than_promoted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("nothing.pdf");
+        let op = PrintOperation::new();
+        op.set_export_filename(&path);
+        op.set_unit(gtk::Unit::Points);
+        op.set_n_pages(3);
+        // The production tally, so this tests the mechanism and not a stand-in.
+        let drawn = Rc::new(crate::export::pdf::PageTally::default());
+        op.connect_draw_page({
+            let drawn = Rc::clone(&drawn);
+            move |_op, _ctx, _page| {
+                // Nothing is drawn, so there is no `PageDrawn` to record. Under the old
+                // hand-incremented counter this handler still reported three pages.
+                let _ = &drawn;
+            }
+        });
+        let result = op.run(PrintOperationAction::Export, None::<&gtk::Window>);
+        let expected = op.n_pages().max(0) as usize;
+        assert_eq!(
+            drawn.count(),
+            0,
+            "nothing was drawn, so nothing may be tallied"
+        );
+        assert_eq!(
+            finish(result, drawn.count(), expected),
+            Outcome::Discard { report_error: true },
+            "a run that drew no pages must never promote over the reader's file"
         );
     }
 

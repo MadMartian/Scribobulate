@@ -38,6 +38,7 @@
 #import <objc/runtime.h>
 #include <mach/mach.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 @interface DeallocSpy : NSObject
@@ -53,6 +54,7 @@ static int use_close = 1;
 static int use_accessory = 0;
 static int use_spy = 1;
 static int use_invalidate = 0;
+static int verbose = 0;
 static NSSavePanel *panel = nil;
 static NSSavePanel *last_panel = nil;
 static long rss_base = 0;
@@ -103,21 +105,47 @@ static void after_cancel(void) {
                                "_observingBridge", NULL};
         for (int i = 0; bools[i]; i++) {
             Ivar b = class_getInstanceVariable([last_panel class], bools[i]);
-            if (b) printf(" %s=%d", bools[i],
-                          *(BOOL *)((char *)last_panel + ivar_getOffset(b)));
+            if (!b) continue;
+            /* These are PRIVATE ivars whose declared type is AppKit's business and
+             * can change between releases. Reading one as a BOOL when it is not
+             * would print a confident wrong number, which is worse than printing
+             * nothing -- so check the encoding and say so when it is unexpected.
+             * 'B' is C99 _Bool, 'c' is signed char, which is what ObjC BOOL is on
+             * the Intel ABI; anything else is not ours to dereference. */
+            const char *enc = ivar_getTypeEncoding(b);
+            if (!enc || (enc[0] != 'B' && enc[0] != 'c')) {
+                printf(" %s=<enc %s>", bools[i], enc ? enc : "?");
+                continue;
+            }
+            printf(" %s=%d", bools[i],
+                   *(BOOL *)((char *)last_panel + ivar_getOffset(b)));
         }
         printf("\n"); fflush(stdout);
     }
     if (cycles == 1) rss_base = rss_kb();   /* baseline after warm-up cycle */
-    if (0)
-        printf("  [%s] cycle %2d: rss %ld KB (%+ld since baseline), live_panels %d, deallocs %d\n",
+    if (verbose) {
+        /* Per-cycle trace. Off by default because the summary line is the result;
+         * this is for watching the growth curve's SHAPE (linear vs plateauing),
+         * which a single total cannot show. */
+        printf("  [%s] cycle %2d: rss %ld KB (%+ld since baseline), windowlist_panels %d, deallocs %s\n",
                use_close ? "close" : "orderout", cycles, rss_kb(), rss_kb() - rss_base,
-               panel_count(), panel_deallocs), fflush(stdout);
+               panel_count(), use_spy ? "" : "n/a");
+        if (use_spy) printf("  [cycle %d] deallocs %d\n", cycles, panel_deallocs);
+        fflush(stdout);
+    }
     if (cycles == total) {
         long grown = rss_kb() - rss_base;
-        printf("spy=%d accessory=%d dismiss=%s cycles=%d rss_total=%+ld KB per_cycle=%.1f KB live_panels=%d deallocs=%d\n",
+        /* deallocs is n/a rather than 0 when --no-spy disarmed the instrument:
+         * "the spy saw none" and "there was no spy" are opposite results and must
+         * not share a spelling. live_panels is named windowlist_panels because
+         * that is what it measures -- [NSApp windows] -- and a closed-but-live
+         * panel has already left that list, so it is a floor, not a census. */
+        char deallocs[32];
+        if (use_spy) snprintf(deallocs, sizeof deallocs, "%d", panel_deallocs);
+        else         snprintf(deallocs, sizeof deallocs, "n/a");
+        printf("spy=%d accessory=%d dismiss=%s cycles=%d rss_total=%+ld KB per_cycle=%.1f KB windowlist_panels=%d deallocs=%s\n",
                use_spy, use_accessory, use_close ? "close" : "orderout", total, grown,
-               (double)grown / (total - 1), panel_count(), panel_deallocs);
+               (double)grown / (total - 1), panel_count(), deallocs);
         fflush(stdout);
         [NSApp terminate:nil];
         return;
@@ -155,7 +183,12 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--accessory")) use_accessory = 1;
         else if (!strcmp(argv[i], "--no-spy")) use_spy = 0;
         else if (!strcmp(argv[i], "--invalidate")) use_invalidate = 1;
+        else if (!strcmp(argv[i], "--verbose")) verbose = 1;
+        else { fprintf(stderr, "unknown flag %s\n", argv[i]); return 2; }
     }
+    /* per_cycle divides by (total - 1) because cycle 1 sets the baseline, so a
+     * single cycle has no growth to report and would divide by zero. */
+    if (total < 2) { fprintf(stderr, "--cycles must be at least 2\n"); return 2; }
     @autoreleasepool {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];

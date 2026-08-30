@@ -416,7 +416,7 @@ mod gtk_integration_tests {
             (got.x(), got.y(), got.width(), got.height()),
             (11, 22, 33, 44)
         );
-        // A parented popover must be unparented before it is dropped (ScrAP-128 family).
+        // A parented popover must be unparented before it is dropped (ScrAP-90).
         pop.unparent();
     }
 }

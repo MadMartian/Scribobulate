@@ -8,7 +8,7 @@
 use super::{align_of, heading_level, plain_text};
 use super::{Align, Block, ExportDoc, ImageRef, ImageSource, Inline, ListItem, RenderOptions};
 use crate::links::{self, ImageResolution};
-use crate::renderer::{scan_scripts, Script};
+use crate::renderer::{is_inline_tag, BlockScripts, Script};
 use pulldown_cmark::{CodeBlockKind, Event, Tag, TagEnd};
 use std::collections::HashMap;
 
@@ -43,6 +43,10 @@ pub(super) struct Builder<'a> {
     picture_open: bool,
     picture_taken: bool,
     has_unembedded_remote: bool,
+    /// The block-scope tight-construct table for the document being walked, so a
+    /// `~~ … ~~` fence wrapping other inline markup exports struck rather than as
+    /// two literal `~~` — Document Rendering CAM row 17 (exports as it renders).
+    scripts: BlockScripts,
 }
 
 /// A construct whose end event closes a frame.
@@ -85,9 +89,10 @@ struct TableBuild {
 }
 
 impl<'a> Builder<'a> {
-    pub(super) fn new(opts: &'a RenderOptions) -> Self {
+    pub(super) fn new(opts: &'a RenderOptions, scripts: BlockScripts) -> Self {
         Self {
             opts,
+            scripts,
             block_stack: vec![Vec::new()],
             inline_stack: Vec::new(),
             open: Vec::new(),
@@ -211,17 +216,24 @@ impl<'a> Builder<'a> {
         // from being the *different renderer* a second parse would make it
         // (ScrAP-66, ScrAP-195).
         let before = self.rendered;
-        for (text, script) in scan_scripts(t) {
+        for seg in self.scripts.segments(src.start, t) {
+            // A delimiter is source, not content: it owns no rendered char, so it
+            // must not advance the counter `Inline::Text::span` and the claim
+            // mapper both count in.
+            if seg.marker {
+                continue;
+            }
+            let text = seg.text(t);
             if text.is_empty() {
                 continue;
             }
             let start = self.rendered;
             self.rendered += text.chars().count() as i32;
             let run = Inline::Text {
-                text,
+                text: text.to_string(),
                 span: (start, self.rendered),
             };
-            self.push_inline(match script {
+            self.push_inline(match seg.script {
                 Script::None => run,
                 Script::Superscript => Inline::Superscript(vec![run]),
                 Script::Subscript => Inline::Subscript(vec![run]),
@@ -522,17 +534,11 @@ impl<'a> Builder<'a> {
 /// a construct pulldown adds later defaults to *block* and closes a paragraph — the
 /// safe direction. Getting this backwards is the defect that split a tight list item
 /// into one paragraph per token.
+/// Whether `tag` opens a BLOCK — the complement of the inline set, which
+/// `renderer::segments` owns because the same split decides where a tight fence
+/// may span (one definition, two consumers).
 fn is_block_start(tag: &Tag<'_>) -> bool {
-    !matches!(
-        tag,
-        Tag::Emphasis
-            | Tag::Strong
-            | Tag::Strikethrough
-            | Tag::Superscript
-            | Tag::Subscript
-            | Tag::Link { .. }
-            | Tag::Image { .. }
-    )
+    !is_inline_tag(tag)
 }
 
 /// [`is_block_start`]'s counterpart for an end tag.

@@ -14,11 +14,23 @@ use pulldown_cmark::TagEnd;
 impl Renderer {
     pub(super) fn end_tag(&mut self, end: TagEnd) {
         match end {
-            TagEnd::Heading(_) => {
+            TagEnd::Heading(level) => {
                 // Compute this heading's GitHub-style anchor slug and record its
                 // position so `#slug` links can scroll here.
                 let slug = unique_slug(&slugify(&self.heading_text), &mut self.slug_seen);
                 self.headings.push((slug, self.heading_start));
+                // …and its EXTENT, for the drawn band (TDD 18.25). Recorded BEFORE the
+                // terminating newline, so the span covers the heading's content only —
+                // the same content-not-separator discipline the blockquote range below
+                // follows, and what keeps a band from reaching into the blank line after
+                // the heading.
+                self.heading_spans.push(crate::renderer::HeadingSpan {
+                    span: crate::span::BufferSpan::new(self.heading_start, self.end_offset()),
+                    // h5 and h6 share the deepest slot, the same fold `emit.rs`
+                    // applies when it picks the heading's tag — the same call, so
+                    // they cannot disagree about it.
+                    level_index: crate::theme::heading_slot(level as u8),
+                });
                 self.newline();
                 self.heading = None;
             }
@@ -27,33 +39,99 @@ impl Renderer {
             // flushed here so it can't swallow later content). No-op otherwise.
             TagEnd::Paragraph => self.flush_open_picture(),
             TagEnd::BlockQuote(_) => {
+                // This level's own depth, BEFORE decrementing: 1 for an unnested quote.
+                let depth = self.blockquote_depth;
                 self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
+                if let Some(start) = self.blockquote_starts.pop() {
+                    // Close THIS level: apply its depth's margin tag and record its range
+                    // so the preview view draws that level's accent bar over it in
+                    // snapshot_layer (the proven, never-flickers code-block pattern — no
+                    // anchored widget). The text is already in the buffer with its inline
+                    // tags, so it is selectable and its links work.
+                    //
+                    // Every level tags its OWN range, and an inner line therefore ends up
+                    // carrying every enclosing level's tag. That is deliberate and needs
+                    // no per-line depth arithmetic: `bq-{depth}` is registered
+                    // deepest-last, so the deepest tag on a line is the highest-priority
+                    // one and GTK resolves the margin to that level's indent (tags.rs).
+                    //
+                    // Apply the tag to each logical line's CONTENT ONLY, EXCLUDING the
+                    // terminating '\n's — NOT one continuous apply over the whole range.
+                    // A continuous multi-paragraph tag leaves the MIDDLE lines with no tag
+                    // toggle inside them, and GtkTextView's `one_style_cache`
+                    // (gtktextlayout.c get_style) then reuses the previous line's style and
+                    // DROPS the left-margin on those lines — a width-dependent layout
+                    // artifact (researcher-sourced, GTK 4.6.9; GTK4Rs/AP-72). Leaving each
+                    // '\n' untagged breaks the btree's same-tag run so every line's margin
+                    // is rebuilt. (The `\n`s carry no visible glyph, so excluding them
+                    // costs nothing.)
+                    let end = self.end_offset();
+                    // Step the start PAST the separator newlines that stand between the
+                    // parent's last line and this level's first one.
+                    //
+                    // Only an OUTERMOST quote gets a `block_sep()` at `Tag::BlockQuote`
+                    // (`start.rs`), so only its recorded start already sits at a line
+                    // start. A nested level records the offset it is opened at — which is
+                    // the END of whatever the parent last wrote — and the newlines that
+                    // move it onto its own line are inserted afterwards, by the first
+                    // block INSIDE it (a paragraph's own `block_sep`). The span therefore
+                    // opened one line too high, and since the bar is drawn from
+                    // `span_card_y_extent`'s line yrange, the inner bar visibly overlapped
+                    // the parent's last line and the blank line under it — in every theme,
+                    // sprite or flat.
+                    //
+                    // Normalising HERE rather than emitting a separator at
+                    // `Tag::BlockQuote` is deliberate: it inserts no text, so it cannot
+                    // change the rendered layout, and it is indifferent to WHICH block
+                    // opens the nested level (a paragraph `block_sep`s, a nested list
+                    // inside a list emits a single `newline`). Only `block_sep`/`newline`
+                    // can sit in that gap, so skipping '\n' skips exactly the separator
+                    // and stops at the first real character.
+                    //
+                    // '\n' alone is enough on EVERY platform, and that is not an
+                    // assumption about the host's line endings: the separator is
+                    // `newline()`'s own hardcoded "\n", never a byte copied out of the
+                    // document. A CRLF document renders to the byte-identical buffer
+                    // because pulldown-cmark does not carry a line terminator into a
+                    // text event, which is also why `lineendings.rs` states its rule at
+                    // the two doors documents arrive by and never at a parse site.
+                    // Guarded, not assumed — `preview::build`'s nested-quote test
+                    // renders the LF and CRLF twins and compares both.
+                    let start = (start..end)
+                        .find(|&off| self.buf.iter_at_offset(off).char() != '\n')
+                        .unwrap_or(end);
+                    if end > start {
+                        let depth = (depth as u8).clamp(1, crate::tags::MAX_QUOTE_DEPTH);
+                        self.apply_tag_per_line(
+                            crate::tags::TagName::Blockquote { depth },
+                            start,
+                            end,
+                        );
+                        self.blockquote_ranges.push(crate::span::QuoteSpan {
+                            span: crate::span::BufferSpan::new(start, end),
+                            depth,
+                        });
+                    }
+                }
                 if self.blockquote_depth == 0 {
-                    if let Some(start) = self.blockquote_start.take() {
-                        // Close the top-level blockquote: apply the `blockquote`
-                        // margin tag and record the range so the preview view draws
-                        // the left accent bar over it in snapshot_layer (proven,
-                        // never-flickers code-block pattern — no anchored widget). The
-                        // text is already in the buffer with its inline tags, so it is
-                        // selectable and its links work.
-                        //
-                        // Apply the tag to each logical line's CONTENT ONLY, EXCLUDING
-                        // the terminating '\n's — NOT one continuous apply over the
-                        // whole range. A continuous multi-paragraph tag leaves the
-                        // MIDDLE lines with no tag toggle inside them, and
-                        // GtkTextView's `one_style_cache` (gtktextlayout.c get_style)
-                        // then reuses the previous line's style and DROPS the
-                        // left-margin on those lines — a width-dependent layout
-                        // artifact (researcher-sourced, GTK 4.6.9; GTK4Rs/AP-72).
-                        // Leaving each '\n' untagged breaks the btree's same-tag
-                        // coalescing, so every line gets its own on/off toggle and its
-                        // margin is rebuilt. (The `\n`s carry no visible glyph, so
-                        // excluding them costs nothing.)
-                        let end = self.end_offset();
-                        if end > start {
-                            self.apply_tag_per_line(crate::tags::TagName::Blockquote, start, end);
-                            self.blockquote_ranges
-                                .push(crate::span::BufferSpan::new(start, end));
+                    // The quote's own ink (TDD 18.29) is a property of the QUOTE, not of a
+                    // level, so it rides one pass over the OUTERMOST range on its own
+                    // LOWEST-priority tag — a link, heading or `==mark==` inside the quote
+                    // keeps its colour (`tags::TagName::BlockquoteInk`). Applying it per
+                    // level instead would re-ink nested text once per enclosing level for
+                    // no visible difference. Applied unconditionally: the tag carries no
+                    // foreground at all unless the theme states one, so a theme that states
+                    // none re-inks nothing.
+                    //
+                    // The outermost level is the LAST span pushed above (its close is this
+                    // one), so its extent is the whole quote.
+                    if let Some(outer) = self.blockquote_ranges.last().copied() {
+                        if outer.depth == 1 {
+                            self.apply_tag_per_line(
+                                crate::tags::TagName::BlockquoteInk,
+                                outer.span.start,
+                                outer.span.end,
+                            );
                         }
                     }
                 }
@@ -105,6 +183,10 @@ impl Renderer {
             TagEnd::TableCell => {
                 if let Some(ts) = &mut self.table {
                     ts.in_cell = false;
+                    // What the delimiter row said about THIS cell's column. Both cell
+                    // shapes honour it, so `:---:` centres a pure-link cell exactly as
+                    // it centres a text one.
+                    let align = crate::mdtable::column_align(&ts.aligns, ts.col);
                     // Table-cell annotation: paint CriticMarkup claim highlights into the cell label.
                     if !self.ann_highlights.is_empty() {
                         ts.cell_markup = Self::finalize_cell_markup(
@@ -113,6 +195,7 @@ impl Renderer {
                             &ts.cell_content_evs,
                             &self.cleaned,
                             &self.ann_highlights,
+                            &self.theme,
                         );
                     }
                     let cell_widget: gtk::Widget =
@@ -123,7 +206,13 @@ impl Renderer {
                             // caption is installed and how it is read back — a walk
                             // over a table's cells must be able to reach this text
                             // (ScrAP-250).
-                            let btn = link_cell_button(&url, &ts.cell_plain);
+                            // The cell seam takes the column's alignment and applies
+                            // it to the CAPTION, leaving the button at its default
+                            // `halign`/`valign` of Fill so its `.cell` border spans the
+                            // whole grid slot — see `link_cell_button`. A non-Fill
+                            // `halign` here instead shrink-wraps the border to the
+                            // caption and breaks the column's rules row to row.
+                            let btn = link_cell_button(&url, &ts.cell_plain, align);
                             btn.set_has_frame(false);
                             btn.add_css_class("cell");
                             if ts.in_head {
@@ -141,7 +230,7 @@ impl Renderer {
                             // them out (it never re-measures at validation, so they never
                             // re-arm the GTK4Rs/AP-23 blank).
                             let label = cell_markup_label(&ts.cell_markup);
-                            label.set_xalign(0.0);
+                            label.set_xalign(align.xalign());
                             // Fill (not Start) so the cell's CSS border spans the FULL
                             // row height even when a sibling cell wraps taller; yalign 0
                             // keeps this cell's text aligned to the top.
@@ -163,6 +252,7 @@ impl Renderer {
                     ts.cell_plain.clear();
                     ts.cell_content_evs.clear();
                     ts.cell_off = 0;
+                    ts.col += 1;
                 }
             }
             TagEnd::TableHead => {}
@@ -197,7 +287,7 @@ impl Renderer {
             TagEnd::Strong => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</b>");
+                        ts.cell_markup.push_str(super::BOLD_CLOSE);
                     }
                 } else {
                     self.inline_tags
@@ -216,8 +306,9 @@ impl Renderer {
             }
             TagEnd::Strikethrough => {
                 if self.in_table_cell() {
+                    let (_open, close) = super::strike_tags(&self.theme);
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</s>");
+                        ts.cell_markup.push_str(close);
                     }
                 } else {
                     self.inline_tags
@@ -227,7 +318,7 @@ impl Renderer {
             TagEnd::Superscript => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</sup>");
+                        ts.cell_markup.push_str(super::SUPERSCRIPT_CLOSE);
                     }
                 } else {
                     self.inline_tags
@@ -237,7 +328,7 @@ impl Renderer {
             TagEnd::Subscript => {
                 if self.in_table_cell() {
                     if let Some(ts) = &mut self.table {
-                        ts.cell_markup.push_str("</sub>");
+                        ts.cell_markup.push_str(super::SUBSCRIPT_CLOSE);
                     }
                 } else {
                     self.inline_tags
@@ -272,13 +363,29 @@ impl Renderer {
             // rendering any `<picture>`/`<img>` images, else dropped (sanitize by
             // omission). Flush a `<picture>` left open by a malformed/unclosed block.
             // See ScrAP-147 / TDD 2.23.
-            TagEnd::HtmlBlock if self.in_html_block => {
-                self.in_html_block = false;
-                let html = std::mem::take(&mut self.html_acc);
-                self.feed_html(&html);
-                self.flush_open_picture();
+            // TOTAL, not guarded, for the reason `events.rs`'s twin gives — and here
+            // a failed guard was worse than a dropped event: it left `in_html_block`
+            // true and `html_acc` holding stale bytes, which the next block would
+            // then inherit.
+            TagEnd::HtmlBlock => {
+                if self.in_html_block {
+                    self.in_html_block = false;
+                    let html = std::mem::take(&mut self.html_acc);
+                    self.feed_html(&html);
+                    self.flush_open_picture();
+                } else {
+                    self.dropped_construct("an HTML-block close with no open block");
+                }
             }
-            _ => {}
+
+            // Inert BY OPTION, matching `start.rs`'s arms one for one — the two
+            // halves of one construct's absence, so neither can be added without the
+            // other.
+            TagEnd::FootnoteDefinition => self.dropped_construct("a footnote definition"),
+            TagEnd::DefinitionList
+            | TagEnd::DefinitionListTitle
+            | TagEnd::DefinitionListDefinition => self.dropped_construct("a definition list"),
+            TagEnd::MetadataBlock(_) => self.dropped_construct("a metadata block"),
         }
     }
 }

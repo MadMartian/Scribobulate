@@ -397,7 +397,7 @@ fn materialize_deferred_preview(window: &ApplicationWindow, st: &Rc<TabState>) {
         // Clone the source out of the RefCell before rendering (GTK4Rs/AP-61 idiom):
         // keep no live borrow across the render call. `render` never re-enters
         // `source`, but cloning first matches `viewactions`' own render site.
-        let md = st.source.borrow().clone();
+        let md = st.source().clone();
         let preview = render_and_wire_preview(
             &md,
             st.doc_dir().as_deref(),

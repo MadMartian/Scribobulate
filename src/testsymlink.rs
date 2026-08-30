@@ -25,6 +25,75 @@
 //! ordinary developer box legitimately cannot run these; that is a skip and it is
 //! reported as one. On unix there is no such excuse, so a failure to create is a
 //! real failure and is left to panic.
+//!
+//! # A skip is a last resort, not the Windows answer
+//!
+//! [`escaping_reference_or_skip`] exists because the *containment* limb — "a link
+//! inside the directory cannot reach outside it" — does not actually need a symlink,
+//! it needs a **reparse point**, and Windows has one an unprivileged process may
+//! create: an NTFS **directory junction** (`mklink /J`). MEASURED on an ordinary,
+//! unelevated box with Developer Mode off: `symlink_file` fails with os error 1314
+//! ("A required privilege is not held by the client") while `mklink /J` returns 0,
+//! and `std::fs::canonicalize` follows the junction to its target outside the
+//! directory — which is the whole mechanism the containment gate is checked against.
+//!
+//! That matters disproportionately here because **Windows owns row 1 of the sprite
+//! search path** (`%APPDATA%`, `sdd/SCHEMA.md`), so the platform whose user-writable
+//! theme directory is most exposed was the one reporting the limb unverified. The
+//! skip is still reachable and still printed when *both* mechanisms refuse; what
+//! changed is that it is no longer the first answer.
+//!
+//! Not every symlink test can be served this way and none should be forced to: a
+//! junction is a **directory**, so a check whose subject is the link's own *name*
+//! (the sprite extension allowlist, `chip.png → notes.txt`) has no junction form and
+//! correctly still skips here.
+//!
+//! # Reading the skip report: REACHABLE debt vs INHERENT limits
+//!
+//! The pipeline's skip list is a flat set of `SKIPPED [...]` lines, and a flat list
+//! cannot say which of two very different things a line means. **"Nobody has got to
+//! this yet" and "this platform cannot express it" look identical in that report**,
+//! and the difference is the whole of what a reader needs: one is work, the other is
+//! a fact to stop re-litigating. Stated here rather than in a register because the
+//! person who needs it is standing in this file.
+//!
+//! **REACHABLE** — a mechanism exists on the platform and the limb can be closed.
+//! Every one of these was a symlink-shaped skip on Windows and now goes through
+//! [`escaping_reference_or_skip`]: sprite containment (SCHEMA), image containment
+//! (TDD 2.7), link containment and link resolution (TDD 19.2 / 19.3), and path
+//! identity through a link. They share one property that makes the junction work —
+//! the subject is where the link **leads**, and a directory hop leads there just as
+//! a file symlink does.
+//!
+//! **INHERENT** — no mechanism exists, and a skip is the honest answer rather than a
+//! placeholder for effort:
+//! - **The subject is the link's own NAME.** The sprite extension allowlist checks
+//!   `chip.png → notes.txt`; a junction is a directory, so the authored name and the
+//!   target's name cannot differ in extension the way the check requires.
+//! - **The subject is the link AS THE RENAME TARGET.** `atomic_io`'s save-through-a-link
+//!   check exists because `rename` replaces the *link itself* unless the path is
+//!   canonicalised first — so the link has to be the file being renamed over. Through a
+//!   junction the rename lands on a file *inside* the target directory and never touches
+//!   the reparse point, which makes the hazard unreachable. MEASURED rather than argued:
+//!   with `write_atomic`'s canonicalisation neutered, a junction-shaped fixture still
+//!   reports the link surviving and the real file updated — it passes with the guard
+//!   removed. A conversion here would be a **vacuous** test, which is strictly worse
+//!   than the skip it replaced.
+//! - **No FIFO.** The sprite FIFO-admission limb needs a named pipe as a filesystem
+//!   entry that `metadata` reports with length zero; Windows named pipes are not
+//!   filesystem entries in that sense.
+//! - **POSIX mode bits against ACLs.** The TDD 21.12 crash-report, seen-marker and
+//!   log permission checks and the TDD 21.2 rotation-failure check induce their
+//!   condition with mode bits. Windows privacy is a DACL question and needs its own
+//!   *assertion*, not a translated fixture — the rubric is real here, the test body
+//!   is not portable, and that is a genuinely different piece of work.
+//! - **Absent fonts.** TDD 25.25 needs `DejaVu Serif` / `DejaVu Sans Mono` present to
+//!   tell a named face from the generic fall-through. A property of the host, not of
+//!   the platform, and not fixable in code.
+//!
+//! The test to apply to a new skip: **ask what the check's subject is, not what its
+//! fixture is.** Every REACHABLE entry above was written as "a symlink test" and is
+//! not one — the symlink was the fixture, and the subject survived changing it.
 
 use std::path::Path;
 
@@ -105,12 +174,9 @@ fn try_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
 /// }
 /// ```
 pub(crate) fn symlink_or_skip(target: &Path, link: &Path, limb: &str) -> Result<(), ()> {
-    match try_symlink(target, link) {
-        Ok(()) => {}
+    match symlink_checked(target, link) {
+        Ok(()) => Ok(()),
         Err(e) => {
-            if cfg!(unix) {
-                panic!("symlink creation failed on a unix host, which should not happen: {e}");
-            }
             // Through `skipped`, so the pipeline greps ONE format. Two sites
             // formatting the same marker independently is how a report ends up
             // counting some skips and not others.
@@ -121,8 +187,27 @@ pub(crate) fn symlink_or_skip(target: &Path, link: &Path, limb: &str) -> Result<
                      Developer Mode or an elevated shell"
                 ),
             );
-            return Err(());
+            Err(())
         }
+    }
+}
+
+/// Create the symlink and prove it is one, WITHOUT announcing a skip.
+///
+/// Split out from [`symlink_or_skip`] when [`escaping_reference_or_skip`] gained a
+/// second mechanism, and the split is the load-bearing part rather than a tidy-up: a
+/// caller that falls back to a junction must not have already printed
+/// `SKIPPED [...]: ... NOT verified by this run` for an attempt it then went on to
+/// make succeed by other means. The pipeline greps that marker and counts the limbs it
+/// names, so a skip line emitted before a successful fallback would report the
+/// guarantee as unverified in the one mechanism the project has for saying so —
+/// ScrAP-273's shape, arrived at from the other direction.
+fn symlink_checked(target: &Path, link: &Path) -> std::io::Result<()> {
+    if let Err(e) = try_symlink(target, link) {
+        if cfg!(unix) {
+            panic!("symlink creation failed on a unix host, which should not happen: {e}");
+        }
+        return Err(e);
     }
     // Prove the SETUP before trusting the verdict: a test whose fixture is not what
     // it claims reports on something else entirely, and passes while doing it
@@ -138,4 +223,125 @@ pub(crate) fn symlink_or_skip(target: &Path, link: &Path, limb: &str) -> Result<
         meta.file_type()
     );
     Ok(())
+}
+
+/// Create an NTFS **directory junction** at `link` pointing at the directory
+/// `target_dir`, and prove it reads through.
+///
+/// Shelling out to `mklink` is deliberate and is not laziness: creating a junction is
+/// a `DeviceIoControl(FSCTL_SET_REPARSE_POINT)` call with a hand-built
+/// `REPARSE_DATA_BUFFER`, `std` exposes no API for it, and this is test-only setup —
+/// the project's Win32 FFI rule (POLICY § architecture) is about *production* calls
+/// past GTK, and hand-rolling a reparse buffer here would put a second, unreviewed
+/// Win32 surface in the tree to save a process spawn in a test.
+///
+/// `.output()` rather than `.status()` so `mklink`'s success chatter stays out of the
+/// harness stream, where it would interleave with libtest's own progress writes for
+/// the same reason [`skipped`] builds its line before emitting it.
+#[cfg(windows)]
+fn try_junction(target_dir: &Path, link: &Path) -> std::io::Result<()> {
+    use std::io::Error;
+
+    let out = std::process::Command::new("cmd")
+        .arg("/c")
+        .arg("mklink")
+        .arg("/J")
+        .arg(link)
+        .arg(target_dir)
+        .output()?;
+    if !out.status.success() {
+        return Err(Error::other(format!(
+            "mklink /J failed ({}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+/// A theme-relative reference that leaves `inside_dir` by way of a link, or `Err(())`
+/// having printed a `SKIPPED [...]` line naming **every** mechanism this host refused.
+///
+/// The caller gets a *reference string* rather than a path because the two mechanisms
+/// produce different shapes and the difference is load-bearing: a file symlink is
+/// `link.png` and a directory junction is `link/<name>`, and a caller that assumed the
+/// first would silently stop traversing anything on the host that used the second.
+///
+/// # What it proves before it returns
+///
+/// The fixture, never the verdict. `symlink_or_skip` already asserts a symlink is a
+/// symlink (ScrAP-209's species — a fixture that is not what it claims reports on
+/// something else and passes while doing it); a junction has to clear the same bar,
+/// and "mklink printed success" does not clear it. So the junction arm canonicalises
+/// the reference and asserts it lands on the **outside** file — the link genuinely
+/// reads through — before the caller is allowed to assert that `resolve` refuses it.
+/// Without that, a junction that silently resolved to nothing would make the
+/// containment assertion pass for the wrong reason, which is the exact failure this
+/// module exists to prevent.
+pub(crate) fn escaping_reference_or_skip(
+    inside_dir: &Path,
+    outside_file: &Path,
+    limb: &str,
+) -> Result<String, ()> {
+    let name = outside_file
+        .file_name()
+        .expect("the escape target must be a file, not a directory");
+    let outside_dir = outside_file
+        .parent()
+        .expect("the escape target must live in a directory");
+
+    // Preferred everywhere, and the only mechanism on unix -- where a failure is a
+    // broken host and `symlink_checked` panics rather than returning.
+    let link = inside_dir.join(name);
+    let refused = match symlink_checked(outside_file, &link) {
+        Ok(()) => return Ok(name.to_string_lossy().into_owned()),
+        Err(e) => e,
+    };
+
+    #[cfg(windows)]
+    {
+        let junction = inside_dir.join("junction");
+        if let Err(e) = try_junction(outside_dir, &junction) {
+            // BOTH mechanisms named, because a reader of the skip report has to know
+            // what was actually tried on this host -- a line saying only "symlink"
+            // where a junction was also refused misdescribes the box it ran on.
+            skipped(
+                limb,
+                &format!(
+                    "this host allows neither a file symlink ({refused}; Windows \
+                     requires Developer Mode or an elevated shell) nor an NTFS \
+                     directory junction ({e})"
+                ),
+            );
+            return Err(());
+        }
+        // Prove the fixture, per the doc comment above: the junction must READ
+        // THROUGH to the file outside, or the containment assertion behind it would
+        // be about a path that resolves to nothing.
+        let through = junction.join(name);
+        let landed = through.canonicalize().unwrap_or_else(|e| {
+            panic!("the junction we just created does not read through to {through:?}: {e}")
+        });
+        let want = outside_file
+            .canonicalize()
+            .expect("the escape target must exist before the fixture is built");
+        assert_eq!(
+            landed, want,
+            "the junction resolves somewhere other than its target -- the containment \
+             assertion behind this would pass for the wrong reason"
+        );
+        Ok(format!("junction/{}", name.to_string_lossy()))
+    }
+
+    // Unreachable on unix: `symlink_checked` panics there rather than returning `Err`,
+    // which is the asymmetry the module header states -- a unix box that cannot make a
+    // symlink in a temp directory has a real problem and must not be let past as a skip.
+    #[cfg(not(windows))]
+    {
+        // `limb` too: it is read only by the junction arm's `skipped` call, and this
+        // file is compiled on every platform, so an unused-variable error here is the
+        // cross-platform asymmetry POLICY warns about arriving in the gate itself.
+        let _ = (outside_dir, refused, limb);
+        unreachable!("a unix host that refuses a symlink has already panicked")
+    }
 }

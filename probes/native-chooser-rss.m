@@ -1,6 +1,12 @@
 /*
  * native-chooser-rss.c -- attribute the macOS per-invocation footprint growth of
- * GtkFileChooserNative (ISSUES.md "native file chooser RSS growth").
+ * GtkFileChooserNative: RSS that climbs with every open/close of the native chooser
+ * and never comes back.
+ *
+ * (Deliberately no ISSUES.md citation. An issue exists in order to be deleted, so a
+ * pointer from outside that register dangles the moment the fix lands -- and lies
+ * quietly if the letters are ever compacted. SDD principle 6 / POLICY.md's cross-
+ * reference gate. The subject is named above instead, which needs no register at all.)
  *
  * The measurement that raised the issue read RSS from outside the process, which
  * says THAT it grows and nothing about WHERE. This probe answers "where" without
@@ -216,9 +222,16 @@ static gboolean want_show = TRUE;
 static GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_SAVE;
 static gboolean want_instances = FALSE;
 
-/* Types worth counting per cycle. Requires GOBJECT_DEBUG=instance-count and a
- * glib built with G_ENABLE_DEBUG; when unsupported every count reads 0 and the
- * mode says so rather than lying. */
+/* Types worth counting per cycle. Requires GOBJECT_DEBUG=instance-count and a glib
+ * built with G_ENABLE_DEBUG.
+ *
+ * WHEN UNSUPPORTED EVERY COUNT READS 0, which is indistinguishable at the call site
+ * from "none of these are live" -- the reading anyone actually wants. This comment
+ * used to claim "the mode says so rather than lying" and nothing said so: an
+ * unavailable instrument reported zero as a measurement, which is the most
+ * expensive shape a probe can have, because a leak hunt reads it as good news.
+ * report_instances() now canaries the instrument against a type it is holding live
+ * at that instant, and suppresses the whole section if the canary reads 0. */
 static const char *tracked_types[] = {
     "GtkFileChooserNative", "GtkFileChooserDialog", "GtkFileChooserWidget",
     "GtkFileSystemModel", "GtkColumnView", "GtkColumnViewCell", "GtkListItemWidget",
@@ -289,9 +302,24 @@ static void count_panels(int *total, int *visible)
 }
 
 /* Candidate remedy, tested here before it is proposed anywhere: close the panels
- * GTK ordered out and never released. -setReleasedWhenClosed:YES is already set
- * on them by GTK, so -close balances GTK's retain and frees the view hierarchy.
- * Only non-visible panels are touched, so a chooser still on screen is safe. */
+ * GTK ordered out and never released. Only non-visible panels are touched, so a
+ * chooser still on screen is safe.
+ *
+ * The HYPOTHESIS this probe started from was that -setReleasedWhenClosed:YES is
+ * already set on them by GTK, so -close alone balances GTK's retain and frees the
+ * view hierarchy. That is REFUTED by what the probe went on to measure -- see the
+ * --release-panel comment below: -close drops only AppKit's ownership, GTK's
+ * alloc-time retain survives it, and a closed panel does not deallocate. -close on
+ * its own is therefore not the remedy; it is the precondition for one. */
+/* gtk_window_destroy() returns void, so casting it to GSourceFunc leaves the
+ * source's remove-or-repeat verdict to whatever is in the return register --
+ * which happens to work until it does not. One-shot, explicitly. */
+static gboolean destroy_parent(gpointer p)
+{
+    gtk_window_destroy(GTK_WINDOW(p));
+    return G_SOURCE_REMOVE;
+}
+
 static int reap_spent_panels(void)
 {
     int reaped = 0;
@@ -354,8 +382,34 @@ static void report_window_classes(void)
     [set release];
 }
 
+/* Is g_type_get_instance_count actually counting? Build a GtkLabel, hold it, and ask
+ * for GtkLabel's count. A live instance we are holding MUST read >= 1; a 0 there can
+ * only mean the instrument is off. Runs once, on the first report. */
+static gboolean instance_counting_available(void)
+{
+    GtkWidget *canary = gtk_label_new("canary");
+    g_object_ref_sink(canary);
+    int n = g_type_get_instance_count(GTK_TYPE_LABEL);
+    g_object_unref(canary);
+    return n > 0;
+}
+
 static void report_instances(const char *when)
 {
+    static gboolean canaried = FALSE;
+    if (!canaried) {
+        canaried = TRUE;
+        if (!instance_counting_available()) {
+            printf("instance counting: UNAVAILABLE (set GOBJECT_DEBUG=instance-count, and a glib\n");
+            printf("                   built with G_ENABLE_DEBUG); --instances suppressed rather\n");
+            printf("                   than reporting 0 for every type, which reads as a measurement.\n");
+            fflush(stdout);
+            want_instances = FALSE;
+        }
+    }
+    if (!want_instances)
+        return;
+
     int panels = 0, vis = 0;
     count_panels(&panels, &vis);
     printf("  --- live GObject instances (%s) ---\n", when);
@@ -378,6 +432,9 @@ static int done_cycles = 0;
 static GtkWindow *parent;
 static GtkFileChooserNative *chooser;
 static snapshot base, prev, now;
+/* Which cycle `prev` was taken at. The baseline lands after the warmup cycle, so the
+ * first bucket is one cycle short of `every` and its divisor is not `every`. */
+static int prev_cycle = 0;
 
 static gboolean start_cycle(gpointer data);
 static int responses_seen = 0;
@@ -395,6 +452,14 @@ static int linger_secs = 0;
  * panel's, and it runs identically on every platform. */
 static gboolean widget_only = FALSE;
 static GtkWidget *dlg_widget = NULL;
+
+/* --cancel asks for the USER's dismissal path. When no visible NSSavePanel is found the
+ * cycle silently fell through to gtk_native_dialog_hide() -- a different code path with a
+ * different teardown -- while the run header still advertised the requested one. The
+ * resulting figure is an unlabelled average over two dismissals, which is not the
+ * measurement anyone asked for. Counted, reported, and fatal, like the watchdog below. */
+static int cancels_issued = 0;
+static int hide_fallbacks = 0;
 
 static gboolean watchdog(gpointer data)
 {
@@ -513,11 +578,15 @@ static gboolean finish_cycle(gpointer data)
         attach_dealloc_spy();
     if (cancel_mode_appkit) {
         if (cancel_via_appkit()) {
+            cancels_issued++;
             /* The response handler owns teardown and the next cycle. */
             g_timeout_add(watchdog_ms, watchdog, GINT_TO_POINTER(done_cycles));
             return G_SOURCE_REMOVE;
         }
-        printf("  note: no NSSavePanel found to cancel (cycle %d)\n", done_cycles + 1);
+        hide_fallbacks++;
+        printf("  note: no NSSavePanel found to cancel (cycle %d) -- FALLING BACK to\n"
+               "        gtk_native_dialog_hide(), which is not the path --cancel requested\n",
+               done_cycles + 1);
     }
     /* Dismiss without answering -- gtk_native_dialog_hide()'s own path. */
     gtk_native_dialog_hide(GTK_NATIVE_DIALOG(chooser));
@@ -537,7 +606,7 @@ static gboolean finish_cycle(gpointer data)
         take_snapshot(&now);
         report_diff("TOTAL (post-warmup baseline -> end)", &base, &now, total_cycles - 1);
         printf("responses seen: %d of %d cycles\n", responses_seen, done_cycles);
-        g_idle_add((GSourceFunc)gtk_window_destroy, parent);
+        g_idle_add(destroy_parent, parent);
         return G_SOURCE_REMOVE;
     }
     g_timeout_add(gap_ms, start_cycle, NULL);
@@ -546,29 +615,51 @@ static gboolean finish_cycle(gpointer data)
 
 static void checkpoint(void)
 {
-    if (done_cycles % every == 0) {
+    /* `done_cycles != prev_cycle` suppresses a DUPLICATE at the boundary. checkpoint() has
+     * four call sites and more than one can run for the same cycle, so at every `every`-th
+     * cycle a second call reported a bucket spanning ZERO cycles. It was invisible while the
+     * label was derived from `every`: both calls printed the same "cycles 0..3" and the
+     * repeat read as a formatting quirk. Spanning from `prev_cycle` made it legible as
+     * "cycles 3..3", which is what a zero-length measurement actually looks like. */
+    if (done_cycles % every == 0 && done_cycles != prev_cycle) {
         take_snapshot(&now);
         if (want_instances) {
             char w[32];
             snprintf(w, sizeof(w), "after %d cycles", done_cycles);
             report_instances(w);
         }
+        /* The first bucket is SHORT. The baseline is taken after the warmup cycle, so
+         * with every=10 the first checkpoint spans cycles 1..10 -- nine cycles, not ten
+         * -- and dividing by `every` under-reported its per-cycle growth by 10% while
+         * labelling a range that never happened. Span from where prev was actually taken. */
         char label[64];
-        snprintf(label, sizeof(label), "cycles %d..%d", done_cycles - every, done_cycles);
-        report_diff(label, &prev, &now, every);
+        int span = done_cycles - prev_cycle;
+        snprintf(label, sizeof(label), "cycles %d..%d", prev_cycle, done_cycles);
+        report_diff(label, &prev, &now, span > 0 ? span : 1);
         prev = now;
+        prev_cycle = done_cycles;
     }
     if ((teardown_in_response || widget_only) && done_cycles >= total_cycles) {
         take_snapshot(&now);
         report_diff("TOTAL (post-warmup baseline -> end)", &base, &now, total_cycles - 1);
         printf("responses seen: %d of %d cycles, panels reaped: %d, accessory views released: %d, panels DEALLOCATED: %d\n",
                responses_seen, done_cycles, reaped_total, accessories_released, panel_deallocs);
+        if (cancel_mode_appkit) {
+            printf("dismissal: cancel=%d hide_fallback=%d\n", cancels_issued, hide_fallbacks);
+            if (hide_fallbacks > 0) {
+                printf("INVALID: %d of %d cycles did not use the dismissal path --cancel asked for,\n"
+                       "         so the figures above average two different teardowns.\n",
+                       hide_fallbacks, done_cycles);
+                fflush(stdout);
+                exit(2);
+            }
+        }
         if (linger_secs > 0) {
             printf("lingering %d s (pid %d) -- attach now\n", linger_secs, (int)getpid());
             fflush(stdout);
-            g_timeout_add_seconds(linger_secs, (GSourceFunc)gtk_window_destroy, parent);
+            g_timeout_add_seconds(linger_secs, destroy_parent, parent);
         } else {
-            g_idle_add((GSourceFunc)gtk_window_destroy, parent);
+            g_idle_add(destroy_parent, parent);
         }
     }
 }
@@ -581,6 +672,7 @@ static gboolean start_cycle(gpointer data)
     if (done_cycles == 1) {
         take_snapshot(&base);
         prev = base;
+        prev_cycle = done_cycles;   /* 1: the warmup cycle is already spent */
         printf("baseline after 1 warmup cycle: rss %lld KB, footprint %lld KB, malloc %lld KB\n",
                base.rss_kb, base.footprint_kb, base.malloc_in_use / 1024);
         fflush(stdout);
@@ -668,6 +760,13 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--linger") && i + 1 < argc) linger_secs = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--widget-only")) widget_only = TRUE;
         else if (!strcmp(argv[i], "--watchdog") && i + 1 < argc) watchdog_ms = atoi(argv[++i]);
+        else {
+            /* Silently ignoring an unknown flag makes a typo look like a measurement of
+             * the mode you meant to select: --instaces runs the default configuration and
+             * prints a clean, wrong answer under the heading you asked for. */
+            fprintf(stderr, "unknown argument: %s\n", argv[i]);
+            return 2;
+        }
     }
     printf("probe: %d cycles, hold %d ms, gap %d ms, checkpoint every %d\n",
            total_cycles, hold_ms, gap_ms, every);
@@ -677,6 +776,15 @@ int main(int argc, char **argv)
            want_parent ? "yes" : "no", want_show ? "yes" : "no");
     printf("       dismissal=%s\n", cancel_mode_appkit ? "-[NSSavePanel cancel:] (the user's path)"
                                                        : "gtk_native_dialog_hide()");
+    /* Every mode that changes what is measured is echoed, not just some of them: a run
+     * transcript that omits a mode cannot be told apart from one that did not use it. */
+    printf("       widget-only=%s instances=%s reap=%s pool-per-cycle=%s track-dealloc=%s\n",
+           widget_only ? "yes" : "no", want_instances ? "yes" : "no",
+           reap_panels ? "yes" : "no", pool_per_cycle ? "yes" : "no",
+           track_dealloc ? "yes" : "no");
+    printf("       release-panel=%s release-accessory=%s watchdog=%d ms linger=%d s\n",
+           release_panel ? "yes" : "no", release_accessory ? "yes" : "no",
+           watchdog_ms, linger_secs);
     fflush(stdout);
 
     GtkApplication *app = gtk_application_new("org.scribobulate.probe.chooserrss",

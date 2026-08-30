@@ -414,36 +414,9 @@ mod gtk_integration_tests {
     use super::*;
     use gtk::ScrolledWindow;
 
-    const PUMP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
-
-    /// Pump until `done()` or panic after [`PUMP_DEADLINE`] via a real glib TIMEOUT
-    /// SOURCE — never a between-iterations wall-clock check, which hangs forever on a
-    /// truly idle display because `iteration(true)` blocks until there is work (GTK4Rs/AP-79).
-    /// The source is removed on the converged exit so it can't fire into a later
-    /// test.
-    fn pump_until(ctx: &gtk::glib::MainContext, msg: &str, mut done: impl FnMut() -> bool) {
-        use std::cell::Cell;
-        use std::rc::Rc;
-        let fired = Rc::new(Cell::new(false));
-        let f = fired.clone();
-        let source = gtk::glib::timeout_add_local_once(PUMP_DEADLINE, move || f.set(true));
-        let mut source = Some(source);
-        loop {
-            if done() {
-                break;
-            }
-            assert!(
-                !fired.get(),
-                "pump watchdog ({PUMP_DEADLINE:?}) fired: {msg}"
-            );
-            ctx.iteration(true);
-        }
-        if let Some(id) = source.take() {
-            if !fired.get() {
-                id.remove();
-            }
-        }
-    }
+    // The pump-until-or-panic helper that used to live here now lives at
+    // `crate::testpump::until` under `Clock::Idle` (M31) — this file's copy and the
+    // byte-identical one in `preview/scroll.rs` are the two it replaces.
 
     /// A realized+mapped `CodePreviewView` over an `n`-line buffer, with its scroller,
     /// window, and the shared main context. Pumps until the view is mapped and the
@@ -470,9 +443,11 @@ mod gtk_integration_tests {
         {
             let view = view.clone();
             let sw = sw.clone();
-            pump_until(&ctx, "window never mapped/allocated", move || {
-                view.is_mapped() && sw.vadjustment().upper() > 0.0
-            });
+            crate::testpump::until(
+                crate::testpump::Clock::Idle,
+                "window never mapped/allocated",
+                move || view.is_mapped() && sw.vadjustment().upper() > 0.0,
+            );
         }
         (view, sw, window, ctx)
     }
@@ -520,7 +495,7 @@ mod gtk_integration_tests {
     /// view's scroll would break the fresh-tab fragment scroll of `scroll_preview_to_fragment`.)
     #[gtktest::test]
     fn a_scroll_on_a_mapped_view_still_reaches_the_far_target() {
-        let (view, sw, window, ctx) = mapped_view(2_000);
+        let (view, sw, window, _ctx) = mapped_view(2_000);
         let target_line = 1_500;
         let far = view
             .buffer()
@@ -534,10 +509,14 @@ mod gtk_integration_tests {
         {
             let view = view.clone();
             let vadj = vadj.clone();
-            pump_until(&ctx, "viewport never reached the far target", move || {
-                let (top, _) = view.line_at_y(vadj.value() as i32);
-                top.line() >= target_line - 50
-            });
+            crate::testpump::until(
+                crate::testpump::Clock::Idle,
+                "viewport never reached the far target",
+                move || {
+                    let (top, _) = view.line_at_y(vadj.value() as i32);
+                    top.line() >= target_line - 50
+                },
+            );
         }
         let (top, _) = view.line_at_y(vadj.value() as i32);
         let top_line = top.line();
@@ -576,9 +555,11 @@ mod gtk_integration_tests {
 
         {
             let ran = ran.clone();
-            pump_until(&ctx, "the coalesced idle never ran", move || {
-                !ran.borrow().is_empty()
-            });
+            crate::testpump::until(
+                crate::testpump::Clock::Idle,
+                "the coalesced idle never ran",
+                move || !ran.borrow().is_empty(),
+            );
         }
         // Give any (wrongly) surviving earlier source a chance to also fire.
         while ctx.pending() {

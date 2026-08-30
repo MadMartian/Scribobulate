@@ -223,16 +223,24 @@ impl ScribTableWidget {
         //    makes that cell OVERFLOW its column, so the table ends up a few pixels
         //    wider than the bound → the view goes over-wide → the outer Automatic h-bar
         //    appears and churns → blank (GTK4Rs/AP-23). `fit_columns` never allocates below it.
-        let mut col_min = vec![0i32; ncols];
-        let mut col_nat = vec![0i32; ncols];
+        //    Measured as PAIRS rather than two parallel vectors, so nothing downstream
+        //    can transpose them — see `layout::ColumnWant`.
+        let mut wants = vec![
+            layout::ColumnWant {
+                natural: 0,
+                minimum: 0,
+            };
+            ncols
+        ];
         for cell in cells.iter() {
             let (min_w, nat_w, _, _) = cell.widget.measure(gtk::Orientation::Horizontal, -1);
-            col_min[cell.col] = col_min[cell.col].max(min_w).max(layout::MIN_COL_WIDTH);
-            col_nat[cell.col] = col_nat[cell.col].max(nat_w);
+            let want = &mut wants[cell.col];
+            want.minimum = want.minimum.max(min_w).max(layout::MIN_COL_WIDTH);
+            want.natural = want.natural.max(nat_w);
         }
 
         // 2. Fit the columns into `bound_w` (the three-case water-fill — pure).
-        let col_w = layout::fit_columns(&col_min, &col_nat, bound_w);
+        let col_w = layout::fit_columns(&wants, bound_w);
 
         // 3. Each row's height — the max cell height measured AT that cell's assigned
         //    column width (height-for-width, but done once, here, not at validation).
@@ -269,6 +277,162 @@ impl ScribTableWidget {
 mod gtk_integration_tests {
     use super::*;
     use gtk::subclass::prelude::*;
+
+    /// A display-wide CSS provider, removed again when this value drops. A provider on
+    /// the display is PROCESS-global state and libtest runs the whole suite in one
+    /// process, so it must come off even on a panic (POLICY § Unit tests).
+    struct DisplayCss(gtk::CssProvider);
+
+    impl DisplayCss {
+        fn install(css: &str) -> Self {
+            let display = gdk::Display::default().expect("this test needs a display");
+            let provider = gtk::CssProvider::new();
+            provider.load_from_data(css);
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_USER,
+            );
+            Self(provider)
+        }
+    }
+
+    impl Drop for DisplayCss {
+        fn drop(&mut self) {
+            if let Some(display) = gdk::Display::default() {
+                gtk::style_context_remove_provider_for_display(&display, &self.0);
+            }
+        }
+    }
+
+    /// **The preview's link-cell rules reach the widget** — asserted on the colour the
+    /// button node RESOLVES to, which is the only observable that can see whether a
+    /// selector matched anything.
+    ///
+    /// TDD 18.45. Every other test of these rules asserts on the generated stylesheet
+    /// TEXT, and that is a check of the same defect one layer up: a blanket rename of the
+    /// theme vocabulary turned `scribtable button.cell.link` — where `link` is GTK's own
+    /// class on `GtkLinkButton`, not this project's `link_color` key — into
+    /// `scribtable button.cell.link_color`, a perfectly well-formed selector matching
+    /// nothing. The rule still generated, every text assertion still passed, and a
+    /// link-only cell silently reverted to the desktop's link colour beside a mixed cell
+    /// that stayed themed.
+    ///
+    /// Two readings, and the first is what makes the second mean anything: the same
+    /// button is read BEFORE the provider goes on, so a colour that happened to match by
+    /// coincidence would fail the fixture rather than pass the test.
+    ///
+    /// **What this cannot reach**, stated rather than papered over: the third selector,
+    /// `scribtable button.cell.link label`, exists for `text-decoration-*`, which does
+    /// not inherit to the caption and which gtk4-rs exposes no style-context accessor
+    /// for. Its effect is covered by the driven pixel comparison recorded at TDD 18.45,
+    /// not here — adding another rule-text assertion for it would be the very thing this
+    /// test exists to stop.
+    #[gtktest::test]
+    fn a_link_only_cells_button_wears_the_themes_link_colour() {
+        use crate::palette::Palette;
+
+        // A link colour no fallback theme is going to land on by accident, and one that
+        // is not the theme's body ink either — so `color` inherited from an ancestor
+        // cannot satisfy the assertion.
+        let mut themes = crate::theme::Themes::builtin();
+        themes.merge_over_for_test("[themes.probe]\nlink_color = \"#2de1ff\"\n");
+        let theme = themes.resolve("probe");
+        let palette = Palette::for_paper(&theme);
+        let want = palette.link_fg;
+
+        // Built exactly as `preview::build` builds a pure-link cell.
+        let link = crate::widgets::table::link_cell_button(
+            "https://example.com/handbook",
+            "Handbook",
+            crate::mdtable::Align::Left,
+        );
+        link.set_has_frame(false);
+        link.add_css_class("cell");
+        let _table = ScribTableWidget::new(vec![vec![link.clone().upcast()]]);
+
+        let before = link.style_context().color();
+        assert_ne!(
+            (before.red(), before.green(), before.blue()),
+            (want.red(), want.green(), want.blue()),
+            "fixture no longer discriminates: the ambient theme already paints this \
+             button the probe theme's link colour, so the assertion below cannot fail"
+        );
+
+        let _css = DisplayCss::install(&crate::preview::theme_css(&theme, &palette));
+        let after = link.style_context().color();
+        assert_eq!(
+            (after.red(), after.green(), after.blue()),
+            (want.red(), want.green(), want.blue()),
+            "the preview's link-cell rule did not reach a pure-link cell's button — a \
+             selector that matches nothing generates and asserts exactly like one that \
+             matches, so this is the only place the difference is visible"
+        );
+    }
+
+    /// **A pure-link cell's border box fills its column** — the live half of the
+    /// regression the operator reported: a link cell's `.cell` border shrink-wrapped to
+    /// its caption and floated inside the column, so the table's vertical rules moved
+    /// from row to row while the text cells beside it stayed flush.
+    ///
+    /// The cause is not decidable from data — it is what GTK does with a non-Fill
+    /// `halign` at allocation time (the widget is given only its natural width), so the
+    /// oracle has to be a real allocation. Mutation: restoring
+    /// `btn.set_halign(Align::Center)` at the cell's construction fails this.
+    #[gtktest::test]
+    fn a_link_cells_border_box_fills_its_column() {
+        // A wide text cell above a narrow link cell in the SAME column, so the column
+        // is fitted much wider than the link caption wants — the only shape in which
+        // a shrink-wrapped box is distinguishable from a filled one.
+        let wide: gtk::Widget = gtk::Label::builder()
+            .label("a deliberately wide header cell")
+            .build()
+            .upcast();
+        let link = crate::widgets::table::link_cell_button(
+            "https://example.com/1",
+            "#295",
+            crate::mdtable::Align::Center,
+        );
+        // Built exactly as the renderer builds it — a framed button carries the
+        // theme's own button chrome, which is not what a table cell is.
+        link.set_has_frame(false);
+        link.add_css_class("cell");
+        let link_w: gtk::Widget = link.clone().upcast();
+        let table = ScribTableWidget::new(vec![vec![wide], vec![link_w]]);
+        table.set_bound_width(600);
+
+        let (total_w, total_h) = table.imp().layout.borrow().total;
+        // The link cell is the only cell in row 1, so its slot IS the column.
+        let col_w = table.imp().layout.borrow().rects[1].width();
+        table.allocate(total_w, total_h, -1, None);
+
+        // Two oracles, because the ambient theme has a say in the second. The table
+        // hands the cell its whole grid slot — that is the decision under test, and it
+        // is exact. What the cell's CSS box then does with that slot includes any
+        // margin the desktop theme puts on a `button` node (14px under the test
+        // environment's fallback theme, 0 under the app's own sheet), so the box is
+        // checked against the caption it must NOT be shrink-wrapped to instead.
+        let (_, nat_w, _, _) = link.measure(gtk::Orientation::Horizontal, -1);
+        assert_eq!(
+            link.allocation().width(),
+            col_w,
+            "the link cell must be allocated its whole grid slot; a non-Fill halign \
+             shrinks it to the caption and the column rule breaks"
+        );
+        assert!(
+            link.width() > nat_w,
+            "the cell's CSS box ({}px) must span more than its caption wants ({nat_w}px) \
+             — a box at the caption's own width IS the shrink-wrapped border",
+            link.width()
+        );
+        // And neither assertion is vacuous: the slot must be genuinely wider than the
+        // caption wants, or a shrink-wrapped box would satisfy them too.
+        assert!(
+            nat_w < col_w,
+            "fixture no longer discriminates: the caption's natural width {nat_w} must \
+             be under the fitted column width {col_w}"
+        );
+    }
 
     /// `set_bound_inset` narrows the fit target: after `set_bound_width(px)` the table's
     /// measured width is `≤ px − inset`, so an indented table fits inside the column its

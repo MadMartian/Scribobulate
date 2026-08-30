@@ -39,10 +39,44 @@ pub(crate) struct Placement {
     pub(crate) rects: Vec<CellRect>,
 }
 
-/// Fit the columns into `bound_w`, GUARANTEEING `sum(col_w) <= bound_w` AND
-/// `col_w[c] >= col_min[c]` (so no cell overflows its column → the table is
-/// never wider than the bound, which would summon the outer Automatic h-bar and
-/// re-arm the split-pane blank — see mod.rs and GTK4Rs/AP-23). Three cases:
+/// One column's two measurements, in pixels.
+///
+/// **Named so the pair cannot be transposed**, and named identically to
+/// `export::pdftable::ColumnWant`, which is this function's transcription into points.
+/// The two took their equivalent pairs in OPPOSITE orders — this one min-then-natural,
+/// the export's natural-then-minimum — so the cross-check test binding them had to
+/// hand-swap its arrays to be true. A transposed call neither panics nor warns: every
+/// column's floor becomes its want and vice versa, and the table merely lays out badly.
+///
+/// It also retires the `debug_assert_eq!` this function used to carry for the two
+/// slices' lengths: one slice of pairs cannot disagree with itself about how many
+/// columns there are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ColumnWant {
+    /// Max-content: the column's widest cell, unconstrained.
+    pub(crate) natural: i32,
+    /// Min-content: below this a cell overflows its column.
+    pub(crate) minimum: i32,
+}
+
+/// Fit the columns into `bound_w`.
+///
+/// **What is actually guaranteed, which is not what this said.** It claimed
+/// `sum(col_w) <= bound_w` AND `col_w[c] >= minimum[c]` unconditionally — and its own
+/// middle branch violates the first: when not even the minimums fit, it RETURNS the
+/// minimums, whose sum exceeds the bound by construction. That is the correct behaviour
+/// and the only honest one (the table is `sum(min)` wide and the pane h-scrolls), but a
+/// caller reading the guarantee and sizing something against it would have been wrong in
+/// exactly the case that matters.
+///
+/// So, restated as the code behaves:
+///   - `col_w[c] >= minimum[c]` — ALWAYS. No cell ever overflows its column.
+///   - `sum(col_w) <= bound_w` — WHENEVER THE MINIMUMS FIT. Where they do not, the result
+///     is `sum(minimum)` and the caller must expect to scroll; `widgets::table::mod`
+///     does, which is why the outer Automatic h-bar and the split-pane blank it can
+///     re-arm (GTK4Rs/AP-23) are not triggered by it.
+///
+/// Three cases:
 ///   - naturals fit → give each its natural plus an even share of the slack;
 ///   - even the minimums don't fit (very narrow pane) → use the minimums (the
 ///     table is `sum(min)` wide and h-scrolls — the only honest option);
@@ -53,18 +87,18 @@ pub(crate) struct Placement {
 ///     proportional-to-want scheme that would give nearly all space to the
 ///     widest column.
 ///
-/// `col_min` is assumed already clamped to at least [`MIN_COL_WIDTH`] by the
-/// caller (the measure loop). `col_nat` is normalised to `>= col_min` here, so
+/// Each column's `minimum` is assumed already clamped to at least [`MIN_COL_WIDTH`] by
+/// the caller (the measure loop). `natural` is normalised to `>= minimum` here, so
 /// callers need not pre-normalise it.
-pub(crate) fn fit_columns(col_min: &[i32], col_nat: &[i32], bound_w: i32) -> Vec<i32> {
-    let ncols = col_min.len();
-    debug_assert_eq!(ncols, col_nat.len(), "col_min/col_nat length mismatch");
+pub(crate) fn fit_columns(wants: &[ColumnWant], bound_w: i32) -> Vec<i32> {
+    let ncols = wants.len();
     if ncols == 0 {
         return Vec::new();
     }
 
+    let col_min: Vec<i32> = wants.iter().map(|w| w.minimum).collect();
     // Natural is never less than minimum.
-    let col_nat: Vec<i32> = (0..ncols).map(|c| col_nat[c].max(col_min[c])).collect();
+    let col_nat: Vec<i32> = wants.iter().map(|w| w.natural.max(w.minimum)).collect();
 
     let sum_min: i32 = col_min.iter().sum();
     let sum_nat: i32 = col_nat.iter().sum();
@@ -75,7 +109,7 @@ pub(crate) fn fit_columns(col_min: &[i32], col_nat: &[i32], bound_w: i32) -> Vec
         col_nat.iter().map(|&w| w + per).collect()
     } else if sum_min >= bound_w {
         // Even the minimums overflow — use them; the table h-scrolls.
-        col_min.to_vec()
+        col_min.clone()
     } else {
         // Water-fill: sort by natural width ascending so narrower columns are
         // offered their fair share first. A column whose want <= fair share
@@ -83,7 +117,7 @@ pub(crate) fn fit_columns(col_min: &[i32], col_nat: &[i32], bound_w: i32) -> Vec
         let mut order: Vec<usize> = (0..ncols).collect();
         order.sort_by_key(|&c| col_nat[c]);
 
-        let mut col_w = col_min.to_vec();
+        let mut col_w = col_min.clone();
         let mut pool = (bound_w - sum_min) as i64;
 
         for (i, &c) in order.iter().enumerate() {
@@ -144,31 +178,70 @@ pub(crate) fn place_cells(col_w: &[i32], row_h: &[i32], cells: &[CellPos]) -> Pl
 
 #[cfg(test)]
 mod tests {
+    /// Pair minimums with naturals for a test. Takes them in this function's own
+    /// documented order (minimum first, as the measure loop produces them) and builds
+    /// the pairs, so a fixture cannot express the transposition the type prevents.
+    fn wants(col_min: &[i32], col_nat: &[i32]) -> Vec<ColumnWant> {
+        assert_eq!(col_min.len(), col_nat.len(), "fixture length mismatch");
+        col_min
+            .iter()
+            .zip(col_nat)
+            .map(|(&minimum, &natural)| ColumnWant { natural, minimum })
+            .collect()
+    }
+
     use super::*;
+
+    /// **QA M08** — the contract the doc comment states, including its exception.
+    ///
+    /// The comment used to GUARANTEE `sum(col_w) <= bound_w` unconditionally, which its
+    /// own middle branch violates: when not even the minimums fit it returns the minimums,
+    /// whose sum exceeds the bound by construction. Both halves are pinned here so the
+    /// restated contract cannot drift back into the stronger, false one.
+    #[test]
+    fn the_stated_contract_holds_including_the_case_that_breaks_the_bound() {
+        // Minimums fit: both clauses hold.
+        let w = fit_columns(&wants(&[40, 30, 20], &[300, 200, 120]), 400);
+        assert!(w.iter().sum::<i32>() <= 400, "must fit the bound: {w:?}");
+        for (got, want) in w.iter().zip([40, 30, 20]) {
+            assert!(*got >= want, "no cell may overflow its column: {w:?}");
+        }
+
+        // Minimums do NOT fit: the floor clause still holds, the bound clause does not,
+        // and that is the documented exception rather than a defect.
+        let narrow = fit_columns(&wants(&[200, 150, 120], &[300, 200, 120]), 100);
+        for (got, want) in narrow.iter().zip([200, 150, 120]) {
+            assert_eq!(*got, want, "the minimums are returned verbatim: {narrow:?}");
+        }
+        assert!(
+            narrow.iter().sum::<i32>() > 100,
+            "and they exceed the bound, which is why the pane h-scrolls: {narrow:?}"
+        );
+    }
 
     #[test]
     fn fit_columns_empty_is_empty() {
-        assert!(fit_columns(&[], &[], 500).is_empty());
+        assert!(fit_columns(&wants(&[], &[]), 500).is_empty());
     }
 
     #[test]
     fn fit_columns_naturals_fit_shares_slack_evenly() {
         // sum_nat = 300 <= bound 360 ⇒ 60 slack / 3 cols = 20 each.
-        let col_w = fit_columns(&[50, 50, 50], &[100, 100, 100], 360);
+        let col_w = fit_columns(&wants(&[50, 50, 50], &[100, 100, 100]), 360);
         assert_eq!(col_w, vec![120, 120, 120]);
         assert!(col_w.iter().sum::<i32>() <= 360);
     }
 
     #[test]
     fn fit_columns_naturals_fit_exactly_no_slack() {
-        let col_w = fit_columns(&[50, 50], &[100, 100], 200);
+        let col_w = fit_columns(&wants(&[50, 50], &[100, 100]), 200);
         assert_eq!(col_w, vec![100, 100]);
     }
 
     #[test]
     fn fit_columns_minimums_overflow_returns_minimums() {
         // sum_min = 300 >= bound 200 ⇒ minimums, table h-scrolls.
-        let col_w = fit_columns(&[150, 150], &[400, 400], 200);
+        let col_w = fit_columns(&wants(&[150, 150], &[400, 400]), 200);
         assert_eq!(col_w, vec![150, 150]);
     }
 
@@ -178,7 +251,7 @@ mod tests {
         // min 50, want 70) is offered fair 150/2=75 first ⇒ takes its full 70;
         // the 5 surplus pools to the wide col (nat 280, min 50), which then
         // gets the rest. Total must equal bound and honour minimums.
-        let col_w = fit_columns(&[50, 50], &[280, 120], 250);
+        let col_w = fit_columns(&wants(&[50, 50], &[280, 120]), 250);
         assert_eq!(col_w.iter().sum::<i32>(), 250);
         assert!(col_w[0] >= 50 && col_w[1] >= 50);
         // Narrow column (index 1) got its full natural, not an even split.
@@ -190,7 +263,7 @@ mod tests {
     fn fit_columns_waterfill_residual_pixel_to_widest() {
         // Force an odd pool so integer division leaves a residual pixel that
         // must land on the widest (last-in-order) column; total stays == bound.
-        let col_w = fit_columns(&[10, 10, 10], &[200, 30, 40], 101);
+        let col_w = fit_columns(&wants(&[10, 10, 10], &[200, 30, 40]), 101);
         assert_eq!(col_w.iter().sum::<i32>(), 101);
         // Widest column is index 0 (nat 200) — it absorbs the residual.
         assert!(col_w[0] >= col_w[1] && col_w[0] >= col_w[2]);
@@ -199,8 +272,63 @@ mod tests {
     #[test]
     fn fit_columns_never_below_minimum() {
         // A degenerate natural below the minimum must still allocate >= min.
-        let col_w = fit_columns(&[80, 80], &[10, 10], 400);
+        let col_w = fit_columns(&wants(&[80, 80], &[10, 10]), 400);
         assert!(col_w.iter().all(|&w| w >= 80));
+    }
+
+    #[test]
+    fn fit_columns_respects_its_stated_contract_across_a_sweep_of_shapes() {
+        // Mirrors `pdftable`'s
+        // `every_width_respects_its_invariants_across_a_sweep_of_shapes`: a sweep of
+        // column counts and bounds spanning all three regimes (fits-outright, water-fill,
+        // floors-don't-fit), checking the two-clause contract this function's own doc
+        // comment states — `col_w[c] >= minimum[c]` always, `sum(col_w) <= bound_w`
+        // whenever the minimums fit — as a property rather than one example per regime.
+        for ncols in 1..8_usize {
+            let col_min: Vec<i32> = (0..ncols).map(|i| 10 + i as i32 * 5).collect();
+            let col_nat: Vec<i32> = col_min.iter().map(|&m| m * 4).collect();
+            let sum_min: i32 = col_min.iter().sum();
+            let sum_nat: i32 = col_nat.iter().sum();
+            for bound in [
+                (sum_min - 5).max(0),
+                sum_min,
+                (sum_min + sum_nat) / 2,
+                sum_nat,
+                sum_nat + 50,
+            ] {
+                let col_w = fit_columns(&wants(&col_min, &col_nat), bound);
+                assert_eq!(
+                    col_w.len(),
+                    ncols,
+                    "column count changed at ncols={ncols} bound={bound}"
+                );
+                for (i, &w) in col_w.iter().enumerate() {
+                    assert!(
+                        w >= col_min[i],
+                        "column {i} fell below its minimum at ncols={ncols} bound={bound}: \
+                         {col_w:?}"
+                    );
+                }
+                let total: i32 = col_w.iter().sum();
+                if sum_min < bound {
+                    assert!(
+                        total <= bound,
+                        "sum exceeded the bound though the minimums fit at ncols={ncols} \
+                         bound={bound}: {col_w:?}"
+                    );
+                } else {
+                    assert_eq!(
+                        total, sum_min,
+                        "minimums must be returned verbatim when they do not fit at \
+                         ncols={ncols} bound={bound}: {col_w:?}"
+                    );
+                }
+
+                // Determinism: the same inputs must produce the same outputs.
+                let col_w_again = fit_columns(&wants(&col_min, &col_nat), bound);
+                assert_eq!(col_w, col_w_again, "fit_columns is non-deterministic");
+            }
+        }
     }
 
     #[test]

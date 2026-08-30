@@ -328,7 +328,7 @@ by the call site.**
 | 2 | Live-preview re-render (editor edit) | rebuild (in-place) | — | ✓ | partial — relies on `value` survival, no explicit restore |
 | 3 | External reload — live **and** prompted | rebuild | ✓ | ✓ | ✓ `reload.rs` |
 | 4 | Runtime theme switch | rebuild | — | ✓ | ✓ (reuses the reload path) |
-| 5 | View-mode switch (edit↔split↔preview) | rebuild | ✓ | ✓ | ✗ uses `content_scroll_fraction` (drifts — should be the line anchor) |
+| 5 | View-mode switch (edit↔split↔preview) | rebuild | ✓ | ✓ | ✓ `content_reading_position` / `apply_content_reading_position` — a `readingpos::DocPosition`, which is stronger than the line anchor this row asked for: the two panes hold different text, so a line is meaningful in one and wrong in the other, whereas a document position each pane resolves for itself crosses the boundary |
 | 6 | Tab switch / deferred materialize / session restore | host | ✓ | ✓ | ✓ (materialize path) |
 | 7 | **Horizontal resize / window maximize-restore** | geometry | ◑ | ✓ | ✓ (preview) `size_allocate` raw-width re-anchor (ScrAP-162); editor pane not yet covered |
 | 8 | **Split-pane drag** (divider move → the preview pane's width changes) | geometry | ◑ | ✓ | ✓ (preview) — same re-anchor; the width key is **cause-agnostic**, so #7's fix covers this too. Live-verify pending |
@@ -472,6 +472,7 @@ The invalidation classes (matrix columns):
 | 4 | Pending marker-open request | marker-list **index** + buffer offset | ✓ | ✓ | ⚠ | Bounded by a wall-clock deadline and re-aimed each frame, but the target is a **positional index** into a list a re-render replaces — see the rule on positional references below |
 | 5 | Scroll re-anchor target line | buffer line | ✓ | ✓ | — | Re-read each frame; a drifted line mis-positions the viewport only, and the next settle corrects it |
 | 6 | Back/Forward history entry's **place** in a document (TDD §23) | heading **slug**, or a buffer line | ◑ | ✓ | ✓ | Two strengths, chosen by what the recording site can know. A slug is re-resolved against the tab's live heading map, and a render that no longer contains it **degrades the entry to "just this document"** rather than letting it point somewhere wrong (23.14). A line is the weak form — an arbitrary scroll position offers no stronger handle — and takes row 5's bargain: it clamps and mis-positions the viewport only |
+| 7 | Reading position carried across a view-mode switch | source bytes (`readingpos::DocPosition`) | ✓ | n/a | ✓ | Held only for the span of the swap — captured from the pane being left, resolved into the pane being entered — so class B cannot reach it (a wholesale replacement is not in flight during a mode switch), and the editor flushes to source before the capture so class A is settled. Class C is what makes it a `DocPosition` rather than a preview buffer offset: the preview is REBUILT by the very switch being crossed, so any reference into its buffer would be resolved against a collection that no longer exists |
 
 **Row 6's `◑` under content mutation is the one deliberate weakness in this matrix,
 and it is bounded rather than unnoticed.** A slug survives an edit (class A) by

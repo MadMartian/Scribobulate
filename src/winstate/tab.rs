@@ -53,7 +53,19 @@ pub(crate) struct TabState {
     /// Backing file path, or `None` for an untitled WELCOME window.
     pub(crate) path: RefCell<Option<PathBuf>>,
     /// Current source text (drives re-render on theme change / reload).
-    pub(crate) source: RefCell<String>,
+    ///
+    /// **PRIVATE, and written only through [`TabState::set_source`].** Every derived view
+    /// — the preview, the outline, the annotations list — renders from this and never from
+    /// the editor buffer, so text that reaches it unrepaired shows a correct editor beside
+    /// broken projections of it. That is not hypothetical: swap recovery assigned the
+    /// decoded body here verbatim while the buffer it wrote alongside was repaired by the
+    /// hook armed at its birth, and the whole in-crate suite stayed green because the
+    /// assertions read `editor_text()`.
+    ///
+    /// Seven call sites write it. Six were safe only because their values happened to come
+    /// from something already repaired; the setter makes that a property of the field
+    /// rather than of where each caller sourced its string.
+    source: RefCell<String>,
     /// Text as of the last load or successful save — the clean baseline the
     /// unsaved-changes check compares the editor against.
     pub(crate) saved_baseline: RefCell<String>,
@@ -320,6 +332,35 @@ pub(crate) struct TabInit {
 }
 
 impl TabState {
+    /// The current source text every derived view renders from.
+    ///
+    /// Read-only by design: see [`Self::set_source`] for why writing goes through a
+    /// choke point.
+    pub(crate) fn source(&self) -> std::cell::Ref<'_, String> {
+        self.source.borrow()
+    }
+
+    /// (An aside earned the hard way, twice in one session: the blanket substitution that
+    /// converted this file's readers to the accessor above also rewrote the accessor's own
+    /// body into a call to itself. A source-transforming operation whose pattern matches
+    /// the text it produces — ScrAP-321's fourth route. Caught by the compiler both times,
+    /// which is luck rather than method.)
+    ///
+    /// Replace the source text, repairing it on the way in.
+    ///
+    /// **The only writer**, so "the text every derived view renders from has no lone
+    /// carriage return" is a property of the FIELD rather than of whichever caller last
+    /// touched it. `crate::lineendings`' module doc names the doors that file-borne text
+    /// arrives through and records that repairing the editor buffer alone was the first
+    /// attempt at that defect — it looked convincing while every projection stayed broken.
+    /// This is the same guarantee for the other half of the pair.
+    ///
+    /// The substitution is length- and position-preserving, so every offset any caller
+    /// holds into this text still indexes the same logical position.
+    pub(crate) fn set_source(&self, text: &str) {
+        *self.source.borrow_mut() = crate::lineendings::normalize_lone_cr(text).into_owned();
+    }
+
     /// Construct a fresh tab, filling in the universal-default fields that do
     /// not vary across construction call sites (QA round-1 H7): both
     /// `window/mod.rs::build_window` (a window's first tab) and
@@ -456,6 +497,27 @@ impl TabState {
     /// Live text of the editor buffer.
     pub(crate) fn editor_text(&self) -> String {
         crate::saferizer::BufferText::of(&self.editor_buf).into_string()
+    }
+
+    /// The Markdown the reader is currently looking at, for `mode`: the live editor
+    /// buffer in the editor-backed modes — so a derived view tracks in-progress edits
+    /// (TDD 20.15) — and the stored source in preview, where the buffer is not what is
+    /// on screen.
+    ///
+    /// **THE answer, so a fourth consumer cannot pick a different one.** The outline
+    /// (`refresh_outline`), its scroll-spy (`current_heading_levels`) and the
+    /// annotations viewer (`refresh_annotations`) each carried this two-arm match
+    /// verbatim, and the coupling was held by a comment in one of them saying it
+    /// "matches `refresh_outline`" — a comment doing a function's job. The arms are not
+    /// interchangeable: pick the wrong one and a derived view silently shows the
+    /// pre-edit document while the pane beside it shows the edited one, which reads as
+    /// a refresh that did not fire rather than as a source that was never the same.
+    pub(crate) fn shown_source(&self, mode: crate::winstate::ViewMode) -> String {
+        use crate::winstate::ViewMode;
+        match mode {
+            ViewMode::Edit | ViewMode::Split => self.editor_text(),
+            ViewMode::Preview => self.source().clone(),
+        }
     }
 
     /// True when the editor differs from the saved baseline (unsaved changes).

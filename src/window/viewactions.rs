@@ -139,7 +139,7 @@ pub(super) fn register_view_actions(
 pub(super) struct SidebarSections<'a> {
     pub outline_section: &'a gtk::Box,
     pub annotations_section: &'a gtk::Box,
-    pub sidebar_box: &'a gtk::Box,
+    pub sidebar_paned: &'a gtk::Paned,
 }
 
 /// `win.view-mode` — the string-state action driving the Preview/Edit/Split swap
@@ -182,15 +182,18 @@ fn register_view_mode_action(window: &ApplicationWindow) {
             // D7: flush editor buffer → source when leaving edit or split, so the
             // preview that follows reflects any in-buffer edits.
             if old_mode.is_editor_visible() {
-                *st.source.borrow_mut() = st.editor_text();
+                st.set_source(&st.editor_text());
             }
 
             // Read source text AFTER the flush so the preview reflects edits.
-            let md = st.source.borrow().clone();
+            let md = st.source().clone();
 
             // Capture the reading position BEFORE the swap (content_box still shows
-            // the old content) so it can be carried onto the new view.
-            let old_frac = content_scroll_fraction(&window);
+            // the old content) so it can be carried onto the new view. A DOCUMENT
+            // position, not a scroll fraction: the two panes have different content
+            // heights, so a fraction re-derived on each crossing loses precision at
+            // both ends and ACCUMULATES over repeated round trips (TDD 7.5).
+            let old_pos = content_reading_position(&window);
 
             // ScrAP-58: the reused editor is NEVER
             // reparented on a mode switch (that was the use-after-free — reparenting
@@ -243,7 +246,7 @@ fn register_view_mode_action(window: &ApplicationWindow) {
             }
 
             // Carry the reading position across the mode switch.
-            apply_content_scroll(&window, new_mode, old_frac);
+            apply_content_reading_position(&window, new_mode, old_pos);
 
             // Put keyboard focus in the editor when it becomes visible so vertical
             // navigation (PageUp/PageDown, arrows) operates on it — in split mode
@@ -325,7 +328,7 @@ fn register_sidebar_actions(
     sidebar.outline_section.set_visible(outline_initial);
     sidebar.annotations_section.set_visible(annotations_initial);
     sidebar
-        .sidebar_box
+        .sidebar_paned
         .set_visible(outline_initial || annotations_initial);
 
     // ── win.outline-expand-all / win.outline-collapse-all ─────────────────────
