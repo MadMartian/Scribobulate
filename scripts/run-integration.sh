@@ -50,6 +50,31 @@
 # services deep and grows with the desktop, and one missed entry restores the hang.
 #
 #
+# 4. THE NESTING ORDER IS LOAD-BEARING: `xvfb-run` OUTSIDE, `dbus-run-session` INSIDE.
+#
+# ⚠ Inverted — which is how this ran until it was measured — the private bus is started
+# BEFORE the display exists, so it inherits the ambient `DISPLAY`. Every service it
+# activates then inherits that too, and the crowd from note 2 connects to the DEVELOPER'S
+# REAL X SERVER instead of the Xvfb this step exists to isolate. `xvfb-run` only rewrites
+# `DISPLAY` for the command it wraps, so wrapping `cargo test` alone isolates the tests and
+# nothing else.
+#
+# MEASURED 2026-08-30 on the reference host: inverted, one run made ~20 connections to the
+# live `:0` and printed `qt.qpa.xcb: could not connect to display :0` twenty-one times
+# alongside `Maximum number of clients reached`; the session's X server was at 251 of
+# X.org's 256-client default, so the step aborted under `G_DEBUG=fatal-criticals` with a
+# `SIGTRAP` naming the accessibility bus — note 1's failure, arriving by a different road
+# and immune to note 1's fix. In this order: zero contacts with `:0`, zero refusals, 1682
+# tests green.
+#
+# IT FAILS FAVOURABLY, which is why it survived. On a desktop with client slots to spare
+# the leak is invisible and every test passes; the step only goes red once the developer's
+# own session is full, at which point it reports a fault in the accessibility bus. So a
+# GREEN RUN IN THE INVERTED ORDER WAS NEVER EVIDENCE OF ISOLATION — it was evidence that
+# the machine had room. An isolation boundary has to enclose everything that inherits the
+# environment, not just the process under test.
+#
+#
 # 3. IT BOUNDS THE RUN.
 #
 # A wedged GTK suite is a real failure mode (ScrAP-166 is a whole entry about misdiagnosing
@@ -72,9 +97,10 @@ trap "rm -f '$log'" EXIT
 # `--kill-after` so a suite ignoring SIGTERM still dies rather than becoming the hang this
 # script exists to prevent.
 timeout --kill-after=60s "$BUDGET" \
+    xvfb-run -a \
     dbus-run-session -- \
     env G_DEBUG=fatal-criticals \
-    xvfb-run -a cargo test --features gtk-integration-tests \
+    cargo test --features gtk-integration-tests \
     >"$log" 2>&1
 rc=$?
 
