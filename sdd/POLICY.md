@@ -214,11 +214,18 @@ Before any change is considered valid, run these steps in order:
    no build while breaking a different platform's icon or Launch Services registration.
    Another is over the **citation FORM**, and it is the one rule here that bans a
    spelling rather than checking a target: an entry in `sdd/ANTI-PATTERNS.md` is cited
-   `ScrAP-N`, one in the `gtk4-rs` skill is cited `GTK4Rs/AP-N`, and **a bare `AP-N` is
-   illegal anywhere in the tree** (check 8). Illegal, not "means the skill" — it was this
+   `ScrAP-N`, one in the `gtk4-rs` skill `GTK4Rs/AP-N` and one of its techniques
+   `GTK4Rs/T-N`, one in the `general-engineering-principles` skill `GEP-N`, and **a bare
+   `AP-N` or `T-N` is illegal anywhere in the tree** (check 8). Illegal, not "means the skill" — it was this
    project's spelling historically and the skill's later, so its correct and incorrect
    uses are textually identical and no reader can tell a deliberate citation from one a
-   sweep missed. Both legal forms are deliberately **single tokens**: a two-word form is
+   sweep missed. **`sdd/ANTI-PATTERNS.md`'s own header is the authority on this list, and
+   this paragraph is a summary of it** — read that one before concluding a form is
+   unsanctioned. Said because this sentence enumerated only the first two for as long as
+   it existed, and a seat holding the register's pen answered from it rather than from the
+   register, told a peer that `GEP-N` was illegal, and was corrected by the peer quoting
+   the header back with line numbers — with about eighty `GEP-N` tombstones already in the
+   file. Every legal form is deliberately a **single token**: a two-word form is
    split by any Markdown or `rustfmt` wrap, and since a `GTK4Rs/AP-N` can only ever be
    checked for *form* (the skill need not be installed), its whole value is that a grep
    can **enumerate** the set a human must audit — which a wrapped citation silently
