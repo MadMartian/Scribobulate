@@ -145,6 +145,9 @@ impl ScanSet {
             for entry in walkdir::WalkDir::new(&dir).follow_links(false) {
                 let entry = entry.map_err(|why| format!("walking {root}: {why}"))?;
                 if entry.file_type().is_file() {
+                    if is_desktop_metadata(entry.path()) {
+                        continue;
+                    }
                     if let Some(rel) = relative(repo, entry.path()) {
                         paths.insert(rel);
                     }
@@ -343,4 +346,32 @@ pub fn illegal_tracked_paths(repo: &Path) -> Result<Vec<String>, String> {
         .into_iter()
         .filter(|path| win_illegal_path(path))
         .collect())
+}
+
+/// Desktop-manager metadata a file browser drops into any directory it is pointed at.
+///
+/// SKIPPED BY BASENAME, NOT BY AN `exclude` PREFIX, and the distinction is the whole point.
+/// These files are gitignored and machine-dependent — whether one exists depends on which
+/// directories a developer happened to open in Finder — which is exactly the class the
+/// contract's `exclude` keyword describes: a member whose presence makes the gate's verdict
+/// a fact about the machine rather than about the commit. But an `exclude packaging/.DS_Store`
+/// line fixes only the directory someone has already browsed; the next one appears under
+/// `src/` or `data/` the moment anyone browses there. The hazard is a property of the FILE,
+/// so the skip is too — the same reasoning that put the symlink rule in code rather than in
+/// a contract line.
+///
+/// FOUND BY THE THREE-PLATFORM SCAN-SET COMPARISON, on its first real run: macOS enumerated
+/// 433 members where Linux enumerated 432, and the difference was `packaging/.DS_Store`. That
+/// is the divergence POLICY § "Continuous integration" keeps the parity job for, and it is
+/// worth recording that retiring the two shell ports did NOT remove it — one implementation
+/// removes port divergence, and this was the filesystem answering differently.
+///
+/// The latent half, INFERRED and not measured: `.DS_Store` is binary and stores filenames,
+/// and set members are read as text. A path- or citation-shaped token inside one could raise
+/// a finding that only a macOS seat can reproduce. Skipping the file forecloses that too.
+fn is_desktop_metadata(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".DS_Store")
+    )
 }

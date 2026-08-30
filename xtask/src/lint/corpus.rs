@@ -384,6 +384,44 @@ fn the_ps1_encoding_predicate_discriminates() {
     );
 }
 
+// ── Desktop metadata never reaches the scan set ───────────────────────────────
+
+/// The macOS seat's `.DS_Store` finding, pinned so the skip cannot be dropped.
+///
+/// TWO ASSERTIONS, BOTH REQUIRED, for the reason the symlink case states: without the
+/// control, the skip assertion passes vacuously the day the predicate widens into skipping
+/// everything, or the day the walk stops finding anything at all.
+///
+/// PLANTED IN A SCRATCH TREE, never in the working copy — this repository is developed on
+/// Linux, so the file this defends against is one no Linux seat will have lying around to
+/// notice a regression with. That asymmetry is the entire reason the skip needs a test
+/// rather than a comment.
+#[test]
+fn desktop_metadata_is_skipped_and_ordinary_files_are_not() {
+    let contract = real_contract();
+    let tree = ScratchTree::new(&contract);
+    let root = contract
+        .roots
+        .first()
+        .expect("the contract declares a root");
+
+    tree.plant(&format!("{root}/.DS_Store"));
+    tree.plant(&format!("{root}/lint-scan-control.md"));
+
+    let scan = ScanSet::build(tree.path(), &contract).expect("the scratch tree builds");
+
+    assert!(
+        scan.paths
+            .iter()
+            .any(|path| path.ends_with("lint-scan-control.md")),
+        "the control file did not reach the set, so this proves nothing about the skip"
+    );
+    assert!(
+        !scan.paths.iter().any(|path| path.contains(".DS_Store")),
+        "desktop metadata reached the scan set"
+    );
+}
+
 // ── The scan set ──────────────────────────────────────────────────────────────
 
 fn repo() -> PathBuf {
