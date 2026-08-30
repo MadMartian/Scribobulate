@@ -593,9 +593,28 @@ the removal:
   directory.
 
 Either route removes the install directory, the ProgID, the `OpenWithProgids`
-entries and the `RegisteredApplications` entry — every registry write carries an
-`uninsdeletekey` or `uninsdeletevalue` flag, so the registration comes back out with
-the install.
+entries and the `RegisteredApplications` entry.
+
+**How the registry writes come back out, precisely — because the obvious summary is
+wrong and copying it would leak a key.** The `[Registry]` section has 13 writes and
+only 7 flags, so "every write is flagged" is a false description of a true outcome.
+The actual arrangement is two shapes:
+
+- **A subtree root flagged `uninsdeletekey`, which takes its children with it.**
+  `Software\Classes\Scribobulate.Document` and `Software\Scribobulate\Capabilities`
+  each carry the flag on their *first* write; the three further writes under each
+  (`FriendlyAppName`, `DefaultIcon`, `shell\open\command`; the second `Capabilities`
+  value and the two `FileAssociations` entries) carry none and need none.
+- **An individual value flagged `uninsdeletevalue`**, for the five writes that land
+  *outside* those two subtrees and so have no flagged root above them: the two
+  `OpenWithProgids` entries, the two default-handler values, and the
+  `RegisteredApplications` entry.
+
+The rule to carry away when adding a write: a value under an already-flagged subtree
+root needs nothing, and a value anywhere else needs its own flag or it is left
+behind. Reading it as "flag every write" is harmless; reading it as "writes are
+cleaned up automatically" is how a new subkey root ships without a flag and never
+comes out.
 
 **Anything you created after installing is left alone.** The `.iss` has no
 `[UninstallDelete]` section and names no user directory, so your themes at
