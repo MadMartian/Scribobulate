@@ -1,7 +1,14 @@
 # Windows packaging
 
-Builds a self-contained Scribobulate install for Windows: the release binary plus
-the GTK4 runtime it needs, wrapped in a per-user installer.
+Builds a Scribobulate install for Windows: the release binary plus the GTK4
+runtime it needs, wrapped in a per-user installer.
+
+**Not self-contained, and the exception is deliberate.** Everything GTK needs
+ships inside the install; Microsoft's C runtime does not, and the installer runs
+Microsoft's own redistributable instead. The reasoning is in
+[The MSVC runtime](#the-msvc-runtime-and-why-this-machine-cannot-verify-it) below —
+read it before "fixing" the omission, because copying those DLLs app-local is the
+arrangement that was deliberately reversed.
 
 ## Prerequisites
 
@@ -9,9 +16,21 @@ the GTK4 runtime it needs, wrapped in a per-user installer.
 |---|---|
 | Rust (MSVC toolchain) | `winget install --id Rustlang.Rustup` |
 | MSVC + Windows SDK | Visual Studio 2022 with the C++ workload |
+| **The C++ redistributable component** | Part of the same C++ workload — `package.ps1` embeds `vc_redist.x64.exe` in the installer and **throws** if it is absent. See the note below |
 | MSYS2 | `winget install --id MSYS2.MSYS2` — **genuinely required, not a precaution**: gvsbuild's first run installs `m4`, `bison`, `flex`, `make`, `patch` and `diffutils` into it via `pacman` and drives the autotools-based upstream steps through them |
 | gvsbuild | `pip install --user gvsbuild` |
 | Inno Setup 6 | `winget install --id JRSoftware.InnoSetup` |
+
+**The redistributable is a PACKAGING prerequisite, not a build one**, and it fails
+at the worst moment: `cargo build` and `stage.ps1` never touch it, so a machine
+without it builds and stages perfectly and then throws at the last step of a long
+run. `package.ps1`'s `Find-VCRedist` reads the version out of
+`VC\Auxiliary\Build\Microsoft.VCRedistVersion.default.txt` under the Visual Studio
+root and expects `VC\Redist\MSVC\<version>\vc_redist.x64.exe` beside it. It is
+discovered rather than hardcoded because the version differs per Visual Studio
+install, so a constant would be wrong on somebody's box. If the throw names a path
+that does not exist, the C++ workload was installed without its redistributable
+component; add it in the Visual Studio Installer.
 
 ## Pipeline
 
@@ -27,13 +46,21 @@ $env:LIB = "C:\gtk-build\gtk\x64\release\lib;$env:LIB"
 $env:INCLUDE = "C:\gtk-build\gtk\x64\release\include;$env:INCLUDE"
 cargo build --release
 
-# 3. Stage the redistributable tree
+# 3. OPTIONAL — stage the tree on its own, to inspect what will ship.
+#    Step 4 does this for you; running both stages it twice.
 .\packaging\windows\stage.ps1
 
-# 4. Compile the installer — use package.ps1 rather than calling ISCC by hand,
-#    because it discovers vc_redist.x64.exe and passes /DRedistFile
+# 4. Stage and compile the installer. Use this rather than calling ISCC by hand:
+#    it invokes stage.ps1 itself, discovers vc_redist.x64.exe and passes
+#    /DRedistFile, and locates ISCC.exe in either of its two normal homes.
 .\packaging\windows\package.ps1
 ```
+
+**Step 3 is not a prerequisite of step 4** — `package.ps1` calls `stage.ps1`
+directly, forwarding `-GtkPrefix` so both halves build against one GTK. Run step 3
+alone when you want to look at the staged tree without spending the Inno Setup
+compile; running it before step 4 is harmless (the output directory is cleared at
+the start of every stage) but does the work twice.
 
 **Two of those four are easy to omit and neither failure names them.** Setting only
 `PKG_CONFIG_PATH` and `PATH` gets you past `pkg-config` and then fails at link time with
@@ -78,7 +105,7 @@ is present on the seat that wrote this, so the end-to-end claim is recorded here
 
 | Verified | How | What it does not cover |
 |---|---|---|
-| Nothing else needs a CRT DLL | `dumpbin /dependents` over all 38 staged binaries: 37 import `vcruntime140.dll`, `vcruntime140_1.dll` is imported by `cairo-2.dll` alone, and no `msvcp140`/`concrt140`/`mfc`/`vcomp`/`vccorlib` appears anywhere | — |
+| Nothing else needs a CRT DLL | `dumpbin /dependents` over all **36** staged binaries (33 DLLs in `bin\`, `scribobulate.exe`, `gdbus.exe`, and the one gdk-pixbuf loader): **all 36** import `vcruntime140.dll`, `vcruntime140_1.dll` is imported by `cairo-2.dll` alone, and no `msvcp140`/`concrt140`/`mfc`/`vcomp`/`vccorlib` appears anywhere | — |
 | The detector's *negative* branch | Registry read returns `Installed=1`, version 14.44.35211; the prerequisite is skipped and Setup raises no prompt | that it correctly says **yes** on a machine without the runtime |
 | The redistributable is extracted before it is run | detector forced True in a throwaway build; the probe found the file present in `{tmp}` | that `vc_redist.x64.exe` then installs successfully |
 | **Refusal leaves the machine untouched** | detector forced True with the exec target absent → Setup exit code **7**, install directory never created, zero files written | that the same happens specifically on a dismissed UAC prompt |
@@ -101,8 +128,9 @@ from a different GTK than the binary was built against.
 **`ISCC.exe` lives in one of two places and both are normal.**
 `winget install --id JRSoftware.InnoSetup` defaults to **user** scope
 (`%LOCALAPPDATA%\Programs\Inno Setup 6\`, as above); a machine-scope install lands in
-`%ProgramFiles(x86)%\Inno Setup 6\`. `pipeline.ps1 -Package` probes `iscc` on `PATH`
-and then both, so it does not need to be told.
+`%ProgramFiles(x86)%\Inno Setup 6\`. `package.ps1`'s `Find-Iscc` probes `iscc` on
+`PATH` and then both, so it does not need to be told. (`pipeline.ps1 -Package`
+reaches it by calling `package.ps1`; the probe is not in the pipeline runner.)
 
 **`/DStageDir` is not optional.** The `.iss` opens with `#ifndef StageDir / #error`,
 so omitting it does not produce a wrongly-rooted installer — it produces none.
@@ -432,13 +460,21 @@ package rebuilds the whole dependency chain — including the fragile `gettext` 
 
 ```
 Scribobulate\
-  bin\    scribobulate.exe + 33 DLLs
+  LICENSE                      the app's own licence
+  THIRD-PARTY-LICENSES.md      generated at build time from notices\
+  bin\    scribobulate.exe + gdbus.exe + 33 DLLs
   lib\gdk-pixbuf-2.0\2.10.0\   loaders.cache + loaders\
   share\glib-2.0\schemas\      gschemas.compiled
   share\icons\                 Adwaita, hicolor
   share\gtksourceview-5\       RNG/DTD schemas only
-  share\scribobulate\          themes.toml
+  share\licenses\<Id>\         one directory per licences.psd1 row
+  share\scribobulate\          themes.toml, sprites\
 ```
+
+Measured on a staged tree: 905 files, 45.2 MB, of which 36 are binaries, and
+`share\licenses\` holds 39 texts across 35 component directories. `stage.ps1`
+prints both counts as it runs (`Staged 39 licence texts for 35 components`), so a
+divergence from this block is visible without a diff.
 
 GTK derives its prefix on Windows by taking the path of the loaded GLib DLL and
 stripping a trailing `bin`. **DLLs must therefore live in `<root>\bin` for
@@ -457,6 +493,20 @@ Notes on the contents:
 - **`loaders.cache` is copied verbatim, never regenerated.** gvsbuild writes it with
   a relative loader path, so it relocates cleanly; regenerating it on the build
   machine would bake in absolute paths.
+- **`gdbus.exe` is not optional tooling.** GIO has no Win32-native uniqueness
+  backend, so `GApplication` negotiates over a D-Bus session bus here exactly as on
+  Linux, and GLib autolaunches that bus by spawning `gdbus.exe` from beside the
+  loaded GLib DLL. Omit it and every launch elects itself primary: one process per
+  document, silently (ScrAP-249). It is invisible from a dev-tree run, where
+  gvsbuild's `bin` is on `PATH` — test single-instance against the STAGED tree.
+- **The licence texts are staged from `licenses.psd1`, one directory per row.**
+  `LICENSE` and `THIRD-PARTY-LICENSES.md` go to the install root because they cover
+  the whole distribution; a notice that covers one DLL in `bin\` goes under
+  `share\licenses\<Id>\` instead. `verify-licenses.ps1` is the gate over that
+  arrangement — see [Licence staging](#licence-staging-and-its-gate).
+- **`THIRD-PARTY-LICENSES.md` is generated, not authored.** `build.rs` builds it
+  from the files in `notices\`, and it is not committed. Edit `notices\*.md`; a
+  change made to the generated file is overwritten by the next build.
 - **`themes.toml` ships as a reference copy, not as a requirement.** The same file is
   compiled into the binary (`include_str!`), so every shipped theme resolves whether
   or not this copy exists — deleting it from an install changes nothing on screen. It
@@ -466,6 +516,43 @@ Notes on the contents:
   path row 3 (`$XDG_DATA_DIRS`), so a user override still wins over it. Verified on a
   staged tree by perturbing this copy and watching the perturbation reach the screen —
   the only check that distinguishes "shipped" from "actually read".
+
+## Licence staging, and its gate
+
+`licenses.psd1` says which upstream project every staged file belongs to and where
+its licence text comes from. `stage.ps1` copies one text per row into
+`share\licenses\<Id>\`, and puts `LICENSE` and `THIRD-PARTY-LICENSES.md` at the
+install root — the split is by *scope*: a notice covering the whole distribution
+goes to the root, a notice covering one DLL goes beside the other component
+notices.
+
+```powershell
+.\packaging\windows\verify-licenses.ps1              # check a staged tree against the table
+.\packaging\windows\verify-licenses.ps1 -Report      # list every row and what it resolved to
+.\packaging\windows\verify-licenses.ps1 -SelfTest    # prove the checker can fail
+```
+
+**It is not wired into the pipeline, the contract or the workflow** — nothing runs
+it for you, so run it after a staging change. It fails on four disagreements, and
+the last is the one that earns its keep:
+
+1. a staged file with **no row** — somebody else's code shipped unattributed;
+2. a row with **no staged file** — the table describes an artefact that no longer
+   exists, which is how a manifest becomes fiction while every row still reads
+   correctly;
+3. a row whose licence text is **missing** — gvsbuild ships empty `share\doc`
+   directories for freetype, graphene and libxml2, so a table written from a
+   directory listing names files that are not there;
+4. a row whose licence text is **not the licence**. Each row declares a string
+   that must occur in its Source, because file-existence is a predicate standing
+   in for a semantic question and it answers "fine" for `pcre2\COPYING` (four
+   lines pointing at a file that is not shipped), `cairo\COPYING` (a summary
+   pointing at two that are not shipped), and `gettext\COPYING` (the GPL-3.0 for
+   the gettext *tools*, where the DLL we ship is libintl under LGPL-2.1).
+
+`THIRD-PARTY-LICENSES.md` is **generated** by `build.rs` from `notices\*.md` and is
+not committed. Change a notice by editing its file in `notices\`; edits to the
+generated file are overwritten by the next build.
 
 ## Installer behaviour
 
@@ -481,9 +568,6 @@ File associations follow an opt-in model:
   that box, which is unchecked by default. Silently seizing a file type is the kind
   of thing users have to go and undo.
 
-Uninstall removes the install directory, the ProgID, the `OpenWithProgids` entries
-and the `RegisteredApplications` entry.
-
 **The installer is unsigned**, so SmartScreen warns on first run when it has been
 downloaded rather than built locally, and the publisher shows as unknown in the UAC
 and Programs-and-Features surfaces. Fixing this needs a code-signing certificate, not
@@ -495,3 +579,31 @@ writes.** Inno's own uninstall registration writes some of the same keys the
 `[Registry]` section does, so `DisplayIcon` or `InstallDate` showing a previous
 package's value proves nothing about whether your edit applied — every ambiguous
 witness costs a re-run to interpret.
+
+## Uninstalling
+
+**Windows uninstalls through Apps & Features, not through a script in this
+repository.** The install is registered with Windows by Inno Setup, so Windows owns
+the removal:
+
+- **Settings ▸ Apps ▸ Installed apps** (Windows 11) or **Settings ▸ Apps ▸ Apps &
+  features** (Windows 10) — find **Scribobulate**, then **Uninstall**.
+- Or use the **Uninstall Scribobulate** shortcut in the Start menu group, which the
+  installer creates pointing at Inno Setup's own uninstaller in the install
+  directory.
+
+Either route removes the install directory, the ProgID, the `OpenWithProgids`
+entries and the `RegisteredApplications` entry — every registry write carries an
+`uninsdeletekey` or `uninsdeletevalue` flag, so the registration comes back out with
+the install.
+
+**Anything you created after installing is left alone.** The `.iss` has no
+`[UninstallDelete]` section and names no user directory, so your themes at
+`%APPDATA%\scribobulate\themes.toml`, your configuration and your session state
+survive an uninstall and are still there for a reinstall.
+
+**`./uninstall.sh` in the repository root does not work here, by design.** It is a
+`uname -s` router for the platforms that install from source; on a Windows shell it
+refuses and points at this section rather than half-removing an install it did not
+create. There is nothing to run in its place — the two routes above are the whole
+answer.
