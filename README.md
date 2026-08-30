@@ -176,8 +176,16 @@ Homebrew libraries at runtime. More: [`packaging/macos/README.md`](packaging/mac
 ### Windows
 
 Run the installer (`Scribobulate-<version>-x64-setup.exe`) — per-user, no admin
-prompt, runtime included. Building from source:
+prompt, GTK runtime included. Building from source:
 [`packaging/windows/README.md`](packaging/windows/README.md).
+
+**Microsoft's Visual C++ runtime is a separate prerequisite** and the installer
+does not ship it. Scribobulate and the bundled GTK libraries import
+`VCRUNTIME140.dll`, which Windows does not include — the UCRT that *is* part of
+Windows 10 and later is a different runtime. Most machines already have it from
+some other application, so if the install completes and the app then fails to
+start, install [Microsoft's Visual C++ Redistributable
+(x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) and launch it again.
 
 ### Tips (all platforms)
 

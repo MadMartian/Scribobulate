@@ -37,6 +37,7 @@ described from a different vantage point.
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | J | Any | Upstream | A paragraph that mixes fonts (any inline-code span) can lay out a few pixels wider than the wrap width it was given, summoning the preview's Automatic horizontal scrollbar and intermittently blanking the pane until a resize | Closed |
 | L | Any | Test | `lint-references` check 7 cannot see an app ID that has the canonical one as a strict PREFIX — `com.extollit.scribobulated` passes both halves of the check | Low |
+| M | Windows | Production | The installer does not install Microsoft's Visual C++ runtime, so on a machine without it the app installs and then fails to start; the fix exists on the unmerged `ci` branch | Medium |
 
 ## A. Tables are selection islands
 
@@ -603,3 +604,51 @@ the existing `!= canonical` filter report the superset as foreign, which also wa
 presence half re-expressed as a whole-identifier test rather than a substring one. Both
 halves should change together, and the check is mutation-tested, so the mutation has to
 be re-chosen with them.
+
+## M. The Windows installer leaves the Visual C++ runtime to chance
+
+**Severity**: Medium (a first-run failure on a clean machine, and the last thing the
+installer does is launch the app — so it reads as "it would not install")
+
+`scribobulate.exe` and the staged GTK tree import `VCRUNTIME140.dll` (plus
+`VCRUNTIME140_1.dll`, via `cairo-2.dll`). Windows does not ship it; the
+`api-ms-win-crt-*` imports beside it are the UCRT, which it does. The installer neither
+installs it nor checks for it, so on a machine that has never had a Visual C++
+redistributable the app cannot start. `scribobulate.iss`'s `[Run]` section launches the
+app post-install, so the failure is the last thing the user sees.
+
+**MEASURED** by the Windows seat (`dumpbin /DEPENDENTS`, VS2022 14.44.35207): 33 staged
+modules import `VCRUNTIME140.dll`; zero CRT DLLs are staged; the gvsbuild prefix has none
+to stage. **A standing gap, never a regression** — `git log` on `scribobulate.iss` shows
+one commit in its whole history, and `git log -S vcruntime -- packaging/windows/stage.ps1`
+is empty, so this line has never shipped it.
+
+⛔ **Do NOT fix this by staging `vcruntime140.dll` into `stage.ps1`.** That is the obvious
+move and it is the one the remedy below explicitly reversed: copying the DLLs in makes the
+project a redistributor of Microsoft's Distributable Code, whose terms require an
+end-user click-through that no file vendored into this repository can present. The licence
+problem arrives with the DLLs.
+
+**Where the remedy is**: the unmerged `ci` branch, which adds an Inno Setup
+`PrepareToInstall` that runs Microsoft's own `vc_redist.x64.exe` when a registry probe
+finds the runtime absent or below the embedded redist's version. Running Microsoft's
+installer is what satisfies the click-through, which is why that shape was chosen. `ci`
+is 9 ahead of master and ~96 behind, so this is a port of three things (the `[Code]`
+block, its `dontcopy` source entry, and the redist discovery in `package.ps1`), not a
+merge. `1fd4f5c` also rewrites `stage.ps1`; that half removes an app-local copy master
+never had and must not be ported.
+
+**Why it is not fixed here**, and this is the part to read before acting: **the remedy on
+`ci` has never been verified against the condition it exists for.** Every machine able to
+build this project already has the CRT, so a staged launch on a build box proves nothing
+either way. The observation that means something is a PAIR — runtime absent with the
+bootstrapper disabled must fail to start, and the bootstrapper must then make it start —
+and that needs a clean Windows image no seat currently has. Porting it would move an
+unverified remedy rather than a proven one. Two live possibilities also remain open: the
+report may have come from a `ci` build, in which case the fault is *in* the bootstrapper
+(a 32-bit Setup reading a redirected registry view, a declined elevation, a redist below
+the compiled floor) rather than in its absence.
+
+**Also owed when it lands**: `THIRD-PARTY-LICENSES.md` covers only the `two-face` grammar
+assets today. Embedding `vc_redist.x64.exe` in the installer puts a third-party
+redistributable in our artefact and belongs in that document.
