@@ -86,3 +86,26 @@ own `packaging/<os>/` directory rather than in a shared script's branches.
   `rpm` package installed; no dependency here has been resolved against a real
   Fedora or openSUSE repository and the package has never been installed on one.
   Treat a successful build as "the artefact is well-formed", not "it installs".
+
+## Uninstalling a from-source install
+
+`./uninstall.sh` at the repository root, or `packaging/linux/uninstall.sh` here —
+the root file is a `uname -s` router and running this one directly is equivalent.
+
+**It removes exactly what `install.sh` put there**, and the list is kept in step with
+`payload.sh` by hand: the binary from `$XDG_BIN_HOME`, the icon, the desktop entry,
+`themes.toml`, and the `sprites/` directory. It then `rmdir`s
+`$XDG_DATA_HOME/scribobulate` **only if emptying it left nothing** — a file of your
+own in there is not ours to delete, which is why that one is `rmdir` and not `rm -rf`.
+
+**There is no uninstall direction to `payload.sh`.** The `.deb` and `.rpm` get their
+removal from dpkg's and rpm's own file manifests, so only the from-source route needs
+a remover — which is precisely why this script has to be edited in the same change
+that adds a file to `stage_payload`. It is the one place the payload is restated.
+
+**It does not touch your data.** `~/.config/scribobulate/` and session state are left
+alone; nothing here walks a tree deleting.
+
+**`.deb` / `.rpm` installs are removed by the package manager** (`apt remove
+scribobulate`, `dnf remove scribobulate`), not by this script.
+

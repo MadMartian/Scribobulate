@@ -138,6 +138,13 @@ scribobulate path/to/document.md
 ./uninstall.sh               # removes both
 ```
 
+`./install.sh` at the repository root is the canonical entry point on every
+platform — a `uname -s` router holding no install logic, which dispatches here.
+Running `packaging/macos/install.sh` directly is equivalent and is the form to use
+when you are already working inside this directory. The router is named first
+deliberately: documenting the direct path as primary is how the router came to be
+unmentioned in every README that existed.
+
 Builds the bundle (via `bundle.sh`) and symlinks its own executable —
 `Scribobulate.app/Contents/MacOS/scribobulate` — into Homebrew's `bin/`
 directory, which this project already requires for its GTK4 dependencies and

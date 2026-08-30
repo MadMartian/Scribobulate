@@ -141,13 +141,20 @@ cargo build --release
 ./target/release/scribobulate path/to/document.md
 ```
 
-To install a source build into `~/.local` — desktop entry, icon, man page and the
-Markdown file association, no root:
+Or install from source into `~/.local` — binary, desktop entry, icon, themes, man
+page and the third-party notices — which also registers Scribobulate as a Markdown
+handler so a double-click in your file manager opens it:
 
 ```bash
-packaging/linux/install.sh      # builds, then installs
-packaging/linux/uninstall.sh    # removes it again
+./install.sh          # needs cargo and the -dev libraries above
+./uninstall.sh        # removes what it installed
 ```
+
+`./install.sh` and `./uninstall.sh` are the entry points on every platform. They
+hold no install logic — each is a `uname -s` router that dispatches to
+`packaging/<os>/`, so the same two commands work wherever you are and each
+platform's answer lives in one place. Details:
+[`packaging/linux/README.md`](packaging/linux/README.md).
 
 To build the packages yourself, `packaging/linux/build-deb.sh` and
 `build-rpm.sh` (the latter needs `rpm` installed on a Debian host). All three routes
@@ -171,13 +178,19 @@ packaging/macos/bundle.sh          # -> target/macos/Scribobulate.app
 open target/macos/Scribobulate.app --args path/to/document.md
 ```
 
-Or `packaging/macos/install.sh` to also get a `scribobulate` command on PATH
-(symlinked into Homebrew's `bin/`, so it needs no `sudo`):
+Or `./install.sh` to also get a `scribobulate` command on PATH (symlinked into
+Homebrew's `bin/`, so it needs no `sudo`):
 
 ```bash
-packaging/macos/install.sh
+./install.sh
 scribobulate path/to/document.md
+./uninstall.sh        # removes the symlink and the built .app
 ```
+
+`./install.sh` dispatches to `packaging/macos/install.sh`; running that directly
+is equivalent. Use `bundle.sh` above when you want the `.app` and nothing on your
+PATH. **A copy you dragged to `/Applications` from a `.dmg` is a separate thing**
+and `./uninstall.sh` deliberately does not delete it — it reports it instead.
 
 Not a self-contained redistributable — the built app still links these
 Homebrew libraries at runtime. More: [`packaging/macos/README.md`](packaging/macos/README.md).
@@ -185,8 +198,11 @@ Homebrew libraries at runtime. More: [`packaging/macos/README.md`](packaging/mac
 ### Windows
 
 Run the installer (`Scribobulate-<version>-x64-setup.exe`) — per-user, no admin
-prompt, GTK runtime included. Building from source:
-[`packaging/windows/README.md`](packaging/windows/README.md).
+prompt, GTK runtime included. **Uninstall through Settings ▸ Apps**, or the Start
+menu's *Uninstall Scribobulate* shortcut; `./uninstall.sh` is for the platforms
+that install from source and refuses here rather than half-removing an install it
+did not create. Building from source, and what an uninstall does and does not
+take with it: [`packaging/windows/README.md`](packaging/windows/README.md).
 
 **Microsoft's Visual C++ runtime is a separate prerequisite** and the installer
 does not ship it. Scribobulate and the bundled GTK libraries import
