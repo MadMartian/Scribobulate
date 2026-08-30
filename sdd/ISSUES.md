@@ -30,7 +30,6 @@ described from a different vantage point.
 | ID | Platform | Scope | Issue | Severity |
 |----|----------|-------|-------|----------|
 | A | Any | Upstream | Tables are selection islands; cells are individually selectable but not part of the continuous buffer | Closed |
-| B | Any | Production | A `~~strikethrough~~` fence that wraps other inline markup (`~~a **bold** b~~`) renders the `~~` literally | Low |
 | D | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
 | F | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in roughly one full run in four, at a varying site | Medium |
 | G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
@@ -134,33 +133,6 @@ triple-click-line, keyboard selection and PRIMARY ownership — all of which GTK
 free today, as the probe's control demonstrates — to un-break a Low-severity limitation
 nobody has asked for. It would be a deliberate project chosen on product grounds, not an
 increment, and it should not be started from this entry.
-
-## B. A strikethrough fence wrapping other inline markup renders the `~~` literally
-
-**Severity**: Low (rare authoring pattern; plain `~~struck~~` is unaffected)
-
-Superscript (`^x^`), subscript (`~x~`) and strikethrough (`~~x~~`) are parsed by this
-crate's own tight-syntax scanner (`renderer::scan_scripts`), because pulldown-cmark's
-native versions use flanking rules that reject the tight Pandoc syntax authors type and
-fragment multi-tilde lines (see ScrAP-66). The scanner runs **per pulldown
-`Text` event**. A `~~ … ~~` fence whose content contains *other inline markup* —
-`~~a **bold** b~~` — is split by pulldown into `"~~a "`, `Strong("bold")`, `" b~~"`, so
-the two `~~` halves never meet in one scanned run and the fence is not recognised: the
-`**bold**` still renders bold, but the surrounding `~~` show as literal characters and
-no strike is applied. Plain `~~struck text~~` (no nested markup), the overwhelmingly
-common case, renders correctly.
-
-A related, rarer edge: `x\^2\^` (escaped literal carets) cannot be distinguished from
-`x^2^` after pulldown has consumed the backslash escapes, so it renders as a superscript.
-
-**Mitigation options**:
-- **Coalesce adjacent inline events before scanning**: buffer consecutive `Text` (and
-  re-emit nested `Strong`/`Emphasis`/etc.) within a paragraph and scan the reassembled
-  run, so a fence can span nested markup. Non-trivial control-flow change to the renderer.
-- **Accept the limitation (current state)**: nested markup inside strikethrough is rare;
-  plain strikethrough and all tight super/subscript work. **TDD 10.10** makes the
-  boundary explicit — it blesses the plain `~~struck~~` case as a contract and scopes
-  the wrapping case (`~~a **bold** b~~`) OUT as this accepted limitation.
 
 ## D. A large document pegs a CPU core at ~100% while idle (GTK/Pango relayout loop that never converges)
 

@@ -244,7 +244,12 @@ mod tests {
                 kind: RawKind::End(Construct::Paragraph),
             },
         ];
-        build(md, &evs, n)
+        build(
+            md,
+            &evs,
+            n,
+            &std::rc::Rc::new(crate::renderer::BlockScripts::scan(md)),
+        )
     }
 
     /// A copymap for two plain paragraphs "para one\n\npara two" (the `\n\n` separator
@@ -283,7 +288,8 @@ mod tests {
                 kind: RawKind::End(Construct::Paragraph),
             },
         ];
-        (build(&md, &evs, 18), md)
+        let scripts = std::rc::Rc::new(crate::renderer::BlockScripts::scan(&md));
+        (build(&md, &evs, 18, &scripts), md)
     }
 
     #[test]
@@ -693,7 +699,13 @@ mod tests {
                 kind: RawKind::End(Construct::Paragraph),
             },
         ];
-        (build(&cleaned, &evs, n), ext.shifts, cleaned, original)
+        let scripts = std::rc::Rc::new(crate::renderer::BlockScripts::scan(&cleaned));
+        (
+            build(&cleaned, &evs, n, &scripts),
+            ext.shifts,
+            cleaned,
+            original,
+        )
     }
 
     /// **The multi-block-over-existing-annotation defect, proven at the pure boundary.** A
@@ -781,6 +793,7 @@ mod tests {
         let mut content: Vec<(usize, usize, i32, i32)> = Vec::new();
         let mut plain = String::new();
         let mut off = 0i32;
+        let scripts = std::rc::Rc::new(crate::renderer::BlockScripts::scan(cleaned));
         for (ev, src) in Parser::new_ext(cleaned, crate::renderer::md_options()).into_offset_iter()
         {
             let kind = crate::copymap::classify(&ev);
@@ -793,12 +806,16 @@ mod tests {
                     off = 0;
                 }
                 Event::End(TagEnd::TableCell) => {
-                    out.push((build(cleaned, &evs, off), content.clone(), plain.clone()));
+                    out.push((
+                        build(cleaned, &evs, off, &scripts),
+                        content.clone(),
+                        plain.clone(),
+                    ));
                     active = false;
                 }
                 _ if active => {
                     if let Some(k) = &kind {
-                        let w = crate::copymap::cell_width(k);
+                        let w = crate::copymap::cell_width(&scripts, src.start, k);
                         let before = off;
                         let after = off + w;
                         evs.push(RawEv {

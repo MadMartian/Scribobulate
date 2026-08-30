@@ -176,6 +176,11 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
     let extraction = crate::annotate::extract(md_norm.as_str());
     let md = extraction.cleaned.as_str();
 
+    // A tight construct's markers must be dropped from the label exactly as the
+    // renderer drops them, including one whose fence wraps other inline markup —
+    // so the outline consults the same block-scope table the preview does.
+    let scripts = crate::renderer::BlockScripts::scan(md);
+
     for (ev, range) in Parser::new_ext(md, crate::renderer::md_options()).into_offset_iter() {
         match ev {
             Event::Start(Tag::Heading { level, .. }) => {
@@ -195,10 +200,12 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
             }
             Event::Text(t) => {
                 if let Some((_, _, ref mut text)) = current {
-                    // Mirror renderer.rs: drop tight super/sub-script markers so the
+                    // Mirror renderer.rs: drop tight construct markers so the
                     // outline label and heading slug match the rendered heading.
-                    for (run, _) in crate::renderer::scan_scripts(&t) {
-                        text.push_str(&run);
+                    for seg in scripts.segments(range.start, &t) {
+                        if !seg.marker {
+                            text.push_str(seg.text(&t));
+                        }
                     }
                 }
             }
@@ -216,6 +223,19 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sidebar label must match the rendered heading, including a fence that
+    /// WRAPS other inline markup — pulldown splits that across events, so a label
+    /// built one event at a time keeps the literal `~~` the page does not show.
+    #[test]
+    fn a_heading_drops_the_markers_of_a_markup_wrapping_fence() {
+        assert_eq!(
+            extract_headings("# ~~a **bold** b~~\n")
+                .first()
+                .map(|h| h.text.clone()),
+            Some("a bold b".to_string()),
+        );
+    }
 
     #[test]
     fn nested_headings_keep_level_text_and_order() {

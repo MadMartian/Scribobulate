@@ -2,7 +2,7 @@
 //! tags route to [`super::start`] / [`super::end`]; text/code/breaks/rules are
 //! handled inline here.
 
-use super::scan::{scan_scripts, script_tag, Script};
+use super::scan::{script_tag, Script};
 use super::Renderer;
 use gtk::glib;
 use gtk::prelude::*;
@@ -20,6 +20,10 @@ impl Renderer {
                 } else if let Some((_, ref mut acc)) = self.code {
                     acc.push_str(&t);
                 } else if self.in_table_cell() {
+                    // Segmented before the cell borrow: the table is scanned per
+                    // BLOCK, so the answer comes from `self`, not from `t` alone.
+                    let segs = self.scripts.segments(self.event_src.start, &t);
+                    let src = self.event_src.clone();
                     if let Some(ts) = &mut self.table {
                         // Text outside a link in a cell that already has/had a link = mixed.
                         if ts.in_link.is_none()
@@ -28,15 +32,21 @@ impl Renderer {
                             ts.cell_mixed = true;
                         }
                         let before = ts.cell_off;
-                        for (run, script) in scan_scripts(&t) {
-                            let esc = glib::markup_escape_text(&run);
+                        for seg in &segs {
+                            // A delimiter is source, never a glyph: it contributes
+                            // no markup, no plain text and no cell offset.
+                            if seg.marker {
+                                continue;
+                            }
+                            let run = seg.text(&t);
+                            let esc = glib::markup_escape_text(run);
                             // Highlight's open tag is theme-generated (`mark_open`,
                             // the cell twin of the `TagName::Mark` body tag, Document
                             // Rendering CAM row 12), so `open` is a `Cow`; the rest
                             // are static Pango tags.
                             // Superscript/highlight are theme-generated (TDD 18.18,
                             // 18.6) — `open` is a `Cow` for exactly those two branches.
-                            let (open, close): (std::borrow::Cow<str>, &str) = match script {
+                            let (open, close): (std::borrow::Cow<str>, &str) = match seg.script {
                                 Script::Superscript => (
                                     super::superscript_open(&self.theme).into(),
                                     super::SUPERSCRIPT_CLOSE,
@@ -57,31 +67,33 @@ impl Renderer {
                             ts.cell_markup.push_str(&open);
                             ts.cell_markup.push_str(&esc);
                             ts.cell_markup.push_str(close);
-                            ts.cell_plain.push_str(&run);
+                            ts.cell_plain.push_str(run);
                             ts.cell_off += run.chars().count() as i32;
                         }
                         let after = ts.cell_off;
                         if after > before {
                             // Table-cell annotation: content event for map_cleaned_highlight_to_local.
-                            let src = self.event_src.clone();
                             ts.cell_content_evs
                                 .push((src.start, src.end, before, after));
                         }
                     }
                 } else {
-                    let runs = scan_scripts(&t);
+                    let segs = self.scripts.segments(self.event_src.start, &t);
                     if self.heading.is_some() {
                         // The slug mirrors the rendered text with markers dropped.
-                        for (run, _) in &runs {
-                            self.heading_text.push_str(run);
+                        for seg in segs.iter().filter(|s| !s.marker) {
+                            self.heading_text.push_str(seg.text(&t));
                         }
                     }
-                    for (run, script) in &runs {
-                        let tag = script_tag(*script);
+                    for seg in &segs {
+                        if seg.marker {
+                            continue;
+                        }
+                        let tag = script_tag(seg.script);
                         if let Some(name) = tag {
                             self.inline_tags.push(name);
                         }
-                        self.insert(run);
+                        self.insert(seg.text(&t));
                         if tag.is_some() {
                             self.inline_tags.pop();
                         }

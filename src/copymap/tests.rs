@@ -6,7 +6,7 @@ use pulldown_cmark::Parser;
 // The resolver depends on two facts per event: its *source* byte range (from
 // pulldown, taken verbatim here) and the *buffer* char range the renderer
 // produced. This sim mirrors `renderer.rs`'s buffer arithmetic (block_sep
-// idempotence, heading trailing newline, scan_scripts marker stripping) for the
+// idempotence, heading trailing newline, tight-construct marker stripping) for the
 // constructs these tests use, so `(md, evs)` is a faithful stand-in for a real
 // render. The `gtk-integration-tests` in `preview.rs` validate the *real*
 // buffer-offset capture end-to-end.
@@ -71,7 +71,14 @@ impl Sim {
 /// `\n` per line). That fidelity is the point — the copymap has to re-derive the
 /// block's buffer layout from that rule (ScrAP-255), so a stand-in body would test
 /// nothing.
-fn apply(sim: &mut Sim, ev: &Event, code: &mut Option<String>, opaque_depth: &mut i32) {
+fn apply(
+    sim: &mut Sim,
+    ev: &Event,
+    code: &mut Option<String>,
+    opaque_depth: &mut i32,
+    scripts: &crate::renderer::BlockScripts,
+    src: &std::ops::Range<usize>,
+) {
     match ev {
         Event::Start(Tag::Heading { .. })
         | Event::Start(Tag::Paragraph)
@@ -127,8 +134,10 @@ fn apply(sim: &mut Sim, ev: &Event, code: &mut Option<String>, opaque_depth: &mu
             } else if *opaque_depth > 0 {
                 // suppressed image alt text
             } else {
-                for (run, _) in scan_scripts(t) {
-                    sim.insert(&run);
+                for seg in scripts.segments(src.start, t) {
+                    if !seg.marker {
+                        sim.insert(seg.text(t));
+                    }
                 }
             }
         }
@@ -159,9 +168,10 @@ fn render(md: &str) -> (CopyTree, String, String) {
     let mut evs = Vec::new();
     // Streamed: no list-item look-ahead is needed — markers are drawn in the gutter and
     // insert no buffer text, so there is nothing to suppress (mirrors `preview::build`).
+    let scripts = std::rc::Rc::new(crate::renderer::BlockScripts::scan(md));
     for (ev, r) in Parser::new_ext(md, crate::renderer::md_options()).into_offset_iter() {
         let before = sim.count;
-        apply(&mut sim, &ev, &mut code, &mut opaque_depth);
+        apply(&mut sim, &ev, &mut code, &mut opaque_depth, &scripts, &r);
         let after = sim.count;
         if let Some(kind) = classify(&ev) {
             evs.push(RawEv {
@@ -171,7 +181,11 @@ fn render(md: &str) -> (CopyTree, String, String) {
             });
         }
     }
-    (build(md, &evs, sim.count), md.to_string(), sim.text)
+    (
+        build(md, &evs, sim.count, &scripts),
+        md.to_string(),
+        sim.text,
+    )
 }
 
 fn tree(md: &str) -> (CopyTree, String) {
@@ -236,6 +250,53 @@ fn strikethrough_trace_c() {
     let (t, md) = tree("~~strike out~~ outside");
     // "strike out outside": s0..; select [4,15) per the plan.
     assert_eq!(resolve(&t, &md, 4, 15), "~~ke out~~ outs");
+}
+
+/// A fence that WRAPS other inline markup is one construct across three events.
+///
+/// pulldown splits `~~a **bold** b~~` into `"~~a "`, `Strong("bold")`, `" b~~"`, so
+/// the copymap sees the opening `~~` and the closing `~~` in different events with
+/// the Strong's own nodes between them. The markers are stripped from the buffer,
+/// so this map is what has to put them back — and each half is reconstructed from
+/// the event that owns it.
+#[test]
+fn a_fence_wrapping_inline_markup_round_trips() {
+    let (t, md, text) = render("~~a **bold** b~~ tail");
+    assert_eq!(text, "a bold b tail", "the delimiters must not render");
+
+    // The whole struck run, selected exactly ("a bold b" = chars 0..8): every
+    // delimiter comes back, both halves of the fence included.
+    assert_eq!(resolve(&t, &md, 0, 8), "~~a **bold** b~~");
+
+    // Selecting inside the fence's leading half, without crossing out of it,
+    // clips to the content — exactly as an outer `**` would.
+    assert_eq!(resolve(&t, &md, 0, 1), "a");
+    // Crossing out of that half reconstructs the `~~` it owns, and clips the
+    // Strong it crossed into (2.8b: a crossed pair is always closed).
+    assert_eq!(resolve(&t, &md, 0, 3), "~~a **b**");
+
+    // The whole buffer is Copy Document — byte-identical source.
+    assert_eq!(resolve(&t, &md, 0, t.char_count), md);
+}
+
+/// The annotation wrap span must take such a fence WHOLE.
+///
+/// Half of it is not a construct: `{==` landing between the `~~` halves produces
+/// markup that parses as neither. The tree alone cannot see the whole (the two
+/// halves are separate nodes), so `wrap_span` widens through the construct table.
+#[test]
+fn wrap_span_takes_a_markup_wrapping_fence_whole() {
+    for (src, sub, want) in [
+        ("~~a **bold** b~~ tail", "old", "~~a **bold** b~~"),
+        ("~~a **bold** b~~ tail", "a", "~~a **bold** b~~"),
+        ("==a *em* b== tail", "em", "==a *em* b=="),
+    ] {
+        let (t, md, text) = render(src);
+        let a = woff(&text, sub);
+        let span = wrap_span(&t, &md, a, a + sub.chars().count() as i32)
+            .unwrap_or_else(|| panic!("no span for {src:?}"));
+        assert_eq!(&md[span], want, "preview balance for {src:?}");
+    }
 }
 
 #[test]
@@ -338,6 +399,7 @@ fn cell_trees(md: &str) -> Vec<CopyTree> {
     let mut active = false;
     let mut evs: Vec<RawEv> = Vec::new();
     let mut off = 0i32;
+    let scripts = std::rc::Rc::new(crate::renderer::BlockScripts::scan(md));
     for (ev, src) in Parser::new_ext(md, crate::renderer::md_options()).into_offset_iter() {
         let kind = classify(&ev);
         match &ev {
@@ -347,12 +409,12 @@ fn cell_trees(md: &str) -> Vec<CopyTree> {
                 off = 0;
             }
             Event::End(TagEnd::TableCell) => {
-                maps.push(build(md, &evs, off));
+                maps.push(build(md, &evs, off, &scripts));
                 active = false;
             }
             _ if active => {
                 if let Some(k) = &kind {
-                    let w = cell_width(k);
+                    let w = cell_width(&scripts, src.start, k);
                     evs.push(RawEv {
                         buf: (off, off + w),
                         src: src.clone(),
@@ -644,6 +706,26 @@ fn wrap_span_inside_an_in_crate_construct_includes_its_markers() {
     }
 }
 
+/// The EDITOR path's half of the same rule (Document Rendering CAM row 3).
+///
+/// `wrap_span` above resolves against the copymap; this resolves against the
+/// source, and the two balance through different code — which is exactly how
+/// `~~`/`==` came to be handled on one path and not the other (ScrAP-195).
+#[test]
+fn balance_source_span_takes_a_markup_wrapping_fence_whole() {
+    for (src, sub) in [
+        ("~~a **bold** b~~ tail", "bold"),
+        ("~~a **bold** b~~ tail", "a "),
+        ("==a *em* b== tail", "em"),
+    ] {
+        let at = src.find(sub).expect("fixture");
+        let normalized = crate::renderer::NormalizedMd::new(src);
+        let got = balance_source_span(&normalized, at..at + sub.len());
+        let want = &src[..src.rfind(' ').expect("fixture")];
+        assert_eq!(&src[got], want, "editor balance for {src:?} at {sub:?}");
+    }
+}
+
 // ── input-limit regressions (QA round 3, D-1) ─────────────────────────────────
 
 /// A pathologically nested document must not abort the process.
@@ -919,6 +1001,7 @@ fn a_code_block_flush_that_does_not_reconcile_degrades_to_opaque() {
             kind: RawKind::End(Construct::CodeBlock),
         };
         CopyTree {
+            scripts: std::rc::Rc::new(crate::renderer::BlockScripts::default()),
             root: code_block_node(md, &start, &end, &texts, true),
             char_count: flushed_chars,
         }
@@ -946,6 +1029,7 @@ fn a_code_block_with_an_unmodelled_interior_event_degrades_to_opaque() {
         kind: RawKind::End(Construct::CodeBlock),
     };
     let tree = CopyTree {
+        scripts: std::rc::Rc::new(crate::renderer::BlockScripts::default()),
         root: code_block_node(md, &start, &end, &texts, false),
         char_count: 11,
     };
@@ -968,7 +1052,17 @@ fn a_code_block_with_an_unmodelled_interior_event_degrades_to_opaque() {
 
 /// Build a copymap from a hand-written event stream, then copy `[a, b)` from it.
 fn resolve_raw(md: &str, evs: &[RawEv], char_count: i32, a: i32, b: i32) -> String {
-    resolve(&build(md, evs, char_count), md, a, b)
+    resolve(
+        &build(
+            md,
+            evs,
+            char_count,
+            &std::rc::Rc::new(crate::renderer::BlockScripts::scan(md)),
+        ),
+        md,
+        a,
+        b,
+    )
 }
 
 fn ev(buf: (i32, i32), src: Range<usize>, kind: RawKind) -> RawEv {
@@ -1117,7 +1211,12 @@ fn wrap_span_takes_an_opaque_or_atomic_unit_whole() {
         ev((2, 6), 2..8, RawKind::Code("code".into())),
         ev((6, 8), 8..10, RawKind::Text(" b".into())),
     ];
-    let t = build(md, &evs, 8);
+    let t = build(
+        md,
+        &evs,
+        8,
+        &std::rc::Rc::new(crate::renderer::BlockScripts::scan(md)),
+    );
     // A selection of ONE character inside the code span still wraps the whole span,
     // backticks included.
     assert_eq!(super::wrap_span(&t, md, 3, 4), Some(2..8));
@@ -1128,6 +1227,11 @@ fn wrap_span_takes_an_opaque_or_atomic_unit_whole() {
         ev((1, 2), 1..2, RawKind::Break),
         ev((2, 3), 2..6, RawKind::Atomic),
     ];
-    let t2 = build(md2, &evs2, 3);
+    let t2 = build(
+        md2,
+        &evs2,
+        3,
+        &std::rc::Rc::new(crate::renderer::BlockScripts::scan(md2)),
+    );
     assert_eq!(super::wrap_span(&t2, md2, 2, 3), Some(2..6));
 }

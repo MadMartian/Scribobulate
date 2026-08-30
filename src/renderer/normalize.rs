@@ -305,6 +305,7 @@ mod normalize_inline_tabs_tests {
             "preview/annotate.rs",
             "preview/build.rs",
             "docio/mod.rs",
+            "renderer/segments.rs",
         ];
 
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -409,6 +410,26 @@ mod normalize_inline_tabs_tests {
             crate::copymap::balance_source_span(&normalized, sel.clone()),
             sel,
             "copymap: widened across a table cell boundary"
+        );
+
+        // renderer/segments.rs — a tight fence may span a block's inline events but
+        // never a BLOCK boundary, and which boundaries exist is exactly what the
+        // pre-pass decides. Unnormalised, the tab table below is one paragraph, so a
+        // `~~` opening in one cell and closing in another forms a fence across them
+        // and strikes text the reader sees in two separate cells.
+        const TAB_FENCE: &str = "| ~~a\t| b~~\t|\n|---\t|---\t|\n| c | d |\n";
+        assert!(
+            crate::renderer::BlockScripts::scan(NormalizedMd::new(TAB_FENCE).as_str())
+                .outers()
+                .is_empty(),
+            "renderer/segments.rs: a fence formed across a table cell boundary"
+        );
+        assert!(
+            !crate::renderer::BlockScripts::scan(TAB_FENCE)
+                .outers()
+                .is_empty(),
+            "fixture: unnormalised, the straddling fence must form — otherwise the \
+             assertion above proves nothing"
         );
 
         // And the pre-pass keeps a heading's own text in step with the rendered one.

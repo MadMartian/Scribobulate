@@ -14,7 +14,7 @@
 
 use super::walk::Builder;
 use super::{Block, ExportAnnotation, ExportDoc, Inline, RenderOptions};
-use crate::renderer::scan_scripts;
+use crate::renderer::segments_of;
 use pulldown_cmark::Parser;
 
 /// Build the export model for `source`.
@@ -33,7 +33,9 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
     let extraction = crate::annotate::extract(normalised.as_str());
     let cleaned = extraction.cleaned.as_str();
 
-    let mut builder = Builder::new(opts);
+    // One block-scope scan of the same cleaned text the walk below parses, so the
+    // export segments every tight construct exactly as the preview does.
+    let mut builder = Builder::new(opts, crate::renderer::BlockScripts::scan(cleaned));
     for (ev, src) in Parser::new_ext(cleaned, crate::renderer::md_options()).into_offset_iter() {
         builder.event(ev, src);
     }
@@ -75,9 +77,11 @@ fn claim_text(cleaned: &str, hs: usize, he: usize) -> String {
     if hs >= he || he > cleaned.len() {
         return String::new();
     }
-    scan_scripts(&cleaned[hs..he])
+    let run = &cleaned[hs..he];
+    segments_of(run)
         .into_iter()
-        .map(|(text, _)| text)
+        .filter(|seg| !seg.marker)
+        .map(|seg| seg.text(run))
         .collect()
 }
 
@@ -322,10 +326,36 @@ mod export_doc_tests {
         ));
     }
 
+    /// Document Rendering CAM row 17 — exports as it renders.
+    ///
+    /// A `~~ … ~~` fence wrapping other inline markup is split across events by
+    /// pulldown; the export walks the same block-scope table the preview does, so
+    /// the artefact must carry the strike rather than two literal `~~`.
+    #[test]
+    fn a_fence_wrapping_inline_markup_exports_struck() {
+        let doc = doc_of("~~a **bold** b~~\n");
+        let Some(Block::Paragraph(inlines)) = doc.blocks.first() else {
+            panic!("expected a paragraph, got {:?}", doc.blocks);
+        };
+        // Every rendered run is struck, and no `~~` reaches the artefact.
+        assert!(
+            inlines
+                .iter()
+                .all(|i| matches!(i, Inline::Strikethrough(_) | Inline::Strong(_))),
+            "unstruck run in {inlines:?}"
+        );
+        assert!(
+            !crate::export::plain_text(inlines).contains('~'),
+            "a delimiter reached the export: {inlines:?}"
+        );
+        assert_eq!(crate::export::plain_text(inlines), "a bold b");
+    }
+
     #[test]
     fn the_four_tight_constructs_pulldown_never_sees_become_their_own_inlines() {
         // Each arrives from pulldown as plain `Text`; only `scan_scripts` knows what
-        // it is (ScrAP-66/ScrAP-195). A second parse would emit all four literally.
+        // it is (`renderer::segments`, ScrAP-66/ScrAP-195). A second parse would emit
+        // all four literally.
         let doc = doc_of("H~2~O and E=mc^2^ and ~~gone~~ and ==marked==\n");
         let Some(Block::Paragraph(inlines)) = doc.blocks.first() else {
             panic!("expected a paragraph, got {:?}", doc.blocks);
