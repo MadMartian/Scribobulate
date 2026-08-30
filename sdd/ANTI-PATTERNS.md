@@ -289,7 +289,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 | 274 | A provenance tally that counts measurements instead of outcomes, and so reports the opposite of its evidence | B |
 | 275 | A `GFileMonitor` created while its parent DIRECTORY is absent is permanently dead on Windows, and self-heals everywhere else | A |
 | 276 | A parity artefact written to the console instead of the success stream — the documented diff produced an empty file, and the self-test rebuilt the list rather than calling the printer | B |
-| 277 | A test whose subject IS a by-design CRITICAL blocks a process-wide fatal-criticals switch — and "do not weaken the test" was the wrong reading of the trade | A/B |
+| 277 | A test whose subject IS a by-design CRITICAL blocks a process-wide fatal-criticals switch — and "do not weaken the test" was the wrong reading of the trade | A |
 | 278 | A filename or file-existence predicate standing in for a semantic question — three measured cases in one night, each confidently wrong | A |
 | 279 | `gvsbuild --configuration release` compiles GTK's assertions OUT, so the development box cannot enforce the contracts CI enforces | A |
 | 280 | Provisioning for a machine you cannot inspect — installing a tool the image already had, and discovering one path component while pinning its sibling | B |
@@ -1513,45 +1513,8 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 **See**: general-engineering-principles — the self-test half (GEP-3), the success-signal half (GEP-52).
 
 ## 277. A test whose subject IS a by-design CRITICAL blocks a process-wide fatal-criticals switch — and "do not weaken the test" was the wrong reading of the trade
-
-> *Core GTK/GLib log machinery wearing a gate-design problem. **Weave candidate for the
-> `gtk4-rs` skill**, automated-testing material. Kin to GTK4Rs/AP-257 and ScrAP-217.*
-
-**Symptom**: a CI job that sets `G_DEBUG=fatal-criticals` — the standing recommendation, since
-it turns a `Gtk-CRITICAL` into a hard failure rather than a line nobody reads — aborts the
-suite with `SIGTRAP` and no Rust panic. The harness reports only "process didn't exit
-successfully"; the discriminating evidence is the CRITICAL printed immediately above it.
-
-**Two aborts of opposite kinds, which is the finding.** (1) A REAL DEFECT:
-`change_action_state` on the *stateless* `win.find-replace`, emitting `g_action_change_state:
-assertion 'state_type != NULL' failed` unread for as long as the test existed (ScrAP-252's
-shape). Two later comments claimed the broken reveal left the a11y guard walking a smaller
-tree; measured, it did not — `a11y.rs`'s `descendants` filters on TYPE, never visibility, 61
-candidates either way. The defect was a stray CRITICAL; the quantity was inferred twice and
-measured never. (2) A CORRECT TEST: `saferizer::popover_anchor`'s round-trip reads an unset
-anchor on a never-`set_parent`'d popover — the exact case the seam absorbs — and GTK reaches
-`GTK_IS_WIDGET` through `gtk_popover_get_pointing_to`'s NULL-parent fallback
-(`gtkpopover.c:2278/:2280`, researcher-confirmed).
-
-**Root cause**: `G_DEBUG` is process-wide and read at startup, so it cannot separate "a
-CRITICAL nobody meant" from "the CRITICAL this test is about". `glib::log_set_fatal_mask` is
-per-*domain* and does not separate them either — one is `GLib-GIO`, the other `Gtk`, and the
-suite legitimately produces both.
-
-**The trap is which way you resolve it, and this entry got it wrong first.** The original
-reading was that both single-sided moves are wrong: drop the setting and you discard the
-mechanism that just found a real defect; reshape the test and you have narrowed it so a gate
-passes. So it prescribed an allow-list and left the flag unarmed. **That second premise was
-false and was never checked.** Parenting the popover STRENGTHENS the test: `pointing_to`'s
-contract is that the raw binding's fallback rectangle be discarded however plausible, and the
-fallback is a **zeroed** rect when parentless and the **parent's own bounds** when parented.
-The abort disappeared as a side effect of making the assertion harder to pass.
-
-**The general form**: "this edit exists to make a gate pass, therefore it weakens the test" is
-a heuristic, not a finding — a good one, which is why it went unexamined for a week while the
-gate stayed disarmed. **Price the edit** before paying an allow-list's construction cost: read
-what the test would assert afterwards and compare. Where the by-design CRITICAL is incidental
-to the subject rather than *being* it, the edit is free. — Severity: High
+**Scribobulate**: `saferizer::popover_anchor`'s round-trip now PARENTS the popover, which strengthened the assertion rather than narrowing it — `pointing_to`'s fallback is a zeroed rect when parentless and the parent's own bounds when parented, so the seam is now proven to discard a BELIEVABLE rectangle rather than an obviously-empty one. The stateless-action defect it surfaced (`change_action_state` on `win.find-replace`) is fixed at the call site. `G_DEBUG=fatal-criticals` is armed in `scripts/run-integration.sh` with no allow-list, which is what the corrected reading bought.
+**See**: gtk4-rs skill → ui-testing-debugging (GTK4Rs/AP-319), which holds both abort cases, the `gtk_popover_get_pointing_to` NULL-parent fallback mechanism, and the "price the edit" argument including the premise this entry originally got wrong.
 
 ## 278. A filename or file-existence predicate standing in for a semantic question — six measured cases, each confidently wrong
 

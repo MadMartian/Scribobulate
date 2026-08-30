@@ -676,6 +676,14 @@ installer is what satisfies the click-through, which is why that shape was chose
 project never becomes a redistributor. The `stage.ps1` half of `1fd4f5c` is *removal* of an
 app-local copy, and it merged as such: nothing in the staged tree copies a CRT DLL.
 
+**A FIELD DISCRIMINATOR, so a future report can be placed without a clean image.** The
+bootstrapper is EMBEDDED, so it shows up in the artefact's size: a `ci`-line installer
+measures ~37.7 MB (39,509,846 bytes, measured by the Windows seat on 6604ae5) against
+~15.7 MB for a master-line build with no bootstrapper. Cite the SIZE CLASS, never the
+constant — the same build shape already moved from 38,595,643 bytes at `1fd4f5c`. That is
+also independent evidence the bootstrapper is WIRED rather than merely present in the
+`.iss`, which the `.iss` alone cannot show.
+
 **WHY THIS ENTRY IS STILL OPEN, and it is the part to read before closing it: the remedy
 has never been verified against the condition it exists for.** Every machine able to build
 this project already has the CRT, so a staged launch on a build box proves nothing either
