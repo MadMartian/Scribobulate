@@ -548,7 +548,24 @@ function Invoke-WithEnv {
         & $Body @ArgumentList
     } finally {
         foreach ($name in @($saved.Keys)) {
-            [Environment]::SetEnvironmentVariable($name, $saved[$name])
+            if ($null -eq $saved[$name]) {
+                # REMOVE EXPLICITLY, never `SetEnvironmentVariable($name, $null)`.
+                # "Set it to null and the runtime deletes it" is an ENGINE-DEPENDENT
+                # claim, and this runner meets two engines: 5.1/.NET Framework locally
+                # and pwsh 7/.NET on the CI runner. On 5.1 both null and the empty
+                # string delete -- MEASURED here, a variable set to '' reads back
+                # `$null` and a child `cmd /c echo %VAR%` prints the literal `%VAR%`,
+                # so the present-but-empty state does not exist. Under pwsh 7 it does,
+                # and the restore left the probe PRESENT AND EMPTY rather than gone
+                # (contract (windows) run 33339388823). Whether the null reached the
+                # API intact or was converted to '' on the way is not established and
+                # does not need to be: the provider's Remove-Item has one meaning on
+                # every engine, so removing the ambiguous construct settles it the way
+                # stage.ps1's param-time $PSScriptRoot read was settled.
+                if (Test-Path "Env:$name") { Remove-Item "Env:$name" }
+            } else {
+                [Environment]::SetEnvironmentVariable($name, $saved[$name])
+            }
         }
     }
 }
@@ -623,8 +640,11 @@ function Invoke-SelfTest {
     # a prefix that never reaches the child makes a gate silently unarmed, and one that
     # outlives its step silently arms every step after it. Read from a CHILD process,
     # because that is where a contract command actually runs.
+    # Through the child for the same reason the after-check below is: "already set" has
+    # to mean the same thing on both engines, or 5.1 runs this check and pwsh 7 refuses
+    # to on a state 5.1 cannot even represent.
     $probe = 'SCRIB_SELFTEST_PROBE'
-    if ($null -ne [Environment]::GetEnvironmentVariable($probe)) {
+    if ((@(cmd /c "echo %$probe%") | Select-Object -First 1) -cne "%$probe%") {
         Write-Err "pipeline: $probe is already set in this environment; cannot self-test isolation"
         return $false
     }
@@ -637,9 +657,31 @@ function Invoke-SelfTest {
         Write-Err "pipeline: env prefix did not reach the child (got '$($seenFirst -join '')', want 'armed')"
         return $false
     }
-    $after = [Environment]::GetEnvironmentVariable($probe)
-    if ($null -ne $after) {
-        Write-Err "pipeline: env prefix LEAKED past its step ($probe = '$after' afterwards)"
+    # ASK THE CHILD, not the engine, and the difference is not pedantry -- it is the
+    # whole verdict. `[Environment]::GetEnvironmentVariable` returns `$null` for a
+    # variable that is ABSENT and, on an engine that admits the state at all, an empty
+    # string for one that is PRESENT AND EMPTY. So a `$null -ne $after` test asks a
+    # question whose answer depends on which engine is running it, and this file is run
+    # by two: 5.1 locally, pwsh 7 in the `contract (windows)` job. That is exactly the
+    # divergence ScrAP-207 is about, arriving inside the self-test rather than in the
+    # thing it tests.
+    #
+    # cmd.exe has no such ambiguity: an unexpanded `%VAR%` means the variable does not
+    # exist, and an empty line means it exists and is empty. Same answer on every
+    # engine, because the discriminator belongs to the child rather than to the host.
+    # The module comment above already named this property; the check simply was not
+    # using it.
+    #
+    # The message reports BOTH states by name, so a red run says which one it found
+    # instead of leaving the reader to infer it from a quoted empty string.
+    $afterChild = @(cmd /c "echo %$probe%") | Select-Object -First 1
+    if ($afterChild -cne "%$probe%") {
+        $state = if ([string]::IsNullOrEmpty($afterChild)) {
+            'PRESENT AND EMPTY'
+        } else {
+            "PRESENT with value '$afterChild'"
+        }
+        Write-Err "pipeline: env prefix LEAKED past its step ($probe is $state afterwards, expected absent)"
         return $false
     }
     Write-Host '   env prefix reaches the child, and is unset again afterwards'
@@ -656,7 +698,11 @@ function Invoke-SelfTest {
             return $false
         }
     } finally {
-        [Environment]::SetEnvironmentVariable($probe, $null)
+        # Same removal idiom as Invoke-WithEnv's restore: a self-test that cleans up
+        # with the ambiguous construct would leave the probe present-and-empty on the
+        # engine this check exists to protect, and the next run would then refuse to
+        # start on a state its own predecessor created.
+        if (Test-Path "Env:$probe") { Remove-Item "Env:$probe" }
     }
     Write-Host '   env prefix restores a pre-existing value rather than deleting it'
 
