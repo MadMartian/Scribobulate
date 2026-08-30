@@ -137,10 +137,48 @@ fn device_name_rx() -> &'static Regex {
     rx(&RX, r"(?i)^(CON|PRN|AUX|NUL|COM[1-9]|LPT[0-9])(\..*)?$")
 }
 
-/// A reverse-DNS identifier ending in `scribobulate`, for check 7's foreign-ID sweep.
+/// A reverse-DNS identifier whose last segment BEGINS with `scribobulate`, for check 7's
+/// foreign-ID sweep.
+///
+/// The trailing `[a-z0-9]*` is load-bearing and the reason is a measured blind spot. This
+/// pattern used to end `scribobulate\b`, which cannot match `com.extollit.scribobulated`
+/// at all — the trailing `d` is a word character, so the word boundary fails — while
+/// check 7's other half, a `contains` of the canonical ID, is satisfied by any superset of
+/// it. A last segment that merely EXTENDS the canonical therefore passed both halves and
+/// the gate reported nothing. Matching the extension is what lets the caller's
+/// `!= canonical` filter see it as foreign.
 pub fn reverse_dns_rx() -> &'static Regex {
     static RX: OnceLock<Regex> = OnceLock::new();
-    rx(&RX, r"\b[a-z0-9]+\.[a-z0-9]+\.scribobulate\b")
+    rx(&RX, r"\b[a-z0-9]+\.[a-z0-9]+\.scribobulate[a-z0-9]*\b")
+}
+
+/// Whether `text` declares `id` as a WHOLE reverse-DNS identifier rather than merely
+/// containing its characters.
+///
+/// Check 7's presence half was `text.contains(canonical)`, which a superset satisfies —
+/// `com.extollit.scribobulated` contains `com.extollit.scribobulate`. On its own that made
+/// the presence half unable to distinguish a file that declares the ID from one that
+/// declares something else beginning with it, so a drifted file could report as carrying
+/// the ID it does not carry. An occurrence counts only when neither side continues the
+/// identifier.
+///
+/// **A `.` deliberately does NOT continue it, and that is a decided trade rather than an
+/// oversight.** The ID is also a filename (`data/icons/.../com.extollit.scribobulate.svg`)
+/// and a GResource path, so a following `.svg` is an ordinary extension, not a fourth
+/// segment. Treating `.` as a continuation rejected `data/resources.gresource.xml`
+/// outright — MEASURED, the gate failed on the real tree the moment it was written. The
+/// residue is that a genuine four-segment id (`com.extollit.scribobulate.helper`) still
+/// reads as the canonical one followed by something; nothing in the text distinguishes it
+/// from an extension, and the drift this check exists for is a rewritten LAST SEGMENT,
+/// which is alphanumeric and still caught.
+pub fn declares_whole_id(text: &str, id: &str) -> bool {
+    let continues = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+    text.match_indices(id).any(|(at, _)| {
+        let before_ok = at == 0 || !continues(text.as_bytes()[at - 1]);
+        let after = at + id.len();
+        let after_ok = after >= text.len() || !continues(text.as_bytes()[after]);
+        before_ok && after_ok
+    })
 }
 
 /// A `## N.` or `## 23a.` entry heading in `sdd/ANTI-PATTERNS.md` — the ALLOCATION form,

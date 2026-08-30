@@ -294,7 +294,10 @@ pub fn app_id_drift(tree: &Tree) -> bool {
             findings.push(format!("{file} is missing"));
             continue;
         };
-        if !text.contains(canonical) {
+        // A WHOLE-identifier test, not a substring one: `contains` is satisfied by any
+        // superset of the canonical ID, so a file declaring `…scribobulated` would report
+        // as carrying `…scribobulate` (see `declares_whole_id`).
+        if !rx::declares_whole_id(&text, canonical) {
             findings.push(format!("{file} does not carry the app ID '{canonical}'"));
         }
         // A DIFFERENT reverse-DNS id in the same file is drift the presence test above

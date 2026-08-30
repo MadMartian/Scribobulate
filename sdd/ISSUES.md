@@ -36,7 +36,6 @@ described from a different vantage point.
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | J | Any | Upstream | A paragraph that mixes fonts (any inline-code span) can lay out a few pixels wider than the wrap width it was given, summoning the preview's Automatic horizontal scrollbar and intermittently blanking the pane until a resize | Closed |
-| L | Any | Test | `lint-references` check 7 cannot see an app ID that has the canonical one as a strict PREFIX — `com.extollit.scribobulated` passes both halves of the check | Low |
 | M | Windows | Production | The installer does not install Microsoft's Visual C++ runtime, so on a machine without it the app installs and then fails to start; the fix exists on the unmerged `ci` branch | Medium |
 
 ## A. Tables are selection islands
@@ -575,35 +574,6 @@ scrolling. It is invisible at every other width.
   from GTK.
 - Revisit if the clamp above stops being a symptom gate — if a way appears to distinguish a
   hanging space from a clipped glyph, the clamp becomes safe and this reopens.
-
-## L. Check 7 is blind to an app ID that merely EXTENDS the canonical one
-
-**Severity**: Low (the drift shape is unlikely; the cost is that a passing gate is
-quietly weaker than it reads)
-
-`cargo xtask lint-references` check 7 holds the application ID identical across
-`src/icons.rs` and the packaging files that restate the literal. It tests two things: that
-each file `contains` the canonical ID, and that no *foreign* reverse-DNS ID appears
-alongside it. An ID with the canonical as a strict prefix defeats both at once.
-
-**MEASURED** against the shipped pattern, with `com.extollit.scribobulated` as the probe:
-`contains("com.extollit.scribobulate")` is true for any superset, so the presence half
-passes; and `reverse_dns_rx` (`\b[a-z0-9]+\.[a-z0-9]+\.scribobulate\b`, `patterns.rs`)
-cannot match, because the trailing `d` is a word character and kills the closing `\b` —
-so the foreign-ID half finds nothing to report. Prefix drift (`org.other.scribobulate`)
-and last-segment drift (`com.extollit.scribobulat`) are both still caught; only the
-suffix case is invisible.
-
-Found by the macOS seat while adding `packaging/linux/{install,uninstall}.sh` to
-`APP_ID_FILES`.
-
-**Why it is not fixed here**: the repair is a decision about the pattern rather than a
-typo. The Rust `regex` crate has no lookaround, so the closing `\b` cannot simply be
-tightened; the workable shape is to widen the match to `scribobulate[a-z0-9]*` and let
-the existing `!= canonical` filter report the superset as foreign, which also wants the
-presence half re-expressed as a whole-identifier test rather than a substring one. Both
-halves should change together, and the check is mutation-tested, so the mutation has to
-be re-chosen with them.
 
 ## M. The Windows installer leaves the Visual C++ runtime to chance
 

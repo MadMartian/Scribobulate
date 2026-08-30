@@ -20,7 +20,10 @@
 
 use crate::lint::checks::references::citation_targets;
 use crate::lint::contract::{git_index, Contract, ScanSet};
-use crate::lint::patterns::{bare_ap_citations, issues_rx, prose_prescriptions, win_illegal_path};
+use crate::lint::patterns::{
+    bare_ap_citations, declares_whole_id, issues_rx, prose_prescriptions, reverse_dns_rx,
+    win_illegal_path,
+};
 use std::path::{Path, PathBuf};
 
 // ── Check 1: the ISSUES citation forms ────────────────────────────────────────
@@ -509,4 +512,73 @@ impl Drop for ScratchTree {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+// ── Check 7: the app ID, whole rather than merely present ─────────────────────
+
+/// The canonical ID, as `src/icons.rs` declares it. A literal here on purpose: the corpus
+/// must keep testing the shape even if the real ID ever changes.
+const CANON: &str = "com.extollit.scribobulate";
+
+/// The blind spot this pair of predicates was written to close.
+///
+/// `com.extollit.scribobulated` passed check 7 whole: `contains` is true for any superset
+/// of the canonical ID, and the old `…scribobulate\b` pattern could not match it because
+/// the trailing `d` is a word character and killed the boundary. Both halves are asserted
+/// here because closing either one alone leaves the gate reporting the wrong thing.
+#[test]
+fn an_id_that_merely_extends_the_canonical_is_not_the_canonical() {
+    let drifted = "com.extollit.scribobulated";
+    assert!(
+        !declares_whole_id(drifted, CANON),
+        "presence half: a superset must not satisfy the ID"
+    );
+    let foreign: Vec<&str> = reverse_dns_rx()
+        .find_iter(drifted)
+        .map(|m| m.as_str())
+        .filter(|f| *f != CANON)
+        .collect();
+    assert_eq!(
+        foreign,
+        [drifted],
+        "foreign half: the extended id must be reported"
+    );
+}
+
+#[test]
+fn a_real_declaration_still_satisfies_the_presence_half() {
+    for text in [
+        CANON,
+        "  <file>com.extollit.scribobulate.svg</file>",
+        "Icon=com.extollit.scribobulate\nStartupWMClass=com.extollit.scribobulate",
+        "install -Dm644 \"$D/com.extollit.scribobulate.svg\" \"$I/\"",
+        "<string>com.extollit.scribobulate</string>",
+        "/com/extollit/scribobulate/ and com.extollit.scribobulate together",
+    ] {
+        assert!(declares_whole_id(text, CANON), "FALSE NEGATIVE: {text}");
+    }
+}
+
+/// The other two drift directions, which the widened pattern must not have lost.
+#[test]
+fn prefix_and_last_segment_drift_are_still_caught() {
+    // A different vendor prefix: reported as foreign.
+    let other = "org.other.scribobulate";
+    let foreign: Vec<&str> = reverse_dns_rx()
+        .find_iter(other)
+        .map(|m| m.as_str())
+        .filter(|f| *f != CANON)
+        .collect();
+    assert_eq!(foreign, [other]);
+    // A truncated last segment: the ID is simply absent.
+    assert!(!declares_whole_id("com.extollit.scribobulat", CANON));
+}
+
+/// A `.` must NOT continue the identifier, and this is the case that decided it: the ID is
+/// also a filename, so the icon's `.svg` is an extension. Asserted so the trade is not
+/// silently reversed by someone tightening the predicate.
+#[test]
+fn an_extension_does_not_make_the_id_a_different_one() {
+    assert!(declares_whole_id("com.extollit.scribobulate.svg", CANON));
+    assert!(declares_whole_id("com.extollit.scribobulate.png", CANON));
 }
