@@ -244,8 +244,13 @@ pub fn citation_targets(line: &str) -> Vec<String> {
 /// that mentions it: `README.md`, the SVG, the manual-test plan and the port READMEs all
 /// name it in prose, where a mention is not a declaration.
 const APP_ID_FILES: [&str; 5] = [
-    "install.sh",
-    "uninstall.sh",
+    // The Linux install and uninstall, which is where the ID is declared. The root
+    // `install.sh`/`uninstall.sh` are `uname -s` routers carrying no install logic and so
+    // no ID to drift; listing a router here would point this check at a file that cannot
+    // fail it, which reads as coverage and is not. The macOS scripts are absent for the
+    // same reason -- they address the bundle by path and never restate the ID.
+    "packaging/linux/install.sh",
+    "packaging/linux/uninstall.sh",
     "data/scribobulate.desktop",
     "data/resources.gresource.xml",
     "packaging/macos/Info.plist.in",
