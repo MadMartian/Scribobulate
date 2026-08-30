@@ -27,11 +27,23 @@
 [CmdletBinding()]
 param(
     [string]$GtkPrefix = $(if ($env:SCRIB_GTK_PREFIX) { $env:SCRIB_GTK_PREFIX } else { "C:\gtk-build\gtk\x64\release" }),
-    [string]$OutDir    = "$PSScriptRoot\..\..\build\stage\Scribobulate",
-    [string]$RepoRoot  = "$PSScriptRoot\..\.."
+    # NO $PSScriptRoot DEFAULT HERE. It is EMPTY while a param() default binds under
+    # `powershell -File` on a script carrying [CmdletBinding()], so "$PSScriptRoot\..\.."
+    # became "\..\.." and resolved against the current DRIVE ROOT -- and the error that
+    # follows names a path that still looks like a path ("outside the base 'R:'"), so it
+    # reads as a broken checkout rather than as an unbound variable. MEASURED: the trigger
+    # is the PAIR, [CmdletBinding()] with -File; either alone is fine, and `&` or a dotted
+    # path is fine. Filled in the BODY below, as package.ps1 and verify-licenses.ps1
+    # already do. ScrAP-288.
+    [string]$OutDir,
+    [string]$RepoRoot
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The two defaults, bound where $PSScriptRoot is populated. See the param() note above.
+if (-not $RepoRoot) { $RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path }
+if (-not $OutDir)   { $OutDir   = Join-Path $RepoRoot "build\stage\Scribobulate" }
 
 $exeSrc = Join-Path $RepoRoot "target\release\scribobulate.exe"
 if (-not (Test-Path $exeSrc)) {

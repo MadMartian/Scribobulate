@@ -1697,8 +1697,9 @@ Severity: High
 **See**: general-engineering-principles (GEP-49).
 
 ## 288. `$PSScriptRoot` is EMPTY while parameter defaults are evaluated under `powershell -File`, and correct everywhere else
-**Symptom**: A script's `param()` default resolves against the drive root under one invocation form and correctly under every other, with nothing at the use site to show it.
-**Scribobulate**: `packaging/windows/stage.ps1`'s `param()` block. Not currently reachable — `package.ps1` invokes it with `&` and passes both parameters explicitly, and the README's `.\stage.ps1` form is safe; `pipeline.yml` does use `-File`, but for scripts that touch `$PSScriptRoot` only in the body.
+**Symptom**: A script's `param()` default resolves against the drive root under one invocation form and correctly under every other, with nothing at the use site to show it. The error names a path that still LOOKS like a path (`the item 'R:\..\..\target\release\...' is outside the base 'R:'`), so it reads as a broken checkout rather than as an unbound variable — which is what makes it expensive rather than merely obscure.
+**The precondition is a PAIR, not `-File` alone** — measured with a two-line probe, and worth knowing because it says exactly which scripts are exposed instead of leaving every `-File` call site suspect: `[CmdletBinding()]` **with** `powershell -File` breaks; `[CmdletBinding()]` without `-File` is fine; `-File` without `[CmdletBinding()]` is fine; `&` or a dotted path is fine either way.
+**Scribobulate**: fixed in `packaging/windows/stage.ps1` — its `$OutDir`/`$RepoRoot` defaults moved out of `param()` into the body, where `$PSScriptRoot` is populated, as `package.ps1` and `verify-licenses.ps1` already did. It was the one exposed script and nothing in-tree started it that way, so the blast radius was zero and stayed zero: this was found by a seat reading the file, not by a failure, which is the only way a dormant defect of this shape is ever found.
 **See**: general-engineering-principles (GEP-51).
 
 
