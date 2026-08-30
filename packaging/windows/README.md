@@ -1,7 +1,16 @@
 # Windows packaging
 
-Builds a self-contained Scribobulate install for Windows: the release binary plus
-the GTK4 runtime it needs, wrapped in a per-user installer.
+Builds a Scribobulate install for Windows: the release binary plus the GTK4 runtime
+it needs, wrapped in a per-user installer.
+
+**Not self-contained, and the exception is deliberate.** The GTK stack ships in the
+package; Microsoft's Visual C++ runtime does NOT. `scribobulate.exe` and the staged
+GTK DLLs import `VCRUNTIME140.dll`, Windows does not ship it, and this installer
+neither installs nor checks for it — so on a machine that has never had a Visual C++
+redistributable the app installs and then fails to start. Copying the DLLs in is the
+obvious fix and it is the wrong one: it makes this project a redistributor of
+Microsoft's Distributable Code, whose terms require an end-user click-through no
+vendored file can present.
 
 ## Prerequisites
 
@@ -45,8 +54,10 @@ from a different GTK than the binary was built against.
 **`ISCC.exe` lives in one of two places and both are normal.**
 `winget install --id JRSoftware.InnoSetup` defaults to **user** scope
 (`%LOCALAPPDATA%\Programs\Inno Setup 6\`, as above); a machine-scope install lands in
-`%ProgramFiles(x86)%\Inno Setup 6\`. `pipeline.ps1 -Package` probes `iscc` on `PATH`
-and then both, so it does not need to be told.
+`%ProgramFiles(x86)%\Inno Setup 6\`. `package.ps1` probes `iscc` on `PATH` and then
+both, so it does not need to be told — and `pipeline.ps1 -Package` inherits that by
+calling `package.ps1` rather than carrying a second copy of the probe, which is what
+its own comment records as the way the two would silently stop matching.
 
 **`/DStageDir` is not optional.** The `.iss` opens with `#ifndef StageDir / #error`,
 so omitting it does not produce a wrongly-rooted installer — it produces none.
@@ -349,9 +360,6 @@ File associations follow an opt-in model:
   that box, which is unchecked by default. Silently seizing a file type is the kind
   of thing users have to go and undo.
 
-Uninstall removes the install directory, the ProgID, the `OpenWithProgids` entries
-and the `RegisteredApplications` entry.
-
 **The installer is unsigned**, so SmartScreen warns on first run when it has been
 downloaded rather than built locally, and the publisher shows as unknown in the UAC
 and Programs-and-Features surfaces. Fixing this needs a code-signing certificate, not
@@ -363,3 +371,47 @@ writes.** Inno's own uninstall registration writes some of the same keys the
 `[Registry]` section does, so `DisplayIcon` or `InstallDate` showing a previous
 package's value proves nothing about whether your edit applied — every ambiguous
 witness costs a re-run to interpret.
+
+## Uninstalling
+
+**Windows uninstalls through Apps & Features, not through a script in this
+repository.** The install is registered with Windows by Inno Setup, so Windows owns
+the removal:
+
+- **Settings ▸ Apps ▸ Installed apps** (Windows 11) or **Settings ▸ Apps ▸ Apps &
+  features** (Windows 10) — find **Scribobulate**, then **Uninstall**.
+- Or the **Uninstall Scribobulate** shortcut in the Start menu group, which the
+  installer creates pointing at Inno Setup's own uninstaller.
+
+Either route removes the install directory, the ProgID, the `OpenWithProgids`
+entries and the `RegisteredApplications` entry.
+
+**How the registry writes come back out**, stated as the rule someone ADDING a write
+needs rather than as a summary that happens to hold today. MEASURED on the `.iss`: 13
+`Root:` writes, 7 flags, and both halves are load-bearing.
+
+- **Two subtree roots carry `uninsdeletekey` on their *first* write, which takes their
+  children with them.** `Software\Classes\Scribobulate.Document` (children:
+  `FriendlyAppName`, `DefaultIcon`, `shell\open\command`) and
+  `Software\Scribobulate\Capabilities` (children: `ApplicationDescription` and the two
+  `FileAssociations` entries). Those six writes carry no flag and need none.
+- **Five values outside any flagged subtree carry `uninsdeletevalue` individually** —
+  the two `OpenWithProgids` entries, the two default-handler values, and the
+  `RegisteredApplications` entry.
+
+So the rule is: a value under an already-flagged subtree root needs nothing, a value
+anywhere else needs its own flag. "Every write carries a flag" is a false description
+of a true outcome — harmless as a belief, but its mirror image ("writes are cleaned up
+automatically") ships a new subkey root with no flag and nothing to notice it.
+
+**Anything you created after installing is left alone.** The `.iss` has no
+`[UninstallDelete]` section and names no user directory — the only two `appdata`
+mentions in it are comments — so your themes at
+`%APPDATA%\scribobulate\themes.toml`, your configuration and your session state
+survive an uninstall and are still there for a reinstall.
+
+**`.\uninstall.sh` in the repository root does not work here, by design.** It is a
+`uname -s` router for the platforms that install from source; on a Windows shell it
+refuses and points at this section rather than half-removing an install it did not
+create. There is nothing to run in its place — the two routes above are the whole
+answer.

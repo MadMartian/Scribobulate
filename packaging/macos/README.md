@@ -98,9 +98,16 @@ duti -s com.extollit.scribobulate net.daringfireball.markdown all
 ## Putting `scribobulate` on PATH
 
 ```bash
-packaging/macos/install.sh   # -> target/macos/Scribobulate.app, plus a symlink on PATH
+./install.sh                 # -> target/macos/Scribobulate.app, plus a symlink on PATH
 scribobulate path/to/document.md
 ```
+
+`./install.sh` at the repository root is the canonical entry point on every
+platform — a `uname -s` router holding no install logic, which dispatches here.
+Running `packaging/macos/install.sh` directly is equivalent and is the form to use
+when you are already working inside this directory. The router is named first
+deliberately: documenting the direct path as primary is how the router came to be
+unmentioned in every README that existed.
 
 Builds the bundle (via `bundle.sh`) and symlinks its own executable —
 `Scribobulate.app/Contents/MacOS/scribobulate` — into Homebrew's `bin/`
@@ -110,15 +117,40 @@ symlink stays inside `Contents/MacOS/`, so a terminal launch runs the identical
 executable Finder or the Dock would, Dock/Cmd-Tab identity included — a copy
 made outside the bundle would not carry that.
 
-This is the developer-convenience counterpart to the top-level `install.sh` on
-Linux, not the redistributable installer — that is `dmg.sh` above.
+This is the developer-convenience counterpart to `packaging/linux/install.sh`,
+not the redistributable installer — that is `dmg.sh` above.
+
+## Uninstalling
+
+```bash
+./uninstall.sh               # or packaging/macos/uninstall.sh, equivalently
+```
+
+**Two things come off, and one deliberately does not.**
+
+- The `scribobulate` symlink in Homebrew's `bin/` — removed **only if it is in fact
+  a symlink**, so a real file you put there yourself is left alone. This is the part
+  nobody guesses: `install.sh` puts it in `$(brew --prefix)/bin`, which is nowhere
+  near this repository, and you will not find it by looking here.
+- The built `Scribobulate.app` under `target/macos/`.
+- **A copy you dragged to `/Applications` from a `.dmg` is NOT removed.** That one
+  did not come from this script and is not its to delete; it is reported, with the
+  `rm -rf` you would run yourself, rather than silently left or silently taken.
+
+**Launch Services keeps its own record.** `bundle.sh` registers the bundle with
+`lsregister -f` when it builds one, so after removing an `.app` the shell may still
+offer a stale entry until Launch Services catches up. That is the symptom you would
+otherwise chase — it is a database outside this repository, not a leftover file.
+
+**Your data is untouched**: `~/.config/scribobulate/`, themes and session state all
+survive an uninstall.
 
 ## Verifying a bundle
 
 ```bash
 plutil -lint target/macos/Scribobulate.app/Contents/Info.plist
 codesign -dv target/macos/Scribobulate.app
-open target/macos/Scribobulate.app --args -n path/to/document.md
+open target/macos/Scribobulate.app --args -n "$PWD/path/to/document.md"
 lsappinfo info -only bundleid,name -app "$(pgrep -f Scribobulate.app | head -1)"
 ```
 
