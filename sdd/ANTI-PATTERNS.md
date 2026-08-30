@@ -9,7 +9,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 2. General engineering discipline that survives deleting every Scribobulate noun? → route it to `general-engineering-principles`, cited `GEP-N`; leave a one-line `**Routed**` tombstone here. No ScrAP number is needed for provenance.
 3. Neither — Scribobulate internals, or a non-gtk4-rs dependency (Pango, GtkSourceView, pulldown-cmark, librsvg, syntect, serde/toml, the toolchain)? → it stays here, **in ≤ 6 lines**: Symptom · Root cause · Resolution · Lesson · Scribobulate · See. Extend an existing entry rather than minting a sibling for the same root cause. Route a Pango lesson on whose API *contract* it is about, and raise it before routing.
 
-**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 292**+ — check this table and announce the range you claim; never derive it from the highest heading below.
+**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 338**+ — check this table and announce the range you claim; never derive it from the highest heading below.
 
 **Growth** is gated in bytes (check 11). The ratchet only tightens; consolidate in the change that trips it.
 
@@ -335,6 +335,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 | 334 | A repaint failure that also happens in an unrelated application is upstream, and the platform seam it invites is the wrong response | C |
 | 335 | A generated stylesheet GTK refuses loads silently, and the guard that could see it was scoped to one property | A |
 | 336 | A `GtkPaned` child dragged to nothing still reports its full natural height, so `height()` cannot answer "was it crushed away" | A |
+| 337 | A precondition implicit in a whole script is reported by whichever line violates it first, at that line's layer, after everything before it has run | B |
 
 ---
 
@@ -1703,3 +1704,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 ## 336. A `GtkPaned` child dragged to nothing still reports its full natural height, so `height()` cannot answer "was it crushed away"
 **Scribobulate**: `window::gtk_integration_tests::the_divider_cannot_crush_a_sidebar_section_away` asserts the paned's `position()` against the sidebar's own height, at both extremes and for both sections (TDD 20.21).
 **See**: gtk4-rs skill.
+
+## 337. A precondition implicit in a whole script is reported by whichever line violates it first, at that line's layer, after everything before it has run
+**Routed**: GEP-69 — the lesson lives in the `general-engineering-principles` skill; essay in git history (f725e67).
+**Scribobulate**: `install.sh` at the repo root is a `uname -s` router holding no install logic, dispatching to `packaging/linux/install.sh` and `packaging/macos/install.sh`; each body ALSO guards itself, because it stays directly runnable and a direct run must not be the lenient path. Found by the macOS seat: the pre-router script spent a full `cargo build --release` and then died on `install -Dm755` with exit 71 and a message naming a path, because BSD install has no `-D`.
