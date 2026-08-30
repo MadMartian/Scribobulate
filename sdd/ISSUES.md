@@ -36,7 +36,6 @@ described from a different vantage point.
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | J | Any | Upstream | A paragraph that mixes fonts (any inline-code span) can lay out a few pixels wider than the wrap width it was given, summoning the preview's Automatic horizontal scrollbar and intermittently blanking the pane until a resize | Closed |
-| K | Linux | Production | `uninstall.sh` leaves the installed theme data (`$XDG_DATA_HOME/scribobulate/`) on disk while reporting "Removed Scribobulate." | Low |
 | L | Any | Test | `lint-references` check 7 cannot see an app ID that has the canonical one as a strict PREFIX — `com.extollit.scribobulated` passes both halves of the check | Low |
 
 ## A. Tables are selection islands
@@ -575,33 +574,6 @@ scrolling. It is invisible at every other width.
   from GTK.
 - Revisit if the clamp above stops being a symptom gate — if a way appears to distinguish a
   hanging space from a clipped glyph, the clamp becomes safe and this reopens.
-
-## K. `uninstall.sh` leaves the installed theme data behind
-
-**Severity**: Low (nothing breaks; a reinstall silently reuses stale theme data, and the
-script says it removed everything)
-
-`packaging/linux/install.sh` writes four things under `$XDG_DATA_HOME`: the binary, the
-hicolor SVG, the `.desktop` entry, and `scribobulate/{themes.toml,sprites/}`. The
-uninstaller removes the first three. The theme directory survives, and the script then
-prints `Removed Scribobulate.`
-
-**MEASURED** on the reference host, into a scratch prefix
-(`XDG_BIN_HOME`/`XDG_DATA_HOME`/`XDG_CONFIG_HOME` all redirected), install then
-uninstall: `share/scribobulate/themes.toml` and `share/scribobulate/sprites/` (three
-PNGs) remain. The user-visible consequence is that a later install does not get a fresh
-`themes.toml` — the file is overwritten, but a sprite or a theme id that a *newer*
-`data/themes.toml` no longer ships stays on the search path and keeps resolving.
-
-Reported by the macOS seat while splitting the installer per platform; it kept that move
-behaviour-preserving, so the defect is untouched and pre-existing rather than introduced
-by the split.
-
-**Why it is not fixed here**: `uninstall.sh` is mid-flight on a platform branch that
-moves its body to `packaging/linux/uninstall.sh`. Landing a behaviour change into the
-same file from the other end would either conflict or smuggle a fix into a move commit.
-Fix it on Linux once that branch is merged — the removal set is the install set, and the
-install script is the only thing that has to be read to derive it.
 
 ## L. Check 7 is blind to an app ID that merely EXTENDS the canonical one
 

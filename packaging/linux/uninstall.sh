@@ -22,6 +22,19 @@ rm -fv "$BIN_DIR/scribobulate"
 rm -fv "$DATA_DIR/icons/hicolor/scalable/apps/$APP_ID.svg"
 rm -fv "$APP_DIR/scribobulate.desktop"
 
+# The theme payload install.sh writes beside the three above. The REMOVAL SET IS THE
+# INSTALL SET: these two lines exist because their two counterparts do, and a fourth
+# thing installed there wants a fourth line here. Left behind, they made an uninstall
+# that printed success while a later install silently reused stale theme data.
+#
+# `rm -rf` on `sprites/` (wholly ours, and its contents change between versions, so
+# naming the files would strand a sprite an older install shipped), then `rmdir` on the
+# directory itself rather than `rm -rf` — a user's own file under $DATA_DIR/scribobulate
+# is not ours to delete, so the directory goes only when emptying it left nothing.
+rm -fv "$DATA_DIR/scribobulate/themes.toml"
+rm -rfv "$DATA_DIR/scribobulate/sprites"
+rmdir "$DATA_DIR/scribobulate" 2>/dev/null && echo "removed '$DATA_DIR/scribobulate'" || true
+
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APP_DIR" || true
 command -v gtk-update-icon-cache  >/dev/null 2>&1 && \
     gtk-update-icon-cache -f -t "$DATA_DIR/icons/hicolor" 2>/dev/null || true
