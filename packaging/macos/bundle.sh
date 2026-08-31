@@ -132,8 +132,60 @@ resolve_deps() {
     done
 }
 
-declare -a QUEUE=("$APP/Contents/MacOS/scribobulate")
+# --- gdk-pixbuf loaders, staged BEFORE the closure is walked --------------------
+#
+# THESE ARE NOT IN THE STATIC GRAPH. They are `dlopen`ed at runtime, so nothing reachable
+# from the executable's load commands mentions them, and a closure seeded only from the
+# executable stages neither the loaders nor -- the part that bites -- THEIR OWN
+# dependencies. The SVG loader alone pulls in librsvg, which the application does not link
+# and which would therefore be absent from a bundle that looked complete.
+#
+# So they are copied in first and their ORIGINALS are seeded into the work list below,
+# which makes their dependencies part of the same closure rather than a second staging
+# list that has to be kept in step with it.
+PIXBUF_VER="2.10.0"
+PIXBUF_SRC="/opt/homebrew/lib/gdk-pixbuf-2.0/$PIXBUF_VER/loaders"
+# FLAT IN Contents/Frameworks, with no directory of its own, and that is not a style
+# choice. `codesign --deep` treats ANY DIRECTORY under Frameworks/ as a nested bundle and
+# refuses one that is not: "bundle format unrecognized, invalid, or unsuitable -- In
+# subcomponent: .../Frameworks/gdk-pixbuf-2.0". The bundle is then left UNSIGNED (no
+# Contents/_CodeSignature at all) and the kernel kills it at launch with no output, which
+# reads as a missing library and is not one. Flat Mach-O files sign exactly like the 44
+# dylibs already beside them.
+#
+# SCOPE OF THAT MEASUREMENT, stated because the first version of this comment overclaimed:
+# the "In subcomponent" refusal WAS observed directly with a directory here. Whether
+# Contents/Resources would also have worked was NOT established -- that build died earlier
+# for an unrelated reason (see the loader-cache step below), so its failure proved nothing
+# about placement. Flat under Frameworks is chosen because it is known to sign, not
+# because the alternative is known to fail.
+PIXBUF_DST="$APP/Contents/Frameworks"
+declare -a LOADER_SRCS=()
+if [ -d "$PIXBUF_SRC" ]; then
+    mkdir -p "$PIXBUF_DST"
+    # Enumerated, never matched against a guessed filename: the set includes both `.so`
+    # and `.dylib` spellings and is not predictable from the format list.
+    while IFS= read -r loader; do
+        cp "$(/usr/bin/readlink -f "$loader")" "$PIXBUF_DST/$(basename "$loader")"
+        chmod u+w "$PIXBUF_DST/$(basename "$loader")"
+        LOADER_SRCS+=("$loader")
+    done < <(find -L "$PIXBUF_SRC" -type f \( -name '*.so' -o -name '*.dylib' \))
+    echo "   staged ${#LOADER_SRCS[@]} gdk-pixbuf loaders"
+fi
+
+declare -a QUEUE=("$APP/Contents/MacOS/scribobulate" "${LOADER_SRCS[@]}")
 declare -a STAGED=()
+
+# The staged loader copies are Mach-O objects inside the bundle and need their load
+# commands rewritten like everything else -- condition 1 walks every file in the bundle,
+# so a missed one fails the gate rather than shipping. They are kept SEPARATE from
+# $STAGED because they must NOT receive an `@rpath/<name>` install ID: a loader is
+# `dlopen`ed by the path written in loaders.cache, not resolved through an rpath, so
+# rewriting its ID would describe it as something it is not.
+declare -a LOADER_OBJS=()
+while IFS= read -r staged_loader; do
+    [ -n "$staged_loader" ] && LOADER_OBJS+=("$staged_loader")
+done < <(find "$PIXBUF_DST" -type f 2>/dev/null || true)
 while [ ${#QUEUE[@]} -gt 0 ]; do
     current="${QUEUE[0]}"; QUEUE=("${QUEUE[@]:1}")
     while IFS= read -r dep; do
@@ -195,11 +247,35 @@ needs_rewrite() {
         | grep -E '^(/opt/homebrew|/usr/local|@loader_path)/' || true
 }
 
-for obj in "$APP/Contents/MacOS/scribobulate" "${STAGED[@]}"; do
+# WHERE a dependency ends up decides the form it is rewritten to, and getting this wrong
+# is invisible until something dlopens. A library staged in Frameworks/ is reached through
+# the executable's LC_RPATH, so `@rpath/<name>`. A pixbuf loader's SIBLING loader is NOT in
+# Frameworks -- it sits beside it in the loaders directory -- so `@rpath/<name>` would send
+# dyld to Frameworks/ and find nothing. That one is `@loader_path/<name>`, which is also
+# the truthful description: it is found relative to the object loading it.
+rewrite_target() {
+    local dep="$1" name
+    name="$(basename "$dep")"
+    if [ -e "$FRAMEWORKS/$name" ]; then
+        printf '@rpath/%s\n' "$name"
+    else
+        printf '@loader_path/%s\n' "$name"
+    fi
+}
+
+for obj in "$APP/Contents/MacOS/scribobulate" "${STAGED[@]}" ${LOADER_OBJS[@]+"${LOADER_OBJS[@]}"}; do
     while IFS= read -r dep; do
         [ -n "$dep" ] || continue
-        retool -change "$dep" "@rpath/$(basename "$dep")" "$obj"
+        retool -change "$dep" "$(rewrite_target "$dep")" "$obj"
     done < <(needs_rewrite "$obj")
+done
+
+# A loader's own ID is absolute as Homebrew ships it, which condition 1 rejects and which
+# describes the file as living somewhere it does not. `@loader_path/<name>` rather than
+# `@rpath/<name>`: a loader is dlopen'ed by the path in loaders.cache, never resolved
+# through the executable's rpath, so @rpath would be a claim that is simply untrue.
+for obj in ${LOADER_OBJS[@]+"${LOADER_OBJS[@]}"}; do
+    retool -id "@loader_path/$(basename "$obj")" "$obj"
 done
 
 # The one absolute assumption, in one place.
@@ -209,6 +285,60 @@ if ! otool -l "$APP/Contents/MacOS/scribobulate" \
      | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}' \
      | grep -qx '@executable_path/../Frameworks'; then
     retool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/scribobulate"
+fi
+
+# --- Runtime data that fails LATE and SILENTLY ---------------------------------
+#
+# None of this is in any link graph, so nothing above stages it and no dyld error reports
+# it missing. Each one degrades the running window instead: icons become broken-image
+# placeholders, a file dialog aborts on a missing GSettings schema, images fail to decode.
+# That is the whole reason TDD 26.4 asserts them as OUTCOMES from inside the bundle rather
+# than as a staging checklist -- a checklist is satisfied by copying the wrong thing.
+#
+# NOT STAGED, deliberately: share/gtksourceview-5. The editor's language specs and style
+# schemes are NOT on disk in the Homebrew prefix at all -- they are a GResource compiled
+# into libgtksourceview-5.0.dylib, which Frameworks/ already carries. Staging that
+# directory would copy six RNG/DTD validators and a font nobody loads, and would look like
+# it was what made highlighting work. TDD 26.5 asserts the outcome instead.
+echo ":: Staging runtime data"
+SHARE="$APP/Contents/Resources/share"
+mkdir -p "$SHARE"
+
+# GSettings schemas. `gschemas.compiled` is what GLib actually reads; the .xml sources
+# come too so the directory is inspectable rather than opaque.
+if [ -d /opt/homebrew/share/glib-2.0/schemas ]; then
+    mkdir -p "$SHARE/glib-2.0/schemas"
+    cp -RL /opt/homebrew/share/glib-2.0/schemas/. "$SHARE/glib-2.0/schemas/"
+    [ -f "$SHARE/glib-2.0/schemas/gschemas.compiled" ] \
+        || glib-compile-schemas "$SHARE/glib-2.0/schemas"
+fi
+
+# The icon theme. `-L` because Homebrew's share/icons entries are symlinks into the
+# Cellar, and copying the links would produce a bundle whose icons resolve only on a
+# machine that has the Cellar -- i.e. exactly the bundle this work exists to stop
+# shipping.
+for theme in Adwaita hicolor; do
+    if [ -d "/opt/homebrew/share/icons/$theme" ]; then
+        mkdir -p "$SHARE/icons/$theme"
+        cp -RL "/opt/homebrew/share/icons/$theme/." "$SHARE/icons/$theme/"
+    fi
+done
+
+# The loader cache, REGENERATED rather than copied. Homebrew's own cache names absolute
+# /opt/homebrew paths, so shipping it would point a self-contained bundle straight back
+# out of itself. Paths are made relative to the cache file's own directory, which is how
+# the seam then resolves them at runtime.
+# QUERIED AGAINST THE ORIGINALS, NEVER THE STAGED COPIES. `gdk-pixbuf-query-loaders`
+# dlopens every module it scans, and the staged copies have had install_name_tool run over
+# them, which invalidates their signatures -- on Apple Silicon the kernel SIGKILLs a
+# process that loads such a dylib. Pointed at the bundle this step died with "Killed: 9",
+# taking the whole build down BEFORE the signing step, which is why the resulting bundle
+# had no signature and the app was killed at launch with no output. Every symptom in that
+# cascade pointed somewhere other than here.
+if [ -d "$PIXBUF_SRC" ] && command -v gdk-pixbuf-query-loaders >/dev/null 2>&1; then
+    GDK_PIXBUF_MODULEDIR="$PIXBUF_SRC" gdk-pixbuf-query-loaders \
+        | sed "s|$PIXBUF_SRC/||g" \
+        > "$APP/Contents/Resources/loaders.cache"
 fi
 
 # --- Third-party notices -------------------------------------------------------
@@ -236,6 +366,19 @@ cp "$REPO_ROOT/THIRD-PARTY-LICENSES.md" "$APP/Contents/Resources/THIRD-PARTY-LIC
 # one in script/CI output.
 if ! codesign --force --deep --sign - "$APP"; then
     echo "error: ad-hoc codesign failed; the bundle will likely refuse to launch" >&2
+    exit 1
+fi
+
+# CODESIGN EXITS 0 WHILE FAILING, so the check above is not sufficient on its own and was
+# not sufficient in practice. MEASURED: with a directory under Frameworks/ it printed
+# "bundle format unrecognized, invalid, or unsuitable / In subcomponent: ..." and RETURNED
+# ZERO, leaving the bundle with no Contents/_CodeSignature and no signature at all. The
+# guard that exists precisely to stop a broken signature shipping (QA finding R1-14) saw
+# exit 0 and passed it on. VERIFY THE ARTEFACT, never the exit code -- the same rule this
+# project applies to every other gate.
+if ! codesign --verify --deep --strict "$APP" 2>/dev/null; then
+    echo "error: the bundle is not validly signed after signing it:" >&2
+    codesign --verify --deep --strict "$APP" 2>&1 | sed 's/^/       /' >&2
     exit 1
 fi
 
