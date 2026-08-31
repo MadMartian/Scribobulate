@@ -2103,6 +2103,54 @@ the resolved GTK **runtime** version, the renderer and the pid, which is what te
 whether the binary you are looking at is the one you meant to launch. **It does not carry a
 commit SHA** — this section claimed one for a while and no such record exists in the tree;
 use the executable's mtime and size, which do distinguish a rebuild.
+
+**8. The staged GtkSourceView validators — a 2x2, and the last cell is not optional.**
+
+Loading a `.lang` validates it against `language2.rng`, which libxml reads from a
+**filesystem path** — so the GResource the `.lang` itself comes from cannot satisfy it,
+and `stage.ps1` ships `share\gtksourceview-5` for that reason. The failure is a `WARN`
+and **the document still renders**, in monochrome, looking like a plain text file rather
+than like something broken. Nobody notices it who has not seen the highlighted version,
+which is why this is a written procedure rather than a glance.
+
+Run the **installed** product (`%LOCALAPPDATA%\Programs\Scribobulate\bin\scribobulate.exe`),
+open a Markdown file with a heading, a fenced code block and a list, press `%+e` for the
+editor, and read stderr. **RENAME** each directory rather than making it unreadable —
+denial and absence are equivalent to this lookup (`g_file_test` collapses `EPERM` and
+`ENOENT` to the same `FALSE`, measured by the macOS seat), but renaming models the
+recipient's condition exactly and costs nothing.
+
+| build prefix (`C:\gtk-build`) | installed `share\gtksourceview-5` | expected |
+|---|---|---|
+| present | present | no warning, stderr ~401 B |
+| **renamed away** | present | no warning, stderr ~401 B |
+| present | **renamed away** | no warning, stderr ~401 B |
+| **renamed away** | **renamed away** | `WARN GtkSourceView: Failed to load 'resource:///…/markdown.lang': could not find the RelaxNG schema file`, stderr ~570 B |
+
+**All four cells, and the byte counts are the cheap discriminator** — 401 against 570
+answers the question without reading the log at all. The first three each showing *no*
+warning is itself the finding: **both locations are in the search path and either one
+suffices alone**. A procedure that ran only rows 2 and 4 would let a reader conclude an
+ordering between them, and no measurement here supports one.
+
+**Row 4 is the positive control and the run is worthless without it.** Rows 1-3 are
+negatives — "no warning appeared" is equally true of a working lookup and of a harness
+that cannot see the warning. Row 4 is what distinguishes them, and it doubles as proof
+that the staged directory is load-bearing rather than decorative. Corroborate with a
+screenshot pair if the log is in doubt: row 2 shows a teal heading, coloured inline code
+and orange list markers; row 4 is uniformly monochrome with every glyph in the same
+place.
+
+**OPEN QUESTION, recorded here so the next person starts from it rather than from an
+answer.** In the equivalent state the macOS bundle's staged copy is *not* reached while
+this one is. The best explanation on the table is that the Windows tree sits under the
+prefix GTK derives from the loaded GLib DLL — GLib's default `XDG_DATA_DIRS` value on
+this platform — which a `.app` bundle has no equivalent of. Two further states measured
+here bear on it and neither settles it: pointing `XDG_DATA_DIRS` at an unrelated
+directory makes row 2 **fail**, and pointing it at the installed `share` root makes it
+**pass**, so an explicit entry is honoured and setting the variable *displaces* the
+default rather than adding to it. Nothing about search-path **order** has been measured
+on either platform; do not infer one from these cells.
 - [ ] **23.11** **A link to a section of the same document is a navigation.** Open a document with a table of contents linking its own headings (`sdd/TDD.md` and `sdd/CAM.md` both have one; `punkie-joe-farms.md` is the report this came from). Scroll to the TOC and click one entry → the preview jumps to that section, the **tab strip selection does not move**, and **View ▸ Back is no longer greyed**. Repeat with an **outline sidebar** row (F9) → same result. Then switch to pure-**edit** mode and activate an outline row → the caret moves and Back is *unchanged*, because nothing moved the preview (TDD 23.11)
 - [ ] **23.12** **Back returns to where you clicked from.** Continuing from 23.11: invoke **Back** → the viewport returns to the TOC, at the position it was at when you clicked — **not** the top of the document. **Forward** → back to the section. Nothing re-renders and the active tab never changes. Now click the *same* TOC entry twice in a row → the second click adds no stop: one Back press leaves the section (TDD 23.12)
 - [ ] **23.12a** **Back works when you clicked from the very top.** The 23.12 case above starts with a deliberate scroll, which hides this one. Open a document whose table of contents is the **first thing in the file** (`sdd/TDD.md`), do **not** scroll at all, and click a TOC entry from the top of the document → the preview jumps to that section. Now **Back** → the preview scrolls **back up to the top**; it must not sit still on the section. **Forward** → the section again. Before the fix the departure was recorded as line 0 and the restore treated that as "already at the top, nothing to do", so *both* directions did nothing and the feature looked entirely broken for TOC links while working for every other navigation (ScrAP-262, TDD 23.12)
