@@ -1,0 +1,48 @@
+# THE TOOLCHAIN IS PINNED SO THE GATES MEAN THE SAME THING ON EVERY MACHINE.
+#
+# Build-pipeline step 2 is `cargo clippy -- -D warnings`, and CLIPPY'S LINT SET IS A
+# FUNCTION OF THE TOOLCHAIN. Unpinned, step 2 asks a different question on every box, and
+# the answer it gives is a fact about which rustc that box happened to have rather than
+# about this tree. That is the same shape as ScrAP-279 (a version number is not a build)
+# and as the coverage floor's host-dependence: a gate whose verdict moves with the machine
+# is not gating the commit.
+#
+# MEASURED, which is why this exists rather than a note asking people to keep in step.
+# `chunks_exact_to_as_chunks` was introduced in Rust 1.98.0. The hosted runners had it and
+# the developer box was on 1.95.0, so `execute (linux)` and `execute (windows)` both failed
+# step 2 on eleven errors that NO LOCAL RUN COULD PRODUCE — green here, red there, on one
+# commit, with nothing in the tree recording that the two were even asking different
+# questions.
+#
+# AND SUPPRESSING THE LINT WOULD HAVE INVERTED THE SPLIT RATHER THAN CLOSING IT. Measured
+# on 1.95.0: `#![allow(clippy::chunks_exact_to_as_chunks)]` is itself an error, because
+# `unknown_lints` is warn-by-default and `-D warnings` promotes it —
+#
+#     error: unknown lint: `clippy::chunks_exact_to_as_chunks`
+#       = note: `-D unknown-lints` implied by `-D warnings`
+#
+# so the obvious fix makes CI green and the developer box red. There is no per-site
+# annotation that satisfies both toolchains at once; only agreeing on one toolchain does.
+#
+# THIS IS NOT THE PIN Cargo.toml FORBIDS. That prohibition — "do NOT respond by bumping
+# rustc, pinning rustc, or disabling thin LTO workspace-wide" — is the recurrence protocol
+# for the intermittent `LLVM ERROR: PromoteIntegerResult` fatal, and it says pinning is no
+# remedy FOR THAT, which is correct: 1.95.0 through 1.98.0 are all LLVM 22. This pin is
+# about reproducibility of the lint gate and has nothing to do with that crash. If the
+# LLVM fatal recurs, follow Cargo.toml's protocol; do not touch this file for it.
+#
+# BUMPING IS DELIBERATE WORK, NOT MAINTENANCE DRIFT, and it is the point of pinning rather
+# than a cost of it. Raising `channel` re-arms every lint added since, so the bump lands
+# with the fixes it demands in the same change, verified on one toolchain, instead of
+# arriving unannounced in whichever runner image refreshed first. The known cost of the
+# current value: 1.98.0's `chunks_exact_to_as_chunks` fires on ~11 call sites, and the
+# ones passing a const-generic expression (`chunks_exact(W * 4)`) cannot take the lint's
+# suggested `as_chunks::<W * 4>()` without `generic_const_exprs`, which is unstable — so
+# that bump needs a per-site `#[allow]` with its reason, not a blanket rewrite.
+#
+# `components` is declared here rather than left to the workflow's `rustup component add`
+# so a fresh clone is correct before CI is involved. The workflow's line is harmless
+# belt-and-braces against this file being edited without it.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]

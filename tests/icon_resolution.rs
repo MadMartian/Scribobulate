@@ -21,8 +21,10 @@
 //! Do not "tidy" this into the suite. For an ordinary GTK assertion, write
 //! `#[gtktest::test]` in `src/` instead; see POLICY's testing section.
 //!
-//! Run:
-//!   `xvfb-run -a cargo test --features gtk-integration-tests` (whole suite)
+//! Run — `xvfb-run` OUTSIDE, `dbus-run-session` INSIDE (the reverse leaks the bus's
+//! activated daemons onto your real X server; POLICY step 5 has the measurement):
+//!   `scripts/run-integration.sh` (the whole step, and it gets the nesting right)
+//!   `xvfb-run -a dbus-run-session -- cargo test --features gtk-integration-tests`
 //!   `cargo test --features gtk-integration-tests --test icon_resolution`
 //!
 //! Non-zero exit lists the offending names. Passing `--render <DIR>` also

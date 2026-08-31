@@ -58,6 +58,80 @@ pub(crate) fn new_instance_argv(args: Vec<String>) -> (bool, Vec<String>) {
     (force_new, rest)
 }
 
+/// The marker `--probe-startup` prints. **A CONTRACT WITH THE macOS PACKAGING GATE** —
+/// `packaging/macos/verify-selfcontained.sh` greps for exactly this text, so it is a
+/// published interface and not a log line. Change it and that gate goes red.
+///
+/// Deliberately ASCII, deliberately not routed through the logger, and deliberately not
+/// translated. It replaces a grep for GLib's `Unknown option`, which was none of those
+/// things: that string belongs to GLib's message catalogue and is translated, so the gate
+/// it backed passed in English and FAILED on a German machine against the same bundle —
+/// measured across four locales. A gate whose verdict depends on the tester's locale is
+/// not a gate.
+pub(crate) const STARTUP_PROBE_MARKER: &str = "scribobulate: startup-probe ok";
+
+/// Is this a `--probe-startup` invocation?
+///
+/// WHAT REACHING THIS PROVES, which is the whole reason the flag exists: dyld binds every
+/// `LC_LOAD_DYLIB` in the graph BEFORE `main()` runs, so a process that gets far enough to
+/// answer this question has already resolved its entire library closure. The macOS
+/// packaging gate uses that: it launches the bundled binary with the Homebrew prefix made
+/// unreadable, and a bundle that still depends on Homebrew dies in dyld without ever
+/// reaching here. Silence is a failure; the marker is the pass.
+///
+/// WHAT IT DOES NOT PROVE: anything `dlopen`ed later — gdk-pixbuf loaders, GIO modules,
+/// GSettings schemas — is not in the static graph and is not exercised by this. Those need
+/// their own assertions, and a probe that returns 0 must not be read as "the bundle is
+/// complete".
+///
+/// Pure, and unit-tested here rather than at the call site, for the reason
+/// `new_instance_argv` above is: the coverage gate cannot reach `lib.rs`.
+pub(crate) fn is_startup_probe(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--probe-startup")
+}
+
+#[cfg(test)]
+mod startup_probe_tests {
+    use super::{is_startup_probe, STARTUP_PROBE_MARKER};
+
+    fn argv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn the_flag_is_recognised_only_in_its_exact_spelling() {
+        assert!(is_startup_probe(&argv(&[
+            "scribobulate",
+            "--probe-startup"
+        ])));
+        assert!(is_startup_probe(&argv(&[
+            "scribobulate",
+            "a.md",
+            "--probe-startup"
+        ])));
+        // NEAR MISSES MUST NOT TRIGGER IT. A document legitimately named
+        // `--probe-startup.md`, or a prefix of the flag, would otherwise make an
+        // ordinary launch exit silently instead of opening anything.
+        for near in ["--probe", "--probe-startup.md", "probe-startup", "-p"] {
+            assert!(
+                !is_startup_probe(&argv(&["scribobulate", near])),
+                "{near} must not be read as the probe flag"
+            );
+        }
+        assert!(!is_startup_probe(&argv(&["scribobulate", "a.md"])));
+    }
+
+    /// The marker is an interface, so its SHAPE is asserted, not just its presence.
+    /// A gate greps for it on one line; an empty or multi-line value would break that
+    /// silently on the packaging seat rather than here.
+    #[test]
+    fn the_marker_is_a_single_nonempty_ascii_line() {
+        assert!(!STARTUP_PROBE_MARKER.is_empty());
+        assert!(!STARTUP_PROBE_MARKER.contains('\n'));
+        assert!(STARTUP_PROBE_MARKER.is_ascii());
+    }
+}
+
 #[cfg(test)]
 mod new_instance_tests {
     use super::new_instance_argv;

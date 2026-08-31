@@ -164,6 +164,11 @@ file build.rs
 # its pattern AND its set, and the two disagreed here in the set's direction.
 file .cargo/config.toml
 file clippy.toml
+# The pinned toolchain, and it is here for the reason its two neighbours are: its header
+# cites this project's register while explaining WHY the version is frozen, and a citation
+# the gate cannot see is one no sweep will ever correct. It also states the cost of the
+# current pin, which is exactly the kind of claim that rots the moment the value moves.
+file rust-toolchain.toml
 # The CI workflow, for the same reason as the two above: it cites this project's register
 # in comments, and a citation the gate cannot see is one no sweep will ever correct. Named
 # as a `file` entry rather than adding a `root .github` so no dot-directory is walked —

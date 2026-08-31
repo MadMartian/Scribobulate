@@ -173,6 +173,29 @@ pub(crate) use icons::APP_ID;
 /// of these steps must happen before GTK or GLib initialises, and a caller that
 /// reordered them would re-arm bugs that took a long time to find.
 pub fn run() -> glib::ExitCode {
+    // `--probe-startup`: print a marker and exit 0, BEFORE anything else happens.
+    //
+    // FIRST STATEMENT IN THE FUNCTION, deliberately. The macOS packaging gate
+    // (`packaging/macos/verify-selfcontained.sh`) launches the bundled binary with the
+    // Homebrew prefix made unreadable and asks one question: did the process get far
+    // enough to speak? dyld binds the whole `LC_LOAD_DYLIB` graph before `main()`, so a
+    // bundle still depending on Homebrew dies in dyld and prints nothing — silence is the
+    // failure, the marker is the pass. Putting this first keeps the answer about the
+    // LIBRARY GRAPH and nothing else: a renderer env var, a logger, or a GTK init failing
+    // later would otherwise turn a self-containment gate into a test of whatever ran first.
+    //
+    // It replaces a grep for GLib's `Unknown option`, which was the same observation made
+    // through a string this project does not own and GLib translates — that gate passed in
+    // English and failed on a German machine against an identical bundle.
+    //
+    // Returns rather than `process::exit`, so no destructor is skipped and the flag costs
+    // nothing to anyone who never passes it.
+    let argv: Vec<String> = std::env::args().collect();
+    if app::is_startup_probe(&argv) {
+        println!("{}", app::STARTUP_PROBE_MARKER);
+        return glib::ExitCode::SUCCESS;
+    }
+
     // Force the GSK Cairo software renderer: no GL/GLES context, no GPU memory.
     // Must be set before GTK initialises (POLICY.md architecture rule).
     //
