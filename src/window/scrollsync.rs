@@ -500,6 +500,18 @@ pub(super) fn apply_content_reading_position(
 mod gtk_integration_tests {
     use super::*;
 
+    /// Sections in the fixture below, and the lines each one costs in the buffer —
+    /// `## Section n`, a blank, one line of prose, a blank.
+    ///
+    /// **A BLOCK IS `FIXTURE_LINES_PER_SECTION` LINES, and the settle bound is derived
+    /// from it** rather than written as a literal. The crossing between two panes
+    /// resolves a position to the waypoint at or before it, so "the block containing the
+    /// reader" is a fixture property; a bound spelled as a bare number silently widens
+    /// the moment someone edits the fixture, which is how a guard stops guarding without
+    /// anyone touching it.
+    const FIXTURE_SECTIONS: i32 = 40;
+    const FIXTURE_LINES_PER_SECTION: i32 = 4;
+
     /// Build a window on a fixture tall enough that a drift is visible, mapped and
     /// pumped to a real scroll range.
     fn windowed(app_id: &str) -> (ApplicationWindow, std::rc::Rc<crate::winstate::TabState>) {
@@ -507,7 +519,7 @@ mod gtk_integration_tests {
         app.register(gtk::gio::Cancellable::NONE)
             .expect("register (emits startup) before building any window");
         let mut md = String::new();
-        for n in 1..=40 {
+        for n in 1..=FIXTURE_SECTIONS {
             md.push_str(&format!(
                 "## Section {n}\n\nSome prose for section {n}.\n\n"
             ));
@@ -515,65 +527,112 @@ mod gtk_integration_tests {
         let window = crate::window::new_window(&app, "IT", &md, None);
         window.set_default_size(800, 600);
         window.present();
-        crate::testpump::drain_for(
-            crate::testpump::Clock::Frame,
-            std::time::Duration::from_millis(400),
-        );
         let st = state(&window).expect("tab state");
+
+        // ASSERTED, not slept for. "A real scroll range" is the precondition the whole
+        // fixture rests on — the tests park the reader at `upper * 0.5`, which on a view
+        // whose content height has not been established yet is a jump to nowhere and
+        // silently makes every later reading a measurement of the wrong document. A
+        // fixed drain claimed this and checked nothing.
+        crate::testpump::until_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(8000),
+            "the preview to mount and report a scrollable range",
+            || {
+                st.split
+                    .preview_scroller()
+                    .map(|sw| sw.vadjustment())
+                    .is_some_and(|adj| adj.upper() > adj.page_size() && adj.page_size() > 0.0)
+            },
+        );
+        settle(&st, "the freshly built preview");
         (window, st)
     }
 
     fn round_trip(window: &ApplicationWindow, via: &str) {
         for mode in [via, "preview"] {
             crate::window::change_action_state(window, "view-mode", &mode.to_variant());
-            crate::testpump::drain_for(
-                crate::testpump::Clock::Frame,
-                std::time::Duration::from_millis(120),
-            );
+            // The switch AWAY is where a hand-off reads the pane it is leaving, so the
+            // settle belongs after every mode change, not only after the return trip.
+            settle(&st_of(window), &format!("the {mode} pane after the switch"));
         }
     }
 
-    /// The preview's top line once it has stopped moving.
+    fn st_of(window: &ApplicationWindow) -> std::rc::Rc<crate::winstate::TabState> {
+        state(window).expect("tab state")
+    }
+
+    /// The live viewport top offset of the pane the app would READ right now —
+    /// deliberately mirroring [`content_reading_position`]'s own choice of pane, since
+    /// that is the read whose timing decides whether a hand-off is honest.
     ///
-    /// **Not a fixed sleep.** A restore lands through `scroll_to_mark`, which GTK
-    /// re-applies across successive line-height validation passes, so the position
-    /// keeps changing for an unbounded number of frames after the switch returns —
-    /// on an idle machine it settles in well under 250 ms, and under the load of a
-    /// full suite run it does not. This guard read a fixed 250 ms after the switch
-    /// and duly reported a settled `[78, 78, 78, 94]` sequence: three trips of a
-    /// converged view and one caught mid-validation, which is indistinguishable
-    /// from the drift it exists to catch. Poll for stability instead, so the guard
-    /// measures the reading position rather than the machine's load (ScrAP-13/65;
-    /// the same wall-clock-on-a-shared-runner trap the register's own flaky
-    /// growth-ratio guards fell into).
-    fn settled_top_line(st: &std::rc::Rc<crate::winstate::TabState>) -> i32 {
-        let mut last = i32::MIN;
-        let mut stable = 0;
-        crate::testpump::until_or_for(
+    /// **This is raw geometry on purpose.** `preview_top_line` prefers
+    /// `restore_target_line`, a `Cell` the restore path writes synchronously, so it
+    /// answers the same number from the moment a restore is *scheduled* — before any of
+    /// the validation this wait exists to outlast. Polling it observes a constant.
+    fn live_top_offset(st: &std::rc::Rc<crate::winstate::TabState>) -> i32 {
+        if st.view_mode.get().is_editor_visible() {
+            return view_top_offset(&st.editor);
+        }
+        st.split
+            .preview_scroller()
+            .and_then(|sw| sw.child())
+            .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
+            .map_or(-1, |v| view_top_offset(&v))
+    }
+
+    /// Hold the precondition every reading in this module depends on: the pane the app
+    /// reads has stopped moving.
+    ///
+    /// **A failure here is NOT a drift failure, and says so.** Folding the two together
+    /// is what made these guards flaky across harness, platform and run: an
+    /// under-settled pane hands back the top of an unvalidated view (line 0), the
+    /// accumulation assertion sees 0 against 78 and reports "that is a ratchet, not
+    /// jitter" — a confident claim about the application, produced by a starved test.
+    /// MEASURED: shortening the pre-switch wait on an otherwise green Linux run
+    /// reproduces exactly the sequence `[0, 78, 0, 78]` and exactly that message.
+    fn settle(st: &std::rc::Rc<crate::winstate::TabState>, what: &str) {
+        let settled = crate::testpump::until_stable(
             crate::testpump::Clock::Frame,
-            std::time::Duration::from_millis(4000),
-            || {
-                let Some(sw) = st.split.preview_scroller() else {
-                    return false;
-                };
-                let Some(cur) = crate::preview::preview_top_line(&sw) else {
-                    return false;
-                };
-                if cur == last {
-                    stable += 1;
-                } else {
-                    stable = 0;
-                    last = cur;
-                }
-                stable >= 4
-            },
+            std::time::Duration::from_millis(8000),
+            std::time::Duration::from_millis(150),
+            || live_top_offset(st),
         );
-        assert_ne!(
-            last,
-            i32::MIN,
-            "the preview never reported a top line at all"
+        assert!(
+            settled.converged,
+            "{what}: the viewport was still moving after 8s (last offset \
+             {:?}) — the precondition for reading a position was never established, \
+             so this run can say nothing about drift either way",
+            settled.value
         );
-        last
+    }
+
+    /// The preview's top line, read once the pane has stopped moving.
+    ///
+    /// **Not a fixed sleep** — a restore lands through `scroll_to_mark`, which GTK
+    /// re-applies across successive line-height validation passes, so the position
+    /// keeps changing for an unbounded number of frames after the switch returns; on an
+    /// idle machine it settles in well under 250 ms, and under the load of a full suite
+    /// run it does not (ScrAP-13/65, and the same wall-clock-on-a-shared-runner trap the
+    /// register's flaky growth-ratio guards fell into).
+    ///
+    /// **And not a poll of this value either, which is the correction.** The version
+    /// that replaced the fixed sleep polled `preview_top_line` for four equal readings —
+    /// but that call prefers `restore_target_line`, which the restore path writes
+    /// SYNCHRONOUSLY, so what it polled was a constant and it reached its bar on the
+    /// minimum five turns every time. MEASURED on this fixture: `polls=5 stable=4
+    /// converged=true` on every call, on a healthy run AND on a deliberately starved one
+    /// that was reading line 0 off an unvalidated view. A wait that reports success
+    /// without ever having observed the thing it waits for is not a wait, and the
+    /// convergence flag it did compute was discarded on top. The settling now happens in
+    /// [`settle`], against live geometry, and its failure is asserted; this function is
+    /// left with the single deterministic read it always wanted.
+    fn settled_top_line(st: &std::rc::Rc<crate::winstate::TabState>) -> i32 {
+        settle(st, "the preview before reading its top line");
+        st.split
+            .preview_scroller()
+            .and_then(|sw| crate::preview::preview_top_line(&sw))
+            .expect("the preview never reported a top line at all")
     }
 
     /// **TDD 7.5: repeated view-mode round trips do not accumulate a drift.**
@@ -604,6 +663,10 @@ mod gtk_integration_tests {
             std::time::Duration::from_millis(300),
         );
         let start = settled_top_line(&st);
+        // Captured WITH `start`, not after the trips: read later it reports whichever
+        // mode the loop happened to end in, and a `page_size` of 0 from an unmounted
+        // pane reads as a broken fixture rather than as a timing artefact of the probe.
+        let geometry = fixture_geometry(&st);
 
         let mut seen = Vec::new();
         for _ in 0..4 {
@@ -611,7 +674,7 @@ mod gtk_integration_tests {
             seen.push(settled_top_line(&st));
         }
 
-        assert_no_accumulation(start, &seen, "preview↔split");
+        assert_no_accumulation(&geometry, start, &seen, "preview↔split");
     }
 
     /// The contract TDD 7.5 actually states, asserted as two separate things.
@@ -629,9 +692,48 @@ mod gtk_integration_tests {
     /// one-time settle must be bounded. Asserting only a tolerance against `start`
     /// would pass a slow ratchet for as long as it stayed inside the tolerance,
     /// which is the defect wearing a smaller step.
-    fn assert_no_accumulation(start: i32, seen: &[i32], what: &str) {
+    /// The fixture geometry both assertions below are read against, carried into their
+    /// failure messages.
+    ///
+    /// **Because a failure of these guards is usually read from a CI log by someone who
+    /// cannot rerun it.** The macOS red that put these guards on the register reported
+    /// `start` and the sequence and nothing else, and deciding whether that was a timing
+    /// artefact or a genuinely different document meant getting a second machine to
+    /// print the content height by hand. Three numbers in the message would have settled
+    /// it from the log: they turned out to be IDENTICAL on the runner, on the macOS box
+    /// and here (`total=159 upper=2858 page=507 start=79`), which is what ruled out
+    /// font metrics and left timing as the only variable.
+    fn fixture_geometry(st: &std::rc::Rc<crate::winstate::TabState>) -> String {
+        let Some(sw) = st.split.preview_scroller() else {
+            return "no preview scroller".to_string();
+        };
+        let adj = sw.vadjustment();
+        let total = sw
+            .child()
+            .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
+            .map_or(-1, |v| v.buffer().line_count());
+        format!(
+            "total_lines={total} upper={} page_size={}",
+            adj.upper(),
+            adj.page_size()
+        )
+    }
+
+    fn assert_no_accumulation(geometry: &str, start: i32, seen: &[i32], what: &str) {
         let lo = *seen.iter().min().expect("at least one round trip");
         let hi = *seen.iter().max().expect("at least one round trip");
+
+        // PUBLISHED ON A GREEN RUN, deliberately — an assertion message only reaches the
+        // reader when the guard fails, and the number needed to tighten the bound below
+        // is the one from a run that PASSED on the environment that used to fail. This
+        // costs two lines per suite run in the `gtk_suite` target (whose `main` does not
+        // capture) and it is the only way a hosted runner's cost is ever readable.
+        eprintln!(
+            "scrollsync {what}: start={start} seen={seen:?} \
+             one_time_cost={} band={} {geometry}",
+            (seen[0] - start).abs(),
+            hi - lo
+        );
 
         // THE load-bearing assertion: the readings stay inside a narrow band, so
         // repeating the trip does not walk the reader anywhere. A ratchet of even one
@@ -648,20 +750,42 @@ mod gtk_integration_tests {
         assert!(
             hi - lo <= JITTER,
             "{what}: the reading position moved across {} lines over the round trips \
-             (sequence {seen:?}, started at {start}) — that is a ratchet, not jitter",
+             (sequence {seen:?}, started at {start}; {geometry}) — that is a ratchet, \
+             not jitter",
             hi - lo
         );
 
         // And the one-time cost of crossing between two panes that hold different
         // text is bounded: it may settle onto the block containing the reader, not
         // several blocks away.
-        const SETTLE_LIMIT: i32 = 20;
+        //
+        // **FIVE blocks, and the five is headroom that is on its way out.** MEASURED
+        // once the pane is genuinely settled, this cost is 1 on ALL THREE platforms with
+        // zero variance — Linux 3/3, macOS 10/10 per guard, Windows 10/10 per guard.
+        // Before the settle fix it WANDERED with host speed: 11 on Linux; 9/11/13/17/19
+        // across ten macOS runs; 11-or-17 across twenty Windows runs, moving back and
+        // forth rather than stepping once. All against a bound of 20 — which is how the
+        // hosted runner reached 25 and failed this line. The bound was never
+        // miscalibrated — it was absorbing an unsettled read, on one line of margin, on
+        // boxes that had passed fifteen and twenty times in a row.
+        //
+        // **Why the multiplier is still 5 when three platforms measure 1.** One
+        // environment has not been measured post-fix and it is the one that actually
+        // went red: the HOSTED macOS runner, which is slower than any desk here and is
+        // where 25 came from. Tightening to one block on three desktops that all read 1
+        // would calibrate the bound everywhere except where the defect appeared — the
+        // original mistake at a smaller radius. The line published above prints the cost
+        // on a PASSING run, so the next CI run supplies that number; tighten the
+        // multiplier to 1 then, and argue it from the runner's own figure.
+        const SETTLE_LIMIT: i32 = FIXTURE_LINES_PER_SECTION * 5;
         let first = seen[0];
         assert!(
             (first - start).abs() <= SETTLE_LIMIT,
             "{what}: the one-time settle moved the reader from line {start} to \
              {first}, further than the block-granularity crossing should cost \
-             (sequence {seen:?})"
+             (sequence {seen:?}; {geometry}). MEASURED cost with a settled pane is 1 on \
+             every platform — a number well above that is an unsettled read, not a \
+             wider block"
         );
     }
 
@@ -679,6 +803,10 @@ mod gtk_integration_tests {
             std::time::Duration::from_millis(300),
         );
         let start = settled_top_line(&st);
+        // Captured WITH `start`, not after the trips: read later it reports whichever
+        // mode the loop happened to end in, and a `page_size` of 0 from an unmounted
+        // pane reads as a broken fixture rather than as a timing artefact of the probe.
+        let geometry = fixture_geometry(&st);
 
         let mut seen = Vec::new();
         for _ in 0..4 {
@@ -686,6 +814,6 @@ mod gtk_integration_tests {
             seen.push(settled_top_line(&st));
         }
 
-        assert_no_accumulation(start, &seen, "preview↔edit");
+        assert_no_accumulation(&geometry, start, &seen, "preview↔edit");
     }
 }

@@ -185,3 +185,80 @@ pub(crate) fn until_or_for(_clock: Clock, deadline: Duration, done: impl FnMut()
 pub(crate) fn drain_for(_clock: Clock, deadline: Duration) {
     pump(deadline, || false);
 }
+
+/// The outcome of [`until_stable`]: whether the sampled value went quiet, and the
+/// last value seen either way.
+///
+/// A struct rather than a tuple because BOTH fields are load-bearing and a caller
+/// that reads only the value is the bug this exists to prevent — see
+/// [`until_stable`]'s note on discarded convergence.
+pub(crate) struct Settled<T> {
+    /// `true` when the value held still for the whole quiet window; `false` when
+    /// `deadline` elapsed with it still moving.
+    pub(crate) converged: bool,
+    /// The last sample taken, or `None` if `sample` was never called (an immediately
+    /// firing deadline).
+    pub(crate) value: Option<T>,
+}
+
+/// Pump until `sample()` returns the same value for `quiet` uninterrupted, or
+/// `deadline` elapses. **This is the honest form of "wait until it stops moving".**
+///
+/// Two traps this exists to close, both MEASURED on this project's scroll-position
+/// guards (`window::scrollsync`), where the hand-rolled version of this wait was
+/// reporting `converged` on every call while observing nothing:
+///
+/// * **A turn count is not a quiet period.** "N consecutive equal samples" is
+///   satisfiable in microseconds when the loop spins faster than the work it is
+///   waiting on — the guard that prompted this reached its four-equal-samples bar on
+///   the minimum possible five turns, every single call, on both a fast and a starved
+///   run. So the bar here is a DURATION of no change, and the sampler below
+///   guarantees the loop actually turns often enough to measure one. That cadence is
+///   a sampling rate, not a completion signal (GTK4Rs/AP-261): what ends the wait is
+///   always the observed value going quiet.
+/// * **Nothing pending means nothing polled.** `pump`'s `iteration(true)` blocks
+///   until some source is ready, so once the app goes idle — exactly the state being
+///   waited for — a predicate that only consults the clock would never be evaluated
+///   again and the wait would run to its deadline and report failure. Hence the
+///   periodic sampler source, installed for the life of the wait and removed after.
+///
+/// **Sample the quantity that actually moves.** A wait is only as good as what it
+/// polls: sampling a value that is cached, or recorded synchronously ahead of the
+/// work, observes a constant and reports quiet immediately. That is not this
+/// function's job to check, and it is where its caller most easily goes wrong.
+///
+/// The caller must inspect [`Settled::converged`]. A timeout here means the
+/// precondition was never established, and any assertion made on the value after one
+/// is measuring the machine rather than the code.
+pub(crate) fn until_stable<T: PartialEq>(
+    _clock: Clock,
+    deadline: Duration,
+    quiet: Duration,
+    mut sample: impl FnMut() -> T,
+) -> Settled<T> {
+    // ~60 Hz: fast enough that `quiet` is measured with several samples rather than
+    // two, slow enough not to starve the very work being waited for.
+    let sampler =
+        glib::timeout_add_local(Duration::from_millis(16), || glib::ControlFlow::Continue);
+    let mut sampler = Some(sampler);
+
+    let mut seen: Option<T> = None;
+    let mut unchanged_since = std::time::Instant::now();
+    let converged = pump(deadline, || {
+        let cur = sample();
+        if seen.as_ref() != Some(&cur) {
+            seen = Some(cur);
+            unchanged_since = std::time::Instant::now();
+            return false;
+        }
+        unchanged_since.elapsed() >= quiet
+    });
+
+    if let Some(id) = sampler.take() {
+        id.remove();
+    }
+    Settled {
+        converged,
+        value: seen,
+    }
+}
