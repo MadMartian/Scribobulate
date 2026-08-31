@@ -1651,12 +1651,12 @@ Severity: High
 
 ## 286. A reconciliation agreed in the room and never written into the artefact is not a decision — it reopens on the next read, and the seat that measured it pays twice
 **Symptom**: A question settled days ago comes back phrased as though it had never been asked, because the artefact still carries the superseded claim that the conversation corrected.
-**Scribobulate**: `sdd/PLAN.build-pipeline-ci.md` — the hicolor row now states the 15/17 reconciliation inline, the `BuilderBlocks.ttf` row is marked open with its measurement rather than carrying only a verdict, and "The design, agreed and not yet written" now names the owning seat and says why leaving it unsaid stalled it.
+**Scribobulate**: the artefacts that carried those reconciliations — `packaging/windows/licenses.psd1` and its `PROVENANCE.md`, and `packaging/macos/MANIFEST.tsv` — each state their measurement inline rather than recording a verdict whose basis lived only in a conversation. **The instance that produced this entry is no longer citable by path**: it was a set of rows in the build-pipeline plan, and that plan was retired once its work landed (git history holds it). That is not an accident of housekeeping, it is the entry restating itself — a reconciliation held in a document written to be deleted is one step from a reconciliation held in the room.
 **See**: general-engineering-principles (GEP-48).
 
 ## 287. A scope claim is only as wide as the thing it was measured over — "which platform bundles the runtime" answered "which platform owes attribution"
 **Symptom**: An obligation recorded as affecting one platform — with a measurement backing it — is in fact live on all three.
-**Scribobulate**: `packaging/linux/payload.sh` stages `THIRD-PARTY-LICENSES.md` for all three Linux routes (rpm marks it `%license`; the deb `copyright` gained a `Files: usr/bin/*` stanza naming the grammars' licences); `sdd/PLAN.build-pipeline-ci.md` now separates the two obligations; `tests/MANUAL-TEST.md` §A.1 item 5 asserts all six payload files.
+**Scribobulate**: `packaging/linux/payload.sh` stages `THIRD-PARTY-LICENSES.md` for all three Linux routes (rpm marks it `%license`; the deb `copyright` gained a `Files: usr/bin/*` stanza naming the grammars' licences); POLICY § "Third-party attribution" separates the two obligations, and separates them where they can be read without the plan that discovered them; `tests/MANUAL-TEST.md` §A.1 item 5 asserts all six payload files.
 **See**: general-engineering-principles (GEP-49).
 
 ## 288. `$PSScriptRoot` is EMPTY while parameter defaults are evaluated under `powershell -File`, and correct everywhere else

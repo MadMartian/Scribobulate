@@ -411,7 +411,7 @@ cmd.windows references  cargo xtask lint-references
 # The intent line is deliberately NOT narrowed to match. It states the property the
 # artefact must have, and one platform not reaching it yet is a gap to close (an Apple
 # Developer Program membership and a notarization step), not a standard to lower. See
-# sdd/PLAN.build-pipeline-ci.md § Signing.
+# POLICY § "Artefact signing".
 # ---------------------------------------------------------------------------
 step   10  package
 intent package  A transferable installer artefact a non-developer can install with no toolchain, versioned from Cargo.toml

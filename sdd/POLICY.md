@@ -413,6 +413,37 @@ part covers the artefact we shipped. Where a determination is unmade, mark it
 NOT GATE-ENFORCED in the table rather than letting a green gate read as a licensing verdict
 (ScrAP-278).
 
+## Artefact signing
+
+**No published artefact is signed with a trusted identity today, and the intent line in
+`scripts/pipeline.steps` is deliberately NOT narrowed to match.** Step 10 states the
+property an artefact must have — installable by a non-developer with no toolchain — and one
+platform not reaching it is a gap to close, not a standard to lower.
+
+| Platform | State | What the recipient meets |
+|---|---|---|
+| Linux | `.deb` / `.rpm` unsigned | Ordinary for a direct download; not a Gatekeeper-class barrier. Intent holds. |
+| Windows | Installer unsigned | SmartScreen warns on a downloaded file and the publisher shows as unknown. Annoying, passable. |
+| macOS | **Ad-hoc signed** | Gatekeeper REFUSES it on any machine that did not build it, and macOS reports that as *"is damaged and can't be opened"* — a trust verdict in the vocabulary of corruption. Step 10's intent is **partially met**. |
+
+**DEFERRED, NOT REJECTED.** Closing the macOS gap needs a Developer ID Application
+certificate, `codesign --options runtime`, `notarytool submit` and `stapler staple` — a paid
+enrolment bound to a legal identity, which is an operator decision and not a technical one.
+The workflow is built so signing inserts into an existing job rather than forcing a
+redesign.
+
+**UNTIL THEN THE LIMITATION IS ANNOUNCED BY THE THING THAT PRODUCES THE ARTEFACT, and again
+where the recipient meets it.** `bundle.sh` prints it on SUCCESS, unconditionally, because a
+limitation mentioned only in a README is one the person holding the `.app` has already
+walked past; `packaging/macos/README.md` carries the override (`xattr -dr
+com.apple.quarantine`, or right-click ▸ Open) stated AS an override of a security decision
+the recipient's OS made for them. **A green step 10 must not be readable as "a stranger can
+install this"** when today it means "a stranger is told it is damaged".
+
+**WHEN NOTARIZATION LANDS, THE ANNOUNCEMENT COMES OUT IN THE SAME CHANGE AS THE STAPLING.**
+An artefact that is notarized and still warns that it is not is this same defect pointed the
+other way.
+
 ## Optional diagnostics
 
 - `cargo valgrind test` / `cargo valgrind run` (`cargo install cargo-valgrind`)

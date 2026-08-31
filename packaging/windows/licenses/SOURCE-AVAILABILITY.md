@@ -13,9 +13,11 @@ the Windows installer triggers the clause.
 
 **Do not read this scope claim more widely than the thing it was measured over.** It is a
 statement about *who redistributes the GTK runtime*, not about *who owes attribution* —
-that conflation is the error recorded twice in `sdd/PLAN.build-pipeline-ci.md`, and the
-statically linked `two-face` grammars owe attribution on all three platforms while owing
-nothing here.
+that conflation was made twice during this work and is worth stating plainly rather than
+cited: *"only Windows bundles the runtime"* is true and does NOT imply *"only Windows owes
+attribution"*, because the statically linked `two-face` grammars owe attribution on all
+three platforms while owing nothing under this clause. The two obligations are separated in
+POLICY § "Third-party attribution".
 
 ## What the clause actually requires
 
