@@ -38,6 +38,7 @@ described from a different vantage point.
 | J | Any | Upstream | A paragraph that mixes fonts (any inline-code span) can lay out a few pixels wider than the wrap width it was given, summoning the preview's Automatic horizontal scrollbar and intermittently blanking the pane until a resize | Closed |
 | M | Windows | Production | On a machine with no Visual C++ runtime the app installs and then fails to start; the installer's bootstrapper for it has landed but has never been verified against that condition | Medium |
 | N | Any | Test | Coverage is still not fully host-independent: the theme search path walks the ambient `XDG_DATA_DIRS`, and the Windows config dir is unpinnable | Low |
+| O | Any | Test | The two scrollsync reading-position guards give different verdicts on the same code depending on harness, platform and run — one false red has already landed on a required CI gate | Medium |
 
 ## A. Tables are selection islands
 
@@ -753,3 +754,57 @@ cannot rise to the next integer until coverage clears it *with margin on every h
 residual that moves the figure is exactly what eats that margin — so closing them is still
 worth doing. It is no longer urgent. `scripts/coverage.sh` is the source of truth for the
 value and carries the arithmetic; ScrAP-123 carries the lesson.
+
+---
+
+## O. The scrollsync reading-position guards disagree with themselves across harness, platform and run
+
+**Severity**: Medium (no user-visible effect — it degrades a *gate*, not the app — but it
+produces FALSE REDS on a required CI step, and one has already arrived at a decision point)
+
+Two integration tests:
+
+- `window::scrollsync::gtk_integration_tests::repeated_edit_round_trips_do_not_walk_the_reading_position_either`
+- `window::scrollsync::gtk_integration_tests::repeated_view_mode_round_trips_do_not_walk_the_reading_position`
+
+**THE VERDICT VARIES ON THREE AXES, and the code under test is constant across all of
+them.** Measured:
+
+| Axis | Observation |
+|---|---|
+| HARNESS | On one branch both FAILED under `--test gtk_suite` while the `--lib` harness passed 1667 tests. On another, the reverse: one test failed in the LIB harness and the suite was green. Both harnesses run the same bodies. |
+| PLATFORM | Linux passes consistently, including an instrumented run showing the reading position CONVERGING (`polls=5 stable=4 converged=true`, settling at 68/70/72). Windows and macOS have both produced reds. |
+| RUN | On a hosted macOS runner: three consecutive greens, then a red, then GREEN AGAIN ON RERUN OF THE IDENTICAL COMMIT (CI run 33362485097). |
+
+**The application is probably fine and the CRITERION is the suspect.** The Linux
+instrumentation shows the reading position settling rather than walking, which is the
+property the guards exist to assert — so a test that reds on that same behaviour is
+measuring something other than what it names. A guard whose answer depends on which
+process ran it is not a guard, and neither harness's colour is evidence about the code.
+
+**INFERRED, NOT MEASURED — a candidate mechanism worth testing first.** These are
+frame-clock-dependent, and they are the *same two tests* that fail on a Mac whose screen is
+locked (found while building `packaging/macos/pipeline.sh`'s lock gate). A hosted CI runner
+has no active window-server session either, which would put macOS CI permanently near the
+boundary and passing on timing luck. That would explain the run-to-run variance and the
+platform split in one mechanism. It has NOT been tested.
+
+**Cost so far**: one false red on `execute (macos)` immediately before a `ci` → `master`
+merge, which halted the merge and cost a rerun to disbelieve. That is the expensive shape —
+a flaky required gate is worst at exactly the moment someone is deciding something.
+
+**Mitigation options**
+
+1. **Fix the criterion.** Establish what the guards should assert that is true on all three
+   platforms in both harnesses, and assert that instead. Most work, and the only option that
+   ends the problem rather than managing it.
+2. **Pin the precondition rather than sampling it.** If the frame-clock hypothesis holds,
+   have the tests establish and HOLD the condition they need — the same move the macOS lock
+   gate made when it went from checking `caffeinate` once to holding an assertion.
+3. **Carve them out per-platform via `carveout.macos` / `carveout.windows`.** Cheapest,
+   honest in the contract, and the contract already applies carve-outs on every port. But it
+   retires the guards on two of three platforms, and they were written to catch a real
+   regression.
+4. **Leave as-is and rerun on red.** Costs a rerun each time and trains readers to
+   disbelieve a red on a required step, which is the habit that makes the next real failure
+   invisible.
