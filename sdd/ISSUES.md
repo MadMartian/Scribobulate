@@ -37,7 +37,6 @@ described from a different vantage point.
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | J | Any | Upstream | A paragraph that mixes fonts (any inline-code span) can lay out a few pixels wider than the wrap width it was given, summoning the preview's Automatic horizontal scrollbar and intermittently blanking the pane until a resize | Closed |
 | M | Windows | Production | On a machine with no Visual C++ runtime the app installs and then fails to start; the installer's bootstrapper for it has landed but has never been verified against that condition | Medium |
-| N | Any | Test | Coverage is still not fully host-independent: the theme search path walks the ambient `XDG_DATA_DIRS`, and the Windows config dir is unpinnable | Low |
 | O | Any | Test | The two scrollsync reading-position guards give different verdicts on the same code depending on harness, platform and run — one false red has already landed on a required CI gate | Medium |
 
 ## A. Tables are selection islands
@@ -707,53 +706,6 @@ floor) rather than in its absence.
 `notices/*.md` at build time, and `notices/20-msvc.md` covers the embedded
 `vc_redist.x64.exe`. That was the other obligation this entry was carrying; only the
 verification remains.
-
----
-
-## N. Two residual paths still take their coverage from the host's environment
-
-**Severity**: Low (no user-visible effect; it degrades a *gate* rather than the app)
-
-The main instance is fixed: `.cargo/config.toml`'s `[env]` now pins `XDG_CONFIG_HOME` to a
-scratch directory, `Config::load()` carries a mutation-tested assertion that it is set, and
-the two-host differential that exposed this (`scripts/coverage.sh` against the same run with
-a scrubbed config dir) is now byte-identical where it used to differ by four lines.
-
-**Two paths remain, and they are the same defect wearing different variables:**
-
-1. **The theme search path**, measured at 3 lines. `theme::find_themes_file` walks
-   `XDG_DATA_HOME` and then each entry of `XDG_DATA_DIRS`, so how much of that loop
-   executes depends on how many data directories the host advertises. A developer box
-   reports more than a hosted runner, so those lines are covered here and not there.
-   **Do not fix this by pinning `XDG_DATA_DIRS`**: it is how GTK finds icon themes and
-   GSettings schemas, and pinning it would break icon resolution across the integration
-   suite. The right fix is a deterministic unit test over the path assembly, which means
-   making the directory list a parameter rather than an ambient read — `src/theme/tests/
-   searchpath.rs` already asserts the ORDER, which is the half that does not need the
-   environment.
-2. **The Windows config directory.** `config_home_fallback()` resolves through `APPDATA`
-   there, which is not pinned and should not be — it is a directory the whole toolchain
-   uses. The behavioural hazard (a test reading the developer's real `config.toml`) therefore
-   persists on Windows, where the assertion in `Config::load()` is deliberately `unix`-gated
-   so it cannot fire on a correct run. Coverage is unaffected there, since step 6 is
-   contract-declared non-applicable on Windows.
-
-**The general form, which is the part worth keeping**: coverage produced by the *ambient
-environment* rather than by a test is false comfort. It looks like tested code and is
-nobody's assertion, so it silently moves with the host — and pinning a variable only
-relocates the accident. `config_home_fallback()` illustrates the trade honestly: pinning
-`XDG_CONFIG_HOME` made its three lines *uncovered* on every host, which is worse-looking and
-strictly more truthful, because nothing ever tested them. A deterministic test is the real
-answer in all three places.
-
-**Consequence for the ratchet — bounded rather than tracked**: `FLOOR` is a whole number
-and advances one whole point at a time (POLICY step 6). That is deliberately wider than this
-entry's residual: ~0.02pt cannot move a threshold quoted in points, so the two paths above
-no longer put the gate at risk of a false red. They still cost something real — the floor
-cannot rise to the next integer until coverage clears it *with margin on every host*, and a
-residual that moves the figure is exactly what eats that margin — so closing them is still
-worth doing. It is no longer urgent. `scripts/coverage.sh` is the source of truth for the
-value and carries the arithmetic; ScrAP-123 carries the lesson.
 
 ---
 

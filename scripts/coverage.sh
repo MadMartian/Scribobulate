@@ -522,6 +522,26 @@ cd "$(dirname "$0")/.."
 # `testsymlink.rs`, which were already there. Neither was excluded to protect the number:
 # both are above the floor they joined. 146 files measured, re-pinned in
 # scripts/coverage.scope by `--update-scope` in this same commit.
+#
+# -- 2026-08-31, THE THEME RESIDUAL IS CLOSED, AND IT WAS MEASURED --------------------
+#
+# The caveat every note above carries -- "the theme search path reads $XDG_DATA_DIRS,
+# which a hosted runner advertises differently from a developer box, ~3 lines, ~0.02pt"
+# -- is no longer true of this tree, so the margin arithmetic above no longer has to
+# reserve room for it. The directory list became a data seam (`theme::SearchBases` and
+# the pure `candidates()` over it): the LOOP that varied with the host now runs in
+# deterministic unit tests over temp directories, and `from_env()` is a fixed read whose
+# line count no host can move.
+#
+# MEASURED by the same two-run differential that first exposed the config-dir leak:
+# `cargo llvm-cov --lib --json` twice on this tree, XDG_DATA_DIRS=/usr/share (one entry)
+# against this box's own seven-entry list. 37990 lines, 21594 covered, and covered-line
+# counts IDENTICAL in every file the run measured -- where the config leak showed four
+# lines of difference. Note that is the unscoped `--lib` run, not this gate's scoped
+# invocation; the differential is the claim, not the percentage.
+#
+# This buys MARGIN, not a raise. FLOOR stays 82 and the rule is unchanged -- what is
+# retired is a caveat, so the next raise is argued against the measurement alone.
 FLOOR=82
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised

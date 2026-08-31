@@ -189,13 +189,20 @@ impl Config {
         // Unlike the session leak it is not destructive, only silently non-reproducible,
         // which is why it survived so much longer.
         //
-        // `unix` because this asserts on the variable the unix branch READS. Windows
-        // resolves through `APPDATA`, which is not pinned (redirecting it would move a
-        // directory the whole toolchain uses), so the dependence genuinely remains there
-        // and a bare `test` gate would fire on a correct Windows run. This is an assertion
-        // inside production code, not a `#[cfg]`'d-out test — POLICY's "never
-        // `#[cfg(platform)]` a test" is about tests that silently cease to exist.
-        #[cfg(all(test, unix))]
+        // Not platform-gated, because the leak is not platform-specific:
+        // `user_config_dir` reads `XDG_CONFIG_HOME` on EVERY platform before it reaches
+        // `config_home_fallback`, and `.cargo/config.toml`'s `[env]` table sets that
+        // variable unconditionally. So the pin already covers Windows, and `APPDATA` is
+        // never consulted under Cargo — the earlier `unix` gate reasoned from the
+        // fallback rather than from the lookup order and left this dead there.
+        // MEASURED on Windows/MSVC: a test binary launched by `cargo test` sees
+        // `XDG_CONFIG_HOME = <repo>\target/test-config`, and inverting this predicate
+        // makes 96 lib cases and the main-thread suite fail — so the assertion is
+        // reached on this platform, not merely compiled into it.
+        // This is an assertion inside production code, not a `#[cfg]`'d-out test —
+        // POLICY's "never `#[cfg(platform)]` a test" is about tests that silently cease
+        // to exist, and removing a platform gate is the direction that rule points.
+        #[cfg(test)]
         assert!(
             std::env::var_os("XDG_CONFIG_HOME").is_some(),
             "Config::load reached in a test with no XDG_CONFIG_HOME override — the suite \
