@@ -376,6 +376,43 @@ scoped by the branch it sits on** — it runs against the shared repository the 
 anything merges, which is why its triggers are a project-level decision rather than a
 detail of whoever adds a job.
 
+## Third-party attribution
+
+**Every artefact this project publishes must carry the notices its dependencies require.**
+Two obligations, and they have different scopes, so neither substitutes for the other.
+
+1. **THE STATICALLY LINKED GRAMMARS — ALL THREE PLATFORMS.** `two-face`'s syntect grammar
+   assets are compiled INTO the binary under MIT, Apache-2.0, BSD-2-Clause and
+   BSD-3-Clause, every one of which requires the notice to travel with a binary
+   distribution. A statically linked dependency leaves no file of its own in the installed
+   tree, **which is exactly why this was missed on all three platforms at once**: nothing
+   was absent that anyone could see. `THIRD-PARTY-LICENSES.md` is generated at build time
+   from `notices/*.md` and must reach every artefact — Linux via `payload.sh`, Windows via
+   `stage.ps1`, macOS into `Contents/Resources/`.
+2. **THE BUNDLED RUNTIME — WHEREVER ONE IS BUNDLED.** An artefact that ships an
+   LGPL-family GTK stack must attribute it. This is Windows AND macOS: Windows has always
+   bundled, and the macOS `.app` began bundling when self-containment landed, so THE SCOPE
+   OF THIS OBLIGATION FOLLOWED THE BUNDLING RATHER THAN BEING RE-DECIDED. Linux is exempt
+   as a measured fact, not an assumption — the packages `Depends:` on the system GTK and
+   bundle no runtime. Detail lives beside the artefact it describes:
+   `packaging/windows/licenses.psd1` and its `PROVENANCE.md` / `SOURCE-AVAILABILITY.md`.
+
+**THE IN-APP CLAIM IS PART OF THE OBLIGATION, not a description of it.** The About dialog
+tells every user "Full notices: THIRD-PARTY-LICENSES.md (in the distribution)". That
+sentence is only true because something stages the file, so deleting a staging step does
+not lose a file — **it falsifies a claim the running product makes about itself**. Treat
+those `cp` lines as load-bearing.
+
+**GATE IT WHERE YOU CAN, AND SAY SO WHERE YOU CANNOT.** Presence, non-emptiness and a
+content anchor are file-shaped and belong in a gate — `packaging/windows/verify-licenses.ps1`
+is the worked example, and its anchor tests the TEXT'S IDENTITY rather than the file's
+existence, because a licence file containing the wrong licence satisfies every
+presence check. The DETERMINATION — which licence covers which binary — is a claim we make
+and is **not** derivable: an SPDX `OR` needs an election and an `AND` does not say which
+part covers the artefact we shipped. Where a determination is unmade, mark it
+NOT GATE-ENFORCED in the table rather than letting a green gate read as a licensing verdict
+(ScrAP-278).
+
 ## Optional diagnostics
 
 - `cargo valgrind test` / `cargo valgrind run` (`cargo install cargo-valgrind`)

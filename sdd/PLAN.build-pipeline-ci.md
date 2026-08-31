@@ -329,6 +329,13 @@ different scopes, and neither discharges the other.
 
 ### Obligation 1 — the bundled GTK runtime. Scope: Windows only.
 
+> **DISTILLED TO POLICY § "Third-party attribution".** The rule outlives this plan and now
+> lives where it can be read without it. **Its scope has since widened**: this section says
+> Windows only, which was measured and true when written, and the macOS `.app` began
+> bundling a GTK runtime when self-containment landed — so the obligation followed the
+> bundling rather than being re-decided. POLICY carries the current scope; everything below
+> is the research that established it.
+
 The Windows installer bundles a complete GTK runtime — 35 binaries in `bin/`, 824 files in
 `share/` — and `THIRD-PARTY-LICENSES.md` covers only syntect syntaxes and themes. It has
 zero mentions of GTK, GLib, Pango, Cairo, GdkPixbuf, GtkSourceView, HarfBuzz, FreeType,
@@ -343,6 +350,11 @@ projects, so most of the remedy is staging a directory that exists — the binar
 mapping table is measured and complete.
 
 ### Obligation 2 — the statically linked syntax grammars. Scope: ALL THREE platforms.
+
+> **DISTILLED TO POLICY § "Third-party attribution"**, including the half that is easiest to
+> lose: the About dialog's "Full notices: THIRD-PARTY-LICENSES.md (in the distribution)" is
+> only true because something stages the file, so a deleted staging step does not lose a
+> file, it falsifies a claim the running product makes about itself.
 
 **`THIRD-PARTY-LICENSES.md` ships in no artefact on any platform.** Measured:
 
