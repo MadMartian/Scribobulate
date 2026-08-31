@@ -5,7 +5,7 @@
 //! because a count is the one fact about a growing list guaranteed to be wrong by the next
 //! addition and no reader can tell a stale one from a current one.
 
-mod architecture;
+pub mod architecture;
 pub mod references;
 pub mod register;
 
@@ -31,6 +31,7 @@ pub fn run_all(tree: &Tree) -> bool {
         register::growth(tree),
         architecture::windows_illegal_paths(tree),
         register::body_without_toc_row(tree),
+        architecture::powershell_encoding(tree),
     ];
     verdicts.into_iter().all(|ok| ok)
 }

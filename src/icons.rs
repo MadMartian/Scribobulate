@@ -25,12 +25,12 @@ pub(crate) enum Icon {
     /// This literal is the source of truth: `crate::APP_ID` is *defined as*
     /// `Icon::App.name()`, so this arm must not refer back to it.
     /// Bundled in the GResource: before that it resolved ONLY where
-    /// `install.sh` had dropped it into `hicolor`, so any uninstalled run — every
+    /// `packaging/linux/install.sh` had dropped it into `hicolor`, so any uninstalled run — every
     /// `cargo run`, and any packaging path that does not install into an icon
     /// theme — put the broken-image placeholder in the About dialog. Note this
-    /// masks itself on a developer box: once `install.sh` has run the icon
+    /// masks itself on a developer box: once `packaging/linux/install.sh` has run the icon
     /// resolves from hicolor forever after. The same gap is *unmaskable* on
-    /// **Windows**, which has no `install.sh` step at all (the staged tree ships
+    /// **Windows**, which has no `packaging/linux/install.sh` step at all (the staged tree ships
     /// only gvsbuild's stock Adwaita + hicolor), so the title bar, taskbar and
     /// Alt+Tab all fell back to GTK's generic default until this was bundled.
     /// Not `-symbolic`: it keeps its own palette instead of being recoloured to
@@ -351,7 +351,7 @@ impl Icon {
     /// title bar, taskbar and Alt+Tab to GTK's generic default rather than drawing a
     /// placeholder — which is exactly why it went unnoticed on Windows until someone
     /// looked at the title bar. It resolves from the bundled GResource, so the
-    /// assertion holds on every platform and without `install.sh`.
+    /// assertion holds on every platform and without `packaging/linux/install.sh`.
     ///
     /// `InsertLink` is `MustResolve` despite being a format icon, because it is ALSO
     /// used without a fallback (the File ▸ Load Unsafe Linked Documents toolbar

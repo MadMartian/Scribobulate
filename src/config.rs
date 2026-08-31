@@ -181,6 +181,28 @@ impl Default for CodeConfig {
 
 impl Config {
     fn load() -> Self {
+        // The twin of `session::save`'s guard, for the same failure and with the same
+        // reasoning: reached in a test with no override, this reads the developer's real
+        // config.toml, so the suite exercises different code depending on whose machine
+        // it runs on. That is not hypothetical — it moved the coverage figure between two
+        // hosts of the same platform, which is how it was found (ScrAP-123).
+        // Unlike the session leak it is not destructive, only silently non-reproducible,
+        // which is why it survived so much longer.
+        //
+        // `unix` because this asserts on the variable the unix branch READS. Windows
+        // resolves through `APPDATA`, which is not pinned (redirecting it would move a
+        // directory the whole toolchain uses), so the dependence genuinely remains there
+        // and a bare `test` gate would fire on a correct Windows run. This is an assertion
+        // inside production code, not a `#[cfg]`'d-out test — POLICY's "never
+        // `#[cfg(platform)]` a test" is about tests that silently cease to exist.
+        #[cfg(all(test, unix))]
+        assert!(
+            std::env::var_os("XDG_CONFIG_HOME").is_some(),
+            "Config::load reached in a test with no XDG_CONFIG_HOME override — the suite \
+             would read the developer's real config.toml and its coverage would follow \
+             the host. Run it through Cargo so .cargo/config.toml's [env] applies."
+        );
+
         // Snapshots the real config dir on first call — which is why this must run
         // before the XDG_CONFIG_HOME redirect. See `user_config_dir`.
         let path = match user_config_dir() {

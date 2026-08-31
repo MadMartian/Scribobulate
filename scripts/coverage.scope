@@ -102,6 +102,7 @@ src/lineendings.rs
 src/links.rs
 src/macwordnav.rs
 src/mdtable.rs
+src/notices.rs
 src/outline.rs
 src/palette/mod.rs
 src/pangospan.rs
@@ -148,6 +149,7 @@ src/tags/spec.rs
 src/tasklist.rs
 src/testlog.rs
 src/testsymlink.rs
+src/testtiming.rs
 src/theme/decor.rs
 src/theme/keys.rs
 src/theme/mod.rs

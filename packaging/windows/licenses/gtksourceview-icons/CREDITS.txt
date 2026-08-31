@@ -1,0 +1,32 @@
+Title:   GtkSourceView completion icons (lang-*-symbolic, completion-*-symbolic)
+Author:  Christian Hergert
+Source:  GtkSourceView 5.20.0 -- https://gitlab.gnome.org/GNOME/gtksourceview
+         (introduced in commit 5470523d "icons: add various icons for completion")
+Licence: CC BY-SA 3.0 -- http://creativecommons.org/licenses/by-sa/3.0/
+
+This credit is not decoration. CC BY-SA 3.0 s4(c) requires the attribution to be
+given; the licence text alone does not discharge it, so this file ships beside
+CC-BY-SA-3.0.txt rather than in place of it.
+
+The 15 files it covers are share\icons\hicolor\scalable\actions\*.svg in the
+installed tree: lang-class, lang-define, lang-enum, lang-enum-value,
+lang-function, lang-include, lang-method, lang-namespace, lang-struct,
+lang-struct-field, lang-typedef, lang-union, lang-variable,
+completion-snippet and completion-word, each -symbolic.
+
+They are redistributed UNMODIFIED. That matters: ShareAlike leaves us with
+nothing further to do only while that stays true, and recolouring one of these
+SVGs to match a theme would make an Adaptation and bring s4(b) into play.
+
+WHY THIS TEXT IS VENDORED AND NOT COPIED FROM THE GTK PREFIX. It cannot come
+from the prefix. Upstream's data/icons/meson.build installs the icon tree with
+install_subdir('hicolor', ...) and installs no COPYING beside it, so the file
+that governs these icons -- GtkSourceView's own data/icons/COPYING, which reads
+"The icons here are licensed under the CC-by-SA 3." -- has never existed in any
+installed tree, in any prefix, on any platform.
+
+That absence is the whole reason this row was wrong twice. The icons sit in an
+installed tree with no licence file next to them and no per-file header, which
+reads like an absence of any special terms and is in fact an absence of the
+DECLARATION, not of the terms. The root COPYING is LGPL-2.1 and governs the
+code; it does not reach the artwork.

@@ -72,7 +72,7 @@ pub(crate) use value::{
 use gtk::glib;
 use std::collections::BTreeMap;
 
-/// The shipped theme data, compiled in. This is the SAME file `install.sh`
+/// The shipped theme data, compiled in. This is the SAME file `packaging/linux/payload.sh`
 /// installs, so the built-in fallback and the installed default can never drift.
 const BUILTIN_THEMES_TOML: &str = include_str!("../../data/themes.toml");
 

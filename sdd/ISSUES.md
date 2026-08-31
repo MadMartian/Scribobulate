@@ -36,7 +36,9 @@ described from a different vantage point.
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | J | Any | Upstream | A paragraph that mixes fonts (any inline-code span) can lay out a few pixels wider than the wrap width it was given, summoning the preview's Automatic horizontal scrollbar and intermittently blanking the pane until a resize | Closed |
-| M | Windows | Production | The installer does not install Microsoft's Visual C++ runtime, so on a machine without it the app installs and then fails to start; the fix exists on the unmerged `ci` branch | Medium |
+| M | Windows | Production | On a machine with no Visual C++ runtime the app installs and then fails to start; the installer's bootstrapper for it has landed but has never been verified against that condition | Medium |
+| N | Any | Test | Coverage is still not fully host-independent: the theme search path walks the ambient `XDG_DATA_DIRS`, and the Windows config dir is unpinnable | Low |
+| O | Any | Test | The two scrollsync reading-position guards give different verdicts on the same code depending on harness, platform and run — one false red has already landed on a required CI gate | Medium |
 
 ## A. Tables are selection islands
 
@@ -323,35 +325,104 @@ evidence is machine-local and not transferable:
 
 ## G. A wall-clock growth-ratio guard fails on a loaded machine
 
-**Severity**: Low (nothing shipped is affected; a required pipeline step goes red on a
-correct tree, and the failure text accuses a specific, already-fixed regression by name,
-so the next reader starts by re-auditing code that is fine)
+**Severity**: Low (no user-visible effect; it degrades a *gate* rather than the app)
 
-`renderer::normalize::normalize_inline_tabs_tests::tab_normalisation_over_a_single_enormous_line_grows_linearly`
-asserts that normalising 512 KiB of tabs takes less than **8x** the time of 128 KiB —
-4x the input. The intent is sound and deliberately machine-independent: the exponent is
-what regressed once (a per-tab backwards line walk), and the test's own doc argues,
-correctly, that an absolute wall-clock bound would be "either flaky or blind".
+The main instance is fixed: `.cargo/config.toml`'s `[env]` now pins `XDG_CONFIG_HOME` to a
+scratch directory, `Config::load()` carries a mutation-tested assertion that it is set, and
+the two-host differential that exposed this (`scripts/coverage.sh` against the same run with
+a scrubbed config dir) is now byte-identical where it used to differ by four lines.
 
-**Measured**: one failure in 40 consecutive `scripts/coverage.sh` runs on the reference
-host, 2026-08-09 — `normalisation grew 8.1x for 4x the input (4.814539ms ->
-38.939987ms)`. The ratio is a quotient of two wall-clock samples whose **numerator is
-about 5 ms**, so a single scheduler preemption of the small run is enough to move it
-across a threshold set at 8 against an expectation of 4. The instrumented (llvm-cov)
-build widens the window further, and 39 of the 40 runs passed.
+**Two paths remain, and they are the same defect wearing different variables:**
+
+1. **`theme.rs`'s search path**, measured at 3 lines. `find_themes_file()` walks
+   `system_data_dirs()` — `XDG_DATA_HOME`, then each entry of `XDG_DATA_DIRS` — so how much
+   of that loop executes depends on how many data directories the host advertises. A
+   developer box reports more than a hosted runner, so those lines are covered here and not
+   there. **Do not fix this by pinning `XDG_DATA_DIRS`**: it is how GTK finds icon themes and
+   GSettings schemas, and pinning it would break icon resolution across the integration
+   suite. The right fix is a deterministic unit test over the path assembly, which means
+   making the directory list a parameter rather than an ambient read.
+2. **The Windows config directory.** `config_home_fallback()` resolves through `APPDATA`
+   there, which is not pinned and should not be — it is a directory the whole toolchain
+   uses. The behavioural hazard (a test reading the developer's real `config.toml`) therefore
+   persists on Windows, where the assertion in `Config::load()` is deliberately `unix`-gated
+   so it cannot fire on a correct run. Coverage is unaffected there, since step 6 is
+   contract-declared non-applicable on Windows.
+
+**The general form, which is the part worth keeping**: coverage produced by the *ambient
+environment* rather than by a test is false comfort. It looks like tested code and is
+nobody's assertion, so it silently moves with the host — and pinning a variable only
+relocates the accident. `config_home_fallback()` illustrates the trade honestly: pinning
+`XDG_CONFIG_HOME` made its three lines *uncovered* on every host, which is worse-looking and
+strictly more truthful, because nothing ever tested them. A deterministic test is the real
+answer in all three places.
+
+**Consequence for the ratchet — now bounded rather than tracked**: `FLOOR` is a whole
+number and advances one whole point at a time (POLICY step 6). That is deliberately wider
+than this entry's residual: ~0.02pt cannot move a threshold quoted in points, so the two
+paths above no longer put the gate at risk of a false red. They still cost something real —
+the floor cannot rise to the next integer until coverage clears it *with margin on every
+host*, and a residual that moves the figure is exactly what eats that margin — so closing
+them is still worth doing. It is no longer urgent. `scripts/coverage.sh` is the source of
+truth for the value and carries the arithmetic; ScrAP-123 carries the lesson.
+
+---
+
+## Q. A complexity guard measures an exponent with a wall clock, and flakes on a loaded machine
+
+**Severity**: Low (a false red, never a false green — it cannot hide a regression, only
+invent one; but a required pipeline step goes red on a correct tree, and the failure text
+accuses a specific, already-fixed regression by name, so the next reader starts by
+re-auditing code that is fine)
+
+`renderer::normalize`'s `tab_normalisation_over_a_single_enormous_line_grows_linearly`
+times normalisation of 128 KiB and 512 KiB inputs and asserts the ratio is `< 8.0`, on the
+reasoning that the *exponent* is the property that regressed and a ratio is
+machine-independent where a wall-clock bound is "either flaky or blind". The reasoning is
+right about the property and wrong about the immunity.
+
+**Measured, on two hosts of the same platform:**
+
+- *Hosted Linux runner*: `8.7x (6.32ms -> 54.918ms)`, failing the pipeline at step 4. The
+  same commit passes locally 5 runs out of 5, and a second CI run of the identical tree
+  **passed** — so it is intermittent rather than a property of that machine. The tell is in
+  the absolute numbers: the runner's small sample is ~6.3 ms where this box is well under a
+  millisecond, so CI is not merely noisier, it is roughly an order of magnitude slower per
+  byte. A ratio taken from a 6 ms denominator on a shared vCPU has scheduling jitter of the
+  same order as the signal it is measuring.
+- *Reference host*: one failure in 40 consecutive `scripts/coverage.sh` runs, 2026-08-09 —
+  `normalisation grew 8.1x for 4x the input (4.814539ms -> 38.939987ms)`. Same shape, much
+  rarer. The instrumented (llvm-cov) build widens the window further.
+
+**A ratio is machine-independent only while both samples sit in the same regime.** Two
+plausible contributors, and they are not exclusive: scheduler preemption on a shared core,
+and the 512 KiB input (plus an equal-sized output) crossing a cache boundary the 128 KiB one
+does not — on a smaller-cache machine the larger sample pays a per-byte penalty the smaller
+never sees, and the ratio inflates with the exponent unchanged.
 
 Not the same defect as the SIGSEGV that used to share this symptom (a coverage run going
 red about one time in three); that one was the fatal-signal handler outliving its own
 test and is fixed — see ScrAP-265. This is the residue that reproduced *instead* of it.
 
-**Why it is not fixed here**: the repair is a judgement about how to make a complexity
-assertion robust, not a one-line threshold bump, and the same shape is used by at least
-one sibling guard (`annotate::scan`'s), so whatever is chosen should be chosen for both.
-The candidates, none of them free: take the best of N repetitions rather than one sample
-(kills preemption noise, costs runtime); raise the baseline until scheduler noise is a
-rounding error (costs runtime, and the absolute-ceiling half of the test already bounds
-that); or count a proxy for work done — iterations, comparisons — instead of time, which
-is the only variant that is not a timing test at all and is the one worth pricing first.
+**Options, roughly in order of honesty:**
+
+1. **Count operations, not time.** The property is algorithmic, so measure the algorithm —
+   instrument the line walk with a step counter and assert *that* grows linearly.
+   Machine-independent by construction rather than by hope. Costs a counter reachable from
+   tests.
+2. **Move both inputs outside cache** (e.g. 4 MiB and 16 MiB) so both are bandwidth-bound and
+   the ratio reflects the exponent again. Simple; costs run time.
+3. **Best-of-N per size.** Timing noise is one-sided, so a minimum is the robust estimator.
+   Helps with preemption, does nothing about a cache-regime difference.
+4. **Widen the threshold.** Cheapest and the worst: 8.7 already sits between linear (~4x) and
+   quadratic (~16x), so widening spends the discrimination the guard exists for.
+
+Whichever is taken, take it for both: the same shape is used by at least one sibling guard
+(`annotate::scan`'s), so the choice is not local to this test.
+
+Do **not** simply delete it — it guards a real regression that has happened once (a per-tab
+backwards line walk, pre-fix cost measured in tens of seconds). The companion absolute
+ceiling (3 s for 512 KiB) still holds and is not implicated.
 
 **Workaround**: re-run. A ratio between 8 and roughly 10 on an otherwise-green suite is
 this issue; a genuine return of the quadratic walk reads ~16x and does not come and go.
@@ -360,12 +431,11 @@ this issue; a genuine return of the quadratic walk reads ~16x and does not come 
 (2026-08-21, reference host, `cargo test` step 4 of a routine pipeline run):
 `annotate::scan::tests::extraction_over_adversarial_input_grows_linearly_not_quadratically`
 went red once and passed on an immediate isolated re-run of the same binary. That matters
-for the choice above, because it is evidence *against* the cheapest candidate — the
-annotation guard takes the best of N repetitions per sample and a preemption still moved
-the ratio across the threshold, so best-of-N narrows the window rather than closing it.
-The remaining two candidates (raise the baseline, or count a proxy for work done) are
-unaffected by this measurement, and counting work done is still the only one that stops
-being a timing test.
+for the choice above, because it is evidence *against* option 3 — the annotation guard
+already takes the best of N repetitions per sample, and a preemption still moved the ratio
+across the threshold, so best-of-N narrows the window rather than closing it. Options 1 and
+2 are unaffected by this measurement, and counting operations is still the only one that
+stops being a timing test.
 
 ---
 
@@ -575,7 +645,7 @@ scrolling. It is invisible at every other width.
 - Revisit if the clamp above stops being a symptom gate — if a way appears to distinguish a
   hanging space from a clipped glyph, the clamp becomes safe and this reopens.
 
-## M. The Windows installer leaves the Visual C++ runtime to chance
+## M. The Windows installer's Visual C++ runtime bootstrapper is unverified
 
 **Severity**: Medium (a first-run failure on a clean machine, and the last thing the
 installer does is launch the app — so it reads as "it would not install")
@@ -599,26 +669,142 @@ project a redistributor of Microsoft's Distributable Code, whose terms require a
 end-user click-through that no file vendored into this repository can present. The licence
 problem arrives with the DLLs.
 
-**Where the remedy is**: the unmerged `ci` branch, which adds an Inno Setup
-`PrepareToInstall` that runs Microsoft's own `vc_redist.x64.exe` when a registry probe
-finds the runtime absent or below the embedded redist's version. Running Microsoft's
-installer is what satisfies the click-through, which is why that shape was chosen. `ci`
-is 9 ahead of master and ~96 behind, so this is a port of three things (the `[Code]`
-block, its `dontcopy` source entry, and the redist discovery in `package.ps1`), not a
-merge. `1fd4f5c` also rewrites `stage.ps1`; that half removes an app-local copy master
-never had and must not be ported.
+**THE REMEDY IS NOW IN THIS TREE**, landed by the `ci` merge: `scribobulate.iss` carries a
+`PrepareToInstall` `[Code]` block that runs Microsoft's own `vc_redist.x64.exe` when a
+registry probe finds the runtime absent or below the embedded redist's version, its
+`dontcopy` source entry, and the redist discovery in `package.ps1`. Running Microsoft's
+installer is what satisfies the click-through, which is why that shape was chosen — the
+project never becomes a redistributor. The `stage.ps1` half of `1fd4f5c` is *removal* of an
+app-local copy, and it merged as such: nothing in the staged tree copies a CRT DLL.
 
-**Why it is not fixed here**, and this is the part to read before acting: **the remedy on
-`ci` has never been verified against the condition it exists for.** Every machine able to
-build this project already has the CRT, so a staged launch on a build box proves nothing
-either way. The observation that means something is a PAIR — runtime absent with the
-bootstrapper disabled must fail to start, and the bootstrapper must then make it start —
-and that needs a clean Windows image no seat currently has. Porting it would move an
-unverified remedy rather than a proven one. Two live possibilities also remain open: the
-report may have come from a `ci` build, in which case the fault is *in* the bootstrapper
-(a 32-bit Setup reading a redirected registry view, a declined elevation, a redist below
-the compiled floor) rather than in its absence.
+**A FIELD DISCRIMINATOR, so a future report can be placed without a clean image.** The
+bootstrapper is EMBEDDED, so it shows up in the artefact's size: a `ci`-line installer
+measures ~37.7 MB (39,509,846 bytes, measured by the Windows seat on 6604ae5) against
+~15.7 MB for a master-line build with no bootstrapper. Cite the SIZE CLASS, never the
+constant — the same build shape already moved from 38,595,643 bytes at `1fd4f5c`. That is
+also independent evidence the bootstrapper is WIRED rather than merely present in the
+`.iss`, which the `.iss` alone cannot show.
 
-**Also owed when it lands**: `THIRD-PARTY-LICENSES.md` covers only the `two-face` grammar
-assets today. Embedding `vc_redist.x64.exe` in the installer puts a third-party
-redistributable in our artefact and belongs in that document.
+**INDEPENDENTLY CONFIRMED FROM CI, which closes the weaker half.** The hosted Windows
+runner's artefact measures 39,146,361 B (run 33357529291), squarely the bootstrapper size
+class — so the artefact CI publishes demonstrably carries `vc_redist.x64.exe`, established
+from a machine that is not the Windows seat's own. That answers "does the shipped artefact
+contain the remedy at all" and leaves untouched the question below.
+
+**WHY THIS ENTRY IS STILL OPEN, and it is the part to read before closing it: the remedy
+has never been verified against the condition it exists for.** Every machine able to build
+this project already has the CRT, so a staged launch on a build box proves nothing either
+way. The observation that means something is a PAIR — runtime absent with the bootstrapper
+disabled must fail to start, and the bootstrapper must then make it start — and that needs
+a clean Windows image no seat currently has. An unverified remedy in the tree is not a
+smaller problem than one on a branch; it is the same problem wearing a green tick, which is
+why the severity is unchanged. Two live possibilities also remain open: the original report
+may have come from a `ci` build, in which case the fault is *in* the bootstrapper (a 32-bit
+Setup reading a redirected registry view, a declined elevation, a redist below the compiled
+floor) rather than in its absence.
+
+**The attribution half is discharged.** `THIRD-PARTY-LICENSES.md` is now generated from
+`notices/*.md` at build time, and `notices/20-msvc.md` covers the embedded
+`vc_redist.x64.exe`. That was the other obligation this entry was carrying; only the
+verification remains.
+
+---
+
+## N. Two residual paths still take their coverage from the host's environment
+
+**Severity**: Low (no user-visible effect; it degrades a *gate* rather than the app)
+
+The main instance is fixed: `.cargo/config.toml`'s `[env]` now pins `XDG_CONFIG_HOME` to a
+scratch directory, `Config::load()` carries a mutation-tested assertion that it is set, and
+the two-host differential that exposed this (`scripts/coverage.sh` against the same run with
+a scrubbed config dir) is now byte-identical where it used to differ by four lines.
+
+**Two paths remain, and they are the same defect wearing different variables:**
+
+1. **The theme search path**, measured at 3 lines. `theme::find_themes_file` walks
+   `XDG_DATA_HOME` and then each entry of `XDG_DATA_DIRS`, so how much of that loop
+   executes depends on how many data directories the host advertises. A developer box
+   reports more than a hosted runner, so those lines are covered here and not there.
+   **Do not fix this by pinning `XDG_DATA_DIRS`**: it is how GTK finds icon themes and
+   GSettings schemas, and pinning it would break icon resolution across the integration
+   suite. The right fix is a deterministic unit test over the path assembly, which means
+   making the directory list a parameter rather than an ambient read — `src/theme/tests/
+   searchpath.rs` already asserts the ORDER, which is the half that does not need the
+   environment.
+2. **The Windows config directory.** `config_home_fallback()` resolves through `APPDATA`
+   there, which is not pinned and should not be — it is a directory the whole toolchain
+   uses. The behavioural hazard (a test reading the developer's real `config.toml`) therefore
+   persists on Windows, where the assertion in `Config::load()` is deliberately `unix`-gated
+   so it cannot fire on a correct run. Coverage is unaffected there, since step 6 is
+   contract-declared non-applicable on Windows.
+
+**The general form, which is the part worth keeping**: coverage produced by the *ambient
+environment* rather than by a test is false comfort. It looks like tested code and is
+nobody's assertion, so it silently moves with the host — and pinning a variable only
+relocates the accident. `config_home_fallback()` illustrates the trade honestly: pinning
+`XDG_CONFIG_HOME` made its three lines *uncovered* on every host, which is worse-looking and
+strictly more truthful, because nothing ever tested them. A deterministic test is the real
+answer in all three places.
+
+**Consequence for the ratchet — bounded rather than tracked**: `FLOOR` is a whole number
+and advances one whole point at a time (POLICY step 6). That is deliberately wider than this
+entry's residual: ~0.02pt cannot move a threshold quoted in points, so the two paths above
+no longer put the gate at risk of a false red. They still cost something real — the floor
+cannot rise to the next integer until coverage clears it *with margin on every host*, and a
+residual that moves the figure is exactly what eats that margin — so closing them is still
+worth doing. It is no longer urgent. `scripts/coverage.sh` is the source of truth for the
+value and carries the arithmetic; ScrAP-123 carries the lesson.
+
+---
+
+## O. The scrollsync reading-position guards disagree with themselves across harness, platform and run
+
+**Severity**: Medium (no user-visible effect — it degrades a *gate*, not the app — but it
+produces FALSE REDS on a required CI step, and one has already arrived at a decision point)
+
+Two integration tests:
+
+- `window::scrollsync::gtk_integration_tests::repeated_edit_round_trips_do_not_walk_the_reading_position_either`
+- `window::scrollsync::gtk_integration_tests::repeated_view_mode_round_trips_do_not_walk_the_reading_position`
+
+**THE VERDICT VARIES ON THREE AXES, and the code under test is constant across all of
+them.** Measured:
+
+| Axis | Observation |
+|---|---|
+| HARNESS | On one branch both FAILED under `--test gtk_suite` while the `--lib` harness passed 1667 tests. On another, the reverse: one test failed in the LIB harness and the suite was green. Both harnesses run the same bodies. |
+| PLATFORM | Linux passes consistently, including an instrumented run showing the reading position CONVERGING (`polls=5 stable=4 converged=true`, settling at 68/70/72). Windows and macOS have both produced reds. |
+| RUN | On a hosted macOS runner: three consecutive greens, then a red, then GREEN AGAIN ON RERUN OF THE IDENTICAL COMMIT (CI run 33362485097). |
+
+**The application is probably fine and the CRITERION is the suspect.** The Linux
+instrumentation shows the reading position settling rather than walking, which is the
+property the guards exist to assert — so a test that reds on that same behaviour is
+measuring something other than what it names. A guard whose answer depends on which
+process ran it is not a guard, and neither harness's colour is evidence about the code.
+
+**INFERRED, NOT MEASURED — a candidate mechanism worth testing first.** These are
+frame-clock-dependent, and they are the *same two tests* that fail on a Mac whose screen is
+locked (found while building `packaging/macos/pipeline.sh`'s lock gate). A hosted CI runner
+has no active window-server session either, which would put macOS CI permanently near the
+boundary and passing on timing luck. That would explain the run-to-run variance and the
+platform split in one mechanism. It has NOT been tested.
+
+**Cost so far**: one false red on `execute (macos)` immediately before a `ci` → `master`
+merge, which halted the merge and cost a rerun to disbelieve. That is the expensive shape —
+a flaky required gate is worst at exactly the moment someone is deciding something.
+
+**Mitigation options**
+
+1. **Fix the criterion.** Establish what the guards should assert that is true on all three
+   platforms in both harnesses, and assert that instead. Most work, and the only option that
+   ends the problem rather than managing it.
+2. **Pin the precondition rather than sampling it.** If the frame-clock hypothesis holds,
+   have the tests establish and HOLD the condition they need — the same move the macOS lock
+   gate made when it went from checking `caffeinate` once to holding an assertion.
+3. **Carve them out per-platform via `carveout.macos` / `carveout.windows`.** Cheapest,
+   honest in the contract, and the contract already applies carve-outs on every port. But it
+   retires the guards on two of three platforms, and they were written to catch a real
+   regression.
+4. **Leave as-is and rerun on red.** Costs a rerun each time and trains readers to
+   disbelieve a red on a required step, which is the habit that makes the next real failure
+   invisible.

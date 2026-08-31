@@ -3,6 +3,7 @@
 //! give macOS its own *behaviour*.
 
 pub(crate) mod appearance;
+pub(crate) mod bundle;
 pub(crate) mod fullscreen;
 pub(crate) mod menubar;
 pub(crate) mod process;

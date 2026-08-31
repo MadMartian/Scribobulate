@@ -1,4 +1,5 @@
-//! The test-architecture checks (4, 5, 5b) and the tracked-path legality check (12).
+//! The test-architecture checks (4, 5, 5b), the tracked-path legality check (12) and the
+//! PowerShell encoding check (14).
 //!
 //! The first three share a failure mode rather than a subject: each guards something that
 //! breaks SILENTLY, where the tree still builds, every test still passes, and the only
@@ -203,4 +204,72 @@ fn modules(tree: &Tree, path: &str) -> BTreeSet<String> {
         .filter_map(|line| rx::mod_decl_rx().captures(line))
         .filter_map(|caps| Some(caps.get(2)?.as_str().to_string()))
         .collect()
+}
+
+/// Check 14 — every `.ps1` in the scan set carries a UTF-8 BOM or is pure ASCII.
+///
+/// Windows PowerShell 5.1 — the interpreter on a stock Windows box, and the one
+/// `packaging/windows/pipeline.ps1` is run under — decodes a BOM-LESS script as the system
+/// ANSI code page, not UTF-8. A UTF-8 em-dash in a comment then arrives as two mojibake
+/// characters; the same bytes inside a STRING LITERAL or a regex reach the runtime as the
+/// wrong characters, so the script does not merely look wrong, it behaves differently. The
+/// file still parses, so nothing fails: this is a silent-divergence check like 4 and 5
+/// above, not a style rule.
+///
+/// The invariant is BOM **or** pure ASCII, because either one removes the ambiguity: a BOM
+/// tells 5.1 the encoding outright, and a file with no byte above 0x7F decodes identically
+/// under every code page it could pick. A BOM is the stronger fix and the one to prefer —
+/// it keeps non-ASCII safe anywhere in the file, literals included.
+///
+/// LINUX AND macOS CAN CHECK IT, which is why it lives here rather than on the Windows
+/// seat: the hazard is a byte sequence, so the platform that cannot RUN the file is
+/// perfectly able to read it. A check only Windows could run would be a check that fires
+/// after the commit that broke it, on the one seat that is not authoring it.
+pub fn powershell_encoding(tree: &Tree) -> bool {
+    header(
+        "14",
+        "a .ps1 must carry a UTF-8 BOM or contain no byte above 0x7F",
+    );
+    let mut findings = Vec::new();
+    for path in tree.scan.paths.iter().filter(|p| p.ends_with(".ps1")) {
+        // BYTES, not `Tree::text`: the question is what the file's first three bytes are
+        // and whether any byte is above 0x7F, and both facts are erased by a lossy decode.
+        let Ok(bytes) = std::fs::read(tree.repo.join(path)) else {
+            findings.push(format!("{path} is unreadable"));
+            continue;
+        };
+        if let Some((at, byte)) = ps1_encoding_violation(&bytes) {
+            findings.push(format!(
+                "{path} — byte 0x{byte:02X} at offset {at} in a BOM-less file"
+            ));
+        }
+    }
+    if findings.is_empty() {
+        return pass();
+    }
+    fail(
+        "non-ASCII byte(s) in a BOM-less .ps1 (Windows PowerShell 5.1 reads these as ANSI):",
+        &findings,
+        &[
+            "Add a UTF-8 BOM to the file, or keep it pure ASCII. The BOM is the stronger",
+            "fix: it makes non-ASCII safe anywhere in the file, string literals included.",
+        ],
+    )
+}
+
+/// The predicate behind check 14: the offset and value of the first byte above 0x7F in a
+/// file that carries no UTF-8 BOM, or `None` when the file is safe.
+///
+/// SEPARATE FROM THE CHECK so it can be exercised against the two fixtures under
+/// `tests/fixtures/encoding/`, which are deliberately malformed and therefore excluded
+/// from the scan set. A gate must be proven to FIRE, and the only way to prove this one
+/// fires is to hand it bytes that must trip it.
+pub fn ps1_encoding_violation(bytes: &[u8]) -> Option<(usize, u8)> {
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return None;
+    }
+    bytes
+        .iter()
+        .position(|byte| *byte > 0x7F)
+        .map(|at| (at, bytes[at]))
 }

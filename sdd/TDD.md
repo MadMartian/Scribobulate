@@ -816,7 +816,7 @@
 - **Then** a new window opens containing that tab (same outcome as 7.10 on X11)
 
 ### 7.17 An installed Scribobulate carries its own icon everywhere
-- **Given** Scribobulate has been installed for the platform — `install.sh` on Linux, the `.app` bundle on macOS, or an equivalent OS packaging step — and is running
+- **Given** Scribobulate has been installed for the platform — `packaging/linux/install.sh` on Linux, the `.app` bundle on macOS, or an equivalent OS packaging step — and is running
 - **When** the user looks at the title bar, the taskbar/dock, or the window switcher
 - **Then** each shows Scribobulate's own application icon, never the toolkit's generic default
 - **And** an *uninstalled* run is not held to this: the surfaces the OS owns (taskbar/dock, switcher) may show a generic icon, because on some platforms an unpackaged binary has no application identity to attach one to
@@ -841,6 +841,16 @@
 - **Then** its tab is drawn **after** the last existing tab, evenly spaced with the rest — never on top of its left-hand neighbour, and never leaving two labels superimposed
 - **And** the strip scrolls far enough to show the new tab **in full**: it is the active tab, so it must be visible, not clipped past the right-hand edge
 - **And** the tabs that were already there stay evenly spaced, whatever changed their widths earlier in the session
+
+### 7.21 Every install route delivers the same payload, attribution included
+- **Given** any of the three Linux install routes — the `.deb`, the `.rpm`, or the from-source install into `~/.local`
+- **When** the install completes
+- **Then** all six payload files are present: the binary, the desktop entry, the application icon, the reading-themes file, the man page, and `THIRD-PARTY-LICENSES.md`
+- **And** `THIRD-PARTY-LICENSES.md` is not optional documentation — the syntax-highlighting grammars are statically linked into the binary under licences that require their notices to accompany a binary distribution, so an install lacking it is a licence violation rather than a cosmetic gap
+- **And** the rpm marks that file as a licence, so `--excludedocs` cannot drop it
+- **And** the routes cannot diverge on *what* an install consists of: the payload is defined once and every route reads that definition
+- **And** the from-source route pins the desktop entry's `Exec`/`TryExec` to the absolute binary path, because its bin directory is frequently absent from the launcher's `PATH`
+- **And** installing does not widen permissions on directories it did not create — a user-private directory under the install prefix keeps the mode the user gave it
 
 ---
 
@@ -3255,3 +3265,63 @@ up doing.
 - **When** the export is published on Windows
 - **Then** it reports a **named** failure telling the reader to close the file, never a generic write error, since the remedy is the reader's and a generic message describes neither the cause nor it
 - **And** the same export on Linux and macOS succeeds — the check targets **local disk**, the stricter case, a network destination succeeding where local NTFS does not
+
+## 26. Self-contained macOS bundle
+
+> The `.dmg` exists to satisfy build-pipeline step 10's stated intent: *an artefact a
+> non-developer can install with no toolchain*. A bundle that resolves its libraries out
+> of `/opt/homebrew` fails that intent outright rather than narrowly — the recipient has
+> no Homebrew, so it does not launch at all.
+>
+> **These rubrics gate the OBSERVATION, not the file list.** Each one asserts what the
+> running bundle can do from inside itself, never that some directory was staged. The
+> distinction is load-bearing and was measured: GtkSourceView's language specs and style
+> schemes are not on disk in the Homebrew prefix at all — they are a GResource compiled
+> into `libgtksourceview-5.0.dylib` — so a staging checklist would have passed a bundle
+> whose data came from somewhere else entirely, and would stay silent if that GResource
+> were ever stripped.
+>
+> **A pass is only evidence if the check can fail.** The development machine has Homebrew
+> GTK installed, so a bundle that still links it launches there perfectly. 26.3 exists to
+> keep 26.2 honest.
+
+### 26.1 The bundle resolves no library outside itself
+- **Given** a `Scribobulate.app` produced by `bundle.sh`
+- **When** every Mach-O in the bundle is walked transitively with `otool -L`
+- **Then** every load path resolves under `@rpath`, `@executable_path`, `/usr/lib` or `/System/Library`, and none under `/opt/homebrew` or `/usr/local`
+- **And** each staged library's own install **ID** is rewritten too, not only its dependents' load commands — an absolute ID works by accident and breaks the moment anything re-resolves it
+
+### 26.2 The bundle launches with the Homebrew prefix unreachable
+- **Given** the built bundle, on a machine that does have Homebrew GTK installed
+- **When** it is launched under a sandbox denying `file-read*` on `/opt/homebrew` and `/usr/local`
+- **Then** it starts and presents a window, rather than dying in `dyld`
+
+### 26.3 The negative control is proven able to fail
+- **Given** a bundle that still links Homebrew paths
+- **When** it is launched under that same sandbox
+- **Then** it fails in `dyld` naming the blocked library
+- **And** the check is rejected as vacuous if it cannot be made to fail this way — a control that passes both a good and a bad subject measures nothing, which is what `DYLD_*` path scoping would have done here, since absolute load commands never consult it
+
+### 26.4 The resources that fail late and silently are found
+- **Given** the bundle running with the Homebrew prefix unreachable
+- **When** the icon set, a file dialog, and an image-bearing document are exercised
+- **Then** no icon falls back to the broken-image placeholder, no missing-GSettings-schema abort occurs, and images render
+- **And** each of these is asserted as an outcome, because all three fail as a degraded window rather than as a link error, and so are invisible to 26.1 and 26.2
+
+### 26.5 The editor's own syntax data resolves from inside the bundle
+- **Given** the bundle running with the Homebrew prefix unreachable
+- **When** a Markdown document is opened in the editor pane
+- **Then** `LanguageManager` resolves `markdown` and `StyleSchemeManager` resolves one of the schemes the application names
+- **And** neither is allowed to fail by returning `None`, which is legal, silent, and leaves the **edit pane on the light scheme while the rest of the application follows dark** — a defect a user reports as a theming bug rather than as a missing file
+
+### 26.6 The bundled runtime is attributed
+- **Given** a bundle carrying a GTK runtime it redistributes
+- **When** the staged licence texts are checked against the libraries actually bundled
+- **Then** every bundled library has a licence text present and non-empty, and the covered set is **derived** from what is bundled rather than hand-listed
+- **And** each row declares a string that must occur in the staged text, since an SPDX identifier is a declaration about a licence and not evidence about the bytes shipped
+
+### 26.7 The packaging gate rejects a bad artefact
+- **Given** the packaging step
+- **When** it produces a `.dmg` that is zero-byte, carries no GTK runtime, or disagrees with `Cargo.toml` on the version
+- **Then** the step fails
+- **And** that is established by mutation — each gate is shown failing on a subject known to be bad, never inferred from a green run

@@ -288,17 +288,25 @@ mod gtk_integration_tests {
             .expect("register before building any window");
         let window = crate::window::new_window(&app, "IT", "# Doc\n\nBody.\n", None);
 
-        // Reveal the surfaces whose controls are built but hidden, so the walk reaches
-        // the find bar's buttons and both sidebars' headers rather than silently passing
-        // over an empty tree (ScrAP-209: a guard whose setup leaves nothing to inspect passes with the fix deleted).
+        // Reveal the surfaces whose controls are built but hidden, so the test drives the
+        // window into the state a reader actually meets. **These four lines do not change
+        // what the walk sees, MEASURED**: `descendants` below walks the widget TREE and
+        // filters on type, never on visibility or mapping, and every one of these controls
+        // is a child of its container whether or not the container is revealed — 61
+        // candidates with all four lines present, 61 with all four deleted. Two successive
+        // comments here claimed otherwise (that the walk would pass over an empty tree, and
+        // that a broken reveal left it inspecting a smaller one); both were inferred from
+        // the mechanism and neither was measured. They are kept as a state-of-the-window
+        // setup, not as the guard's reach — the sanity floor below is what proves reach.
+        //
+        // Route per action KIND, and the kinds differ: `find-replace` is a stateless
+        // `SimpleAction::new(.., None)` (window/findbar.rs), so it must be ACTIVATED — a
+        // `change_action_state` on it is a silent no-op that emits `GLib-GIO-CRITICAL
+        // g_action_change_state: assertion 'state_type != NULL'`, which went unread until
+        // the suite ran under `G_DEBUG=fatal-criticals` and it became a SIGTRAP (ScrAP-277).
+        // The two sidebars ARE stateful toggles, so they keep the state route (ScrAP-252).
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        // ACTIVATE, not change_action_state: `find-replace` is a stateless
-        // `SimpleAction` (window/findbar.rs), so changing its state is a silent no-op
-        // that only emits `g_action_change_state: assertion 'state_type != NULL'`. That
-        // is this comment's own ScrAP-209 in miniature — the setup step meant to reveal
-        // the replace row did nothing, so the walk never reached those controls and the
-        // guard passed on a smaller tree than it claimed to inspect.
         gtk::prelude::ActionGroupExt::activate_action(&window, "find-replace", None);
         window.change_action_state("outline", &true.to_variant());
         window.change_action_state("annotations", &true.to_variant());

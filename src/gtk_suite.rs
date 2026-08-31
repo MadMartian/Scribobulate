@@ -76,6 +76,8 @@ mod links;
 mod logging;
 mod macwordnav;
 mod mdtable;
+// Test-only in `lib.rs` (`#[cfg(test)]`); this root is always built `--cfg test`.
+mod notices;
 mod outline;
 mod outline_view;
 mod palette;
@@ -103,6 +105,9 @@ mod testpump;
 mod sprite;
 mod testlog;
 mod testsymlink;
+// Same story as `testsymlink` above: test-only in `lib.rs`, needs the declaration here or
+// the suite build breaks the moment a timing guard in it reaches the shared sampler.
+mod testtiming;
 mod theme;
 mod widgets;
 mod window;

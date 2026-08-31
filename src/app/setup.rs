@@ -112,6 +112,13 @@ pub(crate) fn setup_app(app: &Application) {
 /// desktop-theme-change signals, add the app-level actions, and register the
 /// keyboard accelerators. Runs once, before any window is built.
 fn on_startup(app: &Application) {
+    // FIRST, and before any tab or editor exists. Loading a `.lang` validates it against
+    // an RNG read from the compile-time prefix, which a bundled app does not have; the
+    // resolved path is cached on first use, so this has to win the race with the first
+    // `language()` call rather than merely happen during startup. Inert outside a bundle.
+    #[cfg(target_os = "macos")]
+    crate::platform::mac::bundle::configure_language_path();
+
     init_resources_and_css();
     connect_theme_change(app);
     // Supplies the SOURCE for the channel just subscribed to: GTK never reads the

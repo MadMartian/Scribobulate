@@ -1721,7 +1721,37 @@ PID you launched (`xdotool search --pid`), never to a name or class.
 
 **4. Force-kill.** `kill -9 <pid>` — the PID you launched, never a pattern match.
 
-**5. Install.** `./install.sh`, then check the title bar, the taskbar, and Alt-Tab.
+**5. Install.** `packaging/linux/install.sh`, then check the title bar, the taskbar, and Alt-Tab.
+
+Install into a throwaway `HOME` rather than your own — the script writes to `~/.local`
+and registers a MIME default, and there is no reason for a test to do either to your
+session:
+
+```bash
+env HOME=/tmp/scribtest XDG_DATA_HOME=/tmp/scribtest/.local/share \
+    XDG_CONFIG_HOME=/tmp/scribtest/.config packaging/linux/install.sh --no-build
+```
+
+**All six payload files must be present**, because `payload.sh` is shared with the two
+package builders and a file missing here is a file missing from the `.deb` and `.rpm`
+too — `bin/scribobulate`, `share/applications/scribobulate.desktop`,
+`share/icons/hicolor/scalable/apps/<app-id>.svg`, `share/scribobulate/themes.toml`,
+`share/man/man1/scribobulate.1.gz`, and
+`share/doc/scribobulate/THIRD-PARTY-LICENSES.md`. The last is an attribution
+obligation, not documentation: the syntax grammars are statically linked into the
+binary and their licences require the notice to travel with it, so an install missing
+it is a licence violation rather than a cosmetic gap. Confirm `Exec=`/`TryExec=` in the
+installed desktop entry are the **absolute** binary path, not the bare command.
+
+Then `packaging/linux/uninstall.sh` and confirm all six are gone. A generated
+`applications/mimeinfo.cache` legitimately remains — it is the desktop database's, not
+ours. (TDD 7.21)
+
+**Permission check, and it is the one worth not skipping.** Before installing, create
+`$HOME/.local/share/keyrings` mode `700`. After installing it must **still** be `700`.
+The payload sets directory permissions explicitly so a package cannot carry the
+builder's umask into `/usr`, and applying that sweep to a live `~/.local` would widen
+directories the user deliberately made private.
 
 **6. Tokened (desktop-integrated) launch.** `gio open <file>`, or open it from the
 file manager. The distinction matters: a tokened launch carries a startup token and
@@ -2073,6 +2103,54 @@ the resolved GTK **runtime** version, the renderer and the pid, which is what te
 whether the binary you are looking at is the one you meant to launch. **It does not carry a
 commit SHA** — this section claimed one for a while and no such record exists in the tree;
 use the executable's mtime and size, which do distinguish a rebuild.
+
+**8. The staged GtkSourceView validators — a 2x2, and the last cell is not optional.**
+
+Loading a `.lang` validates it against `language2.rng`, which libxml reads from a
+**filesystem path** — so the GResource the `.lang` itself comes from cannot satisfy it,
+and `stage.ps1` ships `share\gtksourceview-5` for that reason. The failure is a `WARN`
+and **the document still renders**, in monochrome, looking like a plain text file rather
+than like something broken. Nobody notices it who has not seen the highlighted version,
+which is why this is a written procedure rather than a glance.
+
+Run the **installed** product (`%LOCALAPPDATA%\Programs\Scribobulate\bin\scribobulate.exe`),
+open a Markdown file with a heading, a fenced code block and a list, press `%+e` for the
+editor, and read stderr. **RENAME** each directory rather than making it unreadable —
+denial and absence are equivalent to this lookup (`g_file_test` collapses `EPERM` and
+`ENOENT` to the same `FALSE`, measured by the macOS seat), but renaming models the
+recipient's condition exactly and costs nothing.
+
+| build prefix (`C:\gtk-build`) | installed `share\gtksourceview-5` | expected |
+|---|---|---|
+| present | present | no warning, stderr ~401 B |
+| **renamed away** | present | no warning, stderr ~401 B |
+| present | **renamed away** | no warning, stderr ~401 B |
+| **renamed away** | **renamed away** | `WARN GtkSourceView: Failed to load 'resource:///…/markdown.lang': could not find the RelaxNG schema file`, stderr ~570 B |
+
+**All four cells, and the byte counts are the cheap discriminator** — 401 against 570
+answers the question without reading the log at all. The first three each showing *no*
+warning is itself the finding: **both locations are in the search path and either one
+suffices alone**. A procedure that ran only rows 2 and 4 would let a reader conclude an
+ordering between them, and no measurement here supports one.
+
+**Row 4 is the positive control and the run is worthless without it.** Rows 1-3 are
+negatives — "no warning appeared" is equally true of a working lookup and of a harness
+that cannot see the warning. Row 4 is what distinguishes them, and it doubles as proof
+that the staged directory is load-bearing rather than decorative. Corroborate with a
+screenshot pair if the log is in doubt: row 2 shows a teal heading, coloured inline code
+and orange list markers; row 4 is uniformly monochrome with every glyph in the same
+place.
+
+**OPEN QUESTION, recorded here so the next person starts from it rather than from an
+answer.** In the equivalent state the macOS bundle's staged copy is *not* reached while
+this one is. The best explanation on the table is that the Windows tree sits under the
+prefix GTK derives from the loaded GLib DLL — GLib's default `XDG_DATA_DIRS` value on
+this platform — which a `.app` bundle has no equivalent of. Two further states measured
+here bear on it and neither settles it: pointing `XDG_DATA_DIRS` at an unrelated
+directory makes row 2 **fail**, and pointing it at the installed `share` root makes it
+**pass**, so an explicit entry is honoured and setting the variable *displaces* the
+default rather than adding to it. Nothing about search-path **order** has been measured
+on either platform; do not infer one from these cells.
 - [ ] **23.11** **A link to a section of the same document is a navigation.** Open a document with a table of contents linking its own headings (`sdd/TDD.md` and `sdd/CAM.md` both have one; `punkie-joe-farms.md` is the report this came from). Scroll to the TOC and click one entry → the preview jumps to that section, the **tab strip selection does not move**, and **View ▸ Back is no longer greyed**. Repeat with an **outline sidebar** row (F9) → same result. Then switch to pure-**edit** mode and activate an outline row → the caret moves and Back is *unchanged*, because nothing moved the preview (TDD 23.11)
 - [ ] **23.12** **Back returns to where you clicked from.** Continuing from 23.11: invoke **Back** → the viewport returns to the TOC, at the position it was at when you clicked — **not** the top of the document. **Forward** → back to the section. Nothing re-renders and the active tab never changes. Now click the *same* TOC entry twice in a row → the second click adds no stop: one Back press leaves the section (TDD 23.12)
 - [ ] **23.12a** **Back works when you clicked from the very top.** The 23.12 case above starts with a deliberate scroll, which hides this one. Open a document whose table of contents is the **first thing in the file** (`sdd/TDD.md`), do **not** scroll at all, and click a TOC entry from the top of the document → the preview jumps to that section. Now **Back** → the preview scrolls **back up to the top**; it must not sit still on the section. **Forward** → the section again. Before the fix the departure was recorded as line 0 and the restore treated that as "already at the top, nothing to do", so *both* directions did nothing and the feature looked entirely broken for TOC links while working for every other navigation (ScrAP-262, TDD 23.12)
@@ -2171,3 +2249,21 @@ use the executable's mtime and size, which do distinguish a rebuild.
 - [ ] **25.23** Export a document long enough to cross the responsiveness threshold → an indicator appears in the **status bar**, not a dialog, and the reader can cancel it; a cancelled export leaves the destination as 25.21 requires. **NOT IMPLEMENTED as of 2026-08-19** — the "Exporting…" busy notice exists, the interactive Cancel does not; record this as unverified rather than passing (TDD 25.23)
 - [ ] **25.24** **Windows only.** Open the destination PDF in a viewer that holds it open, then export over it → the failure is reported **by name**, telling the reader to close the file, never as a generic write error. Test against **local disk**, the stricter case — a network share succeeds where local NTFS does not, so a rubric written against one is wrong for the other. The same export on Linux and macOS **succeeds** (TDD 25.24)
 - [ ] **25.25** **A named font reaches the PDF.** In a scratch `themes.toml` put `[themes.system]` with `font_family = "DejaVu Serif, serif"` and `heading_font = "DejaVu Sans Mono, monospace"` (confirm both with `fc-match "DejaVu Serif"`), relaunch, and export the fixture to PDF. Run `pdffonts <file>.pdf` → the embedded faces are **DejaVuSerif** and **DejaVuSansMono**. ⚠️ **`[themes.system]`, not the active reading theme** — paper deliberately resolves against System (TDD 25.9), so the same keys under a named theme prove nothing here. ⚠️ **Read the face NAMES, never "it looks like a serif"**: a stack the sink hands over in a spelling Pango cannot parse falls through to the stack's generic terminator, so a completely broken export shows `NotoSerif` — a real serif face, and exactly what a reader would expect the theme to produce. A bare generic (`monospace` alone) cannot discriminate either; the family must be multi-word, because that is what the sanitiser quotes (TDD 25.25)
+
+### §26 Self-contained macOS bundle
+
+> **macOS only.** Automation covers the library graph; these are the checks that need a
+> machine, an eye, or a second computer. Build with `packaging/macos/bundle.sh` first.
+>
+> **The trap this section exists for:** the machine you build on has Homebrew GTK
+> installed and never quarantines its own files, so a bundle that is neither
+> self-contained nor installable launches perfectly here. Every check below is written to
+> be run in a way that machine cannot fake.
+
+- [ ] **26.1** Run `packaging/macos/verify-selfcontained.sh <bundle>` → PASS on both conditions. Then run it against a bundle built *before* the framework staging (or delete one file from `Contents/Frameworks/`) → it must FAIL and name the reference. A run that only ever passes has proven nothing (TDD 26.1, 26.3)
+- [ ] **26.2** With the Homebrew prefix hidden, the app **presents a window** and not merely a process: `sandbox-exec -f <profile> open -W <bundle>`, or run the binary and look at the screen. The automated condition proves `dyld` bound the graph and `main()` was entered; it does not prove a window appeared (TDD 26.2)
+- [ ] **26.4** In that same prefix-hidden run, walk the toolbar and menus → **no broken-image placeholders**. Open a file dialog → it opens rather than aborting on a missing GSettings schema. Open a document containing a local PNG and a local SVG → both render. These three fail as a degraded window rather than as an error, so nothing upstream of your eyes will report them (TDD 26.4)
+- [ ] **26.5** In that run, open a Markdown document and look at the **edit pane**: syntax highlighting is present, and in dark mode the edit pane is **dark like the rest of the app**. A light edit pane inside a dark window is the missing-style-scheme signature, and it reports as a theming bug (TDD 26.5)
+- [ ] **26.6** `Contents/Resources/` carries `LICENSE` and `THIRD-PARTY-LICENSES.md`, and the licence texts for the bundled runtime are present and non-empty. Cross-check the covered set against `Contents/Frameworks/` — every library shipped is attributed, and nothing is attributed that is not shipped (TDD 26.6)
+- [ ] **26.7** Make the packaging step produce a bad artefact and confirm it is rejected: truncate the `.dmg` to zero bytes, and separately build one whose version disagrees with `Cargo.toml` → the step FAILS in each case. Establish this by mutation; a green packaging run proves nothing on its own (TDD 26.7)
+- [ ] **26.8** **The recipient's experience, and the build machine structurally cannot check it.** Transfer the `.dmg` to *another* Mac (or set the flag by hand: `xattr -w com.apple.quarantine "0083;0;Safari;" <bundle>`), then double-click → macOS reports the app **"is damaged and can't be opened"**. Expected today: that is Gatekeeper refusing an ad-hoc signature, not a corrupt build. Confirm the documented way in works — right-click ▸ Open, or `xattr -dr com.apple.quarantine <bundle>` — and that `bundle.sh` printed the warning saying so. **If this check ever passes with no override, notarization has landed and the packaging step's ad-hoc warning must come out in the same change** (no TDD rubric yet — proposed as 26.8, pending the operator; recorded here rather than left uncovered)

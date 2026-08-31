@@ -1,0 +1,42 @@
+# Licence-text anchors for verify-licenses.sh (TDD 26.6).
+#
+# WHAT THIS IS FOR, AND WHAT IT IS NOT. Each line is a phrase that appears in the body of
+# a real licence. The gate requires at least one of them to occur, case-insensitively,
+# somewhere in the set of files staged for a formula. It answers ONE question: did we ship
+# something that IS licence text, rather than a path that merely resolves?
+#
+# IT DOES NOT SELECT WHICH FILE TO SHIP. An earlier version used these phrases to DISCOVER
+# the licence file, and that was a treadmill: `COPYING-MPL-1.1` opens `MOZILLA PUBLIC
+# LICENSE` in capitals while `README.md` says `Mozilla Public License` in passing, so
+# discovery had to be simultaneously case-sensitive enough to reject the README and
+# case-insensitive enough to accept the licence. Staging is now mechanical (every file at
+# the formula's prefix root, minus a history denylist) and these anchors only VALIDATE, so
+# a false positive costs nothing and a miss is a loud, reviewable failure naming the
+# formula.
+#
+# IT DOES NOT DETERMINE THE LICENCE EITHER. An anchor hit says "this is licence text", not
+# "this is the licence covering the binary we staged". That determination is deliberately
+# NOT GATE-ENFORCED — see the manifest column of the same name and the header of
+# verify-licenses.sh for why it cannot be derived.
+#
+# ADDING A LINE IS A REVIEWABLE EVENT, which is the point of it being data rather than a
+# regex in the script. Three of these were added because a real formula failed the gate:
+# `GNU LIBRARY GENERAL PUBLIC LICENSE` (the pre-1999 name, which gtk4, pango and harfbuzz
+# still ship), `PNG Reference Library License`, and `FREETYPE LICENSES`. A fourth was a
+# CORRECTION rather than an addition: the MIT phrase was `Permission is hereby granted,
+# free of charge`, which misses harfbuzz's "Old MIT" variant reading `Permission is hereby
+# granted, without fee`. Shortened to the common prefix.
+
+GNU LESSER GENERAL PUBLIC LICENSE
+GNU LIBRARY GENERAL PUBLIC LICENSE
+GNU GENERAL PUBLIC LICENSE
+Mozilla Public License
+Apache License
+FREETYPE LICENSES
+The FreeType Project LICENSE
+PNG Reference Library License
+COPYRIGHT NOTICE, DISCLAIMER, and LICENSE
+Permission is hereby granted
+Redistribution and use in source and binary forms
+Permission to use, copy, modify
+This software is provided 'as-is'

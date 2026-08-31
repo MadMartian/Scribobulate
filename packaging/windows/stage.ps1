@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Stage a self-contained Scribobulate tree for Windows distribution.
 
@@ -27,11 +27,23 @@
 [CmdletBinding()]
 param(
     [string]$GtkPrefix = $(if ($env:SCRIB_GTK_PREFIX) { $env:SCRIB_GTK_PREFIX } else { "C:\gtk-build\gtk\x64\release" }),
-    [string]$OutDir    = "$PSScriptRoot\..\..\build\stage\Scribobulate",
-    [string]$RepoRoot  = "$PSScriptRoot\..\.."
+    # NO $PSScriptRoot DEFAULT HERE. It is EMPTY while a param() default binds under
+    # `powershell -File` on a script carrying [CmdletBinding()], so "$PSScriptRoot\..\.."
+    # became "\..\.." and resolved against the current DRIVE ROOT -- and the error that
+    # follows names a path that still looks like a path ("outside the base 'R:'"), so it
+    # reads as a broken checkout rather than as an unbound variable. MEASURED: the trigger
+    # is the PAIR, [CmdletBinding()] with -File; either alone is fine, and `&` or a dotted
+    # path is fine. Filled in the BODY below, as package.ps1 and verify-licenses.ps1
+    # already do. ScrAP-288.
+    [string]$OutDir,
+    [string]$RepoRoot
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The two defaults, bound where $PSScriptRoot is populated. See the param() note above.
+if (-not $RepoRoot) { $RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path }
+if (-not $OutDir)   { $OutDir   = Join-Path $RepoRoot "build\stage\Scribobulate" }
 
 $exeSrc = Join-Path $RepoRoot "target\release\scribobulate.exe"
 if (-not (Test-Path $exeSrc)) {
@@ -70,6 +82,32 @@ if ($missing.Count -gt 0) {
 }
 
 Copy-Item $exeSrc "$OutDir\bin\"
+
+# ---------------------------------------------------------------------------
+# THE MSVC RUNTIME IS NOT STAGED, AND THAT IS THE POINT.
+#
+# This script used to copy vcruntime140.dll and vcruntime140_1.dll app-local out
+# of the Visual Studio redistributable directory. Doing that made us a
+# redistributor of Microsoft's Distributable Code, which carries a term an
+# Apache-2.0 LICENSE file does not satisfy: the distributor must require end
+# users to AGREE to protective terms, which is a click-through, not a file on
+# disk. Not shipping the files removes the obligation instead of documenting it.
+#
+# The dependency has NOT gone away -- it moved to the machine's own copy.
+# MEASURED with dumpbin /dependents over all 38 staged binaries: 37 import
+# vcruntime140.dll (everything except the CRT DLL that imports the other one),
+# vcruntime140_1.dll is imported by cairo-2.dll ALONE, and no msvcp140,
+# concrt140, mfc, vcomp or vccorlib is imported anywhere in the tree. So removing
+# exactly these two files is sufficient; nothing else drags a CRT DLL in.
+#
+# scribobulate.iss now installs Microsoft's own redistributable when the machine
+# does not already carry it, so Microsoft's terms travel with Microsoft's code.
+#
+# A DEVELOPER BOX CANNOT NOTICE IF THIS IS WRONG. Every machine that can build
+# this software already has the runtime, so the app starts either way and the
+# green tells you nothing -- see packaging/windows/README.md for what an honest
+# verification of this requires.
+# ---------------------------------------------------------------------------
 
 # GLib's helper executables. These are NOT optional tooling -- gdbus.exe is a
 # load-bearing part of single-instance behaviour on Windows, and omitting it
@@ -117,11 +155,67 @@ New-Item -ItemType Directory -Force -Path "$OutDir\share\icons" | Out-Null
 Copy-Item "$GtkPrefix\share\icons\Adwaita" "$OutDir\share\icons\" -Recurse
 Copy-Item "$GtkPrefix\share\icons\hicolor" "$OutDir\share\icons\" -Recurse
 
-# Only the RNG/DTD validation schemas. GtkSourceView's .lang specs and style
-# schemes are compiled into gtksourceview-5-0.dll as GResource, so there is
-# nothing else to ship for syntax highlighting.
+# The RNG/DTD validation schemas. GtkSourceView's .lang specs and style schemes
+# are compiled into gtksourceview-5-0.dll as GResource, so there is nothing else
+# to ship for syntax highlighting.
+#
+# THIS COPY IS LOAD-BEARING, MEASURED, and it is not the belt-and-braces it reads
+# as. Loading a .lang VALIDATES it against language2.rng, which libxml reads from a
+# FILESYSTEM PATH -- so the GResource the .lang itself comes from cannot satisfy
+# that, and without a copy on disk the language is dropped. The failure is a WARN
+# and the document still renders, in monochrome, looking like a plain text file
+# rather than like anything broken.
+#
+# 2x2 on the INSTALLED product, renaming each directory away rather than denying
+# access to it: with the gvsbuild prefix present the lookup succeeds whether or not
+# THIS copy exists, and with the prefix renamed away it succeeds only because of
+# it. Remove both and Markdown highlighting dies. So the state this copy is for is
+# the RECIPIENT'S -- a machine that has no gvsbuild prefix -- which is exactly the
+# state a packager's box is never in, and why the property was asserted here for a
+# long time before anyone measured it.
+#
+# No claim is made about search-path ORDER, and none should be added without
+# measuring it: four presence tests cannot establish one. The procedure, including
+# the both-absent positive control that makes the other three cells mean anything,
+# is tests\MANUAL-TEST.md section A.3 step 8.
+#
+# THE COPY IS RECURSIVE AND THE PREFIX HOLDS MORE THAN THAT -- which is how a font
+# nobody uses reached every installer built to date. The comment above used to say
+# "only the RNG/DTD validation schemas" and describe the INTENT, while the code
+# took the whole directory. So the exclusion is spelled out below rather than left
+# to a reader to notice the gap between the two.
 if (Test-Path "$GtkPrefix\share\gtksourceview-5") {
     Copy-Item "$GtkPrefix\share\gtksourceview-5" "$OutDir\share\" -Recurse
+}
+
+# BuilderBlocks.ttf is dropped: a 4-glyph synthetic font (.notdef/block/empty/
+# smallblock) that exists for GtkSourceMap's minimap mosaic, and Scribobulate has
+# no minimap. MEASURED, not reasoned -- the claim was confirmed by installing the
+# built installer and running it, twice on one install, with the font present and
+# then removed, at pinned window geometry: the editor rendered PIXEL-IDENTICAL
+# both times. The only 236 differing pixels sat in a 42x16 box on the "View"
+# menubar label, a focus underline left by the test's own keystrokes.
+#
+# Looking alone would NOT have settled this. An unused font is invisible, so a
+# correct-looking window cannot tell "unused" from "used and fine"; only the A/B
+# discriminates. The consumer is established from the shipped DLL's own strings,
+# where the minimap CSS `font-family: BuilderBlocks; font-size: 4px` sits beside
+# GTK_SOURCE_IS_MAP and gtk_source_map_set_view -- so this no longer rests on a
+# grep for GtkSourceMap in our source.
+#
+# DENYLIST, NOT ALLOWLIST, deliberately. Copying only the three known-good
+# subdirectories would silently omit anything upstream adds that we DO need, and
+# a missing runtime file is a worse failure than a stray 500-byte one. The cost
+# is the reverse blind spot: a future addition here ships unnoticed, and the
+# licence gate will not catch it because the gtksourceview row claims the whole
+# subtree by pattern.
+#
+# Not conditional on the file existing: Remove-Item is given a path that may be
+# absent if upstream ever drops it, and this must not become the line that breaks
+# staging on a gvsbuild bump.
+$sourceViewFonts = Join-Path $OutDir 'share\gtksourceview-5\fonts'
+if (Test-Path $sourceViewFonts) {
+    Remove-Item $sourceViewFonts -Recurse -Force
 }
 
 # The reading themes, as the Linux packages already install them
@@ -144,12 +238,119 @@ New-Item -ItemType Directory -Force -Path "$OutDir\share\scribobulate" | Out-Nul
 Copy-Item "$RepoRoot\data\themes.toml" "$OutDir\share\scribobulate\"
 
 # The sprite copy every platform ships. WHY it is shipped is stated once, in
-# install.sh, beside the Linux copy of this same step -- read it there rather than
-# trusting a second copy here. All three packaging scripts once carried that rationale
-# verbatim, which hid the fact that the commands underneath the three copies did three
-# different things with an empty directory, a subdirectory, and a filename with a space.
-# `-Recurse -Force` already survives all three; the two shell scripts now do too.
+# packaging/linux/payload.sh beside the Linux copy of this step -- read it there rather
+# than trusting a second copy here. The packaging scripts once carried that rationale
+# verbatim, which hid the fact that the commands underneath the copies did different
+# things with an empty directory, a subdirectory, and a filename with a space.
+# `-Recurse -Force` survives all three; the Linux side now does too. `-Force` is
+# load-bearing rather than defensive: without it a second copy into an existing
+# destination throws ResourceExists per directory, which terminates under this script's
+# $ErrorActionPreference = 'Stop'.
 Copy-Item "$RepoRoot\data\sprites" "$OutDir\share\scribobulate\" -Recurse -Force
+
+# ---------------------------------------------------------------------------
+# The licence texts the product is obliged to carry. No scribobulate.iss change
+# is needed for any of them: line 76 already takes {#StageDir}\* with
+# recursesubdirs, so whatever lands here is installed.
+#
+# THE INSTALLER WAS SHOWING THE LICENCE AND SHIPPING IT NOWHERE. scribobulate.iss
+# sets LicenseFile to the repo's LICENSE, which displays it in the setup wizard
+# and installs nothing. The installed tree contained no licence text at all --
+# not ours, not the syntax grammars', not librsvg's Rust graph's -- while the
+# wizard made the obligation look discharged. An absence that reads as handled is
+# worse than a plain omission, and it is what the three "row matches no staged
+# file" entries in licenses.psd1 were reporting.
+#
+# TWO GO TO THE ROOT AND ONE DOES NOT. LICENSE and THIRD-PARTY-LICENSES.md are
+# about the product as a whole and sit where a person looks first. The librsvg
+# notice is about one DLL in bin\, so it goes under share\licenses\librsvg\ --
+# and it has to be staged from the repo rather than copied out of the GTK prefix,
+# because the crates it attributes are statically linked into rsvg-2-2.dll and
+# leave no file of their own in any installed tree.
+#
+# MISSING SOURCES THROW. A missing DLL above throws, and a missing licence is the
+# more serious absence -- it must not be the one failure this script shrugs off.
+# verify-licenses.ps1 would catch it later, but a packager that knowingly emits a
+# short tree makes a downstream gate the only thing standing between us and
+# shipping it, which is one process change away from nothing at all.
+# ---------------------------------------------------------------------------
+# The librsvg Rust notice USED TO BE COPIED HERE BY HAND. It no longer is: it is
+# an ordinary row in licenses.psd1, so the manifest-driven block below stages it
+# like every other licence text, to share\licenses\librsvg-rust\. Copying it here
+# as well would put 219 KB of identical bytes in two directories and give the
+# reader two places to believe are authoritative.
+$notices = @(
+    @{ From = "$RepoRoot\LICENSE"
+       To   = "$OutDir\LICENSE" }
+    @{ From = "$RepoRoot\THIRD-PARTY-LICENSES.md"
+       To   = "$OutDir\THIRD-PARTY-LICENSES.md" }
+)
+foreach ($n in $notices) {
+    if (-not (Test-Path $n.From)) { throw "Licence text not found at $($n.From)" }
+    Copy-Item $n.From $n.To
+}
+
+# ---------------------------------------------------------------------------
+# EVERY COMPONENT'S LICENCE TEXT, staged from the manifest.
+#
+# THIS IS THE HALF THAT WAS MISSING, and licenses.psd1 said so in its own opening
+# line: "the installer currently ships not one line of their licence text". The
+# table names, for all 34 components, where each licence text COMES FROM -- and
+# nothing ever copied them anywhere. verify-licenses.ps1 reads those Sources off
+# the BUILD MACHINE, from the repo and the GTK prefix, so all four of its
+# conditions could pass while the installed product carried no LGPL text at all.
+# Exactly the defect recorded above for LICENSE and THIRD-PARTY-LICENSES.md --
+# an obligation that reads as discharged because a gate is green -- one layer out.
+#
+# DRIVEN BY THE MANIFEST, NOT BY A SECOND LIST. A hand-kept list of files to copy
+# would be a fourth restatement of the table and would drift from it on the first
+# dependency change, silently, because both would still read plausibly. The rows
+# are the single source of truth: add a component there and its text ships here.
+#
+# One text per component directory, named by row Id rather than by upstream
+# filename, so `share\licenses\glib\` answers "what covers GLib" without the
+# reader knowing that GLib's text happens to be called LGPL-2.1-or-later.txt.
+#
+# ROWS WITH NO TEXT ARE REPORTED, NOT SKIPPED SILENTLY, and deliberately do NOT
+# throw. No row is in that state today -- msvc-runtime was the last one, and it
+# was deleted rather than closed when the runtime stopped shipping -- so this path
+# is dormant rather than dead: the next component whose terms exist only online
+# lands here. Throwing would make this script fail on a condition the gate already
+# reports precisely, and would block staging on a decision that has nothing to do
+# with staging. The gate's condition 3 stays the hard failure.
+# ---------------------------------------------------------------------------
+$manifest = Import-PowerShellDataFile -LiteralPath "$PSScriptRoot\licenses.psd1"
+$noText   = @()
+$staged   = 0
+
+foreach ($row in $manifest.Rows) {
+    if (-not $row.Source) { continue }
+    foreach ($src in @($row.Source)) {
+        # Same resolution as verify-licenses.ps1's New-SourceReader. A scheme it
+        # would reject is a typo in the table, so it throws here too rather than
+        # quietly staging nothing.
+        if ($src -like 'prefix:*') {
+            $from = Join-Path $GtkPrefix $src.Substring(7)
+        } elseif ($src -like 'repo:*') {
+            $from = Join-Path $RepoRoot  $src.Substring(5)
+        } else {
+            throw "Row '$($row.Id)' Source must start with 'prefix:' or 'repo:', got: $src"
+        }
+
+        if (-not (Test-Path -LiteralPath $from -PathType Leaf)) {
+            $noText += "$($row.Id) -> $src"
+            continue
+        }
+
+        $destDir = Join-Path "$OutDir\share\licenses" $row.Id
+        New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+        Copy-Item -LiteralPath $from -Destination (Join-Path $destDir (Split-Path $from -Leaf))
+        $staged++
+    }
+}
+
+Write-Host "Staged $staged licence texts for $($manifest.Rows.Count) components"
+foreach ($m in $noText) { Write-Warning "no licence text on disk: $m" }
 
 $files = Get-ChildItem $OutDir -Recurse -File
 $size  = ($files | Measure-Object Length -Sum).Sum

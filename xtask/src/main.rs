@@ -16,7 +16,7 @@ mod lint;
 
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: cargo xtask lint-references";
+const USAGE: &str = "usage: cargo xtask lint-references [--list-scan]";
 
 fn main() -> ExitCode {
     // `skip(1)` drops the binary path; the alias in `.cargo/config.toml` passes everything
@@ -25,6 +25,25 @@ fn main() -> ExitCode {
     let gate = args.first().map(String::as_str);
 
     match gate {
+        // The parity artefact, and the reason it survived the retirement of the two shell
+        // ports: one implementation removes PORT divergence, not PLATFORM divergence. The
+        // set is still derived by walking a filesystem, and a filesystem answers differently
+        // on each of the three — case folding, symlink resolution, ordering. POLICY
+        // § "Continuous integration" requires the three to be compared, and this prints the
+        // thing that gets compared. Exits before any check runs, so a contract job needs no
+        // GTK: that is what makes the three-platform matrix affordable.
+        Some("lint-references") if args.len() == 2 && args[1] == "--list-scan" => {
+            match lint::list_scan() {
+                Ok(listing) => {
+                    print!("{listing}");
+                    ExitCode::SUCCESS
+                }
+                Err(why) => {
+                    eprintln!("lint-references: {why}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("lint-references") if args.len() == 1 => match lint::run() {
             Ok(true) => ExitCode::SUCCESS,
             Ok(false) => ExitCode::FAILURE,

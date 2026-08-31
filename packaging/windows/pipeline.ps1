@@ -4,9 +4,12 @@
     scripts/pipeline.steps, and optionally stages the runtime and builds the installer.
 
 .DESCRIPTION
-    This is a LOCAL developer script. It is deliberately not CI: Scribobulate has no
-    GitHub Actions workflow, and adding one is out of scope for the Windows port (see
-    packaging/windows/README.md "Why this is a script, not CI").
+    This is the LOCAL developer entry point, and it stays one now that CI exists.
+    .github/workflows/pipeline.yml does not reimplement it: the workflow's Windows job
+    invokes THIS script for -SelfTest and -ListSteps, so there is still exactly one
+    Windows runner and CI is a caller of it rather than a second port. Executing the
+    full pipeline on a hosted Windows runner is not yet solved (it needs a gvsbuild GTK);
+    see packaging/windows/README.md "Windows and CI".
 
     IT DERIVES, IT DOES NOT RESTATE. Every step, its ordinal, class, intent, verdict
     rule and command come from scripts/pipeline.steps. This file previously carried its
@@ -441,17 +444,31 @@ function Test-Contract {
 # declare a non-applicable step 0 -- noise that dilutes the declarations carrying real
 # information.
 #
-# Written through [Console]::Out with explicit LF. PowerShell would emit CRLF, which makes
-# a byte-exact diff against the shell port's output fail on every line for a reason that
-# has nothing to do with the step list -- and the usual fix, normalising CR away at
-# compare time, weakens the very artefact whose job is to be compared.
+# EMITTED ON THE SUCCESS STREAM, and that is the whole of the fix recorded here.
+#
+# This used to build one string and write it through [Console]::Out with explicit LF, to
+# spare a byte-exact diff from failing on every line over CRLF. The reasoning was sound and
+# the consequence was fatal to the artefact's purpose: [Console]::Out writes to the
+# PROCESS's stdout handle, which PowerShell's `>` does not redirect -- `>` captures the
+# SUCCESS STREAM. So `pipeline.ps1 -ListSteps > steps.txt` printed the list to the console
+# and wrote an EMPTY FILE, and the documented parity procedure (diff it against
+# `scripts/pipeline.sh --list-steps`) could not have worked for anyone who ever tried it.
+# Measured the first time CI redirected it: the job exited 0 with a zero-byte artefact.
+#
+# The line terminator is a property of the PLATFORM, not drift in the step list, so it
+# belongs to whoever COMPARES -- scripts/pipeline-parity.sh strips a trailing CR and
+# announces when it had to, which is where a difference that means nothing can be absorbed
+# without weakening what the artefact says. Trading capturability for a terminator was the
+# wrong trade in the other direction.
+#
+# THE SELF-TEST BELOW NOW CALLS THIS FUNCTION. It used to rebuild the printed list inline
+# -- a THIRD restatement, inside the check whose job is to catch restatements -- which is
+# exactly why -SelfTest stayed green while -ListSteps produced nothing capturable.
 # --------------------------------------------------------------------------------------
 function Write-StepList {
-    $sb = New-Object System.Text.StringBuilder
     foreach ($id in @(Get-DerivedStepIds)) {
-        $null = $sb.Append((Get-StepOrdinal $id)).Append("`t").Append($id).Append("`t").Append((Get-ContractValue 'class' $id)).Append("`n")
+        '{0}{1}{2}{1}{3}' -f (Get-StepOrdinal $id), "`t", $id, (Get-ContractValue 'class' $id)
     }
-    [Console]::Out.Write($sb.ToString())
 }
 
 # --------------------------------------------------------------------------------------
@@ -537,7 +554,24 @@ function Invoke-WithEnv {
         & $Body @ArgumentList
     } finally {
         foreach ($name in @($saved.Keys)) {
-            [Environment]::SetEnvironmentVariable($name, $saved[$name])
+            if ($null -eq $saved[$name]) {
+                # REMOVE EXPLICITLY, never `SetEnvironmentVariable($name, $null)`.
+                # "Set it to null and the runtime deletes it" is an ENGINE-DEPENDENT
+                # claim, and this runner meets two engines: 5.1/.NET Framework locally
+                # and pwsh 7/.NET on the CI runner. On 5.1 both null and the empty
+                # string delete -- MEASURED here, a variable set to '' reads back
+                # `$null` and a child `cmd /c echo %VAR%` prints the literal `%VAR%`,
+                # so the present-but-empty state does not exist. Under pwsh 7 it does,
+                # and the restore left the probe PRESENT AND EMPTY rather than gone
+                # (contract (windows) run 33339388823). Whether the null reached the
+                # API intact or was converted to '' on the way is not established and
+                # does not need to be: the provider's Remove-Item has one meaning on
+                # every engine, so removing the ambiguous construct settles it the way
+                # stage.ps1's param-time $PSScriptRoot read was settled.
+                if (Test-Path "Env:$name") { Remove-Item "Env:$name" }
+            } else {
+                [Environment]::SetEnvironmentVariable($name, $saved[$name])
+            }
         }
     }
 }
@@ -556,11 +590,13 @@ function Invoke-SelfTest {
     if (-not (Test-Contract)) { return $false }
     Write-Host '   contract is well-formed'
 
-    # The list -ListSteps prints must be the list the run loop iterates. Both derive from
-    # Get-DerivedStepIds, so this compares the artefact against its own source.
+    # The list -ListSteps prints must be the list the run loop iterates. It calls
+    # Write-StepList rather than rebuilding the same line format inline: the inline version
+    # was a third restatement sitting inside the check whose subject is restatement, and it
+    # asserted about a list -ListSteps never produced. It stayed green through the whole
+    # period in which -ListSteps wrote nothing a redirection could capture.
     $derived = @(Get-DerivedStepIds)
-    $printed = @()
-    foreach ($id in $derived) { $printed += (Get-StepOrdinal $id) + "`t" + $id + "`t" + (Get-ContractValue 'class' $id) }
+    $printed = @(Write-StepList)
     $printedIds = @($printed | ForEach-Object { ($_ -split "`t")[1] })
     if (($printedIds -join '|') -cne ($derived -join '|')) {
         Write-Err 'pipeline: -ListSteps does not print the derived step list'
@@ -610,8 +646,11 @@ function Invoke-SelfTest {
     # a prefix that never reaches the child makes a gate silently unarmed, and one that
     # outlives its step silently arms every step after it. Read from a CHILD process,
     # because that is where a contract command actually runs.
+    # Through the child for the same reason the after-check below is: "already set" has
+    # to mean the same thing on both engines, or 5.1 runs this check and pwsh 7 refuses
+    # to on a state 5.1 cannot even represent.
     $probe = 'SCRIB_SELFTEST_PROBE'
-    if ($null -ne [Environment]::GetEnvironmentVariable($probe)) {
+    if ((@(cmd /c "echo %$probe%") | Select-Object -First 1) -cne "%$probe%") {
         Write-Err "pipeline: $probe is already set in this environment; cannot self-test isolation"
         return $false
     }
@@ -624,9 +663,31 @@ function Invoke-SelfTest {
         Write-Err "pipeline: env prefix did not reach the child (got '$($seenFirst -join '')', want 'armed')"
         return $false
     }
-    $after = [Environment]::GetEnvironmentVariable($probe)
-    if ($null -ne $after) {
-        Write-Err "pipeline: env prefix LEAKED past its step ($probe = '$after' afterwards)"
+    # ASK THE CHILD, not the engine, and the difference is not pedantry -- it is the
+    # whole verdict. `[Environment]::GetEnvironmentVariable` returns `$null` for a
+    # variable that is ABSENT and, on an engine that admits the state at all, an empty
+    # string for one that is PRESENT AND EMPTY. So a `$null -ne $after` test asks a
+    # question whose answer depends on which engine is running it, and this file is run
+    # by two: 5.1 locally, pwsh 7 in the `contract (windows)` job. That is exactly the
+    # divergence ScrAP-207 is about, arriving inside the self-test rather than in the
+    # thing it tests.
+    #
+    # cmd.exe has no such ambiguity: an unexpanded `%VAR%` means the variable does not
+    # exist, and an empty line means it exists and is empty. Same answer on every
+    # engine, because the discriminator belongs to the child rather than to the host.
+    # The module comment above already named this property; the check simply was not
+    # using it.
+    #
+    # The message reports BOTH states by name, so a red run says which one it found
+    # instead of leaving the reader to infer it from a quoted empty string.
+    $afterChild = @(cmd /c "echo %$probe%") | Select-Object -First 1
+    if ($afterChild -cne "%$probe%") {
+        $state = if ([string]::IsNullOrEmpty($afterChild)) {
+            'PRESENT AND EMPTY'
+        } else {
+            "PRESENT with value '$afterChild'"
+        }
+        Write-Err "pipeline: env prefix LEAKED past its step ($probe is $state afterwards, expected absent)"
         return $false
     }
     Write-Host '   env prefix reaches the child, and is unset again afterwards'
@@ -643,7 +704,11 @@ function Invoke-SelfTest {
             return $false
         }
     } finally {
-        [Environment]::SetEnvironmentVariable($probe, $null)
+        # Same removal idiom as Invoke-WithEnv's restore: a self-test that cleans up
+        # with the ambiguous construct would leave the probe present-and-empty on the
+        # engine this check exists to protect, and the next run would then refuse to
+        # start on a state its own predecessor created.
+        if (Test-Path "Env:$probe") { Remove-Item "Env:$probe" }
     }
     Write-Host '   env prefix restores a pre-existing value rather than deleting it'
 

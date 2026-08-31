@@ -611,16 +611,33 @@ mod normalize_inline_tabs_tests {
     /// machine-independent, where a wall-clock bound is either flaky or blind.
     #[test]
     fn tab_normalisation_over_a_single_enormous_line_grows_linearly() {
+        /// Absolute ceiling for the 512 KiB input, shared by the sampler's early exit
+        /// and the assertion below so the two cannot disagree about "too slow".
+        const LINEAR_CEILING: std::time::Duration = std::time::Duration::from_millis(3000);
+
+        /// Best-of-N, N from `crate::testtiming`.
+        ///
+        /// This guard took a SINGLE draw until a hosted CI runner failed it at 8.7x
+        /// against a threshold of 8.0 with the code correct. Its sibling in
+        /// `annotate::scan` had grown a documented best-of-5 sampler for exactly this
+        /// reason and this one never inherited it — a remedy written into one of two
+        /// consumers, which is why the sampler now lives in a shared module instead of
+        /// inside whichever guard was fixed first.
         fn time_norm(kib: usize) -> std::time::Duration {
             let src = "\t".repeat(kib * 1024);
-            let t = std::time::Instant::now();
-            let out = normalize_inline_tabs(&src);
-            // Consume the result, and pin the BEHAVIOUR: every one of these tabs
-            // is leading whitespace on its (single, endless) line, so not one of
-            // them is rewritten.
-            assert_eq!(out.len(), src.len());
-            assert!(!out.contains(' '), "leading tabs must not be rewritten");
-            t.elapsed()
+            crate::testtiming::best_of(
+                || {
+                    let out = normalize_inline_tabs(&src);
+                    // Consume the result, and pin the BEHAVIOUR: every one of these
+                    // tabs is leading whitespace on its (single, endless) line, so not
+                    // one of them is rewritten.
+                    assert_eq!(out.len(), src.len());
+                    assert!(!out.contains(' '), "leading tabs must not be rewritten");
+                },
+                // Pre-fix cost here was tens of seconds against a post-fix ~5 ms, so a
+                // draw past the ceiling is a regression rather than a slow sample.
+                |best| best > LINEAR_CEILING,
+            )
         }
 
         let small = time_norm(128);
@@ -641,7 +658,7 @@ mod normalize_inline_tabs_tests {
         // former and far below the latter, so it discriminates without being
         // sensitive to machine speed.
         assert!(
-            large < std::time::Duration::from_millis(3000),
+            large < LINEAR_CEILING,
             "{large:?} for 512 KiB is far past any linear implementation's cost \
              — the growth ratio may have been masked by a constant-factor \
              speedup on a still-quadratic algorithm."

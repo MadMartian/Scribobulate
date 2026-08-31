@@ -143,6 +143,28 @@ pub fn run() -> Result<bool, String> {
     Ok(checks::run_all(&tree))
 }
 
+/// The scan set, one path per line, ordinal-sorted — the artefact the three platforms are
+/// diffed on (POLICY § "Continuous integration"). Built exactly as `run` builds it, from the
+/// same contract, so the listing cannot describe a set the checks do not run over.
+///
+/// ORDINAL SORT, not the platform's collation: a locale-aware sort makes the same set print
+/// in a different order on a different host, and a parity diff cannot tell that apart from a
+/// set that genuinely differs. The ONE difference between three ports and one binary is that
+/// this ordering is now a property of the program rather than of whichever `sort` was first
+/// on PATH (ScrAP-319).
+pub fn list_scan() -> Result<String, String> {
+    let repo = repo_root()?;
+    let contract_text = std::fs::read_to_string(repo.join(contract::CONTRACT))
+        .map_err(|why| format!("{} is missing or unreadable ({why})", contract::CONTRACT))?;
+    let contract = Contract::parse(&contract_text)?;
+    let mut paths = ScanSet::build(&repo, &contract)?.paths;
+    paths.sort_unstable();
+    Ok(paths
+        .into_iter()
+        .map(|path| format!("{path}\n"))
+        .collect::<String>())
+}
+
 /// The repository root: this crate's manifest directory's parent, so the gate is
 /// independent of the working directory a runner happens to invoke it from. `cargo xtask`
 /// sets `CARGO_MANIFEST_DIR` for the xtask crate, never for the caller.

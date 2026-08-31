@@ -674,9 +674,6 @@ mod tests {
     ///   proceeds *into* the construct body and any scan there is reached).
     #[test]
     fn extraction_over_adversarial_input_grows_linearly_not_quadratically() {
-        /// How many times each input is timed before the best result is kept.
-        const TIMING_SAMPLES: usize = 5;
-
         /// Absolute ceiling for the 1024 KiB input. The post-fix debug measurement is
         /// ~45 ms and the PRE-fix one was 96 SECONDS, so this sits ~66x above the former
         /// and ~30x below the latter — it discriminates without being sensitive to
@@ -685,7 +682,7 @@ mod tests {
         /// to fail, so two copies could disagree about what "too slow" means.
         const LINEAR_CEILING: std::time::Duration = std::time::Duration::from_millis(3000);
 
-        /// Best-of-[`TIMING_SAMPLES`] cost of one `extract` pass.
+        /// Best-of-N cost of one `extract` pass, N from `crate::testtiming`.
         ///
         /// The **minimum**, not a single sample and not a mean, because timing noise on
         /// a shared machine is strictly ADDITIVE: preemption, cache eviction and
@@ -704,31 +701,22 @@ mod tests {
         /// widening the threshold trades the flake for exactly the discriminating power
         /// the guard exists to have.
         fn time_extract(src: &str) -> std::time::Duration {
-            let mut best = std::time::Duration::MAX;
-            for _ in 0..TIMING_SAMPLES {
-                let t = std::time::Instant::now();
-                let e = extract(src);
-                // Consume the result so nothing can be optimised away. Only the
-                // no-closer shape has a pinnable output (see the caller); the
-                // with-closer shape's output differs per pair, so all this asserts
-                // is that extraction stays a lossless-or-shrinking transform.
-                assert!(e.cleaned.len() <= src.len());
-                assert!(e.annotations.len() <= 1);
-                best = best.min(t.elapsed());
-                // Stop as soon as one sample is already past the ceiling. Sampling must
-                // not make the FAILURE mode more expensive than the bug: the regression
-                // this guards against costs ~96 s per call, so a plain best-of-5 over
-                // five pairs x four measurements turns a red run into a multi-hour one
-                // (measured — the first attempt at this fix had to be killed). The early
-                // exit is sound only because the ceiling has ~66x headroom over the
-                // linear cost: additive noise cannot lift a 45 ms pass past 3 s, so a
-                // sample over it means a real regression, not a slow draw. Do not reuse
-                // this shape for a tight bound, where it WOULD reintroduce the flake.
-                if best > LINEAR_CEILING {
-                    break;
-                }
-            }
-            best
+            crate::testtiming::best_of(
+                || {
+                    let e = extract(src);
+                    // Consume the result so nothing can be optimised away. Only the
+                    // no-closer shape has a pinnable output (see the caller); the
+                    // with-closer shape's output differs per pair, so all this asserts
+                    // is that extraction stays a lossless-or-shrinking transform.
+                    assert!(e.cleaned.len() <= src.len());
+                    assert!(e.annotations.len() <= 1);
+                },
+                // Stop as soon as one sample is already past the ceiling — the failure
+                // case must not cost more than the bug it reports. Sound here because
+                // the ceiling has ~66x headroom over the linear cost; the shared helper
+                // documents why it must not be reused for a tight bound.
+                |best| best > LINEAR_CEILING,
+            )
         }
 
         for (open, close) in PAIRS {

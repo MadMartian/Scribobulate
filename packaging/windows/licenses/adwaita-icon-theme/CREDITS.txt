@@ -1,0 +1,38 @@
+Adwaita icon theme -- attribution
+=================================
+
+The Adwaita icon theme is redistributed in this product under the Creative
+Commons Attribution-Share Alike 3.0 Unported License.
+
+    Title    Adwaita icon theme, version 50.0
+    Author   GNOME Project
+    Source   https://gitlab.gnome.org/GNOME/adwaita-icon-theme
+    Licence  CC BY-SA 3.0, http://creativecommons.org/licenses/by-sa/3.0/
+
+Attribution wording is upstream's own. The COPYING file of the
+adwaita-icon-theme 50.0 source tree states:
+
+    "When attributing the artwork, using "GNOME Project" is enough.
+     Please link to http://www.gnome.org where available."
+
+    https://www.gnome.org
+
+ELECTION
+--------
+
+adwaita-icon-theme is offered under a choice of two licences. Its COPYING
+reads:
+
+    "This work is licenced under the terms of either the GNU LGPL v3 or
+     Creative Commons Attribution-Share Alike 3.0 United States License."
+
+This product elects CC-BY-SA-3.0. The icons are redistributed unmodified, so
+no Adaptation is created and the ShareAlike limb of section 4(b) is not
+engaged. Section 4(a) explicitly does not subject the surrounding Collection
+to this licence, so the Apache-2.0 licence of Scribobulate itself is
+unaffected.
+
+The election is this redistributor's to make and is recorded rather than
+implied: the GTK prefix installs only COPYING_CCBYSA3, and allowing "whichever
+text upstream happened to install" to decide the question is how a licence
+gets chosen by accident.

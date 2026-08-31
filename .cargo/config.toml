@@ -48,6 +48,33 @@ GSK_RENDERER = "cairo"
 # the built binary directly (`./target/release/scribobulate`) when you want that.
 XDG_STATE_HOME = { value = "target/test-state", relative = true }
 
+# Keep the test suite out of the developer's REAL config directory — the same leak as
+# XDG_STATE_HOME above, discovered from the opposite end.
+#
+# `config::config()` is a OnceLock over `Config::load()`, which resolves
+# `user_config_dir()` from the ambient environment and reads `scribobulate/config.toml`
+# out of it. Nothing redirected that, so any test transitively touching `config()` —
+# `palette`, `tags`, `session` and `window` all do — read whatever the machine running
+# the tests happened to have. Same shape as the state leak: not one stray test, but
+# production code with no test seam, reached from everywhere.
+#
+# It surfaced as a COVERAGE disagreement, which is the small half. The first CI run of
+# the coverage gate on a hosted Linux runner reported 76.26% where this box reported
+# 76.31% on the same commit, and the whole gap was four lines of src/config.rs. Two
+# hosts of the SAME platform disagreeing is why every existing protection missed it —
+# POLICY's rules about the floor are about other PLATFORMS. The larger half is that a
+# test which reads the developer's real configuration can behave differently for them
+# than for anyone else, silently, in either direction.
+#
+# A second effect, deliberate and worth knowing: GTK reads
+# `$XDG_CONFIG_HOME/gtk-4.0/settings.ini`, and under Xvfb — with no XSettings manager —
+# that file is what supplies the theme (ScrAP-152). Pinning this means the integration
+# suite stops inheriting the tester's own GTK settings, so a theme-sensitive test now
+# behaves the same here as on a runner instead of quietly depending on the desktop.
+#
+# NOT `force = true` and `relative = true`, both for the reasons given above.
+XDG_CONFIG_HOME = { value = "target/test-config", relative = true }
+
 # `cargo xtask <gate>` — the build-pipeline gate binary in `xtask/`. An alias rather than a
 # path so the contract's step commands are IDENTICAL on all three platforms: `cargo` is on
 # PATH everywhere a build happens, which is the property that let one binary replace the

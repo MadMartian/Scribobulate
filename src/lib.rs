@@ -80,6 +80,12 @@ pub(crate) mod logging;
 // core is not.
 pub(crate) mod macwordnav;
 pub(crate) mod mdtable;
+/// Test-only. Renders `THIRD-PARTY-LICENSES.md` from `notices/*.md` plus `two-face`'s
+/// acknowledgement listing, and gates the committed copy against it. Generator and gate
+/// are one code path so they cannot drift; `UPDATE_NOTICES=1 cargo test` rewrites the
+/// file. Not gated on the GTK-suite feature: it is an ordinary unit test.
+#[cfg(test)]
+pub(crate) mod notices;
 pub(crate) mod outline;
 pub(crate) mod outline_view;
 pub(crate) mod palette;
@@ -131,6 +137,13 @@ pub(crate) mod testpump;
 /// consumers are ordinary unit tests.
 #[cfg(test)]
 pub(crate) mod testsymlink;
+/// Test-only wall-clock sampling shared by the two growth-ratio guards, so the noise
+/// remedy is not written into one of them and forgotten in the other — which is exactly
+/// what happened, and what both hosted CI runners then failed on. Carries the
+/// `SCRIBTEST_TIMING_SAMPLES` knob. Not gated on the GTK-suite feature: its consumers are
+/// ordinary unit tests.
+#[cfg(test)]
+pub(crate) mod testtiming;
 pub(crate) mod theme;
 pub(crate) mod widgets;
 pub(crate) mod window;
@@ -160,6 +173,36 @@ pub(crate) use icons::APP_ID;
 /// of these steps must happen before GTK or GLib initialises, and a caller that
 /// reordered them would re-arm bugs that took a long time to find.
 pub fn run() -> glib::ExitCode {
+    // `--probe-startup`: print a marker and exit 0, BEFORE anything else happens.
+    //
+    // FIRST STATEMENT IN THE FUNCTION, deliberately. The macOS packaging gate
+    // (`packaging/macos/verify-selfcontained.sh`) launches the bundled binary with the
+    // Homebrew prefix made unreadable and asks one question: did the process get far
+    // enough to speak? dyld binds the whole `LC_LOAD_DYLIB` graph before `main()`, so a
+    // bundle still depending on Homebrew dies in dyld and prints nothing — silence is the
+    // failure, the marker is the pass. Putting this first keeps the answer about the
+    // LIBRARY GRAPH and nothing else: a renderer env var, a logger, or a GTK init failing
+    // later would otherwise turn a self-containment gate into a test of whatever ran first.
+    //
+    // It replaces a grep for GLib's `Unknown option`, which was the same observation made
+    // through a string this project does not own and GLib translates — that gate passed in
+    // English and failed on a German machine against an identical bundle.
+    //
+    // Returns rather than `process::exit`, so no destructor is skipped and the flag costs
+    // nothing to anyone who never passes it.
+    let argv: Vec<String> = std::env::args().collect();
+    if app::is_startup_probe(&argv) {
+        println!("{}", app::STARTUP_PROBE_MARKER);
+        return glib::ExitCode::SUCCESS;
+    }
+
+    // Point GTK at the data staged inside the .app, when running from one. Must precede
+    // GTK init, and precedes the renderer pin only because both are env writes and this
+    // one reads no state. Inert outside a bundle, so `cargo run` and the suites are
+    // unaffected. See src/platform/mac/bundle.rs for why a wrapper script was rejected.
+    #[cfg(target_os = "macos")]
+    platform::mac::bundle::configure_paths();
+
     // Force the GSK Cairo software renderer: no GL/GLES context, no GPU memory.
     // Must be set before GTK initialises (POLICY.md architecture rule).
     //

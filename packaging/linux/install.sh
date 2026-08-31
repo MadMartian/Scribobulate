@@ -2,31 +2,38 @@
 #
 # User-local installer for Scribobulate (no root required).
 #
-# Installs into ~/.local so it stays per-user and needs no sudo:
-#   binary  -> ~/.local/bin/scribobulate
-#   icon    -> ~/.local/share/icons/hicolor/scalable/apps/com.extollit.scribobulate.svg
-#              (from data/icons/scalable/apps/, the same file bundled in-binary)
-#   desktop -> ~/.local/share/applications/scribobulate.desktop
-#   themes  -> ~/.local/share/scribobulate/themes.toml
-#              (plus data/sprites/ beside it, for that copy's own references)
+# THE THIRD LINUX INSTALL ROUTE, and the one that needs a toolchain. build-deb.sh and
+# build-rpm.sh beside it produce transferable artefacts for someone with no Rust and no
+# GTK development packages; this one builds from source straight into ~/.local, so it
+# needs cargo and the -dev libraries and cannot be handed to anyone. That is the whole
+# difference, and it is why it lives here rather than being folded into them: same
+# destination shape, same payload, different audience.
+#
+#   binary   -> ~/.local/bin/scribobulate
+#   desktop  -> ~/.local/share/applications/scribobulate.desktop
+#   icon     -> ~/.local/share/icons/hicolor/scalable/apps/<app-id>.svg
+#   themes   -> ~/.local/share/scribobulate/themes.toml
+#   man page -> ~/.local/share/man/man1/scribobulate.1.gz
+#   notices  -> ~/.local/share/doc/scribobulate/THIRD-PARTY-LICENSES.md
+#
+# WHAT GOES WHERE IS NOT DECIDED HERE. payload.sh owns the layout and all three routes
+# read it, because XDG's user tree is shaped like /usr — so this is one payload with a
+# different anchor, not a second one. Add a file there, and the packages and this script
+# gain it together. Written twice, they drift, and a drifted layout is invisible: each
+# route installs cleanly on its own and nothing compares them.
 #
 # Then registers Scribobulate as the default handler for Markdown files so a
 # double-click in Dolphin (or any file manager) opens it here.
 #
-# WHAT THIS IS NOT: the redistributable artefact -- that is build-deb.sh / build-rpm.sh
-# (pipeline step 10). This builds from source and needs cargo plus the -dev libraries,
-# which makes it a developer convenience, exactly as its macOS counterpart is.
+# Usage:
+#   packaging/linux/install.sh          # build, then install into ~/.local
+#   packaging/linux/install.sh --no-build   # install an existing release binary
 #
 # REACHED BY `./install.sh` AT THE REPO ROOT, which is a router that dispatches on
 # `uname -s`; running this file directly is equivalent. The root script holds no install
 # logic of its own, so the three platforms cannot answer an install question differently
-# by accident -- each one's answer lives in its own packaging/<os>/ directory.
+# by accident — each one's answer lives in its own packaging/<os>/ directory.
 set -euo pipefail
-
-# The repository root, two levels up, the way payload.sh anchors to its own directory.
-# NOT `dirname $0` as this script used when it lived at the root: every path below is
-# repo-relative, so the anchor moved with the file.
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # The router already dispatched on the platform, but this script is directly runnable and
 # a direct run must not be the lenient path. `install -D`, `xdg-mime` and the desktop
@@ -34,63 +41,48 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # path rather than the platform, minutes into a release build.
 [ "$(uname -s)" = "Linux" ] || { echo "error: Linux only (see packaging/macos/install.sh)" >&2; exit 1; }
 
-APP_ID="com.extollit.scribobulate"
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$repo"
+# shellcheck source=packaging/linux/payload.sh
+. "$repo/packaging/linux/payload.sh"
 
+VERSION="$(read_version)"
+[ -n "$VERSION" ] || { echo "install: could not read version from Cargo.toml" >&2; exit 1; }
+
+# XDG_BIN_HOME is not a real XDG variable — there is no such key in the basedir spec,
+# which stops at DATA/CONFIG/STATE/CACHE. It is honoured anyway because it is a common
+# convention and someone who sets it means it; ~/.local/bin is the default either way.
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
-ICON_DIR="$DATA_DIR/icons/hicolor/scalable/apps"
+BIN_PATH="$BIN_DIR/$PKG"
 APP_DIR="$DATA_DIR/applications"
-THEME_DIR="$DATA_DIR/scribobulate"
-BIN_PATH="$BIN_DIR/scribobulate"
-DESKTOP_PATH="$APP_DIR/scribobulate.desktop"
+DESKTOP_PATH="$APP_DIR/$PKG.desktop"
 
-echo ":: Building release binary"
-cargo build --release --manifest-path "$REPO_DIR/Cargo.toml"
+BIN="target/release/$PKG"
+if [ "${1:-}" = "--no-build" ]; then
+    require_fresh_binary "$BIN"
+else
+    echo ":: Building release binary"
+    cargo build --release
+fi
+
+# The two anchors have to agree, and they only do by default. payload.sh writes
+# <root>/bin and <root>/share/…, so it can honour a redirected XDG_DATA_HOME or a
+# redirected XDG_BIN_HOME, but not both at once when they disagree about their parent.
+# Refuse rather than install half the payload somewhere the user did not ask for.
+root="${DATA_DIR%/share}"
+if [ "$BIN_DIR" != "$root/bin" ] || [ "$DATA_DIR" != "$root/share" ]; then
+    echo "install: XDG_BIN_HOME ($BIN_DIR) and XDG_DATA_HOME ($DATA_DIR) do not share a" >&2
+    echo "         parent, so one payload cannot satisfy both. Unset one, or set them to" >&2
+    echo "         <prefix>/bin and <prefix>/share." >&2
+    exit 1
+fi
 
 echo ":: Installing files"
-install -Dm755 "$REPO_DIR/target/release/scribobulate" "$BIN_PATH"
-# Sourced from data/icons/, the tree build.rs compiles into the binary's
-# GResource — so the app icon the window resolves internally and the one the
-# desktop shell reads off disk are byte-for-byte the same file. (The shell is a
-# separate process and cannot see our GResource, so this copy is still needed.)
-install -Dm644 "$REPO_DIR/data/icons/scalable/apps/$APP_ID.svg" "$ICON_DIR/$APP_ID.svg"
-# Preview reading themes. The same file is compiled into the binary as a fallback,
-# so this copy is what makes the themes readable/editable — and it is installed under
-# XDG_DATA_HOME (never XDG_CONFIG_HOME, which the app redirects at startup for the
-# XCompose workaround). A user override goes in ~/.config/scribobulate/themes.toml
-# and is merged over this one per theme id.
-install -Dm644 "$REPO_DIR/data/themes.toml" "$THEME_DIR/themes.toml"
-# CANONICAL: why EVERY platform ships this copy of data/sprites/.
-#
-# The sprites that themes.toml's shipped themes name. NOT what makes those themes
-# work -- a built-in theme's sprite is compiled into the binary (`include_bytes!`,
-# src/sprite.rs) precisely so no install step can take a shipped decoration away.
-# This copy exists because the installed themes.toml is itself read as a themes file
-# (it lands on the themes search path), and its own sprite references resolve against
-# its own directory; without the sprites beside it every launch would log a resolution
-# failure for a decoration that is in fact rendering perfectly from the binary.
-#
-# packaging/linux/payload.sh and packaging/windows/stage.ps1 ship the same copy and
-# point HERE instead of restating this. They used to carry it verbatim, all three,
-# and that is precisely how the three commands underneath the three copies drifted
-# into three different behaviours (empty directory, subdirectory, filename with a
-# space) while the prose above them stayed identical and said nothing about it.
-#
-# `find ... -exec install -Dm644 -t ... {} +` rather than a glob: a glob with nothing
-# to match stays literal and aborts the install, a glob that matches a subdirectory
-# hands `install` an operand it refuses, and an unquoted glob word-splits a filename
-# containing a space. This form survives all three, and the two shell scripts run the
-# SAME command so they cannot answer those three cases differently again.
-find "$REPO_DIR/data/sprites" -type f \
-    -exec install -Dm644 -t "$THEME_DIR/sprites" {} +
-
-# Copy the desktop entry, pinning Exec/TryExec to the absolute binary path so it
-# launches regardless of whether $BIN_DIR is on the launcher's PATH.
-mkdir -p "$APP_DIR"
-sed -e "s|^Exec=scribobulate|Exec=$BIN_PATH|" \
-    -e "s|^TryExec=scribobulate|TryExec=$BIN_PATH|" \
-    "$REPO_DIR/data/scribobulate.desktop" > "$DESKTOP_PATH"
-chmod 644 "$DESKTOP_PATH"
+# Empty prefix: root IS the anchor, so paths land at ~/.local/bin and ~/.local/share/…
+# rather than ~/.local/usr/…. The absolute Exec path is the other user-local difference
+# — ~/.local/bin is frequently absent from the launcher's PATH where /usr/bin never is.
+stage_payload "$root" "$BIN" "$VERSION" "" "$BIN_PATH"
 
 if command -v desktop-file-validate >/dev/null 2>&1; then
     desktop-file-validate "$DESKTOP_PATH" && echo "   desktop entry valid"
@@ -105,18 +97,19 @@ echo ":: Registering as default handler for Markdown"
 # text/markdown covers *.md / *.markdown via shared-mime-info; x-markdown is the
 # legacy alias some setups still emit.
 for mime in text/markdown text/x-markdown; do
-    xdg-mime default scribobulate.desktop "$mime" || true
+    xdg-mime default "$PKG.desktop" "$mime" || true
 done
 
 echo
-echo "Installed Scribobulate."
+echo "Installed Scribobulate $VERSION."
 echo "  binary  : $BIN_PATH"
 echo "  desktop : $DESKTOP_PATH"
+echo "  notices : $DATA_DIR/doc/$PKG/THIRD-PARTY-LICENSES.md"
 echo "  default : $(xdg-mime query default text/markdown 2>/dev/null || echo '?') for text/markdown"
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) echo "  NOTE: $BIN_DIR is not on your PATH; the launcher still works (absolute Exec)," \
-            "but the 'scribobulate' command in a terminal will not until you add it." ;;
+            "but the '$PKG' command in a terminal will not until you add it." ;;
 esac
 echo
 echo "Double-click a .md file in Dolphin to open it in Scribobulate."

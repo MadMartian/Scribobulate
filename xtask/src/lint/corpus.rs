@@ -355,6 +355,73 @@ fn the_growth_ratchet_measures_the_same_on_either_line_ending() {
     );
 }
 
+// ── Check 14: the .ps1 encoding predicate discriminates ───────────────────────
+
+/// TWO FIXTURES, BOTH REQUIRED, and their EXISTENCE asserted before their content. The
+/// fixtures are deliberately malformed and therefore excluded from the scan set
+/// (`scripts/lint-references.scan`), so nothing else in this tree reads them: delete one
+/// and the assertion below it would otherwise pass on an empty file, which is how a gate
+/// stops gating without going red.
+#[test]
+fn the_ps1_encoding_predicate_discriminates() {
+    let bad = repo().join("tests/fixtures/encoding/bomless-nonascii.ps1");
+    let good = repo().join("tests/fixtures/encoding/bom-nonascii.ps1");
+    let bad_bytes = std::fs::read(&bad).unwrap_or_else(|_| panic!("{bad:?} is readable"));
+    let good_bytes = std::fs::read(&good).unwrap_or_else(|_| panic!("{good:?} is readable"));
+
+    assert!(
+        crate::lint::checks::architecture::ps1_encoding_violation(&bad_bytes).is_some(),
+        "a BOM-less .ps1 carrying a byte above 0x7F must be refused"
+    );
+    assert!(
+        crate::lint::checks::architecture::ps1_encoding_violation(&good_bytes).is_none(),
+        "a BOM makes non-ASCII legal; the invariant is BOM OR pure ASCII, not ASCII alone"
+    );
+    // The good fixture must actually CARRY non-ASCII, or it proves only that ASCII passes.
+    assert!(
+        good_bytes[3..].iter().any(|byte| *byte > 0x7F),
+        "the BOM fixture has no non-ASCII byte after its BOM, so it tests nothing"
+    );
+}
+
+// ── Desktop metadata never reaches the scan set ───────────────────────────────
+
+/// The macOS seat's `.DS_Store` finding, pinned so the skip cannot be dropped.
+///
+/// TWO ASSERTIONS, BOTH REQUIRED, for the reason the symlink case states: without the
+/// control, the skip assertion passes vacuously the day the predicate widens into skipping
+/// everything, or the day the walk stops finding anything at all.
+///
+/// PLANTED IN A SCRATCH TREE, never in the working copy — this repository is developed on
+/// Linux, so the file this defends against is one no Linux seat will have lying around to
+/// notice a regression with. That asymmetry is the entire reason the skip needs a test
+/// rather than a comment.
+#[test]
+fn desktop_metadata_is_skipped_and_ordinary_files_are_not() {
+    let contract = real_contract();
+    let tree = ScratchTree::new(&contract);
+    let root = contract
+        .roots
+        .first()
+        .expect("the contract declares a root");
+
+    tree.plant(&format!("{root}/.DS_Store"));
+    tree.plant(&format!("{root}/lint-scan-control.md"));
+
+    let scan = ScanSet::build(tree.path(), &contract).expect("the scratch tree builds");
+
+    assert!(
+        scan.paths
+            .iter()
+            .any(|path| path.ends_with("lint-scan-control.md")),
+        "the control file did not reach the set, so this proves nothing about the skip"
+    );
+    assert!(
+        !scan.paths.iter().any(|path| path.contains(".DS_Store")),
+        "desktop metadata reached the scan set"
+    );
+}
+
 // ── The scan set ──────────────────────────────────────────────────────────────
 
 fn repo() -> PathBuf {

@@ -354,8 +354,8 @@ cmd.windows diagram  powershell -NoProfile -Command "$d = New-Object System.Xml.
 #
 # ONE COMMAND ON ALL THREE PLATFORMS, which is the whole point of it being a cargo
 # subcommand. This step used to be a bash script plus a hand-synced PowerShell port —
-# ~3,400 lines implementing one rule twice, with a `--list-scan`/`-ListScan` diff as the
-# only available proof they agreed, because "neither platform has the other's shell". One
+# ~3,400 lines implementing one rule twice, with a scan-set diff as the only available proof
+# they agreed, because "neither platform has the other's shell". One
 # QA round found seven defects that existed ONLY because there were two ports. cargo is on
 # PATH wherever this repository builds, so the interpreter argument that forced the split
 # is gone.
@@ -384,7 +384,7 @@ cmd.windows references  cargo xtask lint-references
 # platform packages — exactly what `intent`-not-command exists to absorb.
 #
 # The intent is the property every platform must satisfy, and it is the one the plan
-# names: an artefact a NON-DEVELOPER can install with NO toolchain. `install.sh` does
+# names: an artefact a NON-DEVELOPER can install with NO toolchain. `packaging/linux/install.sh` does
 # not satisfy it and is not this step — it builds from source into ~/.local and needs
 # cargo plus the -dev libraries, which makes it a developer convenience.
 #
@@ -393,6 +393,25 @@ cmd.windows references  cargo xtask lint-references
 # platform derives it ONCE: Linux parses the [package] table, Windows reads it for the
 # Inno Setup define, macOS reads it back out of the built .app's
 # CFBundleShortVersionString rather than re-parsing Cargo.toml a second time.
+#
+# WHERE THE ARTEFACT FALLS SHORT OF THE INTENT ABOVE, recorded here because this is where
+# the claim is made and a reader has no other reason to doubt it. NO CODE-SIGNING
+# CERTIFICATES EXIST for this project, so:
+#
+#   macOS   — the .app is AD-HOC signed (`codesign --sign -`, bundle.sh) and the .dmg is
+#             NOT notarized. Gatekeeper REFUSES it on any machine that did not build it;
+#             the user must right-click -> Open, or clear the quarantine attribute. That
+#             is a toolchain-free install only by a generous reading, so on this platform
+#             the intent is AT PRESENT UNMET. dmg.sh says the same in its own header.
+#   Windows — the installer is unsigned, so SmartScreen warns on first run. The install
+#             itself needs no toolchain, so the intent HOLDS; the warning is friction.
+#   Linux   — .deb and .rpm are unsigned, which is ordinary for a direct download and is
+#             not a Gatekeeper-class barrier. Intent holds.
+#
+# The intent line is deliberately NOT narrowed to match. It states the property the
+# artefact must have, and one platform not reaching it yet is a gap to close (an Apple
+# Developer Program membership and a notarization step), not a standard to lower. See
+# sdd/PLAN.build-pipeline-ci.md § Signing.
 # ---------------------------------------------------------------------------
 step   10  package
 intent package  A transferable installer artefact a non-developer can install with no toolchain, versioned from Cargo.toml

@@ -141,8 +141,9 @@ cargo build --release
 ./target/release/scribobulate path/to/document.md
 ```
 
-Or install from source into `~/.local`, which also registers Scribobulate as a
-Markdown handler so a double-click in your file manager opens it:
+Or install from source into `~/.local` — binary, desktop entry, icon, themes, man
+page and the third-party notices — which also registers Scribobulate as a Markdown
+handler so a double-click in your file manager opens it:
 
 ```bash
 ./install.sh          # needs cargo and the -dev libraries above
@@ -156,8 +157,9 @@ platform's answer lives in one place. Details:
 [`packaging/linux/README.md`](packaging/linux/README.md).
 
 To build the packages yourself, `packaging/linux/build-deb.sh` and
-`build-rpm.sh` (the latter needs `rpm` installed on a Debian host). Both take the
-version from `Cargo.toml` and install the same payload.
+`build-rpm.sh` (the latter needs `rpm` installed on a Debian host). All three routes
+take the version from `Cargo.toml` and install the same payload, defined once in
+`packaging/linux/payload.sh`.
 
 ### macOS
 

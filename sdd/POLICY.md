@@ -145,8 +145,20 @@ Before any change is considered valid, run these steps in order:
    no-regression **ratchet**, not a target: the script owns both the floor (`FLOOR`)
    and the scope (`IGNORE`), and is the only place either is written down. **Do not
    restate either value here** — a second copy is exactly how the floor silently fell
-   ~2pt behind the code and stopped protecting it. When new tests raise coverage, raise
-   `FLOOR` in the script in the same change; the aspiration is 80%.
+   ~2pt behind the code and stopped protecting it. The aspiration is 80%.
+   **`FLOOR` is a WHOLE NUMBER, and it advances one whole point at a time.** It rises
+   only once measured coverage *reliably* reaches the next integer — on every host that
+   runs the gate, not on the machine that happened to measure it. Coverage sitting at
+   76.8 keeps a floor of 76; the floor becomes 77 when the figure reaches 77 with room
+   to spare. Deriving a floor to the second decimal is what made it track the tester
+   rather than the tree, and a whole number is wide enough that the residual
+   host-dependence in the scoped set cannot move it.
+   **Sub-point movement is not a finding.** Coverage drifting by fractions of a percent
+   — between hosts, between runs, or across a change — is normal measurement noise and
+   the expected consequence of ordinary work. Do not raise it with the operator, do not
+   adjust `FLOOR` for it, and do not treat a change that moves it as owing an
+   explanation. What is worth reporting is the gate going **red**: a whole point lost
+   means real coverage was removed, and that is the event this ratchet exists to catch.
    **Scope rule:** GTK signal-wiring that cannot be exercised headlessly is excluded;
    pure decision logic is always in. So **when adding logic to an excluded file, extract
    the decision core into its own logic module** (as `winstate` does) rather than letting
@@ -263,6 +275,16 @@ Before any change is considered valid, run these steps in order:
    **Its input set is `git ls-files`, deliberately NOT `lint-references.scan`** — the
    offending path landed in the repository root, outside the curated scan, and a check
    whose input is narrower than its hazard is ScrAP-132's species.
+   The tenth is over **`.ps1` source encoding**: every `.ps1` in the scan set must carry
+   a UTF-8 BOM **or** contain no byte above `0x7F` (check 13). Windows PowerShell 5.1
+   decodes a BOM-less `.ps1` as the ANSI codepage, so a UTF-8 curly quote inside a string
+   literal terminates the literal early and the parse dies naming an unrelated brace
+   hundreds of lines away; pwsh 7 defaults to UTF-8 and is immune, which is the hazard —
+   the contract-checking job runs pwsh 7 and certifies the break GREEN while the job that
+   actually executes the pipeline runs 5.1. A disjunction rather than "keep them ASCII"
+   because a BOM removes the hazard instead of dodging it, MEASURED on a real Windows
+   host. It replaces an unwritten rule ("non-ASCII in comments only, never in a literal")
+   whose enforcement depended on which side of a quote mark a character sat on.
    The three citation rules: no `sdd/ISSUES.md` entry may be cited from outside that
    file (SDD principle 6 — issue IDs are ephemeral, so every such pointer dangles
    when the fix lands, and *lies quietly* if IDs are ever compacted); every
@@ -283,7 +305,7 @@ Before any change is considered valid, run these steps in order:
     Every other gate answers "is this change valid?" and belongs after every edit; this
     one answers "can a stranger install this?", takes minutes, and answers the same way
     whether or not the last edit touched packaging. It is a gate rather than a chore
-    because the property it defends is invisible from inside the repo: `install.sh`
+    because the property it defends is invisible from inside the repo: `packaging/linux/install.sh`
     builds from source into `~/.local` and needs cargo plus the `-dev` libraries, so a
     tree can look perfectly installable to everyone who already has a toolchain and be
     unusable by the audience the artefact exists for. Each platform's command is in the
@@ -302,6 +324,94 @@ part of completing each task: write code → fmt → clippy → build → test �
 Do not report a task complete until every step passes. Running these steps only at
 cleanup time lets broken changes pile up, making it harder to attribute which
 change introduced the problem.
+
+## Continuous integration
+
+`.github/workflows/pipeline.yml` runs on every push. It exists because the parity between
+the three ports was an assurance nothing checked: no single machine has all three, so the
+diff was performed when someone thought to perform it, and the Windows port's step list was
+*inferred* rather than measured. CI is the only machine where the comparison can happen.
+
+- **The workflow invokes the runners and names no step.** There is not one `cargo` or
+  `clippy` invocation in it; `execute-linux` runs `scripts/pipeline.sh` whole and takes its
+  verdict. **Adding a step to `scripts/pipeline.steps` must not require editing the
+  workflow** — a workflow that listed steps would be a fourth restatement of a contract
+  whose entire design is derivation, and a clean diff between restatements proves only
+  that two people copied the same list (ScrAP-207). Provisioning is the one thing the
+  workflow may gain when a step is added.
+- **Two jobs, two different claims, and the first does not imply the second.** `parity`
+  proves the ports *agree* about the derived step list and the lint scan set; `execute-linux`
+  proves a port can actually *run* a step. Keeping both is not belt-and-braces: the Windows
+  port once passed `-ListSteps` byte-identically, `-SelfTest`, and a twelve-case mutation
+  battery while an output-stream bug made it report `pipeline PASSED` with exit 0 after a
+  step had failed. Contract-parsing evidence is evidence about contract parsing.
+- **A CI gate is trusted only once it has been shown to FAIL.** A gate that reports success
+  while something failed is the defect a gate exists to prevent, and this project has
+  already produced one. `scripts/pipeline-parity.sh --self-test` runs inside the `parity`
+  job on every run rather than once when it was written, and its battery includes the
+  vacuous pass the job's own shape invites — a port whose job died before uploading leaves
+  a directory whose survivors agree. Any new CI job carries the same obligation: demonstrate
+  the failure, do not infer it from a green run.
+- **THE ARTEFACT IS VERIFIED AS AN ARTEFACT, NOT AS AN EXIT CODE.** A packaging step that
+  exits 0 having produced a zero-byte file is a defect class this project has shipped twice,
+  and a third instance was measured on macOS: `codesign --sign` printed an error, wrote no
+  signature at all, and RETURNED ZERO — defeating a guard written for precisely that risk.
+  So each packaging job asserts its output EXISTS, is NON-TRIVIAL IN SIZE, and carries the
+  version from `Cargo.toml`; an acting verb's exit status is a claim the tool makes about
+  itself, and where a false green is expensive, follow it with a verifying one
+  (`codesign --verify --deep --strict`) and check the file. ScrAP-329 carries the boundary.
+- **Execution runs on all three platforms**, brought up in ascending order of difficulty as
+  planned — Linux, then macOS, then Windows with a pinned and cached gvsbuild prefix. All
+  three `execute-*` jobs run the platform's own runner and name no step, and all three
+  produce an installer under `workflow_dispatch` with `package: true`. The contract jobs run
+  on all three as well, because `--list-steps` and `--self-test` exit before any runner
+  touches its environment, which is what keeps that matrix affordable on every push.
+- **`G_DEBUG=fatal-criticals` is not set process-wide over the suite**, notwithstanding the
+  recommendation in [§ Logging](#logging) — see the exception recorded there. The reasoning
+  is in the workflow beside the job it applies to.
+
+Direct pushes to a scratch branch are how the workflow itself is iterated on; a workflow
+cannot be verified any other way, and it is worth knowing that **a workflow file is not
+scoped by the branch it sits on** — it runs against the shared repository the moment
+anything merges, which is why its triggers are a project-level decision rather than a
+detail of whoever adds a job.
+
+## Third-party attribution
+
+**Every artefact this project publishes must carry the notices its dependencies require.**
+Two obligations, and they have different scopes, so neither substitutes for the other.
+
+1. **THE STATICALLY LINKED GRAMMARS — ALL THREE PLATFORMS.** `two-face`'s syntect grammar
+   assets are compiled INTO the binary under MIT, Apache-2.0, BSD-2-Clause and
+   BSD-3-Clause, every one of which requires the notice to travel with a binary
+   distribution. A statically linked dependency leaves no file of its own in the installed
+   tree, **which is exactly why this was missed on all three platforms at once**: nothing
+   was absent that anyone could see. `THIRD-PARTY-LICENSES.md` is generated at build time
+   from `notices/*.md` and must reach every artefact — Linux via `payload.sh`, Windows via
+   `stage.ps1`, macOS into `Contents/Resources/`.
+2. **THE BUNDLED RUNTIME — WHEREVER ONE IS BUNDLED.** An artefact that ships an
+   LGPL-family GTK stack must attribute it. This is Windows AND macOS: Windows has always
+   bundled, and the macOS `.app` began bundling when self-containment landed, so THE SCOPE
+   OF THIS OBLIGATION FOLLOWED THE BUNDLING RATHER THAN BEING RE-DECIDED. Linux is exempt
+   as a measured fact, not an assumption — the packages `Depends:` on the system GTK and
+   bundle no runtime. Detail lives beside the artefact it describes:
+   `packaging/windows/licenses.psd1` and its `PROVENANCE.md` / `SOURCE-AVAILABILITY.md`.
+
+**THE IN-APP CLAIM IS PART OF THE OBLIGATION, not a description of it.** The About dialog
+tells every user "Full notices: THIRD-PARTY-LICENSES.md (in the distribution)". That
+sentence is only true because something stages the file, so deleting a staging step does
+not lose a file — **it falsifies a claim the running product makes about itself**. Treat
+those `cp` lines as load-bearing.
+
+**GATE IT WHERE YOU CAN, AND SAY SO WHERE YOU CANNOT.** Presence, non-emptiness and a
+content anchor are file-shaped and belong in a gate — `packaging/windows/verify-licenses.ps1`
+is the worked example, and its anchor tests the TEXT'S IDENTITY rather than the file's
+existence, because a licence file containing the wrong licence satisfies every
+presence check. The DETERMINATION — which licence covers which binary — is a claim we make
+and is **not** derivable: an SPDX `OR` needs an election and an `AND` does not say which
+part covers the artefact we shipped. Where a determination is unmade, mark it
+NOT GATE-ENFORCED in the table rather than letting a green gate read as a licensing verdict
+(ScrAP-278).
 
 ## Optional diagnostics
 
@@ -1085,6 +1195,24 @@ inside the batch's single commit rather than beside it.
 
 ## SDD register writes
 
+**Route the lesson before you write it, and there are three destinations.** A lesson
+about **gtk4-rs itself** is woven into the `gtk4-rs` skill and stubbed here citing
+`GTK4Rs/AP-N`. A **general engineering-discipline** lesson — verification and gate
+design, experiment method, claims and relay hygiene, cross-platform toolchain hazards,
+trust-boundary design — goes to the **`general-engineering-principles`** skill and is
+stubbed citing `GEP-N`; send the content to the `gep` member in the `skills` ToasterTalk
+room, which allocates the number. **Everything else** — this project's internals and
+every dependency that is not gtk4-rs — is a full entry in `sdd/ANTI-PATTERNS.md`.
+
+The routing decision is made **at minting time**, not deferred to a later migration: an
+entry written full and moved later costs the rewrite twice, and in practice is never
+moved. This rule is stated here, in the prescriptive document, because it previously
+lived *only* inside the register it governs — so an agent about to file an entry read
+the register's own note, and when that note fell behind the practice (claiming the
+general-lesson destination was undecided while 59 entries already cited `GEP-N`), nine
+consecutive general lessons were filed as project entries with nothing to catch it.
+A rule that lives only in the artefact it governs is one nobody consults before acting.
+
 `sdd/ANTI-PATTERNS.md` and `sdd/ISSUES.md` have **one writer**. When work is split
 across machines, every other seat sends **entry content** — symptom, root cause,
 what was tried, the corrective, and its citations — and the owning seat allocates
@@ -1222,9 +1350,17 @@ flag**, which is the failure this document keeps recording in other people's cod
 that is never armed cannot fail, and looks identical to one that passes. When it was
 finally run, the suite was carrying three latent criticals while reporting `ok` — the
 worst of them a `change_action_state` on a **stateless** action, silently no-opping a
-guard's setup so it walked a smaller tree than it claimed to, inside the very test that
-cites ScrAP-209 for that species. **Do not prescribe a flag without wiring it to a
-runner.** Windows carries it too, having confirmed its own suite clean **and mutation-tested the
+guard's setup, inside the very test that cites ScrAP-209 for that species. (The guard's
+*reach* was never affected — that part of the story was inferred rather than measured, and
+ScrAP-277 records the correction.) **Do not prescribe a flag without wiring it to a
+runner.** Arming it also cost one test a one-line change, and the change made that
+test STRONGER, not narrower: `saferizer::popover_anchor`'s round-trip read an unset anchor
+on an **unparented** popover, which drives GTK's own fallback through the bounds of a NULL
+parent and fires `GTK_IS_WIDGET` by design — benign noise, fatal under the flag. Parenting
+the popover moves the fallback from a zeroed rect to the parent's own bounds, so the seam
+is now shown discarding a *plausible-looking* rectangle rather than an obviously empty one.
+ScrAP-277 records the run that found both this and the `change_action_state` defect, and
+corrects its own first reading of the trade. Windows carries it too, having confirmed its own suite clean **and mutation-tested the
 gate** — reverting one of the three fixes above makes the suite pass with the flag off and
 die with it on, which is the only evidence that distinguishes an armed gate from a quiet
 one.
