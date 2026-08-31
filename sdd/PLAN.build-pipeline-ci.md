@@ -263,6 +263,36 @@ The remedy that worked was not caution: it was **publishing the command rather t
 conclusion**, so the other seat could re-run it in one line. Several were caught by the seat
 that had not made the mistake.
 
+## OBLIGATION ON LANDING: tell the `general-engineering-principles` maintainer
+
+**When `ci` merges to `master`, notify the `gep` maintainer that `ScrAP-276` and
+`ScrAP-281` have become master-resident.** Not a courtesy — four entries in that skill
+currently carry MEASURED-but-unnumbered provenance because the Scribobulate entries they
+came from live ONLY on this branch, and they declined to cite them rather than point a
+permanent register at an unmerged ref.
+
+- `ScrAP-276` — the parity artefact written to the console; feeds GEP-3's
+  consume-the-artifact half and GEP-52's exit-0/zero-byte costume.
+- `ScrAP-281` — a corpus exercising the pattern cannot see a flag on the call site;
+  feeds GEP-3's invocation-flag half.
+
+**WHY THIS IS WRITTEN HERE RATHER THAN REMEMBERED.** The commitment was made in a
+message with a TTL, between two agents, neither of whom persists. "Trust us to remember"
+is not a mechanism, and the failure is silent in both directions: if this branch lands and
+nobody says so, those four halves stay unnumbered indefinitely and nothing anywhere
+flags it. This note sits in the document someone must read to merge or retire the plan, so
+the prompt is in the path of the event.
+
+**AND THE REASON THE DEBT EXISTS AT ALL, which is the transferable half.** This branch's
+2026-08-16 rebase renumbered `ScrAP-269`–`282` to `276`–`289` after a range collision with
+`master`. That was announced — precisely, in this file — TO THE SEATS, in a room the
+downstream skill registers are not in. Every consumer outside that room silently acquired
+a wrong pointer, and the cross-reference gate could not see it: it validates citations
+INSIDE this register and structurally cannot know who cites it from elsewhere. An
+identifier becomes an interface the moment anyone outside this repository writes it down,
+so a renumbering is a breaking change to consumers you cannot enumerate. "Everyone I could
+see" is not "everyone who cites me". Recorded in that skill as GEP-24.
+
 ## Outstanding before the first release: licence attribution
 
 **Status: BLOCKING a published release. Execution and packaging are green on all three
