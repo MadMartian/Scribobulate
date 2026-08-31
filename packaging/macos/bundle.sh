@@ -376,6 +376,14 @@ fi
 cp "$REPO_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$REPO_ROOT/THIRD-PARTY-LICENSES.md" "$APP/Contents/Resources/THIRD-PARTY-LICENSES.md"
 
+# --- Licence attribution for the redistributed runtime --------------------------
+#
+# The bundle now carries a GTK runtime it did not build, so the notices travel with it.
+# Staged and gated in separate scripts, both runnable standalone: a gate that can only be
+# invoked by its own producer cannot be pointed at a subject known to be bad.
+"$REPO_ROOT/packaging/macos/stage-licenses.sh" "$APP"
+"$REPO_ROOT/packaging/macos/verify-licenses.sh" "$APP" >/dev/null
+
 # Ad-hoc signature. Unsigned bundles are increasingly refused outright on Apple
 # Silicon; this is enough to launch locally and is NOT distribution signing
 # (that needs a Developer ID certificate plus notarization).
