@@ -684,6 +684,12 @@ constant — the same build shape already moved from 38,595,643 bytes at `1fd4f5
 also independent evidence the bootstrapper is WIRED rather than merely present in the
 `.iss`, which the `.iss` alone cannot show.
 
+**INDEPENDENTLY CONFIRMED FROM CI, which closes the weaker half.** The hosted Windows
+runner's artefact measures 39,146,361 B (run 33357529291), squarely the bootstrapper size
+class — so the artefact CI publishes demonstrably carries `vc_redist.x64.exe`, established
+from a machine that is not the Windows seat's own. That answers "does the shipped artefact
+contain the remedy at all" and leaves untouched the question below.
+
 **WHY THIS ENTRY IS STILL OPEN, and it is the part to read before closing it: the remedy
 has never been verified against the condition it exists for.** Every machine able to build
 this project already has the CRT, so a staged launch on a build box proves nothing either
