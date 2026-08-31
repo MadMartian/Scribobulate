@@ -172,6 +172,32 @@ done
 
 validate_contract || exit 2
 
+# A LOCKED SCREEN MAKES STEP 5 RED, CORRECTLY, AND FOR A REASON THAT IS NOT THE CHANGE
+# UNDER TEST. POLICY records it: `codeview::markers`'s a11y test panics on its own
+# precondition because a locked session has no active toplevel, and the frame-clock cases
+# go with it. So this refuses to start rather than spending five minutes producing a red
+# whose cause is the room the machine is sitting in.
+#
+# IT GATES RATHER THAN REPORTS, and that distinction is the whole point of it existing.
+# The check was being made — printed, correctly, in the same breath as the run that then
+# went ahead anyway and handed a red step 5 to a merge request. A predicate whose output
+# is narrated but not ACTED ON is indistinguishable from no predicate at all, and worse
+# than an absent one, because it leaves a log line that reads as diligence.
+#
+# `--skip-integration` still overrides, since the operator may want the other steps on a
+# locked box; the run then announces the override the way any other one is announced.
+if [ "$SKIP_INTEGRATION" -eq 0 ] \
+   && ioreg -n Root -d1 -a 2>/dev/null \
+      | plutil -extract IOConsoleUsers xml1 -o - - 2>/dev/null \
+      | grep -q 'CGSSessionScreenIsLocked'; then
+    echo "pipeline: the screen is locked, so step 5 (integration) cannot pass." >&2
+    echo "  A locked session has no active toplevel, so the a11y focus test fails on its" >&2
+    echo "  own precondition and the frame-clock tests go with it. That is the guard" >&2
+    echo "  working, not a defect — unlock and re-run." >&2
+    echo "  To run the other steps anyway: $0 --skip-integration" >&2
+    exit 1
+fi
+
 run_setup_phase
 
 # Required steps an OPERATOR OVERRIDE prevented from running. Accumulated so a later
