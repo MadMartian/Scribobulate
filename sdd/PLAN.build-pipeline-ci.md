@@ -228,12 +228,19 @@ writes.
 
 ### Open, and none of it is blocked on a seat
 
-1. **`windows/bootstrap-vcredist`** (Windows seat) implements the ruled `msvc-runtime` change
-   and is **not landed**, pending two operator decisions: whether the **unverified end-to-end
-   pair** blocks landing (that seat has no clean machine — every box that can build this
-   already has the MSVC runtime, so removing the DLLs and launching proves nothing), and
-   whether **+23.7 MB** of embedded redistributable is acceptable versus downloading it and
-   requiring a network.
+1. ~~**`windows/bootstrap-vcredist`** is not landed, pending two operator decisions.~~
+   **LANDED.** The `PrepareToInstall` `[Code]` block, its `dontcopy` source entry and the
+   redist discovery in `package.ps1` are all in the tree. The SIZE question was answered by
+   landing it: the artefact measures **39,509,846 bytes (~37.7 MB)** against ~15.7 MB for a
+   build without the bootstrapper, and that gap is itself independent evidence the redist is
+   EMBEDDED rather than merely referenced by the `.iss` — cite the size CLASS and not the
+   constant, since the same shape has already moved by ~1 MB between commits.
+   **THE VERIFICATION QUESTION IS STILL OPEN and is tracked as an ISSUES entry rather than
+   here**, because it outlives this plan: no seat has a Windows machine without the MSVC
+   runtime, so the observation that would close it — runtime absent with the bootstrapper
+   disabled must fail to start, and the bootstrapper must then make it start — cannot be
+   made anywhere in this project today. An unverified remedy in the tree is not a smaller
+   problem than one on a branch; it is the same problem wearing a green tick.
 2. ~~**The coverage floor is a two-branch standoff and needs one decision, not two.**~~
    **RESOLVED 2026-08-16 by re-measuring the merged tree, and it needs the operator's
    ratification rather than a further decision.** `ci` sat at `76` under the whole-number rule
@@ -924,13 +931,32 @@ condition it guards. (Where it landed — two files beside `stage.ps1` rather th
 inside it — and the fourth condition it gained are the two ruled departures recorded under
 "The gate as built" above.)
 
-### macOS is deferred by operator decision
+### macOS — GREENLIT, self-containment LANDED, notarization still deferred
 
-The `.dmg` requires the recipient to have Homebrew GTK and therefore fails step 10's stated
-intent outright rather than merely falling short on signing. Closing it is ~50 MB of dylib
-bundling plus load-path rewriting, the icon theme, GLib schemas and pixbuf loaders — a
-separate piece of work, and the macOS seat is occupied. **Until greenlit, macOS must not be
-attached to a release.**
+**The deferral below is LIFTED.** The operator greenlit macOS, the bundling work is done and
+gated, and "macOS must not be attached to a release" no longer binds on self-containment
+grounds. What the section got right is preserved because the reasoning still explains the
+shape of the work; what it ruled is superseded.
+
+**WHAT LANDED**: the transitive dylib closure into `Contents/Frameworks` with a two-sided
+rewrite (every load command AND every install ID — Homebrew builds these with absolute IDs,
+so a bundle with rewritten load commands still advertises paths outside itself); the icon
+theme, GSettings schemas, pixbuf loaders and the GtkSourceView RelaxNG validators; a
+`platform/mac/bundle.rs` seam pointing GTK at them; and `verify-selfcontained.sh` gating the
+result statically (every reference internal, every `@rpath` name present in `Frameworks/`)
+and dynamically (it launches with the Homebrew prefix unreachable). Both obligations are
+discharged: obligation 2 by `bundle.sh` staging the notices, obligation 1 by the licence work
+queued behind it.
+
+**STEP 10'S INTENT IS PARTIALLY MET, NOT MET.** Self-containment was necessary and is not
+sufficient. The bundle is ad-hoc signed, so Gatekeeper refuses it on any machine that did not
+build it and reports it to the user as *"is damaged and can't be opened"* — a trust verdict
+in the vocabulary of corruption. Notarization needs a Developer ID certificate and a paid
+enrolment, which is a legal-identity decision rather than a technical one; it stays
+**deferred, not rejected**, exactly as § Signing has it. The packaging step announces the
+limitation on success, the README carries the recipient's override AS an override, and the
+gap is recorded rather than redefined away. **macOS may be attached to a release; a release
+carrying it inherits that limitation and must say so.**
 
 It defers **obligation 1** with it — the `.app` bundles no GTK runtime, so there is no
 runtime attribution to stage. It does **not** defer **obligation 2**: `bundle.sh` has no
