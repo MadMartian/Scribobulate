@@ -295,11 +295,33 @@ fi
 # That is the whole reason TDD 26.4 asserts them as OUTCOMES from inside the bundle rather
 # than as a staging checklist -- a checklist is satisfied by copying the wrong thing.
 #
-# NOT STAGED, deliberately: share/gtksourceview-5. The editor's language specs and style
-# schemes are NOT on disk in the Homebrew prefix at all -- they are a GResource compiled
-# into libgtksourceview-5.0.dylib, which Frameworks/ already carries. Staging that
-# directory would copy six RNG/DTD validators and a font nobody loads, and would look like
-# it was what made highlighting work. TDD 26.5 asserts the outcome instead.
+# THE gtksourceview VALIDATORS ARE STAGED; the .lang files and style schemes are NOT.
+# That split is measured, and the obvious reading of it is wrong in both directions.
+#
+# The .lang files and schemes genuinely are a GResource inside libgtksourceview-5.0.dylib,
+# which Frameworks/ already carries, so restaging them would be copying what the library
+# already has. But loading one VALIDATES it against language2.rng, and that is read from a
+# real filesystem path -- libxml takes a filename, so a GResource cannot satisfy it. The
+# path is the compile-time PACKAGE_DATADIR, i.e. the Homebrew Cellar, which the recipient
+# does not have. Validation then fails, the .lang is DROPPED, and the editor silently
+# loses Markdown highlighting with no error the user sees.
+#
+# XDG_DATA_DIRS does not fix it, and the reason is search ORDER rather than the variable
+# being ignored: GtkSourceView walks user-data-dir, then the compiled DATADIR, then its
+# GResource, then XDG_DATA_DIRS -- so on a machine that HAS the Cellar the walk stops at
+# entry two and never reaches the staged copy. The seam prepends this directory to the
+# LanguageManager search path instead, which is the supported way in front of DATADIR.
+GTKSV_SRC="/opt/homebrew/share/gtksourceview-5/language-specs"
+if [ -d "$GTKSV_SRC" ]; then
+    GTKSV_DST="$APP/Contents/Resources/gtksourceview-5/language-specs"
+    mkdir -p "$GTKSV_DST"
+    # Enumerated rather than named: the validator set is language2.rng today, with
+    # language.rng and language.dtd beside it, and which of them a given .lang pulls in is
+    # not something to hard-code.
+    find -L "$GTKSV_SRC" -maxdepth 1 -type f \( -name '*.rng' -o -name '*.dtd' \) \
+        -exec cp {} "$GTKSV_DST/" \;
+    echo "   staged $(find "$GTKSV_DST" -type f | wc -l | tr -d ' ') gtksourceview validators"
+fi
 echo ":: Staging runtime data"
 SHARE="$APP/Contents/Resources/share"
 mkdir -p "$SHARE"

@@ -134,6 +134,51 @@ pub(crate) fn configure_paths() {
     }
 }
 
+/// Put the bundle's GtkSourceView validators ahead of the compile-time prefix.
+///
+/// **Why this is not an env var, and so cannot live in [`configure_paths`].** Loading a
+/// `.lang` validates it against `language2.rng`, read from a real filesystem path —
+/// libxml takes a filename, so the GResource the `.lang` itself comes from cannot satisfy
+/// it. The path is the compile-time `PACKAGE_DATADIR`, the Homebrew Cellar, which a
+/// recipient does not have. Validation fails, the language is DROPPED, and the editor
+/// loses Markdown highlighting with nothing on screen to say why.
+///
+/// **`XDG_DATA_DIRS` does not reach it**, and the reason is search ORDER rather than the
+/// variable being ignored. GtkSourceView walks: user data dir, compiled `DATADIR`, its own
+/// GResource, then `XDG_DATA_DIRS`. On a machine that HAS the Cellar the walk stops at the
+/// second entry and never reaches a staged copy. Prepending is the supported way to get in
+/// front of `DATADIR`.
+///
+/// **Call before the first `language()` or `guess_language()`.** The resolved RNG path is
+/// cached on first use, so a later call changes nothing.
+#[cfg(target_os = "macos")]
+pub(crate) fn configure_language_path() {
+    let Some(contents) = contents_dir() else {
+        return;
+    };
+    let specs = contents
+        .join("Resources")
+        .join("gtksourceview-5")
+        .join("language-specs");
+    if !specs.is_dir() {
+        return;
+    }
+    // READ-PREPEND-SET rather than `prepend_search_path`, and the reason is other
+    // people's builds. The binding gates `prepend_search_path` behind its `v5_4` feature,
+    // and enabling that would raise the GtkSourceView floor for LINUX AND WINDOWS to
+    // satisfy a macOS-only need — the one thing the cross-platform rule says not to do.
+    // `search_path` and `set_search_path` are ungated, and reading the existing list
+    // before setting it preserves every default entry, including the GResource the .lang
+    // files themselves come from. Same effect, no floor moved.
+    let manager = sourceview::LanguageManager::default();
+    let existing = manager.search_path();
+    let mut dirs: Vec<&str> = Vec::with_capacity(existing.len() + 1);
+    let ours = specs.to_string_lossy().into_owned();
+    dirs.push(&ours);
+    dirs.extend(existing.iter().map(glib::GString::as_str));
+    manager.set_search_path(&dirs);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{absolutize_loader_cache, module_basename};
