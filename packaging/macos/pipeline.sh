@@ -198,6 +198,21 @@ if [ "$SKIP_INTEGRATION" -eq 0 ] \
     exit 1
 fi
 
+# CHECKING ONCE IS NOT ENOUGH, AND THIS IS THE MEASURED REASON. The gate above asks the
+# question at second zero; step 5 takes about two and a half minutes and the whole run
+# about five. A screen that locks DURING that window passes the gate and then fails the
+# suite anyway — which is exactly what happened, with the same two frame-clock tests, on a
+# session that reported unlocked both before and after. A precondition that can change
+# under the run has to be HELD, not sampled.
+#
+# `-w $$` ties the assertion to this process: it is released when the pipeline exits, by
+# any route, so there is no trap to forget and nothing left holding the display awake if
+# the run dies. Best-effort — a missing caffeinate is not worth failing a build over, and
+# the sampled check above still catches the already-locked case.
+if [ "$SKIP_INTEGRATION" -eq 0 ] && command -v caffeinate >/dev/null 2>&1; then
+    caffeinate -disu -w $$ &
+fi
+
 run_setup_phase
 
 # Required steps an OPERATOR OVERRIDE prevented from running. Accumulated so a later
