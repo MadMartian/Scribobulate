@@ -100,7 +100,10 @@ PROFILE_EOF
 # parse its command line and exit, which is enough to prove every library loaded --
 # dyld resolves the whole graph before main() runs, so a missing library fails BEFORE
 # any argument is looked at.
-out="$(sandbox-exec -f "$PROFILE" "$BIN" --verify-startup 2>&1 || true)"
+# LC_ALL=C IS LOAD-BEARING, not tidiness. The string matched below is GLib's, and GLib
+# translates it, so without this pin the gate's verdict depends on the tester's locale --
+# red on a perfectly good bundle for a reason that has nothing to do with the bundle.
+out="$(LC_ALL=C sandbox-exec -f "$PROFILE" "$BIN" --verify-startup 2>&1 || true)"
 rm -f "$PROFILE"
 
 if printf '%s' "$out" | grep -q 'Library not loaded\|dyld\[' ; then
@@ -111,14 +114,21 @@ fi
 
 # ABSENCE OF A dyld ERROR IS NOT EVIDENCE THE BINARY RAN. A process that died for some
 # other reason -- or never started -- also prints no dyld error, so a check that stops at
-# the line above passes on silence. Require the application's OWN voice: its argument
-# parser rejecting the probe flag proves main() was entered, which in turn proves dyld
-# resolved every library first, since the graph is bound before main().
+# the line above passes on silence. Requiring a rejected probe flag proves main() was
+# entered, which in turn proves dyld resolved every library first, since the graph is
+# bound before main().
 #
-# This couples the gate to that diagnostic string, which is the weakest part of it. A
-# first-class `--probe-startup` that exits 0 with a known marker would be better and is
-# application-side work; until then the coupling is stated here rather than left for
-# someone to discover when the message is reworded.
+# KNOW WHOSE STRING THIS IS. It is NOT the application's -- `Unknown option` appears
+# nowhere in src/. It is GLIB's, from GOptionContext, reached because lib.rs hands argv to
+# GApplication. So the coupling is to GLib's MESSAGE CATALOGUE, which is worse than
+# coupling to our own text in two ways: it moves when GLib rewords it, and it is
+# TRANSLATED (glib20.mo ships for dozens of locales), which is why the invocation above
+# pins LC_ALL=C. An earlier version of this comment claimed the string as ours; it was
+# wrong, and a reader who believed it would have gone looking in the wrong repository.
+#
+# A first-class `--probe-startup` exiting 0 with a marker we own is the proper fix and is
+# application-side work. Until then the coupling is stated rather than left to be
+# discovered when someone upgrades GLib.
 if ! printf '%s' "$out" | grep -q 'Unknown option'; then
     echo "   FAIL — no dyld error, but the application never spoke either." >&2
     echo "          Silence is not a pass; it did not reach its own argument parsing." >&2

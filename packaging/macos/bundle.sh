@@ -8,12 +8,16 @@
 # Info.plist (CFBundleIconFile), NOT from GTK's icon theme. No amount of
 # GTK-side icon work reaches it. A bundle is the only fix.
 #
-# WHAT THIS IS NOT: a redistributable. The bundled binary still links against
-# Homebrew's dylibs in /opt/homebrew (49 of them, ~35 MB — see `otool -L`), and
-# a self-contained bundle additionally needs those copied into
-# Contents/Frameworks with their load paths rewritten, plus the icon theme and
-# GLib schemas staged inside. See packaging/macos/README.md for the gap list.
-# On a machine with the Homebrew dependencies installed, this bundle works.
+# THE RUNTIME TRAVELS WITH IT. The GTK closure is copied into Contents/Frameworks and
+# every load path rewritten, so the bundle needs no Homebrew on the machine that runs it;
+# `verify-selfcontained.sh` is the gate on that claim and is not optional. The closure is
+# 42 FILES reached by 49 distinct load paths — eight basenames are reached through two
+# Homebrew aliases each, so "49 dylibs" counts paths and overcounts files.
+#
+# WHAT IT IS STILL NOT: notarized. The signature below is ad-hoc, so Gatekeeper refuses
+# the bundle on any Mac that did not build it and tells the user it is "damaged". That is
+# a deferred scope decision rather than an oversight, and the run announces it — see the
+# note printed at the end, and packaging/macos/README.md.
 #
 # Usage:  packaging/macos/bundle.sh [OUTPUT_DIR]   (default: target/macos)
 
@@ -153,9 +157,26 @@ while [ ${#QUEUE[@]} -gt 0 ]; do
 done
 echo "   staged ${#STAGED[@]} libraries into Contents/Frameworks"
 
+# `install_name_tool` warns "changes being made to the file will invalidate the code
+# signature" on EVERY call. It is benign HERE and only here, because signing happens after
+# all rewriting (below) -- if that order ever reverses, this warning stops being noise and
+# starts being the report of a real defect.
+#
+# Filter that one line rather than discarding stderr: `2>/dev/null` on the whole stream
+# also hides the failures worth seeing, and a rewrite that silently did not happen is
+# exactly what condition 1 of verify-selfcontained.sh then has to catch for us.
+retool() {
+    local err
+    if ! err="$(install_name_tool "$@" 2>&1 >/dev/null)"; then
+        printf '%s\n' "$err" >&2
+        return 1
+    fi
+    printf '%s\n' "$err" | grep -v 'will invalidate the code signature' | grep . >&2 || true
+}
+
 # Side one: every staged library's own ID.
 for lib in "${STAGED[@]}"; do
-    install_name_tool -id "@rpath/$(basename "$lib")" "$lib" 2>/dev/null
+    retool -id "@rpath/$(basename "$lib")" "$lib"
 done
 
 # Side two: every load command, in the executable and in every staged library.
@@ -177,13 +198,18 @@ needs_rewrite() {
 for obj in "$APP/Contents/MacOS/scribobulate" "${STAGED[@]}"; do
     while IFS= read -r dep; do
         [ -n "$dep" ] || continue
-        install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$obj" 2>/dev/null
+        retool -change "$dep" "@rpath/$(basename "$dep")" "$obj"
     done < <(needs_rewrite "$obj")
 done
 
 # The one absolute assumption, in one place.
-install_name_tool -add_rpath "@executable_path/../Frameworks" \
-    "$APP/Contents/MacOS/scribobulate" 2>/dev/null || true
+# Conditional rather than `|| true`: adding an rpath that is already present is an error,
+# and blanket-ignoring the result would also swallow a genuine failure to add it.
+if ! otool -l "$APP/Contents/MacOS/scribobulate" \
+     | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}' \
+     | grep -qx '@executable_path/../Frameworks'; then
+    retool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/scribobulate"
+fi
 
 # --- Third-party notices -------------------------------------------------------
 # The syntect grammar assets `two-face` compiles into the binary (MIT, Apache-2.0,
