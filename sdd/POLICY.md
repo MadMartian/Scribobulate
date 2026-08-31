@@ -352,11 +352,20 @@ diff was performed when someone thought to perform it, and the Windows port's st
   vacuous pass the job's own shape invites — a port whose job died before uploading leaves
   a directory whose survivors agree. Any new CI job carries the same obligation: demonstrate
   the failure, do not infer it from a green run.
-- **Execution is Linux-only today**, deliberately and in ascending order of difficulty.
-  Windows needs a gvsbuild GTK and macOS needs the bundling and `codesign` questions
-  answered with no interactive session; both are provisioning jobs, not workflow ones. The
-  contract jobs already run on all three, because `--list-steps` and `--self-test` exit
-  before any runner touches its environment.
+- **THE ARTEFACT IS VERIFIED AS AN ARTEFACT, NOT AS AN EXIT CODE.** A packaging step that
+  exits 0 having produced a zero-byte file is a defect class this project has shipped twice,
+  and a third instance was measured on macOS: `codesign --sign` printed an error, wrote no
+  signature at all, and RETURNED ZERO — defeating a guard written for precisely that risk.
+  So each packaging job asserts its output EXISTS, is NON-TRIVIAL IN SIZE, and carries the
+  version from `Cargo.toml`; an acting verb's exit status is a claim the tool makes about
+  itself, and where a false green is expensive, follow it with a verifying one
+  (`codesign --verify --deep --strict`) and check the file. ScrAP-329 carries the boundary.
+- **Execution runs on all three platforms**, brought up in ascending order of difficulty as
+  planned — Linux, then macOS, then Windows with a pinned and cached gvsbuild prefix. All
+  three `execute-*` jobs run the platform's own runner and name no step, and all three
+  produce an installer under `workflow_dispatch` with `package: true`. The contract jobs run
+  on all three as well, because `--list-steps` and `--self-test` exit before any runner
+  touches its environment, which is what keeps that matrix affordable on every push.
 - **`G_DEBUG=fatal-criticals` is not set process-wide over the suite**, notwithstanding the
   recommendation in [§ Logging](#logging) — see the exception recorded there. The reasoning
   is in the workflow beside the job it applies to.

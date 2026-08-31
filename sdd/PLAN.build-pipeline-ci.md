@@ -106,12 +106,30 @@ step inserted into an existing job rather than a redesign.
 **Execution first (macOS, then Windows), then packaging for all three**, in that order,
 because each stage retires the risk the next one would otherwise carry blind.
 
-1. `execute-macos`, brought up on `workflow_dispatch`, then moved to the push trigger.
-2. `execute-windows`, same bring-up, with a pinned and cached gvsbuild prefix.
-3. `release` jobs for all three platforms, triggered by a published release plus dispatch,
-   uploading each artefact to the release.
+1. ~~`execute-macos`, brought up on `workflow_dispatch`, then moved to the push trigger.~~ **DONE.**
+2. ~~`execute-windows`, same bring-up, with a pinned and cached gvsbuild prefix.~~ **DONE.**
+3. ~~`release` jobs for all three platforms, triggered by a published release plus dispatch,
+   uploading each artefact to the release.~~ **BUILT AND EXERCISED, minus the upload itself.**
 
-Three rules carry over from the work already done and are not optional:
+**MEASURED, run `33357529291` on `ci`, `workflow_dispatch` with `package: true`** — seven
+jobs green and three installers produced:
+
+    installers-windows   39,146,361 B
+    installers-macos     22,286,918 B
+    installers-linux      7,624,487 B
+
+`attach-installers` was correctly SKIPPED, being release-only. That last step — the upload
+to a published release — is the one thing this plan cannot demonstrate, BY DESIGN: the
+workflow's own comment records that the obligation to show a gate failing "cannot be met by
+cutting throwaway public releases", which is why `workflow_dispatch` is retained
+permanently and uploads to the run's own artefacts instead. So stage 3 is as verified as it
+can be without an actual release, and the residue is a deliberate limit rather than an
+omission.
+
+Three rules carry over from the work already done and are not optional. **All three now
+live in POLICY § "Continuous integration", which is where they belong once this plan
+retires** — they are prescriptive, they outlive the work, and a rule readable only from a
+plan is a rule that disappears when the plan does:
 
 - **The job invokes the platform's runner and names no step.** Provisioning is the only
   thing an execution or packaging job may contain. A workflow that lists steps is a fourth
