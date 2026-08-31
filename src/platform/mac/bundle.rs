@@ -106,15 +106,30 @@ pub(crate) fn configure_paths() {
         return;
     }
 
-    // Icon themes, and anything else GTK resolves through the XDG data path. Prepended
-    // rather than replacing: a value already set is the operator's and outranks ours.
+    // Icon themes, and anything else GTK resolves through the XDG data path.
+    //
+    // PREPENDED, AND THE FALLBACK IS NOT AN EMPTY STRING. Setting this variable REPLACES
+    // the platform default rather than adding to it — measured by the Windows seat, whose
+    // state E pointed it at one unrelated directory and broke a lookup that had been
+    // working, because the default was what had been carrying it. So when the variable is
+    // unset, the XDG default has to be written back explicitly or this function silently
+    // takes /usr/local/share and /usr/share away from every other data lookup in the
+    // process. A value already set is the operator's and outranks ours.
+    //
+    // The entry is the `share` ROOT, never a directory below it: consumers append their
+    // own subdirectory (`gtksourceview-5/language-specs`, `icons/…`), so an entry one
+    // level deeper looks correct in a listing and matches nothing.
+    const XDG_DEFAULT: &str = "/usr/local/share:/usr/share";
     let existing = std::env::var("XDG_DATA_DIRS").unwrap_or_default();
-    let combined = if existing.is_empty() {
-        share.to_string_lossy().into_owned()
+    let tail = if existing.is_empty() {
+        XDG_DEFAULT
     } else {
-        format!("{}:{existing}", share.to_string_lossy())
+        existing.as_str()
     };
-    std::env::set_var("XDG_DATA_DIRS", combined);
+    std::env::set_var(
+        "XDG_DATA_DIRS",
+        format!("{}:{tail}", share.to_string_lossy()),
+    );
 
     let schemas = share.join("glib-2.0").join("schemas");
     if schemas.is_dir() {
