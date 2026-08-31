@@ -81,12 +81,30 @@ The two icon paths are genuinely separate and both are needed:
 Scribobulate.app/Contents/
 ├── Info.plist                    generated from Info.plist.in
 ├── MacOS/scribobulate            the release binary, copied in
+├── Frameworks/
+│   ├── lib*.dylib                the GTK closure — 43 files, load paths rewritten
+│   └── libpixbufloader-*.so      the 13 gdk-pixbuf loaders, FLAT (see below)
 ├── Resources/
 │   ├── scribobulate.icns         rasterized from the app-icon SVG, via iconutil
+│   ├── loaders.cache             generated, naming the loaders above
+│   ├── share/icons/{Adwaita,hicolor}/
+│   ├── share/glib-2.0/schemas/   including gschemas.compiled
 │   ├── LICENSE
 │   └── THIRD-PARTY-LICENSES.md
 └── _CodeSignature/               written by the ad-hoc codesign
 ```
+
+**The loaders are flat in `Frameworks/`, and that is a constraint rather than a
+preference.** `codesign --deep` treats any *directory* under `Frameworks/` as a nested
+bundle and refuses one that is not — *"bundle format unrecognized, invalid, or unsuitable
+/ In subcomponent: …/gdk-pixbuf-2.0"*. It then leaves the app **unsigned** and the kernel
+kills it at launch with no output, which reads as a missing library and is not one.
+
+**`share/gtksourceview-5` is deliberately absent.** The editor's language specs and style
+schemes are not on disk in the Homebrew prefix at all — they are a GResource compiled into
+`libgtksourceview-5.0.dylib`, which `Frameworks/` already carries. Staging that directory
+would copy six RNG/DTD validators and a font nothing loads, and would look like the thing
+that made highlighting work.
 
 **The two notice files are a shipping obligation rather than documentation, and this is
 the paragraph to read before editing `bundle.sh`.** Several crates this binary links
@@ -97,22 +115,67 @@ are in `THIRD-PARTY-LICENSES.md` "in the distribution". Those two `cp` lines in
 assembling a bundle some other way and not carrying them, does not merely lose a file —
 it falsifies a claim the running application makes about itself.
 
-## What this bundle is not: a redistributable
+## Self-contained, and the one way it still is not
 
-It runs on a machine that already has the Homebrew dependencies. It is **not**
-self-contained, and handing it to someone without Homebrew GTK will fail. The
-dylib counts/sizes and the icon-theme row below are measured on a real machine;
-the schema and signing rows are reasoned from how those libraries behave and
-have **not** been reproduced — they are leads to verify while closing the gap,
-not findings to quote.
+The bundle carries its own GTK runtime: **43 libraries in `Contents/Frameworks`**, plus
+the **13 gdk-pixbuf loader modules** flat beside them, the Adwaita and hicolor icon
+themes, and the GSettings schemas under `Contents/Resources/share`. It needs no Homebrew
+on the machine that runs it. `packaging/macos/verify-selfcontained.sh` is the gate on that
+claim and is run as part of every bundle build.
 
-| Gap | Detail | Cost |
-|---|---|---|
-| **Dylibs** | The binary links Homebrew paths directly (`otool -L`); the transitive closure is **49 dylibs, ~35 MB**. A self-contained bundle copies them into `Contents/Frameworks` and rewrites every load path (`install_name_tool -change` / `-add_rpath @executable_path/../Frameworks`, or `dylibbundler`). | ~35 MB |
-| **Icon theme** | GTK finds Adwaita via `XDG_DATA_DIRS`, which points into `/opt/homebrew`. **Measured**: with that path removed, 11 icon names fall back to the broken-image placeholder — i.e. the packaged app reproduces the exact defect the icon audit exists to catch. Stage the theme into `Contents/Resources/share/icons` and point `XDG_DATA_DIRS` there. | ~15 MB |
-| **GLib schemas** | GTK4 defines `org.gtk.gtk4.Settings.FileChooser` and friends (confirmed), and GLib aborts on a missing schema — so a bundle without `gschemas.compiled` is *expected* to die when a file dialog opens. Not yet reproduced. Stage it into `Contents/Resources/share/glib-2.0/schemas`. | ~3 KB |
-| **gdk-pixbuf loaders** | Non-native image formats resolve through the loader cache of the *process*, not the file. Stage `lib/gdk-pixbuf-2.0/**` and set `GDK_PIXBUF_MODULE_FILE` if the packaged app must render WebP/AVIF. | small |
-| **Signing** | `bundle.sh` signs ad-hoc (`codesign --sign -`), which is enough to launch locally. Distribution needs a Developer ID certificate, `--options runtime`, and notarization. **Gatekeeper refuses an ad-hoc-signed `.dmg` that carries a quarantine flag — measured, not assumed:** with `com.apple.quarantine` set, `spctl -a -t open` rejects the image (`source=no usable signature`) and `spctl -a -t exec` rejects the `.app` (exit 3). That was tested on the machine that *built* it, which is the case most likely to be allowed — so anyone who downloads it will be refused too, and must right-click ▸ Open or clear the attribute. The `.dmg` is a transfer format here, not a distribution channel. | — |
+**"49 dylibs" counts load PATHS, not files.** The closure is 43 files reached by 49
+distinct paths — eight basenames arrive through two Homebrew aliases each
+(`/opt/homebrew/lib/X` and `/opt/homebrew/opt/<formula>/lib/X`). The earlier figure in
+this file was the path count and overstated the file count by eight.
+
+Two things are worth knowing about how that closure is computed, because both were
+defects before they were features:
+
+- **`@rpath` dependencies are followed.** Most Homebrew libraries reference their
+  siblings as `@rpath/NAME` with an `LC_RPATH` of `@loader_path/../lib`. A walk that
+  follows only absolute paths misses them *invisibly*, because `@rpath/NAME` reads as an
+  internal reference whether or not the file behind it was ever staged.
+- **The loaders seed the walk.** They are `dlopen`ed, so nothing in the executable's link
+  graph mentions them — and neither, therefore, do their own dependencies. The SVG loader
+  alone pulls in librsvg, which the application does not link.
+
+### It is not notarized, and the recipient is told it is "damaged"
+
+This is the remaining gap, and it is a deferred scope decision rather than an oversight.
+`bundle.sh` signs ad-hoc (`codesign --sign -`), which is enough to launch on the machine
+that built it. It is **not** a Developer ID signature and there is no notarization, so
+Gatekeeper refuses the bundle anywhere else.
+
+**What the recipient actually sees** — measured, with `com.apple.quarantine` set, which is
+what a download or an AirDrop applies: macOS reports *"Scribobulate.app is damaged and
+can't be opened. You should move it to the Trash."* `spctl -a -t exec` rejects the `.app`
+and `spctl -a -t open` rejects the `.dmg` (`source=no usable signature`). **The app is not
+damaged.** That sentence is Gatekeeper's wording for "signed by an identity I do not
+trust", and it is actively misleading: it sends the user to the Trash when the issue is a
+signing identity.
+
+**The way in, which is an override of a security decision rather than a trick.** The
+recipient is deliberately overruling their OS, and should know that is what they are
+doing:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Scribobulate.app
+```
+
+or, without a terminal: right-click the app ▸ **Open** ▸ **Open**, which records a
+per-app exception.
+
+Closing this needs a Developer ID Application certificate (a paid Apple Developer
+enrolment, bound to a legal identity), `codesign --options runtime`, `notarytool submit`
+and `stapler staple`. None of that is an engineering decision. Until it lands, `bundle.sh`
+prints this limitation at the end of every successful build, so whoever holds the artefact
+meets it before a recipient does — and when notarization does land, that warning must come
+out in the same change, since an artefact that is notarized and still says it is not is
+the same defect pointed the other way.
+
+**So step 10's intent is partially met.** Self-containment: met. *An artefact a
+non-developer can install with no toolchain*: met only with the override above documented,
+which is why it is documented here rather than in a commit message.
 
 Nothing here needs the GSK renderer to be configured: `scribobulate::run`
 (`src/lib.rs`, which `main()` delegates to) sets `GSK_RENDERER=cairo` in-process
