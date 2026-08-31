@@ -269,8 +269,13 @@ cmd.windows skipreport  cargo test -- --nocapture
 # same file at the version macOS ships (ScrAP-318).
 #
 # LINUX DELEGATES TO `scripts/run-integration.sh`, for the same reason step 6 delegates to
-# `scripts/coverage.sh`: the step owns three things a command line cannot carry, and the
-# helper's header is the authority on all three. In short — it ARMS `dbus-run-session`,
+# `scripts/coverage.sh`: the step owns several things a command line cannot carry, and the
+# helper's header is the authority on all of them. NO COUNT HERE — this sentence said
+# "three" and the list has since grown to four, which is the same rot the gate's check
+# count and the coverage floor were each written up under. In short — it ARMS
+# `dbus-run-session` INSIDE `xvfb-run` (the reverse order, which reads more naturally,
+# leaks the bus's activated daemons onto the developer's real X server, where they outlive
+# the run — POLICY step 5 carries the measurement),
 # which POLICY has prescribed since it was measured and which this contract's command did
 # NOT run, so the instruction lived in prose and every caller either supplied it by hand or
 # ate a SIGTRAP before the first test (the same unarmed-gate failure this very step records

@@ -456,10 +456,16 @@ function Write-StepList {
 
 # --------------------------------------------------------------------------------------
 # THE CONTRACT'S GRAMMAR INCLUDES A LEADING `NAME=VALUE` ENV PREFIX, and this port has to
-# implement it rather than inherit it. The shell port runs `eval "$cmd"`, so a line like
-#   cmd.linux integration  G_DEBUG=fatal-criticals xvfb-run -a cargo test ...
+# implement it rather than inherit it. A shell port runs `eval "$cmd"`, so a prefixed line
 # sets that variable for the child and only the child, free, because POSIX shells define
 # it. `cmd.exe` has no such syntax: it reads the assignment as the name of a program.
+#
+# TODAY EXACTLY ONE CONTRACT LINE CARRIES A PREFIX, and it is this platform's:
+#   cmd.windows integration  G_DEBUG=fatal-criticals cargo test --features gtk-integration-tests -- --test-threads=1
+# which is why this port had to implement the grammar and the others got it for nothing.
+# The example here used to be a `cmd.linux integration` line carrying `G_DEBUG` and
+# `xvfb-run`; that line no longer exists (Linux delegates to scripts/run-integration.sh),
+# so the illustration was of a form the contract no longer contained.
 # MEASURED, the day `cmd.windows integration` gained the same prefix --
 #   $ G_DEBUG=fatal-criticals cargo test --features gtk-integration-tests -- --test-threads=1
 #   'G_DEBUG' is not recognized as an internal or external command,

@@ -85,10 +85,29 @@ Before any change is considered valid, run these steps in order:
    ScrAP-124.
 3. `cargo build --release` — must compile cleanly
 4. `cargo test` — all tests must pass
-5. `xvfb-run -a cargo test --features gtk-integration-tests` — all tests must pass.
+5. `scripts/run-integration.sh` — all tests must pass. That helper IS the step; the
+   contract points `cmd.linux integration` at it, and its header is the authority on
+   what it owns that a command line cannot carry. **No count here** — the header
+   enumerates them and the list has already grown once.
    Needs a display; `xvfb-run` supplies one headlessly, and these tests present real
    windows and pump the frame clock. Do NOT skip this step when no display is handy:
    skipping is how step 2's failure mode arises.
+   **RUNNING THE UNDERLYING COMMAND BY HAND: `xvfb-run` GOES OUTSIDE, `dbus-run-session`
+   INSIDE.**
+
+   ```sh
+   xvfb-run -a dbus-run-session -- cargo test --features gtk-integration-tests
+   ```
+
+   The reverse — `dbus-run-session -- xvfb-run …` — is the order that reads more
+   naturally and it LEAKS. The bus then starts before the display exists, inherits the
+   ambient `DISPLAY`, and hands it to every service it activates: portal, gvfs, a11y and
+   the rest attach to the DEVELOPER'S REAL X SERVER rather than the Xvfb, and they
+   outlive the bus because systemd reaps them as a subreaper. Measured on this project:
+   ~20 leaked connections per run, accumulating unnoticed across a week until Xorg hit
+   its 256-client limit and no application on the desktop could start. It fails
+   favourably — with slots to spare every test passes — so a green run is not evidence
+   the nesting is right.
    **Run it through Cargo, so `.cargo/config.toml`'s `[env]` applies.** These tests
    close real windows, which runs the production session-save path, and that path
    resolves `XDG_STATE_HOME` from the environment — so without that override the
@@ -110,7 +129,8 @@ Before any change is considered valid, run these steps in order:
    and reproduces identically on an untouched tree — so it costs a control build to
    disbelieve, every time, unless it is written down. **The runner now handles this** —
    `scripts/run-integration.sh`, which the contract points step 5 at on Linux, wraps the
-   suite in `dbus-run-session` so at-spi autolaunches on a bus of its own. This paragraph
+   suite in `dbus-run-session` — INSIDE `xvfb-run`, per the nesting rule above — so
+   at-spi autolaunches on a bus of its own, on the throwaway display rather than yours. This paragraph
    used to instruct the reader to do that by hand, with nothing in the toolchain doing it,
    so every caller either supplied the wrapper themselves or ate the SIGTRAP; the helper's
    header records what else it owns and why none of it fits on a command line. On the operator's live session the
