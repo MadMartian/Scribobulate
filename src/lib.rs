@@ -196,6 +196,13 @@ pub fn run() -> glib::ExitCode {
         return glib::ExitCode::SUCCESS;
     }
 
+    // Point GTK at the data staged inside the .app, when running from one. Must precede
+    // GTK init, and precedes the renderer pin only because both are env writes and this
+    // one reads no state. Inert outside a bundle, so `cargo run` and the suites are
+    // unaffected. See src/platform/mac/bundle.rs for why a wrapper script was rejected.
+    #[cfg(target_os = "macos")]
+    platform::mac::bundle::configure_paths();
+
     // Force the GSK Cairo software renderer: no GL/GLES context, no GPU memory.
     // Must be set before GTK initialises (POLICY.md architecture rule).
     //
