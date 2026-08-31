@@ -159,6 +159,26 @@ Copy-Item "$GtkPrefix\share\icons\hicolor" "$OutDir\share\icons\" -Recurse
 # are compiled into gtksourceview-5-0.dll as GResource, so there is nothing else
 # to ship for syntax highlighting.
 #
+# THIS COPY IS LOAD-BEARING, MEASURED, and it is not the belt-and-braces it reads
+# as. Loading a .lang VALIDATES it against language2.rng, which libxml reads from a
+# FILESYSTEM PATH -- so the GResource the .lang itself comes from cannot satisfy
+# that, and without a copy on disk the language is dropped. The failure is a WARN
+# and the document still renders, in monochrome, looking like a plain text file
+# rather than like anything broken.
+#
+# 2x2 on the INSTALLED product, renaming each directory away rather than denying
+# access to it: with the gvsbuild prefix present the lookup succeeds whether or not
+# THIS copy exists, and with the prefix renamed away it succeeds only because of
+# it. Remove both and Markdown highlighting dies. So the state this copy is for is
+# the RECIPIENT'S -- a machine that has no gvsbuild prefix -- which is exactly the
+# state a packager's box is never in, and why the property was asserted here for a
+# long time before anyone measured it.
+#
+# No claim is made about search-path ORDER, and none should be added without
+# measuring it: four presence tests cannot establish one. The procedure, including
+# the both-absent positive control that makes the other three cells mean anything,
+# is tests\MANUAL-TEST.md section A.3 step 8.
+#
 # THE COPY IS RECURSIVE AND THE PREFIX HOLDS MORE THAN THAT -- which is how a font
 # nobody uses reached every installer built to date. The comment above used to say
 # "only the RNG/DTD validation schemas" and describe the INTENT, while the code
