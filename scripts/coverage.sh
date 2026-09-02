@@ -1,12 +1,40 @@
 #!/usr/bin/env bash
-# Scoped, unit-tests-only coverage gate — POLICY.md § "Build pipeline" step 6 states
-# the rule; THIS SCRIPT is the source of truth for the two values it turns on, the
-# floor and the scope. POLICY deliberately does not restate either: when the number
-# lived in both places it drifted, and the floor sat ~2pt below the real figure,
-# silently gating nothing.
+# Scoped coverage gate — POLICY.md § "Build pipeline" step 6 states the rule; THIS SCRIPT
+# is the source of truth for the values it turns on, the two floors and the scope. POLICY
+# deliberately does not restate any of them: when the number lived in both places it
+# drifted, and the floor sat ~2pt below the real figure, silently gating nothing.
 #
-# FLOOR is a no-regression RATCHET, not a target — `--fail-under-lines` exits
-# non-zero when scoped line coverage drops below it. Never lower it to make a run pass.
+# ── TWO LEGS OVER ONE SCOPE ───────────────────────────────────────────────────────────
+#
+# The gate measures the SAME 160 files twice and renders a floor verdict on each:
+#
+#   LEG A — unit tests only ................ FLOOR
+#   LEG B — unit + the GTK integration suite  FLOOR_FULL
+#
+# **Why two.** With one unit-only number, code that is thoroughly tested by
+# `#[gtktest::test]` bodies reads as 0% here, so landing it DROPS the figure — and the
+# only lever the drop offers is to lower the floor. That happened twice (both drops are
+# recorded below, with their causes), and the second one's own note said the quiet part:
+# *"if this keeps happening, the gate is the thing to fix, not the floor."* A gate blind
+# to fourteen points of tested code is measuring the wrong thing.
+#
+# Leg B is what fixes it. Tested GTK-wired code RAISES `FLOOR_FULL` instead of lowering
+# anything; UNtested GTK-wired code lowers it, and there is no longer a reading in which
+# that looks like ordinary drift. Leg A stays because it is the only leg that can see
+# whether a decision core has been extracted at all — POLICY step 6's scope rule is that
+# pure logic belongs in a headless test, and a full-suite figure alone would let every
+# decision hide behind a live window.
+#
+# **THE ONE RULE THAT MAKES THIS A RATCHET AND NOT TWO NUMBERS:** `FLOOR` may only be
+# lowered in a change that RAISES `FLOOR_FULL`. Lowering both, or lowering one and
+# leaving the other, is the failure this split exists to prevent, and it is visible in
+# any diff of this file. Nothing in the script can enforce it — a script cannot see
+# history — so it is stated here, where the numbers are, rather than in POLICY where
+# a second copy would drift.
+#
+# Both floors are no-regression RATCHETS, not targets — `--fail-under-lines` exits
+# non-zero when scoped line coverage drops below one. Never lower either to make a run
+# pass.
 #
 # FLOOR IS A WHOLE NUMBER, AND IT MOVES ONE WHOLE POINT AT A TIME. It rises only once
 # measured coverage RELIABLY reaches the next integer — on every host that runs this
@@ -40,54 +68,67 @@
 # the rounding it existed to defend against. Reading the right column still matters,
 # because regions run about a point higher, which is exactly one ratchet step.)
 #
-# THE GATE HAS TWO VERDICTS AND THEY ARE NOT INTERCHANGEABLE. The SCOPE verdict comes
-# first: the set of files being measured is recorded in `scripts/coverage.scope` and
-# compared on every run, because a change in WHAT IS MEASURED used to arrive disguised as
-# a change in the percentage — see that file's header for the mechanism and the three
-# times it happened. Only if the scope is unchanged is the FLOOR verdict rendered at all;
-# a ratchet compared across two different scopes measures nothing.
+# THE SCOPE VERDICT IS NOT INTERCHANGEABLE WITH A FLOOR VERDICT, AND COMES FIRST. The set
+# of files being measured is recorded in `scripts/coverage.scope` and compared on every
+# run, because a change in WHAT IS MEASURED used to arrive disguised as a change in the
+# percentage — see that file's header for the mechanism and the three times it happened.
+# Only if the scope is unchanged is any floor verdict rendered at all; a ratchet compared
+# across two different scopes measures nothing.
+#
+# **Leg B is scope-checked against the SAME manifest**, which is the whole reason its
+# number is comparable to anything. Enabling the feature pulls the test scaffolding
+# itself into the measured set (`testpump.rs`, the excursion rig), and coverage OF TEST
+# CODE is meaningless — so `IGNORE_TESTONLY` removes exactly those, and then leg B's set
+# is asserted to equal the manifest rather than assumed to. A seventh scaffolding file
+# added later does not get quietly absorbed into the number; it is named, and the run
+# stops.
+#
+# **What leg B's figure honestly is.** It still counts the `#[gtktest::test]` bodies that
+# live INSIDE the 160 production files, and those are ~100% covered by construction, so
+# the figure reads about 0.7pt higher than the production-only truth. That is the same
+# distortion leg A already carries for `#[cfg(test)]` bodies in the same files, and it is
+# harmless to a RATCHET, which compares a tree against itself. Do not read either figure
+# as a claim about how much of the product is tested.
 #
 # Usage:
-#   scripts/coverage.sh                 # run the gate (summary + scope + fail-under)
-#   scripts/coverage.sh --html          # + HTML report (extra args pass through)
-#   scripts/coverage.sh --update-scope  # rewrite scripts/coverage.scope from this run,
-#     # then carry on to the floor verdict. Consumed here, not passed to cargo.
-#   scripts/coverage.sh --features gtk-integration-tests   # UNSCOPED-ish; note the
-#     # floor is defined WITHOUT this feature (unit-only) — don't gate with it on.
+#   scripts/coverage.sh                 # the gate: both legs, three verdicts
+#   scripts/coverage.sh --unit-only     # leg A only — the fast development loop.
+#     # Prints PARTIAL and renders NO full-suite verdict. Never what the pipeline runs.
+#   scripts/coverage.sh --html          # + HTML report from leg A (extra args pass through)
+#   scripts/coverage.sh --update-scope  # rewrite scripts/coverage.scope from leg A,
+#     # then carry on to both floor verdicts. Consumed here, not passed to cargo.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# LOWERED 82 -> 80 by operator decision, and it is the SAME cause as the 76.76 -> 76.30
-# entry below — which is itself the reason to record this one rather than treat a second
-# instance as routine. If this keeps happening, the gate is the thing to fix, not the
-# floor.
+# LOWERED 82 -> 80 by operator decision, and it was the SECOND instance of one cause —
+# which is why the remedy below exists rather than a third recorded drop.
 #
 # Cause: wiring the disclosure fold splice to the live toggle added ~433 lines of
 # GTK-wired production code — `preview/splice/install.rs`, `farscroll/settle.rs`,
 # `window/foldsplice.rs` — un-gated from `#[cfg(test)]` because they now have a
 # production caller. They are exercised by `#[gtktest::test]` bodies behind the
-# `gtk-integration-tests` feature, which this unit-only run deliberately does not enable,
-# so they read 0% here.
+# `gtk-integration-tests` feature, which leg A deliberately does not enable, so they read
+# 0% there.
 #
 # What was MEASURED before choosing this (so nobody re-derives it):
 #   82.09  branch tip before the wiring
-#   80.65  after it, unit-only — this run
+#   80.65  after it, unit-only — leg A
 #   94.84  the SAME tree with `--features gtk-integration-tests`
-# That last figure is the point: the code is not untested, and this gate cannot see
-# fourteen points of it. The prescribed remedy was applied as far as it honestly goes —
+# That last figure is the point: the code is not untested, and leg A cannot see fourteen
+# points of it. The prescribed remedy was applied as far as it honestly goes —
 # `keep_survivors`, `offset_below_viewport_top` and `restored_value` were extracted as
 # pure cores with unit tests — and recovers a fraction of a point, not 1.4.
 #
-# DELIBERATELY NOT DONE HERE: switching this gate to compile the GTK suite. That is
-# arguably the right long-term answer, since a gate blind to fourteen points of tested
-# code is measuring the wrong thing. But it changes the measured SCOPE (verified: the
-# run above withheld its verdict for exactly that reason), needs the floor recalibrated
-# from 80 to near 94, needs a display, and redesigning a required gate inside the change
-# that gate is currently failing is how a gate ends up calibrated to its own fixture.
-# RAISED WITH THE OPERATOR AS SEPARATE WORK AND DECLINED — this gate stays unit-only.
-# So the note above stands as the standing answer rather than as a deferral: when this
-# cause forces a floor drop again, the choice is another recorded drop or a different
-# remedy, NOT this one. Do not re-propose it as though it had merely gone unconsidered.
+# RESOLVED by `FLOOR_FULL` and leg B. An earlier note here recorded that switching this
+# gate to compile the GTK suite had been raised and DECLINED — correctly, because what
+# was proposed was a REPLACEMENT: one full-suite number, floor recalibrated from 80 to
+# near 94, and leg A gone. That would have retired the only measurement that can tell
+# whether a decision core was ever extracted, and it would have been calibrated inside
+# the change whose gate was failing. What landed instead is an ADDITION: leg A keeps its
+# floor and its job, leg B answers the fourteen points, and the rule that `FLOOR` may
+# only fall when `FLOOR_FULL` rises is what makes the pair a ratchet. The scope objection
+# the old note raised was real and is met head-on — leg B is scope-checked against the
+# same manifest, and refuses rather than absorbs a difference.
 #
 # LOWERED 76.76 -> 76.30 by operator decision. Recording it because the rule above says
 # never to, and an unexplained drop is indistinguishable from the silent drift that rule
@@ -576,6 +617,23 @@ cd "$(dirname "$0")/.."
 # retired is a caveat, so the next raise is argued against the measurement alone.
 FLOOR=80
 
+# ── LEG B's floor: the same 160 files, measured with the GTK integration suite running.
+#
+# MEASURED 94.98 on the reference host at the commit that introduced this leg (160 files,
+# scope-checked equal to leg A's manifest). 94 leaves a full point, which is what the
+# whole-number rule above is for.
+#
+# **This is the number that must go UP.** Adding GTK-wired production code with tests
+# raises it; adding it without tests lowers it and the gate goes red with no reading in
+# which that is ordinary drift. `FLOOR` may only be lowered in a change that raises this
+# one — see the header.
+FLOOR_FULL=94
+
+# How long leg B may take before a wedge is called. The suite is ~2 min uninstrumented
+# and ~4 min under llvm-cov on the reference host; this is a WEDGE bound, not a duration
+# policy (see `scripts/gtk-run.sh`).
+FULL_BUDGET="${SCRIB_COVERAGE_FULL_BUDGET:-1800}"
+
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:
 # pure decision logic. Every entry below is one half of a deliberate split — the
@@ -746,6 +804,22 @@ FLOOR=80
 # `cargo llvm-cov` reports native Windows paths regardless of who invokes it.
 IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app[/\\](appactions|menubar|openbatch|open|setup)|clipboard|main|lib|gtk_suite|suite_registry|logging|tags|codeview[/\\][a-z_]+|outline_view|preview[/\\]annotate[/\\]overlay|widgets[/\\](table[/\\]mod|tab[/\\](imp|bar|ops|view|mod)))\.rs'
 
+# IGNORE_TESTONLY — leg B's extra filter, and ONLY leg B's.
+#
+# Enabling `gtk-integration-tests` compiles whole FILES that exist only to test with:
+# `testpump.rs` (the main-loop pump every GTK body waits on) and the excursion rig under
+# `preview/splice/excursion/`. They are not in leg A's scope because they are not
+# compiled there, and they must not enter leg B's, because coverage OF TEST CODE moves
+# the number without saying anything about the code under test — the same argument the
+# `gtk_suite|suite_registry` entry in `IGNORE` already makes.
+#
+# This names a path SHAPE and will not know about a seventh scaffolding file added later.
+# That is deliberate and is why leg B carries its own scope check: an unrecognised file
+# entering is NAMED and stops the run, rather than being quietly absorbed at whatever
+# coverage a test file happens to have. Same `[/\\]` class rule as `IGNORE` above, and
+# for the same reason.
+IGNORE_TESTONLY='src[/\\](testpump|preview[/\\]splice[/\\]excursion([/\\][a-z_]+)?)\.rs'
+
 # SCOPE_FILE — the measured set, recorded. Its own header states its role; the one thing
 # worth repeating HERE, where the enforcement lives, is what keeps the two files from
 # becoming two policies: this script never passes SCOPE_FILE to llvm-cov. `IGNORE` above
@@ -753,22 +827,28 @@ IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app
 SCOPE_FILE="scripts/coverage.scope"
 
 UPDATE_SCOPE=0
+UNIT_ONLY=0
 PASSTHRU=()
 for arg in "$@"; do
     case "$arg" in
         --update-scope) UPDATE_SCOPE=1 ;;
+        --unit-only)    UNIT_ONLY=1 ;;
         *)              PASSTHRU+=("$arg") ;;
     esac
 done
 
 # --------------------------------------------------------------------------------------
-# 1. MEASURE. This is the run: it builds, executes the unit tests, and leaves the profile
-#    data behind. Everything after it is a `report` against that same data — sub-second,
+# 1. MEASURE — LEG A. This is the run: it builds, executes the unit tests, and leaves the
+#    profile data behind. Everything after it is a `report` against that same data — sub-second,
 #    and derived from ONE `IGNORE`, so no verdict below can be reading a different scope
 #    than another (a gate is its pattern, its input set, AND the invocation consuming
 #    both; a second enumeration here would be the defect this whole change is about).
 #    Deliberately WITHOUT --fail-under-lines: the floor verdict must not pre-empt the
 #    scope verdict.
+#
+#    ⚠ EVERY `report` LEG A NEEDS MUST HAPPEN BEFORE LEG B RUNS. `cargo llvm-cov report`
+#    reads whatever profile data the last `cargo llvm-cov` left behind, so leg B's run
+#    replaces leg A's. The ordering below is load-bearing, not stylistic.
 # --------------------------------------------------------------------------------------
 cargo llvm-cov --summary-only --ignore-filename-regex "$IGNORE" ${PASSTHRU[@]+"${PASSTHRU[@]}"}
 
@@ -779,8 +859,12 @@ cargo llvm-cov --summary-only --ignore-filename-regex "$IGNORE" ${PASSTHRU[@]+"$
 # TRIPWIRE on anything that will not normalise: a path this cannot anchor is a file from
 # somewhere the gate has never measured, and silently dropping it would make the scope
 # check leniently incomplete without saying so. Same rule as the scan set's `maxdepth`.
+#
+# Takes the ignore regex as `$1`, because leg B measures the same manifest through a wider
+# filter (`IGNORE|IGNORE_TESTONLY`) and the two must derive their sets the same way — a
+# second copy of this awk is exactly where two "identical" scope checks stop being.
 measured_scope() {
-    cargo llvm-cov report --lcov --summary-only --ignore-filename-regex "$IGNORE" \
+    cargo llvm-cov report --lcov --summary-only --ignore-filename-regex "$1" \
         | awk -v root="$PWD/" '
             /^SF:/ {
                 p = substr($0, 4)
@@ -796,7 +880,7 @@ measured_scope() {
         | LC_ALL=C sort -u
 }
 
-now="$(measured_scope)"
+now="$(measured_scope "$IGNORE")"
 if [ -z "$now" ]; then
     echo "coverage: SCOPE CHECK REFUSED — llvm-cov reported no files at all." >&2
     echo "coverage: an empty measured set is not a passing one. Check IGNORE and the run above." >&2
@@ -873,13 +957,104 @@ echo "coverage: SCOPE OK — $(printf '%s\n' "$now" | wc -l) files measured, mat
 # --------------------------------------------------------------------------------------
 lines_pct="$(cargo llvm-cov report --summary-only --ignore-filename-regex "$IGNORE" \
              | awk '$1 == "TOTAL" { print $10 }')"
-if cargo llvm-cov report --summary-only --fail-under-lines "$FLOOR" \
-       --ignore-filename-regex "$IGNORE" >/dev/null; then
-    echo "coverage: FLOOR OK — scoped LINES ${lines_pct:-?} >= FLOOR $FLOOR."
+if ! cargo llvm-cov report --summary-only --fail-under-lines "$FLOOR" \
+         --ignore-filename-regex "$IGNORE" >/dev/null; then
+    echo "coverage: FLOOR FAILED — leg A (unit) scoped LINES ${lines_pct:-?} is below FLOOR=$FLOOR." >&2
+    echo "coverage: the measured scope is UNCHANGED (SCOPE OK above), so this is a real" >&2
+    echo "coverage: coverage regression: the same files are being measured and less of them" >&2
+    echo "coverage: is covered. Add tests; do not lower the floor and do not widen IGNORE." >&2
+    echo "coverage: if the new code is GTK-wired and genuinely tested by the integration" >&2
+    echo "coverage: suite, leg B below is where that shows — but lowering FLOOR is only" >&2
+    echo "coverage: available in a change that RAISES FLOOR_FULL. See this file's header." >&2
+    exit 1
+fi
+echo "coverage: FLOOR OK — leg A (unit) scoped LINES ${lines_pct:-?} >= FLOOR $FLOOR."
+
+if [ "$UNIT_ONLY" = 1 ]; then
+    echo "coverage: PARTIAL — --unit-only was passed, so leg B (the full suite) did NOT run"
+    echo "coverage: and FLOOR_FULL=$FLOOR_FULL was NOT evaluated. This is the development"
+    echo "coverage: loop's shortcut; the gate is both legs. Do not read this as a pass."
     exit 0
 fi
-echo "coverage: FLOOR FAILED — scoped LINES ${lines_pct:-?} is below FLOOR=$FLOOR." >&2
-echo "coverage: the measured scope is UNCHANGED (SCOPE OK above), so this is a real" >&2
-echo "coverage: coverage regression: the same files are being measured and less of them" >&2
-echo "coverage: is covered. Add tests; do not lower the floor and do not widen IGNORE." >&2
+
+# --------------------------------------------------------------------------------------
+# 4. MEASURE — LEG B. The same 160 files, with the GTK integration suite running, so the
+#    code leg A can only see at 0% is measured where it is actually exercised.
+#
+#    Runs through `scripts/gtk-run.sh` for the same four reasons step 5 does — a private
+#    display, a private bus, criticals fatal, and output that cannot wedge a reader — and
+#    through the SAME script rather than a second copy of that nesting, because getting
+#    the order wrong fails favourably and a green run proves nothing.
+#
+#    NOT merged with step 5. Running the suite once under instrumentation and taking both
+#    verdicts would be tidier and is wrong twice: `cargo llvm-cov` sets `cfg(coverage)`
+#    and changes the build profile, so the suite would no longer be verified in the shape
+#    it ships in, and a coverage-tool failure would then also read as a test failure.
+#    `PASSTHRU` is deliberately not forwarded — leg B is a gate run, not a report the
+#    caller shapes.
+# --------------------------------------------------------------------------------------
+echo
+echo "coverage: leg B — measuring the same scope with the GTK integration suite..."
+if ! "$(dirname "$0")/gtk-run.sh" coverage "$FULL_BUDGET" \
+        cargo llvm-cov --summary-only --features gtk-integration-tests \
+        --ignore-filename-regex "$IGNORE|$IGNORE_TESTONLY"; then
+    echo "coverage: LEG B REFUSED — the instrumented integration run did not succeed, so" >&2
+    echo "coverage: there is no full-suite figure to render a verdict on. That is a failure" >&2
+    echo "coverage: of the run, not a coverage regression: read the output above." >&2
+    exit 1
+fi
+
+# --------------------------------------------------------------------------------------
+# 5. LEG B's SCOPE verdict, against the SAME manifest. This is what makes leg B's number
+#    comparable to anything: enabling the feature pulls test scaffolding into the measured
+#    set, `IGNORE_TESTONLY` removes the files known to be scaffolding, and the equality
+#    below is what catches the ones that are not yet.
+# --------------------------------------------------------------------------------------
+full_now="$(measured_scope "$IGNORE|$IGNORE_TESTONLY")"
+full_entered="$(LC_ALL=C comm -13 <(printf '%s\n' "$recorded") <(printf '%s\n' "$full_now"))"
+full_departed="$(LC_ALL=C comm -23 <(printf '%s\n' "$recorded") <(printf '%s\n' "$full_now"))"
+if [ -n "$full_entered" ] || [ -n "$full_departed" ]; then
+    {
+        echo
+        echo "=== coverage: LEG B SCOPE MISMATCH ==="
+        echo "Leg B measured a different set of files from $SCOPE_FILE, so its percentage"
+        echo "is not comparable to FLOOR_FULL and no verdict is rendered on it."
+        if [ -n "$full_entered" ]; then
+            echo
+            echo "ONLY IN LEG B — measured with the feature on, but not in the manifest:"
+            printf '  + %s\n' $full_entered
+            echo
+            echo "Almost certainly test scaffolding that only compiles with the feature. If it"
+            echo "is, add it to IGNORE_TESTONLY with the narrowest term that names it — coverage"
+            echo "OF TEST CODE moves the number without saying anything about the product. If it"
+            echo "is production code that only exists under the feature, that is a different"
+            echo "problem and the scope decision belongs in IGNORE."
+        fi
+        if [ -n "$full_departed" ]; then
+            echo
+            echo "ONLY IN THE MANIFEST — leg A measures these and leg B does not:"
+            printf '  - %s\n' $full_departed
+            echo
+            echo "IGNORE_TESTONLY is over-broad: it is removing production files from leg B,"
+            echo "which would let untested GTK-wired code hide from the only leg that can see it."
+        fi
+    } >&2
+    exit 1
+fi
+echo "coverage: LEG B SCOPE OK — $(printf '%s\n' "$full_now" | wc -l) files measured, matching $SCOPE_FILE."
+
+# --------------------------------------------------------------------------------------
+# 6. FLOOR_FULL verdict — the number that must go up.
+# --------------------------------------------------------------------------------------
+full_pct="$(cargo llvm-cov report --summary-only --ignore-filename-regex "$IGNORE|$IGNORE_TESTONLY" \
+            | awk '$1 == "TOTAL" { print $10 }')"
+if cargo llvm-cov report --summary-only --fail-under-lines "$FLOOR_FULL" \
+       --ignore-filename-regex "$IGNORE|$IGNORE_TESTONLY" >/dev/null; then
+    echo "coverage: FLOOR_FULL OK — leg B (unit + GTK suite) scoped LINES ${full_pct:-?} >= FLOOR_FULL $FLOOR_FULL."
+    exit 0
+fi
+echo "coverage: FLOOR_FULL FAILED — leg B scoped LINES ${full_pct:-?} is below FLOOR_FULL=$FLOOR_FULL." >&2
+echo "coverage: the scope is unchanged and BOTH test suites ran, so this is code that no" >&2
+echo "coverage: test reaches at all — not code that merely needs a display. This is the" >&2
+echo "coverage: verdict the two-leg split exists to render; it has no lever but tests." >&2
 exit 1
