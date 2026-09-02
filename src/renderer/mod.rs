@@ -561,8 +561,9 @@ pub(crate) struct Renderer {
     /// know whether the block is ever closed; this is that answer, pre-computed. See
     /// [`disclosure::scan_document`] for what assuming "yes" costs.
     disclosures: Vec<disclosure::DisclosureSpan>,
-    /// How many `<details>` the walk has opened, indexing [`Self::disclosures`].
-    disclosures_seen: usize,
+    /// The document-order cursor over [`Self::disclosures`], shared in KIND with the
+    /// export walk so neither carries a private copy of the fail-safe.
+    disclosure_cursor: disclosure::SpanCursor,
 }
 
 /// The label a `<details>` with no `<summary>` shows.
@@ -611,6 +612,9 @@ pub(crate) struct DisclosureFrame {
     /// `</summary>`, or at the end of the fragment for a `<details>` that never
     /// carries one (rubric 2.26d).
     pub emitted: bool,
+    /// Has this frame written LITERAL text of its own — i.e. is this an UNSPACED
+    /// disclosure? See [`DisclosureExtent::spliceable`], which it decides.
+    pub wrote_literal: bool,
     /// Buffer char offset of this block's summary line, once written.
     ///
     /// **The visible place everything inside a collapsed block is reached at.** A
@@ -679,6 +683,21 @@ pub(crate) struct DisclosureExtent {
     /// Contiguous because the preview, the line terminator and the body are adjacent,
     /// so one delete and one region render still cover the whole difference.
     pub volatile: crate::span::BufferSpan,
+    /// Can a REGION render reproduce this block's body, or must a toggle fall back to
+    /// a full re-render?
+    ///
+    /// **False for an UNSPACED disclosure** (rubric 2.26d), whose body is literal text
+    /// inside the block's own opening raw-HTML event rather than the Markdown events
+    /// between two blocks. A region walk is seeded at the region's start and replays
+    /// the events BELOW it, so that event sits above the region and its text is never
+    /// written — the splice would delete the body and put nothing back, leaving the
+    /// reader having collapsed a block that can never be opened again. MEASURED by
+    /// driving the running app; the unit tests could not see it, because a full render
+    /// of either fold state is correct and only the SPLICE between them is not.
+    ///
+    /// The full re-render is correct there and costs one render of a document that by
+    /// construction contains a malformed shape — not a hot path. ScrAP-340.
+    pub spliceable: bool,
 }
 
 /// A disclosure toggle this render emitted, with everything a caller needs to drive
@@ -855,7 +874,7 @@ impl Renderer {
             blockquote_starts: self.blockquote_starts.clone(),
             inline_tags: self.inline_tags.clone(),
             disclosure_stack: self.disclosure_stack.clone(),
-            disclosures_seen: self.disclosures_seen,
+            disclosures_seen: self.disclosure_cursor.seen(),
             slug_seen: self.slug_seen.clone(),
             heading_start: self.heading_start,
             link_start: self.link_start.clone(),
@@ -889,7 +908,7 @@ impl Renderer {
         self.blockquote_starts = blockquote_starts;
         self.inline_tags = inline_tags;
         self.disclosure_stack = disclosure_stack;
-        self.disclosures_seen = disclosures_seen;
+        self.disclosure_cursor = disclosure::SpanCursor::at(disclosures_seen);
         self.slug_seen = slug_seen;
         self.heading_start = heading_start;
         self.link_start = link_start;
@@ -1010,18 +1029,8 @@ impl Renderer {
     /// logged and answered **`false`**, the reply that can only ever render MORE of
     /// the document, never less.
     fn opening_details_is_closed(&mut self, block_start: usize) -> bool {
-        let span = self.disclosures.get(self.disclosures_seen);
-        self.disclosures_seen += 1;
-        match span {
-            Some(span) if span.start == block_start => span.body.is_some(),
-            other => {
-                log::error!(
-                    "disclosure pre-scan disagrees with the render walk at source byte                      {block_start} (scan says {:?}); treating the block as unclosed so                      nothing after it can be suppressed",
-                    other.map(|s| s.start)
-                );
-                false
-            }
-        }
+        self.disclosure_cursor
+            .opening_is_closed(&self.disclosures, block_start)
     }
 
     pub(crate) fn collapsed_site(&self) -> Option<CollapsedSite> {
@@ -1131,7 +1140,7 @@ impl Renderer {
             collapsed_blocks: Vec::new(),
             disclosure_extents: Vec::new(),
             disclosures: disclosure::scan_document(&scanned),
-            disclosures_seen: 0,
+            disclosure_cursor: disclosure::SpanCursor::default(),
         }
     }
 

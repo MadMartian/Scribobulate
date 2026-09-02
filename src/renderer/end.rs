@@ -371,7 +371,7 @@ impl Renderer {
                 if self.in_html_block {
                     self.in_html_block = false;
                     let html = std::mem::take(&mut self.html_acc);
-                    self.feed_html(&html);
+                    self.feed_html_block(&html);
                     self.flush_open_picture();
                 } else {
                     self.dropped_construct("an HTML-block close with no open block");

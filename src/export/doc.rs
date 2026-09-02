@@ -793,6 +793,69 @@ mod disclosure_export_tests {
         assert_eq!(open_flag(&opened), Some(true));
     }
 
+    /// **F-SPEC-002.** An unspaced disclosure's body is literal text rather than
+    /// Markdown events, and it reached the preview through one owner and the export
+    /// through none — the construct half-taught in exactly the way Document Rendering
+    /// CAM row 17 warns about. Both sinks now read the same interleaved stream, so the
+    /// run lands INSIDE the disclosure in the artefact too.
+    #[test]
+    fn an_unspaced_bodys_literal_text_reaches_the_artefact() {
+        let doc = doc_of("<details>\n<summary>S</summary>\nnot separated\n</details>\n");
+        let body = doc
+            .blocks
+            .iter()
+            .find_map(|b| match b {
+                Block::Disclosure { body, .. } => Some(body.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected a Disclosure block, got {:?}", doc.blocks));
+        let text: String = body
+            .iter()
+            .filter_map(|b| match b {
+                Block::Paragraph(inlines) => Some(crate::export::plain_text(inlines)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            text.contains("not separated"),
+            "the body is in the artefact, inside its own disclosure: {body:?}"
+        );
+    }
+
+    /// **F-003, the export half.** A `<details>` merely MENTIONED in prose used to be
+    /// scanned as a real tag, and its phantom frame was flushed with the next real
+    /// block's — so two sibling disclosures below the mention nested into one another,
+    /// and the outer one took the phantom's `open: false` in place of its own
+    /// `<details open>`.
+    ///
+    /// **Two real blocks are required to see it.** With one, the phantom's frame opens
+    /// at exactly the point the real one would have and the off-by-one cancels; a
+    /// one-block fixture passes against the defect and reads as proof.
+    #[test]
+    fn a_details_mentioned_in_prose_does_not_re_nest_the_real_ones() {
+        let doc = doc_of(concat!(
+            "Wrap an aside in <details> to fold it away.\n\n",
+            "<details>\n<summary>One</summary>\n\nBODY1\n\n</details>\n\n",
+            "<details open>\n<summary>Two</summary>\n\nBODY2\n\n</details>\n"
+        ));
+        let disclosures: Vec<_> = doc
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Disclosure { summary, open, .. } => {
+                    Some((crate::export::plain_text(summary), *open))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            disclosures,
+            vec![("One".to_owned(), false), ("Two".to_owned(), true)],
+            "two SIBLINGS, each with its own summary and its own `open`: {:?}",
+            doc.blocks
+        );
+    }
+
     /// Nesting falls out of the frame stack, exactly as it does for a blockquote in a
     /// list item — so a disclosure inside a disclosure needs no case of its own.
     #[test]

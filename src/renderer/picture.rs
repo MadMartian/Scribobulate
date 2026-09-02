@@ -31,7 +31,7 @@
 // the tag-name-boundary rule — lives in `renderer::rawhtml`, which owns it for every
 // scanner and sink. It was extracted from here when the disclosure work made the set
 // span two features; this module reads it and never restates it.
-use super::rawhtml::{attr, recognise_html_element, RawHtmlElement};
+use super::rawhtml::{attr, recognise_html_element, tag_end, RawHtmlElement};
 
 /// One image-relevant tag from a raw-HTML fragment, in document order.
 #[derive(Debug, PartialEq)]
@@ -59,10 +59,11 @@ pub(crate) fn scan_image_tags(html: &str) -> Vec<ImgTag> {
     let mut i = 0usize;
     while let Some(rel) = lower[i..].find('<') {
         let start = i + rel;
-        let Some(rel_end) = lower[start..].find('>') else {
+        // Quote-aware: a `>` inside an attribute value does not end the tag, and a
+        // scanner that thinks it does re-reads the tag's own tail as markup.
+        let Some(end) = tag_end(html, start) else {
             break;
         };
-        let end = start + rel_end; // index of '>'
         let tag_lower = &lower[start..=end];
         let tag_orig = &html[start..=end];
         match recognise_html_element(tag_lower) {

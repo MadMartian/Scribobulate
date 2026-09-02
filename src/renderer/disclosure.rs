@@ -33,7 +33,7 @@
 //! rendering decision (rubric 2.26d) and a scanner that silently dropped an unpaired
 //! tag would deny the renderer the information it needs to recover well.
 
-use super::rawhtml::{has_attr, recognise_html_element, RawHtmlElement};
+use super::rawhtml::{has_attr, recognise_html_element, tag_end, RawHtmlElement};
 
 /// The collapsed-summary body-preview shortening rule (TDD 2.26) — split out rather
 /// than grown in here, per the 500-line soft limit (`sdd/POLICY.md` § Code style),
@@ -64,6 +64,24 @@ pub(crate) enum DetailsTag {
     SummaryText(String),
     /// `</summary>` — closes the summary line.
     SummaryClose,
+    /// A literal-text run the block contributes to the page, in document order with
+    /// the tags around it.
+    ///
+    /// **Interleaved rather than collected**, because WHERE a run sits decides which
+    /// frame it belongs to. A run between `</summary>` and `</details>` is the block's
+    /// BODY — the unspaced case rubric 2.26d covers, where the whole construct is one
+    /// raw-HTML block and the body never becomes Markdown events. Emitted after the
+    /// whole tag stream instead, it landed *outside* the disclosure: a collapsed block
+    /// printed its body anyway and its toggle became a visible no-op, and the export
+    /// dropped the run entirely.
+    ///
+    /// Which runs exist at all is [`super::rawhtml::literal_text_runs`]'s decision —
+    /// the allowlist still governs, so a `<script>`'s text is not here.
+    ///
+    /// `at` is the run's byte offset **within the fragment**, which is what lets
+    /// [`scan_document`] give an unspaced block a real source range for its body — the
+    /// range the fold splice re-renders from when the reader opens it again.
+    Text { at: usize, text: String },
 }
 
 /// Scan a raw-HTML fragment for the ordered disclosure tag stream.
@@ -75,6 +93,11 @@ pub(crate) enum DetailsTag {
 pub(crate) fn scan_disclosure_tags(html: &str) -> Vec<DetailsTag> {
     let lower = html.to_ascii_lowercase();
     let mut tags = Vec::new();
+    // The block's literal-text runs, merged into the tag stream by offset so each run
+    // reaches the frame it sits inside. See [`DetailsTag::Text`].
+    let mut runs = super::rawhtml::literal_text_runs(html)
+        .into_iter()
+        .peekable();
     // Byte offset just past the last `<summary>`'s `>`, while one is open. The text
     // run is closed by `</summary>`, never by the end of the fragment: an unclosed
     // `<summary>` yields no text rather than swallowing the rest of the block, which
@@ -85,10 +108,15 @@ pub(crate) fn scan_disclosure_tags(html: &str) -> Vec<DetailsTag> {
     let mut i = 0usize;
     while let Some(rel) = lower[i..].find('<') {
         let start = i + rel;
-        let Some(rel_end) = lower[start..].find('>') else {
+        // Quote-aware: a `>` inside an attribute value does not end the tag, and a
+        // scanner that thinks it does re-reads the tag's own tail as markup.
+        let Some(end) = tag_end(html, start) else {
             break;
         };
-        let end = start + rel_end; // index of '>'
+        while runs.peek().is_some_and(|run| run.at < start) {
+            let Some(run) = runs.next() else { break };
+            push_text_run(&mut tags, run.at, run.text);
+        }
         let tag_lower = &lower[start..=end];
         match recognise_html_element(tag_lower) {
             Some(RawHtmlElement::DetailsOpen) => tags.push(DetailsTag::DetailsOpen {
@@ -123,7 +151,25 @@ pub(crate) fn scan_disclosure_tags(html: &str) -> Vec<DetailsTag> {
         }
         i = end + 1;
     }
+    for run in runs {
+        push_text_run(&mut tags, run.at, run.text);
+    }
     tags
+}
+
+/// Push one literal run, trimmed, dropping it when nothing but whitespace is left —
+/// the block separator around it is the renderer's to decide, not the document's.
+fn push_text_run(tags: &mut Vec<DetailsTag>, at: usize, text: &str) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    // The offset follows the TRIM, so it names the first character actually shown.
+    let lead = text.len() - text.trim_start().len();
+    tags.push(DetailsTag::Text {
+        at: at + lead,
+        text: trimmed.to_owned(),
+    });
 }
 
 /// One `<details>` block the document declares, in document order.
@@ -143,6 +189,65 @@ pub(crate) struct DisclosureSpan {
     /// `None` when the block is **never closed** — and that distinction is the whole
     /// reason this scan exists. See [`scan_document`].
     pub body: Option<std::ops::Range<usize>>,
+}
+
+/// A document-order cursor over [`scan_document`]'s spans — the ONE answer to "is the
+/// Nth `<details>` closed?", held by every walk that asks it.
+///
+/// **Both sinks ask, and the fail-safe is the answer's whole value.** The preview
+/// renderer and the export walk each open frames from the same pre-scan, so each needs
+/// the cursor; when each carried its own, the export's copy had lost the `start`
+/// cross-check and the diagnostic with it, so a divergence between the two walks was
+/// silent there and loud here. Divergence cannot happen while both parse the same
+/// string with the same options — which is exactly why the check must exist: nothing
+/// else would ever report that the premise had stopped holding.
+#[derive(Debug, Default)]
+pub(crate) struct SpanCursor {
+    seen: usize,
+}
+
+impl SpanCursor {
+    /// A cursor that has already answered for `seen` blocks — how a region render
+    /// resumes a walk mid-document (`RegionSeed`).
+    pub(crate) fn at(seen: usize) -> Self {
+        Self { seen }
+    }
+
+    /// How many `<details>` this cursor has answered for — the index of the span the
+    /// NEXT call will consume, which is a frame's identity in the pre-scan.
+    pub(crate) fn seen(&self) -> usize {
+        self.seen
+    }
+
+    /// Is the `<details>` opening at source byte `block_start` ever CLOSED?
+    ///
+    /// Only a closed block may collapse: a collapsed frame that never pops suppresses
+    /// every remaining event, so an unclosed one would delete the rest of the document
+    /// (rubric 2.26d).
+    ///
+    /// Advances once per `<details>` however the block turns out. A disagreement
+    /// between the pre-scan's offset and the walk's is logged and answered **`false`**
+    /// — the reply that can only ever render MORE of the document, never less.
+    pub(crate) fn opening_is_closed(
+        &mut self,
+        spans: &[DisclosureSpan],
+        block_start: usize,
+    ) -> bool {
+        let span = spans.get(self.seen);
+        self.seen += 1;
+        match span {
+            Some(span) if span.start == block_start => span.body.is_some(),
+            other => {
+                log::error!(
+                    "disclosure pre-scan disagrees with the render walk at source byte \
+                     {block_start} (scan says {:?}); treating the block as unclosed so \
+                     nothing after it can be suppressed",
+                    other.map(|s| s.start)
+                );
+                false
+            }
+        }
+    }
 }
 
 /// Every `<details>` the document declares, in document order, each paired with the
@@ -215,8 +320,22 @@ pub(crate) fn scan_document(md: &str) -> Vec<DisclosureSpan> {
                 let Some((range, html)) = block.take() else {
                     continue;
                 };
+                // Where this block's own literal text sits in the SOURCE, if any. An
+                // unspaced `<details>` opens and closes inside ONE block, so its body
+                // is this text rather than a run of Markdown events between two
+                // blocks — and a body recorded as the degenerate `start..start` is a
+                // block the reader can collapse and never open again, because the
+                // fold splice re-renders from exactly that range.
+                let mut literal: Option<std::ops::Range<usize>> = None;
                 for tag in scan_disclosure_tags(&html) {
                     match tag {
+                        DetailsTag::Text { at, ref text } => {
+                            let run = range.start + at..range.start + at + text.len();
+                            literal = Some(match literal {
+                                Some(prev) => prev.start.min(run.start)..prev.end.max(run.end),
+                                None => run,
+                            });
+                        }
                         DetailsTag::DetailsOpen { open } => {
                             open_stack.push(spans.len());
                             spans.push(DisclosureSpan {
@@ -233,7 +352,13 @@ pub(crate) fn scan_document(md: &str) -> Vec<DisclosureSpan> {
                             // underflowing — malformed input is reported, not
                             // judged (rubric 2.26d).
                             if let Some(i) = open_stack.pop() {
-                                spans[i].body = Some(spans[i].start..range.start);
+                                // Opened in THIS block: unspaced, so the body is the
+                                // literal text the block itself carries.
+                                spans[i].body = Some(if spans[i].start == range.start {
+                                    literal.clone().unwrap_or(range.start..range.start)
+                                } else {
+                                    spans[i].start..range.start
+                                });
                             }
                         }
                         DetailsTag::SummaryOpen
@@ -246,8 +371,13 @@ pub(crate) fn scan_document(md: &str) -> Vec<DisclosureSpan> {
 
             // An inline raw-HTML run is not a block, so it opens no disclosure this
             // scan would honour: a `<details>` that is not at block level has no
-            // block offset to be keyed on, and the renderer does not open a frame
-            // for one either, so the two stay agreed by both declining it.
+            // block offset to be keyed on. **Both sinks decline it too**, which is
+            // what keeps the walks agreed rather than merely hoping they are —
+            // `renderer::start::feed_inline_html` and `export::walk::inline_html`
+            // each take the image scanner alone, and each says so. This claim was
+            // once made here while the renderer did the opposite, and a paragraph
+            // that merely MENTIONED `<details>` then disabled the feature for the
+            // rest of the document.
             Event::InlineHtml(_) => {}
             // Every other container. A disclosure tag can only arrive inside raw
             // HTML, so no other construct's boundaries can open or close one — but
@@ -415,6 +545,12 @@ mod tests {
     fn open_expanded() -> DetailsTag {
         DetailsTag::DetailsOpen { open: true }
     }
+    fn text_at(at: usize, text: &str) -> DetailsTag {
+        DetailsTag::Text {
+            at,
+            text: text.to_owned(),
+        }
+    }
 
     #[test]
     fn scans_a_whole_disclosure_header_in_order() {
@@ -513,6 +649,32 @@ mod tests {
         assert_eq!(scan_disclosure_tags("<details><summary"), vec![open()]);
     }
 
+    /// F-010 in this scanner: `find('>')` split the tag at a `>` inside a quoted
+    /// attribute value, so the tag's own tail was re-scanned as markup.
+    #[test]
+    fn a_bracket_inside_a_quoted_attribute_does_not_split_the_tag() {
+        assert_eq!(
+            scan_disclosure_tags("<details title=\"a>b\"><summary>S</summary></details>"),
+            vec![
+                open(),
+                DetailsTag::SummaryOpen,
+                DetailsTag::SummaryText("S".into()),
+                DetailsTag::SummaryClose,
+                DetailsTag::DetailsClose,
+            ]
+        );
+    }
+
+    /// F-SEC-004: `open` was read out of a *different* attribute's quoted value, so a
+    /// document could force a disclosure open by titling it.
+    #[test]
+    fn open_is_not_read_out_of_another_attributes_value() {
+        assert_eq!(
+            scan_disclosure_tags("<details title=\"open\"></details>"),
+            vec![open(), DetailsTag::DetailsClose]
+        );
+    }
+
     #[test]
     fn image_elements_are_ignored_by_this_scanner() {
         // They are allowlisted, but they are `renderer::picture`'s to interpret.
@@ -532,9 +694,17 @@ mod tests {
 
     #[test]
     fn tags_are_found_amongst_surrounding_text() {
+        // And the text between them is interleaved in document order, so each run
+        // reaches the frame it sits inside rather than following the whole stream.
         assert_eq!(
             scan_disclosure_tags("lead <details open> trail </details> end"),
-            vec![open_expanded(), DetailsTag::DetailsClose]
+            vec![
+                text_at(0, "lead"),
+                open_expanded(),
+                text_at(20, "trail"),
+                DetailsTag::DetailsClose,
+                text_at(37, "end"),
+            ]
         );
     }
 
@@ -700,5 +870,59 @@ mod document_scan_tests {
         ] {
             assert!(scan_document(md).is_empty(), "{md:?} is not a disclosure");
         }
+    }
+}
+
+#[cfg(test)]
+mod span_cursor_tests {
+    use super::{DisclosureSpan, SpanCursor};
+
+    fn span(start: usize, closed: bool) -> DisclosureSpan {
+        DisclosureSpan {
+            start,
+            open: false,
+            body: closed.then(|| start..start + 10),
+        }
+    }
+
+    #[test]
+    fn it_answers_each_span_in_document_order() {
+        let spans = [span(0, true), span(50, false), span(90, true)];
+        let mut cursor = SpanCursor::default();
+        assert!(cursor.opening_is_closed(&spans, 0));
+        assert!(!cursor.opening_is_closed(&spans, 50));
+        assert!(cursor.opening_is_closed(&spans, 90));
+        assert_eq!(cursor.seen(), 3);
+    }
+
+    /// The fail-safe. A walk that disagrees with the pre-scan is answered "not
+    /// closed", which can only ever render MORE of the document — a wrong "closed"
+    /// collapses a frame that never pops and deletes everything after it.
+    #[test]
+    fn a_disagreement_answers_unclosed_and_still_advances() {
+        let spans = [span(0, true), span(50, true)];
+        let mut cursor = SpanCursor::default();
+        assert!(
+            !cursor.opening_is_closed(&spans, 7),
+            "offset 7 is not the span's own start"
+        );
+        assert_eq!(cursor.seen(), 1, "and the cursor still advanced past it");
+        assert!(
+            !cursor.opening_is_closed(&spans, 999),
+            "the walk is now one ahead of the scan, so every later block disagrees too"
+        );
+    }
+
+    #[test]
+    fn running_past_the_end_is_a_disagreement_not_a_panic() {
+        let mut cursor = SpanCursor::default();
+        assert!(!cursor.opening_is_closed(&[], 0));
+    }
+
+    #[test]
+    fn a_resumed_cursor_starts_where_the_scratch_walk_stood() {
+        let spans = [span(0, false), span(50, true)];
+        let mut cursor = SpanCursor::at(1);
+        assert!(cursor.opening_is_closed(&spans, 50));
     }
 }

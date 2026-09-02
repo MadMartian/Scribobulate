@@ -133,7 +133,8 @@ src/renderer/image.rs
 src/renderer/mod.rs
 src/renderer/normalize.rs
 src/renderer/picture.rs
-src/renderer/rawhtml.rs
+src/renderer/rawhtml/mod.rs
+src/renderer/rawhtml/tags.rs
 src/renderer/scan.rs
 src/renderer/segments.rs
 src/renderer/start.rs

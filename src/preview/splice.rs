@@ -138,7 +138,29 @@ pub(super) fn splice(
     key: FoldKey,
 ) -> Option<SpliceOutcome> {
     let old_extent = old_extents.iter().find(|e| e.key == key)?;
+    // An UNSPACED disclosure's body is literal text inside its own opening raw-HTML
+    // event, which a region walk seeded BELOW that event can never write — so the
+    // splice would delete the body and put nothing back. Refused here, before the
+    // buffer is touched, and the caller's full re-render renders it correctly.
+    if !old_extent.spliceable {
+        log::debug!(
+            "preview::splice: refusing key {key:?} — its body is literal text inside              the opening raw-HTML block, which a region render cannot reproduce;              falling back to a full re-render"
+        );
+        return None;
+    }
     let old_volatile = old_extent.volatile;
+    // The deletion range comes from a PREVIOUS render's extents, and `iter_at_offset`
+    // clamps silently — so an offset past the buffer's end would delete to the end of
+    // the document and report success. Refused here, before the buffer is touched.
+    if old_volatile.start > old_volatile.end || old_volatile.end > buf.char_count() {
+        log::error!(
+            "preview::splice: refusing key {key:?} — its recorded extent {}..{} is not              a range inside a buffer of {} characters; falling back to a full re-render",
+            old_volatile.start,
+            old_volatile.end,
+            buf.char_count()
+        );
+        return None;
+    }
 
     // PASS A — see module docs.
     let products =

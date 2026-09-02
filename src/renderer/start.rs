@@ -296,7 +296,32 @@ impl Renderer {
     /// is not a CommonMark HTML block, so pulldown-cmark emits its tags as separate
     /// `Event::InlineHtml` events — grouping within one call would lose the fallback.
     /// `flush_open_picture` closes a still-open group at the end of its container.
-    pub(super) fn feed_html(&mut self, html: &str) {
+    pub(super) fn feed_html_block(&mut self, html: &str) {
+        self.feed_picture_html(html);
+        self.feed_disclosure_html(html);
+    }
+
+    /// The INLINE half: an `Event::InlineHtml` carries a tag sitting mid-paragraph,
+    /// and only the `<picture>` scanner may read it.
+    ///
+    /// **A disclosure is a BLOCK construct here, and declining it is a contract, not a
+    /// simplification.** `disclosure::scan_document`'s pre-scan indexes block-HTML
+    /// spans only, and the renderer checks each `<details>` it opens against that
+    /// index by source offset — so an inline tag the renderer *accepted* would push a
+    /// frame the pre-scan never counted, advance the shared cursor, and make every
+    /// real disclosure below it fail the offset check and render unfoldable. Prose
+    /// that merely mentions `<details>` mid-sentence is enough to trigger it. The two
+    /// walks stay agreed by both declining an inline tag, and this function is the
+    /// renderer's half of that agreement.
+    ///
+    /// Literal text is declined for the same reason it is emitted for a block: the
+    /// rubric-2.26d case is a whole unspaced construct arriving as ONE raw-HTML block,
+    /// which an inline event by definition is not.
+    pub(super) fn feed_inline_html(&mut self, html: &str) {
+        self.feed_picture_html(html);
+    }
+
+    fn feed_picture_html(&mut self, html: &str) {
         use super::picture::ImgTag;
         for tag in super::picture::scan_image_tags(html) {
             match tag {
@@ -311,35 +336,6 @@ impl Renderer {
                     None => self.render_image_slot(&[src]),
                 },
             }
-        }
-        self.feed_disclosure_html(html);
-        self.feed_html_literal_text(html);
-    }
-
-    /// Emit the literal-text runs an allowlisted raw-HTML block carries (rubric
-    /// 2.26d).
-    ///
-    /// Only reachable for the UNSPACED case in practice: with the blank lines
-    /// CommonMark requires, a disclosure's body is ordinary Markdown events and this
-    /// block holds nothing but tags. Without them the whole construct is one raw-HTML
-    /// block, and its body used to vanish — sanitise-by-omission applied to text the
-    /// author meant to be read, which is the silent loss TDD 2.25 forbids.
-    ///
-    /// Runs inside an unrecognised element are dropped by
-    /// [`rawhtml::literal_text_runs`], so an allowlisted element may contribute its
-    /// own text and never a `<script>`'s. Nothing is emitted inside a COLLAPSED body,
-    /// for the same reason no other event is.
-    fn feed_html_literal_text(&mut self, html: &str) {
-        if self.inside_collapsed_body() {
-            return;
-        }
-        for run in super::rawhtml::literal_text_runs(html) {
-            let text = run.trim();
-            if text.is_empty() {
-                continue;
-            }
-            self.block_sep();
-            self.insert(text);
         }
     }
 
@@ -364,7 +360,7 @@ impl Renderer {
                     // `DisclosureFrame::foldable`. Asked FIRST, and unconditionally,
                     // because the answer comes from a cursor that must advance once
                     // per `<details>` however this block turns out.
-                    let span_index = self.disclosures_seen;
+                    let span_index = self.disclosure_cursor.seen();
                     let foldable = self.opening_details_is_closed(key.0);
                     let collapsed = foldable && self.folds.is_collapsed(key, open);
                     self.disclosure_stack.push(super::DisclosureFrame {
@@ -375,6 +371,7 @@ impl Renderer {
                         label: None,
                         in_summary: false,
                         emitted: false,
+                        wrote_literal: false,
                         summary_offset: 0,
                         summary_end: 0,
                         body_start: 0,
@@ -396,6 +393,24 @@ impl Renderer {
                         frame.in_summary = false;
                     }
                     self.emit_pending_summary();
+                }
+                // A literal-text run, in the frame it sits inside (rubric 2.26d, the
+                // unspaced case). The summary line is written FIRST — it is what makes
+                // `inside_collapsed_body` true, so writing the body before it would
+                // put a closed block's body on the page under a toggle that then had
+                // nothing to fold.
+                DetailsTag::Text { text, .. } => {
+                    self.emit_pending_summary();
+                    // Recorded whatever the fold state: the extent this frame produces
+                    // must say "not spliceable" in BOTH states, or the collapsed
+                    // render would offer a splice the expanded one cannot fulfil.
+                    if let Some(frame) = self.disclosure_stack.last_mut() {
+                        frame.wrote_literal = true;
+                    }
+                    if !self.inside_collapsed_body() {
+                        self.block_sep();
+                        self.insert(&text);
+                    }
                 }
                 // A stray `</details>` closes nothing rather than underflowing —
                 // malformed input degrades predictably (rubric 2.26d).
@@ -434,12 +449,13 @@ impl Renderer {
         if ancestors.iter().any(|f| f.collapsed && f.emitted) {
             return;
         }
-        let (key, summary_offset, summary_end, body_start, label_end) = (
+        let (key, summary_offset, summary_end, body_start, label_end, wrote_literal) = (
             frame.key,
             frame.summary_offset,
             frame.summary_end,
             frame.body_start,
             frame.label_end,
+            frame.wrote_literal,
         );
         let body_end = self.end_offset();
         self.disclosure_extents.push(super::DisclosureExtent {
@@ -447,6 +463,7 @@ impl Renderer {
             summary: crate::span::BufferSpan::new(summary_offset, summary_end),
             body: crate::span::BufferSpan::new(body_start, body_end),
             volatile: crate::span::BufferSpan::new(label_end, body_end),
+            spliceable: !wrote_literal,
         });
     }
 

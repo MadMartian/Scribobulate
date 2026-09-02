@@ -299,6 +299,22 @@ fn the_splice_holds_the_reader_when_the_block_above_them_collapses() {
 /// Linux runs 4.6.9 and observes the defect; the macOS seat's 4.22.4 carries the fix,
 /// so it skips loudly. Neither is a platform claim — it is the library version, which
 /// is why this asks the runtime rather than the target.
+///
+/// # Reading the outcome on a seat whose GTK carries the fix
+///
+/// **These bodies are POSITIVE CONTROLS FOR A DEFECT, so the outcomes do not mean what
+/// they usually mean.** Written down here, at the gate, because the seat that meets a
+/// surprising result reads the code and not somebody's findings document.
+///
+/// | Outcome | Reading |
+/// |---|---|
+/// | **SKIPPED** | Correct on a runtime ≥ 4.19.3. Do not "fix" them. |
+/// | **FAILED** | The runtime GATE is broken on that seat, not the splice. Do not chase the drift. |
+/// | **PASSED** | The MOST suspicious outcome, not the most reassuring. They assert a bug 4.19.3 repaired; passing on a fixed GTK means either [`gtk::minor_version`] misdetected or the body is not exercising what it claims. Scrutinise harder than a failure. |
+///
+/// **And the literals in these bodies are METRIC-dependent, not constants** — 90 px/22
+/// alone and 74 px/27 under the suite are both correct readings of the same rig at
+/// different pane metrics. A hard-coded `22` or `2000` is a bug, not a constant.
 pub(super) fn skip_if_gtk_compensates_top_margin(limb: &str) -> bool {
     let (major, minor) = (gtk::major_version(), gtk::minor_version());
     // 4.19.3 is the first release carrying the fix; anything at or past 4.19 has it.

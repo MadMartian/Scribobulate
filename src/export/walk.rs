@@ -47,7 +47,13 @@ pub(super) struct Builder<'a> {
     /// which blocks are real disclosures and which are unclosed markup (rubric
     /// 2.26d). Consumed in document order.
     disclosures: Vec<crate::renderer::disclosure::DisclosureSpan>,
-    disclosures_seen: usize,
+    /// The document-order cursor over `disclosures`, the SAME type the preview
+    /// renderer holds — so the offset cross-check and its diagnostic reach both walks
+    /// rather than only the one that happened to be written first.
+    disclosure_cursor: crate::renderer::disclosure::SpanCursor,
+    /// Source range of the event being handled, so a raw-HTML block's own start offset
+    /// is available where its disclosure frames are applied.
+    event_src: std::ops::Range<usize>,
     /// Disclosure tags seen inside the raw-HTML block currently open, applied when
     /// that block ENDS.
     ///
@@ -133,7 +139,8 @@ impl<'a> Builder<'a> {
             picture_open: false,
             picture_taken: false,
             disclosures,
-            disclosures_seen: 0,
+            disclosure_cursor: crate::renderer::disclosure::SpanCursor::default(),
+            event_src: 0..0,
             pending_details: Vec::new(),
             has_unembedded_remote: false,
         }
@@ -193,6 +200,7 @@ impl<'a> Builder<'a> {
     }
 
     pub(super) fn event(&mut self, ev: Event<'_>, src: std::ops::Range<usize>) {
+        self.event_src = src.clone();
         match ev {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
@@ -224,7 +232,13 @@ impl<'a> Builder<'a> {
             // the page the preview never showed) and never passed through (that would
             // put an untrusted document's markup into a file the reader is about to
             // send). TDD 25.4.
-            Event::Html(h) | Event::InlineHtml(h) => self.html(&h),
+            Event::Html(h) => self.html_block(&h),
+            // INLINE raw HTML takes the image scanner alone, matching the preview's
+            // split for the same reason: `disclosure::scan_document` indexes block
+            // spans only, so a `<details>` a paragraph merely mentions would open a
+            // frame the pre-scan never counted and re-nest every real disclosure
+            // below it. `renderer::start::feed_inline_html` is the preview's half.
+            Event::InlineHtml(h) => self.inline_html(&h),
             // Not enabled in `md_options`, so these never arrive; the arm is explicit
             // so enabling one later is a visible change here rather than a silent
             // omission from every export.
@@ -401,10 +415,15 @@ impl<'a> Builder<'a> {
         // stack as of the pop below — so the disclosure frames it opens or closes are
         // applied after that, where they nest against the document's blocks rather
         // than against the block that spelled them.
-        let details = (tag == TagEnd::HtmlBlock).then(|| std::mem::take(&mut self.pending_details));
+        let details = (tag == TagEnd::HtmlBlock).then(|| {
+            (
+                self.event_src.start,
+                std::mem::take(&mut self.pending_details),
+            )
+        });
         let popped = self.open.pop();
-        if let Some(details) = details {
-            self.apply_details(details);
+        if let Some((block_start, details)) = details {
+            self.apply_details(block_start, details);
         }
         let Some(open) = popped else { return };
         match open {
@@ -530,16 +549,18 @@ impl<'a> Builder<'a> {
     /// content after it stays where it was, which is the same recovery the preview
     /// applies (rubric 2.26d) — and the reason the two agree is that they read the
     /// same pre-scan rather than each guessing.
-    fn apply_details(&mut self, tags: Vec<crate::renderer::disclosure::DetailsTag>) {
+    fn apply_details(
+        &mut self,
+        block_start: usize,
+        tags: Vec<crate::renderer::disclosure::DetailsTag>,
+    ) {
         use crate::renderer::disclosure::DetailsTag;
         for tag in tags {
             match tag {
                 DetailsTag::DetailsOpen { open } => {
                     let closed = self
-                        .disclosures
-                        .get(self.disclosures_seen)
-                        .is_some_and(|span| span.body.is_some());
-                    self.disclosures_seen += 1;
+                        .disclosure_cursor
+                        .opening_is_closed(&self.disclosures, block_start);
                     if !closed {
                         continue;
                     }
@@ -553,6 +574,19 @@ impl<'a> Builder<'a> {
                 // The label arrives inside the same raw-HTML block as the tag that
                 // opened the frame, so it is written onto the frame already on the
                 // stack rather than carried in a second pending slot.
+                // F-SPEC-002: an allowlisted block's literal text reached the preview
+                // and no exported artefact — the construct half-taught in exactly the
+                // way Document Rendering CAM row 17 warns about. It arrives here in
+                // document order, so it lands in the frame it belongs to.
+                DetailsTag::Text { text, .. } => {
+                    let start = self.rendered;
+                    self.rendered += text.chars().count() as i32;
+                    self.flush_implicit();
+                    self.push_block(Block::Paragraph(vec![Inline::Text {
+                        text,
+                        span: (start, self.rendered),
+                    }]));
+                }
                 DetailsTag::SummaryText(text) => {
                     if let Some(Open::Disclosure { summary, .. }) = self.open.last_mut() {
                         *summary = text;
@@ -597,13 +631,19 @@ impl<'a> Builder<'a> {
         });
     }
 
-    fn html(&mut self, html: &str) {
+    /// A whole raw-HTML BLOCK: images and disclosures both.
+    fn html_block(&mut self, html: &str) {
         // The SAME scanner the preview reads, never a second tag walk — the permitted
         // set is a security posture with one owner, and a construct taught to the
         // renderer alone is silently absent from every artefact (Document Rendering
         // CAM row 17, which is the defect this arm closes).
         self.pending_details
             .extend(crate::renderer::disclosure::scan_disclosure_tags(html));
+        self.inline_html(html);
+    }
+
+    /// One INLINE raw-HTML tag: images only. See the `Event::InlineHtml` arm.
+    fn inline_html(&mut self, html: &str) {
         for tag in crate::renderer::scan_image_tags(html) {
             match tag {
                 crate::renderer::ImgTag::PictureOpen => {

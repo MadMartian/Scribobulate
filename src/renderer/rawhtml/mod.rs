@@ -24,6 +24,10 @@
 //! without a security-posture decision, which is POLICY's call and not a rendering
 //! one.
 
+mod tags;
+
+pub(crate) use tags::{attr, has_attr, tag_end};
+
 /// One raw-HTML element this application renders rather than drops.
 ///
 /// **This enum IS the allowlist**, and it is the whole of it — named data with one
@@ -103,83 +107,8 @@ pub(crate) fn recognise_html_element(tag_lower: &str) -> Option<RawHtmlElement> 
             && tag_lower
                 .as_bytes()
                 .get(name.len())
-                .is_none_or(|&b| b == b' ' || b == b'>' || b == b'/' || b == b'\t')
+                .is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/')
     })
-}
-
-// ── tag attribute reading ─────────────────────────────────────────────────────
-
-/// Extract attribute `name`'s value from a single tag's inner text (already sliced
-/// to `<tagname …` without the closing `>`). `name` must be lowercase; the tag is
-/// matched case-insensitively. Returns the unquoted value, or `None` if absent.
-///
-/// The match requires `name` to sit on an attribute boundary (preceded by ASCII
-/// whitespace or the tag's `<`) and be immediately followed — after optional
-/// whitespace — by `=`. That `=` test is what keeps `src` from matching the `src`
-/// prefix of `srcset` (`srcset` is followed by `set`, not `=`).
-pub(crate) fn attr(tag: &str, name: &str) -> Option<String> {
-    let lower = tag.to_ascii_lowercase();
-    let bytes = tag.as_bytes();
-    let mut from = 0usize;
-    loop {
-        let rel = lower[from..].find(name)?;
-        let idx = from + rel;
-        let boundary = idx == 0 || bytes[idx - 1].is_ascii_whitespace() || bytes[idx - 1] == b'<';
-        let after = idx + name.len();
-        let rest = tag[after..].trim_start();
-        if boundary && rest.starts_with('=') {
-            return Some(attr_value(rest[1..].trim_start()));
-        }
-        from = after;
-    }
-}
-
-/// Read an attribute value starting just after `=` (leading whitespace trimmed):
-/// a double- or single-quoted run up to the closing quote, or an unquoted token up
-/// to the next whitespace or `>`.
-fn attr_value(after_eq: &str) -> String {
-    let mut chars = after_eq.chars();
-    match chars.next() {
-        Some(q @ ('"' | '\'')) => after_eq[1..].split(q).next().unwrap_or_default().to_owned(),
-        _ => after_eq
-            .split(|c: char| c.is_ascii_whitespace() || c == '>')
-            .next()
-            .unwrap_or_default()
-            .to_owned(),
-    }
-}
-
-/// Is boolean attribute `name` PRESENT on this tag? `<details open>` carries no value,
-/// so [`attr`] — which requires an `=` — cannot answer it and would report the
-/// attribute absent.
-///
-/// Shares [`attr`]'s boundary rule deliberately: both live here so the definition of
-/// "this is an attribute rather than a substring of one" has one home. A second copy
-/// inside a scanner is how `src` starts matching the `src` of `srcset` again.
-///
-/// HTML's rule is presence, not value — `open`, `open=""` and `open="false"` are all
-/// TRUE. That last one reads wrong and is correct: the attribute's presence is the
-/// whole signal, which is why a document cannot express "explicitly closed" and does
-/// not need to.
-pub(crate) fn has_attr(tag: &str, name: &str) -> bool {
-    let lower = tag.to_ascii_lowercase();
-    let bytes = tag.as_bytes();
-    let mut from = 0usize;
-    while let Some(rel) = lower[from..].find(name) {
-        let idx = from + rel;
-        let boundary = idx == 0 || bytes[idx - 1].is_ascii_whitespace() || bytes[idx - 1] == b'<';
-        let after = idx + name.len();
-        // The name must END here too, or `open` would match inside `opened`.
-        let ends = tag[after..]
-            .chars()
-            .next()
-            .is_none_or(|c| c.is_ascii_whitespace() || c == '=' || c == '>' || c == '/');
-        if boundary && ends {
-            return true;
-        }
-        from = after;
-    }
-    false
 }
 
 #[cfg(test)]
@@ -225,6 +154,15 @@ mod tests {
             recognise_html_element("<details\topen>"),
             Some(RawHtmlElement::DetailsOpen)
         );
+        // F-AP-022: a tag wrapped across lines is ordinary in a hand-written document,
+        // and the boundary set omitted every vertical whitespace byte.
+        for ws in ["\n", "\r", "\u{c}"] {
+            assert_eq!(
+                recognise_html_element(&format!("<details{ws}open>")),
+                Some(RawHtmlElement::DetailsOpen),
+                "{ws:?} ends a tag name"
+            );
+        }
         assert_eq!(
             recognise_html_element("<summary/>"),
             Some(RawHtmlElement::SummaryOpen)
@@ -282,52 +220,127 @@ mod tests {
 /// Whitespace-only runs are skipped, so a well-formed `<picture>` group — whose tags
 /// are separated by newlines and nothing else — contributes nothing, and its rendering
 /// is byte-identical to what it was before this existed.
-pub(crate) fn literal_text_runs(html: &str) -> Vec<&str> {
+///
+/// **Suppression is tracked by element NAME, not by a depth count.** A counter is
+/// defeated by any token shaped `</…>`, including one that closes nothing: two stray
+/// `</x>` before a real `</script>` drop the count to zero while the cursor is still
+/// inside the script, and every run after that is emitted as page content. So the name
+/// is pushed and popped only against a match, which also makes an unmatched close tag
+/// inert in *both* directions — the same answer a browser gives.
+pub(crate) fn literal_text_runs(html: &str) -> Vec<LiteralRun<'_>> {
     let mut runs = Vec::new();
-    // How many UNRECOGNISED elements enclose the cursor. Text is dropped while this is
-    // non-zero; an allowlisted element never changes it, so `<summary>`'s own text is
-    // reached at depth 0 exactly as the top level is.
-    let mut suppressed = 0usize;
+    // The UNRECOGNISED elements enclosing the cursor, innermost last. Text is dropped
+    // while this is non-empty; an allowlisted element never enters it, so `<summary>`'s
+    // own text is reached at depth 0 exactly as the top level is.
+    let mut suppressors: Vec<String> = Vec::new();
     // `<summary>`'s text is NOT a literal-text run: the disclosure scanner already
     // extracts it and the renderer draws it as the block's label. Emitting it here too
     // would print the label twice — once as the summary line, once as body text.
     let mut in_summary = false;
-    let mut rest = html;
-    while let Some(lt) = rest.find('<') {
-        let (text, tail) = rest.split_at(lt);
-        push_run(&mut runs, text, suppressed + usize::from(in_summary));
+    let mut cursor = 0usize;
+    while let Some(rel) = html[cursor..].find('<') {
+        let lt = cursor + rel;
+        push_run(
+            &mut runs,
+            cursor,
+            &html[cursor..lt],
+            suppressors.len() + usize::from(in_summary),
+        );
         // An unterminated `<` ends the block: the remainder is a partial tag, never
         // text, and treating it as text would print a half-typed tag at every keystroke
         // of a live-preview session.
-        let Some(gt) = tail.find('>') else {
+        let Some(gt) = tag_end(html, lt) else {
             return runs;
         };
-        let tag = &tail[..=gt];
-        match recognise_html_element(&tag.to_ascii_lowercase()) {
+        let tag = &html[lt..=gt];
+        let lower = tag.to_ascii_lowercase();
+        cursor = gt + 1;
+        match recognise_html_element(&lower) {
             Some(RawHtmlElement::SummaryOpen) => in_summary = true,
             Some(RawHtmlElement::SummaryClose) => in_summary = false,
-            _ => {}
-        }
-        if recognise_html_element(&tag.to_ascii_lowercase()).is_none() {
-            if tag.starts_with("</") {
-                suppressed = suppressed.saturating_sub(1);
-            } else if !tag.ends_with("/>") {
-                // A void or self-closing unknown element encloses nothing, so it must
-                // not open a suppression that never closes — one `<br>` would otherwise
-                // silence the whole remainder of the block.
-                suppressed += usize::from(!is_void_element(tag));
+            Some(_) => {}
+            None => {
+                let (close, name) = tags::tag_name(&lower);
+                if close {
+                    // A close tag that matches nothing on the stack closes nothing.
+                    if let Some(at) = suppressors.iter().rposition(|n| n == name) {
+                        suppressors.truncate(at);
+                    }
+                } else if lower.ends_with("/>") || is_void_name(name) {
+                    // A void or self-closing unknown element encloses nothing, so it
+                    // must not open a suppression that never closes — one `<br>` would
+                    // otherwise silence the whole remainder of the block.
+                } else if is_raw_text_name(name) {
+                    // A raw-text element's content is not markup at all: nothing inside
+                    // it can open or close a tag, so no `</b>` in a script's source can
+                    // end the suppression. Skip to its own close tag, as a browser's
+                    // tokenizer does; with none, the rest of the block IS its content.
+                    let Some(after) = skip_raw_text(html, cursor, name) else {
+                        return runs;
+                    };
+                    cursor = after;
+                } else {
+                    suppressors.push(name.to_owned());
+                }
             }
         }
-        rest = &tail[gt + 1..];
     }
-    push_run(&mut runs, rest, suppressed + usize::from(in_summary));
+    push_run(
+        &mut runs,
+        cursor,
+        &html[cursor..],
+        suppressors.len() + usize::from(in_summary),
+    );
     runs
 }
 
-fn push_run<'a>(runs: &mut Vec<&'a str>, text: &'a str, suppressed: usize) {
+/// One literal-text run and where it sits in the fragment.
+///
+/// **The offset is what lets a consumer interleave runs with TAGS in document order.**
+/// `disclosure::scan_disclosure_tags` does exactly that, so a run between `</summary>`
+/// and `</details>` lands inside the block's body rather than after the whole
+/// construct — which is the difference between a collapsed disclosure hiding its body
+/// and printing it beneath a toggle that then does nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LiteralRun<'a> {
+    /// Byte offset of the run within the fragment passed to [`literal_text_runs`].
+    pub(crate) at: usize,
+    /// The run's text, untrimmed.
+    pub(crate) text: &'a str,
+}
+
+fn push_run<'a>(runs: &mut Vec<LiteralRun<'a>>, at: usize, text: &'a str, suppressed: usize) {
     if suppressed == 0 && !text.trim().is_empty() {
-        runs.push(text);
+        runs.push(LiteralRun { at, text });
     }
+}
+
+/// The offset just past `</name …>`, searching from `from`. `None` when the element is
+/// never closed, which means everything left is its content.
+fn skip_raw_text(html: &str, from: usize, name: &str) -> Option<usize> {
+    let lower = html.to_ascii_lowercase();
+    let needle = format!("</{name}");
+    let mut at = from;
+    loop {
+        let lt = at + lower[at..].find(&needle)?;
+        // The name must END at the close tag's own boundary, or `</scriptx>` would do.
+        let after = lt + needle.len();
+        if lower[after..]
+            .chars()
+            .next()
+            .is_none_or(|c| c.is_ascii_whitespace() || c == '>' || c == '/')
+        {
+            return Some(tag_end(html, lt).map_or(html.len(), |gt| gt + 1));
+        }
+        at = after;
+    }
+}
+
+/// HTML elements whose content is text rather than markup. Inside one, a `<` opens
+/// nothing — which is exactly why a `</…>` inside one must not be allowed to close the
+/// suppression it sits in.
+fn is_raw_text_name(name: &str) -> bool {
+    matches!(name, "script" | "style" | "textarea" | "title" | "xmp")
 }
 
 /// HTML elements that never have a closing tag, so an opening one encloses nothing.
@@ -335,26 +348,32 @@ fn push_run<'a>(runs: &mut Vec<&'a str>, text: &'a str, suppressed: usize) {
 /// Only the ones a document plausibly carries inside a disclosure — the list does not
 /// need to be exhaustive to be safe, because an unlisted void element merely suppresses
 /// text that would otherwise show, which is the conservative direction.
-fn is_void_element(tag: &str) -> bool {
-    const VOID: [&str; 7] = ["<br", "<hr", "<wbr", "<meta", "<link", "<input", "<area"];
-    let lower = tag.to_ascii_lowercase();
-    VOID.iter().any(|v| {
-        lower.starts_with(v)
-            && lower[v.len()..]
-                .chars()
-                .next()
-                .is_none_or(|c| c.is_whitespace() || c == '>' || c == '/')
-    })
+fn is_void_name(name: &str) -> bool {
+    matches!(
+        name,
+        "br" | "hr" | "wbr" | "meta" | "link" | "input" | "area"
+    )
 }
 
 #[cfg(test)]
 mod literal_text_tests {
     use super::literal_text_runs;
 
+    /// Every run's text, in document order — what most of these assertions are about.
+    fn texts(html: &str) -> Vec<&str> {
+        literal_text_runs(html)
+            .into_iter()
+            .map(|run| run.text)
+            .collect()
+    }
+
+    fn joined(html: &str) -> String {
+        texts(html).concat()
+    }
+
     #[test]
     fn an_unspaced_disclosure_body_becomes_literal_text() {
-        let runs = literal_text_runs("<details>\n<summary>S</summary>\nnot separated\n</details>");
-        let joined = runs.concat();
+        let joined = joined("<details>\n<summary>S</summary>\nnot separated\n</details>");
         assert!(
             joined.contains("not separated"),
             "the body shows as literal text: {joined:?}"
@@ -370,10 +389,9 @@ mod literal_text_tests {
     /// block being shown, so this is the assertion that keeps the widening narrow.
     #[test]
     fn a_script_inside_an_allowlisted_block_contributes_no_text() {
-        let runs = literal_text_runs(
+        let joined = joined(
             "<details>\n<summary>S</summary>\nvisible\n<script>alert('x')</script>\n</details>",
         );
-        let joined = runs.concat();
         assert!(joined.contains("visible"), "the body's own text shows");
         assert!(
             !joined.contains("alert"),
@@ -383,7 +401,7 @@ mod literal_text_tests {
 
     #[test]
     fn nested_unknown_elements_stay_suppressed_until_all_close() {
-        let runs = literal_text_runs("<details>a<div>b<span>c</span>d</div>e</details>").concat();
+        let runs = joined("<details>a<div>b<span>c</span>d</div>e</details>");
         assert!(runs.contains('a') && runs.contains('e'));
         for hidden in ['b', 'c', 'd'] {
             assert!(
@@ -395,7 +413,7 @@ mod literal_text_tests {
 
     #[test]
     fn a_void_element_does_not_suppress_the_rest_of_the_block() {
-        let runs = literal_text_runs("<details>before<br>after</details>").concat();
+        let runs = joined("<details>before<br>after</details>");
         assert!(
             runs.contains("before") && runs.contains("after"),
             "a void element encloses nothing: {runs:?}"
@@ -404,7 +422,7 @@ mod literal_text_tests {
 
     #[test]
     fn a_well_formed_picture_group_contributes_nothing() {
-        let runs = literal_text_runs(
+        let runs = joined(
             "<picture>\n<source srcset=\"a.webp\">\n<img src=\"a.png\" alt=\"x\">\n</picture>",
         );
         assert!(
@@ -415,7 +433,7 @@ mod literal_text_tests {
 
     #[test]
     fn an_unterminated_tag_is_not_printed_as_text() {
-        let runs = literal_text_runs("<details>shown<scr").concat();
+        let runs = joined("<details>shown<scr");
         assert!(runs.contains("shown"));
         assert!(
             !runs.contains("scr"),
@@ -425,7 +443,65 @@ mod literal_text_tests {
 
     #[test]
     fn a_script_at_the_top_level_of_a_block_is_still_dropped() {
-        let runs = literal_text_runs("<script>alert('x')</script>").concat();
+        let runs = texts("<script>alert('x')</script>");
         assert!(runs.is_empty(), "unchanged by this widening: {runs:?}");
+    }
+
+    /// F-001, both reproductions. A depth COUNTER let any token shaped `</…>` decrement
+    /// it, so a stray close tag inside a `<script>` released the suppression and the
+    /// script's own text was emitted as page content.
+    #[test]
+    fn a_stray_close_tag_inside_a_script_does_not_release_it() {
+        let runs = texts("<details>x<script>y</span>LEAK</script>z</details>");
+        assert_eq!(runs, vec!["x", "z"], "the script's text stays dropped");
+
+        let runs = joined(
+            "<details>\n<summary>S</summary>\n<script>\n</b>\nalert(1)\n</script>\n</details>",
+        );
+        assert!(
+            !runs.contains("alert"),
+            "nor when the stray tag is on its own line: {runs:?}"
+        );
+    }
+
+    /// The counter's other half: at depth 0 a stray close tag was free, and could take
+    /// the depth *negative* were it not for `saturating_sub` — so the element opened
+    /// next was one short of suppressing anything.
+    #[test]
+    fn a_close_tag_that_matches_nothing_is_inert() {
+        let runs = joined("<details>a</x><div>b</div>c</details>");
+        assert!(runs.contains('a') && runs.contains('c'));
+        assert!(
+            !runs.contains('b'),
+            "the `<div>` still suppresses: {runs:?}"
+        );
+    }
+
+    #[test]
+    fn a_mismatched_close_tag_does_not_pop_an_inner_element() {
+        let runs = joined("<details>a<div>b</span>c</div>d</details>");
+        assert!(runs.contains('a') && runs.contains('d'));
+        for hidden in ['b', 'c'] {
+            assert!(!runs.contains(hidden), "still inside the div: {runs:?}");
+        }
+    }
+
+    /// F-010, in this scanner: a `>` inside a quoted attribute value used to split the
+    /// tag, leaving its own tail to be re-scanned as text.
+    #[test]
+    fn a_bracket_in_a_quoted_attribute_does_not_leak_the_tags_tail() {
+        let runs = joined("<details>a<div title=\"x>y\">b</div>c</details>");
+        assert!(runs.contains('a') && runs.contains('c'));
+        assert!(
+            !runs.contains('b') && !runs.contains("y\""),
+            "neither the div's text nor the tag's own tail: {runs:?}"
+        );
+    }
+
+    #[test]
+    fn an_unclosed_raw_text_element_swallows_the_rest_of_the_block() {
+        let runs = joined("<details>shown<style>body{}");
+        assert!(runs.contains("shown"));
+        assert!(!runs.contains("body"), "it is style source: {runs:?}");
     }
 }

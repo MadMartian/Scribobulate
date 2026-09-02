@@ -207,10 +207,13 @@ impl Renderer {
                 }
             }
             // Inline raw HTML (mid-paragraph, e.g. a bare `<img …>`, or the separate
-            // tags of a single-line `<picture>`): feed each tag through the scanner,
-            // which honours the `<picture>` grouping carried across events. Non-image
-            // HTML is dropped (sanitize by omission). See ScrAP-147 / TDD 2.23.
-            Event::InlineHtml(t) => self.feed_html(&t),
+            // tags of a single-line `<picture>`): feed each tag through the IMAGE
+            // scanner alone, which honours the `<picture>` grouping carried across
+            // events. Everything else — a `<details>` a paragraph merely mentions
+            // included — is dropped (sanitize by omission), and `feed_inline_html`
+            // carries why declining the disclosure scanner here is a contract with
+            // `disclosure::scan_document` rather than a shortcut. ScrAP-147 / TDD 2.23.
+            Event::InlineHtml(t) => self.feed_inline_html(&t),
 
             Event::Rule => {
                 self.block_sep();

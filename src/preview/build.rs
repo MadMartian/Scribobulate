@@ -3875,7 +3875,7 @@ mod gtk_integration_tests {
     #[gtktest::test]
     fn an_unspaced_disclosure_body_shows_as_literal_text() {
         let products = build_render_products(
-            "<details>\n<summary>S</summary>\nnot separated\n</details>\n",
+            "<details open>\n<summary>S</summary>\nnot separated\n</details>\n",
             None,
             1.0,
             false,
@@ -3893,6 +3893,133 @@ mod gtk_integration_tests {
         );
     }
 
+    /// **An unspaced disclosure refuses the SPLICE, and must.** Its body is literal
+    /// text inside its own opening raw-HTML event, which a region walk seeded below
+    /// that event cannot write — so a splice would delete the body and put nothing
+    /// back, leaving a block the reader had collapsed and could never open again.
+    ///
+    /// MEASURED by driving the running app: neither fold state's full render is wrong,
+    /// so only the transition between them showed it.
+    #[gtktest::test]
+    fn an_unspaced_disclosure_is_not_spliceable_and_a_spaced_one_is() {
+        let unspaced = build_render_products(
+            "<details>\n<summary>S</summary>\nnot separated\n</details>\n\n## After\n",
+            None,
+            1.0,
+            false,
+        );
+        assert_eq!(
+            unspaced
+                .disclosure_extents
+                .iter()
+                .map(|e| e.spliceable)
+                .collect::<Vec<_>>(),
+            vec![false],
+            "the toggle must fall back to a full re-render"
+        );
+
+        // The control, without which a build that marked EVERY extent unspliceable
+        // would satisfy the assertion above and quietly retire the splice (ScrAP-209).
+        let spaced = build_render_products(
+            "<details>\n<summary>S</summary>\n\nseparated\n\n</details>\n\n## After\n",
+            None,
+            1.0,
+            false,
+        );
+        assert_eq!(
+            spaced
+                .disclosure_extents
+                .iter()
+                .map(|e| e.spliceable)
+                .collect::<Vec<_>>(),
+            vec![true],
+            "an ordinary disclosure still splices"
+        );
+    }
+
+    /// **The other half of 2.26d's unspaced case, and F-SPEC-003.** A literal run is
+    /// the block's BODY, so a CLOSED block hides it like any other body. It used to be
+    /// emitted after the whole tag stream — outside the frame — so a collapsed
+    /// disclosure printed its body anyway and its toggle was a visible no-op.
+    #[gtktest::test]
+    fn a_collapsed_unspaced_disclosure_hides_its_literal_body() {
+        let products = build_render_products(
+            "<details>\n<summary>S</summary>\nnot separated\n</details>\n",
+            None,
+            1.0,
+            false,
+        );
+        let slice = buffer_slice(&products.buf);
+        // The text survives ONLY as the dimmed preview fragment on the summary line —
+        // the same one-line shape a spaced collapsed block takes. A body of its own is
+        // exactly what the block is hiding.
+        let lines: Vec<&str> = slice.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(
+            lines.len(),
+            1,
+            "a collapsed block is one summary line, body and all: {lines:?}"
+        );
+        assert!(
+            lines[0].contains('S'),
+            "the summary line still shows: {slice:?}"
+        );
+        assert_eq!(
+            products.disclosure_toggles.len(),
+            1,
+            "and the toggle it carries has something to fold"
+        );
+
+        // The control: with `open`, the same body IS a line of its own — without it, a
+        // build that rendered nothing at all would satisfy the assertions above
+        // (ScrAP-209).
+        let opened = build_render_products(
+            "<details open>\n<summary>S</summary>\nnot separated\n</details>\n",
+            None,
+            1.0,
+            false,
+        );
+        let opened = buffer_slice(&opened.buf);
+        assert!(
+            opened.lines().any(|l| l.trim() == "not separated"),
+            "expanded, the body is a line of its own: {opened:?}"
+        );
+    }
+
+    /// **F-003.** Prose that MENTIONS `<details>` mid-sentence — this project's own
+    /// release notes do — used to be read as a disclosure: the renderer opened a frame
+    /// the block-level pre-scan never counted, split the paragraph with a spurious
+    /// `Details` label, and left every real disclosure below it failing the offset
+    /// check and rendering unfoldable. One inline tag disabled the feature for the rest
+    /// of the document.
+    #[gtktest::test]
+    fn a_details_mentioned_in_prose_is_not_a_disclosure() {
+        let md = "Wrap an aside in <details> to fold it away.\n\n\
+                  <details>\n<summary>Real</summary>\n\nreal body\n\n</details>\n\n\
+                  ## After\n";
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+
+        assert!(
+            slice.contains("Wrap an aside in  to fold it away.")
+                || slice.contains("Wrap an aside in to fold it away."),
+            "the paragraph stays one paragraph, with the tag dropped and no label \
+             inserted mid-prose: {slice:?}"
+        );
+        assert_eq!(
+            products.disclosure_toggles.len(),
+            1,
+            "and the REAL disclosure below it is still foldable — the mention must not \
+             consume the pre-scan cursor that the offset check pairs against"
+        );
+        assert_eq!(
+            products.disclosure_extents.len(),
+            1,
+            "with its extent recorded: {:?}",
+            products.disclosure_extents
+        );
+        assert!(slice.contains("Real") && slice.contains("After"));
+    }
+
     /// **Rubric 2.26d's security clause**, end to end. The unspaced case puts the
     /// script INSIDE the block being shown, so this is what keeps showing an
     /// allowlisted element's own text from becoming a general widening of the
@@ -3900,7 +4027,7 @@ mod gtk_integration_tests {
     #[gtktest::test]
     fn a_script_inside_an_unspaced_body_reaches_the_page_as_nothing() {
         let products = build_render_products(
-            "<details>\n<summary>S</summary>\nvisible text\n\
+            "<details open>\n<summary>S</summary>\nvisible text\n\
              <script>alert('pwned')</script>\n</details>\n",
             None,
             1.0,

@@ -9,7 +9,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 2. General engineering discipline that survives deleting every Scribobulate noun? → route it to `general-engineering-principles`, cited `GEP-N`; leave a one-line `**Routed**` tombstone here. No ScrAP number is needed for provenance.
 3. Neither — Scribobulate internals, or a non-gtk4-rs dependency (Pango, GtkSourceView, pulldown-cmark, librsvg, syntect, serde/toml, the toolchain)? → it stays here, **in ≤ 6 lines**: Symptom · Root cause · Resolution · Lesson · Scribobulate · See. Extend an existing entry rather than minting a sibling for the same root cause. Route a Pango lesson on whose API *contract* it is about, and raise it before routing.
 
-**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 340**+ — check this table and announce the range you claim; never derive it from the highest heading below.
+**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 341**+ — check this table and announce the range you claim; never derive it from the highest heading below.
 
 **Growth** is gated in bytes (check 11). The ratchet only tightens; consolidate in the change that trips it.
 
@@ -352,6 +352,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 | 337 | A precondition implicit in a whole script is reported by whichever line violates it first, at that line's layer, after everything before it has run | B |
 | 338 | A settle wait pointed at a value the code records SYNCHRONOUSLY ahead of the work it waits for — it observes a constant, reports converged on the first turns, and leaves fixed drains doing the real waiting | A |
 | 339 | An edit ABOVE the viewport scrolls the reader off their line, by a constant quantum per compensating pass rather than by anything height-shaped | A |
+| 340 | Splicing a region whose rendered content was written by an event ABOVE that region | C |
 
 ---
 
@@ -1902,3 +1903,11 @@ Severity: High
 ## 339. An edit ABOVE the viewport scrolls the reader off their line, by a constant quantum per compensating pass rather than by anything height-shaped
 **Scribobulate**: the disclosure fold splice restores the reader's offset from the viewport top after settle rather than compensating for the loss, because the number of compensating passes is not reliably countable — MEASURED bimodal at one dose (55 or 63 for the identical toggle), so the drift itself is nondeterministic. The excursion rig (`preview::splice::excursion`) holds the measurements, and its bodies are positive controls for the defect, so they skip on a runtime GTK that carries the fix rather than failing there.
 **See**: gtk4-rs skill → textview-scrolling-and-adjustments (GTK4Rs/AP-321); kin GTK4Rs/AP-260 (the same `first_validate_idle` teardown arriving from the caller's side rather than GTK's), GTK4Rs/AP-320 (the splice that meets this).
+
+## 340. Splicing a region whose rendered content was written by an event ABOVE that region
+**Symptom**: an UNSPACED `<details>` (rubric 2.26d) collapsed correctly and then could never be opened again — the fold splice deleted the body and wrote nothing back, and the heading below lost its block separator.
+**Root cause**: a region render is seeded at the region's start and replays only the events BELOW it. An unspaced block's body is literal text inside the block's own opening raw-HTML event, which sits above the region — so the region walk never emits it, while a FULL render of either fold state is correct. Only the transition is wrong, which is why no unit test could see it and driving the running app could.
+**Resolution**: the renderer records `DisclosureExtent::spliceable`, false for any frame that wrote literal text of its own, and `preview::splice` refuses before it touches the buffer so the caller's full re-render runs instead.
+**Lesson**: a splice's precondition is not "I know the region" but "every character in the region is produced by an event inside it". Before adding a region-scoped fast path, ask which event WROTE the content — a construct whose rendering is emitted by an ancestor event is not spliceable at any region granularity.
+**Scribobulate**: `renderer::DisclosureExtent::spliceable` (set in `renderer::start::record_disclosure_extent`), refused in `preview::splice::splice`; pinned by `preview::build`'s `an_unspaced_disclosure_is_not_spliceable_and_a_spaced_one_is`, which carries its own positive control.
+**See**: ScrAP-339 (the reader-position half of the same splice).

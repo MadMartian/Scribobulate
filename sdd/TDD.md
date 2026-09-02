@@ -352,6 +352,8 @@
 - **Given** a `<details>` with no `<summary>`, or whose body is not separated by the blank lines CommonMark requires, or which is never closed
 - **When** it is rendered
 - **Then** a missing `<summary>` shows the label "Details"; a body without blank lines renders as **literal text** rather than parsed Markdown (matching CommonMark and GitHub — this is correct, not a defect); and an unclosed `<details>` does not swallow the remainder of the document
+- **And** that literal text is the block's **body**, so it folds with the block: a closed unspaced disclosure hides it and an `open` one shows it, exactly as a spaced body behaves. Emitted outside the block instead, a collapsed disclosure would print the body it had just hidden and its own control would be a visible no-op
+- **And** toggling it is **lossless in both directions**: the body returns on expand. Its rendered body is not a range of Markdown events, so the region splice cannot reproduce it and the toggle takes the full-re-render path instead
 - **And** an unclosed `<details>` shows its summary text as an ordinary line with **no disclosure control** — there is nothing it could fold, and everything after it renders exactly as it would if the tag were absent
 - **And given** an unspaced body that also contains a `<script>` element
 - **Then** the body's own text appears as literal text and the script's text appears nowhere — the allowlist still governs which elements may contribute text at all, so showing an allowlisted element's own text is not a licence for its children's
