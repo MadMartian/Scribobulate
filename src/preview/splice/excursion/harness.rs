@@ -12,21 +12,8 @@ use gtk::prelude::*;
 use std::time::Duration;
 
 use crate::fold::{FoldKey, FoldState};
-use crate::preview::build::attach_anchored;
 
 use super::rig::{Reading, Rig};
-
-/// WHEN a region render's anchored children are parented onto the live view.
-///
-/// The two arms of the experiment this module's docs call for. `Deferred` is the
-/// two-step route every full render uses (`attach_anchored` after the render
-/// returns); `Eager` hands the view to the region renderer so each child is parented
-/// in the same turn as its anchor (`Renderer::push_anchored`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Parenting {
-    Deferred,
-    Eager,
-}
 
 /// Pane size. Small enough that a document of the size below towers over it, which is
 /// the precondition for the clamp: the collapse only bites when `upper` greatly
@@ -78,84 +65,23 @@ pub(super) const SETTLE_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The document: one collapsed disclosure near the top, then a long tail the reader
 /// scrolls down into.
+///
+/// **Deliberately knob-free.** It grew four layers of parameters — a body dose of
+/// anchored children, an independent tail dose, and a body filler length — for the
+/// seven characterization arms that varied them. Those are gone (see [`super`]'s module
+/// docs for where their conclusion lives), and a fixture builder whose knobs nothing
+/// turns is a fixture nobody can tell is still correct.
 pub(super) fn tall_document() -> String {
-    tall_document_with_children(0, "")
-}
-
-/// [`tall_document`] with `children` copies of the Markdown `child` distributed
-/// through the disclosure BODY.
-///
-/// The dose knob [`drift`] varies: `child` is a construct that renders as ONE
-/// anchored widget (`---` a `GtkSeparator`, a broken image reference a `GtkImage`),
-/// so this changes how many anchored children the toggled region creates — and, by
-/// choosing a different `child`, how tall each of them is — and nothing else about
-/// the document's shape.
-pub(super) fn tall_document_with_children(children: usize, child: &str) -> String {
-    tall_document_with_body_and_tail_children(children, 0, child)
-}
-
-/// [`tall_document_with_children`] with a SECOND, independent population of anchored
-/// children placed in the TAIL — outside the disclosure, below it, and outside the
-/// region a toggle deletes and re-renders.
-///
-/// **This is the knob that separates two counts our other fixtures cannot tell
-/// apart.** Every anchored child the older fixtures create lives inside the toggled
-/// body, so the view's whole `anchored_children` list and the toggled region's own
-/// children move together and no measurement can attribute a per-child cost to one
-/// rather than the other. A tail child is in the list and not in the region: it is
-/// never deleted (GTK's own delete touches nothing outside its range, which is what
-/// [`super::super::splice`]'s survivor merge relies on), so it survives the toggle as
-/// the same widget object, already parented and already laid out.
-///
-/// Placed one after each of the first `tail_children` tail paragraphs, mirroring the
-/// body's own spread for the same reason — a clustered run would measure one tall
-/// block of chrome rather than N separate children — and so above the reading
-/// position, matching the body children's "above the viewport" condition. The only
-/// difference between the two populations is which side of the splice they fall on,
-/// which is exactly the variable.
-pub(super) fn tall_document_with_body_and_tail_children(
-    body_children: usize,
-    tail_children: usize,
-    child: &str,
-) -> String {
-    tall_document_with_body_filler(body_children, tail_children, child, FILLER)
-}
-
-/// [`tall_document_with_body_and_tail_children`] with the BODY's paragraph filler
-/// chosen by the caller — [`super::kink`]'s second knob.
-///
-/// A paragraph is one logical line, and a logical line is what
-/// `gtk_text_layout_validate` spends its pixel budget on, so the filler's length is how
-/// an experiment varies the HEIGHT of a validated chunk without touching anything else
-/// about the document's shape. The TAIL keeps [`FILLER`] whatever the body is given: the
-/// tail is what makes the document tower over the viewport, and moving both at once
-/// would change the reading position and the chunk height together.
-pub(super) fn tall_document_with_body_filler(
-    body_children: usize,
-    tail_children: usize,
-    child: &str,
-    body_filler: &str,
-) -> String {
     let mut md = String::from(
         "# Measurement fixture\n\nAn opening paragraph, before the disclosure.\n\n\
          <details>\n<summary>A collapsible section</summary>\n\n",
     );
-    for i in 0..BODY_PARAS.max(body_children) {
-        md.push_str(&format!("Hidden body paragraph {i}. {body_filler}\n\n"));
-        // Spread through the body rather than clustered: a run of adjacent
-        // children would measure one tall block of chrome, not N children.
-        if i < body_children {
-            md.push_str(child);
-            md.push_str("\n\n");
-        }
+    for i in 0..BODY_PARAS {
+        md.push_str(&format!("Hidden body paragraph {i}. {FILLER}\n\n"));
     }
     md.push_str("</details>\n\n");
     for i in 0..TAIL_PARAS {
         md.push_str(&format!("Tail paragraph {i}. {FILLER}\n\n"));
-        if i < tail_children {
-            md.push_str(child);
-            md.push_str("\n\n");
-        }
     }
     md
 }
@@ -404,30 +330,23 @@ pub(super) fn measure_probed_at_margin(
     }
 }
 
-/// Run the SPLICE route's toggle against `rig`, parenting the region render's own
-/// fresh widgets according to `parenting`.
+/// Run the SPLICE route's toggle against `rig`, exactly as production does it: the
+/// view is handed to the region renderer, so each of its fresh children is parented in
+/// the same turn as its anchor (`Renderer::push_anchored`).
 ///
 /// The survivors are already parented and must not be handed to `attach_anchored`
 /// again (the module docs name that as the caller's obligation); only the region
-/// render's own outputs are new. WHICH step parents them — and when — is the single
-/// variable [`drift`] measures, and the reason this is one function rather than two.
+/// render's own outputs are new, and the region renderer has already taken them.
 ///
 /// Returns how many anchored children the REGION render itself drew, so a caller
 /// measuring a per-child effect can check the dose actually arrived. It is not the
 /// number of children in the body: a collapsed region draws none, and an expanded
 /// one draws no toggle button either (the summary line, and so the toggle, belongs
 /// to the seed walk that runs before the region begins).
-pub(super) fn splice_toggle(
-    rig: &Rig,
-    folds: &FoldState,
-    key: FoldKey,
-    md: &str,
-    parenting: Parenting,
-) -> usize {
-    let view = (parenting == Parenting::Eager).then_some(&rig.view);
+pub(super) fn splice_toggle(rig: &Rig, folds: &FoldState, key: FoldKey, md: &str) -> usize {
     let outcome = crate::preview::splice::splice(
         &rig.buf,
-        view,
+        Some(&rig.view),
         &rig.anchored,
         &rig.extents,
         &crate::preview::build::Prepared::new(md, None, ZOOM, false, crate::theme::active(), folds),
@@ -435,40 +354,20 @@ pub(super) fn splice_toggle(
     )
     .expect("the toggled block was drawn in the starting render");
 
-    // Prove the ARM took effect before anything downstream grades a number against
-    // it (ScrAP-252's family: a SETUP step that silently fails to take effect makes the next
-    // assertion answer for the previous state). Both directions are checked, so
-    // neither arm can quietly become the other. Vacuous when the region drew no
-    // child at all, which is why the count is returned rather than asserted here —
-    // only the caller knows what dose it asked for.
-    let all_parented = outcome
-        .region
-        .anchored
-        .iter()
-        .all(|(_, w)| w.parent().is_some());
-    let none_parented = outcome
-        .region
-        .anchored
-        .iter()
-        .all(|(_, w)| w.parent().is_none());
-    match parenting {
-        Parenting::Eager => assert!(
-            all_parented,
-            "the EAGER arm asked the region render to parent its {} children as it \
-             created them, and at least one came back unparented — the arm did not \
-             take effect and its numbers describe the deferred route",
-            outcome.region.anchored.len(),
-        ),
-        Parenting::Deferred => {
-            assert!(
-                none_parented,
-                "the DEFERRED arm expects the region render to leave its {} children \
-                 unparented for `attach_anchored`, and at least one arrived already \
-                 parented — the two arms are not distinct",
-                outcome.region.anchored.len(),
-            );
-            attach_anchored(&rig.view, &outcome.region.anchored);
-        }
-    }
+    // Prove the parenting really happened before anything downstream grades a number
+    // against it (ScrAP-252's family: a SETUP step that silently fails to take effect
+    // makes the next assertion answer for the previous state). Vacuous when the region
+    // drew no child at all, which is why the count is returned rather than asserted
+    // here — only the caller knows what dose it asked for.
+    assert!(
+        outcome
+            .region
+            .anchored
+            .iter()
+            .all(|(_, w)| w.parent().is_some()),
+        "the region render was handed the view and asked to parent its {} children as \
+         it created them, and at least one came back unparented",
+        outcome.region.anchored.len(),
+    );
     outcome.region.anchored.len()
 }

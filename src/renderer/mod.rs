@@ -816,11 +816,13 @@ impl Renderer {
     /// (above-viewport, priority-125-validated) lines already reads
     /// `gtk_widget_get_preferred_size` rather than whatever a widget-less anchor
     /// wraps at. That was the predicted fix for the reader displacement
-    /// `preview::splice::excursion` records, and `…::excursion::drift` runs both
-    /// timings as the two arms of one measurement: on GTK 4.6.9 they are IDENTICAL
-    /// TO THE PIXEL, with the eager arm's children asserted to have been parented.
-    /// The seam is kept as that measurement's arm — not as a fix, and not as a thing
-    /// to re-derive.
+    /// `preview::splice::excursion` records, and it is NOT one: MEASURED on GTK 4.6.9,
+    /// the two timings are identical to the pixel, with the eager arm's children
+    /// asserted to have been parented. (The experiment that established it has since
+    /// been deleted along with the rest of the GTK-characterization arms — `git log --
+    /// src/preview/splice/excursion/`; the conclusion is ScrAP-339.) The seam is kept
+    /// because a live region render is the production path and parenting as it goes is
+    /// the simpler shape there — not as a fix, and not as a thing to re-derive.
     pub(super) fn push_anchored(&mut self, anchor: TextChildAnchor, widget: gtk::Widget) {
         if let Some(view) = &self.live_view {
             use gtk::prelude::TextViewExt;

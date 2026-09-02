@@ -48,116 +48,50 @@
 //! re-projection). The plan's "glides back" is that sync at work, one layer up; this
 //! rig measures the render route alone, so what it shows is the raw damage.
 //!
-//! # The residue, and the one thing the wiring still owes
+//! # The residue, and what the wiring does with it
 //!
 //! The splice does not land the reader on *exactly* the same content. MEASURED, with
 //! the reader's own line tracked by a `GtkTextMark`: expanding drifts the content
-//! **+32 px** down the screen, against a block that added 2 160 px above the viewport.
-//! Sub-line, and nothing a reader would notice — but it is not rounding, and it scales.
+//! **+32 px** down the screen against a block that added 2 160 px above the viewport,
+//! and that figure scales with the number of ANCHORED CHILDREN the toggled region
+//! draws — +368 px at ten, +880 px at thirty. Collapsing stays inside one text row
+//! whatever the count.
 //!
-//! Adding anchored children (thematic-break separators) to the disclosure body:
+//! **The whole account of why is upstream, not here.** It is one `top_margin` per
+//! compensating `::changed` emission, the defect GTK fixed in 4.19.3 by commit
+//! `b300698629`; the emission count is the region's own child count, bounded by the
+//! 2 000 px validation budget `gtk_text_layout_validate` spends. That is recorded as
+//! **ScrAP-339** and, in reusable form, as the gtk4-rs skill's
+//! **GTK4Rs/AP-321**. Seven characterization arms once measured it here — a dose
+//! grid, a chunk-height grid, a `top-margin` knob, a whole-list confound control, a
+//! per-emission trace and a falsification of the kink the budget predicts. They were
+//! **deleted** once their conclusion had landed in those two entries: they asserted
+//! facts about GTK's validation budget rather than about this project, they were
+//! bimodal and order-dependent by their own admission, and they carried a required CI
+//! gate that could go red on a distro GTK patch with nothing here broken. Read them in
+//! `git log -- src/preview/splice/excursion/`; do not re-derive them from scratch.
 //!
-//! | anchored separators in the body | `upper` delta | content drift, EXPANDING | content drift, COLLAPSING |
-//! |---|---|---|---|
-//! | 0 | ±2 160 | **+32 px** | +16 px |
-//! | 10 | ±2 430 | **+368 px** | +32 px |
-//! | 30 | ±2 970 | **+880 px** | +32 px |
+//! The one conclusion worth repeating at this altitude, because it is what the design
+//! rests on: **the drift cannot be compensated, only undone.** The emission count is
+//! BIMODAL at a fixed dose — 55 or 63 for the identical toggle — so any arithmetic that
+//! multiplies it is multiplying a number that is not stable.
 //!
-//! **The asymmetry is the diagnosis, not the linearity.** The same children, removed
-//! rather than inserted, cost nothing that scales — collapsing stays inside one text
-//! row whatever the count, while expanding tracks it.
+//! [`wired`] is what the wiring does instead: `splice::install::ReaderAnchor` records
+//! the reader's offset from the viewport top BEFORE the splice and re-establishes it
+//! after quiescence. It reaches ZERO through the production path: MEASURED +368 px with
+//! the restore removed and +0 px with it, on a 20-separator body.
 //!
-//! **The mechanism this file once inferred is REFUTED — see [`drift`], which is that
-//! experiment.** The reading was that GTK compensates the offset from the height it
-//! can compute at the moment of the change, and that an anchored child's height is
-//! zero then because `attach_anchored` parents the widget after the region render
-//! returns. Two testable consequences follow, and both were measured and failed:
-//! parenting each child in the SAME turn as its anchor changes the drift by nothing
-//! at all (identical to the pixel, with the parenting proved to have happened), and
-//! the per-child drift is the same figure for a 27 px child and a 50 px one, so it is
-//! not a function of the child's height in any form — neither its whole height nor
-//! its height minus a placeholder. Do not re-derive either; `drift` records the
-//! numbers that close them.
-//!
-//! **Which NUMBER, and how the compensation spends it, are now measured too — see
-//! [`wholelist`] and [`trace`].** The count is the children the toggled REGION draws,
-//! not every anchored child in the view: thirty extra children placed OUTSIDE the
-//! region, in the same `anchored_children` list, cost the reader nothing and add not
-//! one compensating adjustment write, while each child inside it adds one. And the
-//! compensation is not a single write — it is a run of one uniform write per region
-//! child, then a bulk write, all of it accounted for exactly by `value-changed`.
-//!
-//! What is MEASURED, and survives that: **the splice needs no scroll work to avoid
-//! the excursion — something already carries the offset to within a text row — but
-//! expanding a region drifts the reader in proportion to the NUMBER of anchored
-//! children that region draws.** The +32 px at zero separators is the same effect at
-//! two emissions rather than a separate term: [`margin`] identifies what the
-//! compensation is missing, and it is `top_margin` per emission — the upstream defect
-//! fixed by GTK commit `b300698629` in 4.19.3.
-//!
-//! # What the wiring did with that, and why the drift is still not asserted HERE
-//!
-//! [`wired`] is the answer: `splice::install::ReaderAnchor` records the reader's offset
-//! from the viewport top BEFORE the splice and re-establishes it after quiescence, so
-//! the drift is undone rather than compensated (a compensation cannot be right — the
-//! emission count is BIMODAL at a fixed dose, 55 or 63 for the identical toggle). It
-//! reaches ZERO through the production path: MEASURED +368 px with the restore removed
-//! and +0 px with it, on a 20-separator body.
-//!
-//! **These files still drive `splice` directly, WITHOUT the restore, and that is
-//! deliberate** — they are the positive controls for the upstream bug, so they must go
-//! on measuring it. The drift they report stays reported and not asserted for the same
-//! reason as before: it is a property of the GTK build, not a contract of this project.
-//! The contract lives in [`wired`], where it belongs, stated against the reader rather
-//! than against the mechanism.
+//! **The two bodies below still drive `splice` directly, without the restore.** They
+//! measure the excursion (the `upper`/`value` collapse), which is this project's own
+//! contract and is asserted; the sub-line drift above them is not asserted anywhere in
+//! this file, because it is a property of the GTK build. The reader-facing contract
+//! lives in [`wired`], stated against the reader rather than against the mechanism.
 
-use harness::{measure, splice_toggle, tall_document, truncate, Parenting, ZOOM};
+use harness::{measure, splice_toggle, tall_document, truncate, ZOOM};
 
 /// The presented pane and the settle discipline — see [`rig`]'s own module docs for
 /// why the cut falls there.
 mod rig;
-
-/// The per-child drift measurement that tests this module's own INFERRED mechanism.
-/// Separate file because it is a third shape again (a dose-response table over a
-/// varying fixture, not one comparison) and because this file is at the 500-line
-/// soft limit.
-mod drift;
-
-/// The experiment that resolves a CONFOUND in the two above: every anchored child
-/// their fixtures create lives inside the toggled body, so "the children the region
-/// draws" and "every anchored child in the view" are one count and neither table can
-/// tell them apart. Separate file because it needs a fixture knob the others do not.
-mod wholelist;
-
-/// The per-emission view of the same toggle: every `vadjustment::value-changed` across
-/// the settle, with its value and its delta. The other three files read what the
-/// compensation LEFT BEHIND; this one watches it happen. Separate file because it is a
-/// different shape again (a sequence per cell, not a figure per cell).
-mod trace;
-
-/// The FALSIFICATION experiment: the same dose knob turned at six counts either side of
-/// a predicted kink at N=22/23, several runs each. The four files above describe what
-/// the compensation does; this one tries to break a formula that claims to say why the
-/// emission count is what it is. Separate file because it is a different shape again (a
-/// distribution per dose, not a figure per cell) and because the bimodality forces the
-/// arithmetic — steps computed WITHIN a mode — that no other file here needs.
-/// One run of one dose and the distribution a repeated one produces — what [`kink`] and
-/// [`budget`] share, split out for the same reason [`recorder`] was.
-mod dose;
-
-mod kink;
-
-/// [`kink`]'s companion, testing the same 2000-pixel validation budget by moving the
-/// CHUNK HEIGHT rather than the dose — the budget's arithmetic directly, rather than the
-/// kink that arithmetic produces. Separate file because it is a different question, and
-/// because it took `kink` past the 500-line soft limit.
-mod budget;
-
-/// The knob experiment: the same grid at three values of the view's own `top-margin`,
-/// which is what tests a model that says the drift is a MULTIPLE of that margin.
-/// Separate file because it is the first experiment here to vary something about the
-/// VIEW rather than about the document.
-mod margin;
 
 /// What the experiments share once there was more than one of them — see its own
 /// module docs for where the cut falls.
@@ -169,8 +103,9 @@ mod harness;
 /// the one wire between a click and it.
 mod wired;
 
-/// The `value-changed` instrument [`trace`] and [`margin`] both record through — one
-/// copy, so their numbers stay comparable.
+/// The `value-changed` instrument: every adjustment write across a settle, with its
+/// delta. [`wired`] reads it to assert that the restore does not itself provoke a fresh
+/// compensation burst.
 mod recorder;
 
 /// **The measurement.** Both routes over one fixture and one toggle direction,
@@ -187,7 +122,7 @@ fn compare_routes(direction: &str, start_expanded: bool) {
     });
 
     let spliced = measure("splice", &md, start_expanded, |rig, folds, key| {
-        let _ = splice_toggle(rig, folds, key, &md, Parenting::Eager);
+        let _ = splice_toggle(rig, folds, key, &md);
     });
 
     let report = format!(
@@ -276,56 +211,4 @@ fn the_splice_avoids_the_excursion_a_full_re_render_causes() {
 #[gtktest::test]
 fn the_splice_holds_the_reader_when_the_block_above_them_collapses() {
     compare_routes("collapsing", true);
-}
-
-/// Does this GTK carry the `top_margin` compensation fix, and therefore NOT the defect
-/// every body in this module is built to observe?
-///
-/// **These experiments are positive controls for an upstream BUG.** They assert that a
-/// splice above the viewport drifts the reader by `emissions x top_margin`, which is
-/// true of GTK before 4.19.3 and false after it — the one-line fix is commit
-/// `b300698629` ("textview: fix yoffset position when top_margin is set",
-/// GNOME/gtk#4134), which adds the missing `+ priv->top_margin`. So on a newer GTK
-/// these bodies must NOT fail; there is simply nothing for them to measure.
-///
-/// Gated at RUNTIME on the loaded library rather than by `#[cfg]`, because a cfg'd-out
-/// test is deleted rather than skipped — not compiled, not reported, not counted
-/// (POLICY § Unit tests) — and this is precisely the case where a silent absence
-/// misleads: a seat on a fixed GTK would see a green suite and conclude the drift is
-/// gone from OUR code. The skip announces itself instead.
-///
-/// The defect itself is ScrAP-339 / GTK4Rs/AP-321.
-///
-/// Linux runs 4.6.9 and observes the defect; the macOS seat's 4.22.4 carries the fix,
-/// so it skips loudly. Neither is a platform claim — it is the library version, which
-/// is why this asks the runtime rather than the target.
-///
-/// # Reading the outcome on a seat whose GTK carries the fix
-///
-/// **These bodies are POSITIVE CONTROLS FOR A DEFECT, so the outcomes do not mean what
-/// they usually mean.** Written down here, at the gate, because the seat that meets a
-/// surprising result reads the code and not somebody's findings document.
-///
-/// | Outcome | Reading |
-/// |---|---|
-/// | **SKIPPED** | Correct on a runtime ≥ 4.19.3. Do not "fix" them. |
-/// | **FAILED** | The runtime GATE is broken on that seat, not the splice. Do not chase the drift. |
-/// | **PASSED** | The MOST suspicious outcome, not the most reassuring. They assert a bug 4.19.3 repaired; passing on a fixed GTK means either [`gtk::minor_version`] misdetected or the body is not exercising what it claims. Scrutinise harder than a failure. |
-///
-/// **And the literals in these bodies are METRIC-dependent, not constants** — 90 px/22
-/// alone and 74 px/27 under the suite are both correct readings of the same rig at
-/// different pane metrics. A hard-coded `22` or `2000` is a bug, not a constant.
-pub(super) fn skip_if_gtk_compensates_top_margin(limb: &str) -> bool {
-    let (major, minor) = (gtk::major_version(), gtk::minor_version());
-    // 4.19.3 is the first release carrying the fix; anything at or past 4.19 has it.
-    let fixed = major > 4 || (major == 4 && minor >= 19);
-    if fixed {
-        crate::testsymlink::skipped(
-            limb,
-            &format!(
-                "GTK {major}.{minor} carries the top_margin compensation fix (b300698629, first in 4.19.3), so the drift this measures does not occur on this runtime"
-            ),
-        );
-    }
-    fixed
 }
