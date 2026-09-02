@@ -19,7 +19,7 @@
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.9 |
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.53 |
-| 18 | Preview reading themes | 18.1 – 18.52 |
+| 18 | Preview reading themes | 18.1 – 18.53 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.18 |
 | 21 | Crash forensics | 21.1 – 21.12 |
@@ -2654,6 +2654,13 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **And** only the window's own chrome follows the desktop's unfocused styling, because that is the desktop's to decide
 - **And** under System, which states no colours of its own, the whole page follows the desktop together — the cells never dim while the prose does, or the reverse
 - **Rationale** the widget-borne parts take their ink by INHERITANCE from the page, and a desktop theme states an unfocused ink on the node each of them actually draws with (`label:backdrop`), which an inherited value loses to regardless of which provider it came from — so a page that looks right focused can re-ink half of itself the moment focus leaves, and the half it re-inks is the half no stylesheet assertion can see
+
+### 18.53 A themed page inks its disclosure indicator, stating it or inheriting the page's
+- **Given** a reading theme that states a page of its own — whether or not it says anything about the disclosure fold
+- **When** a document containing a `<details>` is rendered
+- **Then** the indicator is drawn in a colour the theme owns: the one it states for the marker, or the page's own text colour where it states none
+- **And** under System, which states no page, the indicator keeps the desktop's chevron in the desktop's colour, exactly as it did before any of these keys existed
+- **Rationale** the fallback is the rule the drawn list markers already follow — a marker's ink is the body's until the theme says otherwise — so the two kinds of marker cannot disagree; and an indicator left on the desktop's colour is not merely off-palette, it is the one part of a themed page that changes when the window loses focus (18.52)
 
 ### 19.1 A relative link to a Markdown sibling opens as a new tab
 - **Given** a rendered document containing a relative link to another `.md`/`.markdown` file that resolves within the current document's folder

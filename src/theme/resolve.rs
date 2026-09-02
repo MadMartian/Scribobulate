@@ -160,7 +160,22 @@ impl Theme {
                 collapsed: src.glyph(&keys::DISCLOSURE_GLYPH),
                 expanded: src.glyph(&keys::DISCLOSURE_EXPANDED_GLYPH),
             },
-            disclosure_marker_color: src.color(&keys::DISCLOSURE_MARKER_COLOR),
+            // Folded down to the page's own ink, the way `table_head_fg` folds to the
+            // heading's — and for a sharper reason than tidiness. An unstated marker
+            // colour left the indicator on the DESKTOP theme's ink, which is a colour
+            // the reading theme does not own: wrong on a themed page even focused, and
+            // not stable when the window loses focus, since the desktop states an
+            // unfocused ink for the node the mark is drawn on (TDD 18.52). This is the
+            // rule the drawn list markers already follow at their own paint site —
+            // marker ink is the body's until the theme says otherwise — so the fold
+            // makes the two agree rather than introducing a new one.
+            //
+            // System states no foreground, so this stays `None` there and the theme
+            // sheet emits no rule at all: the stock chevron on the desktop's ink,
+            // byte-identical to what it has always drawn (TDD 18.2).
+            disclosure_marker_color: src
+                .color(&keys::DISCLOSURE_MARKER_COLOR)
+                .or_else(|| src.color(&keys::FOREGROUND)),
             disclosure_preview_fg: src.color(&keys::DISCLOSURE_PREVIEW_FG),
             disclosure_band_color: src.color(&keys::DISCLOSURE_BAND_COLOR),
             disclosure_band_gradient_to: src.color(&keys::DISCLOSURE_BAND_GRADIENT_TO_COLOR),

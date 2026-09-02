@@ -366,6 +366,75 @@ fn pixel_quests_indicator_plates_are_compiled_in_and_match_their_box() {
     }
 }
 
+/// **No themed page leaves its disclosure indicator on the desktop's ink.**
+///
+/// A theme that states a page of its own but no `disclosure_marker_color` used to draw
+/// the indicator in whatever colour the desktop GTK theme happened to hold — a colour the
+/// reading theme does not own, wrong on its page while the window is focused, and
+/// replaced by the desktop's *unfocused* ink the moment it is not (TDD 18.52). The fold
+/// in `Theme::resolve` closes that: the marker's ink is the page's ink until the theme
+/// says otherwise, which is the rule the drawn list markers already follow.
+///
+/// Driven off the shipped set rather than a list of names, so a theme added later is
+/// covered by having been shipped. System is the deliberate exception and is asserted as
+/// one: it states no page, so it states no ink, and its indicator keeps the desktop's
+/// chevron exactly as it always has (TDD 18.2).
+///
+/// **This guards the shipped FILE, not the fold** — every named theme states a marker
+/// ink of its own today, so removing the fold leaves this green. The fold has its own
+/// guard below, and the pair is deliberate: one says the themes we ship are dressed, the
+/// other says a theme that ISN'T still cannot fall through to the desktop.
+#[test]
+fn every_themed_page_inks_its_disclosure_indicator() {
+    let themes = Themes::builtin();
+    let mut checked = 0usize;
+    for entry in themes.chooser_list() {
+        let theme = themes.resolve(&entry.id);
+        if entry.id == super::super::SYSTEM_ID {
+            assert!(
+                theme.disclosure_marker_color.is_none(),
+                "the system theme must state no marker ink — an unstated key here is what \
+                 keeps its rendering byte-identical to the pre-theming one"
+            );
+            continue;
+        }
+        assert!(
+            theme.foreground.is_some(),
+            "fixture assumption: a named theme states its own page ink"
+        );
+        checked += 1;
+        assert!(
+            theme.disclosure_marker_color.is_some(),
+            "theme {:?} states a page of its own and leaves its disclosure indicator on \
+             the desktop theme's ink",
+            entry.id
+        );
+    }
+    assert!(
+        checked > 0,
+        "no named theme was checked — this guard is vacuous"
+    );
+}
+
+/// **A theme that states a page but no marker ink inks the indicator from the page.**
+///
+/// The engine half of the guard above, and the one that fails when the fold in
+/// `Theme::resolve` is removed — which the shipped-file guard cannot, since every theme
+/// we ship now states its own. Written against an inline fragment for exactly that
+/// reason: the input set has to contain the case being policed, or the check is a
+/// tautology about the data (ScrAP-132).
+#[test]
+fn an_undressed_theme_takes_its_marker_ink_from_the_page() {
+    let mut themes = Themes::builtin();
+    themes.merge_over_for_test("[themes.bare]\nforeground = \"#123456\"\n");
+    let theme = themes.resolve("bare");
+    assert_eq!(
+        theme.disclosure_marker_color, theme.foreground,
+        "a theme stating a page ink and no marker ink must fold the one into the other, \
+         or its indicator is drawn in a colour the theme does not own"
+    );
+}
+
 /// **Synthwave and Candy dress BOTH indicator states.**
 ///
 /// The two states resolve independently, so a theme can dress one and leave the other

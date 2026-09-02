@@ -136,6 +136,13 @@ find_hl_current_color = "#c86428"
 mark_bg         = "#d8a98a_66"   # warm tan-rose highlighter — distinct from the amber/yellow
                                  # find & annotation washes, and legible on the cream page
 
+# The disclosure indicator, and NOTHING else about the fold: Sepia is a printed page,
+# so the arrow is the stock chevron in the accent brown rather than a glyph, a band or a
+# re-coloured summary. Stated at all because an unstated marker keeps the DESKTOP's ink
+# — which is neither this page's colour nor stable when the window loses focus
+# (TDD 18.52).
+disclosure_marker_color = "#7a4b2a"   # the accent brown the links and quote bar already use
+
 # Everything else is omitted on purpose, and is therefore DERIVED from
 # background/foreground/accent exactly as the system theme derives it from the
 # desktop: link, code_inline_bg, code_block_bg, blockquote_bar, selection_bg,
@@ -489,6 +496,20 @@ rule_color    = "#555555"   # grey horizontal rule
 table_border_color = "#555555"   # ANSI 8 grey grid
 table_head_bg = "#0000aa"   # ANSI 4 blue header fill (yellow header text on it)
 
+# ── The fold, as a BBS file area ───────────────────────────────────────────────
+# A `<details>` on a bulletin board was a bracketed toggle on a menu bar, not a
+# chevron: `[+]` to open a file area, `[-]` to close it, on the same DOS-blue bar in
+# the same bright yellow the table header already wears here. Every value below is a
+# colour this theme has already stated somewhere else, which is the test of whether a
+# dressing belongs to the theme or is being invented for one construct.
+disclosure_glyph          = "[+]"
+disclosure_expanded_glyph = "[-]"
+disclosure_marker_color   = "#55ff55"   # ANSI 10 bright green — the marker family, as the bullets
+disclosure_band_color     = "#0000aa"   # ANSI 4 blue — the Norton-Commander bar, as the table header
+disclosure_fg             = "#ffff55"   # ANSI 14 bright yellow on it, as the header text
+disclosure_preview_fg     = "#00aaaa"   # ANSI 6 cyan for the collapsed body preview — quieter than
+                                        # the label, and still legible on the blue bar
+
 # ── Bedtime ────────────────────────────────────────────────────────────────────
 # A night-reading theme, in a sans face: warm sand ink on a neutral dark-grey page.
 # Sepia's mood with its luminance inverted — but NOT its hue, because the page here
@@ -577,6 +598,12 @@ mark_fg         = "#A9CE99"   # light green ink for marked text — 3.70:1 on th
                               # have measured 7.31:1, because the two-green pairing is the look
                               # wanted. Recorded here so a future reader does not "fix" it by
                               # accident, and does not copy it as this file's standard
+
+# The disclosure indicator, and nothing else — Bedtime is Sepia read with the lights
+# off, so it dresses its fold exactly as sparely: the stock chevron in the sand-gold
+# every other piece of furniture on this page wears. Stated rather than omitted for the
+# reason Sepia's is (TDD 18.52).
+disclosure_marker_color = "#D9B87C"   # the furniture family: bullets, quote bar, accent
 
 # Geometry: a little airier than the default, which is most of what makes a page feel
 # unhurried. Everything else — typography scales, table padding, list step — is
