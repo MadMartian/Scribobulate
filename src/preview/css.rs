@@ -199,6 +199,24 @@ fn rgba_css(c: gtk::gdk::RGBA, alpha: f32) -> String {
 /// theme's *values* are interpolated into the declarations, and the selector names GTK's
 /// node tree. `a_link_only_cell_wears_the_themes_link_colour` is the guard, and it is a
 /// driven one for the same reason: only a real widget can say whether a selector matched.
+/// **Every widget shape the disclosure indicator wears**, plus the button that hosts
+/// them — `widgets::disclosure::indicator` returns a `GtkLabel` for a themed glyph, a
+/// `GtkImage` for the stock icon, and a `GtkPicture` for a sprite (which carries its own
+/// pixels and ignores `color`, so it needs no selector).
+///
+/// The button alone is not enough for the same reason a link cell's button was not:
+/// `color` reaches the child by INHERITANCE, and inheritance loses to any rule matching
+/// the child's own node — which is exactly what a desktop theme's `label:backdrop` is.
+pub(crate) const DISCLOSURE_MARKER_SELECTORS: [&str; 3] = [
+    "button.scrib-disclosure",
+    "button.scrib-disclosure label",
+    "button.scrib-disclosure image",
+];
+// The child list is closed BY CONSTRUCTION, not by enumeration:
+// `widgets::disclosure::marker_css_node` maps each shape in the decoration vocabulary to
+// the node it draws on and does not compile when a shape is added, and its guard requires
+// a selector here for every node that mapping names.
+
 pub(crate) const LINK_CELL_SELECTORS: [&str; 3] = [
     "scribtable .cell link",
     "scribtable button.cell.link",
@@ -251,11 +269,21 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     // which is what the static sheet's note said when this was still a known gap.
     // `color` tints a symbolic icon and inks a glyph label alike; a sprite indicator
     // ignores it, which is the sprite-outranks-flat rule doing its job.
+    //
+    // Stated on the CHILD nodes too, for the reason [`LINK_CELL_SELECTORS`] records and
+    // the table cells above pay for: `color` inherits from the button to the widget that
+    // owns the mark, and an inherited value loses to any rule that MATCHES that widget's
+    // node — so a glyph indicator (a `GtkLabel`, `widgets::disclosure::indicator`) took
+    // the desktop theme's `label:backdrop` ink the moment the window lost focus.
+    // MEASURED under Synthwave on a driven session: a magenta ▶ turned white in
+    // backdrop while the button node kept the theme's colour.
     if let Some(ink) = theme.disclosure_marker_color {
-        out.push_str(&format!(
-            "button.scrib-disclosure {{ color: {}; }}\n",
-            to_hex_opaque(ink)
-        ));
+        for selector in DISCLOSURE_MARKER_SELECTORS {
+            out.push_str(&format!(
+                "{selector} {{ color: {}; }}\n",
+                to_hex_opaque(ink)
+            ));
+        }
     }
     if let Some(bg) = theme.background {
         out.push_str(&format!(
@@ -313,14 +341,33 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     // add-order, not specificity). A zoom factor here would make one app-wide sheet
     // carry a per-window value. Documented as the standing exception in
     // THEMING.md § Pixel metrics and zoom, so the rule and the code agree.
+    // The cell's INK, stated rather than inherited from the page rule above — and the
+    // reason is the window losing focus. A cell is a `GtkLabel`, and a desktop theme
+    // styles that node in the backdrop state: Breeze ships
+    // `label:backdrop { color: @theme_unfocused_text_color }`. An INHERITED value loses
+    // to any declaration that MATCHES the node, whatever provider it came from — the
+    // priority ladder (GTK4Rs/AP-101, ScrAP-127) arbitrates between rules that match, and
+    // never rescues one that does not — so on a themed page every cell flipped to the
+    // desktop's grey the moment the window went to the back, while the paragraph above it
+    // (styled on the `textview` node this app's provider DOES match) kept the theme's ink.
+    // MEASURED under Synthwave on a driven Xvfb+kwin session: body cells read
+    // (200,187,225) focused and (218,216,222) in backdrop; body prose and header cells,
+    // both of which carry an explicit `color`, did not move.
+    //
+    // It gates on `theme.foreground` — the SAME condition as the page's `color`, and the
+    // same key — so the two cannot disagree: on a themed page body and cell both hold,
+    // and under System neither is stated and both follow the desktop into backdrop
+    // together (TDD 18.2's byte-identical bar). Document Rendering CAM rows 9/12.
+    let cell_ink = crate::cssfrag::decl("color", theme.foreground.map(to_hex_opaque));
     out.push_str(&format!(
         "scribtable .cell {{ padding: {}px {}px; border-width: {}px; border-style: solid; \
-         border-color: {}; border-radius: {}px; }}\n",
+         border-color: {}; border-radius: {}px;{} }}\n",
         m.table_cell_padding_v,
         m.table_cell_padding_h,
         m.table_border_width,
         to_hex_opaque(palette.table_border),
         m.table_cell_radius,
+        cell_ink,
     ));
     // Table header row (the GFM row above the `---` delimiter): bold text on a faint
     // fill, distinguishing it from body cells. Its TEXT takes `table_head_fg`, which
@@ -700,6 +747,64 @@ mod tests {
         assert!(
             !s.contains("scribtable .cell selection"),
             "System must not emit a cell-selection rule (the body doesn't either):\n{s}"
+        );
+    }
+
+    /// A cell's ink is STATED, from the same key and under the same condition as the
+    /// page's — the text half of the backdrop regression whose live half is
+    /// `widgets::table`'s `a_cell_keeps_the_themes_ink_in_the_backdrop_state`.
+    ///
+    /// Inheriting it from the page rule looked equivalent and was not: an inherited value
+    /// loses to a desktop theme's `label:backdrop`, so an unfocused window's cells went
+    /// grey while its prose did not. The two properties asserted here are what stop the
+    /// repair from re-introducing a drift of its own — a cell inked from a *different*
+    /// key, or stated where the body says nothing (which would tint cells under System
+    /// while the body followed the desktop, ScrAP-36's shape).
+    #[test]
+    fn the_cell_ink_is_stated_and_matches_the_page_ink() {
+        let cell_rule = |c: &str| {
+            c.lines()
+                .find(|l| l.starts_with("scribtable .cell {"))
+                .expect("the cell chrome rule is generated for every theme")
+                .to_string()
+        };
+        // The rule also carries `border-color`, so match the PROPERTY, not the substring.
+        let cell_ink_of = |rule: &str| {
+            rule.trim_end_matches(&[' ', '}'][..])
+                .split(';')
+                .filter_map(|d| d.split_once(':'))
+                .find(|(prop, _)| prop.trim() == "color")
+                .map(|(_, value)| value.trim().to_string())
+        };
+        for id in ["sepia", "synthwave", "bedtime", "terminal", "candy"] {
+            let c = css_for(id);
+            let page = c
+                .lines()
+                .find(|l| l.starts_with("textview.scrib-preview {"))
+                .expect("a themed page states its own ink");
+            let ink = page
+                .split("color:")
+                .nth(1)
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .trim()
+                .to_string();
+            assert_eq!(
+                cell_ink_of(&cell_rule(&c)).as_deref(),
+                Some(ink.as_str()),
+                "the {id} page inks its prose {ink} and left its table cells to be \
+                 inherited — which a desktop theme's `label:backdrop` overrides:\n{}",
+                cell_rule(&c)
+            );
+        }
+        // System states no page ink, so the cells must not state one either: both then
+        // follow the desktop together, in backdrop as everywhere else (TDD 18.2).
+        assert_eq!(
+            cell_ink_of(&cell_rule(&css_for(SYSTEM_ID))),
+            None,
+            "System must leave the cell ink unstated, as it leaves the body's unstated"
         );
     }
 

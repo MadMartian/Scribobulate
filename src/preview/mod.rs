@@ -35,6 +35,11 @@ mod sourcemap;
 mod splice;
 
 pub(crate) use cells::{cell_copymap, cell_search_targets};
+/// Re-exported for `widgets::disclosure`'s vocabulary guard only — the sheet is the sole
+/// production consumer, so the export carries the same cfg as its caller rather than
+/// standing as dead code under `-D warnings` (POLICY § GTK-object integration tests).
+#[cfg(test)]
+pub(crate) use css::DISCLOSURE_MARKER_SELECTORS;
 pub(crate) use css::{css, theme_css};
 pub(crate) use interactions::{activate_link_url, link_url_at};
 pub(crate) use qdata::{scrib_labels, scrib_render_data};

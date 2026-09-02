@@ -167,9 +167,82 @@ fn indicator(theme: &crate::theme::Theme, expanded: bool, size: i32) -> gtk::Wid
     gtk::Image::from_icon_name(ICON_COLLAPSED).upcast()
 }
 
+/// The CSS node an indicator SHAPE draws its mark on, or `None` where the shape carries
+/// its own pixels and takes no ink at all.
+///
+/// Test-only, and it exists to answer one question structurally rather than by
+/// enumeration: `preview::css`'s `DISCLOSURE_MARKER_SELECTORS` has to name every node an
+/// indicator can be, and a list of three names is only correct until [`indicator`] grows
+/// a fourth shape. The `match` here is **exhaustive over the decoration vocabulary**, so
+/// a new `MarkerSubstitute` variant does not compile until someone says which node it
+/// draws on — and the guard beside it then requires a selector for that node. The ink
+/// going quietly wrong on backdrop is exactly the failure this control cannot afford:
+/// the indicator is its entire feedback channel.
+#[cfg(test)]
+fn marker_css_node(shape: &crate::theme::MarkerSubstitute<'_>) -> Option<&'static str> {
+    use crate::theme::MarkerSubstitute;
+    match shape {
+        // A `GtkPicture` of a decoded texture — its colours are in the file, which is
+        // the sprite-outranks-flat rule doing its job.
+        MarkerSubstitute::Sprite(_) => None,
+        MarkerSubstitute::Glyph(_) => Some("label"),
+        MarkerSubstitute::Drawn => Some("image"),
+    }
+}
+
 // NOTE: [`set_expanded`] above is the in-place refresh this file once argued should not
 // exist. Read its rustdoc before removing it again: the argument was sound and its
 // premise ("a toggle re-renders") stopped being true when `preview::splice` landed.
+
+/// Display-free guards over the indicator's SHAPE vocabulary — no widget needed, so
+/// they run under a plain `cargo test` rather than only under the integration feature.
+#[cfg(test)]
+mod vocabulary {
+    use super::marker_css_node;
+    use crate::preview::DISCLOSURE_MARKER_SELECTORS;
+
+    /// **Every shape the indicator can wear has a selector inking it.**
+    ///
+    /// The exhaustiveness is [`marker_css_node`]'s `match` — a new shape does not
+    /// compile until it is mapped — and this closes the other half: that the node it maps
+    /// to is one the theme sheet actually states an ink for. Without both, a themed
+    /// indicator keeps its colour focused and takes the desktop's `label:backdrop` ink the
+    /// moment the window goes to the back, which is a silent degradation of the one
+    /// channel this control has (TDD 18.52).
+    ///
+    /// Driven off the SHIPPED themes, so a theme that dresses its fold in a way no
+    /// existing one does is covered by having been shipped rather than by anyone
+    /// remembering this test.
+    #[test]
+    fn every_indicator_shape_a_shipped_theme_produces_has_a_selector() {
+        let themes = crate::theme::Themes::builtin();
+        let mut inked = 0usize;
+        for entry in themes.chooser_list() {
+            let id = entry.id;
+            let theme = themes.resolve(&id);
+            for expanded in [false, true] {
+                for shape in theme.disclosure_marker_decor(expanded).candidates() {
+                    let Some(node) = marker_css_node(&shape) else {
+                        continue;
+                    };
+                    inked += 1;
+                    let selector = format!("button.scrib-disclosure {node}");
+                    assert!(
+                        DISCLOSURE_MARKER_SELECTORS.contains(&selector.as_str()),
+                        "theme {id:?} can draw its {} indicator on a `{node}` node, and \
+                         the theme sheet states no ink for it — the mark then follows the \
+                         desktop theme, including into backdrop",
+                        if expanded { "expanded" } else { "collapsed" }
+                    );
+                }
+            }
+        }
+        assert!(
+            inked > 0,
+            "no shipped theme produces an inkable indicator shape — this guard is vacuous"
+        );
+    }
+}
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod tests {
@@ -434,5 +507,101 @@ mod tests {
         // zero above is a property of `set_expanded` and not of a dead oracle.
         toggle.set_active(true);
         assert_eq!(fired.get(), 1, "the oracle discriminates");
+    }
+
+    /// **A glyph indicator keeps its themed ink when the window goes to the back.**
+    ///
+    /// The sibling of the table cell's backdrop regression, and it reaches this control
+    /// through its own widget shape: a themed glyph indicator is a `GtkLabel`
+    /// ([`indicator`]), so the desktop theme's `label:backdrop { color: … }` matches the
+    /// node the mark is drawn on, and the theme sheet's `button.scrib-disclosure` ink —
+    /// which only INHERITS down to it — loses. MEASURED on a driven session before the
+    /// child selectors existed: Synthwave's magenta ▶ turned white the moment focus left.
+    ///
+    /// The hostile rule sits below this test's own sheet — but both go ABOVE the app's
+    /// process-global theme provider at `APPLICATION + 1`, which is never removed once
+    /// installed and would otherwise decide the control's reading in a full-suite run
+    /// (the table cell's twin records the measurement). Priority is not what decides this
+    /// test; matching is.
+    ///
+    /// Mutation: cutting `button.scrib-disclosure label` from `DISCLOSURE_MARKER_SELECTORS`
+    /// fails this. TDD 18.52.
+    #[gtktest::test]
+    fn a_glyph_indicator_keeps_its_themed_ink_in_the_backdrop_state() {
+        let display = gtk::gdk::Display::default().expect("this test needs a display");
+        let add = |css: &str, priority: u32| {
+            let provider = gtk::CssProvider::new();
+            provider.load_from_data(css);
+            gtk::style_context_add_provider_for_display(&display, &provider, priority);
+            provider
+        };
+        // Removed again on the way out: a display provider is PROCESS-global and libtest
+        // shares one process (POLICY § Unit tests).
+        struct Installed(gtk::gdk::Display, Vec<gtk::CssProvider>);
+        impl Drop for Installed {
+            fn drop(&mut self) {
+                for p in &self.1 {
+                    gtk::style_context_remove_provider_for_display(&self.0, p);
+                }
+            }
+        }
+
+        let mut themes = crate::theme::Themes::builtin();
+        themes.merge_over_for_test(
+            "[themes.probe]\ndisclosure_glyph = \"▶\"\ndisclosure_marker_color = \"#33ddaa\"\n",
+        );
+        let theme = themes.resolve("probe");
+        let want = theme
+            .disclosure_marker_color
+            .expect("the probe theme states a marker ink");
+        let palette = crate::palette::Palette::for_paper(&theme);
+        let sheet = crate::preview::theme_css(&theme, &palette);
+        let _active = crate::theme::activate_for_test(theme);
+
+        // A backdrop toggle built exactly as the renderer builds one. Each reading gets
+        // its own: an unrooted widget caches its computed style at the first read, and a
+        // provider added afterwards does not invalidate it.
+        let backdrop_toggle = || {
+            let toggle = build(false, 1.0);
+            toggle.set_state_flags(gtk::StateFlags::BACKDROP, false);
+            toggle
+        };
+
+        let _hostile = Installed(
+            display.clone(),
+            vec![add(
+                "label:backdrop { color: #ff0000; }",
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2,
+            )],
+        );
+        let control = backdrop_toggle();
+        let glyph = control
+            .child()
+            .and_downcast::<gtk::Label>()
+            .expect("a theme stating a glyph gets a GtkLabel indicator");
+        let hijacked = glyph.style_context().color();
+        assert_eq!(
+            (hijacked.red(), hijacked.green(), hijacked.blue()),
+            (1.0, 0.0, 0.0),
+            "fixture no longer discriminates: the desktop theme's `label:backdrop` rule \
+             must actually reach the glyph, or the assertion below proves nothing"
+        );
+
+        let _themed = Installed(
+            display.clone(),
+            vec![add(&sheet, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 3)],
+        );
+        let inked = backdrop_toggle()
+            .child()
+            .and_downcast::<gtk::Label>()
+            .expect("a theme stating a glyph gets a GtkLabel indicator")
+            .style_context()
+            .color();
+        assert_eq!(
+            (inked.red(), inked.green(), inked.blue()),
+            (want.red(), want.green(), want.blue()),
+            "an unfocused window's disclosure glyph fell back to the desktop theme's \
+             backdrop ink — the button's `color` only INHERITS to the glyph"
+        );
     }
 }

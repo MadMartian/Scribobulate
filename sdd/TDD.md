@@ -19,7 +19,7 @@
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.9 |
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.53 |
-| 18 | Preview reading themes | 18.1 – 18.51 |
+| 18 | Preview reading themes | 18.1 – 18.52 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.18 |
 | 21 | Crash forensics | 21.1 – 21.12 |
@@ -2646,6 +2646,14 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **When** a document containing a `<details>` is exported to HTML and to PDF
 - **Then** both artefacts show the band behind each summary line and the summary text in its themed colour
 - **And** the band's corner rounding reaches neither artefact, as no drawn corner rounding does
+
+### 18.52 A themed page keeps its colours when the window loses focus
+- **Given** a reading theme that states its own page colours (any theme but System)
+- **When** the reader activates another window, so this one is drawn as unfocused
+- **Then** the rendered document is unchanged — every part of it, including the parts drawn as widgets rather than as buffer text: a table's cells and header cells, a link in either cell shape, and a disclosure's indicator
+- **And** only the window's own chrome follows the desktop's unfocused styling, because that is the desktop's to decide
+- **And** under System, which states no colours of its own, the whole page follows the desktop together — the cells never dim while the prose does, or the reverse
+- **Rationale** the widget-borne parts take their ink by INHERITANCE from the page, and a desktop theme states an unfocused ink on the node each of them actually draws with (`label:backdrop`), which an inherited value loses to regardless of which provider it came from — so a page that looks right focused can re-ink half of itself the moment focus leaves, and the half it re-inks is the half no stylesheet assertion can see
 
 ### 19.1 A relative link to a Markdown sibling opens as a new tab
 - **Given** a rendered document containing a relative link to another `.md`/`.markdown` file that resolves within the current document's folder
