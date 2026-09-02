@@ -15,9 +15,28 @@
 //! `line_yrange`'s zero height permanently ambiguous — indistinguishable from "not yet
 //! validated" — which is a trap for every future author of geometry-polling code.
 //!
-//! Not rendering the body deletes all of that by construction. The cost is a re-render
-//! per toggle, which is visible and bounded, rather than a family of hazards that fail
-//! silently and later.
+//! Not rendering the body deletes all of that by construction, at the cost of a
+//! re-render per toggle rather than a family of hazards that fail silently and later.
+//! That cost is no longer paid in full: a toggle SPLICES its own region rather than
+//! rebuilding the document (`preview::splice`), so the reader keeps their place.
+//!
+//! # Scope, and where to stop looking
+//!
+//! Collapsed state lives for the session and is deliberately NOT persisted across one.
+//! It is keyed on the source byte offset of a block's opening raw-HTML, which is stable
+//! across zoom, theme, view-mode and live-preview re-renders and is cleared when the
+//! document changes — matching HTML, where a disclosure's state is the `open` attribute
+//! and therefore a property of the document rather than of the reader.
+//!
+//! **There is no GTK4 prior art for this.** Nothing in gtk4-demo, nothing in gtk4-rs,
+//! and GtkSourceView has no code folding at all; every GTK Markdown viewer renders its
+//! preview through a web engine and so delegates `<details>` to a UA. The one known
+//! implementation of the idea in GNOME is GTK3's `TeplFoldRegion` (libgedit-tepl), from
+//! which two design details carry over — line-snapped bounds, and marks rather than
+//! character offsets for anything that must survive an edit. Its anonymous-tag-per-fold
+//! detail does not, because this design uses no tags; and it never met the anchored-child
+//! problem, because it folds source code, which has no child anchors. Recorded so the
+//! next author searches for an hour less than the first one did.
 //!
 //! # What a fold is keyed on, and why that key is honest about its lifetime
 //!

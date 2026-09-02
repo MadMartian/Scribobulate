@@ -3613,7 +3613,7 @@ mod gtk_integration_tests {
     ///
     /// This is the seam a fold toggle needs: clearing and refilling the whole buffer
     /// discards every line's height validation, which collapses the vadjustment and
-    /// throws the reader to the top (MEASURED — `PLAN.details-disclosure.md`), while
+    /// throws the reader to the top (MEASURED — ScrAP-339), while
     /// an edit confined to one region leaves every untouched line validated.
     ///
     /// Asserted as CONTENT rather than as a call: a right-gravity mark is what makes
@@ -3742,7 +3742,7 @@ mod gtk_integration_tests {
     }
 
     /// The summary span covers the line's TEXT and stops before its newline — what a
-    /// line-wide decoration paints over (`PLAN.details-disclosure.md` item 2), and
+    /// line-wide decoration paints over — the themed summary band — and
     /// what a hit test on the summary line answers about.
     #[gtktest::test]
     fn the_summary_span_covers_the_line_text_and_not_its_newline() {

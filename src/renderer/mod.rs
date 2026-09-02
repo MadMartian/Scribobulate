@@ -523,7 +523,7 @@ pub(crate) struct Renderer {
     /// toggle needs: clearing and refilling the whole buffer discards every line's
     /// height validation, which collapses the vadjustment and throws the reader to the
     /// top for the ~17 idle passes it takes to measure the document again (MEASURED,
-    /// `PLAN.details-disclosure.md`), while an edit confined to one region leaves every
+    /// ScrAP-339), while an edit confined to one region leaves every
     /// untouched line validated and the reader where they were.
     ///
     /// The mark is **right-gravity**, so text inserted at it lands BEFORE it and the
