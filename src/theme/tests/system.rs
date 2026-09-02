@@ -317,7 +317,8 @@ fn chooser_lists_system_first() {
 /// deliberate edit to this test with a reason attached, where today the divergence is
 /// invisible. The alternative — making the value DERIVABLE from `background` — needs a
 /// cross-key reference grammar in `themes.toml`, which is a vocabulary change and not
-/// this guard's to make.
+/// this guard's to make. That edit has since been made once — see [`OFF_PAGE`], which is
+/// where the reason lives, exactly as the assert message below instructs.
 #[test]
 fn a_shipped_bands_gradient_ends_on_that_themes_own_page() {
     let raw: toml::Value =
@@ -341,13 +342,19 @@ fn a_shipped_bands_gradient_ends_on_that_themes_own_page() {
                 continue;
             }
             let Some(far) = value.as_str() else { continue };
+            if OFF_PAGE
+                .iter()
+                .any(|(theme, key, _)| *theme == id.as_str() && *key == spelling.as_str())
+            {
+                continue;
+            }
             checked += 1;
             assert_eq!(
                 far.to_ascii_lowercase(),
                 page.to_ascii_lowercase(),
                 "theme {id:?}: {spelling} is {far} but the page is {page}, so this \
                  theme's bands end on a hard edge against a colour the page no longer \
-                 has. Either follow the page, or change this guard and say why."
+                 has. Either follow the page, or name it in OFF_PAGE and say why."
             );
         }
     }
@@ -355,4 +362,73 @@ fn a_shipped_bands_gradient_ends_on_that_themes_own_page() {
         checked > 0,
         "no shipped theme states a band gradient — this guard is vacuous"
     );
+}
+
+/// Bands that deliberately do NOT fade to their theme's page, with the reason each one
+/// is worth the hard edge the guard above otherwise forbids.
+///
+/// Keyed by `(theme id, the key's exact spelling, why)`. A spelling rather than a key
+/// name, because the levelled heading keys claim several and an exemption should licence
+/// the one band it was argued for rather than all five.
+const OFF_PAGE: &[(&str, &str, &str)] = &[
+    (
+        "candy",
+        "disclosure_band_gradient_to_color",
+        "operator-directed: the fold is banded in the theme's own confection hues — deep \
+         raspberry running to deep lime — rather than in a lifted page surface, so a candy \
+         wrapper reads across the summary line instead of a shelf. The hard edge is accepted \
+         as the cost of that, and the pair is legible at BOTH stops, which is the property \
+         that actually protects the reader (see data/themes.toml's `disclosure_band_color` \
+         for why the requested full-strength hues could not be used)",
+    ),
+    (
+        "candy",
+        "heading_band_gradient_to_color_h1",
+        "operator-directed: the h1 band runs grape → turquoise, resolving into a second hue \
+         rather than dissolving into the page, so a title reads as a banner with somewhere to \
+         go. Licences the _h1 spelling rather than the bare key because this theme states no \
+         bare one — it bands exactly h1 and h2 and narrows both (see data/themes.toml for why, \
+         and for why the turquoise had to be tinted)",
+    ),
+    (
+        "candy",
+        "heading_band_gradient_to_color_h2",
+        "operator-directed, and the h1 entry's pair: h2 runs its hot-pink shade → green, tinted \
+         to the SAME value as h1's turquoise so the two bands read as one decision at two hues. \
+         The requested #149c1a is unusable undiluted — 2.88:1 under the lemon ink — which is the \
+         luminance law, not a rejection of the hue",
+    ),
+];
+
+/// Every off-page licence is still standing over a real divergence.
+///
+/// Same discipline as the contrast sweep's `every_deliberate_exception_is_still_below_its_floor`,
+/// and for the same reason: a theme that has since been retuned to end on its page leaves
+/// an exemption over nothing, and the next band to take that spelling inherits it in
+/// silence — which is precisely the invisibility the guard above exists to end.
+#[test]
+fn every_off_page_licence_still_covers_an_off_page_band() {
+    let raw: toml::Value =
+        toml::from_str(BUILTIN_THEMES_TOML).expect("the shipped themes file must parse");
+    let themes = raw["themes"].as_table().expect("a themes table");
+    for (id, key, why) in OFF_PAGE {
+        let block = themes
+            .get(*id)
+            .and_then(toml::Value::as_table)
+            .unwrap_or_else(|| panic!("{id}: no such shipped theme, so the licence is stale"));
+        let page = block
+            .get("background")
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("{id}: states no page of its own ({why})"));
+        let far = block
+            .get(*key)
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("{id}: states no {key}, so the licence is stale ({why})"));
+        assert_ne!(
+            far.to_ascii_lowercase(),
+            page.to_ascii_lowercase(),
+            "{id}: {key} now ends on the page after all — delete the licence rather than \
+             leaving one standing over nothing ({why})"
+        );
+    }
 }

@@ -346,14 +346,39 @@ list_marker_color = "#fb6f92"   # hot-pink bullets/numerals/checkboxes — 6.0:1
 # already stands on, so a heading banner and a table header read as the same
 # surface. Lemon ink clears 4.5:1 on both (7.00:1, 6.30:1) — the singular
 # `heading_color` above is what the automated floor checks here since this theme
-# has no per-level override. The gradient is safe to fade all the way to the PAGE,
-# unlike a light theme would be: Candy's page is dark (#101a4d), so lemon's contrast
-# only ever improves along the gradient (12.8:1 at the page end) — the opposite risk
-# a light-page theme has to guard against.
+# has no per-level override.
 heading_band_color_h1 = "#6c2a92"
 heading_band_color_h2 = "#9e1449"
-# ⚠️ This IS `background` above, restated — see the Synthwave note on the same key.
-heading_band_gradient_to_color = "#101a4d"
+# ⚠️ NEITHER BAND ENDS ON THE PAGE ANY MORE, and both are named in `system.rs`'s OFF_PAGE.
+# Operator-directed: the two heading bands resolve INTO a second hue rather than dissolving
+# into the indigo, so a title reads as a banner with somewhere to go rather than as a strip
+# that fades out. Everything else in this theme — h3-h5 (unbanded), the disclosure fold's
+# own exemption aside — is unaffected.
+#
+# ⚠️ THERE IS NO BARE `heading_band_gradient_to_color` HERE. This theme bands exactly h1 and
+# h2 and now narrows both, so a bare key would be left describing only h3-h5 — levels with no
+# fill, where a second stop draws nothing. It is dropped as DEAD WEIGHT, not because anything
+# rejects it: MEASURED, re-adding it leaves the whole suite green, because
+# `the_shipped_themes_state_no_key_that_can_never_apply` asks whether a bare key is shadowed
+# at every LEVEL, and h3-h5 keep it unshadowed. Said explicitly because the tempting reading
+# is that the gate forces this, and it does not — the next person to add an h3 band should
+# feel free to state the bare key again.
+#
+# ⚠️ BOTH VALUES ARE TINTED, AND THE TINT IS THE WHOLE POINT. The lemon heading ink caps any
+# surface it sits on at L<=0.135, so a bright far stop is arithmetically unavailable however
+# it is spelled: Candy's own turquoise `link_color` #61c7c9 gives lemon 1.59:1 as a fill, and
+# the requested green #149c1a gives 2.88:1. This is the luminance law `table_head_bg` records
+# below — "make it turquoise" and "make it green" are HUE instructions, not value ones. So
+# each far stop is its requested hue tinted to a legal value, and the two are tinted to the
+# SAME value (L≈0.100) so the pair reads as one decision at two hues rather than as two
+# arbitrary depths.
+#   h1: hue 181° (link turquoise) at half value  → lemon 5.58:1 at the stop, 7.00:1 at grape
+#   h2: hue 123° (the requested #149c1a) at 66%  → lemon 5.55:1 at the stop, 6.30:1 at pink
+# Neither run dips below its stop anywhere along it. `find_hl_all_color`'s #0a5658 is this
+# file's other deep turquoise and is deliberately NOT reused for h1, so a title band cannot
+# be mistaken for a find highlight.
+heading_band_gradient_to_color_h1 = "#116364"
+heading_band_gradient_to_color_h2 = "#0d6811"
 heading_band_radius      = 8
 
 font_family   = 'Comfortaa, Quicksand, Dosis, Cantarell, "Noto Sans", sans-serif'
@@ -413,30 +438,40 @@ mark_bg         = "#5c5200"   # deep lemon — the ==highlight== marker. A shade
 # export as a rasterised colour glyph rather than as text.
 disclosure_glyph          = "⊕"
 disclosure_expanded_glyph = "⊖"
-# Hot pink — the furniture family the bullets and the quote bar already share. 5.02:1 on
-# the band below and 6.10:1 at the page end, well past the 3:1 non-text floor a drawn
+# Hot pink — the furniture family the bullets and the quote bar already share. 5.68:1 at
+# the band's pink end and 4.42:1 at its green end, past the 3:1 non-text floor a drawn
 # indicator answers to. `disclosure_marker_size` is unset for the reason Synthwave's
 # block gives: it sizes the BOX, and a glyph is drawn at the page's font size regardless.
 disclosure_marker_color   = "#fb6f92"
-# A LIFTED band behind the summary line — the same one-step-above-the-page surface
-# `code_inline_bg` stands on, and reused deliberately: a fold's summary is raised
-# furniture, not a heading, and this theme already owns a surface that means exactly
-# that. Banding it in the h1 grape or the h2 pink would have said "heading" instead. The
-# gradient fades to the page, safe here for the reason the heading bands are safe: this
-# page is dark, so every ink on the band only gains contrast along the run.
-disclosure_band_color             = "#1d2a60"
-# ⚠ This IS `background` above, restated — see the note on the heading band's stop.
-disclosure_band_gradient_to_color = "#101a4d"
+# ⚠ THE ONE BAND IN THIS FILE THAT DOES NOT END ON ITS OWN PAGE. Operator-directed: the
+# fold is banded in the theme's confection hues rather than in a lifted page surface —
+# deep raspberry running to deep lime, a candy wrapper rather than a shelf. Every other
+# band here fades to `background` so a one-line strip dissolves instead of ending on a
+# hard edge, and `a_shipped_bands_gradient_ends_on_that_themes_own_page` holds that rule
+# for all of them; this pair is the guard's single named exemption, carrying its reason
+# there as the assert message instructs.
+#
+# ⚠ THE VALUES ARE THE LEGIBILITY BUDGET, NOT A TASTE CHOICE. The hues were asked for at
+# full strength (#e7005c ↝ #68b100) and cannot be had: a gradient's ink must clear its
+# floor at BOTH stops (TDD 18.8), and those two sit on opposite sides of the luminance
+# midpoint — white dies on the green (2.67:1), black barely survives the pink (4.55:1),
+# and a search of the whole cube returns 18 colours clearing 4.5:1 on both, every one of
+# them visually black. Navy #101a4d was tried next and reaches only 3.56:1 on the pink.
+# Dropping both stops to 35% value keeps the exact hues and buys back the whole palette
+# below. Do not brighten these without re-deriving all three ratios; the green end is the
+# binding one, and it has ~0.1 of margin.
+disclosure_band_color             = "#510020"
+disclosure_band_gradient_to_color = "#243e00"
 disclosure_band_radius            = 8
 # Lemon label, in the heading/rule family: the summary is the title of what the fold
-# hides. 10.75:1 on the band, 13.07:1 at the page end.
+# hides. 12.17:1 at the pink end, 9.46:1 at the green end.
 disclosure_fg         = "#f6e94f"
 # The collapsed preview is the cotton-pink body ink SHADED — a hint at half voice rather
-# than a fifth hue on this page. 5.28:1 on the band, 6.42:1 at the page end, both clear
-# of the 4.5:1 text floor. ORCHID #a063c8 was the tempting answer here, being still the
-# one swatch with no role at all, and it is still unusable: 3.9:1 on the page and LOWER
-# on this band, which is lifted above it. The luminance law again — a swatch's role is
-# decided by its value, and no surface on this page rescues that one.
+# than a fifth hue on this page. 5.98:1 at the pink end, 4.64:1 at the green end, both
+# clear of the 4.5:1 text floor. ORCHID #a063c8 was the tempting answer here, being still
+# the one swatch with no role at all, and it is still unusable: 3.9:1 on the page and
+# lower on both of these. The luminance law again — a swatch's role is decided by its
+# value, and no surface on this page rescues that one.
 disclosure_preview_fg = "#cf8fae"
 
 # Geometry: round and generously padded, with a grid heavy enough to draw a real edge.
