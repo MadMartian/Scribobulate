@@ -703,7 +703,9 @@ fn a_brace_inside_a_char_literal_does_not_move_the_depth() {
     // early ARM and the later arms sit a level too deep to be recognised at all, which
     // is how the check went silently blind rather than noisily wrong. Both facts were
     // learned by mutation: the first draft of this case used a balanced `'{' || '}'`
-    // above the block and survived removal of the fix.
+    // above the block and survived removal of the fix. GEP-1 holds the general rule —
+    // plant the violation where the mechanism CONSUMES it, and establish first what
+    // quantity it measures and from which anchor.
     let src = r#"
 match ev {
     Event::Text(t) => lex(t, '{'),

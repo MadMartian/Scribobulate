@@ -477,7 +477,8 @@ fn wildcard_is_annotated(lines: &[&str], index: usize) -> bool {
 /// char-literal case of its own: braces inside a literal are blanked by that branch
 /// whether or not the escape is honoured, and a mis-closed `'\''` leaves a bare quote
 /// this predicate then declines — so every mutation of it was found to be unobservable
-/// through the brace depth. A test that cannot fail is worse than no test.
+/// through the brace depth. A test that cannot fail is worse than no test — it occupies
+/// the slot a real check would take and reports a pass forever (GEP-1).
 fn opens_char_literal(chars: &[char], quote: usize) -> bool {
     match chars.get(quote + 1) {
         Some('\\') => true,
