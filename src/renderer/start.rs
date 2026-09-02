@@ -19,9 +19,9 @@ impl Renderer {
     fn apply_lead_in(&mut self, kind: blockspacing::BlockKind) {
         let cx = blockspacing::BlockContext {
             list_item_open: self.list_item_open,
-            inside_list: !self.lists.is_empty(),
+            inside_list: !self.inter.lists.is_empty(),
             list_first_item: self.list_first_item,
-            at_start: self.at_start,
+            at_start: self.inter.at_start,
         };
         match blockspacing::lead_in(kind, cx) {
             blockspacing::LeadIn::Nothing => {}
@@ -37,7 +37,7 @@ impl Renderer {
                 self.heading = Some(level);
                 // Record where the heading text starts and reset its accumulator;
                 // the slug is computed at TagEnd::Heading.
-                self.heading_start = self.end_offset();
+                self.inter.heading_start = self.end_offset();
                 self.heading_text.clear();
             }
             Tag::Paragraph => {
@@ -48,7 +48,7 @@ impl Renderer {
                 self.list_item_open = false;
             }
             Tag::BlockQuote(_) => {
-                if self.blockquote_depth == 0 {
+                if self.inter.blockquote_depth == 0 {
                     self.block_sep();
                 }
                 // Blockquote content flows into the buffer as normal text + tags
@@ -56,15 +56,15 @@ impl Renderer {
                 // EVERY level records where it starts, not just the outermost: each one
                 // closes into its own span so it can draw its own accent bar at its own
                 // offset (TDD 2.11b). Innermost is last, so the matching TagEnd pops.
-                self.blockquote_starts.push(self.end_offset());
-                self.blockquote_depth += 1;
+                self.inter.blockquote_starts.push(self.end_offset());
+                self.inter.blockquote_depth += 1;
             }
             Tag::List(start) => {
                 self.apply_lead_in(blockspacing::BlockKind::List);
                 // Always start ordered lists at 1 regardless of source numbers;
                 // TagEnd::Item increments the counter, so any disordered or
                 // repeated source numerals render as 1, 2, 3 …
-                self.lists.push(start.map(|_| 1u64));
+                self.inter.lists.push(start.map(|_| 1u64));
                 self.list_first_item = true;
             }
             Tag::Item => {
@@ -79,19 +79,19 @@ impl Renderer {
                 // this is unconditional — they just ALSO carry the blockquote tag,
                 // whose margin the `li-{depth}` tag accumulates onto (`quoted` below).
                 let item_start = self.end_offset();
-                self.item_starts.push(item_start);
+                self.inter.item_starts.push(item_start);
                 // Record this item's marker for the drawn gutter. Ordered/bullet is
                 // known here; a task item is upgraded to `Task` when its
                 // `TaskListMarker` fires.
-                let kind = match self.lists.last() {
+                let kind = match self.inter.lists.last() {
                     Some(Some(n)) => crate::renderer::ListMarkerKind::Ordered(*n),
                     _ => crate::renderer::ListMarkerKind::Bullet,
                 };
                 self.list_markers.push(crate::renderer::ListMarker {
-                    depth: self.lists.len(),
+                    depth: self.inter.lists.len(),
                     kind,
                     first_line: item_start,
-                    quoted: self.blockquote_depth > 0,
+                    quoted: self.inter.blockquote_depth > 0,
                 });
                 self.list_item_open = true;
                 // NO inline marker text is inserted: a bullet /
@@ -161,7 +161,7 @@ impl Renderer {
                         ts.cell_markup.push_str(&open);
                     }
                 } else {
-                    self.inline_tags.push(crate::tags::TagName::Bold);
+                    self.inter.inline_tags.push(crate::tags::TagName::Bold);
                 }
             }
             Tag::Emphasis => {
@@ -170,7 +170,7 @@ impl Renderer {
                         ts.cell_markup.push_str("<i>");
                     }
                 } else {
-                    self.inline_tags.push(crate::tags::TagName::Italic);
+                    self.inter.inline_tags.push(crate::tags::TagName::Italic);
                 }
             }
             Tag::Strikethrough => {
@@ -183,7 +183,7 @@ impl Renderer {
                         ts.cell_markup.push_str(&open);
                     }
                 } else {
-                    self.inline_tags.push(crate::tags::TagName::Strike);
+                    self.inter.inline_tags.push(crate::tags::TagName::Strike);
                 }
             }
             Tag::Superscript => {
@@ -194,7 +194,9 @@ impl Renderer {
                         ts.cell_markup.push_str(&open);
                     }
                 } else {
-                    self.inline_tags.push(crate::tags::TagName::Superscript);
+                    self.inter
+                        .inline_tags
+                        .push(crate::tags::TagName::Superscript);
                 }
             }
             Tag::Subscript => {
@@ -205,7 +207,7 @@ impl Renderer {
                         ts.cell_markup.push_str(&open);
                     }
                 } else {
-                    self.inline_tags.push(crate::tags::TagName::Subscript);
+                    self.inter.inline_tags.push(crate::tags::TagName::Subscript);
                 }
             }
             Tag::Link { dest_url, .. } => {
@@ -228,8 +230,8 @@ impl Renderer {
                             .push_str(&crate::widgets::table::link_markup_open(&dest_url));
                     }
                 } else {
-                    self.link_start = Some((self.end_offset(), dest_url.to_string()));
-                    self.inline_tags.push(crate::tags::TagName::Link);
+                    self.inter.link_start = Some((self.end_offset(), dest_url.to_string()));
+                    self.inter.inline_tags.push(crate::tags::TagName::Link);
                 }
             }
             Tag::Image { dest_url, .. } => {
@@ -358,10 +360,10 @@ impl Renderer {
                     // `DisclosureFrame::foldable`. Asked FIRST, and unconditionally,
                     // because the answer comes from a cursor that must advance once
                     // per `<details>` however this block turns out.
-                    let span_index = self.disclosure_cursor.seen();
+                    let span_index = self.inter.disclosure_cursor.seen();
                     let foldable = self.opening_details_is_closed(key.source_offset());
                     let collapsed = foldable && self.folds.is_collapsed(key, open);
-                    self.disclosure_stack.push(super::DisclosureFrame {
+                    self.inter.disclosure_stack.push(super::DisclosureFrame {
                         key,
                         span_index,
                         foldable,
@@ -377,17 +379,17 @@ impl Renderer {
                     });
                 }
                 DetailsTag::SummaryOpen => {
-                    if let Some(frame) = self.disclosure_stack.last_mut() {
+                    if let Some(frame) = self.inter.disclosure_stack.last_mut() {
                         frame.in_summary = true;
                     }
                 }
                 DetailsTag::SummaryText(text) => {
-                    if let Some(frame) = self.disclosure_stack.last_mut() {
+                    if let Some(frame) = self.inter.disclosure_stack.last_mut() {
                         frame.label = Some(text);
                     }
                 }
                 DetailsTag::SummaryClose => {
-                    if let Some(frame) = self.disclosure_stack.last_mut() {
+                    if let Some(frame) = self.inter.disclosure_stack.last_mut() {
                         frame.in_summary = false;
                     }
                     self.emit_pending_summary();
@@ -402,7 +404,7 @@ impl Renderer {
                     // Recorded whatever the fold state: the extent this frame produces
                     // must say "not spliceable" in BOTH states, or the collapsed
                     // render would offer a splice the expanded one cannot fulfil.
-                    if let Some(frame) = self.disclosure_stack.last_mut() {
+                    if let Some(frame) = self.inter.disclosure_stack.last_mut() {
                         frame.wrote_literal = true;
                     }
                     if !self.inside_collapsed_body() {
@@ -414,7 +416,7 @@ impl Renderer {
                 // malformed input degrades predictably (rubric 2.26d).
                 DetailsTag::DetailsClose => {
                     self.record_disclosure_extent();
-                    self.disclosure_stack.pop();
+                    self.inter.disclosure_stack.pop();
                 }
             }
         }
@@ -437,13 +439,13 @@ impl Renderer {
     /// block that IS drawn earns an extent with an empty body, which is exactly the
     /// position a later expansion writes at.
     fn record_disclosure_extent(&mut self) {
-        let Some(frame) = self.disclosure_stack.last() else {
+        let Some(frame) = self.inter.disclosure_stack.last() else {
             return;
         };
         if !frame.emitted {
             return;
         }
-        let ancestors = &self.disclosure_stack[..self.disclosure_stack.len() - 1];
+        let ancestors = &self.inter.disclosure_stack[..self.inter.disclosure_stack.len() - 1];
         if ancestors.iter().any(|f| f.collapsed && f.emitted) {
             return;
         }
@@ -480,7 +482,8 @@ impl Renderer {
     /// the events would be a second implementation of the suppression rule, free to
     /// disagree with the first.
     pub(crate) fn inside_collapsed_body(&self) -> bool {
-        self.disclosure_stack
+        self.inter
+            .disclosure_stack
             .iter()
             .any(|f| f.collapsed && f.emitted)
     }
@@ -496,12 +499,12 @@ impl Renderer {
         // even its summary. Checked before the frame is marked emitted so that the
         // inner block cannot leak a summary line into a body the reader has closed.
         if self.inside_collapsed_body() {
-            if let Some(frame) = self.disclosure_stack.last_mut() {
+            if let Some(frame) = self.inter.disclosure_stack.last_mut() {
                 frame.emitted = true;
             }
             return;
         }
-        let Some(frame) = self.disclosure_stack.last_mut() else {
+        let Some(frame) = self.inter.disclosure_stack.last_mut() else {
             return;
         };
         if frame.emitted {
@@ -535,7 +538,7 @@ impl Renderer {
         // INSIDE the block resolves to, so it has to be the anchor's own position
         // rather than anywhere in the block separator ahead of it.
         let summary_offset = iter.offset();
-        if let Some(frame) = self.disclosure_stack.last_mut() {
+        if let Some(frame) = self.inter.disclosure_stack.last_mut() {
             frame.summary_offset = summary_offset;
         }
         // An UNCLOSED block gets its label and no toggle. The label is authored
@@ -557,7 +560,7 @@ impl Renderer {
             // Before the preview below: the label renders the same under either fold
             // state, the preview does not, so this is where the two begin to diverge.
             let label_end = self.end_offset();
-            if let Some(frame) = self.disclosure_stack.last_mut() {
+            if let Some(frame) = self.inter.disclosure_stack.last_mut() {
                 frame.label_end = label_end;
             }
             // A short preview of the body's OPENING text, dimmed by the active
@@ -589,7 +592,7 @@ impl Renderer {
         } else {
             self.insert(&label);
             let label_end = self.end_offset();
-            if let Some(frame) = self.disclosure_stack.last_mut() {
+            if let Some(frame) = self.inter.disclosure_stack.last_mut() {
                 frame.label_end = label_end;
             }
         }
@@ -620,7 +623,7 @@ impl Renderer {
         }
         self.newline();
         let body_start = self.end_offset();
-        if let Some(frame) = self.disclosure_stack.last_mut() {
+        if let Some(frame) = self.inter.disclosure_stack.last_mut() {
             frame.summary_end = summary_end;
             frame.body_start = body_start;
         }
@@ -727,8 +730,8 @@ impl Renderer {
         overlay.add_overlay(&tint);
         self.push_anchored(anchor.clone(), overlay.upcast());
         self.image_tints.push((anchor, tint.upcast()));
-        self.trailing_newlines = 0;
-        self.at_start = false;
+        self.inter.trailing_newlines = 0;
+        self.inter.at_start = false;
     }
 
     /// Anchor a broken-image placeholder icon with `tooltip` — shown for any image
@@ -751,8 +754,8 @@ impl Renderer {
         icon.add_css_class("scrib-broken-image");
         crate::a11y::name(&icon, tooltip);
         self.push_anchored(anchor, icon.upcast());
-        self.trailing_newlines = 0;
-        self.at_start = false;
+        self.inter.trailing_newlines = 0;
+        self.inter.at_start = false;
     }
 }
 

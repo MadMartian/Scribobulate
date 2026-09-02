@@ -430,12 +430,7 @@ pub(super) fn splice_toggle(
         view,
         &rig.anchored,
         &rig.extents,
-        md,
-        None,
-        ZOOM,
-        false,
-        crate::theme::active(),
-        folds,
+        &crate::preview::build::Prepared::new(md, None, ZOOM, false, crate::theme::active(), folds),
         key,
     )
     .expect("the toggled block was drawn in the starting render");

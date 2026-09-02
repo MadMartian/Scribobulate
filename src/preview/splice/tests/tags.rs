@@ -68,13 +68,8 @@ fn ranges_both_ways(md: &str, before: &FoldState, after: &FoldState, name: &str)
         &starting.buf,
         None,
         &starting.anchored,
-        &starting.disclosure_extents,
-        md,
-        None,
-        1.0,
-        false,
-        crate::theme::active(),
-        after,
+        &starting.maps.disclosure_extents,
+        &crate::preview::build::Prepared::new(md, None, 1.0, false, crate::theme::active(), after),
         key,
     )
     .expect("the toggled block was drawn in the starting render");

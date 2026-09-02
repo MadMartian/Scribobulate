@@ -83,6 +83,89 @@ pub(crate) struct RenderData {
     pub original_owned: String,
 }
 
+impl RenderData {
+    /// The FIRST render's state: a render's maps, plus the two widget-keyed lists
+    /// that route owns outright (there is nothing yet to merge them with).
+    ///
+    /// Exhaustively destructures [`RenderMaps`](crate::preview::build::RenderMaps),
+    /// exactly as [`Self::adopt_maps`] does, so a map added there is a compile error
+    /// at both — which is the whole point of the type. `disclosure_lines` starts
+    /// empty: it is filled when the toggles are wired, after the view exists.
+    pub(super) fn new(
+        maps: crate::preview::build::RenderMaps,
+        image_tints: Vec<(TextChildAnchor, gtk::Widget)>,
+        table_anchors: Vec<(TextChildAnchor, ScribTableWidget)>,
+    ) -> Self {
+        let crate::preview::build::RenderMaps {
+            source_map,
+            copymap,
+            md_owned,
+            links,
+            heading_sites,
+            heading_map,
+            collapsed_blocks,
+            disclosure_extents,
+            shifts,
+            original_owned,
+        } = maps;
+        Self {
+            source_map_inv: super::sourcemap::invert_source_map(&source_map),
+            source_map,
+            copymap,
+            md_owned,
+            links,
+            heading_map,
+            heading_sites,
+            collapsed_blocks,
+            disclosure_extents,
+            disclosure_lines: Vec::new(),
+            image_tints,
+            table_anchors,
+            shifts,
+            original_owned,
+        }
+    }
+
+    /// Adopt a render's buffer-keyed maps WHOLESALE — the one way any route installs
+    /// them, so a map added to [`RenderMaps`](crate::preview::build::RenderMaps)
+    /// reaches every route or none.
+    ///
+    /// `source_map_inv` is derived here, and only here: it is a pure function of
+    /// `source_map`, so no caller can install one without the other or leave the two
+    /// describing different renders.
+    ///
+    /// Deliberately does NOT touch `image_tints`, `table_anchors` or
+    /// `disclosure_lines` — those reference live anchor WIDGETS, and each route
+    /// answers for them differently (a full render replaces, the splice merges
+    /// survivors, the annotation refresh leaves them alone because the buffer was not
+    /// swapped).
+    pub(super) fn adopt_maps(&mut self, maps: crate::preview::build::RenderMaps) {
+        let crate::preview::build::RenderMaps {
+            source_map,
+            copymap,
+            md_owned,
+            links,
+            heading_sites,
+            heading_map,
+            collapsed_blocks,
+            disclosure_extents,
+            shifts,
+            original_owned,
+        } = maps;
+        self.source_map_inv = super::sourcemap::invert_source_map(&source_map);
+        self.source_map = source_map;
+        self.copymap = copymap;
+        self.md_owned = md_owned;
+        self.links = links;
+        self.heading_sites = heading_sites;
+        self.heading_map = heading_map;
+        self.collapsed_blocks = collapsed_blocks;
+        self.disclosure_extents = disclosure_extents;
+        self.shifts = shifts;
+        self.original_owned = original_owned;
+    }
+}
+
 /// The three render-state qdata keys, each binding its name to its one concrete
 /// type. `render()` is the sole writer; `re_render()` mutates the pointed-to
 /// cells in place rather than re-storing, so a clone taken once by a live

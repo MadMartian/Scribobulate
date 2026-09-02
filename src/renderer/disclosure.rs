@@ -201,18 +201,12 @@ pub(crate) struct DisclosureSpan {
 /// silent there and loud here. Divergence cannot happen while both parse the same
 /// string with the same options — which is exactly why the check must exist: nothing
 /// else would ever report that the premise had stopped holding.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct SpanCursor {
     seen: usize,
 }
 
 impl SpanCursor {
-    /// A cursor that has already answered for `seen` blocks — how a region render
-    /// resumes a walk mid-document (`RegionSeed`).
-    pub(crate) fn at(seen: usize) -> Self {
-        Self { seen }
-    }
-
     /// How many `<details>` this cursor has answered for — the index of the span the
     /// NEXT call will consume, which is a frame's identity in the pre-scan.
     pub(crate) fn seen(&self) -> usize {
@@ -969,8 +963,14 @@ mod span_cursor_tests {
 
     #[test]
     fn a_resumed_cursor_starts_where_the_scratch_walk_stood() {
+        // A region render resumes by CLONING the scratch walk's cursor whole (it
+        // travels inside `RegionSeed`), not by rebuilding one from a count — so what
+        // is pinned here is that the clone answers for the span the original had
+        // reached, not the one it started at.
         let spans = [span(0, false), span(50, true)];
-        let mut cursor = SpanCursor::at(1);
-        assert!(cursor.opening_is_closed(&spans, 50));
+        let mut scratch = SpanCursor::default();
+        assert!(!scratch.opening_is_closed(&spans, 0));
+        let mut resumed = scratch.clone();
+        assert!(resumed.opening_is_closed(&spans, 50));
     }
 }

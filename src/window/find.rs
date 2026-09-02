@@ -780,33 +780,13 @@ fn preview_find_step(
         } else {
             cur % total + 1 // cur==0 ⇒ 1; cur==total ⇒ wrap to 1
         };
-        // Landing on a hidden hit is not an arrival, it is a REDIRECTION: the match is
-        // inside a collapsed block, so nothing is marked and the cursor is not set
-        // here. Expanding rebuilds this whole list — the hidden entry is replaced by
-        // the real match — and the resume below lands on that instead. Marking first
-        // would leave a "3 of 7" standing against a list about to become a different
-        // list.
-        if let PreviewHit::Hidden { summary_off, key } = &hits[(next - 1) as usize] {
-            return Some((*summary_off, *key));
-        }
-        apply_preview_highlights(view, targets, hits, next as usize);
-        scroll_to_preview_hit(view, &hits[(next - 1) as usize]);
-        st.find_cursor.set(FindCursor::Preview(next));
-        set_match_label(&st.chrome().match_count_label, next, total);
-        None
+        land_on_hit(view, &st, targets, hits, (next - 1) as usize)
     });
 
     let Some((summary_off, key)) = reveal else {
         return;
     };
-    // Scrolled BEFORE the expansion so the reader sees the block they are about to be
-    // taken into open, rather than the expansion happening off-screen and the view
-    // arriving somewhere it never travelled.
-    view.scroll_to_buffer_offset(summary_off);
-    let text = text.to_string();
-    super::foldreveal::reveal_folds(window, &[key], move |window| {
-        select_preview_hit_at_or_after(window, summary_off, &text);
-    });
+    reveal_and_resume(window, view, summary_off, key, text);
 }
 
 /// After a collapsed block has been expanded for find, land on the first match at or
@@ -847,19 +827,64 @@ fn select_preview_hit_at_or_after(window: &ApplicationWindow, min_off: i32, text
             );
             return None;
         };
-        if let PreviewHit::Hidden { summary_off, key } = &hits[idx] {
-            return Some((*summary_off, *key));
-        }
-        let next = idx as i32 + 1;
-        apply_preview_highlights(&view, targets, hits, next as usize);
-        scroll_to_preview_hit(&view, &hits[idx]);
-        st.find_cursor.set(FindCursor::Preview(next));
-        set_match_label(&st.chrome().match_count_label, next, total);
-        None
+        land_on_hit(&view, &st, targets, hits, idx)
     });
     let Some((summary_off, key)) = reveal else {
         return;
     };
+    reveal_and_resume(window, &view, summary_off, key, text);
+}
+
+/// Mark `hits[idx]` (0-based) as the current match — highlights, scroll, cursor and
+/// count label, which must move TOGETHER or the find bar reports a position that is
+/// not the one highlighted.
+///
+/// Returns `Some((summary_off, key))` instead when the hit is [`PreviewHit::Hidden`]:
+/// landing on a hidden hit is not an arrival, it is a REDIRECTION. The match is inside
+/// a collapsed block, so nothing is marked and the cursor is not set — expanding
+/// rebuilds this whole list (the hidden entry is replaced by the real match) and the
+/// caller resumes onto that instead. Marking first would leave a "3 of 7" standing
+/// against a list about to become a different list. The caller's obligation is
+/// [`reveal_and_resume`].
+///
+/// The ONE definition of "arrive at a match", shared by the entry path
+/// ([`preview_find_step`]) and its recursive resume
+/// ([`select_preview_hit_at_or_after`]) — which differ only in how `idx` is chosen.
+/// Two copies meant a fix applied to the entry path showed up as correct until the
+/// *second* hit inside a nested collapsed block, which is exactly the case TDD 2.26g
+/// added.
+fn land_on_hit(
+    view: &CodePreviewView,
+    st: &Rc<TabState>,
+    targets: &[(i32, Label)],
+    hits: &[PreviewHit],
+    idx: usize,
+) -> Option<(i32, crate::fold::FoldKey)> {
+    if let PreviewHit::Hidden { summary_off, key } = &hits[idx] {
+        return Some((*summary_off, *key));
+    }
+    let next = idx as i32 + 1;
+    apply_preview_highlights(view, targets, hits, next as usize);
+    scroll_to_preview_hit(view, &hits[idx]);
+    st.find_cursor.set(FindCursor::Preview(next));
+    set_match_label(&st.chrome().match_count_label, next, hits.len() as i32);
+    None
+}
+
+/// Expand the collapsed block [`land_on_hit`] redirected to, and resume the search
+/// inside it.
+///
+/// Scrolled BEFORE the expansion so the reader sees the block they are about to be
+/// taken into open, rather than the expansion happening off-screen and the view
+/// arriving somewhere it never travelled.
+fn reveal_and_resume(
+    window: &ApplicationWindow,
+    view: &CodePreviewView,
+    summary_off: i32,
+    key: crate::fold::FoldKey,
+    text: &str,
+) {
+    view.scroll_to_buffer_offset(summary_off);
     let text = text.to_string();
     super::foldreveal::reveal_folds(window, &[key], move |window| {
         select_preview_hit_at_or_after(window, summary_off, &text);

@@ -27,7 +27,7 @@ use std::time::Duration;
 use crate::codeview::CodePreviewView;
 use crate::testpump::{self, Clock};
 
-use super::harness::{FILLER, PANE_H, PANE_W, SETTLE_DEADLINE};
+use super::harness::{FILLER, PANE_H, PANE_W};
 use super::recorder::{runs_summary, Trace};
 use super::rig::{anchor_reader, reader_offset, top_line_text, Reading};
 
@@ -61,9 +61,6 @@ const DEEP_IN_THE_BODY: &str = "the deepest hidden paragraph";
 /// reading below would describe the state the restore exists to correct, and the guards
 /// would pass with the restore deleted.
 const QUIET: Duration = Duration::from_millis(400);
-
-/// Where the reader parks, as a fraction of the scrollable range.
-const READING_FRACTION: f64 = 0.6;
 
 /// A document with one collapsed disclosure near the top and — BELOW it — a heading, a
 /// link, a distinctive paragraph and a table, which are what rubric 2.26j is about.
@@ -134,60 +131,20 @@ impl Wired {
         rig
     }
 
-    /// Pump until line-height validation has finished AND the range has stopped moving
-    /// — both, for the reason `rig::Rig::settle` records (the layout-valid oracle can
-    /// be dispatched early by a main loop pumped from inside the validate callback, and
-    /// anchored-child allocation is the route this fixture is full of).
+    /// See [`super::rig::settle`] — the same discipline the mechanism rig uses, with
+    /// this rig's longer [`QUIET`] window.
     fn settle(&self) {
-        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
-        {
-            let f = std::rc::Rc::clone(&fired);
-            crate::farscroll::after_line_heights_validated(self.view.upcast_ref(), move |_| {
-                f.set(true)
-            });
-        }
-        testpump::until_for(
-            Clock::Idle,
-            SETTLE_DEADLINE,
-            "line heights to validate",
-            move || fired.get(),
-        );
-        let settled = testpump::until_stable(Clock::Idle, SETTLE_DEADLINE, QUIET, {
-            let adjustment = self.adjustment.clone();
-            move || (adjustment.upper().to_bits(), adjustment.value().to_bits())
-        });
-        assert!(
-            settled.converged,
-            "the vadjustment never stopped moving, so every reading taken after this \
-             measures the machine rather than the code"
-        );
+        super::rig::settle(&self.view, &self.adjustment, QUIET);
     }
 
-    /// [`Self::settle`]'s range-quiet half, recording the lowest `value` and `upper`
-    /// seen on the way — the excursion itself, which the endpoints cannot show.
+    /// See [`super::rig::settle_watching_the_trough`].
     fn settle_watching_the_trough(&self) -> (f64, f64) {
-        let mut min_value = f64::INFINITY;
-        let mut min_upper = f64::INFINITY;
-        let settled = testpump::until_stable(Clock::Idle, SETTLE_DEADLINE, QUIET, || {
-            min_value = min_value.min(self.adjustment.value());
-            min_upper = min_upper.min(self.adjustment.upper());
-            (
-                self.adjustment.upper().to_bits(),
-                self.adjustment.value().to_bits(),
-            )
-        });
-        assert!(
-            settled.converged,
-            "the vadjustment never stopped moving after the toggle"
-        );
-        (min_value, min_upper)
+        super::rig::settle_watching_the_trough(&self.adjustment, QUIET)
     }
 
+    /// See [`super::rig::park_the_reader`].
     fn park_the_reader(&self) {
-        let target =
-            (self.adjustment.upper() - self.adjustment.page_size()).max(0.0) * READING_FRACTION;
-        crate::saferizer::scrollpos::jump(&self.adjustment, target);
-        self.settle();
+        super::rig::park_the_reader(&self.view, &self.adjustment, QUIET);
     }
 
     /// The live `RenderData` — the maps every 2.26j consumer reads.

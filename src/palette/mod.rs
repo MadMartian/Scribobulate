@@ -408,15 +408,6 @@ impl Palette {
         }
     }
 
-    /// Resolve the palette for the ACTIVE theme: probe the desktop for whatever the
-    /// theme leaves unstated (resolution link 3), then derive the rest purely.
-    ///
-    /// The probe itself is [`probe_named`]; this is only the entry point that hands it
-    /// the active theme.
-    pub(crate) fn resolve() -> Self {
-        Self::for_theme(&crate::theme::active())
-    }
-
     /// The palette an **exported page** resolves to: the given theme's stated keys
     /// over a paper base, with no desktop probe at all.
     ///

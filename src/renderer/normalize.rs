@@ -125,12 +125,6 @@ impl<'a> NormalizedMd<'a> {
         &self.0
     }
 
-    /// Take the normalised text by value, for a caller that stores it (rather than
-    /// re-deriving it) alongside a render's other products.
-    pub(crate) fn into_owned(self) -> String {
-        self.0.into_owned()
-    }
-
     /// A fresh `pulldown_cmark` iterator over the normalised text, configured with
     /// [`md_options`]. Safe to call more than once — each call parses again, since a
     /// `Parser` cannot be cloned or replayed.

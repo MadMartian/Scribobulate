@@ -117,11 +117,11 @@ impl Renderer {
                         }
                         let tag = script_tag(seg.script);
                         if let Some(name) = tag {
-                            self.inline_tags.push(name);
+                            self.inter.inline_tags.push(name);
                         }
                         self.insert(seg.text(&t));
                         if tag.is_some() {
-                            self.inline_tags.pop();
+                            self.inter.inline_tags.pop();
                         }
                     }
                 }
@@ -260,8 +260,8 @@ impl Renderer {
                 // h-scrollbar → GTK4Rs/AP-22/23 churn (GTK4Rs/AP-23a). 0 at top level.
                 self.width_bounded.push((sep.clone(), self.block_inset()));
                 self.push_anchored(anchor, sep.upcast());
-                self.trailing_newlines = 0;
-                self.at_start = false;
+                self.inter.trailing_newlines = 0;
+                self.inter.at_start = false;
                 self.newline();
             }
 

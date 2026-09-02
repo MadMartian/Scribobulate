@@ -60,14 +60,15 @@
 /// correct region write and that one owns *adopting* it, and because the two together
 /// are past the 500-line soft limit.
 pub(super) mod install;
+mod regionwriter;
 
-use super::build::{build_render_products_with_theme, RenderProducts};
-use crate::fold::{FoldKey, FoldState};
-use crate::renderer::{md_options, DisclosureToggle, NormalizedMd, Renderer};
+use super::build::{Prepared, RenderProducts};
+use crate::fold::FoldKey;
+use crate::renderer::{md_options, DisclosureToggle};
 use gtk::prelude::*;
 use gtk::TextBuffer;
 use pulldown_cmark::Parser;
-use std::rc::Rc;
+use regionwriter::{RegionWriter, Writing};
 
 /// Everything a fold toggle produced, ready for a caller to install: PASS A's
 /// wholesale maps (`products`, `.buf`/`.anchored`/… are the throwaway scratch
@@ -77,12 +78,10 @@ use std::rc::Rc;
 /// already-live survivor — see [`super::build::attach_anchored`] — hands it only
 /// [`Self::region`], never [`Self::merged_anchored`]).
 pub(super) struct SpliceOutcome {
-    /// PASS A's full output. Every field here except the buffer/widget ones
-    /// (`buf`, `anchored`, `image_tints`, `install.width_bounded/image_bounded/tables`,
-    /// `disclosure_toggles`) is valid against the LIVE buffer wholesale — which is
-    /// what [`install::splice_disclosure`] installs, field for field, the way
-    /// `re_render` installs a full render's.
-    pub(super) products: RenderProducts,
+    /// PASS A's output, already reduced to the half that is valid against the LIVE
+    /// buffer — see [`ScratchProducts`]. Installed wholesale, the way `re_render`
+    /// installs a full render's.
+    pub(super) products: ScratchProducts,
     /// Every anchor now live in the buffer this splice was run against, in document
     /// order: the ones that survived the delete, plus [`Self::region`]'s.
     pub(super) merged_anchored: Vec<(gtk::TextChildAnchor, gtk::Widget)>,
@@ -92,6 +91,60 @@ pub(super) struct SpliceOutcome {
     /// it is given) and what it must fold `DisclosureToggle`s from into the live
     /// `RenderData.disclosure_lines` alongside the surviving toggles.
     pub(super) region: RegionWidgets,
+}
+
+/// PASS A's output, reduced to the half that is valid against a DIFFERENT buffer.
+///
+/// A whole-document [`RenderProducts`] measures its maps against the buffer it filled
+/// and OWNS every widget it created for it. PASS A's buffer is a scratch one that is
+/// dropped the moment this value is built: the maps and the buffer-space decor
+/// transfer to the live pane (the splice proves the two buffers hold the same
+/// characters before installing them), and the widgets do not — they are children of
+/// nothing, and installing one would put an unparented widget into a live view's
+/// record.
+///
+/// **Why a separate type and not a comment.** The install used to destructure
+/// `RenderProducts` and drop six fields by naming each `_`, so the only thing
+/// separating the two halves was a reviewer noticing a missing underscore — and
+/// adding a field produced a compile error whose obvious fix was another `_`. That is
+/// the ScrAP-131 shape. The conversion below is the ONE place the split is decided,
+/// and it is an exhaustive destructure, so a field added to `RenderProducts` must be
+/// assigned a side there rather than silently inheriting one.
+pub(super) struct ScratchProducts {
+    /// Every buffer-keyed map, valid against any buffer whose text matches.
+    pub(super) maps: crate::preview::build::RenderMaps,
+    /// The buffer-space decorations, likewise. The widget half of
+    /// [`crate::preview::build::ViewInstall`] is deliberately absent.
+    pub(super) decor: crate::preview::build::InstallDecor,
+    pub(super) markers: Vec<crate::codeview::MarkerData>,
+    pub(super) cell_src_spans: Vec<std::ops::Range<usize>>,
+}
+
+impl From<RenderProducts> for ScratchProducts {
+    fn from(products: RenderProducts) -> Self {
+        let RenderProducts {
+            // ── the scratch buffer's own, and everything parented in it ──
+            buf: _,
+            // PASS A's toggles belong to the scratch buffer; the region render's are
+            // the live ones.
+            disclosure_toggles: _,
+            anchored: _,
+            image_tints: _,
+            // The tags are already on the live buffer — this render did not write it.
+            highlight_ranges: _,
+            // ── valid against any buffer whose text matches ──
+            maps,
+            install,
+            markers,
+            cell_src_spans,
+        } = products;
+        Self {
+            maps,
+            decor: install.decor,
+            markers,
+            cell_src_spans,
+        }
+    }
 }
 
 /// The widget-bearing outputs of one region render ([`render_region`]) — a subset of
@@ -168,20 +221,12 @@ pub(super) enum SpliceRefusal {
 /// distinct variant rather than the same `None` precisely because the caller's
 /// obligation differs: a full re-render is optional after the first and mandatory
 /// after the second.
-#[allow(clippy::too_many_arguments)] // every parameter is a distinct render input;
-                                     // see `build_render_products_with_theme`'s own
-                                     // identical allowance for the same reason
 pub(super) fn splice(
     buf: &TextBuffer,
     view: Option<&crate::codeview::CodePreviewView>,
     old_anchored: &[(gtk::TextChildAnchor, gtk::Widget)],
     old_extents: &[crate::renderer::DisclosureExtent],
-    md: &str,
-    doc_dir: Option<&std::path::Path>,
-    zoom: f64,
-    allow_unsafe: bool,
-    theme: Rc<crate::theme::Theme>,
-    folds: &FoldState,
+    prepared: &Prepared<'_>,
     key: FoldKey,
 ) -> Result<SpliceOutcome, SpliceRefusal> {
     let Some(old_extent) = old_extents.iter().find(|e| e.key == key) else {
@@ -219,10 +264,17 @@ pub(super) fn splice(
         return Err(SpliceRefusal::Untouched);
     }
 
-    // PASS A — see module docs.
-    let products =
-        build_render_products_with_theme(md, doc_dir, zoom, allow_unsafe, theme.clone(), folds);
-    let Some(new_extent) = products.disclosure_extents.iter().find(|e| e.key == key) else {
+    // PASS A — see module docs. Driven from the SAME `Prepared` as the region walk
+    // below, so the "scratch text equals the spliced live text" premise this whole
+    // route rests on cannot be broken by the two passes preparing the document
+    // differently.
+    let products = crate::preview::build::build_products_scratch(prepared);
+    let Some(new_extent) = products
+        .maps
+        .disclosure_extents
+        .iter()
+        .find(|e| e.key == key)
+    else {
         // The doc comment has always promised this one is logged, and it was not.
         // `error` rather than `debug`: PASS A parses the same string with the same
         // options as the walk that produced `old_extents`, so the two disagreeing is a
@@ -254,12 +306,7 @@ pub(super) fn splice(
     let Some(region) = render_region(
         buf,
         view,
-        md,
-        doc_dir,
-        zoom,
-        allow_unsafe,
-        theme,
-        folds,
+        prepared,
         key,
         old_volatile.start,
         target_collapsed,
@@ -288,7 +335,7 @@ pub(super) fn splice(
     {
         let slice = buf.slice(&buf.start_iter(), &buf.end_iter(), true);
         let chars: Vec<char> = slice.chars().collect();
-        crate::copymap::debug_verify(&products.copymap, &products.md_owned, &chars);
+        crate::copymap::debug_verify(&products.maps.copymap, &products.maps.md_owned, &chars);
     }
 
     // ...and the release-safe half of the same question, because the check above is the
@@ -305,7 +352,7 @@ pub(super) fn splice(
     //
     // Reported as `RegionLost`: the buffer HAS been mutated and is now inconsistent, so
     // the caller's obligation is the same as a failed region write — re-render whole.
-    let expected = products.copymap.char_count();
+    let expected = products.maps.copymap.char_count();
     if buf.char_count() != expected {
         log::error!(
             "preview::splice: after splicing key {key:?} the buffer holds {} characters \
@@ -317,7 +364,7 @@ pub(super) fn splice(
     }
 
     Ok(SpliceOutcome {
-        products,
+        products: products.into(),
         merged_anchored: merged,
         region,
     })
@@ -332,59 +379,32 @@ pub(super) fn splice(
 /// into its OWN throwaway scratch buffer and is discarded once it has yielded a
 /// [`crate::renderer::RegionSeed`]; only the LIVE renderer this constructs from that
 /// seed ever touches `buf`.
-#[allow(clippy::too_many_arguments)] // every parameter is a render input `splice`
-                                     // already had; this is its own walk, not a
-                                     // second seam over the same inputs
 fn render_region(
     buf: &TextBuffer,
     view: Option<&crate::codeview::CodePreviewView>,
-    md: &str,
-    doc_dir: Option<&std::path::Path>,
-    zoom: f64,
-    allow_unsafe: bool,
-    theme: Rc<crate::theme::Theme>,
-    folds: &FoldState,
+    prepared: &Prepared<'_>,
     key: FoldKey,
     at_offset: i32,
     target_collapsed: bool,
 ) -> Option<RegionWidgets> {
-    let md_norm = NormalizedMd::new(md);
-    let extraction = crate::annotate::extract(md_norm.as_str());
-    let cleaned = extraction.cleaned.as_str();
-    let ann_highlights: Vec<(usize, usize)> = extraction
-        .annotations
-        .iter()
-        .filter(|a| a.kind == crate::annotate::AnnKind::Highlight)
-        .map(|a| (a.cleaned_content.start.raw(), a.cleaned_content.end.raw()))
-        .collect();
-    let palette = crate::palette::Palette::for_theme(&theme);
-
-    let new_renderer = |buf: TextBuffer| {
-        Renderer::new(
-            buf,
-            theme.clone(),
-            palette.syntect_theme.clone(),
-            doc_dir.map(|d| d.to_path_buf()),
-            allow_unsafe,
-            cleaned.to_string(),
-            ann_highlights.clone(),
-            zoom,
-            folds.clone(),
-        )
-    };
+    let cleaned = prepared.cleaned();
 
     // The seed-capture walk (see this function's doc comment). Its buffer gets the
-    // same tag table any fresh render would (`build_render_products_with_theme`'s
-    // own "fresh tag table" branch) — a body event applies tags as it writes, and
-    // an untagged buffer answers every `apply_tag_by_name` with a `Gtk-WARNING`
+    // same tag table any fresh render would — a body event applies tags as it writes,
+    // and an untagged buffer answers every `apply_tag_by_name` with a `Gtk-WARNING`
     // rather than a state difference, but there is no reason to pay the noise.
     let seed_buf = TextBuffer::new(None::<&gtk::TextTagTable>);
-    crate::tags::setup_tags_with_theme(&seed_buf, &palette, zoom, &theme);
-    let mut seed_r = new_renderer(seed_buf);
+    prepared.setup_tags(&seed_buf);
+    let mut seed_r = prepared.renderer(seed_buf);
 
-    let mut live: Option<Renderer> = None;
+    // The finished region, set by whichever of the two terminations the walk reaches.
+    // A `RegionWriter` is consumed by `finish()`, so this cannot hold a region that was
+    // never closed — and the `None` below is the one case where PASS A and this walk
+    // disagreed, which the caller must treat as a lost region.
+    let mut finished: Option<RegionWidgets> = None;
+    let mut live: Option<RegionWriter<Writing>> = None;
     for (ev, src) in Parser::new_ext(cleaned, md_options()).into_offset_iter() {
-        match &mut live {
+        match live.take() {
             None => {
                 // `event_src` must be set before EVERY `process` call — a
                 // disclosure's own identity (`DisclosureFrame::key`, minted from
@@ -394,79 +414,57 @@ fn render_region(
                 seed_r.event_src = src.clone();
                 seed_r.process(ev);
                 if let Some(seed) = seed_r.capture_region_seed(key) {
-                    let mut r = new_renderer(buf.clone());
-                    // BEFORE `write_at`, so every anchored child this region render
-                    // creates is parented in the same turn as its anchor — see
-                    // `Renderer::push_anchored`. `None` (a bare-buffer caller, as
-                    // `super::tests` is) keeps the old two-step behaviour.
-                    if let Some(view) = view {
-                        r.set_live_view(view);
-                    }
-                    r.seed(seed);
-                    r.write_at(at_offset);
-                    // The summary line's own tail (the collapsed preview, if any,
-                    // then the newline `emit_pending_summary` always ends with) —
-                    // written into the SCRATCH buffer during seed capture, never
-                    // into this (live) one. See `write_seeded_summary_tail`'s doc
-                    // comment for why this is a catch-up write and not double
-                    // bookkeeping.
-                    r.write_seeded_summary_tail(target_collapsed);
+                    // The whole ordering constraint — the view and the seed before the
+                    // offset, the offset before any content, `finish_region` exactly
+                    // once at the end — is held by `RegionWriter`'s two states rather
+                    // than by the order of the lines below.
+                    let mut r = RegionWriter::begin(prepared, buf, view, seed).write_at(at_offset);
+                    r.summary_tail(target_collapsed);
                     if target_collapsed {
                         // A collapsed target has no body events to process at all
                         // — `Renderer::process`'s own suppression would swallow
                         // them if it did.
-                        r.finish_region();
-                        live = Some(r);
+                        finished = Some(r.finish());
                         break;
                     }
                     live = Some(r);
                 }
             }
-            Some(r) => {
-                r.event_src = src;
-                r.process(ev);
+            Some(mut r) => {
+                r.process(ev, src);
                 if !r.is_open(key) {
                     // The event just processed closed `key`'s own frame — the
                     // region ends here. Everything after this belongs to content
                     // already sitting in the live buffer, untouched; a region
                     // render must never reach past its own block.
-                    r.finish_region();
+                    finished = Some(r.finish());
                     break;
                 }
+                live = Some(r);
             }
         }
     }
-    let Some(mut r) = live else {
+    let Some(region) = finished else {
         // NOT a silent substitution. The caller has ALREADY deleted the region from
         // the live buffer, so writing nothing here would leave the reader's page short
         // by a whole block while every installed map still described the longer
         // buffer. Refuse, and let `splice` report `SpliceRefusal::RegionLost`.
+        //
+        // Two shapes reach here and both are the same disagreement: the walk never
+        // reached `key`'s region at all, or it reached it and the block never closed.
+        // A spliceable block is a CLOSED one by construction (`splice` refuses the
+        // others before touching the buffer), so neither is reachable while the two
+        // walks parse the same string with the same options.
         log::error!(
             "preview::splice: PASS A drew a disclosure_extent for source byte {} but the \
-             region-seed walk never reached it — the two walks parsed the same string with \
-             the same options, so this should be unreachable; the region is LOST and the \
-             pane must be re-rendered whole",
+             region-seed walk never produced a finished region for it — the two walks parsed \
+             the same string with the same options, so this should be unreachable; the region \
+             is LOST and the pane must be re-rendered whole",
             key.source_offset()
         );
         return None;
     };
-    // `attach_anchored`'s own trailing `queue_resize`, which the eager path would
-    // otherwise skip: parenting N children queues N resizes on the view, but the
-    // batched one is what the two-step route does and the arms must differ only in
-    // WHEN the children are parented.
-    if let Some(view) = view {
-        if !r.anchored.is_empty() {
-            view.queue_resize();
-        }
-    }
-    Some(RegionWidgets {
-        anchored: std::mem::take(&mut r.anchored),
-        image_tints: std::mem::take(&mut r.image_tints),
-        width_bounded: std::mem::take(&mut r.width_bounded),
-        image_bounded: std::mem::take(&mut r.image_bounded),
-        tables: std::mem::take(&mut r.tables),
-        disclosure_toggles: std::mem::take(&mut r.disclosure_toggles),
-    })
+    Some(region)
 }
 
 /// Display-free tests for the delete boundary. Plain `#[cfg(test)]`, not the

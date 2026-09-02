@@ -17,7 +17,6 @@ use super::interactions::{
 use super::qdata::{
     scrib_anchor_widgets, scrib_labels, scrib_render_data, set_scrib_render_state, RenderData,
 };
-use super::sourcemap::invert_source_map;
 use crate::codeview::CodePreviewView;
 use gtk::prelude::*;
 use gtk::{Label, ScrolledWindow, TextChildAnchor, WrapMode};
@@ -32,45 +31,24 @@ pub(crate) fn render(
 ) -> gtk::Widget {
     let RenderProducts {
         buf,
+        maps,
         disclosure_toggles,
-        collapsed_blocks,
-        disclosure_extents,
-        source_map,
-        copymap,
-        md_owned,
-        links,
         anchored,
         image_tints,
         install,
-        heading_sites,
-        heading_map,
         mut markers,
         cell_src_spans,
         highlight_ranges: _,
-        shifts,
-        original_owned,
     } = build_render_products(md, doc_dir, zoom, allow_unsafe_images);
 
     // Wrap per-render data in a shared cell so `re_render` can update it in
     // place without disconnecting and reconnecting any signal handlers.
     let table_anchors = collect_table_anchors(&anchored);
-    let source_map_inv = invert_source_map(&source_map);
-    let render_data: Rc<RefCell<RenderData>> = Rc::new(RefCell::new(RenderData {
-        source_map,
-        source_map_inv,
-        copymap,
-        md_owned,
-        links,
-        heading_map,
-        heading_sites,
-        collapsed_blocks,
-        disclosure_extents,
-        disclosure_lines: Vec::new(),
+    let render_data: Rc<RefCell<RenderData>> = Rc::new(RefCell::new(RenderData::new(
+        maps,
         image_tints,
         table_anchors,
-        shifts,
-        original_owned,
-    }));
+    )));
     // Tint images that fall inside the buffer selection (the buffer was just built).
     connect_image_tints(&buf, &render_data);
 
@@ -255,22 +233,13 @@ pub(crate) fn re_render(
     let RenderProducts {
         buf: _,
         disclosure_toggles,
-        collapsed_blocks,
-        disclosure_extents,
-        source_map,
-        copymap,
-        md_owned,
-        links,
+        maps,
         anchored,
         image_tints,
         install,
-        heading_sites,
-        heading_map,
         mut markers,
         cell_src_spans,
         highlight_ranges: _,
-        shifts,
-        original_owned,
     } = build_render_products_into(
         &view.buffer(),
         md,
@@ -292,19 +261,13 @@ pub(crate) fn re_render(
     }
     if let Some(rd) = &render_data {
         let mut rd = rd.borrow_mut();
-        rd.source_map_inv = invert_source_map(&source_map);
-        rd.source_map = source_map;
-        rd.copymap = copymap;
-        rd.md_owned = md_owned;
-        rd.links = links;
-        rd.heading_map = heading_map;
-        rd.heading_sites = heading_sites;
-        rd.collapsed_blocks = collapsed_blocks;
-        rd.disclosure_extents = disclosure_extents;
+        rd.adopt_maps(maps);
+        // The widget-keyed halves, which `adopt_maps` deliberately does not own: this
+        // route swapped the buffer's contents, so both lists are REPLACED wholesale
+        // rather than merged (the splice's route) or left alone (the annotation
+        // refresh's).
         rd.image_tints = image_tints;
         rd.table_anchors = collect_table_anchors(&anchored);
-        rd.shifts = shifts;
-        rd.original_owned = original_owned;
     }
 
     // Rebuild the table label list from the new table widgets.
@@ -458,7 +421,7 @@ pub(crate) fn refresh_annotations_in_place(
     // checkbox's CHECKED state lives in the markers, not in any buffer tag. Without
     // re-installing them the drawn box keeps its stale state and the toggle appears to do
     // nothing in preview-only mode.
-    install_annotations(&view, products.install.list_markers, zoom);
+    install_annotations(&view, products.install.decor.list_markers, zoom);
 
     // Refresh the offset-based render maps (source↔buffer / copy / shift), which DO change
     // — the source shifted by the inserted/removed CriticMarkup even though the buffer did
@@ -466,18 +429,7 @@ pub(crate) fn refresh_annotations_in_place(
     // anchor widgets, which are unchanged (the products' fresh widgets are discarded), and
     // the buffer was not swapped, so the image-tint handler stays attached.
     if let Some(rd) = scrib_render_data(&view) {
-        let mut rd = rd.borrow_mut();
-        rd.source_map_inv = invert_source_map(&products.source_map);
-        rd.source_map = products.source_map;
-        rd.copymap = products.copymap;
-        rd.md_owned = products.md_owned;
-        rd.links = products.links;
-        rd.heading_map = products.heading_map;
-        rd.heading_sites = products.heading_sites;
-        rd.collapsed_blocks = products.collapsed_blocks;
-        rd.disclosure_extents = products.disclosure_extents;
-        rd.shifts = products.shifts;
-        rd.original_owned = products.original_owned;
+        rd.borrow_mut().adopt_maps(products.maps);
     }
     true
 }

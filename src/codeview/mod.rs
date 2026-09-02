@@ -41,6 +41,7 @@ use gtk::{gdk, glib, graphene};
 /// it from cursor geometry (the strong cursor's own width is 0).
 const ANCHORED_LINE_END_SLACK: i32 = 1;
 
+mod bandpaint;
 mod bands;
 mod card;
 mod cards;

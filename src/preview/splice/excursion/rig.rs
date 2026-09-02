@@ -9,6 +9,7 @@
 use gtk::prelude::*;
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use crate::codeview::CodePreviewView;
 use crate::fold::FoldState;
@@ -83,10 +84,11 @@ impl Rig {
         let RenderProducts {
             buf,
             anchored,
-            disclosure_extents,
+            maps,
             install,
             ..
         } = build_render_products_with_theme(md, None, ZOOM, false, crate::theme::active(), folds);
+        let disclosure_extents = maps.disclosure_extents;
 
         let view = CodePreviewView::new();
         view.add_css_class("scrib-preview");
@@ -147,58 +149,13 @@ impl Rig {
     /// measured the wrong thing.
     pub(super) fn settle(&self) {
         let adjustment = self.adjustment();
-        {
-            let view = self.view.clone();
-            let adjustment = adjustment.clone();
-            testpump::until(
-                Clock::Idle,
-                "the preview to map and acquire a viewport",
-                move || view.is_mapped() && adjustment.page_size() > 0.0,
-            );
-        }
-
-        let fired = Rc::new(Cell::new(false));
-        {
-            let f = Rc::clone(&fired);
-            crate::farscroll::after_line_heights_validated(self.view.upcast_ref(), move |_| {
-                f.set(true)
-            });
-        }
-        testpump::until_for(
-            Clock::Idle,
-            SETTLE_DEADLINE,
-            "line heights to validate",
-            move || fired.get(),
-        );
-
-        let settled = testpump::until_stable(Clock::Idle, SETTLE_DEADLINE, QUIET, {
-            let adjustment = adjustment.clone();
-            move || adjustment.upper().to_bits()
-        });
-        assert!(
-            settled.converged,
-            "the vadjustment range never stopped moving, so every reading taken after \
-             this measures the machine rather than the code (last upper {:?})",
-            settled.value.map(f64::from_bits),
-        );
+        await_viewport(&self.view, &adjustment);
+        settle(&self.view, &adjustment, QUIET);
     }
 
-    /// Settle while recording the lowest `value` and `upper` seen on the way — the
-    /// excursion itself. See the module docs on why the trough and not the endpoints.
+    /// See [`settle_watching_the_trough`].
     pub(super) fn settle_watching_the_trough(&self) -> (f64, f64) {
-        let adjustment = self.adjustment();
-        let mut min_value = f64::INFINITY;
-        let mut min_upper = f64::INFINITY;
-        let settled = testpump::until_stable(Clock::Idle, SETTLE_DEADLINE, QUIET, || {
-            min_value = min_value.min(adjustment.value());
-            min_upper = min_upper.min(adjustment.upper());
-            adjustment.upper().to_bits()
-        });
-        assert!(
-            settled.converged,
-            "the vadjustment range never stopped moving after the toggle"
-        );
-        (min_value, min_upper)
+        settle_watching_the_trough(&self.adjustment(), QUIET)
     }
 
     /// See [`top_line_text`].
@@ -216,12 +173,11 @@ impl Rig {
         reader_offset(&self.view, &self.adjustment(), mark)
     }
 
-    /// Park the reader well down the document.
+    /// Park the reader well down the document. See [`park_the_reader`].
     pub(super) fn scroll_to_reading_position(&self) {
         let adjustment = self.adjustment();
-        let target = (adjustment.upper() - adjustment.page_size()).max(0.0) * READING_FRACTION;
-        crate::saferizer::scrollpos::jump(&adjustment, target);
-        self.settle();
+        await_viewport(&self.view, &adjustment);
+        park_the_reader(&self.view, &adjustment, QUIET);
     }
 
     pub(super) fn teardown(self) {
@@ -237,6 +193,107 @@ impl Rig {
 // building a pane by hand, and a private copy of "where is the reader?" would be free
 // to disagree with the one every other measurement in this directory is reported
 // against. `Rig`'s methods below delegate here.
+
+/// Pump until the pane has a viewport at all — mapped, with a non-zero page size.
+///
+/// Separate from [`settle`] because the two rigs reach this point differently: one
+/// builds a pane by hand and waits here, the other presents a whole application window
+/// and has already waited by the time it settles.
+pub(super) fn await_viewport(view: &CodePreviewView, adjustment: &gtk::Adjustment) {
+    let view = view.clone();
+    let adjustment = adjustment.clone();
+    testpump::until(
+        Clock::Idle,
+        "the preview to map and acquire a viewport",
+        move || view.is_mapped() && adjustment.page_size() > 0.0,
+    );
+}
+
+/// Pump until line heights are validated AND the range has been quiet for `quiet`.
+///
+/// **Both halves, deliberately.** `after_line_heights_validated` is the project's exact
+/// "the layout is valid now" event (GTK4Rs/T-5) and is the primary oracle — but its own
+/// rustdoc records that a main loop pumped from *inside* the validate callback's stack
+/// can dispatch it early, and anchored-child allocation is the realistic route, which
+/// both fixtures here are full of (every disclosure toggle is an anchored child). The
+/// quiet window behind it closes that hole; reading geometry a fraction too early is
+/// exactly how this project has repeatedly measured the wrong thing.
+///
+/// **`quiet` is the caller's; the DISCIPLINE is not.** The wired rig needs a longer
+/// window than the mechanism rig — long enough to outlast `farscroll::settle`'s own, so
+/// the deferred restore has always landed and its guards cannot pass with the restore
+/// deleted. That difference is a parameter here rather than a second copy of the
+/// procedure, which is what let the two drift over what they stabilised on (`upper`
+/// alone versus the `(upper, value)` pair) while reporting numbers against each other.
+pub(super) fn settle(view: &CodePreviewView, adjustment: &gtk::Adjustment, quiet: Duration) {
+    let fired = Rc::new(Cell::new(false));
+    {
+        let f = Rc::clone(&fired);
+        crate::farscroll::after_line_heights_validated(view.upcast_ref(), move |_| f.set(true));
+    }
+    testpump::until_for(
+        Clock::Idle,
+        SETTLE_DEADLINE,
+        "line heights to validate",
+        move || fired.get(),
+    );
+    let settled = stabilise(adjustment, quiet, |_, _| {});
+    assert!(
+        settled,
+        "the vadjustment never stopped moving, so every reading taken after this \
+         measures the machine rather than the code"
+    );
+}
+
+/// [`settle`]'s range-quiet half, recording the lowest `value` and `upper` seen on the
+/// way — the excursion itself, which the endpoints cannot show.
+pub(super) fn settle_watching_the_trough(
+    adjustment: &gtk::Adjustment,
+    quiet: Duration,
+) -> (f64, f64) {
+    let mut min_value = f64::INFINITY;
+    let mut min_upper = f64::INFINITY;
+    let settled = stabilise(adjustment, quiet, |value, upper| {
+        min_value = min_value.min(value);
+        min_upper = min_upper.min(upper);
+    });
+    assert!(
+        settled,
+        "the vadjustment never stopped moving after the toggle"
+    );
+    (min_value, min_upper)
+}
+
+/// Park the reader at [`super::harness::READING_FRACTION`] of the range, then settle.
+pub(super) fn park_the_reader(
+    view: &CodePreviewView,
+    adjustment: &gtk::Adjustment,
+    quiet: Duration,
+) {
+    let target = (adjustment.upper() - adjustment.page_size()).max(0.0) * READING_FRACTION;
+    crate::saferizer::scrollpos::jump(adjustment, target);
+    settle(view, adjustment, quiet);
+}
+
+/// Pump until `adjustment`'s `(upper, value)` pair has held still for `quiet`, offering
+/// every sample to `observe` on the way. Reports whether it converged.
+///
+/// **The pair, not `upper` alone.** The two rigs used to stabilise on different things,
+/// and `upper` alone cannot see a value that is still being written — which is precisely
+/// the compensation storm every reading in this directory has to outlast.
+fn stabilise(
+    adjustment: &gtk::Adjustment,
+    quiet: Duration,
+    mut observe: impl FnMut(f64, f64),
+) -> bool {
+    let adjustment = adjustment.clone();
+    testpump::until_stable(Clock::Idle, SETTLE_DEADLINE, quiet, move || {
+        let (value, upper) = (adjustment.value(), adjustment.upper());
+        observe(value, upper);
+        (upper.to_bits(), value.to_bits())
+    })
+    .converged
+}
 
 /// The text of the line at the top of `view`'s viewport — the reader's actual place,
 /// which a buffer OFFSET cannot express across a toggle that inserts text above it.

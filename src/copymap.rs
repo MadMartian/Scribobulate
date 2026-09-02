@@ -223,7 +223,10 @@ tag_constructs! {
 
 // ── the tree ──────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+// `PartialEq` for the splice's differential oracle, which compares a spliced pane's
+// whole map set against a full re-render's: a Debug-string comparison is not usable
+// here, because `BlockScripts` holds a `HashMap` whose Debug order varies per run.
+#[derive(Clone, Debug, PartialEq)]
 enum Node {
     /// A literal run. `src` is the *content* source (no delimiters); when
     /// `one_to_one`, buffer chars align 1:1 with `src`'s chars and a partial
@@ -339,7 +342,7 @@ impl Node {
 
 /// A buffer-annotated construct tree for one render, plus the buffer's total char
 /// count (for the whole-document = Copy Document special case).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CopyTree {
     root: Node,
     char_count: i32,

@@ -93,10 +93,16 @@ const SETTLE_MAX_TICKS: u32 = 200;
 /// Run `f` once GTK has stopped moving `view`'s viewport by itself.
 ///
 /// **Contract.** `f` runs at most once, on the main loop, at a point where `view`'s
-/// line heights are validated AND its vertical adjustment has been left alone for
-/// [`SETTLE_QUIET_TICKS`] — so `line_yrange` reports real geometry and a `set_value`
-/// issued from `f` is not about to be overwritten by GTK's own compensation. `f` does
-/// not run at all if the view has been dropped or unrealized in the meantime.
+/// line heights **have been validated at least once** AND its vertical adjustment has
+/// been left alone for [`SETTLE_QUIET_TICKS`] — so `line_yrange` reports real geometry
+/// and a `set_value` issued from `f` is not about to be overwritten by GTK's own
+/// compensation. `f` does not run at all if the view has been dropped or unrealized in
+/// the meantime.
+///
+/// "Have been validated" rather than "are validated" is exact: the oracle is a one-way
+/// latch (see [`arm_settle`]), so what carries the invariant from the latch onward is
+/// the quiet window — nothing has written the adjustment for three ticks, and a
+/// re-validation that moved geometry would have written it.
 ///
 /// **Precondition.** None. On a view nothing is happening to, `f` runs after the
 /// quiet window rather than immediately — the wait is a property of the mechanism, not
@@ -109,17 +115,44 @@ pub(crate) fn after_scroll_settles<F>(view: &gtk::TextView, f: F)
 where
     F: FnOnce(&gtk::TextView) + 'static,
 {
-    // Weak capture: a strong one would pin the view alive as an unrooted zombie after
-    // `window.destroy()` and fire against it (GTK4Rs/AP-128). `upgrade()` is
-    // liveness-only, so the realized state is gated separately below.
-    let weak = view.downgrade();
-    let once: Rc<RefCell<Option<F>>> = Rc::new(RefCell::new(Some(f)));
-
     let layout_valid = Rc::new(Cell::new(false));
     {
         let valid = Rc::clone(&layout_valid);
         super::after_line_heights_validated(view, move |_| valid.set(true));
     }
+    arm_settle(view, SETTLE_TICK, layout_valid, f);
+}
+
+/// The state machine [`after_scroll_settles`] IS, with its two ambient inputs — the
+/// tick interval and the layout oracle — supplied rather than constructed inline.
+///
+/// **Split out to make the wrapper drivable.** Six behaviours live here and each is a
+/// plausible silent failure: `f` running at most once; the instrument being disarmed
+/// BEFORE `f` runs (a caller re-arming from inside `f` depends on it); the
+/// `is_realized` gate; the weak-upgrade path when the view is dropped mid-wait; a view
+/// with no vertical adjustment, where the write count never moves and the quiet window
+/// is therefore satisfied by a FALSE quiet; and the tick cap. With the real 50 ms tick
+/// and the real validation oracle hard-coded, none of them could be asserted except
+/// through an end-to-end pixel reading that names the reader's position rather than
+/// which behaviour broke. A test drives this at a 1 ms tick with the latch set by hand.
+///
+/// `layout_valid` is a ONE-WAY LATCH: [`super::after_line_heights_validated`] sets it
+/// once and nothing clears it, so a layout that goes invalid again after the oracle
+/// fired leaves the conjunction resting on the quiet window alone. That is deliberate —
+/// a re-arming oracle would restart the wait every time GTK re-validated a chunk, which
+/// on a long document is never — but it means the contract's "line heights are
+/// validated" is precisely *"have been validated at least once, and nothing has written
+/// the adjustment since"*, and the quiet window is what carries the invariant from
+/// there.
+fn arm_settle<F>(view: &gtk::TextView, tick: Duration, layout_valid: Rc<Cell<bool>>, f: F)
+where
+    F: FnOnce(&gtk::TextView) + 'static,
+{
+    // Weak capture: a strong one would pin the view alive as an unrooted zombie after
+    // `window.destroy()` and fire against it (GTK4Rs/AP-128). `upgrade()` is
+    // liveness-only, so the realized state is gated separately below.
+    let weak = view.downgrade();
+    let once: Rc<RefCell<Option<F>>> = Rc::new(RefCell::new(Some(f)));
 
     // The instrument: every write to this view's vertical adjustment, whoever made it.
     // GTK's compensating writes are the ones this is watching for, but counting ALL of
@@ -148,7 +181,7 @@ where
     let mut last_seen = 0u64;
     let mut quiet_ticks = 0u32;
     let mut ticks = 0u32;
-    glib::timeout_add_local(SETTLE_TICK, move || {
+    glib::timeout_add_local(tick, move || {
         ticks += 1;
         let seen = writes.get();
         if seen == last_seen {
@@ -234,5 +267,214 @@ mod decision_tests {
     #[test]
     fn the_quiet_bar_is_a_floor_too() {
         assert!(settle_should_fire(true, SETTLE_QUIET_TICKS + 7, 12));
+    }
+}
+
+/// The wrapper around [`settle_should_fire`], driven directly.
+///
+/// [`arm_settle`] exists so these six behaviours are assertable individually. Before it,
+/// the only witness that any of them worked was `preview::splice::excursion::wired`'s
+/// end-to-end pixel reading — which names the READER'S POSITION when it fails, not which
+/// of the six broke. Each body here runs at a 1 ms tick with the layout oracle set by
+/// hand, so none takes meaningfully longer than a pump.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+    use crate::testpump::{until, until_for, Clock};
+
+    /// Fast enough that `SETTLE_QUIET_TICKS` and `SETTLE_MAX_TICKS` are reached inside a
+    /// pump rather than in ten real seconds — the whole reason the tick is a parameter.
+    const FAST: Duration = Duration::from_millis(1);
+
+    /// A REALIZED view in a presented window, which is what the `is_realized` gate
+    /// requires; and a latch already set, because the layout oracle is not what these
+    /// bodies are about.
+    ///
+    /// The buffer is deliberately TALLER THAN THE WINDOW. An empty view's vadjustment
+    /// has `upper == page_size`, so every write to it clamps back to zero and emits
+    /// nothing — which would make the disarm test's own precondition unsatisfiable while
+    /// looking like a defect in the code under test.
+    fn presented_view() -> (gtk::TextView, gtk::Window, Rc<Cell<bool>>) {
+        let view = gtk::TextView::new();
+        let body: String = (0..400).map(|i| format!("line {i}\n")).collect();
+        view.buffer().set_text(&body);
+        let window = gtk::Window::new();
+        window.set_default_size(400, 300);
+        window.set_child(Some(&view));
+        window.present();
+        until(
+            Clock::Idle,
+            "the view to realize with a scrollable range",
+            {
+                let view = view.clone();
+                move || {
+                    view.is_realized()
+                        && view
+                            .vadjustment()
+                            .is_some_and(|a| a.upper() > a.page_size() && a.page_size() > 0.0)
+                }
+            },
+        );
+        (view, window, Rc::new(Cell::new(true)))
+    }
+
+    /// **`f` runs exactly once**, however long the loop keeps turning afterwards.
+    ///
+    /// The timer returns `Break`, so a second run would need the source to survive it —
+    /// but the `once.take()` is what makes the contract independent of that, and it is
+    /// the part a refactor can drop while the test still "passes" on the source's
+    /// behaviour alone. Counted rather than asserted-once so a second call is a
+    /// FAILURE and not merely unobserved.
+    #[gtktest::test]
+    fn the_deferred_work_runs_exactly_once() {
+        let (view, window, valid) = presented_view();
+        let runs = Rc::new(Cell::new(0u32));
+        arm_settle(&view, FAST, valid, {
+            let runs = Rc::clone(&runs);
+            move |_| runs.set(runs.get() + 1)
+        });
+        until(Clock::Frame, "the settle to fire", {
+            let runs = Rc::clone(&runs);
+            move || runs.get() > 0
+        });
+        // Keep the loop turning well past the tick, so a source that failed to break
+        // has every chance to fire again.
+        crate::testpump::drain_for(Clock::Frame, Duration::from_millis(50));
+        assert_eq!(runs.get(), 1, "the deferred work runs at most once");
+        window.destroy();
+    }
+
+    /// **The write instrument is disarmed BEFORE `f` runs**, so a caller that re-arms
+    /// the wait from inside `f` starts from a clean count rather than inheriting the
+    /// `set_value` it just made.
+    ///
+    /// Asserted the way the contract is used: the restore writes the adjustment, then
+    /// re-arms. If the first wait's handler were still connected, that write would be
+    /// counted by an instrument the second wait has no view of; if the SECOND wait
+    /// inherited a dirty count it would simply wait a tick longer — so what this pins is
+    /// that the second wait completes at all, and that the write made from inside the
+    /// first `f` did not leave a live handler behind.
+    #[gtktest::test]
+    fn the_instrument_is_disarmed_before_the_deferred_work_runs() {
+        let (view, window, valid) = presented_view();
+        let adjustment = view.vadjustment().expect("a TextView has a vadjustment");
+        // A second, independent counter over the same adjustment: it sees every write,
+        // including the one `f` makes, so it can distinguish "no write happened" from
+        // "the write happened and the settle's own handler was gone".
+        let after_disarm = Rc::new(Cell::new(0u64));
+        let second = Rc::new(Cell::new(false));
+        arm_settle(&view, FAST, valid, {
+            let view = view.clone();
+            let after_disarm = Rc::clone(&after_disarm);
+            let second = Rc::clone(&second);
+            move |v| {
+                let adj = v.vadjustment().expect("still has a vadjustment");
+                {
+                    let after_disarm = Rc::clone(&after_disarm);
+                    adj.connect_value_changed(move |_| after_disarm.set(after_disarm.get() + 1));
+                }
+                // Through the seam, like every production write (ScrAP-260) — the
+                // point of the write here is that it lands on the adjustment at all.
+                crate::saferizer::scrollpos::jump(&adj, adj.value() + 1.0);
+                arm_settle(&view, FAST, Rc::new(Cell::new(true)), {
+                    let second = Rc::clone(&second);
+                    move |_| second.set(true)
+                });
+            }
+        });
+        until_for(
+            Clock::Frame,
+            Duration::from_secs(5),
+            "the re-armed settle to fire",
+            {
+                let second = Rc::clone(&second);
+                move || second.get()
+            },
+        );
+        assert!(
+            after_disarm.get() > 0,
+            "precondition: the restore really did write the adjustment, so the count \
+             the first wait would have inherited is non-zero"
+        );
+        assert_eq!(adjustment.value(), 1.0, "and the write landed");
+        window.destroy();
+    }
+
+    /// **An unrealized view never runs the deferred work.**
+    ///
+    /// A zombie retains its last allocation, so no geometry check discriminates —
+    /// `is_realized()` is the exact test (GTK4Rs/AP-128). Here the view is realized when
+    /// the wait is armed and unrealized before it fires, which is the shape a window
+    /// closed mid-settle produces.
+    #[gtktest::test]
+    fn a_view_unrealized_mid_wait_does_not_run_the_deferred_work() {
+        let (view, window, valid) = presented_view();
+        let ran = Rc::new(Cell::new(false));
+        arm_settle(&view, FAST, valid, {
+            let ran = Rc::clone(&ran);
+            move |_| ran.set(true)
+        });
+        window.destroy();
+        assert!(
+            !view.is_realized(),
+            "precondition: the view is a zombie now"
+        );
+        crate::testpump::drain_for(Clock::Frame, Duration::from_millis(100));
+        assert!(
+            !ran.get(),
+            "the deferred work must not fire against an unrealized view"
+        );
+    }
+
+    /// **A view with no vertical adjustment fires on the tick cap's terms, not on a
+    /// false quiet.**
+    ///
+    /// With nothing to instrument, the write count never moves and every tick counts as
+    /// quiet — so with the latch set, the wait completes after `SETTLE_QUIET_TICKS`.
+    /// That is the documented degradation rather than a defect, and it is written down
+    /// here because the alternative reading ("no adjustment means no settle") is the one
+    /// a reader reaches for.
+    #[gtktest::test]
+    fn a_view_with_no_adjustment_still_completes() {
+        let (view, window, valid) = presented_view();
+        view.set_vadjustment(None::<&gtk::Adjustment>);
+        let ran = Rc::new(Cell::new(false));
+        arm_settle(&view, FAST, valid, {
+            let ran = Rc::clone(&ran);
+            move |_| ran.set(true)
+        });
+        until(Clock::Frame, "the settle to fire on a false quiet", {
+            let ran = Rc::clone(&ran);
+            move || ran.get()
+        });
+        window.destroy();
+    }
+
+    /// **A layout that never validates still completes, on the tick cap.**
+    ///
+    /// The cap is a FAILURE bound, never the completion signal (GTK4Rs/AP-122): the
+    /// degradation is a late restore against partial geometry, not an unbounded wait.
+    /// Reachable as a test only because the tick is a parameter — at the production
+    /// 50 ms it is ten seconds.
+    #[gtktest::test]
+    fn a_layout_that_never_validates_fires_on_the_tick_cap() {
+        let (view, window, _valid) = presented_view();
+        let ran = Rc::new(Cell::new(false));
+        // The latch left FALSE, which is the one case `settle_should_fire`'s first
+        // operand can never satisfy.
+        arm_settle(&view, FAST, Rc::new(Cell::new(false)), {
+            let ran = Rc::clone(&ran);
+            move |_| ran.set(true)
+        });
+        until_for(
+            Clock::Frame,
+            Duration::from_secs(10),
+            "the tick cap to fire",
+            {
+                let ran = Rc::clone(&ran);
+                move || ran.get()
+            },
+        );
+        window.destroy();
     }
 }

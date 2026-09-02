@@ -122,6 +122,7 @@ src/preview/scroll.rs
 src/preview/sourcemap.rs
 src/preview/splice.rs
 src/preview/splice/install.rs
+src/preview/splice/regionwriter.rs
 src/readingpos.rs
 src/renderer/blockquote.rs
 src/renderer/blockspacing.rs

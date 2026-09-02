@@ -71,7 +71,7 @@ impl Seg {
 /// the copymap, the outline and the export walk all segment a run identically —
 /// the same single-definition discipline `scan_script_spans` already carries, one
 /// level up.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct BlockScripts {
     /// Keyed by the `Text` event's source byte start, which is unique per parse.
     by_event: HashMap<usize, Vec<Seg>>,

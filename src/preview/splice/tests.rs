@@ -37,6 +37,7 @@ fn both_ways(md: &str, key: FoldKey) -> BothWays {
             .chars()
             .collect();
         let region = products
+            .maps
             .disclosure_extents
             .iter()
             .find(|e| e.key == key)
@@ -172,17 +173,12 @@ fn assert_splice_matches_full_render(md: &str, before: &FoldState, after: &FoldS
     let spans = crate::renderer::disclosure::scan_document(md);
     let key = FoldKey::from_source_offset(spans[0].start);
 
-    super::splice(
+    let outcome = super::splice(
         &starting.buf,
         None,
         &starting.anchored,
-        &starting.disclosure_extents,
-        md,
-        None,
-        1.0,
-        false,
-        crate::theme::active(),
-        after,
+        &starting.maps.disclosure_extents,
+        &crate::preview::build::Prepared::new(md, None, 1.0, false, crate::theme::active(), after),
         key,
     )
     .expect("the toggled block was drawn in the starting render");
@@ -209,6 +205,80 @@ fn assert_splice_matches_full_render(md: &str, before: &FoldState, after: &FoldS
         spliced_text, full_text,
         "a spliced toggle must produce a buffer byte-identical to a full render of \
          the same fold state — this is the splice's whole correctness claim"
+    );
+    assert_maps_match(&outcome.products.maps, &full.maps);
+}
+
+/// **Every buffer-keyed map a splice installs, against the one a full re-render of the
+/// same fold state produces.** One check covering all of [`RenderMaps`], rather than N
+/// checks reading three of ten (GEP-10).
+///
+/// The maps are the whole difficulty of this route: dropping or transposing one
+/// assignment compiles, leaves every other map internally well-formed, and produces a
+/// wrong scroll target / wrong annotation offset / wrong table pairing that reads like a
+/// different feature's bug. The text-identity assertion above cannot see any of it —
+/// the buffer is right and the maps describing it are not.
+///
+/// **Exhaustively destructured on purpose.** A map added to `RenderMaps` fails to
+/// compile here until it is given an assertion, which is the same discipline
+/// `RenderData::adopt_maps` imposes on the install side. `CopyTree` carries a derived
+/// `PartialEq` for this comparison specifically: its `Debug` string is not usable as a
+/// stand-in, because `BlockScripts` holds a `HashMap` whose Debug order varies between
+/// runs of the same code.
+fn assert_maps_match(
+    spliced: &crate::preview::build::RenderMaps,
+    full: &crate::preview::build::RenderMaps,
+) {
+    let crate::preview::build::RenderMaps {
+        source_map,
+        copymap,
+        md_owned,
+        links,
+        heading_sites,
+        heading_map,
+        collapsed_blocks,
+        disclosure_extents,
+        shifts,
+        original_owned,
+    } = spliced;
+    assert_eq!(
+        source_map, &full.source_map,
+        "the buffer→source waypoint map after a splice is the one a full render builds"
+    );
+    assert_eq!(
+        copymap, &full.copymap,
+        "and so is the copy-as-Markdown tree — the map a Ctrl+C below the block reads"
+    );
+    assert_eq!(
+        md_owned, &full.md_owned,
+        "and the cleaned source it is keyed to"
+    );
+    assert_eq!(links, &full.links, "and every link's buffer span");
+    assert_eq!(
+        heading_sites, &full.heading_sites,
+        "and the outline's scroll targets"
+    );
+    assert_eq!(
+        heading_map, &full.heading_map,
+        "and the slug→offset map a `#fragment` link resolves through"
+    );
+    assert_eq!(
+        collapsed_blocks, &full.collapsed_blocks,
+        "and the blocks find must search the SOURCE of, because their bodies are in no \
+         buffer"
+    );
+    assert_eq!(
+        disclosure_extents, &full.disclosure_extents,
+        "and the extents the NEXT toggle will splice against — a stale one here is how a \
+         second toggle deletes the wrong range"
+    );
+    assert_eq!(
+        shifts, &full.shifts,
+        "and the cleaned→original shift table an annotation is anchored through"
+    );
+    assert_eq!(
+        original_owned, &full.original_owned,
+        "and the pre-extraction source the scroll-sync converts offsets against"
     );
 }
 
@@ -327,13 +397,15 @@ fn tables_outside_the_region_survive_the_splice_as_the_same_widgets() {
         &starting.buf,
         None,
         &starting.anchored,
-        &starting.disclosure_extents,
-        MD,
-        None,
-        1.0,
-        false,
-        crate::theme::active(),
-        &opened,
+        &starting.maps.disclosure_extents,
+        &crate::preview::build::Prepared::new(
+            MD,
+            None,
+            1.0,
+            false,
+            crate::theme::active(),
+            &opened,
+        ),
         key,
     )
     .expect("the toggled block was drawn");
@@ -427,13 +499,8 @@ fn everything_below_a_toggled_block_still_addresses_its_own_text() {
         &starting.buf,
         None,
         &starting.anchored,
-        &starting.disclosure_extents,
-        MD,
-        None,
-        1.0,
-        false,
-        crate::theme::active(),
-        &after,
+        &starting.maps.disclosure_extents,
+        &crate::preview::build::Prepared::new(MD, None, 1.0, false, crate::theme::active(), &after),
         key,
     )
     .expect("the toggled block was drawn in the starting render");
@@ -451,7 +518,7 @@ fn everything_below_a_toggled_block_still_addresses_its_own_text() {
     // Copy, at a position BELOW the toggled block.
     let tail = off("a distinctive tail paragraph");
     assert_eq!(
-        crate::copymap::resolve(&outcome.products.copymap, MD, tail, tail + 28),
+        crate::copymap::resolve(&outcome.products.maps.copymap, MD, tail, tail + 28),
         "a distinctive tail paragraph",
         "text below the block copies as ITSELF, not as its neighbour"
     );
@@ -459,6 +526,7 @@ fn everything_below_a_toggled_block_still_addresses_its_own_text() {
     // The link span below the block still covers the link's own rendered text.
     let link = outcome
         .products
+        .maps
         .links
         .iter()
         .find(|(_, _, url)| url.contains("example.invalid"))
@@ -473,6 +541,7 @@ fn everything_below_a_toggled_block_still_addresses_its_own_text() {
     // The heading below the block resolves to a line that really is that heading.
     let below = outcome
         .products
+        .maps
         .heading_sites
         .iter()
         .find(|h| h.slug.as_deref().is_some_and(|s| s.contains("below")))
@@ -512,13 +581,15 @@ fn a_refusal_before_the_delete_leaves_the_buffer_untouched() {
         &starting.buf,
         None,
         &starting.anchored,
-        &starting.disclosure_extents,
-        MD,
-        None,
-        1.0,
-        false,
-        crate::theme::active(),
-        &FoldState::default(),
+        &starting.maps.disclosure_extents,
+        &crate::preview::build::Prepared::new(
+            MD,
+            None,
+            1.0,
+            false,
+            crate::theme::active(),
+            &FoldState::default(),
+        ),
         absent,
     )
     .err()

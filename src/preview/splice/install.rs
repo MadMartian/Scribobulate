@@ -26,7 +26,6 @@ use crate::preview::cells::{
     attach_cell_marker_widgets, collect_cell_labels, collect_table_anchors,
 };
 use crate::preview::qdata::{scrib_anchor_widgets, scrib_labels, scrib_render_data};
-use crate::preview::sourcemap::invert_source_map;
 
 /// Everything a splice needs about the document, so the window layer hands it forward
 /// once instead of each half reaching for `TabState` on its own.
@@ -119,17 +118,24 @@ pub(crate) fn splice_disclosure(
     // from afterwards: the point of the exercise is a position that survives the edit.
     let anchor = ReaderAnchor::capture(view);
 
-    let outcome = match super::splice(
-        &buf,
-        Some(view),
-        &old_anchored,
-        &old_extents,
+    // ONE preparation of the document, shared by the splice's two passes — see
+    // `preview::build::Prepared`. It also retires the eleven-argument positional
+    // hand-off this call used to be.
+    let prepared = crate::preview::build::Prepared::new(
         inputs.md,
         inputs.doc_dir,
         inputs.zoom,
         inputs.allow_unsafe_images,
         crate::theme::active(),
         inputs.folds,
+    );
+
+    let outcome = match super::splice(
+        &buf,
+        Some(view),
+        &old_anchored,
+        &old_extents,
+        &prepared,
         key,
     ) {
         Ok(outcome) => outcome,
@@ -227,58 +233,45 @@ fn install_outcome(
         merged_anchored,
         region,
     } = outcome;
-    let crate::preview::build::RenderProducts {
-        buf: _,
-        disclosure_toggles: _, // PASS A's belong to the scratch buffer; `region`'s are live
-        collapsed_blocks,
-        disclosure_extents,
-        source_map,
-        copymap,
-        md_owned,
-        links,
-        anchored: _, // ditto
-        image_tints: _,
-        mut install,
-        heading_sites,
-        heading_map,
+    let super::ScratchProducts {
+        maps,
+        decor,
         mut markers,
         cell_src_spans,
-        highlight_ranges: _,
-        shifts,
-        original_owned,
     } = products;
 
-    // The three widget-bearing halves of `ViewInstall`, merged. PASS A built these
-    // against a scratch buffer whose widgets were never parented anywhere, so they are
-    // the ONE part of its output that cannot be installed wholesale.
-    install.width_bounded = merge(view.width_bounded(), region.width_bounded, |(w, _)| {
-        w.clone()
-    });
-    install.image_bounded = merge(view.image_bounded(), region.image_bounded, |(w, _, _)| {
-        w.clone()
-    });
-    install.tables = merge(view.tables(), region.tables, |t| {
-        t.clone().upcast::<gtk::Widget>()
-    });
+    // The widget half, which PASS A's output does not contain at all (see
+    // `ScratchProducts`): the survivors of the delete, plus the region render's fresh
+    // children. Built here because this is the only layer that can see both.
+    let install = crate::preview::build::ViewInstall {
+        decor,
+        widgets: crate::preview::build::InstallWidgets {
+            width_bounded: merge(view.width_bounded(), region.width_bounded, |(w, _)| {
+                w.clone()
+            }),
+            image_bounded: merge(view.image_bounded(), region.image_bounded, |(w, _, _)| {
+                w.clone()
+            }),
+            tables: merge(view.tables(), region.tables, |t| {
+                t.clone().upcast::<gtk::Widget>()
+            }),
+        },
+    };
 
     let buf = view.buffer();
     {
         let mut rd = render_data.borrow_mut();
-        rd.source_map_inv = invert_source_map(&source_map);
-        rd.source_map = source_map;
-        rd.copymap = copymap;
-        rd.md_owned = md_owned;
-        rd.links = links;
-        rd.heading_map = heading_map;
-        rd.heading_sites = heading_sites;
-        rd.collapsed_blocks = collapsed_blocks;
+        // PASS A's maps, wholesale — the same call `re_render` makes, which is what
+        // keeps a spliced pane indistinguishable from a re-rendered one no matter how
+        // many maps a render comes to produce. `disclosure_extents` is among them and
+        // is read by the two steps below, so the write happens before this borrow is
+        // dropped rather than in a second one.
+        rd.adopt_maps(maps);
+        // The widget-keyed halves, which `adopt_maps` deliberately does not own. This
+        // route MERGES rather than replaces: the survivors are live children of a
+        // buffer that was never swapped, and only the region's are new.
         rd.image_tints = merge_pairs(std::mem::take(&mut rd.image_tints), region.image_tints);
         rd.table_anchors = collect_table_anchors(&merged_anchored);
-        rd.shifts = shifts;
-        rd.original_owned = original_owned;
-        // Last of the maps, and read by the two steps below, so it is written before
-        // the borrow is dropped rather than in a second one.
-        rd.disclosure_extents = disclosure_extents;
     }
 
     // The region's own controls: parented as they were created (`Renderer::set_live_view`

@@ -372,6 +372,54 @@ pub(crate) struct ListMarker {
     pub quoted: bool,
 }
 
+/// A [`Renderer`]'s INTER-BLOCK state: everything a walk carries from one block to
+/// the next, and therefore everything a region render must ARRIVE with.
+///
+/// **Membership is the contract.** A field that lives here is captured and reseeded;
+/// a field that does not is a deliberate exclusion. There is no third list to keep in
+/// step — [`RegionSeed`] is this value, not a parallel copy of its fields, so a new
+/// inter-block field cannot be added to the renderer and silently left unseeded.
+/// `preview::splice`'s module docs name that omission as the route's only real risk:
+/// *a partial walk that does not seed them differs from a full render by up to two
+/// newlines at a region boundary — and a one-character divergence silently offsets
+/// every map below the splice*, which the compiler could not have seen while the two
+/// lists were written out by hand.
+#[derive(Debug, Clone, Default)]
+struct InterBlock {
+    /// The fixed inline [`TagName`](crate::tags::TagName)s currently open, applied to
+    /// every [`Self::insert`](self) until their `TagEnd` pops them. Typed (not raw
+    /// strings) so the name that reaches the buffer can only come from the enum (N6).
+    inline_tags: Vec<crate::tags::TagName>,
+    lists: Vec<Option<u64>>,
+    /// Buffer offset where each open list item began (one per nesting level).
+    item_starts: Vec<i32>,
+    /// Buffer offset where the current heading's text begins (anchor scroll target).
+    heading_start: i32,
+    /// Per-document slug occurrence counter for GitHub-style `-1`/`-2` suffixing.
+    slug_seen: HashMap<String, u32>,
+    blockquote_depth: usize,
+    /// Buffer offset where each currently-open blockquote LEVEL began, innermost last.
+    /// A stack rather than a single `Option`, because every level records its own span:
+    /// a nested quote draws its own bar at its own offset (TDD 2.11b), which the old
+    /// "remember only the 0→1 transition" shape could not express.
+    blockquote_starts: Vec<i32>,
+    link_start: Option<(i32, String)>,
+    at_start: bool,
+    trailing_newlines: usize,
+    /// One frame per `<details>` currently open, innermost last — the disclosure
+    /// pairing state, carried ACROSS events for the same reason `picture_open` is.
+    ///
+    /// A **stack** rather than a flag because disclosures nest (rubric 2.26e), and
+    /// because the parser hands the pieces over separately: a disclosure's opening
+    /// tags, its body and its closing tag are three different events with ordinary
+    /// Markdown in between (MEASURED — see `renderer::disclosure`'s module docs), so
+    /// nothing about the nesting is visible from any one of them.
+    disclosure_stack: Vec<DisclosureFrame>,
+    /// The document-order cursor over [`Self::disclosures`], shared in KIND with the
+    /// export walk so neither carries a private copy of the fail-safe.
+    disclosure_cursor: disclosure::SpanCursor,
+}
+
 pub(crate) struct Renderer {
     buf: TextBuffer,
     /// Cleaned-document highlight ranges `(start, end)` for CriticMarkup claims
@@ -390,13 +438,6 @@ pub(crate) struct Renderer {
     /// `Rc` so the buffer the renderer fills and the map that indexes it cannot
     /// disagree about which bytes were delimiters.
     pub(crate) scripts: std::rc::Rc<BlockScripts>,
-    /// The fixed inline [`TagName`](crate::tags::TagName)s currently open, applied to
-    /// every [`Self::insert`](self) until their `TagEnd` pops them. Typed (not raw
-    /// strings) so the name that reaches the buffer can only come from the enum (N6).
-    inline_tags: Vec<crate::tags::TagName>,
-    lists: Vec<Option<u64>>,
-    /// Buffer offset where each open list item began (one per nesting level).
-    item_starts: Vec<i32>,
     /// True immediately after a list marker is emitted; cleared by the first
     /// Tag::Paragraph inside the item so that paragraph does not get a
     /// block_sep() inserted between the marker and the item text.
@@ -406,20 +447,10 @@ pub(crate) struct Renderer {
     list_first_item: bool,
     code: Option<(String, String)>,
     heading: Option<HeadingLevel>,
-    /// Buffer offset where the current heading's text begins (anchor scroll target).
-    heading_start: i32,
     /// Plain text of the current heading, accumulated to compute its anchor slug.
     heading_text: String,
-    /// Per-document slug occurrence counter for GitHub-style `-1`/`-2` suffixing.
-    slug_seen: HashMap<String, u32>,
     /// (anchor slug, buffer offset) for every heading — drives `#fragment` links.
     pub headings: Vec<(String, i32)>,
-    blockquote_depth: usize,
-    /// Buffer offset where each currently-open blockquote LEVEL began, innermost last.
-    /// A stack rather than a single `Option`, because every level records its own span:
-    /// a nested quote draws its own bar at its own offset (TDD 2.11b), which the old
-    /// "remember only the 0→1 transition" shape could not express.
-    blockquote_starts: Vec<i32>,
     /// The buffer span of every blockquote LEVEL, with its depth.
     /// Blockquotes are buffer TEXT now (selectable, links work, no anchored widget
     /// to churn — GTK4Rs/AP-23); the preview view draws the left accent bar over each
@@ -430,7 +461,6 @@ pub(crate) struct Renderer {
     /// would make the render's OUTPUT depend on the theme, so a theme switch would need
     /// a re-render rather than a repaint.
     pub heading_spans: Vec<HeadingSpan>,
-    link_start: Option<(i32, String)>,
     pub links: Vec<(i32, i32, String)>,
     /// The theme THIS render is built against.
     ///
@@ -465,8 +495,6 @@ pub(crate) struct Renderer {
     /// through `gutter::draw_list_marker`. No marker text is inserted into the buffer.
     pub list_markers: Vec<ListMarker>,
     table: Option<TableState>,
-    at_start: bool,
-    trailing_newlines: usize,
     syntect_theme: String,
     /// The zoom this render is being built at. Themed decoration metrics are
     /// design-time px at zoom 1.0, so any the renderer applies directly to a widget
@@ -503,15 +531,6 @@ pub(crate) struct Renderer {
     /// Closed and rendered at `</picture>` or its container's end (`start::feed_html`
     /// / `flush_open_picture`). See ScrAP-147.
     picture_open: Option<Vec<String>>,
-    /// One frame per `<details>` currently open, innermost last — the disclosure
-    /// pairing state, carried ACROSS events for the same reason `picture_open` is.
-    ///
-    /// A **stack** rather than a flag because disclosures nest (rubric 2.26e), and
-    /// because the parser hands the pieces over separately: a disclosure's opening
-    /// tags, its body and its closing tag are three different events with ordinary
-    /// Markdown in between (MEASURED — see `renderer::disclosure`'s module docs), so
-    /// nothing about the nesting is visible from any one of them.
-    disclosure_stack: Vec<DisclosureFrame>,
     /// Which disclosures the reader has collapsed — a render INPUT, not renderer
     /// state. A collapsed body is never emitted, which is what keeps invisible text
     /// out of the buffer entirely (see `crate::fold`).
@@ -562,9 +581,9 @@ pub(crate) struct Renderer {
     /// know whether the block is ever closed; this is that answer, pre-computed. See
     /// [`disclosure::scan_document`] for what assuming "yes" costs.
     disclosures: Vec<disclosure::DisclosureSpan>,
-    /// The document-order cursor over [`Self::disclosures`], shared in KIND with the
-    /// export walk so neither carries a private copy of the fail-safe.
-    disclosure_cursor: disclosure::SpanCursor,
+    /// This walk's inter-block state — see [`InterBlock`], which is also exactly
+    /// what a region render is seeded with.
+    inter: InterBlock,
 }
 
 /// The label a `<details>` with no `<summary>` shows.
@@ -764,30 +783,20 @@ pub(crate) struct CollapsedSite {
 /// reaches a disclosure's splice region, and reapplied to a second renderer that
 /// writes that region into the LIVE buffer instead of a scratch one.
 ///
-/// See `preview::splice`'s module docs for the mechanism this exists for. Every
-/// field here is a fact about how the NEXT thing written should be tagged and
-/// numbered — never about buffer POSITION: the buffer-offset-carrying fields a
-/// full [`Renderer`] also carries (`DisclosureFrame::label_end` and friends,
-/// `heading_start`, `link_start`) need no translation between the scratch and
-/// live coordinate spaces, because those spaces coincide up to the region (the
-/// text before it renders identically under either fold state) — so they are
-/// captured and reapplied VERBATIM, the same offsets meaning the same place in
-/// both buffers.
+/// It IS the renderer's [`InterBlock`] — a moved copy of the whole value, not a
+/// hand-written selection of its fields — which is what makes "everything the walk
+/// carries between blocks" a single list the compiler maintains.
+///
+/// See `preview::splice`'s module docs for the mechanism this exists for. The
+/// buffer-offset-carrying fields it contains (`DisclosureFrame::label_end` and
+/// friends, `heading_start`, `link_start`) need no translation between the scratch
+/// and live coordinate spaces, because those spaces coincide up to the region — the
+/// text before it renders identically under either fold state — so they are captured
+/// and reapplied VERBATIM, the same offsets meaning the same place in both buffers.
+/// Everything else here is a fact about how the NEXT thing written should be tagged
+/// and numbered.
 #[derive(Debug, Clone)]
-pub(crate) struct RegionSeed {
-    at_start: bool,
-    trailing_newlines: usize,
-    lists: Vec<Option<u64>>,
-    item_starts: Vec<i32>,
-    blockquote_depth: usize,
-    blockquote_starts: Vec<i32>,
-    inline_tags: Vec<crate::tags::TagName>,
-    disclosure_stack: Vec<DisclosureFrame>,
-    disclosures_seen: usize,
-    slug_seen: HashMap<String, u32>,
-    heading_start: i32,
-    link_start: Option<(i32, String)>,
-}
+pub(crate) struct RegionSeed(InterBlock);
 
 impl Renderer {
     /// Tell this render it is writing into a LIVE, on-screen view, so every anchored
@@ -862,24 +871,11 @@ impl Renderer {
     /// hand to a SEPARATE renderer wholesale, with no offset translation: the
     /// scratch and live coordinate spaces coincide up to the region.
     pub(crate) fn capture_region_seed(&self, key: crate::fold::FoldKey) -> Option<RegionSeed> {
-        let frame = self.disclosure_stack.last()?;
+        let frame = self.inter.disclosure_stack.last()?;
         if frame.key != key || !frame.emitted {
             return None;
         }
-        Some(RegionSeed {
-            at_start: self.at_start,
-            trailing_newlines: self.trailing_newlines,
-            lists: self.lists.clone(),
-            item_starts: self.item_starts.clone(),
-            blockquote_depth: self.blockquote_depth,
-            blockquote_starts: self.blockquote_starts.clone(),
-            inline_tags: self.inline_tags.clone(),
-            disclosure_stack: self.disclosure_stack.clone(),
-            disclosures_seen: self.disclosure_cursor.seen(),
-            slug_seen: self.slug_seen.clone(),
-            heading_start: self.heading_start,
-            link_start: self.link_start.clone(),
-        })
+        Some(RegionSeed(self.inter.clone()))
     }
 
     /// Reapply a [`RegionSeed`] captured from a scratch walk to this (freshly
@@ -887,32 +883,7 @@ impl Renderer {
     /// at the region's start — see [`Self::capture_region_seed`]. Call once,
     /// immediately after construction and before [`Self::write_at`].
     pub(crate) fn seed(&mut self, seed: RegionSeed) {
-        let RegionSeed {
-            at_start,
-            trailing_newlines,
-            lists,
-            item_starts,
-            blockquote_depth,
-            blockquote_starts,
-            inline_tags,
-            disclosure_stack,
-            disclosures_seen,
-            slug_seen,
-            heading_start,
-            link_start,
-        } = seed;
-        self.at_start = at_start;
-        self.trailing_newlines = trailing_newlines;
-        self.lists = lists;
-        self.item_starts = item_starts;
-        self.blockquote_depth = blockquote_depth;
-        self.blockquote_starts = blockquote_starts;
-        self.inline_tags = inline_tags;
-        self.disclosure_stack = disclosure_stack;
-        self.disclosure_cursor = disclosure::SpanCursor::at(disclosures_seen);
-        self.slug_seen = slug_seen;
-        self.heading_start = heading_start;
-        self.link_start = link_start;
+        self.inter = seed.0;
     }
 
     /// Is this renderer currently anywhere inside the disclosure `key` names —
@@ -921,7 +892,7 @@ impl Renderer {
     /// (and everything nested inside it) has fully closed, and nothing after that
     /// belongs to this region.
     pub(crate) fn is_open(&self, key: crate::fold::FoldKey) -> bool {
-        self.disclosure_stack.iter().any(|f| f.key == key)
+        self.inter.disclosure_stack.iter().any(|f| f.key == key)
     }
 
     /// Write a SEEDED region render's summary-line TAIL: the collapsed-body
@@ -969,9 +940,9 @@ impl Renderer {
     /// it already covered, which is a no-op by construction.
     pub(crate) fn write_seeded_summary_tail(&mut self, target_collapsed: bool) {
         use gtk::prelude::TextBufferExt;
-        let (trailing_newlines, at_start) = (self.trailing_newlines, self.at_start);
+        let (trailing_newlines, at_start) = (self.inter.trailing_newlines, self.inter.at_start);
         if target_collapsed {
-            let body_range = self.disclosure_stack.last().and_then(|frame| {
+            let body_range = self.inter.disclosure_stack.last().and_then(|frame| {
                 self.disclosures
                     .get(frame.span_index)
                     .and_then(|span| span.body.clone())
@@ -991,7 +962,7 @@ impl Renderer {
         // `DisclosureExtent` and so no splice — so `emit_pending_summary`'s
         // `foldable` gate is already satisfied here and is read off the frame rather
         // than assumed.
-        if let Some(frame) = self.disclosure_stack.last() {
+        if let Some(frame) = self.inter.disclosure_stack.last() {
             let (foldable, summary_offset) = (frame.foldable, frame.summary_offset);
             let summary_end = self.end_offset();
             if foldable && summary_end > summary_offset {
@@ -1002,8 +973,8 @@ impl Renderer {
         }
         let mut iter = self.tip();
         self.buf.insert(&mut iter, "\n");
-        self.trailing_newlines = trailing_newlines;
-        self.at_start = at_start;
+        self.inter.trailing_newlines = trailing_newlines;
+        self.inter.at_start = at_start;
     }
 
     /// Re-establish the block separator a region render's own content does not
@@ -1028,16 +999,18 @@ impl Renderer {
     /// logged and answered **`false`**, the reply that can only ever render MORE of
     /// the document, never less.
     fn opening_details_is_closed(&mut self, block_start: usize) -> bool {
-        self.disclosure_cursor
+        self.inter
+            .disclosure_cursor
             .opening_is_closed(&self.disclosures, block_start)
     }
 
     /// The collapsed disclosures the renderer is currently inside, or `None` when it
     /// is not inside one. See [`CollapsedSite`].
     pub(crate) fn collapsed_site(&self) -> Option<CollapsedSite> {
-        let outermost = self.disclosure_stack.iter().find(|f| f.collapsed)?;
+        let outermost = self.inter.disclosure_stack.iter().find(|f| f.collapsed)?;
         Some(CollapsedSite {
             chain: self
+                .inter
                 .disclosure_stack
                 .iter()
                 .filter(|f| f.collapsed)
@@ -1099,22 +1072,14 @@ impl Renderer {
             cleaned,
             zoom,
             event_src: 0..0,
-            inline_tags: Vec::new(),
-            lists: Vec::new(),
-            item_starts: Vec::new(),
             list_item_open: false,
             list_first_item: false,
             code: None,
             heading: None,
-            heading_start: 0,
             heading_text: String::new(),
-            slug_seen: HashMap::new(),
             headings: Vec::new(),
-            blockquote_depth: 0,
-            blockquote_starts: Vec::new(),
             blockquote_ranges: Vec::new(),
             heading_spans: Vec::new(),
-            link_start: None,
             links: Vec::new(),
             anchored: Vec::new(),
             width_bounded: Vec::new(),
@@ -1123,8 +1088,6 @@ impl Renderer {
             code_blocks: Vec::new(),
             list_markers: Vec::new(),
             table: None,
-            at_start: true,
-            trailing_newlines: 0,
             syntect_theme,
             doc_dir,
             allow_unsafe_images,
@@ -1133,7 +1096,6 @@ impl Renderer {
             html_acc: String::new(),
             in_html_block: false,
             picture_open: None,
-            disclosure_stack: Vec::new(),
             folds,
             at: None,
             live_view: None,
@@ -1141,7 +1103,13 @@ impl Renderer {
             collapsed_blocks: Vec::new(),
             disclosure_extents: Vec::new(),
             disclosures: disclosure::scan_document(&scanned),
-            disclosure_cursor: disclosure::SpanCursor::default(),
+            // A fresh walk stands at the document start with nothing open. Stated as
+            // one value rather than twelve initialisers, so this list and the seed's
+            // cannot fall out of step.
+            inter: InterBlock {
+                at_start: true,
+                ..InterBlock::default()
+            },
         }
     }
 

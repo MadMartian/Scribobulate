@@ -87,10 +87,11 @@ impl Renderer {
         // than through the indent).
         //
         // A list adds only a LEFT margin; a blockquote sets BOTH, so it costs twice.
-        let list = crate::tags::list_indent_px(self.lists.len() as i32, self.zoom, m);
+        let list = crate::tags::list_indent_px(self.inter.lists.len() as i32, self.zoom, m);
         // Clamped exactly as the tag family is, so the inset can never claim more
         // margin than `bq-{depth}` actually applies on a pathologically nested document.
-        let quote_depth = (self.blockquote_depth as u8).min(crate::tags::MAX_QUOTE_DEPTH) as i32;
+        let quote_depth =
+            (self.inter.blockquote_depth as u8).min(crate::tags::MAX_QUOTE_DEPTH) as i32;
         list + 2 * crate::tags::quote_indent_px(quote_depth, self.zoom, m)
     }
 
@@ -123,7 +124,7 @@ impl Renderer {
             self.apply(tag, &si, &ei);
         };
 
-        for tag in self.inline_tags.clone() {
+        for tag in self.inter.inline_tags.clone() {
             apply(tag);
         }
         if let Some(level) = self.heading {
@@ -133,15 +134,15 @@ impl Renderer {
             // to h5)".
             apply(HEADING_TAGS[crate::theme::heading_slot(level as u8)]);
         }
-        self.trailing_newlines = 0;
-        self.at_start = false;
+        self.inter.trailing_newlines = 0;
+        self.inter.at_start = false;
     }
 
     pub(super) fn newline(&mut self) {
         let mut iter = self.tip();
         self.buf.insert(&mut iter, "\n");
-        self.trailing_newlines += 1;
-        self.at_start = false;
+        self.inter.trailing_newlines += 1;
+        self.inter.at_start = false;
     }
 
     /// Apply a margin tag (`blockquote`, or a `li-{depth}` list hanging-indent) to each
@@ -226,10 +227,10 @@ impl Renderer {
 
     /// Insert a blank line between top-level blocks (skipped at document start).
     pub(super) fn block_sep(&mut self) {
-        if self.at_start {
+        if self.inter.at_start {
             return;
         }
-        for _ in self.trailing_newlines..2 {
+        for _ in self.inter.trailing_newlines..2 {
             self.newline();
         }
     }
@@ -329,8 +330,8 @@ impl Renderer {
         self.apply(TagName::CodeBlockBottom, &last_start, &self.tip());
 
         // Each line was inserted with a trailing \n, so the block ends with one newline.
-        self.trailing_newlines = 1;
-        self.at_start = false;
+        self.inter.trailing_newlines = 1;
+        self.inter.at_start = false;
     }
 }
 
