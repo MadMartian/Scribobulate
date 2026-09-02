@@ -309,7 +309,19 @@ mod gtk_integration_tests {
         );
         app.register(gtk::gio::Cancellable::NONE)
             .expect("register before building any window");
-        let window = crate::window::new_window(&app, "IT", "# Doc\n\nBody.\n", None);
+        // The document carries a `<details>` on purpose. The preview's disclosure toggle
+        // is an anchored child of the `GtkTextView` — inside this walk's reach but only
+        // if a rendered document actually produces one — and it shipped unnamed for
+        // exactly as long as this fixture was `# Doc` alone. A guard whose coverage
+        // grows with the application still needs a fixture that exercises the
+        // application; a document with no constructs in it is the vacuous version of
+        // this test.
+        let window = crate::window::new_window(
+            &app,
+            "IT",
+            "# Doc\n\nBody.\n\n<details>\n<summary>Show the details</summary>\n\nHidden.\n\n</details>\n",
+            None,
+        );
 
         // Reveal the surfaces whose controls are built but hidden, so the test drives the
         // window into the state a reader actually meets. **These four lines do not change

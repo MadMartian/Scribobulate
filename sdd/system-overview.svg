@@ -123,19 +123,20 @@
   <text class="lbl" x="676" y="323" font-size="9">children · code/quote ranges · headings · markers</text>
   <text class="lbl" x="676" y="334" font-size="9">— the typed outputs the view installs in lockstep</text>
 
-  <rect class="box" x="666" y="350" width="296" height="42" rx="4" stroke-width="1"/>
-  <text class="t mono" x="676" y="363" font-size="9.5">preview::render / re_render</text>
-  <text class="lbl" x="676" y="374" font-size="9">re_render swaps only the buffer, keeping the widget</text>
-  <text class="lbl" x="676" y="385" font-size="9">tree — and therefore the scroll position — alive</text>
+  <rect class="box" x="666" y="350" width="296" height="56" rx="4" stroke-width="1"/>
+  <text class="t mono" x="676" y="363" font-size="9.5">preview::render / re_render / splice</text>
+  <text class="lbl" x="676" y="374" font-size="9">Three paths: render appends; re_render swaps the buffer,</text>
+  <text class="lbl" x="676" y="385" font-size="9">keeping widgets but NOT the reading position (it re-anchors);</text>
+  <text class="lbl" x="676" y="396" font-size="9">splice rewrites one fold's region, keeping widgets and place.</text>
 
-  <rect class="note" x="666" y="402" width="296" height="42" rx="4" stroke-width="1"/>
-  <text class="lbl" x="676" y="415" font-size="9">Preview styling = the active <tspan font-weight="bold">reading theme</tspan> (themes.toml,</text>
-  <text class="lbl" x="676" y="426" font-size="9">data); System probes the live GTK theme. A theme or</text>
-  <text class="lbl" x="676" y="437" font-size="9">desktop change re-renders every tab; split waits 300 ms.</text>
+  <rect class="note" x="666" y="416" width="296" height="42" rx="4" stroke-width="1"/>
+  <text class="lbl" x="676" y="429" font-size="9">Preview styling = the active <tspan font-weight="bold">reading theme</tspan> (themes.toml,</text>
+  <text class="lbl" x="676" y="440" font-size="9">data); System probes the live GTK theme. A theme or</text>
+  <text class="lbl" x="676" y="451" font-size="9">desktop change re-renders every tab; split waits 300 ms.</text>
 
-  <text class="lbl" x="666" y="464" font-size="9.5" font-style="italic">The outline sidebar parses the same source separately,</text>
-  <text class="lbl" x="666" y="476" font-size="9.5" font-style="italic">keying headings by source byte offset — so it works in</text>
-  <text class="lbl" x="666" y="488" font-size="9.5" font-style="italic">all three modes, including Edit (which has no preview).</text>
+  <text class="lbl" x="666" y="478" font-size="9.5" font-style="italic">The outline sidebar parses the same source separately,</text>
+  <text class="lbl" x="666" y="490" font-size="9.5" font-style="italic">keying headings by source byte offset — so it works in</text>
+  <text class="lbl" x="666" y="502" font-size="9.5" font-style="italic">all three modes, including Edit (which has no preview).</text>
 
   <!-- pipeline flow arrows -->
   <path class="flow" d="M 814 174 L 814 182" stroke-width="1.4" marker-end="url(#a)"/>

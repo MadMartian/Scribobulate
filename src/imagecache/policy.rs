@@ -9,8 +9,8 @@
 //!
 //! ## Why a hit can never re-enter the fetch path
 //!
-//! [`Cache::get_or_fetch`] is the single choke point every caller goes through:
-//! it calls the supplied `fetch` closure if and only if [`Cache::lookup`]
+//! [`get_or_fetch`] is the single choke point every caller goes through: it
+//! calls the supplied `fetch` closure if and only if [`Cache::lookup`]
 //! returns [`Lookup::Miss`]. A [`Lookup::Hit`] returns the cached value directly
 //! and a live [`Lookup::NegativeHit`] returns `None` directly — neither touches
 //! `fetch`. This is a property of the call site, not something every caller has
@@ -99,9 +99,6 @@ impl<V: Clone> Cache<V> {
         }
     }
 
-    /// Look up `key`; call `fetch` only on an outright [`Lookup::Miss`] and
-    /// record its result. This is the seam `get_or_fetch`'s callers (and its own
-    /// tests) observe to prove a hit never re-enters the fetch path.
     /// Record a successful fetch, evicting least-recently-used positive entries
     /// (never negative ones — they carry no bytes) until `bytes` fits the
     /// budget. **A single entry larger than the whole budget is still admitted**
@@ -123,11 +120,49 @@ impl<V: Clone> Cache<V> {
     }
 
     /// Record that `key` failed to fetch as of `now`, replacing any prior entry
-    /// (positive or negative) for the same key.
+    /// (positive or negative) for the same key — and sweep the negative entries that
+    /// have expired since the last failure.
+    ///
+    /// **The sweep is what BOUNDS this half of the cache.** A negative entry carries no
+    /// bytes, so it is deliberately outside the byte budget and outside the LRU — which
+    /// left nothing at all limiting how many there could be. `lookup` removes an expired
+    /// entry only when someone looks that key up again, so a document whose image URLs
+    /// each fail once and are never re-requested (a rename, a reload, a tab closed) left
+    /// one entry per URL in a thread-local that lives as long as the process.
+    ///
+    /// Swept HERE rather than on a timer or on every lookup: a failure is the only event
+    /// that can grow this set, so it is the one point where a bound is owed, and it is
+    /// already rare — each one costs a connect timeout, so they cannot arrive quickly
+    /// enough for an O(entries) pass to matter.
     pub(crate) fn record_failure(&mut self, key: String, now: Instant) {
         self.remove(&key);
+        self.sweep_expired_negatives(now);
         self.entries
             .insert(key, Slot::Negative { inserted_at: now });
+    }
+
+    /// Drop every negative entry whose TTL has elapsed as of `now`.
+    ///
+    /// Positive entries are untouched: they expire by eviction under the byte budget,
+    /// never by time, and the two policies must not start reaching into each other —
+    /// that separation is one of the module's two stated invariants.
+    fn sweep_expired_negatives(&mut self, now: Instant) {
+        let ttl = self.negative_ttl;
+        self.entries.retain(|_, slot| match slot {
+            Slot::Negative { inserted_at } => now.duration_since(*inserted_at) < ttl,
+            Slot::Positive { .. } => true,
+        });
+    }
+
+    /// How many negative entries the cache is holding. Test-only: the bound this exists
+    /// to prove is invisible from every other observable — an unswept entry changes no
+    /// answer `lookup` gives, which is exactly why it went unnoticed.
+    #[cfg(test)]
+    pub(crate) fn negative_entry_count(&self) -> usize {
+        self.entries
+            .values()
+            .filter(|s| matches!(s, Slot::Negative { .. }))
+            .count()
     }
 
     fn touch(&mut self, key: &str) {
@@ -462,5 +497,62 @@ mod tests {
             Some(1),
             "and what it recorded survives the outer call completing"
         );
+    }
+
+    #[test]
+    fn expired_negative_entries_are_swept_by_the_next_failure() {
+        // The unbounded case: N URLs each fail once and are never looked up again, so
+        // `lookup`'s own expiry never runs for any of them. Without the sweep this holds
+        // all N for the life of the process.
+        let mut c = cache(100, 60);
+        let t0 = Instant::now();
+        for i in 0..50 {
+            c.record_failure(format!("dead-{i}"), t0);
+        }
+        assert_eq!(
+            c.negative_entry_count(),
+            50,
+            "precondition: all 50 are held"
+        );
+
+        // One more failure, a TTL later.
+        c.record_failure("fresh".into(), t0 + Duration::from_secs(61));
+        assert_eq!(
+            c.negative_entry_count(),
+            1,
+            "the 50 expired entries are gone and only the fresh one remains"
+        );
+    }
+
+    #[test]
+    fn the_sweep_keeps_negative_entries_that_are_still_live() {
+        let mut c = cache(100, 60);
+        let t0 = Instant::now();
+        c.record_failure("still-live".into(), t0);
+        c.record_failure("newer".into(), t0 + Duration::from_secs(30));
+        assert_eq!(
+            c.negative_entry_count(),
+            2,
+            "an entry inside its TTL survives a sweep"
+        );
+        assert!(matches!(
+            c.lookup("still-live", t0 + Duration::from_secs(31)),
+            Lookup::NegativeHit
+        ));
+    }
+
+    #[test]
+    fn the_sweep_never_touches_positive_entries() {
+        // The module's second invariant: positive and negative entries cannot evict one
+        // another. A time-based sweep is exactly the shape that would breach it.
+        let mut c = cache(100, 60);
+        let t0 = Instant::now();
+        c.record_success("kept".into(), 7, 3);
+        c.record_failure("dead".into(), t0);
+        c.record_failure("later".into(), t0 + Duration::from_secs(61));
+        match c.lookup("kept", t0 + Duration::from_secs(999)) {
+            Lookup::Hit(value) => assert_eq!(value, 7, "a positive entry never expires by time"),
+            _ => panic!("expected a hit — the sweep took a positive entry"),
+        }
     }
 }

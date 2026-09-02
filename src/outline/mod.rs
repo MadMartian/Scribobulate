@@ -141,13 +141,11 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
             }
             Event::Text(t) => {
                 if let Some((_, _, ref mut text)) = current {
-                    // Mirror renderer.rs: drop tight construct markers so the
-                    // outline label and heading slug match the rendered heading.
-                    for seg in scripts.segments(range.start, &t) {
-                        if !seg.marker {
-                            text.push_str(seg.text(&t));
-                        }
-                    }
+                    // Through the one reduction, so the outline label and heading slug
+                    // match the rendered heading — and so this cannot drift from the
+                    // other caller, which is how the disclosure body's copy came to omit
+                    // the marker suppression entirely.
+                    scripts.push_rendered_text(range.start, &t, text);
                 }
             }
             Event::Code(t) => {

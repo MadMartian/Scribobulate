@@ -430,10 +430,22 @@ pub(crate) fn body_plain_text(body_src: &str) -> String {
     // paragraph whose text carries the `|` separators, so a query spanning two cells
     // matches text the rendered page never shows.
     let normalized = super::NormalizedMd::new(body_src);
+    // The tight-construct delimiters (`^`, `~`, `==`, `~~`) are SOURCE, never rendered,
+    // so they must not reach text that find searches — a `^note^` here would otherwise
+    // report matches on a `^` the reader cannot see, and miss a search for the word as
+    // the page shows it. Scanned over the same normalised text the walk below parses, so
+    // the offsets agree; the outline's heading labels go through the same reduction, and
+    // this copy having omitted it is exactly why it is now one function.
+    let scripts = super::BlockScripts::scan(normalized.as_str());
     let mut plain = String::new();
-    for ev in pulldown_cmark::Parser::new_ext(normalized.as_str(), super::md_options()) {
+    for (ev, src) in
+        pulldown_cmark::Parser::new_ext(normalized.as_str(), super::md_options()).into_offset_iter()
+    {
         match ev {
-            Event::Text(t) | Event::Code(t) => plain.push_str(&t),
+            Event::Text(t) => scripts.push_rendered_text(src.start, &t, &mut plain),
+            // Inline code is literal by definition — a `^` inside a code span IS shown,
+            // so it must not go through the delimiter reduction.
+            Event::Code(t) => plain.push_str(&t),
             // A break or a rule separates two runs the reader sees apart.
             Event::SoftBreak | Event::HardBreak | Event::Rule => plain.push('\n'),
             // A BLOCK boundary separates runs; an INLINE one does not. `foo*bar*`
@@ -480,7 +492,7 @@ mod body_text_tests {
     #[test]
     fn emphasis_markers_are_stripped_so_a_query_matches_what_the_reader_would_see() {
         // Both directions of the defect this exists to avoid, in one fixture.
-        let plain = body_plain_text("some **bold** and `code` here\n");
+        let plain = super::body_plain_text("some **bold** and `code` here\n");
         assert!(plain.contains("bold"), "{plain:?}");
         assert!(plain.contains("code"), "{plain:?}");
         assert!(
@@ -502,7 +514,7 @@ mod body_text_tests {
     #[test]
     fn separate_runs_do_not_run_together() {
         // Two paragraphs the reader sees apart must not form a match across the gap.
-        let plain = body_plain_text("alpha\n\nbeta\n");
+        let plain = super::body_plain_text("alpha\n\nbeta\n");
         assert!(!plain.contains("alphabeta"), "{plain:?}");
         assert!(plain.contains("alpha") && plain.contains("beta"));
     }
@@ -512,7 +524,7 @@ mod body_text_tests {
         // The pre-pass case, stated as a behaviour: unnormalised this is ONE
         // paragraph whose text includes the `|`s, so `a | b` would match text the
         // rendered page never shows.
-        let plain = body_plain_text("| a\t| b\t|\n|---\t|---\t|\n| c\t| d\t|\n");
+        let plain = super::body_plain_text("| a\t| b\t|\n|---\t|---\t|\n| c\t| d\t|\n");
         assert!(
             !plain.contains('|'),
             "cell separators are not text: {plain:?}"
@@ -524,7 +536,7 @@ mod body_text_tests {
 
     #[test]
     fn raw_html_inside_a_body_contributes_no_text() {
-        let plain = body_plain_text("<div>markup</div>\n\nreal text\n");
+        let plain = super::body_plain_text("<div>markup</div>\n\nreal text\n");
         assert!(plain.contains("real text"));
         assert!(!plain.contains("div"), "{plain:?}");
     }
@@ -745,6 +757,42 @@ mod tests {
         assert_eq!(
             scan_disclosure_tags("<details><summary>Title"),
             vec![open(), DetailsTag::SummaryOpen]
+        );
+    }
+
+    #[test]
+    fn a_bodys_tight_construct_markers_never_reach_the_searchable_text() {
+        // The defect: `^` and `~` are SOURCE delimiters the page never shows, and this
+        // reduction used to pass them straight through. Find then counted a match on a
+        // character the reader cannot see, and a search for the word as RENDERED missed.
+        let plain = super::body_plain_text("The 5^th^ of H~2~O.\n");
+        assert!(
+            plain.contains("5th"),
+            "the rendered word is searchable: {plain:?}"
+        );
+        assert!(
+            plain.contains("H2O"),
+            "and so is the subscript's: {plain:?}"
+        );
+        assert!(
+            !plain.contains('^'),
+            "no superscript delimiter survives: {plain:?}"
+        );
+        assert!(
+            !plain.contains('~'),
+            "no subscript delimiter survives: {plain:?}"
+        );
+    }
+
+    #[test]
+    fn a_delimiter_inside_inline_code_is_kept_because_the_page_shows_it() {
+        // The other side of the same rule, and the reason `Event::Code` does NOT go
+        // through the reduction: inside a code span the character is literal content, so
+        // suppressing it would make text the reader CAN see unsearchable.
+        let plain = super::body_plain_text("Use `a^b` in the shell.\n");
+        assert!(
+            plain.contains("a^b"),
+            "a caret inside inline code is real text: {plain:?}"
         );
     }
 }

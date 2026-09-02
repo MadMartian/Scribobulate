@@ -80,6 +80,7 @@ pub(crate) use rename::update_rename_action_state;
 // window-internal; only the shapes the per-tab state has to *hold* are named crate-wide.
 pub(crate) use find::{FindCursor, PreviewFindCache};
 pub(crate) use findbar::refresh_preview_find_highlight;
+pub(crate) use foldreveal::defer_with_window;
 pub(crate) use foldsplice::splice_disclosure_in_place;
 pub(crate) use lifecycle::quit_all_windows;
 pub(crate) use outline_nav::apply_scroll_spy;

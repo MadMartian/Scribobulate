@@ -691,6 +691,55 @@ match ev {
 }
 
 #[test]
+fn a_brace_inside_a_char_literal_does_not_move_the_depth() {
+    // MEASURED blind spot: the depth model had no arm to ENTER a char literal, so `'{'`
+    // counted as an opening brace and every dispatch below it sat at the wrong depth —
+    // the check then saw no `match` block at all and passed vacuously. A file holding
+    // `'{'` or `'}'` is not exotic: any hand-rolled lexer has one, and this tree's own
+    // raw-HTML scanners are full of them.
+    // The literal must sit INSIDE the match block, and be unbalanced there. The model is
+    // relative — arms are recognised at the `match` line's depth plus one — so a stray
+    // brace ABOVE the block shifts every level equally and nothing breaks. Put one in an
+    // early ARM and the later arms sit a level too deep to be recognised at all, which
+    // is how the check went silently blind rather than noisily wrong. Both facts were
+    // learned by mutation: the first draft of this case used a balanced `'{' || '}'`
+    // above the block and survived removal of the fix.
+    let src = r#"
+match ev {
+    Event::Text(t) => lex(t, '{'),
+    _ => other(),
+}
+"#;
+    assert_eq!(
+        parser_dispatch_wildcards(src),
+        vec![4],
+        "an arm carrying a brace-bearing char literal does not hide the wildcard below it"
+    );
+}
+
+#[test]
+fn a_lifetime_is_not_read_as_a_char_literal() {
+    // The other half of the same arm, and the reason it cannot be a bare `'` test: a
+    // lifetime shares the delimiter, so treating every `'` as an opener blanks the rest
+    // of the file from the first `&'a` — trading one blind spot for a larger one.
+    // The arm carries a REAL brace pair that must still be counted. Under a naive
+    // `c == '\''` opener the lifetime opens a literal with no closing quote after it, so
+    // everything to end-of-file goes inert — the arm's own `}` included — and the
+    // wildcard below is never seen.
+    let src = r#"
+match ev {
+    Event::Text(t) => { helper::<'a>(t) }
+    _ => rest(),
+}
+"#;
+    assert_eq!(
+        parser_dispatch_wildcards(src),
+        vec![4],
+        "a lifetime inside an arm leaves the wildcard below it visible"
+    );
+}
+
+#[test]
 fn an_exhaustive_parser_dispatch_is_clean() {
     let src = r#"
 match ev {

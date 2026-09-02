@@ -500,8 +500,16 @@ fn build_products(
             // a copy across a collapsed block reconstruct the block's full Markdown
             // (rubric 2.8i) instead of the summary text the reader can see.
             (Some(site), None) => {
-                let key = site.chain.first().copied().unwrap_or(FoldKey(src_start));
-                match raw_evs.iter_mut().rev().find(|e| e.src.start == key.0) {
+                let key = site
+                    .chain
+                    .first()
+                    .copied()
+                    .unwrap_or(FoldKey::from_source_offset(src_start));
+                match raw_evs
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.src.start == key.source_offset())
+                {
                     Some(opening) => opening.src.end = src_end,
                     // Unreachable while the summary line is emitted from the same
                     // raw-HTML block the key names. Logged rather than ignored: the
@@ -510,7 +518,7 @@ fn build_products(
                         "copymap: collapsed disclosure at source byte {} closed with no \
                          node covering its summary line; a copy across it will omit the \
                          body",
-                        key.0
+                        key.source_offset()
                     ),
                 }
             }
@@ -3544,9 +3552,8 @@ mod gtk_integration_tests {
     /// **Rubric 2.26d** — a `<details>` with no `<summary>` shows the default label
     /// and still folds.
     ///
-    /// The rubric's other unspaced-body clause is deliberately NOT asserted here: it
-    /// promises literal text and this tree drops it, which is a real divergence
-    /// raised with the operator rather than a behaviour to pin. See the plan.
+    /// The rubric's unspaced-body clause is pinned separately, by
+    /// [`an_unspaced_disclosure_body_shows_as_literal_text`].
     #[gtktest::test]
     fn a_summaryless_block_shows_the_default_label() {
         // A TAIL marker past the preview's character limit (item 3 / TDD 2.26) — the
@@ -3589,7 +3596,7 @@ mod gtk_integration_tests {
 
         // Open only the FIRST. The second must be untouched.
         let mut folds = crate::fold::FoldState::default();
-        folds.toggle(crate::fold::FoldKey(spans[0].start));
+        folds.toggle(crate::fold::FoldKey::from_source_offset(spans[0].start));
         let products = super::build_render_products_with_theme(
             &md,
             None,

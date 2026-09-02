@@ -11,6 +11,35 @@
 use super::*;
 use crate::fold::FoldKey;
 
+/// Run `f` on the next main-loop idle, with the window — or not at all, if the window
+/// has gone by the time the idle fires.
+///
+/// **The capture is WEAK, and that is the whole point of the helper.** POLICY's
+/// "widget-owned closures capture weakly" rule (ScrAP-60) is easy to satisfy at the site
+/// you are looking at and easy to miss at the next one: these deferrals are armed from
+/// inside a widget's own signal handler, so a strong `ApplicationWindow` in the closure
+/// keeps the whole window tree alive for as long as the idle is pending. Two call sites
+/// had drifted apart on exactly this — `reveal_folds` downgraded and the disclosure
+/// toggle's handler did not — which is the shape a shared helper removes rather than
+/// documents.
+///
+/// **Why the deferral itself is needed** is the other half, and it is the same at both
+/// sites: a re-render unparents and rebuilds every anchored child of the preview, and
+/// both callers reach here from inside a widget's own signal handler (an outline row's
+/// `row-activated`, a find-bar button's `clicked`, a toggle's `toggled`). Tearing down a
+/// widget subtree synchronously inside a handler still on the stack is the hazard
+/// GTK4Rs/AP-30 records.
+pub(crate) fn defer_with_window(
+    window: &ApplicationWindow,
+    f: impl FnOnce(&ApplicationWindow) + 'static,
+) {
+    let win = window.downgrade();
+    glib::idle_add_local_once(move || {
+        let Some(window) = win.upgrade() else { return };
+        f(&window);
+    });
+}
+
 /// Expand every fold in `chain`, re-render the preview, and then run `after` against
 /// the window — with the new render in place, so `after` may read buffer offsets
 /// that only exist once the block is open.
@@ -42,22 +71,44 @@ pub(crate) fn reveal_folds(
     }
     let Some(st) = state(window) else { return };
     {
-        // Every key in the chain is one this render reported as COLLAPSED, so a
-        // toggle expands it. Taken as a chain rather than one key at a time because
-        // a disclosure nested inside a collapsed one renders nothing — opening the
-        // outer block alone would only reveal the inner block's summary line, and
-        // the caller would have to re-render once per level of nesting to discover
-        // that (`renderer::CollapsedSite`).
+        // `set_collapsed(.., false)`, never `toggle`. This function's NAME is the
+        // postcondition — every key in `chain` is expanded when it returns — and a
+        // toggle only delivers that while every key really is collapsed, an invariant
+        // held by the caller's caller and enforced by nothing. Hand it an already
+        // expanded block and a toggle CLOSES one the reader asked to see, which is the
+        // exact inversion of what a reveal is for.
+        //
+        // The document's own `<details open>` is what the fold model needs to answer
+        // that, so the spans are scanned here. Taken as a chain rather than one key at
+        // a time because a disclosure nested inside a collapsed one renders nothing —
+        // opening the outer block alone would only reveal the inner block's summary
+        // line, and the caller would have to re-render once per level of nesting to
+        // discover that (`renderer::CollapsedSite`).
+        let md = match st.view_mode.get() {
+            ViewMode::Split => st.editor_text(),
+            ViewMode::Preview | ViewMode::Edit => st.source().clone(),
+        };
+        let spans = crate::renderer::disclosure::scan_document(&md);
         let mut folds = st.folds.borrow_mut();
         for key in chain {
-            folds.toggle(*key);
+            match spans.iter().find(|s| s.start == key.source_offset()) {
+                Some(span) => folds.set_collapsed(*key, span.open, false),
+                // No span for the key: the fold map and the document have diverged, so
+                // there is no `open` attribute to reason from. Fall back to the flip —
+                // the old behaviour — rather than guessing, and say so.
+                None => {
+                    log::error!(
+                        "window::foldreveal: key {key:?} names no disclosure in the current \
+                         source; flipping it rather than expanding it"
+                    );
+                    folds.toggle(*key);
+                }
+            }
         }
     }
     let mode = st.view_mode.get();
-    let win = window.downgrade();
-    glib::idle_add_local_once(move || {
-        let Some(window) = win.upgrade() else { return };
-        crate::window::rerender_preview_in_place(&window, mode, RenderShape::ChangedContent);
-        after(&window);
+    defer_with_window(window, move |window| {
+        crate::window::rerender_preview_in_place(window, mode, RenderShape::ChangedContent);
+        after(window);
     });
 }

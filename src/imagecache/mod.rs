@@ -99,16 +99,46 @@ pub(crate) fn get_or_fetch(
     uri: &str,
     fetch: impl FnOnce() -> Option<gtk::gdk::Texture>,
 ) -> Option<gtk::gdk::Texture> {
+    get_or_fetch_at(uri, Instant::now(), fetch)
+}
+
+/// [`get_or_fetch`] with the clock supplied rather than read.
+///
+/// The production wrapper above reads `Instant::now()` itself, which makes every
+/// time-dependent behaviour of the real cache — the negative TTL expiring, a re-attempt
+/// after it, the sweep — unreachable from a test without sleeping through a real minute.
+/// `policy::Cache` has taken `now` as a parameter from the start for exactly this reason;
+/// this seam extends the same discipline to the thread-local the application actually
+/// uses, so a test exercises the SHIPPED path rather than a second cache it built itself.
+pub(crate) fn get_or_fetch_at(
+    uri: &str,
+    now: Instant,
+    fetch: impl FnOnce() -> Option<gtk::gdk::Texture>,
+) -> Option<gtk::gdk::Texture> {
     // The borrow discipline lives in `policy::get_or_fetch` — it takes the `RefCell`
     // precisely so no borrow is held across `fetch`. See its doc comment.
     CACHE.with(|cell| {
-        policy::get_or_fetch(cell, uri, Instant::now(), || {
+        policy::get_or_fetch(cell, uri, now, || {
             fetch().map(|texture| {
                 let bytes = decoded_byte_size(texture.width(), texture.height());
                 (texture, bytes)
             })
         })
     })
+}
+
+/// Empty the thread-local cache.
+///
+/// Test-only, and required rather than convenient: libtest runs the whole suite in one
+/// process and this cache is a `thread_local!`, so an entry one test leaves behind
+/// silently answers another test's lookup — the process-global-state hazard POLICY's
+/// unit-testing section names, arriving here through a cache rather than a signal
+/// handler. A test that touches the shipped cache resets it first.
+#[cfg(test)]
+pub(crate) fn reset_for_test() {
+    CACHE.with(|cell| {
+        *cell.borrow_mut() = Cache::new(IMAGE_CACHE_BUDGET_BYTES, NEGATIVE_CACHE_TTL);
+    });
 }
 
 #[cfg(test)]
@@ -124,5 +154,84 @@ mod tests {
     fn decoded_byte_size_never_underflows_on_a_degenerate_dimension() {
         assert_eq!(decoded_byte_size(0, 100), 0);
         assert_eq!(decoded_byte_size(-1, 100), 0);
+    }
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// A 1×1 texture, the cheapest real `GdkTexture` — the cache stores textures, and
+    /// substituting anything else would test a different `Cache<V>`.
+    fn pixel() -> gtk::gdk::Texture {
+        use gtk::prelude::Cast;
+        let bytes = gtk::glib::Bytes::from_owned(vec![0u8, 0, 0, 255]);
+        gtk::gdk::MemoryTexture::new(1, 1, gtk::gdk::MemoryFormat::R8g8b8a8, &bytes, 4)
+            .upcast::<gtk::gdk::Texture>()
+    }
+
+    /// TDD 2.26k's decidable core, exercised against the SHIPPED thread-local rather than
+    /// a cache the test constructed: a failed URL is not re-fetched inside its TTL, and
+    /// IS re-attempted once past it.
+    ///
+    /// This is what the clock seam buys. Before it, the only way to reach this behaviour
+    /// was to sleep for the real TTL — so nothing tested it, and the rubric's coverage
+    /// line could only point at `policy`'s own tests over a private cache.
+    #[gtktest::test]
+    fn the_shipped_cache_re_attempts_a_dead_url_only_after_its_ttl() {
+        reset_for_test();
+        let attempts = Cell::new(0usize);
+        let failing = || {
+            attempts.set(attempts.get() + 1);
+            None
+        };
+        let t0 = Instant::now();
+
+        assert!(get_or_fetch_at("https://dead.invalid/a.png", t0, failing).is_none());
+        assert_eq!(attempts.get(), 1, "the first toggle attempts the fetch");
+
+        // Several more toggles inside the TTL.
+        for tick in 1..=5 {
+            let at = t0 + Duration::from_secs(tick);
+            assert!(get_or_fetch_at("https://dead.invalid/a.png", at, failing).is_none());
+        }
+        assert_eq!(
+            attempts.get(),
+            1,
+            "no toggle inside the TTL re-enters the fetch — the frequency contract"
+        );
+
+        // ...and past it, exactly one more attempt, which is the design and not a defect:
+        // a longer TTL would make a transient outage read as permanent for the session.
+        let past = t0 + NEGATIVE_CACHE_TTL + Duration::from_secs(1);
+        assert!(get_or_fetch_at("https://dead.invalid/a.png", past, failing).is_none());
+        assert_eq!(attempts.get(), 2, "one re-attempt once the TTL has lapsed");
+        reset_for_test();
+    }
+
+    /// A cached SUCCESS never re-enters the fetch either — the other half of the choke
+    /// point, over the real cache.
+    #[gtktest::test]
+    fn the_shipped_cache_never_re_fetches_a_hit() {
+        reset_for_test();
+        let attempts = Cell::new(0usize);
+        let ok = || {
+            attempts.set(attempts.get() + 1);
+            Some(pixel())
+        };
+        let t0 = Instant::now();
+
+        assert!(get_or_fetch_at("https://live.invalid/b.png", t0, ok).is_some());
+        for tick in 1..=4 {
+            let at = t0 + Duration::from_secs(tick * 30);
+            assert!(get_or_fetch_at("https://live.invalid/b.png", at, ok).is_some());
+        }
+        assert_eq!(
+            attempts.get(),
+            1,
+            "a positive entry answers every later toggle, and never expires by time"
+        );
+        reset_for_test();
     }
 }

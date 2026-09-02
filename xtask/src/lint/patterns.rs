@@ -465,6 +465,27 @@ fn wildcard_is_annotated(lines: &[&str], index: usize) -> bool {
     false
 }
 
+/// Does the `'` at `quote` open a character literal, or a lifetime?
+///
+/// The two share a delimiter and only lookahead separates them. A backslash can only
+/// begin an escape (`'\n'`, `'\\'`, `'\''`, `'\u{1F600}'`) — no lifetime starts with
+/// one — and an unescaped literal is exactly one character wide, so a closing quote two
+/// positions on settles it. `'a`, `'static` and `'_` all fail both tests.
+///
+/// Closing the literal is the `string || chr` branch's escape machinery, shared with
+/// string literals and exercised by their corpus cases. It is deliberately NOT given a
+/// char-literal case of its own: braces inside a literal are blanked by that branch
+/// whether or not the escape is honoured, and a mis-closed `'\''` leaves a bare quote
+/// this predicate then declines — so every mutation of it was found to be unobservable
+/// through the brace depth. A test that cannot fail is worse than no test.
+fn opens_char_literal(chars: &[char], quote: usize) -> bool {
+    match chars.get(quote + 1) {
+        Some('\\') => true,
+        Some(_) => chars.get(quote + 2) == Some(&'\''),
+        None => false,
+    }
+}
+
 pub fn parser_dispatch_wildcards(text: &str) -> Vec<usize> {
     const VOCABULARY: [&str; 3] = ["Event::", "Tag::", "TagEnd::"];
     let bytes: Vec<char> = text.chars().collect();
@@ -508,6 +529,15 @@ pub fn parser_dispatch_wildcards(text: &str) -> Vec<usize> {
             inert[i] = true;
         } else if c == '"' {
             string = true;
+            inert[i] = true;
+        } else if c == '\'' && opens_char_literal(&bytes, i) {
+            // Rust spells a CHARACTER LITERAL and a LIFETIME with the same delimiter, so
+            // this arm cannot be a bare `c == '\''` — that would open a "literal" at the
+            // first `'a` and blank the rest of the file, which is why the arm was simply
+            // missing rather than wrong. With no arm at all the model never entered a
+            // char literal, so `'{'` and `'}'` moved the brace depth and the check went
+            // blind in every file containing one.
+            chr = true;
             inert[i] = true;
         } else {
             if c == '{' {

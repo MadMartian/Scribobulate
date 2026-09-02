@@ -1138,7 +1138,11 @@ mod disclosure_reveal_tests {
         let before = crate::window::content_reading_position(&window);
 
         // The block starts at source byte 0 — the only disclosure in the document.
-        super::foldreveal::reveal_folds(&window, &[crate::fold::FoldKey(0)], |_| {});
+        super::foldreveal::reveal_folds(
+            &window,
+            &[crate::fold::FoldKey::from_source_offset(0)],
+            |_| {},
+        );
         crate::testpump::until(
             crate::testpump::Clock::Idle,
             "the disclosure to expand",

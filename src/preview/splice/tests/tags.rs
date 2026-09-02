@@ -63,7 +63,7 @@ fn ranges_both_ways(md: &str, before: &FoldState, after: &FoldState, name: &str)
         crate::theme::active(),
         before,
     );
-    let key = FoldKey(crate::renderer::disclosure::scan_document(md)[0].start);
+    let key = FoldKey::from_source_offset(crate::renderer::disclosure::scan_document(md)[0].start);
     crate::preview::splice::splice(
         &starting.buf,
         None,
@@ -117,7 +117,7 @@ const MD: &str = concat!(
 /// would make this a test of the fixture.
 #[gtktest::test]
 fn a_spliced_collapse_inks_the_summary_line_the_way_a_full_render_does() {
-    let key = FoldKey(crate::renderer::disclosure::scan_document(MD)[0].start);
+    let key = FoldKey::from_source_offset(crate::renderer::disclosure::scan_document(MD)[0].start);
     // The source says `open`; toggling the reader's state closes it.
     let mut closed = FoldState::default();
     closed.toggle(key);
@@ -160,7 +160,7 @@ fn a_spliced_collapse_inks_the_summary_line_the_way_a_full_render_does() {
 #[gtktest::test]
 fn a_spliced_expand_leaves_the_ink_over_the_label_alone() {
     let md = MD.replace("<details open>", "<details>");
-    let key = FoldKey(crate::renderer::disclosure::scan_document(&md)[0].start);
+    let key = FoldKey::from_source_offset(crate::renderer::disclosure::scan_document(&md)[0].start);
     let mut opened = FoldState::default();
     opened.toggle(key);
 

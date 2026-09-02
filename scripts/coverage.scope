@@ -124,6 +124,7 @@ src/preview/splice.rs
 src/preview/splice/install.rs
 src/readingpos.rs
 src/renderer/blockquote.rs
+src/renderer/blockspacing.rs
 src/renderer/disclosure.rs
 src/renderer/disclosure/preview.rs
 src/renderer/emit.rs

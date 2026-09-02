@@ -357,8 +357,21 @@ fn build_preview_hits(
     if let Some(rd) = crate::preview::scrib_render_data(view) {
         let rd = rd.borrow();
         for block in &rd.collapsed_blocks {
-            let hidden = rd.md_owned.get(block.body.clone()).unwrap_or_default();
-            for _ in 0..hidden_match_count(hidden, text) {
+            // A body range that does not index `md_owned` means the render and the
+            // source have diverged. `unwrap_or_default()` turned that into an EMPTY
+            // body, which counts zero hidden matches and reports it as "nothing in
+            // there" — the confidently wrong answer TDD 11.8 exists to refuse. Say so
+            // and skip the block rather than vouching for it.
+            let Some(hidden) = rd.md_owned.get(block.body.clone()) else {
+                log::error!(
+                    "preview find: collapsed body range {:?} is outside md_owned ({} bytes); \
+                     this block's hidden matches are NOT counted",
+                    block.body,
+                    rd.md_owned.len()
+                );
+                continue;
+            };
+            for _ in 0..plan::hidden_match_count(hidden, text) {
                 keyed.push((
                     block.summary_offset,
                     seq,
@@ -376,24 +389,6 @@ fn build_preview_hits(
     keyed.into_iter().map(|(_, _, hit)| hit).collect()
 }
 
-/// How many times `needle` occurs in the text a collapsed disclosure's body would
-/// render as.
-///
-/// The reduction to plain text belongs to `renderer::disclosure` — it is knowledge
-/// about a disclosure body, it is display-free, and putting it there keeps it inside
-/// the coverage gate, which `src/window/*.rs` is outside of. What stays here is the
-/// case-folding, so a hidden match and a visible one are decided by the same rule.
-fn hidden_match_count(body_src: &str, needle: &str) -> usize {
-    if needle.is_empty() || body_src.is_empty() {
-        return 0;
-    }
-    ci_match_ranges(
-        &crate::renderer::disclosure::body_plain_text(body_src),
-        needle,
-    )
-    .len()
-}
-
 /// The preview hit list, cached against the exact render and query it was derived
 /// from. One per tab (`TabState::preview_find`).
 ///
@@ -406,8 +401,14 @@ fn hidden_match_count(body_src: &str, needle: &str) -> usize {
 ///
 /// - **Query** — compared by value.
 /// - **Render generation** — every path that changes what the preview shows (theme
-///   re-render, view-mode switch, external reload, live-preview re-render) goes through
-///   `preview::re_render`, which bumps `CodePreviewView::render_generation`. The one
+///   re-render, view-mode switch, external reload, live-preview re-render) bumps
+///   `CodePreviewView::render_generation`. The choke point is
+///   `preview::build::install_content`, NOT `preview::re_render`: the disclosure fold
+///   splice changes the buffer without going through `re_render` at all, and it is
+///   covered only because it installs through that same function. Worth naming
+///   precisely, because tracing the splice against the old wording reads as an
+///   invalidation gap and costs a probe to disbelieve. MEASURED: a splice moves the
+///   generation and the cached list rebuilds. The one
 ///   in-place path, `preview::refresh_annotations_in_place`, does not re-render: it is
 ///   gated on the freshly built buffer's *slice* being byte-identical to the live one and
 ///   only ever changes cell-label MARKUP — never the `label.text()` the cell hits index
@@ -831,13 +832,21 @@ fn select_preview_hit_at_or_after(window: &ApplicationWindow, min_off: i32, text
     let Some(st) = state(window) else { return };
     let reveal = st.preview_find.with_hits(&view, text, |targets, hits| {
         let total = hits.len() as i32;
-        let idx = hits
-            .iter()
-            .position(|h| preview_hit_position(h) >= min_off)
-            .unwrap_or(0);
         if total == 0 {
             return None;
         }
+        // No hit at or after the block we just expanded. `unwrap_or(0)` sent the reader
+        // to the document's FIRST match instead — a jump backwards past everything they
+        // had already stepped through, arriving as though it were the next result. The
+        // block IS open now, so the reader can see what is in it; leave the current hit
+        // and the count where they are rather than redirecting.
+        let Some(idx) = hits.iter().position(|h| preview_hit_position(h) >= min_off) else {
+            log::debug!(
+                "preview find: the expanded block at offset {min_off} produced no match at \
+                 or after it; leaving the current hit where it is"
+            );
+            return None;
+        };
         if let PreviewHit::Hidden { summary_off, key } = &hits[idx] {
             return Some((*summary_off, *key));
         }

@@ -1035,8 +1035,10 @@ pub(super) fn wire_spliced_disclosure_toggles(
 /// vadjustment's `upper` and throws the reader to the top of the document before the
 /// restore can land (MEASURED: `upper` 36 168 → 672, `value` 21 340 → 2). Splicing the
 /// toggled block's own region costs none of that. But a splice is only possible when
-/// this render actually DREW the block — `preview::splice` answers `false` otherwise,
-/// before touching the buffer, so the fallback always runs against an untouched pane.
+/// this render actually DREW the block — `preview::splice` refuses otherwise, and its
+/// `SpliceVerdict` says whether that refusal came before the buffer was touched (the
+/// pane is intact and the fallback merely shows the toggle) or after the region was
+/// already deleted (the fallback is the repair).
 fn connect_disclosure_toggle(
     view: &CodePreviewView,
     toggle: &gtk::ToggleButton,
@@ -1057,12 +1059,19 @@ fn connect_disclosure_toggle(
             };
             st.folds.borrow_mut().toggle(key);
             let mode = st.view_mode.get();
-            glib::idle_add_local_once(move || {
-                if crate::window::splice_disclosure_in_place(&window, mode, key) {
+            // Through the shared deferral, which holds the window WEAKLY — a strong
+            // capture here kept the whole window tree alive for as long as the idle was
+            // pending (POLICY "widget-owned closures capture weakly", ScrAP-60), and its
+            // sibling in `foldreveal` had always done it correctly.
+            crate::window::defer_with_window(&window, move |window| {
+                // Anything but a landed splice falls back to a full re-render — which
+                // for `RegionLost` is not a nicety but the repair: the region has
+                // already been deleted from the live buffer.
+                if crate::window::splice_disclosure_in_place(window, mode, key).spliced() {
                     return;
                 }
                 crate::window::rerender_preview_in_place(
-                    &window,
+                    window,
                     mode,
                     crate::window::RenderShape::ChangedContent,
                 );

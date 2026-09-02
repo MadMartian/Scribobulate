@@ -482,16 +482,25 @@ The invalidation classes (matrix columns):
 - **C — re-derivation**: a re-scan or re-render that rebuilds the *collection* a
   positional reference indexes into (the marker list, the entry list), even when
   the document text is unchanged.
+- **A′ — in-place region mutation of a rendered pane**: a disclosure fold splices one
+  block's region into the live preview buffer, deleting and rewriting it without
+  rebuilding the pane (`preview/splice/`). Distinct from A because the SOURCE does not
+  change at all — so anything keyed on source bytes is untouched — while every **buffer**
+  offset below the splice shifts by the region's length delta. It is the mirror image of
+  C, which replaces the collection while the text stands still. Stated as its own class
+  because a reference that survives A and C by being a source-byte reference can still be
+  wrong under A′ if it is in fact a buffer offset, and the two are the same Rust type.
 
-| # | Held reference | Points into | A | B | C | How it survives |
-|---|---|---|:-:|:-:|:-:|---|
-| 1 | Annotation card's Remove / Edit target | source bytes | ✓ | ✓ | ✓ | `AnchoredSpan` — carries the construct's own text and re-resolves at apply time; mutations total (ScrAP-187) |
-| 2 | Annotations viewer's selected row | source bytes | ✓ | ✓ | ✓ | Stored as the annotation's start byte and **re-resolved against a fresh scan on every rebuild**; a vanished annotation simply loses the selection |
-| 3 | Task-checkbox toggle span | source bytes | ✓ | ✓ | — | The toggle re-locates a well-formed marker at the span and returns `None` otherwise, which the caller makes a clean no-op |
-| 4 | Pending marker-open request | marker-list **index** + buffer offset | ✓ | ✓ | ⚠ | Bounded by a wall-clock deadline and re-aimed each frame, but the target is a **positional index** into a list a re-render replaces — see the rule on positional references below |
-| 5 | Scroll re-anchor target line | buffer line | ✓ | ✓ | — | Re-read each frame; a drifted line mis-positions the viewport only, and the next settle corrects it |
-| 6 | Back/Forward history entry's **place** in a document (TDD §23) | heading **slug**, or a buffer line | ◑ | ✓ | ✓ | Two strengths, chosen by what the recording site can know. A slug is re-resolved against the tab's live heading map, and a render that no longer contains it **degrades the entry to "just this document"** rather than letting it point somewhere wrong (23.14). A line is the weak form — an arbitrary scroll position offers no stronger handle — and takes row 5's bargain: it clamps and mis-positions the viewport only |
-| 7 | Reading position carried across a view-mode switch | source bytes (`readingpos::DocPosition`) | ✓ | n/a | ✓ | Held only for the span of the swap — captured from the pane being left, resolved into the pane being entered — so class B cannot reach it (a wholesale replacement is not in flight during a mode switch), and the editor flushes to source before the capture so class A is settled. Class C is what makes it a `DocPosition` rather than a preview buffer offset: the preview is REBUILT by the very switch being crossed, so any reference into its buffer would be resolved against a collection that no longer exists |
+| # | Held reference | Points into | A | A′ | B | C | How it survives |
+|---|---|---|:-:|:-:|:-:|:-:|---|
+| 1 | Annotation card's Remove / Edit target | source bytes | ✓ | n/a | ✓ | ✓ | `AnchoredSpan` — carries the construct's own text and re-resolves at apply time; mutations total (ScrAP-187) |
+| 2 | Annotations viewer's selected row | source bytes | ✓ | n/a | ✓ | ✓ | Stored as the annotation's start byte and **re-resolved against a fresh scan on every rebuild**; a vanished annotation simply loses the selection |
+| 3 | Task-checkbox toggle span | source bytes | ✓ | n/a | ✓ | — | The toggle re-locates a well-formed marker at the span and returns `None` otherwise, which the caller makes a clean no-op |
+| 4 | Pending marker-open request | marker-list **index** + buffer offset | ✓ | ⚠ | ✓ | ⚠ | Bounded by a wall-clock deadline and re-aimed each frame, but the target is a **positional index** into a list a re-render replaces — see the rule on positional references below |
+| 5 | Scroll re-anchor target line | buffer line | ✓ | ✓ | ✓ | — | Re-read each frame; a drifted line mis-positions the viewport only, and the next settle corrects it |
+| 6 | Back/Forward history entry's **place** in a document (TDD §23) | heading **slug**, or a buffer line | ◑ | ◑ | ✓ | ✓ | Two strengths, chosen by what the recording site can know. A slug is re-resolved against the tab's live heading map, and a render that no longer contains it **degrades the entry to "just this document"** rather than letting it point somewhere wrong (23.14). A line is the weak form — an arbitrary scroll position offers no stronger handle — and takes row 5's bargain: it clamps and mis-positions the viewport only |
+| 7 | Reading position carried across a view-mode switch | source bytes (`readingpos::DocPosition`) | ✓ | n/a | n/a | ✓ | Held only for the span of the swap — captured from the pane being left, resolved into the pane being entered — so class B cannot reach it (a wholesale replacement is not in flight during a mode switch), and the editor flushes to source before the capture so class A is settled. Class C is what makes it a `DocPosition` rather than a preview buffer offset: the preview is REBUILT by the very switch being crossed, so any reference into its buffer would be resolved against a collection that no longer exists |
+| 8 | Every buffer-keyed map a render installs — copymap, source map, heading sites, link spans, annotation placements, collapsed-block body ranges | preview **buffer** char offsets | n/a | ✓ | ✓ | ✓ | The splice reinstalls **all of them wholesale** from its own full re-parse (PASS A), never patching the live ones — so they are replaced rather than shifted, and a partial update is not a state the code can reach. The one way this fails is the splice reporting success having not written the region, which is why that refusal is a typed `SpliceVerdict::RegionLost` the caller must re-render on rather than a `bool` — a review finding, since a `bool` was reporting success with the region already deleted. Class A is `n/a` because a source mutation clears the fold map and forces a full re-render before any splice can run |
 
 **Row 6's `◑` under content mutation is the one deliberate weakness in this matrix,
 and it is bounded rather than unnoticed.** A slug survives an edit (class A) by
@@ -508,6 +517,17 @@ The sweep this row's addition obliges (the cross-CAM new-row rule): the only oth
 state pointing into a document across time is rows 1–5, all of which predate it and
 were re-read when this row was written; no gap was found, so nothing was fixed under
 it. Rows 1–5 are unchanged.
+
+**Class A′ and row 8 were added by the disclosure fold-splice work, and the sweep it
+obliges is recorded here.** Rows 1, 2, 3 and 7 are keyed on SOURCE bytes and a splice
+changes no source, so A′ cannot reach them — `n/a`, not `✓`. Row 5 already re-reads its
+line every frame and takes the mis-position bargain, which is what an A′ shift costs it.
+Row 6's line half takes the same bargain, hence `◑` for the same reason as its A cell.
+Row 4 is the one that earns a `⚠`: it holds a marker-list index **and** a buffer offset,
+and a splice re-derives the list and shifts the offset at once — it is bounded by its
+wall-clock deadline and re-aimed each frame, which is the same mitigation it already
+relies on under C, so no new mechanism was owed, but it is the row to re-read first if a
+pending marker ever opens on the wrong annotation after a fold.
 
 Rules that give the matrix its teeth:
 

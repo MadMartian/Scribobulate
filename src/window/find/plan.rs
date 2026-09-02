@@ -19,6 +19,26 @@
 
 use std::collections::HashMap;
 
+/// How many times `needle` occurs in the text a collapsed disclosure's body would
+/// render as.
+///
+/// **Two rules meet here and neither owns the other.** The reduction to plain text is
+/// `renderer::disclosure`'s — it is knowledge about a disclosure body. The case folding
+/// is find's, and it must be the SAME rule a visible match is decided by, or the count
+/// in the match label disagrees with what expanding the block shows. This function is
+/// the composition, and it lives in this module for the reason the module header
+/// already gives: it is a pure decision, and `src/window/*.rs` is outside the gate.
+pub(super) fn hidden_match_count(body_src: &str, needle: &str) -> usize {
+    if needle.is_empty() || body_src.is_empty() {
+        return 0;
+    }
+    super::ci_match_ranges(
+        &crate::renderer::disclosure::body_plain_text(body_src),
+        needle,
+    )
+    .len()
+}
+
 /// A cell's identity for the purposes of this decision. The applier's key is a label
 /// pointer; nothing here does anything with it but compare and group.
 pub(super) type CellKey = usize;
@@ -256,5 +276,43 @@ mod tests {
                 ..Plan::default()
             }
         }
+    }
+
+    /// `hidden_match_count`'s edges. It decides whether find REPORTS a match the reader
+    /// cannot currently see, so a wrong answer is a match count that disagrees with the
+    /// document — and the block has to be expanded before anyone can tell.
+    #[test]
+    fn an_empty_needle_finds_nothing_in_a_hidden_body() {
+        // Not "every position matches": an empty query is a query with no answer, and
+        // the visible path treats it the same way.
+        assert_eq!(super::hidden_match_count("some hidden body text", ""), 0);
+    }
+
+    #[test]
+    fn an_empty_hidden_body_yields_no_matches() {
+        assert_eq!(super::hidden_match_count("", "anything"), 0);
+    }
+
+    #[test]
+    fn a_hidden_match_is_case_folded_like_a_visible_one() {
+        // The one fact this function adds over its two parts: a hidden match and a
+        // visible one must be decided by the same folding, or the count and the document
+        // disagree.
+        assert_eq!(
+            super::hidden_match_count("Alpha and alpha and ALPHA\n", "alpha"),
+            3
+        );
+    }
+
+    #[test]
+    fn a_hidden_match_is_counted_on_the_rendered_text_not_the_source() {
+        // `**bold**` renders as `bold`, so a search for the rendered word must find it
+        // and a search for the asterisks must not — the reduction is what makes the
+        // hidden count agree with what expanding the block would show.
+        assert_eq!(super::hidden_match_count("a **bold** word\n", "bold"), 1);
+        assert_eq!(
+            super::hidden_match_count("a **bold** word\n", "**bold**"),
+            0
+        );
     }
 }

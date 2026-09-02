@@ -215,6 +215,25 @@ impl BlockScripts {
         }
     }
 
+    /// Append the RENDERED text of one `Event::Text` at source offset `src_start`,
+    /// dropping the tight-construct delimiters the page never shows.
+    ///
+    /// The one implementation of "what this event's text WOULD say on the page", shared
+    /// by every reduction that has to agree with the rendered document: the outline's
+    /// heading labels and slugs, and the searchable text of a collapsed disclosure body.
+    /// It exists because those two had it written out twice and the second copy omitted
+    /// the marker suppression entirely — so a `^superscript^` inside a collapsed block
+    /// contributed its `^` delimiters to the text find searched, which both invents
+    /// matches on a character the reader cannot see and misses a search for the word as
+    /// rendered.
+    pub(crate) fn push_rendered_text(&self, src_start: usize, rendered: &str, out: &mut String) {
+        for seg in self.segments(src_start, rendered) {
+            if !seg.marker {
+                out.push_str(seg.text(rendered));
+            }
+        }
+    }
+
     /// Whole-construct source ranges, ascending. An annotation's wrap span must
     /// contain each of these whole or not at all.
     pub(crate) fn outers(&self) -> &[Range<usize>] {

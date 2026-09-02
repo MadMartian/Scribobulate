@@ -341,7 +341,7 @@ pub(super) fn measure_probed_at_margin(
     toggle: impl FnOnce(&Rig, &FoldState, FoldKey),
 ) -> Arm {
     let spans = crate::renderer::disclosure::scan_document(md);
-    let key = FoldKey(spans[0].start);
+    let key = FoldKey::from_source_offset(spans[0].start);
 
     // The fixture's `<details>` carries no `open`, so the default state draws it
     // COLLAPSED and one toggle expands it. Starting expanded is therefore one toggle

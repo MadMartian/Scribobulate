@@ -625,6 +625,36 @@ FLOOR=80
 #   preview/        annotate.rs (selection→source mapping, entry-card placement
 #                   math) is pure → gated; annotate/overlay.rs (GtkPopover/GtkOverlay
 #                   wiring) → excluded.
+#   renderer/       blockspacing.rs is GATED, and it is the shape the scope rule asks
+#   blockspacing    for: the paragraph/list/item separator rules were three interleaved
+#                   condition chains inside `start_tag`, a ~287-line dispatcher over a
+#                   live buffer that this gate cannot see. The decision moved here, the
+#                   application stayed there. A wrong answer is a missing or doubled
+#                   blank line — the renderer and the copy map then disagreeing about how
+#                   many characters a block occupies — which is why it is worth reaching
+#                   directly rather than through a rendered document.
+#   the disclosure  Thirteen modules arrived with the fold/splice feature and the split
+#   feature        between them is the same one, stated here because a reviewer asked
+#                   which rule had decided it and the answer was only derivable from the
+#                   regex. GATED: `fold.rs` (the display-free fold model),
+#                   `renderer/disclosure.rs` and `renderer/disclosure/preview.rs` (the
+#                   pre-scan, its cursor, and the plain-text reduction),
+#                   `widgets/disclosure.rs`, and BOTH halves of `preview/splice.rs` /
+#                   `preview/splice/install.rs` — the splice carries real arithmetic (the
+#                   delete boundary, the survivor merge, the reading-position restore) and
+#                   is the one place in the feature where a wrong answer is silent, so it
+#                   is gated despite needing a live buffer for some of its bodies.
+#                   EXCLUDED by the existing `window/[a-z_]+\.rs` and
+#                   `codeview/[a-z_]+\.rs` terms, needing no new one:
+#                   `window/foldsplice.rs` and `window/foldreveal.rs` resolve a pane and
+#                   hand off (which tab, which source, which settings — every branch a
+#                   `downcast` or a `state()` lookup against a live window), and
+#                   `codeview/disclosurebands.rs` is a Cairo painter, the same shape as
+#                   its `codeview/bands.rs` sibling. Note `foldsplice.rs` IS named in the
+#                   floor-drop rationale above while sitting outside the measured set:
+#                   that is not a contradiction — it is named there as one of the modules
+#                   whose arrival added denominator elsewhere, not as a file this gate
+#                   reads.
 #   forensics/      deliberately NOT excluded, including signal.rs. It reports ~43%
 #                   and is nonetheless fully driven: the fatal-signal handler is
 #                   exercised end to end by a forked child that dies from the signal

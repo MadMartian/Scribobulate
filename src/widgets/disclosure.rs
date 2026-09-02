@@ -55,14 +55,25 @@ const ICON_EXPANDED: &str = "pan-down-symbolic";
 /// nothing.
 pub(crate) const CSS_CLASS: &str = "scrib-disclosure";
 
-/// Build a disclosure toggle showing `expanded`'s state.
+/// Build a disclosure toggle showing `expanded`'s state, named for `summary`.
 ///
 /// The caller owns what activation MEANS (the fold state and the re-render it drives);
 /// this owns only how the control looks, what it announces and how it is reached.
-pub(crate) fn build(expanded: bool, zoom: f64) -> gtk::ToggleButton {
+///
+/// **`summary` is not optional and the parameter exists to make that structural.** The
+/// control publishes an interactive accessible role and draws a bare chevron, so with no
+/// accessible name a screen reader announces it as an unnamed toggle button — and a
+/// document with six disclosures then offers six controls a user cannot tell apart. The
+/// caller already holds the block's summary label (it is about to write it as the line's
+/// text), so the name costs nothing but had to be asked for.
+pub(crate) fn build(expanded: bool, zoom: f64, summary: &str) -> gtk::ToggleButton {
     let toggle = gtk::ToggleButton::new();
     set_expanded(&toggle, expanded, zoom);
     toggle.set_active(expanded);
+    // Through `a11y::name`, the project's one naming choke point — it writes the tooltip
+    // and the accessible `Label` together, which is what stops the pointer and the
+    // screen reader ever describing this control differently.
+    crate::a11y::name(&toggle, summary);
 
     // Flat: the control reads as an indicator in prose, not as a button dropped into
     // a paragraph.
@@ -274,7 +285,7 @@ mod tests {
     #[gtktest::test]
     fn a_new_toggle_publishes_an_interactive_role() {
         use gtk::glib::translate::IntoGlib;
-        let toggle = build(false, 1.0);
+        let toggle = build(false, 1.0, "Summary");
         let (major, minor) = (gtk::major_version(), gtk::minor_version());
         let role = toggle.accessible_role();
 
@@ -300,7 +311,7 @@ mod tests {
     fn a_collapsed_toggle_shows_the_collapsed_indicator() {
         // The indicator IS the feedback channel: a build that fired `toggled` without
         // changing its arrow was reported from a live session as doing nothing at all.
-        let toggle = build(false, 1.0);
+        let toggle = build(false, 1.0, "Summary");
         assert!(!toggle.is_active());
         assert_eq!(icon_of(&toggle).as_deref(), Some(ICON_COLLAPSED));
     }
@@ -309,7 +320,7 @@ mod tests {
     fn a_toggle_built_expanded_starts_expanded() {
         // `<details open>` renders expanded without user action (rubric 2.26b), so the
         // initial state must come from the document rather than from a default.
-        let toggle = build(true, 1.0);
+        let toggle = build(true, 1.0, "Summary");
         assert!(toggle.is_active());
         assert_eq!(icon_of(&toggle).as_deref(), Some(ICON_EXPANDED));
     }
@@ -318,8 +329,8 @@ mod tests {
     fn the_indicator_scales_with_zoom() {
         // Pixel metrics are widget properties and do not follow the CSS font-size rule,
         // so they must be scaled explicitly on every render (POLICY, themed geometry).
-        let small = build(false, 1.0);
-        let large = build(false, 2.0);
+        let small = build(false, 1.0, "Summary");
+        let large = build(false, 2.0, "Summary");
         let px = |t: &gtk::ToggleButton| {
             t.child()
                 .and_downcast::<gtk::Image>()
@@ -348,7 +359,7 @@ mod tests {
         let _guard = crate::theme::activate_for_test(themes.resolve("glyphy"));
 
         for (expanded, want) in [(false, "+"), (true, "-")] {
-            let toggle = build(expanded, 1.0);
+            let toggle = build(expanded, 1.0, "Summary");
             let label = toggle
                 .child()
                 .and_downcast::<gtk::Label>()
@@ -375,7 +386,7 @@ mod tests {
     fn pixel_quests_indicator_reaches_the_control_as_a_plate() {
         let _guard = crate::theme::activate_for_test(crate::theme::themes().resolve("pixelquest"));
         for expanded in [false, true] {
-            let toggle = build(expanded, 1.0);
+            let toggle = build(expanded, 1.0, "Summary");
             assert!(
                 toggle.child().and_downcast::<gtk::Picture>().is_some(),
                 "expanded={expanded}: Pixel Quest's plate did not reach the control — it \
@@ -397,14 +408,14 @@ mod tests {
         let _guard = crate::theme::activate_for_test(themes.resolve("halfglyph"));
 
         assert!(
-            build(false, 1.0)
+            build(false, 1.0, "Summary")
                 .child()
                 .and_downcast::<gtk::Label>()
                 .is_some(),
             "the stated state takes the glyph"
         );
         assert_eq!(
-            icon_of(&build(true, 1.0)).as_deref(),
+            icon_of(&build(true, 1.0, "Summary")).as_deref(),
             Some(ICON_EXPANDED),
             "the unstated state keeps its stock icon"
         );
@@ -424,7 +435,7 @@ mod tests {
             "Adwaita's 16px disclosure metric, which is what the old constant was"
         );
         let _guard = crate::theme::activate_for_test(t);
-        let toggle = build(false, 1.0);
+        let toggle = build(false, 1.0, "Summary");
         assert_eq!(icon_of(&toggle).as_deref(), Some(ICON_COLLAPSED));
         let image = toggle
             .child()
@@ -444,7 +455,7 @@ mod tests {
         );
         let _guard = crate::theme::activate_for_test(themes.resolve("big"));
         let at = |zoom: f64| {
-            build(false, zoom)
+            build(false, zoom, "Summary")
                 .child()
                 .and_downcast::<gtk::Image>()
                 .expect("an icon")
@@ -463,7 +474,7 @@ mod tests {
     /// exists for.
     #[gtktest::test]
     fn refreshing_a_live_toggle_moves_its_indicator_and_its_accessible_state() {
-        let toggle = build(false, 1.0);
+        let toggle = build(false, 1.0, "Summary");
         assert_eq!(icon_of(&toggle).as_deref(), Some(ICON_COLLAPSED));
 
         set_expanded(&toggle, true, 1.0);
@@ -490,7 +501,7 @@ mod tests {
     /// which is the obvious-looking spelling.
     #[gtktest::test]
     fn refreshing_a_toggle_does_not_re_emit_its_activation() {
-        let toggle = build(false, 1.0);
+        let toggle = build(false, 1.0, "Summary");
         let fired = std::rc::Rc::new(std::cell::Cell::new(0u32));
         {
             let f = std::rc::Rc::clone(&fired);
@@ -562,7 +573,7 @@ mod tests {
         // its own: an unrooted widget caches its computed style at the first read, and a
         // provider added afterwards does not invalidate it.
         let backdrop_toggle = || {
-            let toggle = build(false, 1.0);
+            let toggle = build(false, 1.0, "Summary");
             toggle.set_state_flags(gtk::StateFlags::BACKDROP, false);
             toggle
         };

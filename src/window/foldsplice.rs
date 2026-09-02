@@ -12,13 +12,16 @@
 
 use super::*;
 use crate::fold::FoldKey;
+use crate::preview::SpliceVerdict;
 
 /// Splice `key`'s fold into the active tab's preview, in place.
 ///
-/// `false` means the toggle could not be spliced and the caller must fall back to
-/// [`super::rerender_preview_in_place`] with [`RenderShape::ChangedContent`]. Every
-/// refusal is made before the buffer is touched, so the fallback always runs against an
-/// untouched pane.
+/// Anything but [`SpliceVerdict::Spliced`] means the toggle was not spliced and the
+/// caller must fall back to [`super::rerender_preview_in_place`] with
+/// [`RenderShape::ChangedContent`]. The verdict distinguishes a refusal made before the
+/// buffer was touched (the fallback merely makes the toggle visible) from a region write
+/// that failed after the delete (the fallback is what REPAIRS the pane) — see
+/// [`SpliceVerdict`].
 ///
 /// The fold state must already carry the NEW value — the toggle's handler flips it, the
 /// same way it does for the re-render route.
@@ -26,18 +29,27 @@ pub(crate) fn splice_disclosure_in_place(
     window: &ApplicationWindow,
     mode: ViewMode,
     key: FoldKey,
-) -> bool {
+) -> SpliceVerdict {
     let Some(st) = state(window) else {
-        return false;
+        log::debug!("window::foldsplice: refusing key {key:?} — the window has no TabState");
+        return SpliceVerdict::Untouched;
     };
     let Some(preview_sw) = super::zoom::get_preview_sw(window) else {
-        return false; // edit-only mode has no preview to splice
+        log::debug!(
+            "window::foldsplice: refusing key {key:?} — this window has no preview pane \
+             (edit-only mode); nothing to splice"
+        );
+        return SpliceVerdict::Untouched;
     };
     let Some(view) = preview_sw
         .child()
         .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
     else {
-        return false;
+        log::debug!(
+            "window::foldsplice: refusing key {key:?} — the preview pane's child is not a \
+             CodePreviewView; falling back to a full re-render"
+        );
+        return SpliceVerdict::Untouched;
     };
 
     // The mode-appropriate source, read exactly as `zoom::re_render_preview` reads it:
@@ -60,7 +72,7 @@ pub(crate) fn splice_disclosure_in_place(
         st.scroll.pv_last.set((-1.0, -1.0));
     }
 
-    let spliced = crate::preview::splice_disclosure(
+    let verdict = crate::preview::splice_disclosure(
         &view,
         crate::preview::SpliceInputs {
             md: &md,
@@ -72,10 +84,10 @@ pub(crate) fn splice_disclosure_in_place(
         key,
     );
 
-    if spliced && mode == ViewMode::Split {
+    if verdict.spliced() && mode == ViewMode::Split {
         // The same coalesced re-projection every other in-place render queues, so at
         // least one editor→preview projection fires against the new heights.
         queue_scroll_sync(window);
     }
-    spliced
+    verdict
 }

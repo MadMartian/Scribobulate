@@ -108,6 +108,48 @@ pub(super) struct RegionWidgets {
     pub(super) disclosure_toggles: Vec<DisclosureToggle>,
 }
 
+/// Where the region delete ends: `from`, advanced through the run of newlines that
+/// follows it, stopping at the end of the buffer.
+///
+/// **A display-free seam over the splice's only arithmetic.** `splice` is otherwise all
+/// live `GtkTextBuffer`, so this rule could previously be exercised only by rendering a
+/// document and reading the text back — which tests the boundary through everything else
+/// at once and cannot reach its edges (a region at the very end of the buffer, a run of
+/// several blank lines, a region with no trailing newline at all). `char_at` answers
+/// `None` past the end, which is what `TextIter::is_end` means at the call site.
+///
+/// The trailing run is taken because a block's rendered region owns the separator after
+/// it: leaving it behind accumulates a blank line per toggle, and taking one too many
+/// eats the next block's own.
+fn delete_end_through_newlines(from: i32, char_at: impl Fn(i32) -> Option<char>) -> i32 {
+    let mut end = from;
+    while char_at(end) == Some('\n') {
+        end += 1;
+    }
+    end
+}
+
+/// Why a [`splice`] produced no outcome — and, critically, whether the live buffer
+/// was already mutated when it gave up.
+///
+/// The distinction is the whole point of this type. A caller's remedy for both is a
+/// full re-render, but only one of them is OPTIONAL: after [`Self::Untouched`] the
+/// pane still holds exactly what it held before, and after [`Self::RegionLost`] it is
+/// missing the toggled block's whole rendered region while every map the view holds
+/// still describes the longer buffer. A `bool` cannot say that, and this module's
+/// contract used to assert the opposite in prose while the code returned success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SpliceRefusal {
+    /// Refused BEFORE the buffer was touched. The pane is untouched and internally
+    /// consistent; a fallback re-render is the caller's choice, not an obligation.
+    Untouched,
+    /// The live delete ran and the region write did not, so the buffer is now short
+    /// by the region's length while the installed maps are not. The caller MUST
+    /// re-render the whole pane; leaving this state on screen desynchronises every
+    /// offset below the splice (copy, find, outline, annotation placement).
+    RegionLost,
+}
+
 /// Splice `key`'s fold toggle into the live `buf`, in place.
 ///
 /// `old_anchored` and `old_extents` are the PRE-splice render's own — the live
@@ -115,12 +157,17 @@ pub(super) struct RegionWidgets {
 /// touches the buffer. `folds` already reflects the NEW state (the caller toggles it
 /// before calling this).
 ///
-/// `None` when `key` has no recorded extent in `old_extents` (nothing was drawn for
-/// it last render — an ancestor was collapsed, or it was never emitted) or when PASS
-/// A's own walk somehow does not draw it either (logged; should not happen while
-/// both walks parse the same string with the same options, mirroring
-/// `Renderer::opening_details_is_closed`'s own defensive posture). Either way the
-/// caller's answer is the same: fall back to a full re-render.
+/// [`SpliceRefusal::Untouched`] when `key` has no recorded extent in `old_extents`
+/// (nothing was drawn for it last render — an ancestor was collapsed, or it was never
+/// emitted), when its body is unspliceable literal text, when the recorded extent is
+/// not a range inside `buf`, or when PASS A's own walk does not draw it either — every
+/// one of those decided BEFORE the delete at [`SpliceRefusal::Untouched`]'s promise.
+///
+/// [`SpliceRefusal::RegionLost`] when the region-seed walk fails AFTER that delete.
+/// This is the one refusal that arrives with the buffer already mutated, and it is a
+/// distinct variant rather than the same `None` precisely because the caller's
+/// obligation differs: a full re-render is optional after the first and mandatory
+/// after the second.
 #[allow(clippy::too_many_arguments)] // every parameter is a distinct render input;
                                      // see `build_render_products_with_theme`'s own
                                      // identical allowance for the same reason
@@ -136,17 +183,26 @@ pub(super) fn splice(
     theme: Rc<crate::theme::Theme>,
     folds: &FoldState,
     key: FoldKey,
-) -> Option<SpliceOutcome> {
-    let old_extent = old_extents.iter().find(|e| e.key == key)?;
+) -> Result<SpliceOutcome, SpliceRefusal> {
+    let Some(old_extent) = old_extents.iter().find(|e| e.key == key) else {
+        log::debug!(
+            "preview::splice: refusing key {key:?} — the previous render recorded no extent \
+             for it (an ancestor was collapsed, or it was never drawn); falling back to a \
+             full re-render"
+        );
+        return Err(SpliceRefusal::Untouched);
+    };
     // An UNSPACED disclosure's body is literal text inside its own opening raw-HTML
     // event, which a region walk seeded BELOW that event can never write — so the
     // splice would delete the body and put nothing back. Refused here, before the
     // buffer is touched, and the caller's full re-render renders it correctly.
     if !old_extent.spliceable {
         log::debug!(
-            "preview::splice: refusing key {key:?} — its body is literal text inside              the opening raw-HTML block, which a region render cannot reproduce;              falling back to a full re-render"
+            "preview::splice: refusing key {key:?} — its body is literal text inside the \
+             opening raw-HTML block, which a region render cannot reproduce; falling back \
+             to a full re-render"
         );
-        return None;
+        return Err(SpliceRefusal::Untouched);
     }
     let old_volatile = old_extent.volatile;
     // The deletion range comes from a PREVIOUS render's extents, and `iter_at_offset`
@@ -154,30 +210,48 @@ pub(super) fn splice(
     // the document and report success. Refused here, before the buffer is touched.
     if old_volatile.start > old_volatile.end || old_volatile.end > buf.char_count() {
         log::error!(
-            "preview::splice: refusing key {key:?} — its recorded extent {}..{} is not              a range inside a buffer of {} characters; falling back to a full re-render",
+            "preview::splice: refusing key {key:?} — its recorded extent {}..{} is not a \
+             range inside a buffer of {} characters; falling back to a full re-render",
             old_volatile.start,
             old_volatile.end,
             buf.char_count()
         );
-        return None;
+        return Err(SpliceRefusal::Untouched);
     }
 
     // PASS A — see module docs.
     let products =
         build_render_products_with_theme(md, doc_dir, zoom, allow_unsafe, theme.clone(), folds);
-    let new_extent = products.disclosure_extents.iter().find(|e| e.key == key)?;
+    let Some(new_extent) = products.disclosure_extents.iter().find(|e| e.key == key) else {
+        // The doc comment has always promised this one is logged, and it was not.
+        // `error` rather than `debug`: PASS A parses the same string with the same
+        // options as the walk that produced `old_extents`, so the two disagreeing is a
+        // defect somewhere, not a condition the document can produce.
+        log::error!(
+            "preview::splice: refusing key {key:?} — PASS A's own walk drew no extent for \
+             it, though it parsed the same source with the same options as the walk that \
+             did; falling back to a full re-render"
+        );
+        return Err(SpliceRefusal::Untouched);
+    };
     let target_collapsed = new_extent.body.is_empty();
 
-    // The live delete, through the trailing newline run.
+    // The live delete, through the trailing newline run. The BOUNDARY is decided by
+    // `delete_end_through_newlines` — the one piece of pure arithmetic in this function,
+    // and the one whose being wrong is silent: a boundary one character out leaves the
+    // buffer a character longer or shorter than PASS A's map describes, which every
+    // offset below the splice then inherits.
+    let region_end = delete_end_through_newlines(old_volatile.end, |offset| {
+        let iter = buf.iter_at_offset(offset);
+        (!iter.is_end()).then(|| iter.char())
+    });
     let mut del_start = buf.iter_at_offset(old_volatile.start);
-    let mut del_end = buf.iter_at_offset(old_volatile.end);
-    while !del_end.is_end() && del_end.char() == '\n' {
-        del_end.forward_char();
-    }
+    let mut del_end = buf.iter_at_offset(region_end);
     buf.delete(&mut del_start, &mut del_end);
 
-    // PASS SEED+LIVE.
-    let region = render_region(
+    // PASS SEED+LIVE. The FIRST refusal that can arrive after the buffer has been
+    // mutated — see `SpliceRefusal::RegionLost`.
+    let Some(region) = render_region(
         buf,
         view,
         md,
@@ -189,7 +263,9 @@ pub(super) fn splice(
         key,
         old_volatile.start,
         target_collapsed,
-    );
+    ) else {
+        return Err(SpliceRefusal::RegionLost);
+    };
 
     // Merge: survivors (GTK's own delete already unparented anything strictly
     // inside the deleted range and touched nothing outside it, so this is exact)
@@ -215,7 +291,32 @@ pub(super) fn splice(
         crate::copymap::debug_verify(&products.copymap, &products.md_owned, &chars);
     }
 
-    Some(SpliceOutcome {
+    // ...and the release-safe half of the same question, because the check above is the
+    // splice's ONLY correctness oracle and `debug_assertions` compiles it out of exactly
+    // the builds users run. PASS A rendered the whole document under the new fold state,
+    // so its char count is what this buffer must now hold; a disagreement means the
+    // delete boundary or the region write was wrong by that many characters, and the maps
+    // about to be installed describe a buffer that does not exist.
+    //
+    // O(1) against `debug_verify`'s whole-document walk — which is the entire reason a
+    // release build can carry it. It is a strictly weaker oracle (it cannot see a
+    // same-length error) and is not a replacement for the walk above; it catches the
+    // class that actually arises here, which is a length error.
+    //
+    // Reported as `RegionLost`: the buffer HAS been mutated and is now inconsistent, so
+    // the caller's obligation is the same as a failed region write — re-render whole.
+    let expected = products.copymap.char_count();
+    if buf.char_count() != expected {
+        log::error!(
+            "preview::splice: after splicing key {key:?} the buffer holds {} characters \
+             but PASS A's map describes {expected}; the maps would be installed against a \
+             buffer that does not exist, so the pane must be re-rendered whole",
+            buf.char_count()
+        );
+        return Err(SpliceRefusal::RegionLost);
+    }
+
+    Ok(SpliceOutcome {
         products,
         merged_anchored: merged,
         region,
@@ -246,7 +347,7 @@ fn render_region(
     key: FoldKey,
     at_offset: i32,
     target_collapsed: bool,
-) -> RegionWidgets {
+) -> Option<RegionWidgets> {
     let md_norm = NormalizedMd::new(md);
     let extraction = crate::annotate::extract(md_norm.as_str());
     let cleaned = extraction.cleaned.as_str();
@@ -335,16 +436,20 @@ fn render_region(
             }
         }
     }
-    let mut r = live.unwrap_or_else(|| {
+    let Some(mut r) = live else {
+        // NOT a silent substitution. The caller has ALREADY deleted the region from
+        // the live buffer, so writing nothing here would leave the reader's page short
+        // by a whole block while every installed map still described the longer
+        // buffer. Refuse, and let `splice` report `SpliceRefusal::RegionLost`.
         log::error!(
             "preview::splice: PASS A drew a disclosure_extent for source byte {} but the \
              region-seed walk never reached it — the two walks parsed the same string with \
-             the same options, so this should be unreachable; writing nothing for this \
-             region",
-            key.0
+             the same options, so this should be unreachable; the region is LOST and the \
+             pane must be re-rendered whole",
+            key.source_offset()
         );
-        new_renderer(buf.clone())
-    });
+        return None;
+    };
     // `attach_anchored`'s own trailing `queue_resize`, which the eager path would
     // otherwise skip: parenting N children queues N resizes on the view, but the
     // batched one is what the two-step route does and the arms must differ only in
@@ -354,13 +459,76 @@ fn render_region(
             view.queue_resize();
         }
     }
-    RegionWidgets {
+    Some(RegionWidgets {
         anchored: std::mem::take(&mut r.anchored),
         image_tints: std::mem::take(&mut r.image_tints),
         width_bounded: std::mem::take(&mut r.width_bounded),
         image_bounded: std::mem::take(&mut r.image_bounded),
         tables: std::mem::take(&mut r.tables),
         disclosure_toggles: std::mem::take(&mut r.disclosure_toggles),
+    })
+}
+
+/// Display-free tests for the delete boundary. Plain `#[cfg(test)]`, not the
+/// `gtk-integration-tests` gate the sibling modules carry — that is the point of having
+/// extracted it, and it is what puts the rule inside the coverage gate.
+#[cfg(test)]
+mod boundary_tests {
+    use super::delete_end_through_newlines;
+
+    /// The reader: a buffer's characters, answering `None` past the end exactly as
+    /// `TextIter::is_end` does.
+    fn chars_of(text: &str) -> impl Fn(i32) -> Option<char> + '_ {
+        let chars: Vec<char> = text.chars().collect();
+        move |offset: i32| {
+            usize::try_from(offset)
+                .ok()
+                .and_then(|i| chars.get(i))
+                .copied()
+        }
+    }
+
+    #[test]
+    fn a_region_followed_by_one_newline_takes_it() {
+        //            0123 4567
+        let text = "abc\ndef";
+        assert_eq!(delete_end_through_newlines(3, chars_of(text)), 4);
+    }
+
+    #[test]
+    fn a_run_of_blank_lines_is_taken_whole() {
+        // Three newlines after the region — a block followed by two blank lines. Taking
+        // only the first would leave a blank line behind on every toggle.
+        let text = "abc\n\n\ndef";
+        assert_eq!(delete_end_through_newlines(3, chars_of(text)), 6);
+    }
+
+    #[test]
+    fn a_region_with_no_trailing_newline_takes_nothing_extra() {
+        let text = "abcdef";
+        assert_eq!(delete_end_through_newlines(3, chars_of(text)), 3);
+    }
+
+    #[test]
+    fn a_region_ending_at_the_buffers_end_stops_there() {
+        // The edge the live loop needed `is_end()` for: nothing to read past the end, and
+        // the boundary must not run away.
+        let text = "abc";
+        assert_eq!(delete_end_through_newlines(3, chars_of(text)), 3);
+    }
+
+    #[test]
+    fn a_trailing_newline_run_that_reaches_the_buffers_end_stops_at_it() {
+        let text = "abc\n\n";
+        assert_eq!(delete_end_through_newlines(3, chars_of(text)), 5);
+    }
+
+    #[test]
+    fn a_newline_that_is_not_adjacent_is_not_taken() {
+        // Only the run IMMEDIATELY after the region counts; a newline further on belongs
+        // to whatever follows.
+        let text = "abcx\n";
+        assert_eq!(delete_end_through_newlines(3, chars_of(text)), 3);
     }
 }
 

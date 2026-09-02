@@ -28,9 +28,18 @@ pub(super) fn wire_live_preview(content_box: &gtk::Box, buffer: &sourceview::Buf
         }
         // Ignore programmatic buffer replacement (load / external reload) —
         // those re-render the preview and outline themselves.
-        if state(&window).map(|st| st.loading.get()).unwrap_or(false) {
+        let Some(st) = state(&window) else { return };
+        if st.loading.get() {
             return;
         }
+
+        // The edit moved every source byte offset after it, and a `FoldKey` IS a source
+        // byte offset — so this must happen HERE, on the keystroke, not inside the 300 ms
+        // debounce below. A fold toggle clicked during that window reads the fresh editor
+        // text against the stale map, which is the same wrong-block collapse by a shorter
+        // route. `set_source` is the other caller; this path deliberately does not go
+        // through it (the source and baseline are not touched by a live edit).
+        st.note_source_offsets_moved();
 
         // Cancel any already-pending re-render.
         if let Some(id) = pending.take() {
@@ -87,4 +96,62 @@ pub(super) fn wire_live_preview(content_box: &gtk::Box, buffer: &sourceview::Buf
         });
         pending.set(Some(id));
     });
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+
+    /// TDD 2.26l — an edit forgets the reader's folds, and does so ON THE KEYSTROKE.
+    ///
+    /// Not decidable as pure data: the defect was a missing CALL on one path, and the
+    /// fold model itself was always correct. Only a test that drives the editor buffer's
+    /// own `changed` signal through the wiring this module installs can see it.
+    ///
+    /// Mutation-checked (POLICY § Typed GTK seams): removing the
+    /// `note_source_offsets_moved()` call from the handler leaves the toggle in the map
+    /// and fails the first assertion; moving it inside the 300 ms debounce leaves it
+    /// there for the length of that window and fails it too, since nothing here pumps.
+    #[gtktest::test]
+    fn typing_in_split_mode_forgets_every_fold_on_the_keystroke() {
+        use crate::fold::{FoldKey, FoldState};
+        use gtk::prelude::TextBufferExt;
+
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.foldinvalidation"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+
+        const DOC: &str = "Lead paragraph.\n\n<details open>\n<summary>One</summary>\n\nBody one.\n\n</details>\n\n<details open>\n<summary>Two</summary>\n\nBody two.\n\n</details>\n";
+        let window = crate::window::new_window(&app, "IT-folds", DOC, None);
+        change_action_state(&window, "view-mode", &"split".to_variant());
+        let st = state(&window).expect("state registered after new_window");
+
+        // Collapse both blocks, exactly as activating their summaries would.
+        let spans = crate::renderer::disclosure::scan_document(DOC);
+        assert_eq!(spans.len(), 2, "fixture holds two disclosures");
+        for span in &spans {
+            st.folds
+                .borrow_mut()
+                .toggle(FoldKey::from_source_offset(span.start));
+        }
+        assert_ne!(
+            *st.folds.borrow(),
+            FoldState::default(),
+            "precondition: the reader has folds to lose"
+        );
+
+        // One character, typed at the very top — every offset below it, and so every
+        // fold key, has just moved.
+        let mut at = st.editor_buf.start_iter();
+        st.editor_buf.insert(&mut at, "x");
+
+        assert_eq!(
+            *st.folds.borrow(),
+            FoldState::default(),
+            "the keystroke dropped every fold, without waiting for the debounced re-render"
+        );
+    }
 }

@@ -54,9 +54,14 @@
 //!   lossy direction). A lull is therefore not proof the storm is over, and firing
 //!   inside one restores against a half-validated `line_yrange`.
 //!
-//! So the gate is the conjunction, and the bound is an absolute tick cap — the same
-//! "promptly when it settles, late and against partial geometry when it never does"
-//! degradation [`super::after_line_heights_validated`] already chose.
+//! So the gate is the conjunction, with an absolute tick cap **on top of** the
+//! stalled-progress term rather than in place of it — the two bound different failures.
+//! Stalled progress is what ends the ordinary case promptly; the tick cap is the
+//! backstop for a storm that never goes quiet at all. That is the same "promptly when it
+//! settles, late and against partial geometry when it never does" degradation
+//! [`super::after_line_heights_validated`] already chose. Stated this way because the
+//! sentence above says the wait triggers on writes GOING QUIET and this one used to say
+//! the bound WAS the tick cap, which reads as the quiet term having been replaced.
 
 use gtk::glib;
 use gtk::prelude::*;

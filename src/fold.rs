@@ -50,7 +50,15 @@
 //! *attribute*, a property of the document rather than of the session. So a reload
 //! honours `<details open>` afresh and forgets what the reader toggled — which removes
 //! the "key per-fold state to something that survives arbitrary edits" problem rather
-//! than solving it. [`FoldState::clear`] is what a document change calls.
+//! than solving it.
+//!
+//! **Two paths move the source, and both must clear.** `TabState::set_source` is the
+//! obvious one; the other is a live edit in split mode, where the editor buffer is
+//! authoritative and the preview re-renders straight from it without `set_source` ever
+//! running. `TabState::note_source_offsets_moved` is the single method both call, and it
+//! exists because the second path called nothing at all — so a key that no longer named
+//! the block it was minted for either reverted a collapsed block mid-typing or, when it
+//! collided with a different block's new start offset, collapsed the wrong one.
 
 use std::collections::HashSet;
 
@@ -62,7 +70,23 @@ use std::collections::HashSet;
 /// characters) and mixing them is a defect class it has paid for before — an offset is
 /// only as trustworthy as the space it was measured in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct FoldKey(pub usize);
+pub(crate) struct FoldKey(usize);
+
+impl FoldKey {
+    /// Mint a key from a SOURCE BYTE offset — the only space this type accepts.
+    ///
+    /// The field is private and this is its only constructor, so the doc comment above
+    /// states a property of the type rather than a convention its callers observe. It
+    /// was `pub` while claiming exactly this, which made the claim a request.
+    pub(crate) fn from_source_offset(offset: usize) -> Self {
+        Self(offset)
+    }
+
+    /// The source byte offset this key was minted from.
+    pub(crate) fn source_offset(self) -> usize {
+        self.0
+    }
+}
 
 /// The set of disclosures the reader has collapsed, plus the ones the document asked
 /// to be collapsed.
@@ -96,6 +120,32 @@ impl FoldState {
     /// Flip the block at `key`.
     pub(crate) fn toggle(&mut self, key: FoldKey) {
         if !self.toggled.insert(key) {
+            self.toggled.remove(&key);
+        }
+    }
+
+    /// Put the block at `key` into a STATED render state, whatever it is in now.
+    ///
+    /// The companion to [`Self::toggle`], and the distinction is not cosmetic. A caller
+    /// that means "expand this" and spells it `toggle` is correct only while the block
+    /// really is collapsed, and nothing in the type enforces that: hand it an already
+    /// expanded block and it collapses one the reader asked to see. `reveal_folds`
+    /// carried exactly that latent inversion, resting on an invariant held by its
+    /// caller's caller.
+    ///
+    /// `open_in_source` is the document's own `<details open>`, the same input
+    /// [`Self::is_collapsed`] takes — the precedence is one rule and this is the same
+    /// rule solved for the toggle bit rather than for the answer.
+    pub(crate) fn set_collapsed(&mut self, key: FoldKey, open_in_source: bool, collapsed: bool) {
+        // Spelled from `is_collapsed`'s own terms rather than minimised, so the two
+        // read as one rule solved two ways: `is_collapsed` is
+        // `collapsed_by_default != toggled`, and this solves that for `toggled` given
+        // the answer the caller wants.
+        let collapsed_by_default = !open_in_source;
+        let want_toggled = collapsed != collapsed_by_default;
+        if want_toggled {
+            self.toggled.insert(key);
+        } else {
             self.toggled.remove(&key);
         }
     }
@@ -198,5 +248,40 @@ mod tests {
         folds.toggle(A);
         folds.clear();
         assert!(folds.is_collapsed(A, false));
+    }
+
+    #[test]
+    fn set_collapsed_reaches_the_stated_state_from_either_side() {
+        // The property `toggle` cannot offer: the ANSWER is the argument, so calling it
+        // twice is calling it once, and a block already in the wanted state stays there.
+        for open_in_source in [false, true] {
+            for want in [false, true] {
+                let mut folds = FoldState::default();
+                // ...from the document's own default...
+                folds.set_collapsed(A, open_in_source, want);
+                assert_eq!(folds.is_collapsed(A, open_in_source), want);
+                // ...and from the opposite state the reader put it in.
+                let mut flipped = FoldState::default();
+                flipped.toggle(A);
+                flipped.set_collapsed(A, open_in_source, want);
+                assert_eq!(flipped.is_collapsed(A, open_in_source), want);
+                // Idempotent, which is the whole difference from `toggle`.
+                flipped.set_collapsed(A, open_in_source, want);
+                assert_eq!(flipped.is_collapsed(A, open_in_source), want);
+            }
+        }
+    }
+
+    #[test]
+    fn set_collapsed_leaves_every_other_block_alone() {
+        let mut folds = FoldState::default();
+        folds.toggle(B);
+        let b_before = folds.is_collapsed(B, true);
+        folds.set_collapsed(A, false, false);
+        assert_eq!(
+            folds.is_collapsed(B, true),
+            b_before,
+            "expanding A must not disturb B"
+        );
     }
 }

@@ -42,6 +42,7 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 
 mod blockquote;
+mod blockspacing;
 pub(crate) mod disclosure;
 mod emit;
 mod end;
@@ -1015,8 +1016,6 @@ impl Renderer {
         self.block_sep();
     }
 
-    /// The collapsed disclosures the renderer is currently inside, or `None` when it
-    /// is not inside one. See [`CollapsedSite`].
     /// Is the `<details>` the walk is about to open ever CLOSED?
     ///
     /// Only a closed block may collapse: a collapsed frame that never pops suppresses
@@ -1033,6 +1032,8 @@ impl Renderer {
             .opening_is_closed(&self.disclosures, block_start)
     }
 
+    /// The collapsed disclosures the renderer is currently inside, or `None` when it
+    /// is not inside one. See [`CollapsedSite`].
     pub(crate) fn collapsed_site(&self) -> Option<CollapsedSite> {
         let outermost = self.disclosure_stack.iter().find(|f| f.collapsed)?;
         Some(CollapsedSite {

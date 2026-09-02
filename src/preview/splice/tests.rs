@@ -119,7 +119,7 @@ fn a_fold_changes_exactly_one_region_of_the_rendered_text() {
         "## After\n\ntail paragraph\n"
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
-    let w = both_ways(MD, FoldKey(spans[0].start));
+    let w = both_ways(MD, FoldKey::from_source_offset(spans[0].start));
     assert!(
         w.opened_text.len() > w.closed_text.len(),
         "the fixture's body is long enough that expanding it GROWS the document — \
@@ -147,7 +147,7 @@ fn a_fold_inside_a_container_still_changes_only_its_own_region() {
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
     assert!(!spans.is_empty(), "the nested block is found at all");
-    let w = both_ways(MD, FoldKey(spans[0].start));
+    let w = both_ways(MD, FoldKey::from_source_offset(spans[0].start));
     assert_one_region(&w);
 }
 
@@ -170,7 +170,7 @@ fn assert_splice_matches_full_render(md: &str, before: &FoldState, after: &FoldS
         before,
     );
     let spans = crate::renderer::disclosure::scan_document(md);
-    let key = FoldKey(spans[0].start);
+    let key = FoldKey::from_source_offset(spans[0].start);
 
     super::splice(
         &starting.buf,
@@ -225,7 +225,7 @@ fn splicing_open_matches_a_full_open_render() {
         "## After\n\ntail paragraph\n"
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
-    let key = FoldKey(spans[0].start);
+    let key = FoldKey::from_source_offset(spans[0].start);
     let mut opened = FoldState::default();
     opened.toggle(key);
     assert_splice_matches_full_render(MD, &FoldState::default(), &opened);
@@ -247,7 +247,7 @@ fn splicing_closed_matches_a_full_closed_render() {
         "## After\n\ntail paragraph\n"
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
-    let key = FoldKey(spans[0].start);
+    let key = FoldKey::from_source_offset(spans[0].start);
     // The source says `open`; toggling the reader's state closes it.
     let mut closed = FoldState::default();
     closed.toggle(key);
@@ -272,7 +272,7 @@ fn splicing_inside_a_container_matches_a_full_render() {
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
     assert!(!spans.is_empty(), "the nested block is found at all");
-    let key = FoldKey(spans[0].start);
+    let key = FoldKey::from_source_offset(spans[0].start);
     let mut opened = FoldState::default();
     opened.toggle(key);
     assert_splice_matches_full_render(MD, &FoldState::default(), &opened);
@@ -295,7 +295,7 @@ fn tables_outside_the_region_survive_the_splice_as_the_same_widgets() {
         "| after | col |\n|---|---|\n| e | f |\n"
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
-    let key = FoldKey(spans[0].start);
+    let key = FoldKey::from_source_offset(spans[0].start);
 
     let starting = super::super::build::build_render_products_with_theme(
         MD,
@@ -378,7 +378,7 @@ fn the_region_render_normalises_tabs_the_same_way_every_other_parse_site_does() 
         "tail paragraph\n"
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
-    let key = FoldKey(spans[0].start);
+    let key = FoldKey::from_source_offset(spans[0].start);
     let mut opened = FoldState::default();
     opened.toggle(key);
     // The equality oracle already proves the table parsed identically: if the
@@ -411,7 +411,7 @@ fn everything_below_a_toggled_block_still_addresses_its_own_text() {
         "a distinctive tail paragraph\n\n",
         "[link text](https://example.invalid/target)\n"
     );
-    let key = FoldKey(crate::renderer::disclosure::scan_document(MD)[0].start);
+    let key = FoldKey::from_source_offset(crate::renderer::disclosure::scan_document(MD)[0].start);
     let mut after = FoldState::default();
     after.toggle(key);
 
@@ -481,5 +481,60 @@ fn everything_below_a_toggled_block_still_addresses_its_own_text() {
     assert_eq!(
         at, "Below",
         "the heading site below the block names its own line"
+    );
+}
+
+/// A refusal made before the delete leaves the buffer BYTE-IDENTICAL — the property the
+/// `SpliceRefusal::Untouched` variant promises, and the one a caller relies on when it
+/// decides a fallback re-render is optional. Asserted against the buffer rather than
+/// against the return value, because the return value is the claim under test.
+#[gtktest::test]
+fn a_refusal_before_the_delete_leaves_the_buffer_untouched() {
+    use gtk::prelude::TextBufferExt;
+    const MD: &str = "<details>\n<summary>One</summary>\n\nBody\n\n</details>\n\nTail.\n";
+
+    let starting = super::super::build::build_render_products_with_theme(
+        MD,
+        None,
+        1.0,
+        false,
+        crate::theme::active(),
+        &FoldState::default(),
+    );
+    let before = starting
+        .buf
+        .slice(&starting.buf.start_iter(), &starting.buf.end_iter(), true)
+        .to_string();
+
+    // A key no extent records — the same shape as "an ancestor was collapsed".
+    let absent = FoldKey::from_source_offset(usize::MAX);
+    let refusal = super::splice(
+        &starting.buf,
+        None,
+        &starting.anchored,
+        &starting.disclosure_extents,
+        MD,
+        None,
+        1.0,
+        false,
+        crate::theme::active(),
+        &FoldState::default(),
+        absent,
+    )
+    .err()
+    .expect("a key with no recorded extent cannot be spliced");
+
+    assert_eq!(
+        refusal,
+        super::SpliceRefusal::Untouched,
+        "a key that was never drawn is refused before the buffer is touched"
+    );
+    assert_eq!(
+        starting
+            .buf
+            .slice(&starting.buf.start_iter(), &starting.buf.end_iter(), true)
+            .to_string(),
+        before,
+        "an `Untouched` refusal really did leave the buffer alone"
     );
 }

@@ -117,6 +117,18 @@ mod imp {
         /// Distinct from `width_bounded`, which FILLS the column. Both width AND height
         /// stay non-zero so the picture paints (GTK4Rs/AP-58).
         pub(crate) image_bounded: RefCell<Vec<(gtk::Widget, i32, i32)>>,
+        /// Monotonic counter identifying the most recently armed reading-position
+        /// restore, so an earlier one that is still pending can tell it has been
+        /// superseded and stand down.
+        ///
+        /// A fold splice arms a settle-wait that fires well after the toggle returns, and
+        /// a reader who toggles two blocks in quick succession arms two — over the SAME
+        /// adjustment, each with its own quiet-counter, each ending in a `set_value`. The
+        /// second restore is the correct one (its anchor was captured against the newer
+        /// buffer); the first is aimed at geometry that no longer exists, and whichever
+        /// happens to fire last wins. Bumped on arm, compared on fire — see
+        /// `preview::splice::install::ReaderAnchor::restore_when_settled`.
+        pub(crate) restore_generation: Cell<u64>,
         /// Last content-column width applied; the idempotent guard that keeps the
         /// `size_allocate` rebind from looping.
         pub(crate) last_content_width: Cell<i32>,
@@ -316,6 +328,7 @@ mod imp {
                 width_bounded: RefCell::new(Vec::new()),
                 tables: RefCell::new(Vec::new()),
                 image_bounded: RefCell::new(Vec::new()),
+                restore_generation: Cell::new(0),
                 last_content_width: Cell::new(-1),
                 last_alloc_width: Cell::new(-1),
                 restore_target_line: Cell::new(None),
@@ -660,6 +673,25 @@ impl CodePreviewView {
         let next = self.imp().render_generation.get().wrapping_add(1);
         self.imp().render_generation.set(next);
         next
+    }
+
+    /// Claim the reading-position restore for this view, returning the generation that
+    /// identifies the claim.
+    ///
+    /// An earlier restore still pending compares its own value against
+    /// [`Self::restore_generation`] when it fires and stands down if it has moved — see
+    /// the field's own doc for the two-toggle race this settles.
+    pub(crate) fn claim_restore(&self) -> u64 {
+        use gtk::subclass::prelude::*;
+        let next = self.imp().restore_generation.get().wrapping_add(1);
+        self.imp().restore_generation.set(next);
+        next
+    }
+
+    /// The generation of the most recently claimed restore (see [`Self::claim_restore`]).
+    pub(crate) fn restore_generation(&self) -> u64 {
+        use gtk::subclass::prelude::*;
+        self.imp().restore_generation.get()
     }
 
     /// The current render generation (see [`Self::bump_render_generation`]).

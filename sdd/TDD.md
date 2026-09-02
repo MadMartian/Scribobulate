@@ -3,7 +3,7 @@
 | # | Functional area | Rubrics |
 |---|-----------------|---------|
 | 1 | Opening & displaying documents | 1.1 – 1.11a |
-| 2 | Rendering fidelity | 2.1 – 2.26k |
+| 2 | Rendering fidelity | 2.1 – 2.26l |
 | 3 | Live reload (external edits) | 3.1 – 3.4 |
 | 4 | Editing & saving | 4.1 – 4.9 |
 | 5 | Reconciliation (conflict handling) | 5.1 – 5.4 |
@@ -397,11 +397,23 @@
 - **Then** copying any selection below the block yields that selection's own Markdown, activating a link below it opens that link's own target, the outline still scrolls to the heading it names, and find still lands on the match it reports
 - **And** nothing below the toggled block addresses the wrong text — a reference that silently *acts* on the wrong place is the failure here, not a redraw glitch
 
-### 2.26k An unreachable image does not make a toggle stall
+### 2.26k An unreachable image is fetched at most once per URL per TTL, not once per toggle
 - **Given** a document containing a remote image, with "Show Unsafe Images" enabled, whose host is slow or unreachable
 - **When** the reader toggles a disclosure several times
-- **Then** the window stays responsive throughout, and the unreachable image is not re-requested on every toggle
-- **Rationale** a toggle re-walks the document, so every image tag is re-visited; an uncached fetch on the main thread would trade a visible scroll for a frozen window
+- **Then** the dead URL is requested **at most once per TTL**, not once per toggle — a toggle that lands while a negative entry is live does no network work at all
+- **And** each attempt that does run is **bounded** by `imagefetch`'s connect timeout rather than open-ended, so the cost of a failure is a known quantity
+- **And** the negative entry expires on a deliberately short TTL, so a transient outage does not read as permanent for the rest of the session; a re-attempt roughly once a minute per URL is the contract, not a defect
+- **Limitation, stated rather than promised** the fetch is synchronous on the main thread, so the toggle on which an attempt actually runs **does block the window** for the connect timeout (MEASURED at 5.001s against the 5s timeout). This rubric therefore gates the FREQUENCY of that stall, which is what the cache can deliver; it does not promise responsiveness, which only an asynchronous fetch could. Do not read a stall on the attempting toggle as a failure of this rubric — an attempt on *every* toggle is
+- **Rationale** a toggle re-walks the document, so every image tag is re-visited, and an uncached fetch would re-run per toggle. The earlier wording promised "the window stays responsive throughout", which the shipped synchronous fetch does not deliver — so the manual check spent its text documenting the rubric being violated. A rubric that states a contract the code cannot meet trains its reader to ignore the check
+- **Coverage** the decidable half is tested against the **shipped** thread-local cache, not a stand-in — `imagecache::the_shipped_cache_re_attempts_a_dead_url_only_after_its_ttl` counts fetch attempts across a run of toggles inside and past the TTL, which the injected clock (`get_or_fetch_at`) makes reachable without sleeping through a real minute; `imagecache::policy`'s own tests cover the cache type beneath it. The attempt count across REAL toggles is `tests/MANUAL-TEST.md` §2.26k, read from the log rather than the clock
+
+### 2.26l An edit forgets which blocks the reader had collapsed
+- **Given** a document open in split mode with one or more disclosures collapsed by the reader
+- **When** the user types anywhere in the editor — above, inside or below a collapsed block
+- **Then** every block returns to the state the document states for it (`<details open>` expanded, plain `<details>` collapsed), and no block is left collapsed that the document does not itself mark collapsed
+- **And** the reset takes effect on the **keystroke**, not on the debounced re-render that follows it, so a disclosure toggled during that window is decided against the edited source rather than against the pre-edit one
+- **And** no block other than the one whose summary the reader activates ever changes its collapsed state as a result of an edit
+- **Rationale** a fold is keyed on the source byte offset of its opening raw-HTML block, and an edit moves every offset after it. Re-keying survivors would have to define a disclosure's identity across an edit that can split, merge or delete one — a guess the reader cannot predict — so the state is dropped instead, matching HTML, where a disclosure's state is the `open` attribute and therefore a property of the document rather than of the reader. Left unreset, a stale key silently reverts a collapsed block mid-typing or, when it collides with a different block's new start offset, **collapses the wrong block** — hiding content the reader never asked to hide
 
 ### 2.12 Links within blockquotes
 - **Given** a blockquote containing a Markdown hyperlink

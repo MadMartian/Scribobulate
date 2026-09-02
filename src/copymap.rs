@@ -128,78 +128,97 @@ pub(crate) fn classify(ev: &Event) -> Option<RawKind> {
     })
 }
 
-fn construct_of_tag(tag: &Tag) -> Option<Construct> {
-    Some(match tag {
-        Tag::Emphasis => Construct::Emphasis,
-        Tag::Strong => Construct::Strong,
-        Tag::Link { .. } => Construct::Link,
-        Tag::Heading { .. } => Construct::Heading,
-        Tag::Paragraph => Construct::Paragraph,
-        Tag::BlockQuote(_) => Construct::BlockQuote,
-        Tag::List(_) => Construct::List,
-        Tag::Item => Construct::Item,
-        Tag::CodeBlock(_) => Construct::CodeBlock,
-        Tag::Table(_) => Construct::Table,
-        Tag::Image { .. } => Construct::Image,
+/// The `Tag`/`TagEnd` correspondence, declared ONCE and expanded into both directions.
+///
+/// These two functions are mirrors, and they used to be mirrors by comment: a construct
+/// reconstructable on one side and not the other is a branch that opens and never
+/// closes, and nothing but a reader could catch it. Declaring the pairs together makes
+/// the mirror structural — a `Construct` cannot be given a `Tag` arm without a `TagEnd`
+/// arm, because they are written as one row.
+///
+/// **Exhaustiveness is preserved and matters.** Neither expansion has a `_` arm, so a
+/// `pulldown-cmark` upgrade that adds a variant fails to COMPILE rather than silently
+/// copying as nothing — the failure mode `cargo xtask lint-references` check 15 exists to
+/// catch, and which `classify` shipped for as long as `<picture>` had existed.
+macro_rules! tag_constructs {
+    (
+        mapped { $( $construct:ident => ($tag:pat, $end:pat) ),+ $(,)? }
+        unmapped { $( $(#[$why:meta])* ($utag:pat, $uend:pat) ),+ $(,)? }
+    ) => {
+        fn construct_of_tag(tag: &Tag) -> Option<Construct> {
+            Some(match tag {
+                $( $tag => Construct::$construct, )+
+                $( $utag => return None, )+
+            })
+        }
 
-        // ── deliberately not independently reconstructable ────────────────────
-        // Written out rather than swallowed by a `_` arm (lint check 15): a
-        // construct that reaches the buffer without a deliberate arm here is one
-        // that copies as nothing.
+        fn construct_of_tagend(end: TagEnd) -> Option<Construct> {
+            Some(match end {
+                $( $end => Construct::$construct, )+
+                $( $uend => return None, )+
+            })
+        }
+    };
+}
 
+tag_constructs! {
+    mapped {
+        Emphasis   => (Tag::Emphasis,       TagEnd::Emphasis),
+        Strong     => (Tag::Strong,         TagEnd::Strong),
+        Link       => (Tag::Link { .. },    TagEnd::Link),
+        Heading    => (Tag::Heading { .. }, TagEnd::Heading(_)),
+        Paragraph  => (Tag::Paragraph,      TagEnd::Paragraph),
+        BlockQuote => (Tag::BlockQuote(_),  TagEnd::BlockQuote(_)),
+        List       => (Tag::List(_),        TagEnd::List(_)),
+        Item       => (Tag::Item,           TagEnd::Item),
+        CodeBlock  => (Tag::CodeBlock(_),   TagEnd::CodeBlock),
+        Table      => (Tag::Table(_),       TagEnd::Table),
+        Image      => (Tag::Image { .. },   TagEnd::Image),
+    }
+
+    // ── deliberately not independently reconstructable ────────────────────────
+    // Written out rather than swallowed by a `_` arm (lint check 15): a construct
+    // that reaches the buffer without a deliberate row here is one that copies as
+    // nothing.
+    unmapped {
         // Table structure. A cell's CONTENT is reconstructed through its own
-        // per-cell copymap (`preview::build`'s cell capture), so the structural
-        // tags own no buffer range of their own to map.
-        Tag::TableHead | Tag::TableRow | Tag::TableCell => return None,
+        // per-cell copymap (`preview::build`'s cell capture), so the structural tags
+        // own no buffer range of their own to map.
+        (
+            Tag::TableHead | Tag::TableRow | Tag::TableCell,
+            TagEnd::TableHead | TagEnd::TableRow | TagEnd::TableCell
+        ),
 
-        // A raw-HTML block owns buffer glyphs, but they are claimed at its END
-        // event, where the source range spans the whole block — see `classify`.
-        Tag::HtmlBlock => return None,
+        // A raw-HTML block owns buffer glyphs, but they are claimed at its END event,
+        // where the source range spans the whole block — see `classify`, which
+        // intercepts `TagEnd::HtmlBlock` before this function is reached. That is why
+        // the row is `None` on both sides rather than asymmetric.
+        (Tag::HtmlBlock, TagEnd::HtmlBlock),
 
         // The tight constructs this crate scans itself: pulldown never emits them
         // (they are disabled in `md_options`) and they reach the renderer as plain
         // `Text` for `renderer::scan_script_spans` to segment (ScrAP-66).
-        Tag::Strikethrough | Tag::Superscript | Tag::Subscript => return None,
+        (
+            Tag::Strikethrough | Tag::Superscript | Tag::Subscript,
+            TagEnd::Strikethrough | TagEnd::Superscript | TagEnd::Subscript
+        ),
 
-        // Never emitted: `md_options()` does not enable footnotes, definition lists
-        // or metadata blocks, and TDD 2.25 requires the parser be asked only for
+        // Never emitted: `md_options()` does not enable footnotes, definition lists or
+        // metadata blocks, and TDD 2.25 requires the parser be asked only for
         // extensions the renderer handles (ScrAP-78).
-        Tag::FootnoteDefinition(_)
-        | Tag::DefinitionList
-        | Tag::DefinitionListTitle
-        | Tag::DefinitionListDefinition
-        | Tag::MetadataBlock(_) => return None,
-    })
-}
-
-fn construct_of_tagend(end: TagEnd) -> Option<Construct> {
-    Some(match end {
-        TagEnd::Emphasis => Construct::Emphasis,
-        TagEnd::Strong => Construct::Strong,
-        TagEnd::Link => Construct::Link,
-        TagEnd::Heading(_) => Construct::Heading,
-        TagEnd::Paragraph => Construct::Paragraph,
-        TagEnd::BlockQuote(_) => Construct::BlockQuote,
-        TagEnd::List(_) => Construct::List,
-        TagEnd::Item => Construct::Item,
-        TagEnd::CodeBlock => Construct::CodeBlock,
-        TagEnd::Table => Construct::Table,
-        TagEnd::Image => Construct::Image,
-
-        // The `TagEnd` mirror of `construct_of_tag`'s arms above, and it must stay a
-        // mirror: a construct reconstructable on one side and not the other is a
-        // branch that never closes. `TagEnd::HtmlBlock` is the one deliberate
-        // asymmetry — `classify` intercepts it before this function is reached,
-        // because that is the event at which raw HTML's buffer content appears.
-        TagEnd::TableHead | TagEnd::TableRow | TagEnd::TableCell => return None,
-        TagEnd::HtmlBlock => return None,
-        TagEnd::Strikethrough | TagEnd::Superscript | TagEnd::Subscript => return None,
-        TagEnd::FootnoteDefinition
-        | TagEnd::DefinitionList
-        | TagEnd::DefinitionListTitle
-        | TagEnd::DefinitionListDefinition
-        | TagEnd::MetadataBlock(_) => return None,
-    })
+        (
+            Tag::FootnoteDefinition(_)
+                | Tag::DefinitionList
+                | Tag::DefinitionListTitle
+                | Tag::DefinitionListDefinition
+                | Tag::MetadataBlock(_),
+            TagEnd::FootnoteDefinition
+                | TagEnd::DefinitionList
+                | TagEnd::DefinitionListTitle
+                | TagEnd::DefinitionListDefinition
+                | TagEnd::MetadataBlock(_)
+        ),
+    }
 }
 
 // ── the tree ──────────────────────────────────────────────────────────────────
@@ -334,6 +353,18 @@ pub(crate) struct CopyTree {
 }
 
 // ── building ──────────────────────────────────────────────────────────────────
+
+impl CopyTree {
+    /// The buffer char count this map was built against.
+    ///
+    /// Exposed for the one release-safe invariant the fold splice can afford: a spliced
+    /// buffer whose length disagrees with the map about to be installed over it is a
+    /// desync, and every offset below the splice is then wrong. See
+    /// `preview::splice::splice`.
+    pub(crate) fn char_count(&self) -> i32 {
+        self.char_count
+    }
+}
 
 /// Build the copymap from the classified render-event stream. `char_count` is
 /// the finished buffer's char count. Pure: no GTK, fully unit-testable.

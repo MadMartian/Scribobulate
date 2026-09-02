@@ -2,6 +2,7 @@
 //! blockquote spacing, table-cell markup accumulation, inline-tag pushes, and the
 //! image safety gate + anchored-picture (or broken-image placeholder) build.
 
+use super::blockspacing;
 use super::image::image_placeholder_tooltip;
 use super::{Renderer, TableState, DEFAULT_SUMMARY_LABEL};
 use crate::links::{resolve_image, ImageResolution};
@@ -9,6 +10,26 @@ use gtk::prelude::*;
 use pulldown_cmark::{CodeBlockKind, Tag};
 
 impl Renderer {
+    /// Write whatever separator `kind` needs before its own content.
+    ///
+    /// The GTK half of `blockspacing`: that module decides, this applies. Split so the
+    /// spacing rules — the most-exercised decisions in the renderer, and the ones whose
+    /// failure is a silently missing or doubled blank line — are reachable by a unit test
+    /// rather than only by rendering a document and reading the text back.
+    fn apply_lead_in(&mut self, kind: blockspacing::BlockKind) {
+        let cx = blockspacing::BlockContext {
+            list_item_open: self.list_item_open,
+            inside_list: !self.lists.is_empty(),
+            list_first_item: self.list_first_item,
+            at_start: self.at_start,
+        };
+        match blockspacing::lead_in(kind, cx) {
+            blockspacing::LeadIn::Nothing => {}
+            blockspacing::LeadIn::Newline => self.newline(),
+            blockspacing::LeadIn::BlockGap => self.block_sep(),
+        }
+    }
+
     pub(super) fn start_tag(&mut self, tag: Tag) {
         match tag {
             Tag::Heading { level, .. } => {
@@ -20,22 +41,11 @@ impl Renderer {
                 self.heading_text.clear();
             }
             Tag::Paragraph => {
-                if self.list_item_open {
-                    // First paragraph immediately follows the list marker — no
-                    // separator; clearing the flag allows subsequent paragraphs
-                    // (loose lists) to get a newline via the else-if below.
-                    self.list_item_open = false;
-                } else if !self.lists.is_empty() {
-                    // Subsequent paragraphs inside a loose list item: one newline
-                    // is enough; a full block_sep would double-space them.
-                    self.newline();
-                } else {
-                    // Top-level paragraphs AND blockquote paragraphs: block_sep is
-                    // idempotent via trailing_newlines, so the first paragraph after
-                    // a Tag::BlockQuote (which already block_sep'd) is a no-op and
-                    // subsequent quote paragraphs get their blank line.
-                    self.block_sep();
-                }
+                // The RULE is `blockspacing`'s; this arm only carries it out. Setting
+                // the flag unconditionally is equivalent to the old first-branch-only
+                // clear: the other branches are reached only when it is already false.
+                self.apply_lead_in(blockspacing::BlockKind::Paragraph);
+                self.list_item_open = false;
             }
             Tag::BlockQuote(_) => {
                 if self.blockquote_depth == 0 {
@@ -50,16 +60,7 @@ impl Renderer {
                 self.blockquote_depth += 1;
             }
             Tag::List(start) => {
-                if self.lists.is_empty() {
-                    // Top-level list: full block gap from preceding content.
-                    self.block_sep();
-                } else {
-                    // Nested list inside a parent item: one newline is enough;
-                    // block_sep would insert an empty line before the sub-list.
-                    if !self.at_start {
-                        self.newline();
-                    }
-                }
+                self.apply_lead_in(blockspacing::BlockKind::List);
                 // Always start ordered lists at 1 regardless of source numbers;
                 // TagEnd::Item increments the counter, so any disordered or
                 // repeated source numerals render as 1, 2, 3 …
@@ -67,14 +68,11 @@ impl Renderer {
                 self.list_first_item = true;
             }
             Tag::Item => {
-                // Tag::List already inserted one newline (nested) or a full
-                // block_sep (top-level).  Skip the newline for the first item
-                // in each list; subsequent items each need exactly one.
-                if self.list_first_item {
-                    self.list_first_item = false;
-                } else if !self.at_start {
-                    self.newline();
-                }
+                // Tag::List already separated the first item; `blockspacing` holds that
+                // rule. Clearing the flag unconditionally is equivalent to the old
+                // first-branch-only clear, for the same reason as `Tag::Paragraph`.
+                self.apply_lead_in(blockspacing::BlockKind::Item);
+                self.list_first_item = false;
                 // Record where this item starts (after the leading newline) so
                 // that TagEnd::Item can apply the hanging-indent tag over the full
                 // item span. Lists inside blockquotes are buffer text too now, so
@@ -355,13 +353,13 @@ impl Renderer {
                     // in the SOURCE — stable across every re-render that does not
                     // change the text, which is exactly the set of events a reader
                     // expects a fold to survive (`crate::fold`).
-                    let key = crate::fold::FoldKey(self.event_src.start);
+                    let key = crate::fold::FoldKey::from_source_offset(self.event_src.start);
                     // A block the document never closes cannot fold — see
                     // `DisclosureFrame::foldable`. Asked FIRST, and unconditionally,
                     // because the answer comes from a cursor that must advance once
                     // per `<details>` however this block turns out.
                     let span_index = self.disclosure_cursor.seen();
-                    let foldable = self.opening_details_is_closed(key.0);
+                    let foldable = self.opening_details_is_closed(key.source_offset());
                     let collapsed = foldable && self.folds.is_collapsed(key, open);
                     self.disclosure_stack.push(super::DisclosureFrame {
                         key,
@@ -546,7 +544,7 @@ impl Renderer {
         // of the document (`DisclosureFrame::foldable`, rubric 2.26d).
         if foldable {
             let anchor = self.buf.create_child_anchor(&mut iter);
-            let toggle = crate::widgets::disclosure::build(expanded, self.zoom);
+            let toggle = crate::widgets::disclosure::build(expanded, self.zoom, &label);
             // Handed back paired with its fold so the preview layer can wire
             // activation without re-deriving which block a widget belongs to.
             self.disclosure_toggles.push(super::DisclosureToggle {

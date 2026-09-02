@@ -374,6 +374,30 @@ impl TabState {
         // also gives the behaviour HTML itself specifies, where a disclosure's state is
         // the `open` attribute and therefore a property of the document rather than of
         // the session (`crate::fold`).
+        self.note_source_offsets_moved();
+    }
+
+    /// Forget every reader-held state keyed on a SOURCE OFFSET, because the source
+    /// text has moved underneath it.
+    ///
+    /// Today that is the fold map alone. It is a named method rather than an inline
+    /// `folds.clear()` because [`Self::set_source`] is **not** the only way the text a
+    /// preview renders can change: in split mode the editor buffer is authoritative and
+    /// `window::livepreview` re-renders straight from it, so the source moves without
+    /// this field ever being written. That path called nothing, and a `FoldKey` is a
+    /// byte offset — so every character typed above a `<details>` moved its key while
+    /// the map kept the old one, silently reverting a collapsed block or, when a stale
+    /// key happened to land on a different block's new start offset, collapsing THE
+    /// WRONG BLOCK.
+    ///
+    /// **Clearing is the decision, not a shortcut.** `crate::fold`'s module doc already
+    /// states that fold state is deliberately not stable across an edit, matching HTML,
+    /// where a disclosure's state is the `open` attribute and therefore a property of
+    /// the document rather than of the reader. Re-keying survivors against the new
+    /// offsets was the alternative and is rejected: it would have to decide what a
+    /// disclosure's identity is across an edit that can split, merge or delete one, and
+    /// the answer it produced would be a guess the reader could not predict.
+    pub(crate) fn note_source_offsets_moved(&self) {
         self.folds.borrow_mut().clear();
     }
 

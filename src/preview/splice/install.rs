@@ -38,26 +38,71 @@ pub(crate) struct SpliceInputs<'a> {
     pub(crate) folds: &'a FoldState,
 }
 
+/// What an attempted in-place disclosure splice did to the pane.
+///
+/// Deliberately not a `bool`: two of the three answers mean "the splice did not
+/// happen" and they carry DIFFERENT obligations, which is exactly the distinction a
+/// `bool` erased when this returned one. See [`super::SpliceRefusal`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpliceVerdict {
+    /// The region was written and adopted; the pane is current and nothing else is owed.
+    Spliced,
+    /// Nothing was attempted or the attempt was refused before the buffer was touched.
+    /// The pane still holds the pre-toggle render, so a fallback re-render is what makes
+    /// the toggle VISIBLE — not what makes the pane correct.
+    Untouched,
+    /// The buffer was mutated and the replacement region was never written. **The caller
+    /// must re-render the pane whole**; there is no state in which leaving this is right.
+    RegionLost,
+}
+
+impl SpliceVerdict {
+    /// Whether the toggle landed by the splice route. `false` from either refusal — the
+    /// caller falls back to a full re-render for both, and consults the variant only when
+    /// it needs to know whether the pane it is falling back over is intact.
+    pub(crate) fn spliced(self) -> bool {
+        self == Self::Spliced
+    }
+}
+
+impl From<super::SpliceRefusal> for SpliceVerdict {
+    fn from(refusal: super::SpliceRefusal) -> Self {
+        match refusal {
+            super::SpliceRefusal::Untouched => Self::Untouched,
+            super::SpliceRefusal::RegionLost => Self::RegionLost,
+        }
+    }
+}
+
 /// Toggle `key` in `view`'s live preview by splicing its region, holding the reader's
 /// place across the change.
 ///
 /// `inputs.folds` must already reflect the NEW state — the caller toggles it before
 /// calling this, exactly as [`super::splice`] requires.
 ///
-/// **Returns `false` when the splice could not be attempted or could not complete**,
-/// and the caller must then fall back to a full re-render. Every `false` here is a
-/// refusal made BEFORE the buffer is touched, so a fallback re-render is always
-/// operating on an untouched pane. The refusals are: the view has no `RenderData` yet
-/// (nothing has rendered), or `key` names no disclosure this render drew (an ancestor
-/// was collapsed, or the fold state and the render have diverged) — [`super::splice`]'s
-/// own two `None` cases.
+/// **Anything but [`SpliceVerdict::Spliced`] means the caller must consider a full
+/// re-render**, and the verdict says whether that re-render is optional or mandatory.
+/// [`SpliceVerdict::Untouched`] is a refusal made BEFORE the buffer was touched — the
+/// view has no `RenderData` yet, or `key` names no disclosure this render drew, or the
+/// recorded extent does not fit the live buffer — so the pane is still consistent.
+/// [`SpliceVerdict::RegionLost`] is [`super::SpliceRefusal::RegionLost`] surfacing: the
+/// delete ran, the region write did not, and the pane is now inconsistent until it is
+/// re-rendered whole.
+///
+/// This used to be a `bool` documented as "every `false` is a refusal made BEFORE the
+/// buffer is touched", which the region-write path falsified — and a caller reading
+/// that sentence would have been entitled to leave a corrupted pane on screen.
 pub(crate) fn splice_disclosure(
     view: &CodePreviewView,
     inputs: SpliceInputs<'_>,
     key: FoldKey,
-) -> bool {
+) -> SpliceVerdict {
     let Some(render_data) = scrib_render_data(view) else {
-        return false;
+        log::debug!(
+            "preview::splice: refusing key {key:?} — the view holds no RenderData yet \
+             (nothing has rendered into it); falling back to a full re-render"
+        );
+        return SpliceVerdict::Untouched;
     };
     let buf = view.buffer();
 
@@ -74,7 +119,7 @@ pub(crate) fn splice_disclosure(
     // from afterwards: the point of the exercise is a position that survives the edit.
     let anchor = ReaderAnchor::capture(view);
 
-    let Some(outcome) = super::splice(
+    let outcome = match super::splice(
         &buf,
         Some(view),
         &old_anchored,
@@ -86,8 +131,9 @@ pub(crate) fn splice_disclosure(
         crate::theme::active(),
         inputs.folds,
         key,
-    ) else {
-        return false;
+    ) {
+        Ok(outcome) => outcome,
+        Err(refusal) => return SpliceVerdict::from(refusal),
     };
 
     install_outcome(view, &render_data, outcome, inputs.zoom);
@@ -97,7 +143,7 @@ pub(crate) fn splice_disclosure(
     if let Some(anchor) = anchor {
         anchor.restore_when_settled(view);
     }
-    true
+    SpliceVerdict::Spliced
 }
 
 /// The (anchor, widget) pairs currently live in `buf`, in document order.
@@ -114,22 +160,53 @@ fn live_anchored(
     let Some(widgets) = scrib_anchor_widgets(view) else {
         return Vec::new();
     };
-    let known: Vec<gtk::Widget> = widgets.borrow().clone();
+    // A SET, not a `Vec`. This runs on the main loop for every fold toggle, and the
+    // membership test used to be a linear scan inside a per-character walk — O(chars ×
+    // widgets) on a document the reader is waiting on. glib objects hash and compare by
+    // pointer, which is exactly the identity this test wants.
+    let known: std::collections::HashSet<gtk::Widget> = widgets.borrow().iter().cloned().collect();
     let mut out: Vec<(gtk::TextChildAnchor, gtk::Widget)> = Vec::new();
-    let mut iter = buf.start_iter();
-    loop {
-        if let Some(anchor) = iter.child_anchor() {
-            for widget in anchor.widgets() {
-                if known.contains(&widget) {
-                    out.push((anchor.clone(), widget));
-                }
+
+    // Anchors sit at U+FFFC OBJECT REPLACEMENT CHARACTER, GTK's own placeholder for one,
+    // so the scan skips between them inside GTK rather than paying a Rust closure per
+    // character of the document. `forward_find_char` ADVANCES BEFORE it tests, so the
+    // character at the start iterator is never offered to the predicate — hence the
+    // separate first check rather than a bare loop, which would silently drop an anchor
+    // sitting at offset 0.
+    for anchor in anchors_in(buf) {
+        for widget in anchor.widgets() {
+            if known.contains(&widget) {
+                out.push((anchor.clone(), widget));
             }
-        }
-        if !iter.forward_char() {
-            break;
         }
     }
     out
+}
+
+/// U+FFFC OBJECT REPLACEMENT CHARACTER — the character `GtkTextBuffer` puts in the text
+/// where a child anchor sits. Named rather than spelled inline because a bare `'\u{FFFC}'`
+/// at a call site reads as a magic constant, and it is GTK's contract rather than ours.
+const ANCHOR_PLACEHOLDER: char = '\u{FFFC}';
+
+/// Every child anchor in `buf`, in document order.
+///
+/// Split out of [`live_anchored`] so its one sharp edge is reachable by a test that needs
+/// no view: **`forward_find_char` advances BEFORE it tests**, so the character at the
+/// start iterator is never offered to the predicate, and a bare loop silently drops an
+/// anchor sitting at offset 0. That is not a hypothetical shape — a document whose first
+/// block is a table or an image opens with one.
+fn anchors_in(buf: &gtk::TextBuffer) -> Vec<gtk::TextChildAnchor> {
+    let mut found = Vec::new();
+    let mut iter = buf.start_iter();
+    if let Some(anchor) = iter.child_anchor() {
+        found.push(anchor);
+    }
+    while iter.forward_find_char(|c| c == ANCHOR_PLACEHOLDER, None) {
+        if let Some(anchor) = iter.child_anchor() {
+            found.push(anchor);
+        }
+    }
+    found
 }
 
 /// Install a completed splice: the maps from PASS A, the widgets merged, the region's
@@ -373,6 +450,59 @@ struct ReaderAnchor {
     offset: f64,
 }
 
+impl Drop for ReaderAnchor {
+    /// Delete the mark if nothing consumed the anchor.
+    ///
+    /// [`ReaderAnchor::capture`] runs BEFORE the splice, because the position it records
+    /// only exists in the pre-splice buffer — so every refusal downstream of it (and
+    /// there are several) returns while holding a mark nobody will ever delete. A
+    /// `GtkTextBuffer` outlives every render, so those accumulate one per refused
+    /// toggle, forever.
+    ///
+    /// A `Drop` rather than a delete at each early return: the refusals are in a
+    /// different function from the capture, and a rule that must be re-obeyed at every
+    /// new `return` is the rule that gets missed by the next one added. The consuming
+    /// path suppresses this — see [`ReaderAnchor::restore_when_settled`].
+    fn drop(&mut self) {
+        if self.mark.is_deleted() {
+            return;
+        }
+        if let Some(buffer) = self.mark.buffer() {
+            buffer.delete_mark(&self.mark);
+        }
+    }
+}
+
+/// Why [`ReaderAnchor::restore_when_settled`] did not put the reader back.
+///
+/// A closed set with a name per arm rather than a bare `None`, because the arms are
+/// different defects: the first two are geometry that never arrived, the third is the
+/// splice having deleted the position it promised to restore.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotRestored {
+    /// The view had no vertical adjustment — it is not inside a scroller.
+    NoAdjustment,
+    /// The adjustment reports no page size, so the viewport has never been allocated
+    /// and there is no coordinate space to restore into.
+    ViewportUnallocated,
+    /// The mark the anchor was captured on is gone from the buffer.
+    MarkDeleted,
+    /// A later toggle claimed the restore while this one was waiting, so this one's
+    /// anchor points into a buffer state the reader has already moved past.
+    Superseded,
+}
+
+impl NotRestored {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NoAdjustment => "the view has no vadjustment",
+            Self::ViewportUnallocated => "the viewport has no page size yet",
+            Self::MarkDeleted => "the anchor mark was deleted",
+            Self::Superseded => "a later toggle claimed the restore",
+        }
+    }
+}
+
 impl ReaderAnchor {
     /// `None` when there is nothing to hold: no viewport yet, so no reading position
     /// exists and `line_yrange` would answer about a layout that has never run.
@@ -406,16 +536,38 @@ impl ReaderAnchor {
     /// eaten rather than overridden, which looks exactly like a restore that was never
     /// written.
     fn restore_when_settled(self, view: &CodePreviewView) {
-        let ReaderAnchor { mark, offset } = self;
+        // The deferred restore OWNS the mark from here: it has to survive until the
+        // scroll settles, which is well after this call returns. So the refusal-path
+        // `Drop` must not run — it would delete the mark out from under the closure and
+        // the restore would report `MarkDeleted` every time. The closure below deletes
+        // it itself, on every path, which is where the responsibility now sits.
+        let anchor = std::mem::ManuallyDrop::new(self);
+        let (mark, offset) = (anchor.mark.clone(), anchor.offset);
+        // Claim the restore. A reader toggling two blocks in quick succession arms two of
+        // these over the SAME adjustment — each with its own quiet-counter and each ending
+        // in a `set_value` — and the older one's anchor was captured against a buffer that
+        // no longer exists. Whichever fired last used to win, which is a race rather than
+        // a rule.
+        let generation = view.claim_restore();
         crate::farscroll::after_scroll_settles(view.upcast_ref(), move |view| {
             let buffer = view.buffer();
             let restored = (|| {
-                let adjustment = view.vadjustment()?;
+                // Superseded: a later toggle claimed the restore while this one was
+                // waiting. Stand down WITHOUT scrolling — the newer restore owns the
+                // reader's place, and writing this one's would move them off it. The mark
+                // is still deleted below, on every path.
+                if view
+                    .downcast_ref::<CodePreviewView>()
+                    .is_some_and(|v| v.restore_generation() != generation)
+                {
+                    return Err(NotRestored::Superseded);
+                }
+                let adjustment = view.vadjustment().ok_or(NotRestored::NoAdjustment)?;
                 if adjustment.page_size() <= 0.0 {
-                    return None;
+                    return Err(NotRestored::ViewportUnallocated);
                 }
                 if mark.is_deleted() {
-                    return None;
+                    return Err(NotRestored::MarkDeleted);
                 }
                 let iter = buffer.iter_at_mark(&mark);
                 let (y, _height) = view.line_yrange(&iter);
@@ -425,9 +577,19 @@ impl ReaderAnchor {
                 // `GtkAdjustment`, which is what makes this a no-op on a GTK that
                 // compensated correctly.
                 crate::saferizer::scrollpos::jump(&adjustment, restored_value(y, offset));
-                Some(())
+                Ok(())
             })();
-            let _ = restored;
+            // 2.26h's whole promise is that the reader keeps their place, and every way
+            // this can fail leaves them somewhere they did not ask to be with nothing on
+            // screen to say so. The reason is the useful half — "not restored" alone
+            // cannot distinguish a pane that never got a viewport from a mark the splice
+            // deleted, and those are different defects.
+            if let Err(reason) = restored {
+                log::debug!(
+                    "preview::splice: reading position not restored ({})",
+                    reason.as_str()
+                );
+            }
             // The mark has done its job either way; leaving it would accumulate one
             // per toggle in a buffer that outlives every render.
             if !mark.is_deleted() {
@@ -519,5 +681,135 @@ mod decision_tests {
         // alike.
         let offset = offset_below_viewport_top(4_020, 4_048.5);
         assert_eq!(restored_value(4_020, offset), 4_048.5);
+    }
+
+    #[test]
+    fn a_lost_region_never_reports_a_landed_splice() {
+        // The defect this pins was a `bool`: `render_region` substituted an empty
+        // renderer after the delete had already run, and the splice reported success —
+        // so the caller kept a pane missing a whole block, with every map below the
+        // splice off by its length. There is no reaching input for the substitution
+        // itself, which is exactly why the MAPPING is pinned here: the one line that
+        // could silently re-open it is this conversion answering `true`.
+        assert!(!SpliceVerdict::from(super::super::SpliceRefusal::RegionLost).spliced());
+        assert!(!SpliceVerdict::from(super::super::SpliceRefusal::Untouched).spliced());
+        assert!(SpliceVerdict::Spliced.spliced());
+    }
+
+    #[test]
+    fn the_two_refusals_stay_distinguishable_at_the_boundary() {
+        // Both answer `spliced() == false`, and a caller that needs to know whether the
+        // pane it is falling back over is INTACT reads the variant. Collapsing them
+        // would compile and would lose that.
+        assert_ne!(
+            SpliceVerdict::from(super::super::SpliceRefusal::RegionLost),
+            SpliceVerdict::from(super::super::SpliceRefusal::Untouched)
+        );
+    }
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+
+    /// A `ReaderAnchor` that nothing consumes deletes its own mark.
+    ///
+    /// `capture` runs before the splice and several refusals return after it, so without
+    /// this the buffer accumulates one `GtkTextMark` per refused toggle for the lifetime
+    /// of the tab. Nothing else in the tree would notice: a stray mark changes no text,
+    /// fails no assertion, and is invisible to every other test.
+    ///
+    /// Mutation-checked: deleting the `Drop` impl fails the first assertion.
+    #[gtktest::test]
+    fn an_unconsumed_reader_anchor_deletes_its_own_mark() {
+        let buffer = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
+        buffer.set_text("one\ntwo\nthree\n");
+        let mark = buffer.create_mark(None, &buffer.start_iter(), true);
+
+        let watched = mark.clone();
+        {
+            let _anchor = ReaderAnchor { mark, offset: -3.0 };
+            assert!(
+                !watched.is_deleted(),
+                "precondition: the mark is live while the anchor holds it"
+            );
+        }
+        assert!(
+            watched.is_deleted(),
+            "dropping an unconsumed anchor deletes its mark from the buffer"
+        );
+    }
+
+    /// ...and dropping one whose mark is ALREADY gone is a clean no-op rather than a
+    /// second delete. Reachable for real: the splice can delete the region the mark sits
+    /// in, and GTK deletes the marks inside a deleted range with it.
+    #[gtktest::test]
+    fn dropping_an_anchor_whose_mark_was_already_deleted_is_a_no_op() {
+        let buffer = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
+        buffer.set_text("one\ntwo\n");
+        let mark = buffer.create_mark(None, &buffer.start_iter(), true);
+        buffer.delete_mark(&mark);
+        assert!(mark.is_deleted(), "precondition");
+        drop(ReaderAnchor { mark, offset: 0.0 });
+    }
+
+    /// The anchor scan finds one at offset 0, one in the middle and one at the end.
+    ///
+    /// Mutation-checked: dropping the pre-loop `start_iter` check loses the first;
+    /// replacing the placeholder scan with a bare `forward_char` walk keeps all three
+    /// and is only slower, which is why the perf claim is NOT what this test pins — the
+    /// EDGE is.
+    #[gtktest::test]
+    fn the_anchor_scan_includes_one_at_the_very_start() {
+        let buffer = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
+        buffer.set_text("mid\ntail");
+        let first = buffer.create_child_anchor(&mut buffer.start_iter());
+        let mut at_mid = buffer.iter_at_offset(3);
+        let middle = buffer.create_child_anchor(&mut at_mid);
+        let last = buffer.create_child_anchor(&mut buffer.end_iter());
+
+        let found = anchors_in(&buffer);
+        assert_eq!(
+            found.len(),
+            3,
+            "every anchor is found, the offset-0 one included"
+        );
+        assert_eq!(found[0], first, "the anchor at offset 0 is first");
+        assert_eq!(found[1], middle);
+        assert_eq!(found[2], last);
+    }
+
+    /// A buffer with no anchors yields none, and the scan terminates.
+    #[gtktest::test]
+    fn the_anchor_scan_terminates_on_a_buffer_with_none() {
+        let buffer = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
+        buffer.set_text("just text\nand more\n");
+        assert!(anchors_in(&buffer).is_empty());
+    }
+
+    /// Claiming a restore supersedes the one before it, and the generation is what a
+    /// pending restore compares itself against.
+    ///
+    /// The race this settles needs two settle-waits pending over one adjustment, which is
+    /// not constructible without a presented window and real geometry — so what is pinned
+    /// here is the DECISION, at the seam the deferred closure reads. Mutation-checked:
+    /// making `claim_restore` return the generation without storing it leaves the first
+    /// assertion's two values equal.
+    #[gtktest::test]
+    fn claiming_a_restore_supersedes_the_previous_claim() {
+        let view = CodePreviewView::new();
+        let first = view.claim_restore();
+        let second = view.claim_restore();
+        assert_ne!(first, second, "each claim gets its own generation");
+        assert_eq!(
+            view.restore_generation(),
+            second,
+            "the live generation is the LATEST claim, so the earlier one now differs"
+        );
+        assert_ne!(
+            view.restore_generation(),
+            first,
+            "which is exactly the test a superseded restore makes on itself"
+        );
     }
 }
