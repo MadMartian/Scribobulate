@@ -36,6 +36,23 @@ pub(crate) fn css() -> &'static str {
      .conflict-toast { border-radius: 10px; padding: 10px 16px;
                        background-color: mix(@theme_bg_color, @theme_selected_bg_color, 0.10);
                        border: 1px solid alpha(@theme_fg_color, 0.20); }
+     /* The disclosure toggle on a `<details>` summary line. STRUCTURAL only: this
+        strips the button chrome so the control reads as an indicator sitting in prose
+        rather than as a button dropped into a paragraph. `.flat` is not enough — a
+        GtkToggleButton in its `:checked` state paints a frame regardless, so an
+        EXPANDED disclosure rendered boxed while a collapsed one rendered bare. Found
+        by driving the running app, not by any test: both states are individually
+        correct and only look wrong beside each other.
+        The indicator's STATE is carried by the icon (pan-end/pan-down), never by this
+        chrome, which is why suppressing it loses nothing.
+        The indicator's COLOUR is not here: it is a themed value and lives in
+        `theme_css` (`disclosure_marker_color`), because a rule must live in exactly
+        one of the two sheets. Unset, the icon keeps the desktop theme's ink, which is
+        what it always drew with. */
+     .scrib-disclosure { padding: 0; min-width: 0; min-height: 0;
+                         background: none; border: none; box-shadow: none; }
+     .scrib-disclosure:checked, .scrib-disclosure:hover,
+     .scrib-disclosure:active { background: none; border: none; box-shadow: none; }
      listview.outline > row { padding: 1px 4px; }
      .outline-h1 { font-weight: bold; }
      .outline-h2 { font-weight: bold; }
@@ -228,6 +245,17 @@ pub(crate) fn theme_css(theme: &Theme, palette: &Palette) -> String {
     }
     if !page.is_empty() {
         out.push_str(&format!("textview.scrib-preview {{ {page} }}\n"));
+    }
+    // The disclosure indicator's ink. It lives HERE rather than in the static sheet
+    // because it is a themed value, and a rule must live in exactly one of the two —
+    // which is what the static sheet's note said when this was still a known gap.
+    // `color` tints a symbolic icon and inks a glyph label alike; a sprite indicator
+    // ignores it, which is the sprite-outranks-flat rule doing its job.
+    if let Some(ink) = theme.disclosure_marker_color {
+        out.push_str(&format!(
+            "button.scrib-disclosure {{ color: {}; }}\n",
+            to_hex_opaque(ink)
+        ));
     }
     if let Some(bg) = theme.background {
         out.push_str(&format!(

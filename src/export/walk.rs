@@ -42,6 +42,20 @@ pub(super) struct Builder<'a> {
     /// inline events — grouping inside one parse call loses it (ScrAP-147).
     picture_open: bool,
     picture_taken: bool,
+    /// Every `<details>` the document declares, paired with its `</details>` — the
+    /// same pre-scan the preview renderer consults, so the two sinks agree about
+    /// which blocks are real disclosures and which are unclosed markup (rubric
+    /// 2.26d). Consumed in document order.
+    disclosures: Vec<crate::renderer::disclosure::DisclosureSpan>,
+    disclosures_seen: usize,
+    /// Disclosure tags seen inside the raw-HTML block currently open, applied when
+    /// that block ENDS.
+    ///
+    /// Deferred rather than applied as each `Event::Html` line arrives, because a
+    /// `Tag::HtmlBlock` has its own frame on `self.open` for the duration; opening a
+    /// disclosure frame on top of it would have the block's own `End` pop the
+    /// disclosure instead.
+    pending_details: Vec<crate::renderer::disclosure::DetailsTag>,
     has_unembedded_remote: bool,
     /// The block-scope tight-construct table for the document being walked, so a
     /// `~~ … ~~` fence wrapping other inline markup exports struck rather than as
@@ -77,6 +91,13 @@ enum Open {
         title: Option<String>,
     },
     TableCell,
+    /// An HTML `<details>` whose `</details>` is what closes it. Carries the summary
+    /// label and the `open` attribute, both of which arrive at the OPENING tag while
+    /// the body arrives as ordinary Markdown events in between.
+    Disclosure {
+        summary: String,
+        open: bool,
+    },
     /// Collected but emitting nothing of its own.
     Transparent,
 }
@@ -89,7 +110,11 @@ struct TableBuild {
 }
 
 impl<'a> Builder<'a> {
-    pub(super) fn new(opts: &'a RenderOptions, scripts: BlockScripts) -> Self {
+    pub(super) fn new(
+        opts: &'a RenderOptions,
+        scripts: BlockScripts,
+        disclosures: Vec<crate::renderer::disclosure::DisclosureSpan>,
+    ) -> Self {
         Self {
             opts,
             scripts,
@@ -107,6 +132,9 @@ impl<'a> Builder<'a> {
             code: None,
             picture_open: false,
             picture_taken: false,
+            disclosures,
+            disclosures_seen: 0,
+            pending_details: Vec::new(),
             has_unembedded_remote: false,
         }
     }
@@ -337,9 +365,28 @@ impl<'a> Builder<'a> {
                 self.inline_stack.push(Vec::new());
                 self.open.push(Open::TableCell);
             }
-            // Footnotes/metadata/math are not enabled; collected transparently so a
-            // stray one cannot unbalance the stacks.
-            _ => self.open.push(Open::Transparent),
+            // ── collected transparently, each for a stated reason ─────────────
+            // Named rather than swallowed by a `_` arm (lint check 15). This is the
+            // EXPORT sink, so a construct that lands here unexamined is one that is
+            // silently absent from every exported artefact while the file still opens
+            // and still looks finished — CAM Document Rendering row 17's exact failure.
+
+            // Raw HTML's content reaches the sink through `html()`, driven by the
+            // `Event::Html` lines inside this block rather than by the block tag.
+            Tag::HtmlBlock => self.open.push(Open::Transparent),
+
+            // The tight constructs this crate scans itself: pulldown never emits them
+            // (disabled in `md_options`) and they arrive as plain `Text`.
+            Tag::Superscript | Tag::Subscript => self.open.push(Open::Transparent),
+
+            // Never emitted: `md_options()` enables neither footnotes, definition
+            // lists nor metadata blocks (TDD 2.25). Collected transparently anyway so
+            // that a stray one cannot unbalance the stacks.
+            Tag::FootnoteDefinition(_)
+            | Tag::DefinitionList
+            | Tag::DefinitionListTitle
+            | Tag::DefinitionListDefinition
+            | Tag::MetadataBlock(_) => self.open.push(Open::Transparent),
         }
     }
 
@@ -350,7 +397,16 @@ impl<'a> Builder<'a> {
         if is_block_end(&tag) {
             self.flush_implicit();
         }
-        let Some(open) = self.open.pop() else { return };
+        // A raw-HTML block's tags are complete only now, and its own frame is off the
+        // stack as of the pop below — so the disclosure frames it opens or closes are
+        // applied after that, where they nest against the document's blocks rather
+        // than against the block that spelled them.
+        let details = (tag == TagEnd::HtmlBlock).then(|| std::mem::take(&mut self.pending_details));
+        let popped = self.open.pop();
+        if let Some(details) = details {
+            self.apply_details(details);
+        }
+        let Some(open) = popped else { return };
         match open {
             Open::Heading(level) => {
                 let inlines = self.close_inlines();
@@ -376,6 +432,12 @@ impl<'a> Builder<'a> {
                 let inner = self.block_stack.pop().unwrap_or_default();
                 self.push_block(Block::BlockQuote(inner));
             }
+            // Opened and closed by `apply_details`, from the raw-HTML tags that
+            // delimit it, never by a `TagEnd` — so reaching here means a Markdown
+            // construct closed while a disclosure frame was on top, which the
+            // interleaving above prevents. Closed rather than dropped: losing the
+            // body would be silent.
+            Open::Disclosure { summary, open } => self.close_disclosure(summary, open),
             Open::List(start) => {
                 let items = self.list_items.pop().unwrap_or_default();
                 self.push_block(Block::List { start, items });
@@ -461,7 +523,87 @@ impl<'a> Builder<'a> {
         });
     }
 
+    /// Apply the disclosure tags a raw-HTML block carried.
+    ///
+    /// Only a block the pre-scan says is CLOSED opens a frame. An unclosed
+    /// `<details>` groups nothing: its label becomes an ordinary paragraph and the
+    /// content after it stays where it was, which is the same recovery the preview
+    /// applies (rubric 2.26d) — and the reason the two agree is that they read the
+    /// same pre-scan rather than each guessing.
+    fn apply_details(&mut self, tags: Vec<crate::renderer::disclosure::DetailsTag>) {
+        use crate::renderer::disclosure::DetailsTag;
+        for tag in tags {
+            match tag {
+                DetailsTag::DetailsOpen { open } => {
+                    let closed = self
+                        .disclosures
+                        .get(self.disclosures_seen)
+                        .is_some_and(|span| span.body.is_some());
+                    self.disclosures_seen += 1;
+                    if !closed {
+                        continue;
+                    }
+                    self.flush_implicit();
+                    self.block_stack.push(Vec::new());
+                    self.open.push(Open::Disclosure {
+                        summary: String::new(),
+                        open,
+                    });
+                }
+                // The label arrives inside the same raw-HTML block as the tag that
+                // opened the frame, so it is written onto the frame already on the
+                // stack rather than carried in a second pending slot.
+                DetailsTag::SummaryText(text) => {
+                    if let Some(Open::Disclosure { summary, .. }) = self.open.last_mut() {
+                        *summary = text;
+                    }
+                }
+                DetailsTag::DetailsClose => {
+                    if matches!(self.open.last(), Some(Open::Disclosure { .. })) {
+                        self.flush_implicit();
+                        let frame = self.open.pop();
+                        if let Some(Open::Disclosure { summary, open }) = frame {
+                            self.close_disclosure(summary, open);
+                        }
+                    }
+                }
+                // The summary's delimiters carry nothing this sink needs; its text
+                // arrives as `SummaryText` above.
+                DetailsTag::SummaryOpen | DetailsTag::SummaryClose => {}
+            }
+        }
+    }
+
+    /// Pop a disclosure's collected body and emit the block.
+    fn close_disclosure(&mut self, summary: String, open: bool) {
+        let body = self.block_stack.pop().unwrap_or_default();
+        let span = (self.rendered, self.rendered);
+        let summary = if summary.is_empty() {
+            crate::renderer::DEFAULT_SUMMARY_LABEL.to_string()
+        } else {
+            summary
+        };
+        self.push_block(Block::Disclosure {
+            // A zero-width span at the current position: the label lives inside raw
+            // HTML, so no annotation can cover it and no claim is ever mapped onto it.
+            // A span it cannot be asked about beats a fabricated extent the claim
+            // mapper might land inside.
+            summary: vec![Inline::Text {
+                text: summary,
+                span,
+            }],
+            open,
+            body,
+        });
+    }
+
     fn html(&mut self, html: &str) {
+        // The SAME scanner the preview reads, never a second tag walk — the permitted
+        // set is a security posture with one owner, and a construct taught to the
+        // renderer alone is silently absent from every artefact (Document Rendering
+        // CAM row 17, which is the defect this arm closes).
+        self.pending_details
+            .extend(crate::renderer::disclosure::scan_disclosure_tags(html));
         for tag in crate::renderer::scan_image_tags(html) {
             match tag {
                 crate::renderer::ImgTag::PictureOpen => {

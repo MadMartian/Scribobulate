@@ -35,7 +35,11 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
 
     // One block-scope scan of the same cleaned text the walk below parses, so the
     // export segments every tight construct exactly as the preview does.
-    let mut builder = Builder::new(opts, crate::renderer::BlockScripts::scan(cleaned));
+    let mut builder = Builder::new(
+        opts,
+        crate::renderer::BlockScripts::scan(cleaned),
+        crate::renderer::disclosure::scan_document(cleaned),
+    );
     for (ev, src) in Parser::new_ext(cleaned, crate::renderer::md_options()).into_offset_iter() {
         builder.event(ev, src);
     }
@@ -95,6 +99,10 @@ fn mark_claim(blocks: &mut Vec<Block>, idx: usize, range: (i32, i32)) {
                 mark_inlines(inlines, idx, range)
             }
             Block::BlockQuote(inner) => mark_claim(inner, idx, range),
+            // The BODY takes claims like any other content — it is ordinary document
+            // text that the preview happened not to draw. The summary does not: it
+            // lives inside raw HTML, which carries no annotations.
+            Block::Disclosure { body, .. } => mark_claim(body, idx, range),
             Block::List { items, .. } => {
                 for item in items {
                     mark_claim(&mut item.blocks, idx, range);
@@ -267,6 +275,11 @@ mod export_doc_tests {
                     }
                     Block::CodeBlock { text, .. } => out.push_str(text),
                     Block::BlockQuote(inner) => blocks(inner, out),
+                    Block::Disclosure { summary, body, .. } => {
+                        out.push_str(&crate::export::plain_text(summary));
+                        out.push('\n');
+                        blocks(body, out);
+                    }
                     Block::List { items, .. } => {
                         for i in items {
                             blocks(&i.blocks, out);
@@ -700,5 +713,137 @@ mod export_independence_tests {
         let before = build("original\n", &RenderOptions::default());
         let after = build("edited\n", &RenderOptions::default());
         assert_ne!(before, after);
+    }
+}
+
+#[cfg(test)]
+mod disclosure_export_tests {
+    use super::build;
+    use crate::export::{Block, RenderOptions};
+
+    const MD: &str = concat!(
+        "# Doc\n\n",
+        "<details>\n<summary>Show me</summary>\n\n",
+        "body **text**\n\n",
+        "</details>\n\n",
+        "after\n"
+    );
+
+    fn doc_of(md: &str) -> crate::export::ExportDoc {
+        build(md, &RenderOptions::default())
+    }
+
+    /// **Rubric 2.26g — a disclosure exports as it renders.**
+    ///
+    /// MEASURED before this: the body exported fine, because it is ordinary Markdown
+    /// events the walk never had to be taught, and the SUMMARY was dropped entirely —
+    /// so every artefact was missing the one piece of the construct that names it,
+    /// while still opening looking finished (Document Rendering CAM row 17).
+    #[test]
+    fn a_disclosures_summary_and_body_both_reach_the_model() {
+        let doc = doc_of(MD);
+        let disclosure = doc
+            .blocks
+            .iter()
+            .find_map(|b| match b {
+                Block::Disclosure { summary, body, .. } => Some((summary, body)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected a Disclosure block, got {:?}", doc.blocks));
+        assert_eq!(
+            crate::export::plain_text(disclosure.0),
+            "Show me",
+            "the summary label reaches the artefact"
+        );
+        assert!(
+            matches!(disclosure.1.first(), Some(Block::Paragraph(_))),
+            "the body is nested inside it, as Markdown: {:?}",
+            disclosure.1
+        );
+        // And the content around it is untouched.
+        assert!(matches!(doc.blocks.first(), Some(Block::Heading { .. })));
+        assert!(matches!(doc.blocks.last(), Some(Block::Paragraph(_))));
+    }
+
+    /// A collapsed block exports exactly as an open one does. The preview's fold state
+    /// is not an input to this builder at all — the document's own `open` attribute is
+    /// the only thing that differs, and only in the flag a sink may offer.
+    #[test]
+    fn the_readers_fold_state_is_not_an_input_to_the_export() {
+        let closed = doc_of(MD);
+        let opened = doc_of(&MD.replace("<details>", "<details open>"));
+        let body_of = |d: &crate::export::ExportDoc| {
+            d.blocks.iter().find_map(|b| match b {
+                Block::Disclosure { body, .. } => Some(body.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            body_of(&closed),
+            body_of(&opened),
+            "the same body, whichever way the document asked it to be shown"
+        );
+        let open_flag = |d: &crate::export::ExportDoc| {
+            d.blocks.iter().find_map(|b| match b {
+                Block::Disclosure { open, .. } => Some(*open),
+                _ => None,
+            })
+        };
+        assert_eq!(open_flag(&closed), Some(false));
+        assert_eq!(open_flag(&opened), Some(true));
+    }
+
+    /// Nesting falls out of the frame stack, exactly as it does for a blockquote in a
+    /// list item — so a disclosure inside a disclosure needs no case of its own.
+    #[test]
+    fn a_nested_disclosure_nests_in_the_model() {
+        let doc = doc_of(concat!(
+            "<details>\n<summary>Outer</summary>\n\n",
+            "<details>\n<summary>Inner</summary>\n\ninner body\n\n</details>\n\n",
+            "</details>\n"
+        ));
+        let Some(Block::Disclosure { body, .. }) = doc.blocks.first() else {
+            panic!("expected an outer Disclosure, got {:?}", doc.blocks);
+        };
+        assert!(
+            body.iter().any(|b| matches!(b, Block::Disclosure { .. })),
+            "the inner block nests inside the outer one: {body:?}"
+        );
+    }
+
+    /// An UNCLOSED `<details>` groups nothing — the same recovery the preview applies
+    /// (rubric 2.26d), and it is the same pre-scan that decides it in both, so the two
+    /// cannot disagree about which blocks are real.
+    #[test]
+    fn an_unclosed_disclosure_groups_nothing_and_loses_nothing() {
+        let doc = doc_of("<details>\n<summary>Never closed</summary>\n\nbody\n\n## After\n");
+        assert!(
+            !doc.blocks
+                .iter()
+                .any(|b| matches!(b, Block::Disclosure { .. })),
+            "an unpaired block is not a disclosure: {:?}",
+            doc.blocks
+        );
+        assert!(
+            doc.blocks
+                .iter()
+                .any(|b| matches!(b, Block::Heading { .. })),
+            "and nothing after it is swallowed: {:?}",
+            doc.blocks
+        );
+    }
+
+    /// A `<details>` with no `<summary>` takes the same default label the preview
+    /// shows, so the two do not name one construct two different things.
+    #[test]
+    fn a_summaryless_disclosure_takes_the_default_label() {
+        let doc = doc_of("<details>\n\nbody\n\n</details>\n");
+        let Some(Block::Disclosure { summary, .. }) = doc.blocks.first() else {
+            panic!("expected a Disclosure, got {:?}", doc.blocks);
+        };
+        assert_eq!(
+            crate::export::plain_text(summary),
+            crate::renderer::DEFAULT_SUMMARY_LABEL
+        );
     }
 }

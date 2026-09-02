@@ -329,7 +329,14 @@ pub(super) fn rerender_split_preview_driven_by_editor(window: &ApplicationWindow
     let allow_unsafe = st.allow_unsafe_images.get();
     st.scroll.driver.set(ScrollDriver::Editor);
     st.scroll.pv_last.set((-1.0, -1.0));
-    re_render(&preview_sw, md, st.doc_dir().as_deref(), zoom, allow_unsafe);
+    re_render(
+        &preview_sw,
+        md,
+        st.doc_dir().as_deref(),
+        zoom,
+        allow_unsafe,
+        &st.folds.borrow(),
+    );
     // The FIRST live re-render after a fresh preview mount is the one whose
     // `set_buffer`-into-an-already-visible-empty-pane can leave the overlay terminally
     // blank. Force one healing follow-up frame for exactly that render.
@@ -399,7 +406,7 @@ fn arm_first_content_repaint(overlay: &gtk::Overlay) {
 /// top line 79 → 110 → 152 → 158, terminating clamped at the document's end rather
 /// than settling. A document position has no such error to accumulate: it is the
 /// same byte offset however many times it is handed across.
-pub(super) fn content_reading_position(window: &ApplicationWindow) -> DocPosition {
+pub(crate) fn content_reading_position(window: &ApplicationWindow) -> DocPosition {
     let Some(st) = state(window) else {
         return DocPosition::start();
     };

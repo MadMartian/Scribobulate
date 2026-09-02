@@ -39,10 +39,42 @@ blocks it but the work — with one open question, below.
 **Self-drawn content (Tier 3)** is blocked by the rendering architecture and possibly by
 the GTK floor. The content is drawn, not built: there is no object for GTK to attach an
 `ATContext` to. The obvious repair — make each one a real widget at a
-`GtkTextChildAnchor` — is **architecturally forbidden here**: an anchored child is
-re-measured at minimum width and re-arms the layout churn that blanks the view
-(ScrAP-23, and the §23 viewport-column bound around it). That decision is
-load-bearing for the whole preview and is not reopenable for accessibility.
+`GtkTextChildAnchor` — is **forbidden for the elements this tier is about**, and the
+reasons are two, both **quantitative rather than categorical**:
+
+- **(a) Minimum-width floor, proportional to the child.** `gtk_text_view_measure` takes
+  `min = MAX(min, child_min)` over every anchored child and does nothing else, so a
+  child sets a floor under the view's own minimum equal to its own minimum. A table
+  contributes ~900px and re-arms the layout churn that blanks the view (ScrAP-23, and
+  the §23 viewport-column bound around it).
+- **(b) Offset shift at density.** Each anchor inserts a `U+FFFC` into the buffer, so
+  converting per-item elements — list markers, task checkboxes, annotation chips, one
+  per item — shifts every buffer-offset consumer. The copy map compounds it: it holds no
+  node for an anchor it was not explicitly taught about, so an untaught one silently
+  omits its construct from copied source.
+
+Both bite hard for Tier 3 content at its densities, and neither is reopenable for it.
+
+**Neither bites for a small, fixed-size, sparse control**, and that is measured rather
+than argued (`probes/textview-anchored-toggle.c`, GTK 4.6.9): eight anchored ~30px
+children leave the view's minimum width at **30** — `MAX`, not a sum — against **900**
+for a single table-sized child, and produce `hadjustment.upper − page_size` of **0.0**,
+so the ScrAP-23a overflow chain is not reachable through them. Such a child is also
+reachable by Tab and activates on both Space and Enter in a **non-editable** view.
+
+**Do not restate the old justification.** This rule previously read "an anchored child is
+re-measured at minimum width", citing height-for-width, and that framing is why arguments
+pitched at height-for-width kept missing the mechanism. A related trap: a bare wrapping
+`GtkTextView`'s own minimum width is **0**, so a small child is not "below the view's
+floor" — it *raises* the floor, from 0 to its own width. It is harmless because that
+figure cannot arm the overflow chain, not because it disappears into an existing margin.
+
+Two consequences for anything that takes this route: an anchored child sits **outside**
+the view's own hover machinery (`hover_at_point`/`apply_hover` and the cursor set from
+the view's motion handler, `preview/interactions.rs`), so it must carry its own cursor —
+`pointer`, matching links, comment markers, checkboxes and copy buttons — or it hovers as
+an I-beam and reads as unclickable; and it does not inherit the accent hover border the
+drawn affordances get.
 
 ## Constraints that shape every option
 

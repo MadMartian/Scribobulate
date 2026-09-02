@@ -95,6 +95,10 @@ heading_band_padding = 12               # band edge → heading text, each side.
                                         # part of drawing a band correctly, not a flourish.
                                         # Inert here regardless — the inset is applied only
                                         # to a level that HAS a band, and System bands none
+disclosure_band_radius = 0              # square corners on a disclosure summary's band,
+                                        # until a theme rounds them. Stated for the same
+                                        # reason heading_band_radius is: a key whose only
+                                        # value is a code floor is a second source of truth
 blockquote_bar_width = 3             # the quote's left accent bar
 blockquote_text_gap  = 10            # bar → quoted text
 list_step            = 28            # per-nesting-level list indent
@@ -234,6 +238,47 @@ rule_color    = "#ffc21e"   # sunset-GOLD horizon line — a different hue from 
 table_border_color = "#8f3a72"   # deeper, muted magenta grid
 table_head_bg = "#3d1a34"   # dark magenta header fill — matches the grid; gold header text reads on it
 
+# ── The disclosure fold, `<details>` (TDD 18.48–18.51) ─────────────────────────
+# The indicator takes the solid TRANSPORT triangles — the play/eject vocabulary of a
+# cassette deck and a VCR, which is this theme's decade expressed as a control rather
+# than as one more neon. BOTH states are stated: they resolve independently, and an
+# arrow that does not change when the fold is clicked is the one failure this control
+# cannot survive (it was reported once as "did not do anything").
+disclosure_glyph          = "▶"
+disclosure_expanded_glyph = "▼"
+# The indicator is a GRAPHIC, so it answers to WCAG's 3:1 non-text floor rather than
+# prose's 4.5:1 — and it clears both regardless: 4.67:1 on the band below, 5.59:1 where
+# that band has faded to the page. Magenta because an indicator is FURNITURE, the family
+# the bullets, the quote bar and the strike already share; the gold beside it is the
+# title family, and keeping the two apart is what stops the fold reading as one blob.
+disclosure_marker_color   = "#ff3caf"
+# ⚠ `disclosure_marker_size` is deliberately UNSET here. It sizes the indicator's BOX,
+# and a GLYPH is drawn at the page's own font size whatever that box is — so stating it
+# would pad the arrow, never grow it. Pixel Quest states it because its indicator is a
+# sprite, and a sprite IS resampled to the box.
+#
+# A BAND behind the whole summary line, reusing `table_head_bg`'s dark magenta exactly:
+# a fold's summary and a table's header row are both a header over content the reader
+# looks inside, and giving them one surface says so without introducing a hue. The
+# gradient runs down to the page for the same reason the heading bands' does — a
+# one-line strip ending on a hard edge reads as a slab dropped on the page rather than
+# as a header dissolving into it.
+disclosure_band_color             = "#3d1a34"
+# ⚠ This IS `background` above, restated — same key, same guard, same reason as
+# `heading_band_gradient_to_color`.
+disclosure_band_gradient_to_color = "#1a1033"
+disclosure_band_radius            = 6
+# The summary's LABEL takes the headings' sunset-gold: a summary IS the title of what
+# the fold hides, and which heading level it sits under is carried by size and face, not
+# by this colour. 9.30:1 on the band, 11.14:1 at the page end.
+disclosure_fg             = "#ffc21e"
+# A collapsed block's body PREVIEW is a hint at the text, not the text — so it takes the
+# body lavender SHADED rather than a fourth hue, and reads as the body at half voice.
+# 5.29:1 on the band and 6.33:1 at the page end, both clear of the 4.5:1 floor it answers
+# to as ordinary prose. Shaded rather than desaturated, per this file's standing rule for
+# a dark page.
+disclosure_preview_fg     = "#a58ed0"
+
 # Everything omitted derives from background/foreground/accent as usual:
 # code fills, blockquote_bar, selection_bg, table chrome, and all typography/geometry.
 
@@ -349,6 +394,43 @@ find_hl_current_color = "#fb6f92"   # HOT PINK, undiluted. Deliberately BRIGHT r
 mark_bg         = "#5c5200"   # deep lemon — the ==highlight== marker. A shaded gold is the
                               # classic highlighter read, and it is the one overlay that
                               # must never be mistaken for the others (ink 4.7:1)
+
+# ── The disclosure fold, `<details>` (TDD 18.48–18.51) ─────────────────────────
+# ROUND rather than pointed. ⊕/⊖ is the oldest disclosure vocabulary there is, it is the
+# shape this theme's rounded faces are already built on, and at the 16px indicator box a
+# filled circle carrying a plus or a minus stays legible where a small rotated triangle
+# turns to a smudge. Both states are stated — they resolve independently, and an
+# indicator that does not change when clicked is this control's only real failure.
+# 🍬 was the obvious pick and is out on two counts: a colour emoji ignores
+# `disclosure_marker_color` outright (its colours are in the font), and it reaches an
+# export as a rasterised colour glyph rather than as text.
+disclosure_glyph          = "⊕"
+disclosure_expanded_glyph = "⊖"
+# Hot pink — the furniture family the bullets and the quote bar already share. 5.02:1 on
+# the band below and 6.10:1 at the page end, well past the 3:1 non-text floor a drawn
+# indicator answers to. `disclosure_marker_size` is unset for the reason Synthwave's
+# block gives: it sizes the BOX, and a glyph is drawn at the page's font size regardless.
+disclosure_marker_color   = "#fb6f92"
+# A LIFTED band behind the summary line — the same one-step-above-the-page surface
+# `code_inline_bg` stands on, and reused deliberately: a fold's summary is raised
+# furniture, not a heading, and this theme already owns a surface that means exactly
+# that. Banding it in the h1 grape or the h2 pink would have said "heading" instead. The
+# gradient fades to the page, safe here for the reason the heading bands are safe: this
+# page is dark, so every ink on the band only gains contrast along the run.
+disclosure_band_color             = "#1d2a60"
+# ⚠ This IS `background` above, restated — see the note on the heading band's stop.
+disclosure_band_gradient_to_color = "#101a4d"
+disclosure_band_radius            = 8
+# Lemon label, in the heading/rule family: the summary is the title of what the fold
+# hides. 10.75:1 on the band, 13.07:1 at the page end.
+disclosure_fg         = "#f6e94f"
+# The collapsed preview is the cotton-pink body ink SHADED — a hint at half voice rather
+# than a fifth hue on this page. 5.28:1 on the band, 6.42:1 at the page end, both clear
+# of the 4.5:1 text floor. ORCHID #a063c8 was the tempting answer here, being still the
+# one swatch with no role at all, and it is still unusable: 3.9:1 on the page and LOWER
+# on this band, which is lifted above it. The luminance law again — a swatch's role is
+# decided by its value, and no surface on this page rescues that one.
+disclosure_preview_fg = "#cf8fae"
 
 # Geometry: round and generously padded, with a grid heavy enough to draw a real edge.
 blockquote_bar_width = 5
@@ -715,6 +797,54 @@ annotation_chip_fg = "#17263b"
 # unreadable or refused, and `annotation_chip_fg` still colours the overflow-count
 # numeral drawn on top of whichever fill wins.
 annotation_chip_sprite = "sprites/sword.png"
+
+# ── The disclosure fold, `<details>` (TDD 18.48–18.51) ─────────────────────────
+# A SIGN PLATE for the indicator, and this theme's fourth original sprite: a chunky
+# arrow-shaped plate — a rectangular shaft flaring into a broad head — with a 1px dark
+# outline, a lit top edge, a shaded underside and two rivets, in this theme's own
+# collectible gold with its cream as the highlight. The rivets are the copper plate's
+# idiom carried one construct over, so the fold and the quote bar read as the same
+# workshop. Drawn from arithmetic written for this project (a rectangle plus a linear
+# taper); the down-pointing twin is that silhouette turned a quarter turn with its
+# light-from-above shading RECOMPUTED rather than rotated with it. Nothing here is
+# copied, traced or derived from any published game's art — an arrow plate is generic
+# geometry, which is what POLICY's "Bundled decoration art" rule asks for and what the
+# grass platform and the copper plate already answer to.
+disclosure_sprite          = "sprites/sign-right.png"
+disclosure_expanded_sprite = "sprites/sign-down.png"
+# The GLYPH rung beneath each sprite, and it is not decoration. `theme::decor`'s
+# `candidates()` hands back ORDERED RUNGS, so a plate that will not decode falls to the
+# glyph instead of erasing the arrow — and the arrow is this control's entire feedback
+# channel. A solid triangle is the most legible thing a 16px box can hold, which is the
+# whole job of a fallback.
+disclosure_glyph           = "▶"
+disclosure_expanded_glyph  = "▼"
+# The indicator's BOX, pinned to the plate's own 16px grid — stated for the same reason
+# `blockquote_bar_width` is 24 and no other. The plate is resampled to this box with a
+# nearest-neighbour filter, so 16 keeps it pixel-exact at zoom 1.0 and at every integer
+# zoom above it; a theme redrawing the plate at another size must move this with it. It
+# is also Adwaita's own disclosure metric, so the control occupies exactly the space it
+# always did.
+disclosure_marker_size     = 16
+# Inks the GLYPH rung only — a sprite indicator ignores it, per the sprite-outranks-flat
+# rule. The theme's gold, so the fallback and the plate it stands in for read as the same
+# object: 7.92:1 on the band, far past the 3:1 non-text floor.
+disclosure_marker_color    = "#ffd400"
+# A sign BOARD behind the whole summary line, in the h2 banner's wood. Reused rather than
+# re-picked: the fold's board, the h2 banner and the plate in front of it are meant to
+# read as one carpentry, and this page's palette holds no second dark surface that would
+# not have meant "heading" (the h1 indigo) or "quote panel" (the navy) instead. NO
+# gradient, for the reason the heading bands state: fading a dark band down to this
+# bright sky page drags every ink on it toward the floor along the run, and nothing here
+# needs to prove that is safe to ship.
+disclosure_band_color  = "#5b2e1c"
+disclosure_band_radius = 6
+# Cream label on the wood — the h2's own pairing, 10.19:1 — and the collapsed body
+# preview a step quieter in the gold, 7.92:1. Both clear the 4.5:1 text floor with room;
+# the ORDER matters more than the margin, since a preview brighter than the label it
+# follows would read as the more important half of the line.
+disclosure_fg          = "#fff3c4"
+disclosure_preview_fg  = "#ffd400"
 
 # Four distinct hue families, one per overlay, same discipline every theme here
 # follows: green wash for annotations, gold wash for ==marks==, pale lavender for

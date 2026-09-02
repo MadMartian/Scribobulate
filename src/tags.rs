@@ -105,6 +105,34 @@ pub(crate) enum TagName {
     /// its margin still wins over a code block's inside a quote), so an ink on it would
     /// repaint every link, heading and `==mark==` in the quote in the panel's ink.
     BlockquoteInk,
+    /// The ink a disclosure's whole SUMMARY LINE takes when a theme states
+    /// `disclosure_fg` (TDD 18.49).
+    ///
+    /// **Registered immediately after [`TagName::BlockquoteInk`] and before every
+    /// other ink-setting tag**, which is exactly the priority the decoration needs and
+    /// the reason this is a tag at all rather than part of the band. Two orderings are
+    /// live today: a summary line inside a blockquote is a NARROWER statement than the
+    /// quote's, so this must beat `blockquote-ink`; and a collapsed block's body
+    /// PREVIEW is narrower still, so `disclosure-preview` — registered after this —
+    /// must beat it in turn.
+    ///
+    /// **The label itself carries no inline markup today**, and that is a property of
+    /// the renderer rather than of this tag: `<summary>`'s text arrives inside raw HTML
+    /// as one plain run (`renderer::disclosure::DetailsTag::SummaryText`), so there is
+    /// no link, heading or `==mark==` inside it for anything to lose to yet. Siting the
+    /// ink at the bottom of the ink stack is what makes that a change to the renderer
+    /// alone if the label ever becomes rich — which is the reason a fill could never be
+    /// a tag: an extent has no such question to answer at all.
+    DisclosureInk,
+    /// The ink a COLLAPSED disclosure's body-opening PREVIEW takes when a theme
+    /// states `disclosure_preview_fg` (TDD 2.26).
+    ///
+    /// Registered unconditionally (so the vocabulary does not vary by theme) and set
+    /// only when asked for — the same `blockquote-ink` discipline just above — but
+    /// with no ink-floor question to answer: the preview is stand-alone buffer text
+    /// on the summary line, nothing else ever applies a foreground to that range, so
+    /// there is no competing tag for its priority to lose to.
+    DisclosurePreview,
     /// Heading levels h1–h5. h6-and-deeper are mapped onto [`TagName::H5`] upstream
     /// (see `renderer::emit`), the same fold GTK-side would apply to any over-max
     /// level, matching the five heading tags registered here.
@@ -165,6 +193,8 @@ impl TagName {
     pub(crate) fn name(self) -> &'static str {
         match self {
             TagName::BlockquoteInk => "blockquote-ink",
+            TagName::DisclosureInk => "disclosure-ink",
+            TagName::DisclosurePreview => "disclosure-preview",
             TagName::H1 => "h1",
             TagName::H2 => "h2",
             TagName::H3 => "h3",
@@ -262,6 +292,29 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     let quote_fg = theme.blockquote_fg;
     add(TagName::BlockquoteInk.name(), &move |t| {
         if let Some(c) = quote_fg {
+            t.set_foreground_rgba(Some(&c));
+        }
+    });
+
+    // The disclosure summary LINE's ink (TDD 18.49), registered next so it BEATS the
+    // quote's ink above and LOSES to every ink-setting tag below — the priority the
+    // decoration's meaning requires, and the whole reason `disclosure_fg` is a tag
+    // while `disclosure_band_color` is a drawn rect. Inert until stated, the same
+    // discipline `BlockquoteInk` follows, so System's tag table is byte-identical
+    // (TDD 18.2).
+    let disclosure_fg = theme.disclosure_fg;
+    add(TagName::DisclosureInk.name(), &move |t| {
+        if let Some(c) = disclosure_fg {
+            t.set_foreground_rgba(Some(&c));
+        }
+    });
+
+    // A collapsed disclosure's body-opening PREVIEW ink (TDD 2.26) — same shape as
+    // `BlockquoteInk` just above (registered either way, set only when asked for),
+    // but with no priority to reason about: see `TagName::DisclosurePreview`.
+    let disclosure_preview_fg = theme.disclosure_preview_fg;
+    add(TagName::DisclosurePreview.name(), &move |t| {
+        if let Some(c) = disclosure_preview_fg {
             t.set_foreground_rgba(Some(&c));
         }
     });

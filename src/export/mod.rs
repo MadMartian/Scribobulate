@@ -265,6 +265,24 @@ pub(crate) enum Block {
         head: Vec<Vec<Inline>>,
         rows: Vec<Vec<Vec<Inline>>>,
     },
+    /// An HTML `<details>` disclosure: its `<summary>` label and the whole of its
+    /// body, whether or not the preview happens to be showing that body.
+    ///
+    /// **An export is the document, not the viewport** (TDD 2.26g). The preview
+    /// withholds a collapsed body by not rendering it, which is a display decision;
+    /// an artefact that inherited that decision would be missing content the file it
+    /// was made from plainly contains, while still opening looking finished — the
+    /// exact failure Document Rendering CAM row 17 exists to catch.
+    Disclosure {
+        /// The `<summary>` label. Plain text, because it lives inside the raw HTML
+        /// and never reaches the ordinary event path where inline markup is built.
+        summary: Vec<Inline>,
+        /// The document's own `open` attribute, preserved so a sink that CAN offer
+        /// the disclosure (HTML) honours the author's intent. A sink that cannot
+        /// (PDF) lays the body out regardless — the body is never omitted either way.
+        open: bool,
+        body: Vec<Block>,
+    },
     Rule,
 }
 

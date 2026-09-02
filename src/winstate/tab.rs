@@ -90,6 +90,15 @@ pub(crate) struct TabState {
     /// the rebuilt tree re-select the same heading (without re-navigating) so the
     /// panel keeps its position across a view-mode switch.
     pub(crate) outline_selected: Cell<Option<usize>>,
+    /// Which disclosure blocks this document's reader has collapsed.
+    ///
+    /// Per-tab and NOT round-tripped through `session.rs`: the keys are source byte
+    /// offsets, so they mean nothing against a document that has changed underneath
+    /// them, and HTML's own model treats a disclosure's state as a property of the
+    /// document (the `open` attribute) rather than of the session. Survives every
+    /// re-render that leaves the source alone — zoom, theme, view-mode, live preview —
+    /// which is the set a reader expects, and is cleared when the text changes.
+    pub(crate) folds: RefCell<crate::fold::FoldState>,
     /// The current outline's heading source-byte-offsets, in document order —
     /// `refresh_outline`'s own `extract_headings` result, kept around so a caret
     /// move (`editor_cursor_doc_index`) can binary-search it instead of re-parsing
@@ -359,6 +368,13 @@ impl TabState {
     /// holds into this text still indexes the same logical position.
     pub(crate) fn set_source(&self, text: &str) {
         *self.source.borrow_mut() = crate::lineendings::normalize_lone_cr(text).into_owned();
+        // Fold keys are source byte offsets, so a new document text moves every one of
+        // them: a key that still matched would collapse an unrelated block. Clearing
+        // here — at the single choke point every document replacement passes through —
+        // also gives the behaviour HTML itself specifies, where a disclosure's state is
+        // the `open` attribute and therefore a property of the document rather than of
+        // the session (`crate::fold`).
+        self.folds.borrow_mut().clear();
     }
 
     /// Construct a fresh tab, filling in the universal-default fields that do
@@ -401,6 +417,7 @@ impl TabState {
             split,
             content_box,
             outline_selected: Cell::new(None),
+            folds: RefCell::new(crate::fold::FoldState::default()),
             heading_src_offsets: RefCell::new(Vec::new()),
             annotations_selected: Cell::new(None),
             outline_spy_selecting: Cell::new(false),

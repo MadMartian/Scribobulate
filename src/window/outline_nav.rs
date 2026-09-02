@@ -117,7 +117,7 @@ fn navigate_to_heading(
     match current_mode(window) {
         ViewMode::Preview => {
             if let Some(sw) = st.split.preview_scroller() {
-                scroll_preview_to_heading(&sw, doc_index);
+                scroll_preview_to_heading_revealing(window, &sw, doc_index);
             }
         }
         ViewMode::Split => {
@@ -129,12 +129,37 @@ fn navigate_to_heading(
                 // (the coalesced sync projects preview→editor). Genuine user input
                 // on the editor switches the driver back via mark_driver_on_input.
                 st.scroll.driver.set(ScrollDriver::Preview);
-                scroll_preview_to_heading(&preview_sw, doc_index);
+                scroll_preview_to_heading_revealing(window, &preview_sw, doc_index);
             }
         }
         ViewMode::Edit => scroll_editor_to_offset(&st.editor, &st.editor_buf, src_offset),
     }
 }
+/// Scroll the preview to a heading, **opening whatever hides it first** (rubric
+/// 12.22).
+///
+/// The outline lists every heading the document declares, collapsed disclosures
+/// included, so an activation can name a heading that this render did not put in the
+/// buffer at all. `scroll_preview_to_heading` still scrolls — to the summary line of
+/// the block hiding it, the nearest position the reader can see — and reports the
+/// folds standing in the way; expanding those and scrolling again lands on the
+/// heading itself. When nothing hides it, that second pass is skipped and this costs
+/// exactly what the plain scroll always did.
+fn scroll_preview_to_heading_revealing(
+    window: &ApplicationWindow,
+    sw: &gtk::ScrolledWindow,
+    doc_index: usize,
+) {
+    let hidden_by = scroll_preview_to_heading(sw, doc_index);
+    let sw = sw.clone();
+    super::foldreveal::reveal_folds(window, &hidden_by, move |_| {
+        // The re-render rebuilt the preview's buffer, so the heading's offset is a
+        // NEW one; re-reading it through the same accessor is what makes this
+        // correct rather than re-using the offset from before the expansion.
+        scroll_preview_to_heading(&sw, doc_index);
+    });
+}
+
 /// Record an outline activation as a within-document navigation, addressing the
 /// heading by its **slug** rather than by the `doc_index` the row carries.
 ///
@@ -155,7 +180,7 @@ fn record_outline_activation(window: &ApplicationWindow, st: &Rc<TabState>, doc_
         return;
     };
     let slug = crate::preview::scrib_render_data(&view)
-        .and_then(|rd| rd.borrow().heading_slugs.get(doc_index).cloned());
+        .and_then(|rd| rd.borrow().heading_sites.get(doc_index)?.slug.clone());
     if let Some(slug) = slug {
         crate::window::record_in_document_jump(window, st, crate::winstate::NavSpot::Heading(slug));
     }
@@ -452,12 +477,19 @@ fn preview_top_doc_index(window: &ApplicationWindow) -> Option<usize> {
 
     let rd = scrib_render_data(&view)?;
     let rd = rd.borrow();
-    if rd.heading_offsets.is_empty() {
+    if rd.heading_sites.is_empty() {
         return None;
     }
 
-    // Largest heading offset ≤ top_offset = nearest preceding (or current) heading.
-    match rd.heading_offsets.partition_point(|&o| o <= top_offset) {
+    // Largest heading offset <= top_offset = nearest preceding (or current) heading.
+    //
+    // The search still holds across a collapsed disclosure because every heading it
+    // hides carries the disclosure's summary-line offset, so the list stays
+    // non-decreasing (`outline::HeadingSite`). A run of hidden headings shares one
+    // offset and the LAST of them wins, which is the deepest heading whose section
+    // the viewport is in — the same answer this returns for a run of headings that
+    // share a line for any other reason.
+    match rd.heading_sites.partition_point(|s| s.offset <= top_offset) {
         0 => None, // viewport is above the very first heading
         n => Some(n - 1),
     }
@@ -989,6 +1021,241 @@ mod collapse_all_tests {
             },
         );
 
+        window.destroy();
+    }
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod disclosure_reveal_tests {
+    use super::*;
+    use crate::window::testkit::test_app;
+
+    /// One heading before a collapsed disclosure, one hidden INSIDE it, one after —
+    /// the shape in which a rendered-only heading list mis-indexes.
+    ///
+    /// A filler paragraph precedes the hidden heading so it sits past the summary's
+    /// body-opening PREVIEW's character limit (item 3 / TDD 2.26) — otherwise "Hidden"
+    /// would show in the collapsed preview too, defeating the "starts hidden"
+    /// precondition below.
+    const MD: &str = "# A\n\n<details>\n<summary>S</summary>\n\nfiller filler filler filler \
+                       filler filler filler filler filler filler filler filler.\n\n\
+                       ## Hidden\n\n</details>\n\n# B\n";
+
+    /// The preview's live buffer text, anchors included.
+    fn preview_text(window: &ApplicationWindow) -> String {
+        let sw = crate::window::get_preview_sw(window).expect("a preview scroller");
+        let view = sw
+            .child()
+            .and_then(|c| c.downcast::<CodePreviewView>().ok())
+            .expect("a preview view");
+        let buf = view.buffer();
+        buf.slice(&buf.start_iter(), &buf.end_iter(), true)
+            .to_string()
+    }
+
+    /// **Rubric 12.22.** Activating an outline row for a heading inside a collapsed
+    /// disclosure expands that disclosure and navigates to the heading.
+    ///
+    /// The precondition assertion is half the test: it establishes that the heading
+    /// really was hidden, so a build that never collapsed anything could not pass by
+    /// accident.
+    #[gtktest::test]
+    fn activating_a_hidden_heading_opens_the_disclosure_that_hides_it() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.foldreveal");
+        let window = new_window(&app, "IT-FOLD", MD, None);
+        crate::testpump::until(crate::testpump::Clock::Idle, "the first render", || {
+            !preview_text(&window).is_empty()
+        });
+
+        assert!(
+            !preview_text(&window).contains("Hidden"),
+            "precondition: the heading starts hidden inside the collapsed block"
+        );
+        let headings = extract_headings(MD);
+        assert_eq!(headings.len(), 3, "A, Hidden, B");
+
+        // doc_index 1 is the hidden heading — the index the outline row carries.
+        navigate_to_heading(&window, 1, headings[1].src_offset);
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "the disclosure to expand and the heading to appear",
+            || preview_text(&window).contains("Hidden"),
+        );
+
+        window.destroy();
+    }
+
+    /// **The reading position survives a disclosure toggle.**
+    ///
+    /// A toggle re-renders, and the re-render used to restore by buffer LINE — a
+    /// number that names a different place once lines have appeared or vanished, so
+    /// expanding a block above the reader threw them backwards by its length, and
+    /// collapsing threw them forwards (or, past the shortened document's end,
+    /// clamped them). Anchoring on the SOURCE instead holds them where they were,
+    /// because a fold changes the render and not the document.
+    ///
+    /// The claim is made in `DocPosition`, the coordinate it is actually about:
+    /// comparing raw adjustment values would fail on the content below the block
+    /// legitimately moving down, which is the correct behaviour and not the defect.
+    #[gtktest::test]
+    fn opening_a_disclosure_above_the_reader_does_not_move_the_reader() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.foldscroll");
+        // A collapsed block at the very top, then enough prose to scroll through, so
+        // the reader can sit WELL BELOW the block being opened — the case a line
+        // anchor gets wrong by exactly the block's length.
+        let mut md = String::from("<details>\n<summary>S</summary>\n\n");
+        for i in 0..40 {
+            md.push_str(&format!("hidden line {i}\n\n"));
+        }
+        md.push_str("</details>\n\n");
+        for i in 0..200 {
+            md.push_str(&format!("## Section {i}\n\nprose {i}\n\n"));
+        }
+        let window = new_window(&app, "IT-FOLDSCROLL", &md, None);
+        crate::testpump::until(crate::testpump::Clock::Idle, "the first render", || {
+            !preview_text(&window).is_empty()
+        });
+
+        // Park the reader deep in the document, past the collapsed block.
+        let sw = crate::window::get_preview_sw(&window).expect("a preview scroller");
+        let view = sw
+            .child()
+            .and_then(|c| c.downcast::<CodePreviewView>().ok())
+            .expect("a preview view");
+        let text = preview_text(&window);
+        let byte = text
+            .find("Section 120")
+            .expect("the deep section is rendered");
+        view.scroll_to_buffer_offset(text[..byte].chars().count() as i32);
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "the deep scroll to land",
+            || {
+                crate::window::content_reading_position(&window)
+                    != crate::readingpos::DocPosition::start()
+            },
+        );
+        let before = crate::window::content_reading_position(&window);
+
+        // The block starts at source byte 0 — the only disclosure in the document.
+        super::foldreveal::reveal_folds(&window, &[crate::fold::FoldKey(0)], |_| {});
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "the disclosure to expand",
+            || preview_text(&window).contains("hidden line 0"),
+        );
+
+        assert_eq!(
+            crate::window::content_reading_position(&window),
+            before,
+            "opening a block above the reader must not move the reader"
+        );
+
+        window.destroy();
+    }
+
+    /// The other half of the same defect: activating a heading AFTER the collapsed
+    /// block must land on that heading, not on whatever a shifted index pointed at.
+    ///
+    /// MEASURED before `HeadingSite`: the rendered heading list held two entries for
+    /// three source headings, so `doc_index` 2 fell off the end and this activation
+    /// scrolled nowhere at all, while `doc_index` 1 scrolled to "B".
+    #[gtktest::test]
+    fn activating_a_heading_after_a_collapsed_block_lands_on_that_heading() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.foldindex");
+        let window = new_window(&app, "IT-FOLDIDX", MD, None);
+        crate::testpump::until(crate::testpump::Clock::Idle, "the first render", || {
+            !preview_text(&window).is_empty()
+        });
+
+        let sw = crate::window::get_preview_sw(&window).expect("a preview scroller");
+        let view = sw
+            .child()
+            .and_then(|c| c.downcast::<CodePreviewView>().ok())
+            .expect("a preview view");
+        let sites = crate::preview::scrib_render_data(&view)
+            .expect("render data")
+            .borrow()
+            .heading_sites
+            .clone();
+
+        assert_eq!(sites.len(), 3, "one site per SOURCE heading: {sites:?}");
+        assert!(
+            sites[1].hidden_by.len() == 1,
+            "the middle heading is hidden"
+        );
+        assert!(
+            sites[2].hidden_by.is_empty(),
+            "the trailing heading is not hidden"
+        );
+
+        // The trailing heading's site is a real buffer position, and it is the one
+        // holding "B" — the assertion a shifted index cannot satisfy.
+        let buf = view.buffer();
+        let iter = buf.iter_at_offset(sites[2].offset);
+        let mut end = iter;
+        end.forward_char();
+        assert_eq!(buf.slice(&iter, &end, true).as_str(), "B");
+
+        window.destroy();
+    }
+    /// **Rubric 2.26a, end to end.** Activating the control makes the body appear, and
+    /// activating it again makes it go.
+    ///
+    /// Everything else about folding is tested a layer down — the model in `fold.rs`,
+    /// the render in `preview::build`, the hit-test above. None of them would notice
+    /// the one wire between them being cut, which is what this covers: a toggle whose
+    /// `toggled` handler never reached the re-render emitted the signal and changed
+    /// nothing, and that is exactly how this construct has failed before.
+    #[gtktest::test]
+    fn activating_the_control_shows_and_hides_the_body() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.foldend");
+        // "the body text" sits well past the summary's body-opening PREVIEW's
+        // character limit (item 3 / TDD 2.26) — a short body starting with it would
+        // put it in the collapsed preview too, defeating the "starts collapsed"
+        // precondition below.
+        let body = format!("{}the body text", "filler ".repeat(15));
+        let window = new_window(
+            &app,
+            "IT",
+            &format!("<details>\n<summary>S</summary>\n\n{body}\n\n</details>\n"),
+            None,
+        );
+        let text = preview_text;
+        crate::testpump::until(crate::testpump::Clock::Idle, "the first render", || {
+            !text(&window).is_empty()
+        });
+        assert!(
+            !text(&window).contains("the body text"),
+            "precondition: it starts collapsed"
+        );
+
+        let toggle_now = |w: &ApplicationWindow| {
+            let sw = crate::window::get_preview_sw(w).expect("scroller");
+            let view = sw
+                .child()
+                .and_then(|c| c.downcast::<CodePreviewView>().ok())
+                .expect("view");
+            let t = crate::preview::scrib_render_data(&view)
+                .expect("rd")
+                .borrow()
+                .disclosure_lines[0]
+                .1
+                .clone();
+            t.set_active(!t.is_active());
+        };
+
+        toggle_now(&window);
+        crate::testpump::until(crate::testpump::Clock::Idle, "the body to appear", || {
+            text(&window).contains("the body text")
+        });
+
+        // And back. The reverse is the half that silently diverges — an apply path
+        // that works while its undo does not still passes a one-way test.
+        toggle_now(&window);
+        crate::testpump::until(crate::testpump::Clock::Idle, "the body to go", || {
+            !text(&window).contains("the body text")
+        });
         window.destroy();
     }
 }

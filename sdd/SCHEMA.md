@@ -528,6 +528,37 @@ are on.
 | `rule_space` | `i32` | `4` | Space above and below the rule. Clamped `0`–`400`. |
 | `rule_thickness` | `i32` | `1` | The FLAT rule's weight, in design pixels at zoom 1.0. Read by all three surfaces — the preview separator's generated CSS, the HTML sink's `hr`, and the PDF sink's stroke — so one key states the weight everywhere. Ignored by a **sprite-tiled** rule, which takes its tile's own height (`rule_sprite` states the weight implicitly). The default converts to exactly the `0.75 pt` the PDF sink used to hard-code, so a theme stating nothing is byte-identical. Clamped `0`–`400`. |
 
+#### Disclosure (`<details>`)
+
+The indicator is a **two-state control and takes one colour key for both**, the same
+shape and the same reason as `list_task_marker_color`: a collapsed and an expanded
+arrow are one control in two positions, and the glyph is what carries the state. The
+two glyph/sprite keys resolve **independently**, so a theme may restyle one state and
+leave the other on its stock icon.
+
+⚠️ **The five INDICATOR keys reach the PREVIEW only.** A PDF has no disclosure to draw
+a marker for — the body is laid out flat under a bold label — and an exported HTML
+`<details>` is drawn by the reader's own browser. A stated scope limit, as
+`annotation_chip_sprite`'s is. The **summary line's own band and ink** below are not
+in that limit and reach all three surfaces: an exported `<details>` has a real
+`<summary>` element to fill, and the PDF's bold label line takes the same fill a
+banded heading does.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `disclosure_marker_color` | colour | widget foreground | The indicator's ink, **both states**. Unset, it keeps the desktop theme's ink, which is what the control always drew with. Tints a stock icon and inks a glyph alike; a sprite indicator ignores it, per the sprite-outranks-flat rule. |
+| `disclosure_glyph` | `string` | — | A glyph drawn in place of the **collapsed** indicator. |
+| `disclosure_expanded_glyph` | `string` | — | A glyph drawn in place of the **expanded** indicator. Resolves independently of the collapsed one. |
+| `disclosure_sprite` | sprite path | — | A sprite drawn in place of the collapsed indicator. |
+| `disclosure_expanded_sprite` | sprite path | — | A sprite drawn in place of the expanded indicator. |
+| `disclosure_marker_size` | `i32` | `16` | The indicator's box. Adwaita's disclosure metric is a 16×16 minimum, which is what the control drew at before this key existed. Clamped `0`–`400`. |
+| `disclosure_preview_fg` | colour | body foreground | The ink a **collapsed** summary's body-opening preview takes — a short fragment of the body's opening text, ending in an ellipsis, that hints at what the fold hides (TDD 2.26). Unset, the preview text keeps the body foreground like any other line. An **expanded** block shows its body directly and carries no preview. The preview is real buffer text on the summary line, inside the same copy node the block's `</details>` widens to cover its whole source — so it is never present in a copy of the block, whatever colour it is drawn in. |
+| `disclosure_band_color` | colour | — | A band drawn behind a disclosure's whole **summary line**. Absent ⇒ the summary sits on the page, as it always has. The band spans the **content column** — the same extent a heading band and a code-block card use, not the text column — and survives soft-wrap as one continuous band. Independent of `disclosure_fg` in both directions. |
+| `disclosure_band_gradient_to_color` | colour | — | A second stop: the band becomes a vertical gradient from its own fill down to this colour. Ignored (and logged) where no fill is stated. |
+| `disclosure_band_sprite` | sprite path | — | A sprite **tiled at its natural size** across the band, in place of its fill. Outranks the fill and the gradient; a sprite alone is a band. |
+| `disclosure_band_radius` | `i32` | `0` | Corner radius of the band. Clamped `0`–`400`. ⚠️ **Not drawn on the page**, for the reason `table_cell_radius` gives. |
+| `disclosure_fg` | colour | body foreground | The ink a disclosure's **summary line** takes — the label and, on a collapsed block, the body preview beside it. Omitted, the summary is ordinary body text. A **tag** rather than part of the band, and the split is the same one `blockquote_bg`/`blockquote_fg` makes: ink is a priority question where a fill is an extent one. Two orderings are live — a summary inside a blockquote takes this ink rather than `blockquote_fg`, and `disclosure_preview_fg` (narrower still) wins on the preview fragment. ⚠️ A `<summary>`'s text arrives inside raw HTML as ONE PLAIN RUN on every surface, so it carries no link, heading or `==mark==` of its own to keep a colour; the ink is sited at the bottom of the ink stack so that stays a renderer question rather than a theming one. |
+
 #### Selection
 
 | Key | Type | Default | Description |

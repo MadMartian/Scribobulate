@@ -126,6 +126,30 @@ fn block_html(block: &Block, page: &Page<'_>, out: &mut String) {
         }
         Block::List { start, items } => list_html(*start, items, page, out),
         Block::Table { aligns, head, rows } => table_html(aligns, head, rows, page, out),
+        // A real `<details>`, so the artefact carries the construct the document
+        // wrote rather than a flattened impression of it — and the reader of the
+        // export gets the same affordance the reader of the app has. The `open`
+        // attribute follows the SOURCE, not the preview's fold state: an export is
+        // the document, not the viewport (TDD 2.26g), so whether the reader had this
+        // block open when they exported changes nothing about the file.
+        Block::Disclosure {
+            summary,
+            open,
+            body,
+        } => {
+            out.push_str(if *open {
+                "<details open>\n"
+            } else {
+                "<details>\n"
+            });
+            out.push_str("<summary>");
+            inlines_html(summary, page, out);
+            out.push_str("</summary>\n");
+            for b in body {
+                block_html(b, page, out);
+            }
+            out.push_str("</details>\n");
+        }
         Block::Rule => out.push_str("<hr>\n"),
     }
 }
@@ -392,6 +416,7 @@ fn stylesheet(p: &Palette, t: &Theme, uris: &SpriteUris) -> String {
     let mut css = String::with_capacity(2048);
     css.push_str(&page_rules(p, t));
     css.push_str(&block_rules(p, t));
+    css.push_str(&disclosure_summary_css(t, uris));
     css.push_str(&list_rules(p, t, uris));
     css.push_str(&inline_rules(p, t));
     css.push_str(&chrome_rules(p, t));
@@ -786,6 +811,72 @@ fn rule_sprite_css(t: &Theme) -> String {
         return String::new();
     };
     format!("hr {{ border: 0; height: {h}px; background: url({uri}) repeat-x; }}\n")
+}
+
+/// The disclosure summary's band and ink (TDD 18.51). Empty unless the theme states
+/// at least one, so a theme that states neither emits the exact bytes it emitted
+/// before these keys existed (TDD 18.2).
+///
+/// **This is the cheap side of the decoration, and it is worth saying so.** Here the
+/// band is one `background` on a real `<summary>`; on screen it is a span vector, an
+/// install choke point, a `PAINT_ORDER` entry, a draw pass and — the one that fails
+/// silently — an entry in `snapshot_layer`'s early-return gate. "The export already
+/// does this" is evidence about the artefact and none about the preview
+/// (`sdd/THEMING.md`).
+///
+/// The band spans the `<summary>`'s own box, which is the content column in both
+/// media — that is why the preview draws it at the content column rather than at the
+/// widget edge.
+fn disclosure_summary_css(t: &Theme, uris: &SpriteUris) -> String {
+    // The engine decides which of the band's three appearances applies
+    // (`theme::Band`), so this sink emits an answer rather than re-deriving the
+    // precedence — the same reason `heading_band_css` beside it does.
+    let decor = t.disclosure_band_decor();
+    let mut out = String::new();
+    if decor.is_present() {
+        // A sprite outranks the fill and the gradient and TILES at natural size, and
+        // one that cannot be embedded degrades to whatever the band would have been
+        // without it — exactly as the preview does.
+        match decor.sprite.and_then(|r| uris.get(r)) {
+            Some((uri, _, _)) => {
+                let _ = write!(out, " background: url({uri}) repeat;");
+            }
+            None => match decor.without_sprite() {
+                Some(crate::theme::BandPaint::Gradient { from, to }) => {
+                    let _ = write!(
+                        out,
+                        " background: linear-gradient({}, {});",
+                        to_hex_rgba(from),
+                        to_hex_rgba(to)
+                    );
+                }
+                Some(crate::theme::BandPaint::Flat(fill)) => {
+                    let _ = write!(out, " background: {};", to_hex_rgba(fill));
+                }
+                None => {}
+            },
+        }
+        // Consulted only for a band that exists, the same gate the preview and the
+        // per-level heading radius apply.
+        let radius = t.metrics.disclosure_band_radius;
+        if radius > 0 {
+            let _ = write!(out, " border-radius: {radius}px;");
+        }
+    }
+    // The INK is independent of the fill in both directions: a theme may re-ink a
+    // summary without banding it, and vice versa. It sits on the `summary` element,
+    // which is the artefact's spelling of the priority the preview gets from
+    // `TagName::DisclosureInk`: it overrides the `blockquote` rule's inherited colour
+    // for a quoted summary (a more specific element match beats an inherited value),
+    // and anything the label may later hold that matches a rule of its own — an `a`,
+    // a `code` — still wins over it, because a direct match always beats inheritance.
+    if let Some(c) = t.disclosure_fg {
+        let _ = write!(out, " color: {};", to_hex_rgba(c));
+    }
+    if out.is_empty() {
+        return String::new();
+    }
+    format!("summary {{{out} }}\n")
 }
 
 /// The quote panel (TDD 18.29): a background behind quoted text, an ink on it, or
@@ -2172,6 +2263,89 @@ mod html_sink_tests {
         );
     }
 
+    /// The stylesheet rule that styles `<summary>`, or `""` when the sheet emits none.
+    fn summary_rule(css: &str) -> String {
+        css.lines()
+            .find(|line| line.starts_with("summary {"))
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// **TDD 18.51 / 18.2 — the disclosure summary's band and ink reach the artefact,
+    /// and a theme stating neither emits no `summary` rule at all.**
+    ///
+    /// Both directions in one body: the absence half alone is satisfied by a sink that
+    /// ignores the keys entirely, and the presence half alone says nothing about what
+    /// an untouched theme renders. All three fills are covered because they are three
+    /// code paths and the sprite has to outrank the other two — the same precedence the
+    /// drawn preview and the PDF sink apply.
+    #[test]
+    fn the_disclosure_summary_rule_is_opt_in_and_carries_the_band_and_the_ink() {
+        let (palette, mut theme) = style();
+        let bare = super::stylesheet(&palette, &theme, &super::SpriteUris::default());
+        assert!(
+            !bare.contains("summary {"),
+            "a theme that bands and inks nothing must emit no summary rule at all"
+        );
+
+        // The ink alone: a colour with no band beside it, which is the split
+        // `disclosure_fg` exists for.
+        theme.disclosure_fg = crate::theme::parse_color("#ffe9a8");
+        let inked = summary_rule(&super::stylesheet(
+            &palette,
+            &theme,
+            &super::SpriteUris::default(),
+        ));
+        assert!(inked.contains("color: #ffe9a8"), "{inked}");
+        assert!(!inked.contains("background"), "{inked}");
+
+        // …and the band beside it, flat first.
+        theme.disclosure_band_color = crate::theme::parse_color("#339966");
+        theme.metrics.disclosure_band_radius = 8;
+        let flat = summary_rule(&super::stylesheet(
+            &palette,
+            &theme,
+            &super::SpriteUris::default(),
+        ));
+        assert!(flat.contains("background: #339966;"), "{flat}");
+        assert!(flat.contains("border-radius: 8px;"), "{flat}");
+        assert!(flat.contains("color: #ffe9a8"), "{flat}");
+
+        // A gradient replaces the flat fill, and needs that fill to start from — the
+        // same precondition `heading_band_gradient_to_color` carries.
+        theme.disclosure_band_gradient_to = crate::theme::parse_color("#000000");
+        let grad = summary_rule(&super::stylesheet(
+            &palette,
+            &theme,
+            &super::SpriteUris::default(),
+        ));
+        assert!(
+            grad.contains("background: linear-gradient(#339966, #000000);"),
+            "{grad}"
+        );
+
+        // …and a sprite outranks both, tiled at its natural size.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("band.png");
+        std::fs::write(&path, ONE_PIXEL_PNG).unwrap();
+        theme.sprites.disclosure_band = Some(crate::sprite::SpriteRef::File(path));
+        crate::sprite::clear_cache();
+        let tiled = summary_rule(&super::stylesheet(
+            &palette,
+            &theme,
+            &super::SpriteUris::default(),
+        ));
+        assert!(tiled.contains("url(data:image/png;base64,"), "{tiled}");
+        assert!(tiled.contains("repeat;"), "{tiled}");
+        assert!(
+            !tiled.contains("linear-gradient") && !tiled.contains("background: #339966"),
+            "a sprite REPLACES the fill and the gradient rather than layering over \
+             them — a transparent tile would otherwise let the colour bleed through: \
+             {tiled}"
+        );
+        crate::sprite::clear_cache();
+    }
+
     /// TDD 18.25 / 18.2 — no banded level ⇒ no `background` on any heading rule, so an
     /// untouched theme's headings are byte-identical to before the decoration existed.
     #[test]
@@ -2346,5 +2520,49 @@ mod html_sink_tests {
     #[test]
     fn escape_covers_both_text_and_attribute_positions() {
         assert_eq!(escape("<&>\"'"), "&lt;&amp;&gt;&quot;&#39;");
+    }
+    /// **Rubric 2.26g, at the sink.** The artefact carries a real `<details>`, so the
+    /// reader of an exported file gets the construct the document wrote — the summary,
+    /// the whole body, and the affordance itself — rather than a flattened impression
+    /// of it.
+    ///
+    /// MEASURED before this: the body was exported (it is ordinary Markdown events)
+    /// and the summary label appeared nowhere at all.
+    #[test]
+    fn a_disclosure_exports_as_a_real_details_element() {
+        let out = html_of("<details>\n<summary>Show me</summary>\n\nbody **text**\n\n</details>\n");
+        assert!(out.contains("<details>"), "{out}");
+        assert!(out.contains("<summary>Show me</summary>"), "{out}");
+        assert!(
+            out.contains("<strong>text</strong>"),
+            "the body is Markdown: {out}"
+        );
+        assert!(out.contains("</details>"), "{out}");
+    }
+
+    /// The `open` attribute follows the DOCUMENT. An export is the document, not the
+    /// viewport, so what the reader had expanded when they exported changes nothing.
+    #[test]
+    fn the_open_attribute_follows_the_source() {
+        assert!(
+            html_of("<details open>\n<summary>S</summary>\n\nb\n\n</details>\n")
+                .contains("<details open>")
+        );
+        assert!(
+            !html_of("<details>\n<summary>S</summary>\n\nb\n\n</details>\n")
+                .contains("<details open>")
+        );
+    }
+
+    /// A summary is escaped like any other text — it comes from an untrusted document
+    /// (TDD 2.7), and it is the one string in this construct that reaches the artefact
+    /// from inside raw HTML.
+    #[test]
+    fn a_summary_label_is_escaped() {
+        let out = html_of("<details>\n<summary>a &lt; b &amp; c</summary>\n\nx\n\n</details>\n");
+        assert!(
+            !out.contains("<summary>a < b"),
+            "the label must not reach the artefact as live markup: {out}"
+        );
     }
 }

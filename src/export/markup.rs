@@ -191,6 +191,27 @@ pub(super) fn heading_span(theme: &Theme, level_index: usize) -> (String, &'stat
 /// Close [`heading_span`]'s two exits onto one shape: no attributes means no span at
 /// all, so a theme that states nothing about a heading emits the byte-identical markup
 /// this sink always did (TDD 18.2).
+/// The Pango span carrying a theme's `disclosure_fg` (TDD 18.51), as an
+/// `(open, close)` pair. `("", "")` where the theme states none, so the summary label
+/// a PDF measures and inks is byte-identical to before the key existed (TDD 18.2).
+///
+/// **A span around the run, never a cairo pen on the line — and that is what makes a
+/// QUOTED summary come out right.** `ink::draw_page` sets `blockquote_fg` as the cairo
+/// source for every line inside a quote, so a summary label in one would print in the
+/// quote's ink; a Pango `foreground` attribute overrides that source for the run it
+/// covers, which is the same answer the preview gets from `disclosure-ink` being
+/// registered after `blockquote-ink`. Markup also nests, so an inner
+/// `<span foreground=…>` still wins over this outer one — which matters not for the
+/// label as it renders today (one plain run, `Block::Disclosure::summary`) but for
+/// whatever inline markup it may later carry.
+pub(super) fn disclosure_span(theme: &Theme) -> (String, &'static str) {
+    let mut attrs = String::new();
+    if let Some(c) = theme.disclosure_fg {
+        let _ = write!(attrs, " foreground=\"{}\"", crate::palette::to_hex_rgba(c));
+    }
+    finish_heading_span(attrs)
+}
+
 fn finish_heading_span(attrs: String) -> (String, &'static str) {
     if attrs.is_empty() {
         (String::new(), "")

@@ -27,74 +27,11 @@
 //! extracted `src` still passes through `links::resolve_image`, so this widens what
 //! is *rendered*, never what is *trusted*.
 
-/// One raw-HTML element this application renders rather than drops.
-///
-/// **This enum IS the allowlist**, and it is the whole of it. Sanitize-by-omission
-/// means the permitted set is the only thing standing between an untrusted document's
-/// markup and the surfaces that display it, so it is named data with one owner rather
-/// than control flow — a second consumer (the export sink) must reproduce the set
-/// *exactly*, and a set that exists only as branches inside one scanner can only be
-/// reproduced by copying it, which is how the two silently drift apart.
-///
-/// Adding a variant widens what is **rendered**. It never widens what is **trusted**:
-/// only `srcset`/`src` are ever read off a permitted tag, no other attribute has any
-/// effect (an `onerror=` is inert — there is no HTML/JS engine), and every extracted
-/// `src` still passes `links::resolve_image`'s containment gate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RawHtmlElement {
-    /// `<picture>` — opens a fallback group.
-    PictureOpen,
-    /// `</picture>` — closes the current fallback group.
-    PictureClose,
-    /// `<source>` — a candidate carrying `srcset`.
-    Source,
-    /// `<img>` — a candidate carrying `src`.
-    Img,
-}
-
-impl RawHtmlElement {
-    /// The lowercase tag text this element is matched by, **including** the opening
-    /// `<` (and the `/` of a close tag). The prefix travels with the element because
-    /// the boundary rule below is stated in terms of it.
-    const fn tag_prefix(self) -> &'static str {
-        match self {
-            Self::PictureOpen => "<picture",
-            Self::PictureClose => "</picture",
-            Self::Source => "<source",
-            Self::Img => "<img",
-        }
-    }
-}
-
-/// Every raw-HTML element the renderer recognises, in match order. Anything absent
-/// from this array is dropped wholesale — `<script>`, `<iframe>`, `<div>` and the
-/// rest — neither executed nor shown as literal text.
-pub(crate) const RENDERED_HTML_ELEMENTS: [RawHtmlElement; 4] = [
-    RawHtmlElement::PictureOpen,
-    RawHtmlElement::PictureClose,
-    RawHtmlElement::Source,
-    RawHtmlElement::Img,
-];
-
-/// Which permitted element, if any, the tag beginning at `tag_lower` is.
-///
-/// **The tag-name-boundary rule lives here, with the set**, because it is part of the
-/// set's meaning rather than an implementation detail of one scanner: a prefix match
-/// alone would admit `<sourcex>` as a `<source>` and SVG's `<image>` as an `<img>`,
-/// silently widening the allowlist past what it says. The byte after the name must end
-/// it — whitespace, `>`, or the `/` of a self-closing tag.
-///
-/// `tag_lower` is one whole tag, already lowercased, from its `<` through its `>`.
-pub(crate) fn recognise_html_element(tag_lower: &str) -> Option<RawHtmlElement> {
-    RENDERED_HTML_ELEMENTS.into_iter().find(|el| {
-        let name = el.tag_prefix();
-        tag_lower.starts_with(name)
-            && tag_lower
-                .as_bytes()
-                .get(name.len())
-                .is_none_or(|&b| b == b' ' || b == b'>' || b == b'/' || b == b'\t')
-    })
-}
+// The allowlist this scanner reads — `RawHtmlElement`, `RENDERED_HTML_ELEMENTS` and
+// the tag-name-boundary rule — lives in `renderer::rawhtml`, which owns it for every
+// scanner and sink. It was extracted from here when the disclosure work made the set
+// span two features; this module reads it and never restates it.
+use super::rawhtml::{attr, recognise_html_element, RawHtmlElement};
 
 /// One image-relevant tag from a raw-HTML fragment, in document order.
 #[derive(Debug, PartialEq)]
@@ -144,6 +81,18 @@ pub(crate) fn scan_image_tags(html: &str) -> Vec<ImgTag> {
                     tags.push(ImgTag::Candidate(src));
                 }
             }
+            // The disclosure elements are allowlisted, but they are not IMAGE tags —
+            // `renderer::disclosure` scans them. Named explicitly rather than caught
+            // by a `_` arm so that adding an element to the allowlist fails to
+            // compile here until someone decides whether this scanner cares about it;
+            // a wildcard would silently render it as nothing, which is the failure
+            // mode TDD 2.25 pins for the parser dispatchers.
+            Some(
+                RawHtmlElement::DetailsOpen
+                | RawHtmlElement::DetailsClose
+                | RawHtmlElement::SummaryOpen
+                | RawHtmlElement::SummaryClose,
+            ) => {}
             None => {}
         }
         i = end + 1;
@@ -163,51 +112,9 @@ fn first_srcset_url(srcset: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Extract attribute `name`'s value from a single tag's inner text (already sliced
-/// to `<tagname …` without the closing `>`). `name` must be lowercase; the tag is
-/// matched case-insensitively. Returns the unquoted value, or `None` if absent.
-///
-/// The match requires `name` to sit on an attribute boundary (preceded by ASCII
-/// whitespace or the tag's `<`) and be immediately followed — after optional
-/// whitespace — by `=`. That `=` test is what keeps `src` from matching the `src`
-/// prefix of `srcset` (`srcset` is followed by `set`, not `=`).
-fn attr(tag: &str, name: &str) -> Option<String> {
-    let lower = tag.to_ascii_lowercase();
-    let bytes = tag.as_bytes();
-    let mut from = 0usize;
-    loop {
-        let rel = lower[from..].find(name)?;
-        let idx = from + rel;
-        let boundary = idx == 0 || bytes[idx - 1].is_ascii_whitespace() || bytes[idx - 1] == b'<';
-        let after = idx + name.len();
-        let rest = tag[after..].trim_start();
-        if boundary && rest.starts_with('=') {
-            return Some(attr_value(rest[1..].trim_start()));
-        }
-        from = after;
-    }
-}
-
-/// Read an attribute value starting just after `=` (leading whitespace trimmed):
-/// a double- or single-quoted run up to the closing quote, or an unquoted token up
-/// to the next whitespace or `>`.
-fn attr_value(after_eq: &str) -> String {
-    let mut chars = after_eq.chars();
-    match chars.next() {
-        Some(q @ ('"' | '\'')) => after_eq[1..].split(q).next().unwrap_or_default().to_owned(),
-        _ => after_eq
-            .split(|c: char| c.is_ascii_whitespace() || c == '>')
-            .next()
-            .unwrap_or_default()
-            .to_owned(),
-    }
-}
-
 #[cfg(test)]
 mod picture_tests {
-    use super::{
-        recognise_html_element, scan_image_tags, ImgTag, RawHtmlElement, RENDERED_HTML_ELEMENTS,
-    };
+    use super::{recognise_html_element, scan_image_tags, ImgTag, RawHtmlElement};
 
     fn cand(s: &str) -> ImgTag {
         ImgTag::Candidate(s.to_string())
@@ -348,50 +255,11 @@ mod picture_tests {
     }
 
     // ── the allowlist as data (TDD 25.4) ───────────────────────────────────────
-
-    #[test]
-    fn the_allowlist_is_exactly_the_four_image_grouping_elements() {
-        // Pinned as a SET, not as scanner behaviour: a second consumer (the export
-        // sink) reproduces this set, and a silent addition here would widen what
-        // both of them render without either one saying so.
-        assert_eq!(
-            RENDERED_HTML_ELEMENTS,
-            [
-                RawHtmlElement::PictureOpen,
-                RawHtmlElement::PictureClose,
-                RawHtmlElement::Source,
-                RawHtmlElement::Img,
-            ]
-        );
-    }
-
-    #[test]
-    fn recognise_admits_every_allowlisted_element_and_nothing_else() {
-        for el in RENDERED_HTML_ELEMENTS {
-            let tag = format!("{}>", el.tag_prefix());
-            assert_eq!(
-                recognise_html_element(&tag),
-                Some(el),
-                "{tag} should be recognised"
-            );
-        }
-        // Everything else is dropped wholesale — sanitize-by-omission (TDD 2.23).
-        for tag in [
-            "<script>",
-            "<script src=\"x.js\">",
-            "</script>",
-            "<iframe>",
-            "<div>",
-            "<style>",
-            "<object>",
-            "<embed>",
-            "<svg>",
-            "<a href=\"x\">",
-        ] {
-            assert_eq!(recognise_html_element(tag), None, "{tag} must be dropped");
-        }
-    }
-
+    //
+    // The set itself, and the tag-name-boundary rule that gives it meaning, are pinned
+    // by `renderer::rawhtml`'s own tests — it owns them for every scanner and sink.
+    // They are deliberately NOT re-pinned here: two assertions over one set is how the
+    // set acquires two meanings.
     #[test]
     fn recognise_matches_a_tag_name_on_its_boundary_not_as_a_prefix() {
         // The boundary rule is part of the SET's meaning: without it the allowlist

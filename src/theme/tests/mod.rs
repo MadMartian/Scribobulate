@@ -7,6 +7,10 @@
 
 mod contrast;
 mod diagnostics;
+/// Ungated: its resolution half is display-free and belongs inside the coverage gate,
+/// which is unit-only. The one body that needs a live `GtkTextTagTable` carries the
+/// feature cfg itself, along with the helpers only it uses.
+mod disclosure;
 mod headings;
 mod lists;
 mod markers;

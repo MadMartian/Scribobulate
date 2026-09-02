@@ -300,6 +300,20 @@ impl Line {
         self.quote.map(|q| q.indent)
     }
 
+    /// Whether this line carries a background fill — a banded heading's, a code
+    /// block's card, or a disclosure summary's band (TDD 18.51).
+    ///
+    /// A named oracle rather than a widened field: the answer a guard wants is
+    /// "does the page band this at all", and [`Self::digest_for_test`] answers it
+    /// only by string-matching a wash spelling that is free to change. A plain
+    /// `#[cfg(test)]` rather than the digest's feature gate, because it has callers
+    /// on BOTH sides — this sink's own display-free layout tests and the theme
+    /// engine's cross-surface sweep.
+    #[cfg(test)]
+    pub(crate) fn is_filled_for_test(&self) -> bool {
+        self.fill.is_some()
+    }
+
     /// Everything this line carries that a theme key can move — test-only, for the
     /// registry sweep that asks whether a key reaches this sink at all.
     ///

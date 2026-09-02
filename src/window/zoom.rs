@@ -108,34 +108,20 @@ fn rerender_and_restore_scroll(
     zoom: f64,
     allow_unsafe: bool,
 ) {
-    let md = match mode {
-        ViewMode::Split => tab.editor_text(),
-        ViewMode::Preview | ViewMode::Edit => tab.source().clone(),
-    };
-
     // Capture the reading position as a buffer LINE before the swap — this is a
-    // SAME-buffer re-render (identical rendered content, only rescaled by the new
+    // SAME-CONTENT re-render (the same rendered text, only rescaled by the new
     // zoom), so an exact line anchor lands the same line back at the top, with
     // none of the upward drift a pixel fraction suffers here (a fraction mixes
     // tall heading lines and short blank lines, so `fraction × line_count` ≠ the
     // captured line). ScrAP-65.
+    //
+    // **That premise is a real precondition, not a description.** A re-render that
+    // adds or removes lines — a disclosure opening or closing — makes the captured
+    // number name a DIFFERENT place in the new buffer, and the reader is thrown
+    // somewhere they did not ask to be. Such a re-render goes through
+    // [`RenderShape::Changed`] instead, which anchors on the source.
     let top_line = preview_top_line(preview_sw).unwrap_or(0);
-
-    // In split mode, force the editor as scroll driver so the preview's validation
-    // noise during the buffer swap doesn't drive the editor (GTK4Rs/AP-16).
-    if mode == ViewMode::Split {
-        tab.scroll.driver.set(ScrollDriver::Editor);
-        tab.scroll.pv_last.set((-1.0, -1.0));
-    }
-
-    re_render(
-        preview_sw,
-        &md,
-        tab.doc_dir().as_deref(),
-        zoom,
-        allow_unsafe,
-    );
-
+    re_render_preview(tab, preview_sw, mode, zoom, allow_unsafe);
     // Restore to the captured line — validation-safe and input-wedge-proof. The
     // sole validation force is `scroll_to_mark`'s internal `flush_scroll` inside
     // the restore idle (`gtk_text_view_get_line_yrange` validates nothing on any
@@ -145,12 +131,74 @@ fn rerender_and_restore_scroll(
     restore_preview_scroll_to_line(preview_sw, top_line);
 }
 
+/// Rebuild the preview buffer itself, with no reading-position policy of its own.
+///
+/// Split out from [`rerender_and_restore_scroll`] because the anchor is the part
+/// that varies ([`RenderShape`]) and the rebuild is the part that does not: reading
+/// the `mode`-appropriate source and forcing the split driver are the same in every
+/// case, and were the half that had been hand-duplicated before either existed.
+fn re_render_preview(
+    tab: &Rc<TabState>,
+    preview_sw: &gtk::ScrolledWindow,
+    mode: ViewMode,
+    zoom: f64,
+    allow_unsafe: bool,
+) {
+    let md = match mode {
+        ViewMode::Split => tab.editor_text(),
+        ViewMode::Preview | ViewMode::Edit => tab.source().clone(),
+    };
+    // In split mode, force the editor as scroll driver so the preview's validation
+    // noise during the buffer swap doesn't drive the editor (GTK4Rs/AP-16).
+    if mode == ViewMode::Split {
+        tab.scroll.driver.set(ScrollDriver::Editor);
+        tab.scroll.pv_last.set((-1.0, -1.0));
+    }
+    re_render(
+        preview_sw,
+        &md,
+        tab.doc_dir().as_deref(),
+        zoom,
+        allow_unsafe,
+        &tab.folds.borrow(),
+    );
+}
+
+/// What a re-render changes about the preview, which is what decides how the
+/// reader's position can be carried across it.
+///
+/// This is a precondition made explicit rather than a preference. Both anchors are
+/// correct for their own case and WRONG for the other, and the wrong one fails
+/// quietly — the reader simply ends up somewhere else, with nothing logged and
+/// nothing to fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RenderShape {
+    /// The rendered CONTENT is identical; only its scale or styling changed — a
+    /// zoom step, a theme switch, an image that resolved differently. A buffer line
+    /// names the same place before and after, so the exact line anchor is the most
+    /// precise restore available and has no map to round through (ScrAP-65).
+    SameContent,
+    /// The rendered content itself changed — a disclosure opened or closed, so
+    /// lines appeared or vanished. A line number now names a different place, so the
+    /// restore goes through the one coordinate the change does not move: the byte
+    /// offset into the SOURCE (`readingpos::DocPosition`). A reader above the
+    /// toggled block keeps their exact position; one below it moves with the content
+    /// that moved, which is what a browser does and what the reader expects. A
+    /// reader INSIDE a block that just collapsed resolves to its summary line, the
+    /// nearest position that still exists.
+    ChangedContent,
+}
+
 /// Re-render the current preview pane in place. The caller only needs to have
 /// already updated whichever of zoom/unsafe-images it's toggling; current
 /// zoom and unsafe-image setting are read straight off `TabState`. Queues one
 /// coalesced scroll-sync re-projection afterward in split mode, ensuring at
 /// least one projection fires as the new heights settle.
-pub(super) fn rerender_preview_in_place(window: &ApplicationWindow, mode: ViewMode) {
+pub(crate) fn rerender_preview_in_place(
+    window: &ApplicationWindow,
+    mode: ViewMode,
+    shape: RenderShape,
+) {
     let Some(st) = winstate::state(window) else {
         return;
     };
@@ -160,7 +208,21 @@ pub(super) fn rerender_preview_in_place(window: &ApplicationWindow, mode: ViewMo
 
     let zoom = st.chrome().zoom_level.get();
     let allow_unsafe = st.allow_unsafe_images.get();
-    rerender_and_restore_scroll(&st, &preview_sw, mode, zoom, allow_unsafe);
+    match shape {
+        RenderShape::SameContent => {
+            rerender_and_restore_scroll(&st, &preview_sw, mode, zoom, allow_unsafe)
+        }
+        RenderShape::ChangedContent => {
+            // The same document position the mode switch carries across two panes,
+            // used here to carry the reader across two SHAPES of one pane. Reusing
+            // that pair rather than deriving a fold-specific anchor is the point:
+            // `DocPosition` is already the project's answer to "where is the reader,
+            // independent of the buffer they are reading it in".
+            let pos = content_reading_position(window);
+            re_render_preview(&st, &preview_sw, mode, zoom, allow_unsafe);
+            apply_content_reading_position(window, mode, pos);
+        }
+    }
 
     // In split mode the coalesced tick also re-projects editor→preview as the new
     // heights settle — queuing it here ensures at least one projection fires.
@@ -309,7 +371,7 @@ pub(super) fn apply_zoom(window: &ApplicationWindow, new_zoom: f64) {
     // Re-render: swap the TextBuffer (new setup_tags pixel values) and update the
     // view's own pixel margins to match the new zoom.
     let mode = current_mode(window);
-    rerender_preview_in_place(window, mode);
+    rerender_preview_in_place(window, mode, RenderShape::SameContent);
 
     // Zoom is window-scoped (operator decision), but each
     // OTHER tab in the window must be re-rendered too — the CSS font-size rule

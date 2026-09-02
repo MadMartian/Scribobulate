@@ -84,13 +84,47 @@ pub(crate) struct RawEv {
 /// range and source range to build a [`RawEv`].
 pub(crate) fn classify(ev: &Event) -> Option<RawKind> {
     Some(match ev {
+        // ── events that carry reconstructable interior ────────────────────────
         Event::Start(tag) => RawKind::Start(construct_of_tag(tag)?),
-        Event::End(end) => RawKind::End(construct_of_tagend(*end)?),
         Event::Text(t) => RawKind::Text(t.to_string()),
         Event::Code(t) => RawKind::Code(t.to_string()),
         Event::SoftBreak | Event::HardBreak => RawKind::Break,
+
+        // ── opaque: owns buffer glyphs, no reconstructable interior ───────────
         Event::Rule | Event::TaskListMarker(_) => RawKind::Atomic,
-        _ => return None,
+
+        // A raw-HTML BLOCK is inserted by the renderer at its END event, which is
+        // also the only event whose source range spans the whole block (MEASURED:
+        // `Start(HtmlBlock)` and `End(HtmlBlock)` both report the block's range,
+        // and the per-line `Html` events report one line each). So the End event is
+        // where the buffer content and the source it came from coincide, and it is
+        // the one that earns the node.
+        Event::End(TagEnd::HtmlBlock) => RawKind::Atomic,
+        Event::End(end) => RawKind::End(construct_of_tagend(*end)?),
+
+        // A single-line raw-HTML construct is not a CommonMark HTML block, so its
+        // tags arrive as separate InlineHtml events and the renderer inserts at
+        // each one (ScrAP-147).
+        Event::InlineHtml(_) => RawKind::Atomic,
+
+        // ── events that deliberately earn no node ─────────────────────────────
+        // Each of these is a DECISION, written out rather than swallowed by a `_`
+        // arm. That is the whole point of this match being exhaustive: a
+        // pulldown-cmark upgrade that adds a variant must fail to compile here, so
+        // nobody can add a construct that puts glyphs in the buffer and silently
+        // acquires no copy node — which is exactly how raw HTML came to have none.
+
+        // Accumulated per line inside a `Tag::HtmlBlock` and inserted at the block's
+        // End (above). These events change no buffer text, so a node here would be
+        // empty and would claim source the End event already claims.
+        Event::Html(_) => return None,
+
+        // Never emitted: `renderer::md_options()` does not enable the math or
+        // footnote extensions, and TDD 2.25 requires that the parser be asked only
+        // for extensions the renderer handles — an enabled-but-unhandled extension
+        // is DROPPED rather than degraded (ScrAP-78). If one of these ever appears
+        // here, that contract has broken upstream of this function.
+        Event::InlineMath(_) | Event::DisplayMath(_) | Event::FootnoteReference(_) => return None,
     })
 }
 
@@ -107,9 +141,34 @@ fn construct_of_tag(tag: &Tag) -> Option<Construct> {
         Tag::CodeBlock(_) => Construct::CodeBlock,
         Tag::Table(_) => Construct::Table,
         Tag::Image { .. } => Construct::Image,
-        // TableHead/Row/Cell and any strike/script tags (disabled in md_options)
-        // are never independently reconstructed.
-        _ => return None,
+
+        // ── deliberately not independently reconstructable ────────────────────
+        // Written out rather than swallowed by a `_` arm (lint check 15): a
+        // construct that reaches the buffer without a deliberate arm here is one
+        // that copies as nothing.
+
+        // Table structure. A cell's CONTENT is reconstructed through its own
+        // per-cell copymap (`preview::build`'s cell capture), so the structural
+        // tags own no buffer range of their own to map.
+        Tag::TableHead | Tag::TableRow | Tag::TableCell => return None,
+
+        // A raw-HTML block owns buffer glyphs, but they are claimed at its END
+        // event, where the source range spans the whole block — see `classify`.
+        Tag::HtmlBlock => return None,
+
+        // The tight constructs this crate scans itself: pulldown never emits them
+        // (they are disabled in `md_options`) and they reach the renderer as plain
+        // `Text` for `renderer::scan_script_spans` to segment (ScrAP-66).
+        Tag::Strikethrough | Tag::Superscript | Tag::Subscript => return None,
+
+        // Never emitted: `md_options()` does not enable footnotes, definition lists
+        // or metadata blocks, and TDD 2.25 requires the parser be asked only for
+        // extensions the renderer handles (ScrAP-78).
+        Tag::FootnoteDefinition(_)
+        | Tag::DefinitionList
+        | Tag::DefinitionListTitle
+        | Tag::DefinitionListDefinition
+        | Tag::MetadataBlock(_) => return None,
     })
 }
 
@@ -126,7 +185,20 @@ fn construct_of_tagend(end: TagEnd) -> Option<Construct> {
         TagEnd::CodeBlock => Construct::CodeBlock,
         TagEnd::Table => Construct::Table,
         TagEnd::Image => Construct::Image,
-        _ => return None,
+
+        // The `TagEnd` mirror of `construct_of_tag`'s arms above, and it must stay a
+        // mirror: a construct reconstructable on one side and not the other is a
+        // branch that never closes. `TagEnd::HtmlBlock` is the one deliberate
+        // asymmetry — `classify` intercepts it before this function is reached,
+        // because that is the event at which raw HTML's buffer content appears.
+        TagEnd::TableHead | TagEnd::TableRow | TagEnd::TableCell => return None,
+        TagEnd::HtmlBlock => return None,
+        TagEnd::Strikethrough | TagEnd::Superscript | TagEnd::Subscript => return None,
+        TagEnd::FootnoteDefinition
+        | TagEnd::DefinitionList
+        | TagEnd::DefinitionListTitle
+        | TagEnd::DefinitionListDefinition
+        | TagEnd::MetadataBlock(_) => return None,
     })
 }
 
@@ -364,11 +436,50 @@ pub(crate) fn debug_verify(tree: &CopyTree, md: &str, buffer_chars: &[char]) {
             _ => {}
         }
     }
-    drift!(
-        tree.root.buf(),
-        (0, tree.char_count),
-        "root miscovers buffer"
-    );
+    // ANCHOR COVERAGE — the guard that the old "root miscovers buffer" check only
+    // appeared to be. That check compared `tree.root.buf()` against
+    // `(0, tree.char_count)`, but the root is CONSTRUCTED as `(0, char_count)` in
+    // `build`, so the two sides were the same expression and it could never fail. It
+    // read as a whole-buffer coverage assertion and asserted nothing, which is how a
+    // raw-HTML anchor came to sit in the buffer with no node covering it for as long
+    // as `<picture>` has existed.
+    //
+    // The real invariant is narrower than "the tree tiles the buffer", because it
+    // does NOT: the renderer inserts block separators that no parser event claims,
+    // and gaps of that kind are normal and correct. What must never happen is an
+    // ANCHORED CHILD with no node — every `U+FFFC` owns a widget whose source must be
+    // reconstructable, so an unclaimed one silently omits its construct from copied
+    // source rather than failing loudly.
+    let mut claimed = vec![false; buffer_chars.len()];
+    fn mark(node: &Node, claimed: &mut [bool]) {
+        match node {
+            Node::Leaf { buf, .. } | Node::Opaque { buf, .. } => {
+                let (lo, hi) = (
+                    buf.0.max(0) as usize,
+                    (buf.1.max(0) as usize).min(claimed.len()),
+                );
+                for c in claimed.iter_mut().take(hi).skip(lo) {
+                    *c = true;
+                }
+            }
+            Node::Branch { children, .. } => {
+                for c in children {
+                    mark(c, claimed);
+                }
+            }
+        }
+    }
+    mark(&tree.root, &mut claimed);
+    for (i, ch) in buffer_chars.iter().enumerate() {
+        if *ch == '\u{FFFC}' && !claimed.get(i).copied().unwrap_or(false) {
+            drift!(
+                "claimed",
+                "unclaimed",
+                "anchored child at buffer offset {i} has no copymap node — its \
+                 construct would be silently omitted from copied source"
+            );
+        }
+    }
     walk(&tree.root, md, buffer_chars);
 }
 
@@ -1370,3 +1481,70 @@ fn sl(md: &str, r: Range<usize>) -> &str {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, debug_assertions))]
+mod anchor_coverage_guard_tests {
+    use super::*;
+
+    /// A tree built from events that never claim the anchor position — the exact
+    /// shape raw HTML produced before `classify` was taught about it.
+    fn tree_without_anchor_node() -> CopyTree {
+        let md = "ab";
+        let evs = vec![RawEv {
+            buf: (0, 2),
+            src: 0..2,
+            kind: RawKind::Text("ab".into()),
+        }];
+        // char_count 3: two text chars plus one anchored child nothing claims.
+        build(md, &evs, 3, &std::rc::Rc::new(BlockScripts::default()))
+    }
+
+    #[test]
+    #[should_panic(expected = "has no copymap node")]
+    fn an_unclaimed_anchored_child_is_caught() {
+        // MUTATION TEST for the guard itself. Before this existed, the check here
+        // compared the root's buf against the value the root was constructed with,
+        // so it passed on this input — and on every real document containing a
+        // `<picture>`. If this test stops panicking, the guard has been neutered.
+        let tree = tree_without_anchor_node();
+        let chars: Vec<char> = vec!['a', 'b', '\u{FFFC}'];
+        debug_verify(&tree, "ab", &chars);
+    }
+
+    #[test]
+    fn an_anchored_child_covered_by_an_atomic_node_passes() {
+        // The positive control: the same buffer, with the Atomic node `classify` now
+        // produces for raw HTML. Without this, the test above could be passing
+        // because the guard fires on everything.
+        let md = "ab<img src=\"x.png\">";
+        let evs = vec![
+            RawEv {
+                buf: (0, 2),
+                src: 0..2,
+                kind: RawKind::Text("ab".into()),
+            },
+            RawEv {
+                buf: (2, 3),
+                src: 2..md.len(),
+                kind: RawKind::Atomic,
+            },
+        ];
+        let tree = build(md, &evs, 3, &std::rc::Rc::new(BlockScripts::default()));
+        let chars: Vec<char> = vec!['a', 'b', '\u{FFFC}'];
+        debug_verify(&tree, md, &chars);
+    }
+
+    #[test]
+    fn a_buffer_with_no_anchors_is_unaffected() {
+        // The guard must not fire on ordinary prose, or it would be noise rather
+        // than signal — and gaps between nodes ARE normal (block separators).
+        let md = "ab";
+        let evs = vec![RawEv {
+            buf: (0, 2),
+            src: 0..2,
+            kind: RawKind::Text("ab".into()),
+        }];
+        let tree = build(md, &evs, 3, &std::rc::Rc::new(BlockScripts::default()));
+        debug_verify(&tree, md, &['a', 'b', 'c']);
+    }
+}

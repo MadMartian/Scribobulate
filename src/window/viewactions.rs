@@ -501,7 +501,7 @@ fn register_chrome_visibility_actions(
             if !mode.is_preview_visible() {
                 return;
             }
-            rerender_preview_in_place(window, mode);
+            rerender_preview_in_place(window, mode, RenderShape::SameContent);
         },
     );
 }

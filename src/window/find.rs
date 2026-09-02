@@ -195,7 +195,8 @@ fn cell_hl_current() -> (u16, u16, u16) {
 }
 
 /// One occurrence of the search term in the preview, in document order. Body
-/// matches live in the buffer; cell matches live in a table cell `GtkLabel`.
+/// matches live in the buffer; cell matches live in a table cell `GtkLabel`; hidden
+/// matches live in no widget at all, only in the source.
 enum PreviewHit {
     /// Body-text match — buffer character offsets.
     Body { start: i32, end: i32 },
@@ -207,6 +208,21 @@ enum PreviewHit {
         label: Label,
         byte_start: u32,
         byte_end: u32,
+    },
+    /// A match inside a **collapsed disclosure**, which this render did not draw.
+    ///
+    /// It has no buffer range and no widget, because the text it names is not on the
+    /// page — so it cannot be highlighted, only *reached*: stepping onto it expands
+    /// the block and re-enters, and the rebuilt list holds the real match in its
+    /// place (rubric 11.10).
+    ///
+    /// It is a hit rather than an absence because the alternative is the failure TDD
+    /// 11.8 calls worse than not acting — reporting "no matches" for text that is
+    /// plainly in the document. It sorts at the block's summary line, which is where
+    /// the reader can see the block and the only position it owns.
+    Hidden {
+        summary_off: i32,
+        key: crate::fold::FoldKey,
     },
 }
 
@@ -285,17 +301,30 @@ fn build_preview_hits(
     // Body-text matches (buffer).
     let buf = view.buffer();
     let flags = preview_flags();
+    // A collapsed disclosure's body-opening PREVIEW (TDD 2.26) is real buffer text,
+    // so an ordinary `forward_search` sees it too — but the SAME occurrence is also
+    // found below, from the SOURCE, by the collapsed-block scan, which is not bounded
+    // by the preview's own truncation length and so already covers it whether or not
+    // the match happens to fall inside the shown fragment. Counting both would double
+    // this one occurrence, so a match landing on the preview's own tagged text is
+    // excluded here and left to the Hidden hit it already has.
+    let preview_tag = buf
+        .tag_table()
+        .lookup(crate::tags::TagName::DisclosurePreview.name());
     let mut it = buf.start_iter();
     while let Some((ms, me)) = it.forward_search(text, flags, None) {
         let start = ms.offset();
-        keyed.push((
-            start,
-            0,
-            PreviewHit::Body {
+        let in_preview = preview_tag.as_ref().is_some_and(|t| ms.has_tag(t));
+        if !in_preview {
+            keyed.push((
                 start,
-                end: me.offset(),
-            },
-        ));
+                0,
+                PreviewHit::Body {
+                    start,
+                    end: me.offset(),
+                },
+            ));
+        }
         it = me;
     }
 
@@ -318,8 +347,51 @@ fn build_preview_hits(
         }
     }
 
+    // Matches inside COLLAPSED disclosures — text this render withheld.
+    //
+    // Third source, and the only one that searches something other than a widget:
+    // a collapsed body is in no buffer and no label, so `forward_search` reports
+    // nothing for text that is plainly in the document. TDD 11.8 already names that
+    // outcome — a confidently wrong answer in place of a missing one — as worse than
+    // not acting.
+    if let Some(rd) = crate::preview::scrib_render_data(view) {
+        let rd = rd.borrow();
+        for block in &rd.collapsed_blocks {
+            let hidden = rd.md_owned.get(block.body.clone()).unwrap_or_default();
+            for _ in 0..hidden_match_count(hidden, text) {
+                keyed.push((
+                    block.summary_offset,
+                    seq,
+                    PreviewHit::Hidden {
+                        summary_off: block.summary_offset,
+                        key: block.key,
+                    },
+                ));
+                seq += 1;
+            }
+        }
+    }
+
     keyed.sort_by_key(|(off, seq, _)| (*off, *seq));
     keyed.into_iter().map(|(_, _, hit)| hit).collect()
+}
+
+/// How many times `needle` occurs in the text a collapsed disclosure's body would
+/// render as.
+///
+/// The reduction to plain text belongs to `renderer::disclosure` — it is knowledge
+/// about a disclosure body, it is display-free, and putting it there keeps it inside
+/// the coverage gate, which `src/window/*.rs` is outside of. What stays here is the
+/// case-folding, so a hidden match and a visible one are decided by the same rule.
+fn hidden_match_count(body_src: &str, needle: &str) -> usize {
+    if needle.is_empty() || body_src.is_empty() {
+        return 0;
+    }
+    ci_match_ranges(
+        &crate::renderer::disclosure::body_plain_text(body_src),
+        needle,
+    )
+    .len()
 }
 
 /// The preview hit list, cached against the exact render and query it was derived
@@ -483,6 +555,9 @@ fn apply_preview_highlights(
                 byte_start: *byte_start,
                 byte_end: *byte_end,
             },
+            // Nothing to wash: the text is not on the page until the block is
+            // expanded, and stepping onto it is what expands it.
+            PreviewHit::Hidden { .. } => plan::Hit::Hidden,
         })
         .collect();
     let painted = plan::plan(&projected, current);
@@ -650,6 +725,10 @@ fn scroll_to_preview_hit(view: &CodePreviewView, hit: &PreviewHit) {
         PreviewHit::Cell {
             anchor_off, label, ..
         } => view.scroll_to_cell_offset(*anchor_off, label),
+        // The block's summary line is the nearest thing to the match that exists in
+        // this render. Scrolling there first means the reader watches the block they
+        // are about to be taken into, rather than the expansion happening off-screen.
+        PreviewHit::Hidden { summary_off, .. } => view.scroll_to_buffer_offset(*summary_off),
     }
 }
 
@@ -679,13 +758,13 @@ fn preview_find_step(
         return;
     }
     let Some(st) = state(window) else { return };
-    st.preview_find.with_hits(view, text, |targets, hits| {
+    let reveal = st.preview_find.with_hits(view, text, |targets, hits| {
         let total = hits.len() as i32;
         if total == 0 {
             apply_preview_highlights(view, targets, hits, 0);
             st.find_cursor.set(FindCursor::None);
             set_match_label(&st.chrome().match_count_label, 0, 0);
-            return;
+            return None;
         }
         // Reads the PREVIEW index specifically: a cursor left pointing into the editor's
         // occurrence list reads as 0 here and steps to the first preview hit, rather than
@@ -700,11 +779,93 @@ fn preview_find_step(
         } else {
             cur % total + 1 // cur==0 ⇒ 1; cur==total ⇒ wrap to 1
         };
+        // Landing on a hidden hit is not an arrival, it is a REDIRECTION: the match is
+        // inside a collapsed block, so nothing is marked and the cursor is not set
+        // here. Expanding rebuilds this whole list — the hidden entry is replaced by
+        // the real match — and the resume below lands on that instead. Marking first
+        // would leave a "3 of 7" standing against a list about to become a different
+        // list.
+        if let PreviewHit::Hidden { summary_off, key } = &hits[(next - 1) as usize] {
+            return Some((*summary_off, *key));
+        }
         apply_preview_highlights(view, targets, hits, next as usize);
         scroll_to_preview_hit(view, &hits[(next - 1) as usize]);
         st.find_cursor.set(FindCursor::Preview(next));
         set_match_label(&st.chrome().match_count_label, next, total);
+        None
     });
+
+    let Some((summary_off, key)) = reveal else {
+        return;
+    };
+    // Scrolled BEFORE the expansion so the reader sees the block they are about to be
+    // taken into open, rather than the expansion happening off-screen and the view
+    // arriving somewhere it never travelled.
+    view.scroll_to_buffer_offset(summary_off);
+    let text = text.to_string();
+    super::foldreveal::reveal_folds(window, &[key], move |window| {
+        select_preview_hit_at_or_after(window, summary_off, &text);
+    });
+}
+
+/// After a collapsed block has been expanded for find, land on the first match at or
+/// after `min_off` and mark it as the current one.
+///
+/// **Re-entrant on purpose.** A disclosure nested inside a collapsed one renders
+/// nothing at all, so expanding the outer block reveals the inner block's summary and
+/// not its body — the rebuilt list then holds another hidden hit at that summary, and
+/// this expands that one too. The recursion is bounded by nesting depth, because every
+/// pass expands a block that was collapsed and so strictly reduces how many collapsed
+/// ancestors stand between the reader and the match.
+///
+/// `min_off` is the expanded block's summary line, whose offset the expansion does not
+/// move — everything above it is unchanged — so "the first hit at or after it" is the
+/// first match inside the block that just opened.
+fn select_preview_hit_at_or_after(window: &ApplicationWindow, min_off: i32, text: &str) {
+    let FindTarget::Preview(view) = find_target(window) else {
+        // The re-render is asynchronous, so the mode may have changed under it. Not an
+        // error: the reader moved on, and acting now would act on a pane they are not
+        // looking at (TDD 11.8).
+        return;
+    };
+    let Some(st) = state(window) else { return };
+    let reveal = st.preview_find.with_hits(&view, text, |targets, hits| {
+        let total = hits.len() as i32;
+        let idx = hits
+            .iter()
+            .position(|h| preview_hit_position(h) >= min_off)
+            .unwrap_or(0);
+        if total == 0 {
+            return None;
+        }
+        if let PreviewHit::Hidden { summary_off, key } = &hits[idx] {
+            return Some((*summary_off, *key));
+        }
+        let next = idx as i32 + 1;
+        apply_preview_highlights(&view, targets, hits, next as usize);
+        scroll_to_preview_hit(&view, &hits[idx]);
+        st.find_cursor.set(FindCursor::Preview(next));
+        set_match_label(&st.chrome().match_count_label, next, total);
+        None
+    });
+    let Some((summary_off, key)) = reveal else {
+        return;
+    };
+    let text = text.to_string();
+    super::foldreveal::reveal_folds(window, &[key], move |window| {
+        select_preview_hit_at_or_after(window, summary_off, &text);
+    });
+}
+
+/// Where a hit sits in document order, as a buffer char offset. The one place the
+/// three hit kinds are reduced to a common coordinate, so no caller re-derives which
+/// field of which variant carries a position.
+fn preview_hit_position(hit: &PreviewHit) -> i32 {
+    match hit {
+        PreviewHit::Body { start, .. } => *start,
+        PreviewHit::Cell { anchor_off, .. } => *anchor_off,
+        PreviewHit::Hidden { summary_off, .. } => *summary_off,
+    }
 }
 /// Advance to the next or previous match. Dispatches to the preview-buffer path in
 /// pure-preview mode, else the editor `GtkSourceSearchContext` path.
@@ -1392,7 +1553,14 @@ mod gtk_integration_tests {
         // so the generation, not the buffer's identity, is what must move.
         let buf_before = view.buffer();
         let gen_before = view.render_generation();
-        crate::preview::re_render(&sw, MD, None, 1.0, false);
+        crate::preview::re_render(
+            &sw,
+            MD,
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+        );
         let view_after = view_in(&sw);
         assert_eq!(
             view_after.buffer(),
@@ -1646,6 +1814,180 @@ mod gtk_integration_tests {
              re-apply them (GTK4Rs/AP-47)"
         );
 
+        window.destroy();
+    }
+    /// A document whose only occurrence of "needle" is inside a COLLAPSED disclosure.
+    ///
+    /// The body is padded well past the summary line's body-opening PREVIEW's
+    /// character limit (item 3 / TDD 2.26), so "needle" never lands inside the
+    /// visible preview fragment either — the precondition below stays genuinely
+    /// "hidden, not merely off-screen".
+    const MD_HIDDEN: &str = concat!(
+        "Visible prose with no match.\n\n",
+        "<details>\n<summary>Closed block</summary>\n\n",
+        "pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad a hidden needle in here\n\n",
+        "</details>\n\n",
+        "More visible prose.\n"
+    );
+
+    /// **Rubric 11.10 — find reaches a match inside a collapsed disclosure.**
+    ///
+    /// The half that fails silently is the COUNT: the body is in no buffer, so
+    /// `forward_search` reported "No matches" for text plainly in the document, which
+    /// TDD 11.8 already names as worse than not acting.
+    #[gtktest::test]
+    fn find_counts_a_match_inside_a_collapsed_disclosure() {
+        let app = crate::window::testkit::test_app(
+            "com.extollit.scribobulate.integrationtest.findhidden",
+        );
+        let window = crate::window::new_window(&app, "IT", MD_HIDDEN, None);
+        let st = crate::winstate::state(&window).expect("the window has an active tab");
+        let view = super::find_target(&window).expect_preview();
+
+        let buf = view.buffer();
+        let slice = buf.slice(&buf.start_iter(), &buf.end_iter(), true);
+        assert!(
+            !slice.contains("needle"),
+            "precondition: the match is hidden, not merely off-screen: {slice:?}"
+        );
+
+        assert_eq!(
+            super::highlight_preview_matches(&st.preview_find, &view, "needle"),
+            1,
+            "a match the reader cannot see is still a match in the document"
+        );
+        window.destroy();
+    }
+
+    /// **A term the SHORT preview happens to show is still counted exactly once.**
+    ///
+    /// The body-opening preview (item 3 / TDD 2.26) is real buffer text, so an
+    /// ordinary `forward_search` over the buffer sees it too — and the SAME
+    /// occurrence is also found by the collapsed-block SOURCE scan just below it in
+    /// `build_preview_hits`, which is not bounded by the preview's own truncation and
+    /// so already covers it. Left unguarded, a short body would be counted TWICE for
+    /// one real occurrence. Distinct from the test above, whose body is padded past
+    /// the preview's limit specifically so this interaction never arises there.
+    #[gtktest::test]
+    fn a_match_inside_the_body_preview_is_not_double_counted() {
+        let md = concat!(
+            "<details>\n<summary>Closed block</summary>\n\n",
+            "a short needle body\n\n",
+            "</details>\n"
+        );
+        let app = crate::window::testkit::test_app(
+            "com.extollit.scribobulate.integrationtest.findhiddenpreview",
+        );
+        let window = crate::window::new_window(&app, "IT", md, None);
+        let st = crate::winstate::state(&window).expect("the window has an active tab");
+        let view = super::find_target(&window).expect_preview();
+
+        // The whole short body fits inside the preview's limit, so it DOES appear on
+        // the summary line — the opposite precondition from the test above, and the
+        // one that makes the double-count reachable if the guard is missing.
+        let buf = view.buffer();
+        let slice = buf.slice(&buf.start_iter(), &buf.end_iter(), true);
+        assert!(
+            slice.contains("needle"),
+            "precondition: the short body previews in full: {slice:?}"
+        );
+
+        assert_eq!(
+            super::highlight_preview_matches(&st.preview_find, &view, "needle"),
+            1,
+            "one real occurrence must count once, whether or not it happens to sit \
+             inside the shown preview fragment"
+        );
+        window.destroy();
+    }
+
+    /// The other half: stepping onto that match EXPANDS the block and lands on the
+    /// real occurrence, which is then an ordinary highlighted body hit.
+    #[gtktest::test]
+    fn stepping_onto_a_hidden_match_expands_the_block_and_lands_on_it() {
+        let app = crate::window::testkit::test_app(
+            "com.extollit.scribobulate.integrationtest.findhiddenstep",
+        );
+        let window = crate::window::new_window(&app, "IT", MD_HIDDEN, None);
+        let st = crate::winstate::state(&window).expect("the window has an active tab");
+        let chrome = crate::winstate::chrome(&window).expect("window chrome");
+        chrome.find_bar_revealer.set_reveal_child(true);
+        chrome.find_entry.set_text("needle");
+
+        let view = super::find_target(&window).expect_preview();
+        super::highlight_preview_matches(&st.preview_find, &view, "needle");
+        super::preview_find_step(&window, &view, "needle", super::SearchDir::Forward);
+
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "the disclosure to expand and the match to appear",
+            || {
+                let view = match super::find_target(&window) {
+                    super::FindTarget::Preview(v) => v,
+                    _ => return false,
+                };
+                let buf = view.buffer();
+                buf.slice(&buf.start_iter(), &buf.end_iter(), true)
+                    .contains("needle")
+            },
+        );
+
+        // Landed ON it: the cursor names a real hit and the buffer carries the wash.
+        let view = super::find_target(&window).expect_preview();
+        assert!(
+            buffer_has_search_highlight(&view.buffer()),
+            "the revealed match is highlighted like any other"
+        );
+        assert_eq!(
+            st.find_cursor.get().preview_index(),
+            1,
+            "the cursor names the match, not the hidden placeholder it replaced"
+        );
+        window.destroy();
+    }
+
+    /// A match inside a disclosure nested in ANOTHER collapsed disclosure. Expanding
+    /// the outer block only reveals the inner block's summary, so one reveal is not
+    /// enough — the resume re-enters until the match is genuinely on the page.
+    #[gtktest::test]
+    fn a_match_two_collapsed_levels_deep_is_reached_in_one_step() {
+        const MD_NESTED: &str = concat!(
+            "<details>\n<summary>Outer</summary>\n\n",
+            "<details>\n<summary>Inner</summary>\n\n",
+            "a hidden needle in here\n\n",
+            "</details>\n\n",
+            "</details>\n"
+        );
+        let app = crate::window::testkit::test_app(
+            "com.extollit.scribobulate.integrationtest.findhiddennest",
+        );
+        let window = crate::window::new_window(&app, "IT", MD_NESTED, None);
+        let st = crate::winstate::state(&window).expect("the window has an active tab");
+        let chrome = crate::winstate::chrome(&window).expect("window chrome");
+        chrome.find_bar_revealer.set_reveal_child(true);
+        chrome.find_entry.set_text("needle");
+
+        let view = super::find_target(&window).expect_preview();
+        assert_eq!(
+            super::highlight_preview_matches(&st.preview_find, &view, "needle"),
+            1,
+            "the outer block's body range covers the inner block's text too"
+        );
+        super::preview_find_step(&window, &view, "needle", super::SearchDir::Forward);
+
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "both levels to expand and the match to appear",
+            || {
+                let view = match super::find_target(&window) {
+                    super::FindTarget::Preview(v) => v,
+                    _ => return false,
+                };
+                let buf = view.buffer();
+                buf.slice(&buf.start_iter(), &buf.end_iter(), true)
+                    .contains("needle")
+            },
+        );
         window.destroy();
     }
 }

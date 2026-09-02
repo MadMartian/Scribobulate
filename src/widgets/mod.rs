@@ -24,6 +24,7 @@
 use gtk::prelude::*;
 
 pub(crate) mod comment_entry;
+pub(crate) mod disclosure;
 pub(crate) mod rule;
 pub(crate) mod tab;
 pub(crate) mod table;

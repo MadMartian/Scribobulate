@@ -36,6 +36,17 @@ pub(crate) struct ListGlyphs {
 
 // ── the resolved theme ────────────────────────────────────────────────────────
 
+/// The disclosure indicator's two glyphs — collapsed and expanded.
+///
+/// Two, for the same reason the task checkbox has two: the control has two states and
+/// they must stay tellable apart. They resolve independently, so a theme may state
+/// either alone as deliberately as it may state both.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DisclosureGlyphs {
+    pub collapsed: Option<MarkerGlyph>,
+    pub expanded: Option<MarkerGlyph>,
+}
+
 /// A theme colour that carries its own alpha, resolved once and decomposed on
 /// demand for whichever application path needs it. `annotation_hl` is the reason
 /// this type exists: the tag path takes the RGBA directly, while a table cell is a
@@ -273,6 +284,11 @@ pub(crate) struct Metrics {
     pub table_cell_padding_h: i32,
     pub table_border_width: i32,
     pub table_cell_radius: i32,
+    /// The disclosure indicator's box, design-time px at zoom 1.0.
+    pub disclosure_marker_size: i32,
+    /// Corner radius of the disclosure summary's band. Only consulted where a band
+    /// exists, exactly as `heading_band_radius` is.
+    pub disclosure_band_radius: i32,
 }
 
 /// A theme with links 1 and 2 of the resolution order already applied. Colours
@@ -351,6 +367,32 @@ pub(crate) struct Theme {
     /// Glyphs standing in for the drawn list markers; each `None` ⇒ that marker is
     /// drawn as it always was. A sprite for the same marker outranks the glyph.
     pub list_glyphs: ListGlyphs,
+    /// The disclosure indicator's glyphs; each `None` ⇒ that state keeps its stock
+    /// icon. A sprite for the same state outranks the glyph.
+    pub disclosure_glyphs: DisclosureGlyphs,
+    /// The disclosure indicator's ink, both states; `None` ⇒ inherit the widget
+    /// foreground, which is what the control drew with before this key existed.
+    pub disclosure_marker_color: Option<gdk::RGBA>,
+    /// The collapsed summary's body-opening PREVIEW ink (TDD 2.26); `None` ⇒ the
+    /// preview text keeps the body foreground, exactly like any other buffer line —
+    /// unset means NOT PRESENT, never a guessed dimmed default (POLICY "no
+    /// hard-coded styling").
+    pub disclosure_preview_fg: Option<gdk::RGBA>,
+    /// The fill behind a disclosure's whole SUMMARY LINE (TDD 18.48); `None` ⇒ that
+    /// line carries no band and the summary sits on the page, exactly as it did
+    /// before this key existed (TDD 18.2).
+    pub disclosure_band_color: Option<gdk::RGBA>,
+    /// A second stop, making the summary band a vertical gradient from
+    /// [`Self::disclosure_band_color`]. Ignored where no fill is stated — a gradient
+    /// is a second stop and needs a first one, the same precondition
+    /// `heading_band_gradient_to_color` carries.
+    pub disclosure_band_gradient_to: Option<gdk::RGBA>,
+    /// The ink a disclosure's summary LINE takes (TDD 18.49); `None` ⇒ the label
+    /// keeps the body foreground. A tag rather than part of the band, because ink is
+    /// a PRIORITY question where a fill is an EXTENT one: a link or a `==mark==` in
+    /// the label must keep its own colour, which only tag priority can express (the
+    /// same split `blockquote_fg` makes against `blockquote_bg`).
+    pub disclosure_fg: Option<gdk::RGBA>,
     /// Ink for `==marked==` text, over `mark_bg`; `None` ⇒ the marked text keeps the
     /// body foreground, which is what every theme did before this key existed.
     pub mark_fg: Option<gdk::RGBA>,
@@ -396,6 +438,15 @@ pub(crate) struct Sprites {
     /// is read by a WIDGET rather than by a drawing pass or an export sink alone — see
     /// `crate::widgets::rule`.
     pub rule: Option<crate::sprite::SpriteRef>,
+    /// The disclosure indicator's tiles, one per state. Read by a WIDGET rather than
+    /// a drawing pass, as `rule` is — see `crate::widgets::disclosure`.
+    pub disclosure: Option<crate::sprite::SpriteRef>,
+    pub disclosure_expanded: Option<crate::sprite::SpriteRef>,
+    /// The tile behind a disclosure's summary line (TDD 18.48). Unlike the two
+    /// entries above this one IS read by a drawing pass — `codeview::disclosurebands`
+    /// — and by both export sinks, because the band is a fill of an extent rather
+    /// than a picture standing in for a control.
+    pub disclosure_band: Option<crate::sprite::SpriteRef>,
 }
 
 #[cfg(test)]

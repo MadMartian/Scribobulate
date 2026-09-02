@@ -77,6 +77,7 @@ clang -ObjC -O1 -o /tmp/appkit-panel-control \
 clang -ObjC -O1 -o /tmp/middleclick-primary-paste \
    probes/middleclick-primary-paste.m $(pkg-config --cflags --libs gtk4) -framework AppKit
 
+cc probes/textview-anchored-toggle.c    -o /tmp/textview-anchored-toggle    $(pkg-config --cflags --libs gtk4)
 cc probes/textbuffer-selection-leak.c   -o /tmp/textbuffer-selection-leak   $(pkg-config --cflags --libs gtk4)
 cc probes/textview-primary-overwrite.c  -o /tmp/textview-primary-overwrite  $(pkg-config --cflags --libs gtk4)
 cc probes/textview-selection-clipboard.c -o /tmp/textview-selection-clipboard $(pkg-config --cflags --libs gtk4)

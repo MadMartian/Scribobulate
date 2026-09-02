@@ -11,7 +11,8 @@ use super::build::{
 use super::cells::{attach_cell_marker_widgets, collect_cell_labels, collect_table_anchors};
 use super::interactions::{
     connect_image_tints, wire_checkbox_toggle_gesture, wire_copy_button_gesture,
-    wire_copy_clipboard, wire_link_gestures, wire_table_click_gesture,
+    wire_copy_clipboard, wire_disclosure_click_gesture, wire_link_gestures,
+    wire_table_click_gesture,
 };
 use super::qdata::{
     scrib_anchor_widgets, scrib_labels, scrib_render_data, set_scrib_render_state, RenderData,
@@ -31,6 +32,9 @@ pub(crate) fn render(
 ) -> gtk::Widget {
     let RenderProducts {
         buf,
+        disclosure_toggles,
+        collapsed_blocks,
+        disclosure_extents,
         source_map,
         copymap,
         md_owned,
@@ -38,8 +42,7 @@ pub(crate) fn render(
         anchored,
         image_tints,
         install,
-        heading_offsets,
-        heading_slugs,
+        heading_sites,
         heading_map,
         mut markers,
         cell_src_spans,
@@ -59,8 +62,10 @@ pub(crate) fn render(
         md_owned,
         links,
         heading_map,
-        heading_offsets,
-        heading_slugs,
+        heading_sites,
+        collapsed_blocks,
+        disclosure_extents,
+        disclosure_lines: Vec::new(),
         image_tints,
         table_anchors,
         shifts,
@@ -72,6 +77,7 @@ pub(crate) fn render(
     let view = CodePreviewView::new();
     view.add_css_class("scrib-preview");
     view.set_buffer(Some(&buf));
+    wire_disclosure_toggles(&view, &render_data, disclosure_toggles);
     view.set_editable(false);
     // Found by the naming guard once its scope became the accessible ROLE rather than a
     // list of widget types: this view publishes role TextBox and had no accessible name, so
@@ -127,6 +133,7 @@ pub(crate) fn render(
     // copy-clipboard → char-precise Markdown copy.
     wire_table_click_gesture(&view);
     wire_link_gestures(&view, &render_data);
+    wire_disclosure_click_gesture(&view, &render_data);
     // Left-gutter task checkbox → undoable `[ ]`↔`[x]` source toggle (Phase 3b).
     wire_checkbox_toggle_gesture(&view, &render_data);
     // Code-block copy button → that block's code on the clipboard.
@@ -203,6 +210,7 @@ pub(crate) fn re_render(
     doc_dir: Option<&std::path::Path>,
     zoom: f64,
     allow_unsafe_images: bool,
+    folds: &crate::fold::FoldState,
 ) {
     let Some(view) = sw
         .child()
@@ -246,6 +254,9 @@ pub(crate) fn re_render(
     // doc comment describes.
     let RenderProducts {
         buf: _,
+        disclosure_toggles,
+        collapsed_blocks,
+        disclosure_extents,
         source_map,
         copymap,
         md_owned,
@@ -253,18 +264,32 @@ pub(crate) fn re_render(
         anchored,
         image_tints,
         install,
-        heading_offsets,
-        heading_slugs,
+        heading_sites,
         heading_map,
         mut markers,
         cell_src_spans,
         highlight_ranges: _,
         shifts,
         original_owned,
-    } = build_render_products_into(&view.buffer(), md, doc_dir, zoom, allow_unsafe_images);
+    } = build_render_products_into(
+        &view.buffer(),
+        md,
+        doc_dir,
+        zoom,
+        allow_unsafe_images,
+        folds,
+    );
 
     // Update the shared RenderData cell — live closures on the view borrow this.
     let render_data = scrib_render_data(&view);
+    // Every render emits fresh toggles (the previous ones were unparented with the
+    // old anchored children), so activation is re-wired here rather than assumed to
+    // have survived — the same rebuild-boundary rule the find highlight follows. It
+    // needs the cell, because the summary LINES it records live there for the
+    // line-wide click hit-test, so it runs after the cell is resolved.
+    if let Some(rd) = &render_data {
+        wire_disclosure_toggles(&view, rd, disclosure_toggles);
+    }
     if let Some(rd) = &render_data {
         let mut rd = rd.borrow_mut();
         rd.source_map_inv = invert_source_map(&source_map);
@@ -273,8 +298,9 @@ pub(crate) fn re_render(
         rd.md_owned = md_owned;
         rd.links = links;
         rd.heading_map = heading_map;
-        rd.heading_offsets = heading_offsets;
-        rd.heading_slugs = heading_slugs;
+        rd.heading_sites = heading_sites;
+        rd.collapsed_blocks = collapsed_blocks;
+        rd.disclosure_extents = disclosure_extents;
         rd.image_tints = image_tints;
         rd.table_anchors = collect_table_anchors(&anchored);
         rd.shifts = shifts;
@@ -447,8 +473,9 @@ pub(crate) fn refresh_annotations_in_place(
         rd.md_owned = products.md_owned;
         rd.links = products.links;
         rd.heading_map = products.heading_map;
-        rd.heading_offsets = products.heading_offsets;
-        rd.heading_slugs = products.heading_slugs;
+        rd.heading_sites = products.heading_sites;
+        rd.collapsed_blocks = products.collapsed_blocks;
+        rd.disclosure_extents = products.disclosure_extents;
         rd.shifts = products.shifts;
         rd.original_owned = products.original_owned;
     }
@@ -840,6 +867,7 @@ mod gtk_integration_tests {
             None,
             1.0,
             false,
+            &crate::fold::FoldState::default(),
         );
 
         let after = view.buffer();
@@ -925,4 +953,120 @@ mod choke_point_tests {
              previous one derived"
         );
     }
+}
+
+/// Connect each disclosure toggle a FULL render emitted to the fold it drives.
+///
+/// # Why the connection is made here rather than in the renderer
+///
+/// The renderer is deliberately free of GTK signal wiring — it produces buffer content
+/// and widgets and hands them back. What a toggle MEANS (flip this document's fold,
+/// then change what is drawn) is a per-tab concern, and the tab is reachable from the
+/// view's root rather than from the renderer.
+fn wire_disclosure_toggles(
+    view: &CodePreviewView,
+    render_data: &Rc<RefCell<RenderData>>,
+    toggles: Vec<crate::renderer::DisclosureToggle>,
+) {
+    // The whole summary LINE is the click target, not just the arrow, so the line each
+    // toggle sits on is recorded for `interactions`' line hit-test. Rebuilt per render
+    // because both the widgets and the lines are (see `re_render`).
+    render_data.borrow_mut().disclosure_lines = toggles
+        .iter()
+        .map(|t| {
+            let line = view.buffer().iter_at_offset(t.summary_offset).line();
+            (line, t.toggle.clone())
+        })
+        .collect();
+    for crate::renderer::DisclosureToggle { toggle, key, .. } in toggles {
+        connect_disclosure_toggle(view, &toggle, key);
+    }
+}
+
+/// The same wiring after a SPLICE, where most of the controls are survivors.
+///
+/// Two differences from [`wire_disclosure_toggles`], and each is a defect if got
+/// wrong. **Only `fresh` is connected** — a survivor still carries the handler it was
+/// built with, and a second one would fold twice per click, which reads as a click
+/// that does nothing (the exact report this construct has already produced by another
+/// route, ScrAP-79). And the LINE index is rebuilt from the live anchors rather than
+/// from `summary_offset`: a splice moves every line below its region, so the offsets
+/// the surviving controls were emitted with named the previous render's buffer.
+pub(super) fn wire_spliced_disclosure_toggles(
+    view: &CodePreviewView,
+    render_data: &Rc<RefCell<RenderData>>,
+    fresh: Vec<crate::renderer::DisclosureToggle>,
+    merged_anchored: &[(TextChildAnchor, gtk::Widget)],
+) {
+    let buf = view.buffer();
+    render_data.borrow_mut().disclosure_lines = merged_anchored
+        .iter()
+        .filter_map(|(anchor, widget)| {
+            let toggle = widget.clone().downcast::<gtk::ToggleButton>().ok()?;
+            // The class the line hit-test itself resolves a press against, so
+            // "is this a disclosure control?" is asked once, in one vocabulary
+            // (`widgets::disclosure::CSS_CLASS`) — a second predicate here would be
+            // free to disagree with the one deciding what a click means.
+            if !toggle.has_css_class(crate::widgets::disclosure::CSS_CLASS) {
+                return None;
+            }
+            Some((buf.iter_at_child_anchor(anchor).line(), toggle))
+        })
+        .collect();
+    for crate::renderer::DisclosureToggle { toggle, key, .. } in fresh {
+        connect_disclosure_toggle(view, &toggle, key);
+    }
+}
+
+/// What activating a disclosure control MEANS — one definition, reached from both the
+/// full-render and the spliced wiring above.
+///
+/// # Why the work is deferred to an idle
+///
+/// Changing what is drawn re-parents anchored children — under the fallback, every one
+/// of them, INCLUDING the toggle whose signal is still on the stack. Doing that
+/// synchronously destroys the emitting widget inside its own handler. The task-checkbox
+/// toggle defers for exactly this reason (GTK4Rs/AP-30); this follows it rather than
+/// inventing a second answer.
+///
+/// # Why the splice is tried first, and why the fallback is unconditional
+///
+/// A full re-render discards every line's height validation, which collapses the
+/// vadjustment's `upper` and throws the reader to the top of the document before the
+/// restore can land (MEASURED: `upper` 36 168 → 672, `value` 21 340 → 2). Splicing the
+/// toggled block's own region costs none of that. But a splice is only possible when
+/// this render actually DREW the block — `preview::splice` answers `false` otherwise,
+/// before touching the buffer, so the fallback always runs against an untouched pane.
+fn connect_disclosure_toggle(
+    view: &CodePreviewView,
+    toggle: &gtk::ToggleButton,
+    key: crate::fold::FoldKey,
+) {
+    toggle.connect_toggled(glib::clone!(
+        #[weak]
+        view,
+        move |_| {
+            let Some(window) = view
+                .root()
+                .and_then(|r| r.downcast::<gtk::ApplicationWindow>().ok())
+            else {
+                return;
+            };
+            let Some(st) = crate::winstate::state(&window) else {
+                return;
+            };
+            st.folds.borrow_mut().toggle(key);
+            let mode = st.view_mode.get();
+            glib::idle_add_local_once(move || {
+                if crate::window::splice_disclosure_in_place(&window, mode, key) {
+                    return;
+                }
+                crate::window::rerender_preview_in_place(
+                    &window,
+                    mode,
+                    crate::window::RenderShape::ChangedContent,
+                );
+            });
+        }
+    ));
 }

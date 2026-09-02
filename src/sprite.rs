@@ -113,6 +113,14 @@ const BUILTIN_SPRITES: &[(&str, &[u8])] = &[
         include_bytes!("../data/sprites/grass-platform.png"),
     ),
     (
+        "sprites/sign-down.png",
+        include_bytes!("../data/sprites/sign-down.png"),
+    ),
+    (
+        "sprites/sign-right.png",
+        include_bytes!("../data/sprites/sign-right.png"),
+    ),
+    (
         "sprites/sword.png",
         include_bytes!("../data/sprites/sword.png"),
     ),

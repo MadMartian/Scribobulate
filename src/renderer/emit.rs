@@ -94,8 +94,17 @@ impl Renderer {
         list + 2 * crate::tags::quote_indent_px(quote_depth, self.zoom, m)
     }
 
-    pub(super) fn end_offset(&self) -> i32 {
-        self.buf.end_iter().offset()
+    /// The buffer char offset this render will write at next — [`Renderer::tip`]'s
+    /// offset, and therefore the region's cursor rather than the buffer's end once
+    /// [`Renderer::write_at`] has pointed the render somewhere.
+    ///
+    /// `pub(crate)` rather than `pub(super)` because `preview::build` must record each
+    /// event's buffer range from the same definition the renderer writes by. It read
+    /// `buf.char_count()` — the whole buffer's length — which is the same number only
+    /// while every render appends. A region render would have recorded every map entry
+    /// at the document's end instead of at the splice.
+    pub(crate) fn end_offset(&self) -> i32 {
+        self.tip().offset()
     }
 
     /// Insert `text` at the buffer end, applying all currently active inline
@@ -105,12 +114,12 @@ impl Renderer {
             return;
         }
         let start = self.end_offset();
-        let mut iter = self.buf.end_iter();
+        let mut iter = self.tip();
         self.buf.insert(&mut iter, text);
 
         let apply = |tag: TagName| {
             let si = self.buf.iter_at_offset(start);
-            let ei = self.buf.end_iter();
+            let ei = self.tip();
             self.apply(tag, &si, &ei);
         };
 
@@ -129,7 +138,7 @@ impl Renderer {
     }
 
     pub(super) fn newline(&mut self) {
-        let mut iter = self.buf.end_iter();
+        let mut iter = self.tip();
         self.buf.insert(&mut iter, "\n");
         self.trailing_newlines += 1;
         self.at_start = false;
@@ -259,7 +268,7 @@ impl Renderer {
             let ranges = hl.highlight_line(&line_with_nl, ss).unwrap_or_default();
             for (style, s) in ranges {
                 let tok_start = self.end_offset();
-                let mut iter = self.buf.end_iter();
+                let mut iter = self.tip();
                 self.buf.insert(&mut iter, s);
                 let tok_end = self.end_offset();
 
@@ -300,7 +309,7 @@ impl Renderer {
         // to one colour) has no such toggle. Range boundaries are unchanged:
         // [block_start, end_iter). The block's *background* is self-drawn by the preview
         // view — record the block's char extent for it (GTK4Rs/AP-21).
-        let ei = self.buf.end_iter();
+        let ei = self.tip();
         self.apply_tag_per_line(TagName::CodeBlock, block_start, ei.offset());
         self.code_blocks
             .push(crate::span::BufferSpan::new(block_start, ei.offset()));
@@ -315,9 +324,9 @@ impl Renderer {
             &self.buf.iter_at_offset(block_start),
             &first_end,
         );
-        let mut last_start = self.buf.end_iter();
+        let mut last_start = self.tip();
         last_start.backward_line();
-        self.apply(TagName::CodeBlockBottom, &last_start, &self.buf.end_iter());
+        self.apply(TagName::CodeBlockBottom, &last_start, &self.tip());
 
         // Each line was inserted with a trailing \n, so the block ends with one newline.
         self.trailing_newlines = 1;
@@ -366,6 +375,7 @@ mod code_block_per_line_tests {
             String::new(),
             Vec::new(),
             1.0,
+            crate::fold::FoldState::default(),
         );
         r.insert_code_block("", "alpha\nbeta\ngamma");
 

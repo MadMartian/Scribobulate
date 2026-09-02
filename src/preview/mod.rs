@@ -32,6 +32,7 @@ mod qdata;
 mod render;
 mod scroll;
 mod sourcemap;
+mod splice;
 
 pub(crate) use cells::{cell_copymap, cell_search_targets};
 pub(crate) use css::{css, theme_css};
@@ -42,3 +43,4 @@ pub(crate) use scroll::{
     preview_heading_line, preview_heading_slugs, preview_top_line, restore_preview_scroll_to_line,
     restore_preview_scroll_to_line_fresh, scroll_preview_to_fragment, scroll_preview_to_heading,
 };
+pub(crate) use splice::install::{splice_disclosure, SpliceInputs};

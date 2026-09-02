@@ -186,7 +186,7 @@ part of row 1 is about *showing* the markup, not editing it.
 | 14 | **Switches theme at runtime** without restart, in every open window | `re_render_all_windows` |
 | 15 | **Legibility floor** asserted per theme (body contrast gate, headless) | `palette::contrast` |
 | 16 | **Keyboard parity in container contexts** — a rendering choice that puts a **focusable** widget in the document must not disable the pane's own keyboard behaviour: with focus on that widget, every document-navigation key (←, →, ↑, ↓, Home, End, PageUp, PageDown and their Ctrl forms) still moves the *document*, exactly as with the pane focused, while a selection-extending (Shift) key still acts on the widget's own text. A focused child with key bindings of its own consumes them in its target phase and they never reach the view — silently, with no warning and no log line. **Swept** when written (2026-08-09): the renderer anchors four child kinds — the table widget, a rule `GtkSeparator`, an image `GtkPicture` and a missing-image `GtkImage` — and only the table's cells take focus; the repair is sited on the pane rather than per child, so it covers those and any future one | `keynav`; `codeview::navkeys`; ScrAP-264 |
-| 17 | **Exports as it renders** — the construct reaches an exported artefact as the preview shows it, in every container context of row 2. A rendering feature has **two** consumers: the preview widget and `export`'s display-free pipeline, which walks the same normalised event stream. They agree by construction only for constructs both were taught; a construct added to the renderer alone is silently *absent* from every export, and absence is exactly what nobody notices — the artefact still opens, still looks finished, and is simply missing something. Cheap to satisfy and invisible to omit, which is what earns it a cell. **Swept** when written (2026-08-19): the export pipeline was built against the full construct list and every construct in it is covered by `export::doc`'s tests | `export::doc`; `export::html`; `export::pdf`; TDD 25.3 |
+| 17 | **Exports as it renders** — the construct reaches an exported artefact as the preview shows it, in every container context of row 2. A rendering feature has **two** consumers: the preview widget and `export`'s display-free pipeline, which walks the same normalised event stream. They agree by construction only for constructs both were taught; a construct added to the renderer alone is silently *absent* from every export, and absence is exactly what nobody notices — the artefact still opens, still looks finished, and is simply missing something. Cheap to satisfy and invisible to omit, which is what earns it a cell. **Swept** when written (2026-08-19): the export pipeline was built against the full construct list and every construct in it is covered by `export::doc`'s tests. **A construct can be HALF-taught, and that is harder to see than a missing one** — a disclosure's body is ordinary Markdown events the walk never had to be taught, so it exported correctly from the first day, while the `<summary>` label lived inside raw HTML and reached no artefact at all. The export was neither absent nor right, and the part that worked is what made the part that did not look fine. So check the cell against the construct's *pieces*, not against whether it appears | `export::doc`; `export::html`; `export::pdf`; TDD 25.3 |
 
 Row 17 is the export twin of row 1: row 1 governs a construct's appearance on
 screen, row 17 governs its appearance in an artefact the reader hands to someone
@@ -307,20 +307,35 @@ the top**, because a transiently shrinking-then-growing `upper` clamps `value`
 perfectly, only the scroll is wrong, and only on the one event that forgot — the
 textbook latent gap.
 
-The two perturbation kinds need different *restore mechanisms*, never a different
+The perturbation kinds need different *restore mechanisms*, never a different
 *concern*:
 
 - **Geometry change** (width): the text re-wraps, no buffer swap. The raw pixel
   `value` survives but no longer maps to the same logical line.
-- **Content rebuild** (buffer swap): the buffer is new; `value` may or may not
-  survive.
+- **Content rebuild, same text** (buffer swap, identical rendered content): the buffer
+  is new; `value` may or may not survive.
+- **Content rebuild, DIFFERENT text** (buffer swap where lines appear or vanish — a
+  disclosure opening or closing): neither `value` nor the line survives, because the
+  place a line number names has moved.
 
-Both preserve the **same way**: capture the top buffer **line**, restore it after
-validation. The only variable is view *warmth* — a warm, already-validated view takes
-a deferred `scroll_to_mark`; a freshly-built or cold view with a far target needs the
-progressive `set_value`-off-`notify::upper` restore, because a one-shot lands at the
-top (ScrAP-115). **That warm/fresh choice is made once inside the choke point, never
-by the call site.**
+The first two preserve the **same way**: capture the top buffer **line**, restore it
+after validation. The only variable is view *warmth* — a warm, already-validated view
+takes a deferred `scroll_to_mark`; a freshly-built or cold view with a far target
+needs the progressive `set_value`-off-`notify::upper` restore, because a one-shot
+lands at the top (ScrAP-115). **That warm/fresh choice is made once inside the choke
+point, never by the call site.**
+
+**The third kind breaks the line anchor, and it fails in exactly the shape this
+matrix warns about.** A line number is only a reading position while the buffer holds
+the same lines; once a fold adds or removes some, the same number names different
+content, and past the shortened document's end it clamps — MEASURED on a reader parked
+mid-document opening a block above them: the line anchor put them back at source byte
+0, the top. The anchor for this kind is the one coordinate the change does not move,
+the source: `readingpos::DocPosition`, the same value row 5 carries between panes.
+**So a re-render declares which kind it is** (`window::zoom::RenderShape`) rather than
+every call site remembering — the two anchors are each correct for one kind and
+silently wrong for the other, which is not a difference a reader of the call site can
+see.
 
 | # | Perturbing event | Kind | Editor | Preview | Status today |
 |---|---|---|:-:|:-:|---|
@@ -334,6 +349,7 @@ by the call site.**
 | 8 | **Split-pane drag** (divider move → the preview pane's width changes) | geometry | ◑ | ✓ | ✓ (preview) — same re-anchor; the width key is **cause-agnostic**, so #7's fix covers this too. Live-verify pending |
 | 9 | **Sidebar toggle** (show/hide outline / annotations → the preview pane's width changes) | geometry | ◑ | ✓ | ✓ (preview) — same cause-agnostic re-anchor as #7. Live-verify pending |
 | 10 | **Crash recovery applies a snapshot** (buffer replaced with recovered content) | rebuild | n/a | n/a | n/a **by position in the lifecycle, not by exemption** — see below |
+| 11 | **Disclosure expand / collapse** (`<details>` toggled, by the reader or by find/outline reaching into a collapsed block) | rebuild, **different text** | — | ✓ | ✓ `RenderShape::ChangedContent` — a `readingpos::DocPosition`, because the line anchor is invalid here by construction (TDD 2.26h) |
 
 **Why the three geometry rows collapse to one fix (preview).** The re-anchor keys on
 the preview's **raw allocation width inside its own `size_allocate`**, so it is

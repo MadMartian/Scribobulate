@@ -35,6 +35,8 @@ mod contextmenu;
 mod editbar;
 mod editor_annotate;
 mod find;
+mod foldreveal;
+mod foldsplice;
 mod outline_nav;
 mod reload;
 mod rename;
@@ -78,6 +80,7 @@ pub(crate) use rename::update_rename_action_state;
 // window-internal; only the shapes the per-tab state has to *hold* are named crate-wide.
 pub(crate) use find::{FindCursor, PreviewFindCache};
 pub(crate) use findbar::refresh_preview_find_highlight;
+pub(crate) use foldsplice::splice_disclosure_in_place;
 pub(crate) use lifecycle::quit_all_windows;
 pub(crate) use outline_nav::apply_scroll_spy;
 pub(crate) use outline_nav::refresh_outline;
@@ -88,6 +91,7 @@ pub(crate) use reload::check_and_reload;
 pub(crate) use reload::check_and_reload_tab;
 pub(crate) use restore::{apply_tab_layout, restore_session};
 pub(crate) use save::refresh_dirty_status;
+pub(crate) use scrollsync::content_reading_position;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 pub(crate) use swap::{clear_snapshot_failure_for_test, report_snapshot_failure_for_test};
 pub(crate) use swap::{discard_tab_swap, sync_tab_swap, wire_swap_snapshots};
@@ -108,9 +112,11 @@ pub(crate) use tabs::TabMenuItem;
 pub(crate) use tabs::{host_window, window_of_content_box};
 pub(crate) use toast::sync_recovery_toast;
 pub(crate) use zoom::rerender_preview_from_live_edit;
+pub(crate) use zoom::rerender_preview_in_place;
 pub(crate) use zoom::rerender_tab_preview_in_place;
 #[cfg(test)]
 pub(crate) use zoom::zoom_css_rule_for_test;
+pub(crate) use zoom::RenderShape;
 
 // Decomposed window sub-builders (see TECH.md module map).
 mod chrome;

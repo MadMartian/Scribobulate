@@ -46,6 +46,7 @@ mod card;
 mod cards;
 mod chips;
 mod copybutton;
+mod disclosurebands;
 mod geometry;
 mod gutter;
 mod listmarkers;
@@ -90,6 +91,12 @@ mod imp {
         /// the band's PRESENCE is decided at paint time from `heading_band`, so a theme
         /// switch is a repaint rather than a re-render.
         pub(crate) heading_spans: RefCell<Vec<crate::renderer::HeadingSpan>>,
+        /// Every drawn disclosure's summary-LINE extent, for the band behind it
+        /// (TDD 18.48). Populated on every render whatever the theme says, exactly as
+        /// `heading_spans` is and for the same reason: the band's PRESENCE is decided
+        /// at paint time from `disclosure_band_decor`, so a theme switch repaints
+        /// rather than re-renders.
+        pub(crate) disclosure_bands: RefCell<Vec<crate::span::BufferSpan>>,
         /// Replaceable idle for a pending scroll-to-heading, so rapid outline
         /// re-targeting collapses to a single scroll of the latest target.
         pub(crate) scroll_idle: RefCell<Option<glib::SourceId>>,
@@ -304,6 +311,7 @@ mod imp {
                 blockquotes: RefCell::new(Vec::new()),
                 bq_bar: RefCell::new(gdk::RGBA::new(0.0, 0.0, 0.0, 0.0)),
                 heading_spans: RefCell::new(Vec::new()),
+                disclosure_bands: RefCell::new(Vec::new()),
                 scroll_idle: RefCell::new(None),
                 width_bounded: RefCell::new(Vec::new()),
                 tables: RefCell::new(Vec::new()),
@@ -628,6 +636,8 @@ drawn_vectors! {
         => |imp| !imp.list_markers.borrow().is_empty();
     "heading bands", "# Heading\n"
         => |imp| !imp.heading_spans.borrow().is_empty();
+    "disclosure summary bands", "<details>\n<summary>S</summary>\n\nbody\n\n</details>\n"
+        => |imp| !imp.disclosure_bands.borrow().is_empty();
 }
 
 /// Whether this paint has anything to draw at all — the derived form of the gate.
@@ -870,6 +880,35 @@ impl CodePreviewView {
         self.queue_allocate();
     }
 
+    /// The width-bounded children this view is currently holding — the read-back half
+    /// of [`Self::set_width_bounded`].
+    ///
+    /// **Why a read-back exists at all**, when guardrail #4 says to pass a producer's
+    /// list forward rather than re-discover it: `preview::splice` is not a producer of
+    /// this list, it is an *editor* of it. A spliced toggle rebuilds one region and
+    /// keeps everything outside it, so the list it must install is "the survivors of
+    /// what is here now, plus the region's own" — and the survivors are, by
+    /// definition, only knowable from the view. This is still not a tree walk: the
+    /// list was handed to the view by a render, and this hands the same list back.
+    pub(crate) fn width_bounded(&self) -> Vec<(gtk::Widget, i32)> {
+        use gtk::subclass::prelude::*;
+        self.imp().width_bounded.borrow().clone()
+    }
+
+    /// The bounded images this view is currently holding — see [`Self::width_bounded`]
+    /// for why the read-back exists.
+    pub(crate) fn image_bounded(&self) -> Vec<(gtk::Widget, i32, i32)> {
+        use gtk::subclass::prelude::*;
+        self.imp().image_bounded.borrow().clone()
+    }
+
+    /// The table widgets this view is currently holding — see [`Self::width_bounded`]
+    /// for why the read-back exists.
+    pub(crate) fn tables(&self) -> Vec<crate::widgets::table::ScribTableWidget> {
+        use gtk::subclass::prelude::*;
+        self.imp().tables.borrow().clone()
+    }
+
     /// Set the code blocks and fill color (called after a (re-)render), then
     /// repaint. Extents are measured live in `snapshot_layer`, so there is no
     /// cache to refresh — a redraw is all that's needed.
@@ -1092,6 +1131,19 @@ impl CodePreviewView {
         self.queue_draw();
     }
 
+    /// Set this render's disclosure summary-LINE extents, for the drawn band behind
+    /// them (TDD 18.48), then repaint.
+    ///
+    /// No colour travels with them, for the same reason `set_heading_spans` carries
+    /// none: the band's fill is read from the ACTIVE theme at paint time, so selecting
+    /// a theme repaints rather than re-renders — the spans are a property of the
+    /// document, not of the look.
+    pub(crate) fn set_disclosure_bands(&self, spans: Vec<crate::span::BufferSpan>) {
+        use gtk::subclass::prelude::*;
+        self.imp().disclosure_bands.replace(spans);
+        self.queue_draw();
+    }
+
     /// Set this render's list-item markers and the `zoom` they were laid out at,
     /// then repaint. Positions are measured live in
     /// `snapshot_layer` (cache-free `line_yrange`), so a redraw is all that's needed —
@@ -1220,6 +1272,144 @@ mod gtk_integration_tests {
             "the heading band never reached the framebuffer — if the spans, the theme \
              and the setter all look right, check that `heading_spans` is still in \
              snapshot_layer's early-return gate"
+        );
+    }
+
+    /// **TDD 18.48 — a disclosure's summary band reaches the pixels, on a document
+    /// whose only decoration is that band.**
+    ///
+    /// **The whole-pipeline form, deliberately.** Its sibling above hands the view a
+    /// hand-built `HeadingSpan`, which proves the painter and says nothing about how a
+    /// span gets there; this one drives `preview::render`, so the renderer's
+    /// `DisclosureExtent`, its projection into `ViewInstall`, the `install_content`
+    /// choke point and the paint are all in the assertion. A summary line has no
+    /// stand-alone constructor to fake, and faking one would leave exactly the plumbing
+    /// this decoration added untested.
+    ///
+    /// **And it has to be a pixel assertion on a document with NOTHING ELSE DRAWN.**
+    /// The failure `sdd/THEMING.md` names for a new drawn vector is an omission from
+    /// `snapshot_layer`'s early-return gate: the decoration then paints on any document
+    /// that happens to carry a code block, a quote, a list, a heading or an annotation
+    /// — some other vector opened the gate — and silently never paints on one that does
+    /// not. Every check over the spans, the theme, the setter or the paint order passes
+    /// identically either way. Only these pixels differ.
+    ///
+    /// Mutation-tested: deleting the `disclosure summary bands` row from
+    /// [`super::DRAWN_VECTORS`] makes this fail and leaves the rest of the suite green.
+    #[gtktest::test]
+    fn a_disclosure_summary_band_is_painted_on_a_document_that_has_nothing_else_drawn() {
+        // A fill nothing else in the render could produce, so finding it in the
+        // framebuffer is evidence about the band and not about the page.
+        const BAND: (u8, u8, u8) = (0x33, 0x99, 0x66);
+        const ONLY_A_DISCLOSURE: &str =
+            "<details>\n<summary>Summary</summary>\n\nhidden body\n\n</details>\n";
+
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test(
+            "[themes.banded]\nbackground = \"#ffffff\"\nforeground = \"#000000\"\n\
+             disclosure_band_color = \"#339966\"\n",
+        );
+        let _theme = crate::theme::activate_for_test(themes.resolve("banded"));
+
+        let widget = crate::preview::render(ONLY_A_DISCLOSURE, None, 1.0, false);
+        let view = widget
+            .downcast_ref::<gtk::Overlay>()
+            .and_then(|o| o.child())
+            .and_then(|c| c.downcast::<gtk::ScrolledWindow>().ok())
+            .and_then(|sw| sw.child())
+            .and_then(|c| c.downcast::<CodePreviewView>().ok())
+            .expect("Overlay > ScrolledWindow > CodePreviewView");
+
+        // The fixture keeps its end of the bargain: exactly one vector populated, and
+        // it is this decoration's. Without it the pixel assertion below would pass for
+        // a build whose band is not in the gate at all, because some other construct
+        // had opened it (ScrAP-209's shape).
+        use gtk::subclass::prelude::ObjectSubclassIsExt;
+        let others: Vec<&str> = DRAWN_VECTORS
+            .iter()
+            .filter(|d| d.what != "disclosure summary bands" && (d.has_work)(view.imp()))
+            .map(|d| d.what)
+            .collect();
+        assert!(
+            others.is_empty(),
+            "the fixture also populates {others:?}, so it would open the draw gate \
+             even with the disclosure band missing from the table"
+        );
+
+        let window = gtk::Window::new();
+        window.set_default_size(400, 200);
+        window.set_child(Some(&widget));
+        window.present();
+        crate::testpump::until(crate::testpump::Clock::Frame, "the preview maps", || {
+            view.width() > 0
+        });
+        let data = framebuffer_of(&view, 400.0, 200.0);
+        window.destroy();
+
+        assert!(
+            contains_rgb(&data, BAND),
+            "the disclosure summary band never reached the framebuffer — if the \
+             extents, the theme and the setter all look right, check that \
+             `disclosure_bands` is still in snapshot_layer's early-return gate"
+        );
+    }
+
+    /// **TDD 18.48 / 18.2 — under the System theme the summary band's own span vector
+    /// changes not one pixel.**
+    ///
+    /// The pixel half of the absence promise, and the one the resolution assertions in
+    /// `theme::tests::disclosure` cannot make: those prove the theme resolves to *no
+    /// band*, and this proves the painter handed that answer draws nothing — not a
+    /// page-derived fill, not a hairline, nothing. The oracle is a real byte
+    /// comparison because there is no colour to look for: the same document, framed
+    /// once with its summary spans installed and once with them emptied, must be
+    /// byte-identical. A painter reaching for a guessed default would separate the two.
+    #[gtktest::test]
+    fn the_system_theme_paints_no_disclosure_band_at_all() {
+        const ONLY_A_DISCLOSURE: &str =
+            "<details>\n<summary>Summary</summary>\n\nhidden body\n\n</details>\n";
+        let _theme = crate::theme::activate_for_test(
+            crate::theme::themes().resolve(crate::theme::SYSTEM_ID),
+        );
+
+        // Two independent renders rather than one view framed twice: emptying the
+        // vector in place calls `queue_draw`, which CLEARS the cached render node, and
+        // the next `WidgetPaintable::snapshot` on the same turn then yields nothing at
+        // all (GTK4Rs/AP-156). A second render sidesteps that entirely and compares two
+        // frames taken at the same point in each widget's life.
+        let frame = |drop_spans: bool| {
+            let widget = crate::preview::render(ONLY_A_DISCLOSURE, None, 1.0, false);
+            let view = widget
+                .downcast_ref::<gtk::Overlay>()
+                .and_then(|o| o.child())
+                .and_then(|c| c.downcast::<gtk::ScrolledWindow>().ok())
+                .and_then(|sw| sw.child())
+                .and_then(|c| c.downcast::<CodePreviewView>().ok())
+                .expect("Overlay > ScrolledWindow > CodePreviewView");
+            // Emptying the vector is the only way to ask "what would this frame be with
+            // no band at all?" from inside one build — the decoration has no switch of
+            // its own once a theme has been resolved.
+            if drop_spans {
+                view.set_disclosure_bands(Vec::new());
+            }
+            let window = gtk::Window::new();
+            window.set_default_size(400, 200);
+            window.set_child(Some(&widget));
+            window.present();
+            crate::testpump::until(crate::testpump::Clock::Frame, "the preview maps", || {
+                view.width() > 0
+            });
+            let data = framebuffer_of(&view, 400.0, 200.0);
+            window.destroy();
+            data
+        };
+        let with_spans = frame(false);
+        let without_spans = frame(true);
+
+        assert_eq!(
+            with_spans, without_spans,
+            "a theme that states no disclosure band still painted something over the \
+             summary line — an unset key is ABSENT, never a guessed default"
         );
     }
 

@@ -50,7 +50,19 @@ impl Theme {
         // therefore diagnosed rather than removed.
         for level in 0..HEADING_LEVELS {
             let key = keys::HEADING_BAND_GRADIENT_TO_COLOR.spelling(level);
-            if src.colors::<HEADING_LEVELS>(&keys::HEADING_BAND_GRADIENT_TO_COLOR)[level].is_some()
+            // **Only a gradient STATED AT THIS LEVEL is a mistake**, which is what the
+            // paragraph above already says and what this loop did not do. A theme may
+            // state ONE bare `heading_band_gradient_to_color` and band only its top two
+            // levels — a perfectly ordinary shape, and both `synthwave` and `candy` ship
+            // it. The bare key is a BROADCAST, and a broadcast that does not apply
+            // everywhere it reaches is not an authoring error; the resolved per-level
+            // value cannot tell the two apart, so asking it produced three warnings per
+            // theme on shipped defaults, forever, for nothing the author did wrong.
+            // That matters beyond tidiness: several manual checks verify a theme by
+            // running with warnings on and expecting SILENCE, so noise here does not
+            // merely annoy, it spends the signal those checks read.
+            let stated_here = src.stated(&key);
+            if stated_here
                 && src.colors::<HEADING_LEVELS>(&keys::HEADING_BAND_COLOR)[level].is_none()
             {
                 log::warn!(
@@ -58,6 +70,20 @@ impl Theme {
                      this level states no heading_band_color for it to start from"
                 );
             }
+        }
+        // The summary band's own version of the same discard, diagnosed for the same
+        // reason: silence makes "the key resolved fine and was then dropped for want
+        // of another" indistinguishable from "the theme stated nothing" (ScrAP-324).
+        if src
+            .color(&keys::DISCLOSURE_BAND_GRADIENT_TO_COLOR)
+            .is_some()
+            && src.color(&keys::DISCLOSURE_BAND_COLOR).is_none()
+        {
+            log::warn!(
+                "theme {id:?}: disclosure_band_gradient_to_color is ignored — a gradient \
+                 is a second stop, and this theme states no disclosure_band_color for it \
+                 to start from"
+            );
         }
 
         Theme {
@@ -130,6 +156,15 @@ impl Theme {
                 task: src.glyph(&keys::LIST_TASK_GLYPH),
                 task_checked: src.glyph(&keys::LIST_TASK_CHECKED_GLYPH),
             },
+            disclosure_glyphs: crate::theme::model::DisclosureGlyphs {
+                collapsed: src.glyph(&keys::DISCLOSURE_GLYPH),
+                expanded: src.glyph(&keys::DISCLOSURE_EXPANDED_GLYPH),
+            },
+            disclosure_marker_color: src.color(&keys::DISCLOSURE_MARKER_COLOR),
+            disclosure_preview_fg: src.color(&keys::DISCLOSURE_PREVIEW_FG),
+            disclosure_band_color: src.color(&keys::DISCLOSURE_BAND_COLOR),
+            disclosure_band_gradient_to: src.color(&keys::DISCLOSURE_BAND_GRADIENT_TO_COLOR),
+            disclosure_fg: src.color(&keys::DISCLOSURE_FG),
             mark_fg: src.color(&keys::MARK_FG),
             annotation_hl_color: ThemeColor(src.color_floored(&keys::ANNOTATION_HL_COLOR)),
             find_hl_all_color: ThemeColor(src.color_floored(&keys::FIND_HL_ALL_COLOR)),
@@ -158,6 +193,8 @@ impl Theme {
                 table_cell_padding_h: src.int(&keys::TABLE_CELL_PADDING_H),
                 table_border_width: src.int(&keys::TABLE_BORDER_WIDTH),
                 table_cell_radius: src.int(&keys::TABLE_CELL_RADIUS),
+                disclosure_marker_size: src.int(&keys::DISCLOSURE_MARKER_SIZE),
+                disclosure_band_radius: src.int(&keys::DISCLOSURE_BAND_RADIUS),
             },
             annotation_chip_bg: src.color(&keys::ANNOTATION_CHIP_BG),
             annotation_chip_fg: src.color(&keys::ANNOTATION_CHIP_FG),
@@ -173,6 +210,9 @@ impl Theme {
                 heading_band: src.sprites(&keys::HEADING_BAND_SPRITE),
                 blockquote_bar: src.sprite(&keys::BLOCKQUOTE_BAR_SPRITE),
                 rule: src.sprite(&keys::RULE_SPRITE),
+                disclosure: src.sprite(&keys::DISCLOSURE_SPRITE),
+                disclosure_expanded: src.sprite(&keys::DISCLOSURE_EXPANDED_SPRITE),
+                disclosure_band: src.sprite(&keys::DISCLOSURE_BAND_SPRITE),
             },
         }
     }

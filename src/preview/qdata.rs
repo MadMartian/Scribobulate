@@ -37,16 +37,35 @@ pub(crate) struct RenderData {
     pub md_owned: String,
     pub links: Vec<(i32, i32, String)>,
     pub heading_map: HashMap<String, i32>,
-    /// Buffer char offset of each heading's text start, in document order — the
-    /// outline sidebar's scroll targets (indexed by `outline::HeadingNode::doc_index`).
-    pub heading_offsets: Vec<i32>,
-    /// Each heading's anchor slug, in the same document order as `heading_offsets`
-    /// and indexed by the same `doc_index`. `heading_map` answers slug→offset;
-    /// this answers the inverse the Back/Forward history needs, so an outline
-    /// activation can record the *slug* it navigated to (a reference that
-    /// survives an edit) rather than the positional index it was handed
-    /// (the weakest reference there is — Document-Reference CAM).
-    pub heading_slugs: Vec<String>,
+    /// Where each heading the SOURCE declares is reachable in this render, in
+    /// document order and indexed by `outline::HeadingNode::doc_index` — the outline
+    /// sidebar's scroll targets. One entry per source heading, including the ones a
+    /// collapsed disclosure is hiding; see [`crate::outline::HeadingSite`] for why
+    /// the rendered list cannot be used directly.
+    ///
+    /// Each entry carries the heading's anchor slug as well. `heading_map` answers
+    /// slug→offset; this answers the inverse the Back/Forward history needs, so an
+    /// outline activation can record the *slug* it navigated to (a reference that
+    /// survives an edit) rather than the positional index it was handed (the weakest
+    /// reference there is — Document-Reference CAM).
+    pub heading_sites: Vec<crate::outline::HeadingSite>,
+    /// Every disclosure this render drew COLLAPSED, in document order. Find reads it
+    /// to answer "does a hidden body hold the query?" — the body is in no buffer, so
+    /// the question can only be asked of the source (`renderer::CollapsedBlock`).
+    pub collapsed_blocks: Vec<crate::renderer::CollapsedBlock>,
+    /// Where every disclosure this render DREW sits in the buffer, in document order
+    /// — see [`crate::renderer::DisclosureExtent`].
+    ///
+    /// Distinct from `collapsed_blocks`, which holds only the folded ones and answers
+    /// a question about the SOURCE they withheld. This answers where a block's
+    /// rendered content is, which is what a toggle must delete or write into, and it
+    /// covers expanded blocks too — the ones a collapse has to find.
+    pub disclosure_extents: Vec<crate::renderer::DisclosureExtent>,
+    /// Each disclosure summary's buffer LINE and the toggle that sits on it, so a
+    /// click anywhere along that line reaches the control. The arrow is ~16px and is
+    /// meant to be — it reads as an indicator in prose — but that makes it a poor
+    /// thing to aim at, which is why the hit target is the line and not the glyph.
+    pub disclosure_lines: Vec<(i32, gtk::ToggleButton)>,
     /// (anchor, tint widget) for every rendered image: the click-through overlay box
     /// shown when the image is inside the buffer selection (`connect_image_tints`).
     pub image_tints: Vec<(TextChildAnchor, gtk::Widget)>,

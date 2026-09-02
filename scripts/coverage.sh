@@ -57,6 +57,38 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# LOWERED 82 -> 80 by operator decision, and it is the SAME cause as the 76.76 -> 76.30
+# entry below — which is itself the reason to record this one rather than treat a second
+# instance as routine. If this keeps happening, the gate is the thing to fix, not the
+# floor.
+#
+# Cause: wiring the disclosure fold splice to the live toggle added ~433 lines of
+# GTK-wired production code — `preview/splice/install.rs`, `farscroll/settle.rs`,
+# `window/foldsplice.rs` — un-gated from `#[cfg(test)]` because they now have a
+# production caller. They are exercised by `#[gtktest::test]` bodies behind the
+# `gtk-integration-tests` feature, which this unit-only run deliberately does not enable,
+# so they read 0% here.
+#
+# What was MEASURED before choosing this (so nobody re-derives it):
+#   82.09  branch tip before the wiring
+#   80.65  after it, unit-only — this run
+#   94.84  the SAME tree with `--features gtk-integration-tests`
+# That last figure is the point: the code is not untested, and this gate cannot see
+# fourteen points of it. The prescribed remedy was applied as far as it honestly goes —
+# `keep_survivors`, `offset_below_viewport_top` and `restored_value` were extracted as
+# pure cores with unit tests — and recovers a fraction of a point, not 1.4.
+#
+# DELIBERATELY NOT DONE HERE: switching this gate to compile the GTK suite. That is
+# arguably the right long-term answer, since a gate blind to fourteen points of tested
+# code is measuring the wrong thing. But it changes the measured SCOPE (verified: the
+# run above withheld its verdict for exactly that reason), needs the floor recalibrated
+# from 80 to near 94, needs a display, and redesigning a required gate inside the change
+# that gate is currently failing is how a gate ends up calibrated to its own fixture.
+# RAISED WITH THE OPERATOR AS SEPARATE WORK AND DECLINED — this gate stays unit-only.
+# So the note above stands as the standing answer rather than as a deferral: when this
+# cause forces a floor drop again, the choice is another recorded drop or a different
+# remedy, NOT this one. Do not re-propose it as though it had merely gone unconsidered.
+#
 # LOWERED 76.76 -> 76.30 by operator decision. Recording it because the rule above says
 # never to, and an unexplained drop is indistinguishable from the silent drift that rule
 # exists to catch — so this is the deliberate exception, not the failure mode recurring.
@@ -542,7 +574,7 @@ cd "$(dirname "$0")/.."
 #
 # This buys MARGIN, not a raise. FLOOR stays 82 and the rule is unchanged -- what is
 # retired is a caveat, so the next raise is argued against the measurement alone.
-FLOOR=82
+FLOOR=80
 
 # IGNORE — the scope. Excluded: GTK signal-wiring that cannot be exercised
 # headlessly (including it would make the number meaningless). Included, always:

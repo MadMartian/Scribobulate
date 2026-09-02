@@ -195,15 +195,19 @@ const TEXT: f64 = crate::palette::WCAG_AA_TEXT;
 ///
 /// **Reviewed as a whole and ratified by the operator 2026-08-27** — recorded because a
 /// list like this otherwise accretes one row at a time and no one ever reads it back.
-/// The five rows do NOT all mean the same thing, and the table cannot say so itself:
+/// The rows do NOT all mean the same thing, and the table cannot say so itself:
 ///
 /// - **Terminal `rule_color`** — settled. The ANSI 8 reproduction is the point.
 /// - **Bedtime `mark_fg`, `rule_color`** — settled *for this project*: that palette is
 ///   owned by a different operator and is not ours to retune.
-/// - **Pixel Quest `link_color`, `list_task_color`** — **postponed, not settled.** The
-///   ruling was "we'll address those later", so these two are a licence standing over an
-///   open question rather than over a decision. Tracked in the known-issues register; do
-///   not treat their presence here as agreement that the colours are right.
+///
+/// That ratification also covered **Pixel Quest `link_color` and `list_task_color`**,
+/// which were **postponed, not settled** — and both have since been RETIRED, by moving
+/// that theme's page rather than by relaxing anything: the pale page cleared them at
+/// 6.08:1 and 4.05:1 and the rows came out. Recorded here because the count is the part
+/// a reader checks against, and this paragraph claimed five rows over a table of three
+/// for as long as it stood. The mechanism is the standing lesson, not the two colours:
+/// a licence over an open question is retired by closing the question.
 const DELIBERATE: &[(&str, &str, &str)] = &[
     (
         "bedtime",
@@ -278,7 +282,59 @@ fn ink_pairs(t: &Theme, page: gdk::RGBA) -> Vec<Pair> {
         .map(|bg| over(bg, page))
         .unwrap_or(page);
     push("annotation_chip_fg", t.annotation_chip_fg, chip, TEXT);
+    // ── the disclosure summary line ───────────────────────────────────────────
+    //
+    // All three of its inks — the label, the collapsed-body preview beside it and the
+    // indicator in front of it — are read on the summary BAND wherever the theme states
+    // one (TDD 18.48), not on the page. The same correction the heading sweep above
+    // makes for a banded heading, and it matters in the same direction: a band picked to
+    // carry a pale label is exactly the change a page-only check sails past. This ink
+    // used to be measured against the page with a comment saying there was no panel
+    // behind a summary line, which was true until the band key existed.
+    for behind in summary_surfaces(t, page) {
+        push("disclosure_fg", t.disclosure_fg, behind, TEXT);
+        push(
+            "disclosure_preview_fg",
+            t.disclosure_preview_fg,
+            behind,
+            TEXT,
+        );
+        // An indicator is a drawn mark, held to the non-text floor like every other
+        // marker here. Measured whatever the winning rung is: a sprite indicator ignores
+        // this key, but the key still inks the GLYPH the sprite falls back to, so it is
+        // read by somebody on every theme that states it.
+        push(
+            "disclosure_marker_color",
+            t.disclosure_marker_color,
+            behind,
+            GRAPHIC,
+        );
+    }
     out
+}
+
+/// Every surface a disclosure's summary line can be read on.
+///
+/// The page where the theme bands nothing; the band's fill where it bands flat; BOTH
+/// endpoints where it bands with a gradient, since a gradient is legible only if its
+/// whole run is.
+///
+/// A **sprite** band yields no surfaces at all: it is arbitrary pixels, and no ratio
+/// this gate can compute over a fill says anything about reading text on one. Skipped
+/// with the reason named rather than measured against a colour that is never painted —
+/// the heading sweep makes the same call for the same reason.
+fn summary_surfaces(t: &Theme, page: gdk::RGBA) -> Vec<gdk::RGBA> {
+    let decor = t.disclosure_band_decor();
+    if decor.sprite.is_some() {
+        return Vec::new();
+    }
+    match decor.without_sprite() {
+        Some(crate::theme::BandPaint::Gradient { from, to }) => {
+            vec![over(from, page), over(to, page)]
+        }
+        Some(crate::theme::BandPaint::Flat(c)) => vec![over(c, page)],
+        None => vec![page],
+    }
 }
 
 /// **Every ink a shipped theme states clears its floor on the surface it is read on.**

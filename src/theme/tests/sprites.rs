@@ -128,6 +128,9 @@ fn a_compiled_in_sprite_reaches_every_slot_it_can_be_named_in() {
             &s.list_task_checked,
             &s.blockquote_bar,
             &s.rule,
+            &s.disclosure,
+            &s.disclosure_expanded,
+            &s.disclosure_band,
         ])
         .collect();
     assert_eq!(
@@ -326,6 +329,12 @@ fn sprite_slot<'a>(
         &s.blockquote_bar
     } else if key.name == keys::RULE_SPRITE.name {
         &s.rule
+    } else if key.name == keys::DISCLOSURE_SPRITE.name {
+        &s.disclosure
+    } else if key.name == keys::DISCLOSURE_EXPANDED_SPRITE.name {
+        &s.disclosure_expanded
+    } else if key.name == keys::DISCLOSURE_BAND_SPRITE.name {
+        &s.disclosure_band
     } else {
         panic!(
             "sprite key {:?} has no slot in this map — add it, or the sweep silently \

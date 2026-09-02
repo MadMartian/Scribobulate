@@ -171,13 +171,30 @@ impl BlockScripts {
                         block.push_text(src.start, t);
                     }
                 }
-                // Rendered width with unscannable contents.
-                Event::Code(_) | Event::InlineHtml(_) | Event::InlineMath(_) => block.push_filler(),
+                // Rendered width with unscannable contents. `DisplayMath` belongs here
+                // beside `InlineMath` on the merits, NOT because it is reachable: it is
+                // inert today only because `md_options()` does not enable `ENABLE_MATH`,
+                // which is inertness by option rather than by design — the shape this
+                // check exists to catch. Naming it costs one token and stops the day the
+                // option is enabled from being the day this scanner silently mis-stitches.
+                Event::Code(_)
+                | Event::InlineHtml(_)
+                | Event::InlineMath(_)
+                | Event::DisplayMath(_) => block.push_filler(),
                 // A line break is real whitespace: it must be able to close a
                 // tight `^x^`/`~x~` exactly as a space does, while still leaving a
                 // `~~`/`==` fence (whose content may contain spaces) able to span it.
                 Event::SoftBreak | Event::HardBreak => block.push_break(),
-                _ => {}
+                // Named rather than wildcarded, each because it contributes no
+                // stitchable text — which is a DECISION about the variant, not an
+                // absence of one. `Rule` and `TaskListMarker` carry no text at all;
+                // `Html` is block HTML, which per this module's doc never arrives as a
+                // `Text` event; `FootnoteReference` carries a label the scanner has no
+                // reason to search for a delimiter.
+                Event::Rule
+                | Event::TaskListMarker(_)
+                | Event::Html(_)
+                | Event::FootnoteReference(_) => {}
             }
         }
         block.flush(&mut out);

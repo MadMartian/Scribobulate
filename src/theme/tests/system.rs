@@ -297,12 +297,20 @@ fn chooser_lists_system_first() {
 
 /// **A gradient's far stop must not silently drift from the page it fades into.**
 ///
-/// Both shipped uses of `heading_band_gradient_to_color` restate the theme's own
-/// `background` — Synthwave's `#1a1033`, Candy's `#101a4d` — and the file's own prose
-/// says why: *"the gradient runs from each level's own fill down to the deep indigo of
-/// the page, so the band dissolves into the page instead of ending on a hard edge"*.
-/// Nothing linked the two hexes, so re-tinting a theme's page left its bands ending on
-/// a hard edge against the old one, with no gate and no log line.
+/// Every shipped gradient stop restates its own theme's `background` — Synthwave's
+/// `#1a1033`, Candy's `#101a4d` — and the file's own prose says why: *"the gradient runs
+/// from each level's own fill down to the deep indigo of the page, so the band dissolves
+/// into the page instead of ending on a hard edge"*. Nothing linked the two hexes, so
+/// re-tinting a theme's page left its bands ending on a hard edge against the old one,
+/// with no gate and no log line.
+///
+/// **It covers every gradient key, not the heading band's.** The hazard belongs to the
+/// SHAPE — a second stop that names a colour it must keep agreeing with — so the sweep
+/// is driven off the registry rather than off a list of keys, and the disclosure band's
+/// stop (TDD 18.48) was covered by this guard the moment it was declared. The
+/// discriminator is the spelling, because the vocabulary has no gradient *kind* for the
+/// registry to expose; a future stop key spelled otherwise would need adding here, which
+/// is the one thing this derivation cannot catch for itself.
 ///
 /// **This is a drift guard, not a rule that a gradient must end at the page.** A future
 /// theme may legitimately fade somewhere else; the point is that doing so becomes a
@@ -320,12 +328,16 @@ fn a_shipped_bands_gradient_ends_on_that_themes_own_page() {
         let Some(page) = table.get("background").and_then(toml::Value::as_str) else {
             continue;
         };
-        // Every spelling the key CLAIMS — the bare form and each `_hN` — walked off
-        // the block rather than generated, because `Key::spelling` never yields the
-        // bare form for a levelled key and the bare form is what both shipped themes
-        // actually write.
+        // Every spelling every gradient key CLAIMS — the bare form and each `_hN` —
+        // walked off the block rather than generated, because `Key::spelling` never
+        // yields the bare form for a levelled key and the bare form is what the shipped
+        // themes actually write.
         for (spelling, value) in table {
-            if !keys::HEADING_BAND_GRADIENT_TO_COLOR.claims(spelling) {
+            if !keys::KEYS
+                .iter()
+                .filter(|k| k.name.ends_with("_gradient_to_color"))
+                .any(|k| k.claims(spelling))
+            {
                 continue;
             }
             let Some(far) = value.as_str() else { continue };

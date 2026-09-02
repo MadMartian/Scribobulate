@@ -275,10 +275,10 @@ impl Renderer {
                     // goes over-wide → no spurious Automatic h-scrollbar (GTK4Rs/AP-23a).
                     // Zero for a top-level table.
                     table.set_bound_inset(self.block_inset());
-                    let mut iter = self.buf.end_iter();
+                    let mut iter = self.tip();
                     let anchor = self.buf.create_child_anchor(&mut iter);
                     self.tables.push(table.clone());
-                    self.anchored.push((anchor, table.upcast()));
+                    self.push_anchored(anchor, table.upcast());
                     // Anchor char is not a newline; reset so block_sep inserts \n\n after.
                     self.trailing_newlines = 0;
                     self.at_start = false;

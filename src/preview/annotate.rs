@@ -813,6 +813,11 @@ mod tests {
                     ));
                     active = false;
                 }
+                // dispatch-selector: selects every event while inside the cell
+                // (`active`), not by which Event/Tag/TagEnd variant arrived —
+                // `classify(&ev)` above is the real, already-exhaustive dispatcher;
+                // this arm only decides whether an already-classified event belongs
+                // to the cell being built (mirrors copymap::tests::cell_trees).
                 _ if active => {
                     if let Some(k) = &kind {
                         let w = crate::copymap::cell_width(&scripts, src.start, k);
@@ -836,6 +841,10 @@ mod tests {
                         off = after;
                     }
                 }
+                // dispatch-selector: sibling of the `_ if active` arm above — document
+                // content outside any table cell is irrelevant to a per-cell product
+                // builder, regardless of its variant, so this discards on the same
+                // `active` axis, not on identity.
                 _ => {}
             }
         }

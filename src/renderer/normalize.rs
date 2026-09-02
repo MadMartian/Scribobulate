@@ -3,7 +3,7 @@
 //! passed the pre-pass: its constructor runs it, so "parse this without normalising
 //! first" is unrepresentable at a seam site rather than a rule each call site has to
 //! remember. The sites are ENUMERATED rather than summarised: `preview/build.rs`,
-//! `export/doc.rs`, `outline.rs` and `copymap::balance_source_span`. The summary form
+//! `export/doc.rs`, `outline/mod.rs` and `copymap::balance_source_span`. The summary form
 //! ("used at every parse site") is what this comment used to say while reaching two
 //! of the four, and a claim like that terminates the audit it appears to serve — see
 //! `every_parse_site_reads_one_document` (below) for what still enforces it, and
@@ -62,7 +62,7 @@ pub(crate) fn md_options() -> Options {
 /// enters a parse-adjacent function — never a callee further down the call chain.**
 /// This is the one discipline all four sites now share. Before this type existed,
 /// three of the four normalised as callers (`preview/build.rs`, `export/doc.rs`,
-/// `outline.rs`) and the fourth, `copymap::balance_source_span`, normalised
+/// `outline/mod.rs`) and the fourth, `copymap::balance_source_span`, normalised
 /// internally as a callee — so a reader of one file could not infer the rule from
 /// the other, and nothing said which was authoritative. Caller-normalises was kept
 /// over callee-normalises for two reasons: it was already the majority shape, and a
@@ -89,7 +89,7 @@ pub(crate) fn md_options() -> Options {
 /// own structural pre-parse (which must read the UN-normalised text to find the
 /// verbatim-code ranges it is about to protect — the seam cannot apply to its own
 /// implementation), the three sites that parse CriticMarkup-cleaned text derived
-/// FROM a `NormalizedMd` (`preview/build.rs`, `export/doc.rs`, `outline.rs` — the
+/// FROM a `NormalizedMd` (`preview/build.rs`, `export/doc.rs`, `outline/mod.rs` — the
 /// cleaned text is a further transform of the normalised text, not the normalised
 /// text itself, so it is one step past what `parse()` can hand back), and eight
 /// test call sites exercising the tokeniser/options directly rather than a document
@@ -185,7 +185,14 @@ fn normalize_inline_tabs(md: &str) -> std::borrow::Cow<'_, str> {
             }
             Event::End(TagEnd::CodeBlock) => depth -= 1,
             Event::Code(_) => code.push(range),
+            // dispatch-selector: selects every event while nested inside a code
+            // block (`depth > 0`, tracked above), not by which Event/Tag/TagEnd
+            // variant it is — a code block's byte range is verbatim regardless of
+            // what pulldown-cmark parsed inside it.
             _ if depth > 0 => code.push(range),
+            // dispatch-selector: sibling of the arm above — anything outside a code
+            // block and not itself an inline code span is prose, not verbatim, on
+            // the same `depth` axis, not on identity.
             _ => {}
         }
     }
@@ -301,11 +308,13 @@ mod normalize_inline_tabs_tests {
         const SANCTIONED: &[&str] = &[
             "renderer/normalize.rs", // the seam itself, plus the pre-pass
             "export/doc.rs",
-            "outline.rs",
+            "outline/mod.rs",
             "preview/annotate.rs",
             "preview/build.rs",
             "docio/mod.rs",
             "renderer/segments.rs",
+            "renderer/disclosure.rs",
+            "preview/splice.rs",
         ];
 
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -388,13 +397,13 @@ mod normalize_inline_tabs_tests {
             doc.blocks.first()
         );
 
-        // outline.rs — the page shows a table and no heading, so the sidebar must not
+        // outline/mod.rs — the page shows a table and no heading, so the sidebar must not
         // invent one. (Unnormalised, `===` underlines the paragraph the broken table
         // collapsed into and this returned a phantom H1.)
         assert_eq!(
             crate::outline::extract_headings(TAB_TABLE),
             vec![],
-            "outline.rs: a heading the rendered page does not have"
+            "outline/mod.rs: a heading the rendered page does not have"
         );
 
         // copymap::balance_source_span — `**a` and `b**` sit in DIFFERENT cells, so
@@ -410,6 +419,19 @@ mod normalize_inline_tabs_tests {
             crate::copymap::balance_source_span(&normalized, sel.clone()),
             sel,
             "copymap: widened across a table cell boundary"
+        );
+
+        // renderer/disclosure.rs — a collapsed disclosure's body is searched by the
+        // text it WOULD render as, and whether the tab-padded table below is a table
+        // or a paragraph decides what that text is. Unnormalised it is one paragraph
+        // whose text carries the `|` separators, so a find for `a | b` matches
+        // characters the rendered page never shows and reports a hit inside a
+        // collapsed block that expanding it cannot produce (rubric 11.10 inverted:
+        // a match at a location that does not exist).
+        const TAB_BODY: &str = "| a\t| b\t|\n|---\t|---\t|\n| c\t| d\t|\n";
+        assert!(
+            !crate::renderer::disclosure::body_plain_text(TAB_BODY).contains('|'),
+            "renderer/disclosure.rs: cell separators counted as searchable text"
         );
 
         // renderer/segments.rs — a tight fence may span a block's inline events but
@@ -536,6 +558,10 @@ mod normalize_inline_tabs_tests {
                 Event::Start(Tag::MetadataBlock(_)) => Some("MetadataBlock"),
                 Event::End(TagEnd::FootnoteDefinition) => Some("end FootnoteDefinition"),
                 Event::End(TagEnd::MetadataBlock(_)) => Some("end MetadataBlock"),
+                // dispatch-selector: this is a SEARCH for a fixed, finite allow-list of
+                // drop-prone constructs named above, not a dispatch over the whole
+                // vocabulary — every variant not on that list is "not an offender" by
+                // definition, which is what the assertion below tests for.
                 _ => None,
             })
             .collect();
@@ -553,6 +579,10 @@ mod normalize_inline_tabs_tests {
             .iter()
             .filter_map(|e| match e {
                 Event::Text(t) => Some(t.as_ref()),
+                // dispatch-selector: extracts ONLY `Text` events into the string this
+                // assertion scans for literal source; every other variant carries
+                // nothing the "degrades to visible text" check cares about, which is
+                // a search target, not a dispatch decision.
                 _ => None,
             })
             .collect();

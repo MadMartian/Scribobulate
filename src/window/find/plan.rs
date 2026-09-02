@@ -39,6 +39,14 @@ pub(super) enum Hit {
         byte_start: u32,
         byte_end: u32,
     },
+    /// A match inside a **collapsed disclosure**, which this render did not draw.
+    ///
+    /// It carries no coordinates because it names text that is on no page: nothing
+    /// can be washed, and the decision below deliberately produces no span for it.
+    /// It is still a hit — it holds a POSITION in the document-ordered list, which is
+    /// what keeps the "N of M" counter and Next/Prev agreeing about how many matches
+    /// the document has rather than only how many are currently visible.
+    Hidden,
 }
 
 /// Which of the two find washes a span carries.
@@ -115,6 +123,13 @@ pub(super) fn plan(hits: &[Hit], current: usize) -> Plan {
                 byte_end,
                 wash: if is_current { Wash::Current } else { Wash::All },
             }),
+            // **Deliberately paints nothing, current or not.** The match is inside a
+            // collapsed block, so there is no span on the page to wash — and being
+            // the current hit is precisely the moment the caller expands the block
+            // and rebuilds this list, at which point the real hit takes this one's
+            // place and gets its wash. Occupying an index and producing no span is
+            // the whole of its job here.
+            Hit::Hidden => {}
         }
     }
     out
