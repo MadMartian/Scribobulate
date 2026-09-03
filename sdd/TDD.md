@@ -357,12 +357,16 @@
 - **And** an unclosed `<details>` shows its summary text as an ordinary line with **no disclosure control** — there is nothing it could fold, and everything after it renders exactly as it would if the tag were absent
 - **And given** an unspaced body that also contains a `<script>` element
 - **Then** the body's own text appears as literal text and the script's text appears nowhere — the allowlist still governs which elements may contribute text at all, so showing an allowlisted element's own text is not a licence for its children's
+- **And** that holds however the element is spelled and wherever its close tag sits: a self-closing `<script/>` suppresses exactly as `<script>` does (HTML5 does not acknowledge the flag on a non-void element), the same applies to every element whose content HTML parses as text rather than markup (`<style>`, `<textarea>`, `<title>`, `<xmp>`, `<iframe>`, `<noembed>`, `<noframes>`, `<plaintext>`), and no close tag written inside one of them can release it
+- **And given** an unspaced body containing an HTML comment, a doctype, a CDATA section or a processing instruction
+- **Then** the rest of the body still appears, and the construct itself appears nowhere — none of them is an element, so none can open a suppression that never closes and silently delete the remainder of the block
 - **Rationale** browsers close an unclosed `<details>` implicitly at the end of its parent, making the rest of the document its body; that is deliberately not copied, because a document is untrusted content (TDD 2.7) and an authoring slip — or a half-typed tag in a live-preview session — must not be able to hide a document
 
 ### 2.26e Sibling and nested disclosures toggle independently
 - **Given** a document with two sibling disclosures, and a disclosure nested inside another
 - **When** the user toggles one of them
 - **Then** its siblings are unaffected, an inner disclosure toggles independently of its outer, and re-expanding an outer disclosure restores the inner one's **own** prior state rather than resetting it
+- **And** that holds for siblings that share one raw-HTML block — two adjacent `<details>` with no blank line between them, or a compact one-line `<details><summary>…</summary>…</details>`, which CommonMark makes a single type-6 block. A disclosure's identity is its own `<details>` tag's source offset, not its block's, so siblings in one block are two blocks to the reader in every respect: two folds, two bodies, two hidden-match records
 
 ### 2.26f A collapsed body claims no space in the pane
 - **Given** a collapsed disclosure whose body contains a table or image wider than the preview pane
@@ -373,6 +377,7 @@
 - **Given** a document containing disclosure blocks, both collapsed and `open`
 - **When** it is exported to HTML or to PDF
 - **Then** each disclosure's summary **and its full body** appear in the artefact, with the body's Markdown rendered as Markdown — an export is the document, not the viewport, so a collapsed block is never omitted
+- **And** the artefact reproduces the preview's *omissions* as exactly as its content, for raw HTML written across **more than one line** as well as on one: every walk over a raw-HTML block scans the whole accumulated block, never a line at a time, so a `<script>` whose open and close tags sit on different lines — which is how one is normally written — cannot be dropped from the pane and present in the file
 - **And** an HTML export carries a real `<details>` element, so the reader of the artefact gets the affordance too; its `open` attribute follows the **document**, never the reader's fold state. A PDF has no such affordance, so it lays every body out unconditionally
 - **Rationale** the preview and the export are two consumers of one event stream and agree only for constructs both were taught; a construct added to the renderer alone is silently absent from every export, and the artefact still opens looking finished (Document Rendering CAM row 17)
 
@@ -403,7 +408,7 @@
 - **Then** the dead URL is requested **at most once per TTL**, not once per toggle — a toggle that lands while a negative entry is live does no network work at all
 - **And** each attempt that does run is **bounded** by `imagefetch`'s connect timeout rather than open-ended, so the cost of a failure is a known quantity
 - **And** the negative entry expires on a deliberately short TTL, so a transient outage does not read as permanent for the rest of the session; a re-attempt roughly once a minute per URL is the contract, not a defect
-- **Limitation, stated rather than promised** the fetch is synchronous on the main thread, so the toggle on which an attempt actually runs **does block the window** for the connect timeout (MEASURED at 5.001s against the 5s timeout). This rubric therefore gates the FREQUENCY of that stall, which is what the cache can deliver; it does not promise responsiveness, which only an asynchronous fetch could. Do not read a stall on the attempting toggle as a failure of this rubric — an attempt on *every* toggle is
+- **Limitation, stated rather than promised** the fetch is synchronous on the main thread, so the toggle on which an attempt actually runs **does block the window** for the connect timeout (MEASURED at 5.001s against the 5s timeout). This rubric therefore gates the FREQUENCY of that stall, which is what the cache can deliver; it does not promise responsiveness, which only an asynchronous fetch could. Do not read a stall on the attempting toggle as a failure of this rubric; an attempt on *every* toggle is one.
 - **Rationale** a toggle re-walks the document, so every image tag is re-visited, and an uncached fetch would re-run per toggle. The earlier wording promised "the window stays responsive throughout", which the shipped synchronous fetch does not deliver — so the manual check spent its text documenting the rubric being violated. A rubric that states a contract the code cannot meet trains its reader to ignore the check
 - **Coverage** the decidable half is tested against the **shipped** thread-local cache, not a stand-in — `imagecache::the_shipped_cache_re_attempts_a_dead_url_only_after_its_ttl` counts fetch attempts across a run of toggles inside and past the TTL, which the injected clock (`get_or_fetch_at`) makes reachable without sleeping through a real minute; `imagecache::policy`'s own tests cover the cache type beneath it. The attempt count across REAL toggles is `tests/MANUAL-TEST.md` §2.26k, read from the log rather than the clock
 
@@ -412,7 +417,9 @@
 - **When** the user types anywhere in the editor — above, inside or below a collapsed block
 - **Then** every block returns to the state the document states for it (`<details open>` expanded, plain `<details>` collapsed), and no block is left collapsed that the document does not itself mark collapsed
 - **And** the reset takes effect on the **keystroke**, not on the debounced re-render that follows it, so a disclosure toggled during that window is decided against the edited source rather than against the pre-edit one
-- **And** no block other than the one whose summary the reader activates ever changes its collapsed state as a result of an edit
+- **And given** a control the reader activates in the window between the keystroke and the re-render — a control the PREVIOUS render built, whose key names text that has moved
+- **Then** the activation is **discarded**, and discarded visibly enough to be diagnosed (a `debug` record naming the generation it was minted against). It is not honoured, and it is not guessed at: re-keying it would have to define a disclosure's identity across an edit, which is the guess this rubric exists to refuse
+- **And** no block other than the one whose summary the reader activates ever changes its collapsed state as a result of an edit — which is what the discard is *for*, since a stale key can land on a different block's new start offset
 - **Rationale** a fold is keyed on the source byte offset of its opening raw-HTML block, and an edit moves every offset after it. Re-keying survivors would have to define a disclosure's identity across an edit that can split, merge or delete one — a guess the reader cannot predict — so the state is dropped instead, matching HTML, where a disclosure's state is the `open` attribute and therefore a property of the document rather than of the reader. Left unreset, a stale key silently reverts a collapsed block mid-typing or, when it collides with a different block's new start offset, **collapses the wrong block** — hiding content the reader never asked to hide
 
 ### 2.12 Links within blockquotes
@@ -458,6 +465,12 @@
 - **And given** an image whose `src` is an absolute path, a `..` traversal, or a symlink (under the doc folder) pointing outside the document's directory
 - **When** it is rendered
 - **Then** the file is **not** loaded — the canonicalized target must stay at or beneath the document's directory (an untitled document, having no directory, resolves no local images)
+- **And given** an image, local or remote, whose header declares dimensions that decode past the project's pixel cap — a decompression bomb, which is small enough on disk to clear every byte limit and expands to hundreds of megabytes or more
+- **When** it is rendered
+- **Then** its dimensions are read from the header and it is refused **before** the decode, showing the ordinary broken-image placeholder — cost is part of the threat model, and a byte cap bounds the transfer while saying nothing about what it expands to
+- **And given** a disclosure the reader has COLLAPSED, whose body contains a raw-HTML `<img>`
+- **When** the document is rendered
+- **Then** nothing is resolved, nothing is fetched and nothing is anchored for it — a reader's fold state is a privacy signal, so a remote image behind a fold they did not open must not report back, and a local one must not draw inside a region rendered as nothing
 
 ### 2.8 Rendered text is selectable and copyable as Markdown
 - **Given** a rendered document with prose, headings, code blocks, bold/italic, and links
@@ -3331,6 +3344,7 @@ up doing.
 - **Given** a document carrying CriticMarkup annotations
 - **Then** the export shows each claim highlighted and its comment beside it — an aside in HTML, a margin note in PDF, matching what the preview shows
 - **And** the highlight covers exactly the annotated characters, even where the rendered text is shorter than its source because construct markers were stripped
+- **And** the comment appears **once per annotation**, however many pieces the highlight is drawn in. A claim that spans inline markup — `{==a **bold** word==}` — is split at every construct boundary, and in HTML the anchor the aside links back to is written on exactly one of those pieces: N copies of a comment is a different document, and N elements sharing one `id` is invalid and makes the back-link ambiguous
 
 ### 25.14 An export announces itself, either way
 - **Given** a completed export

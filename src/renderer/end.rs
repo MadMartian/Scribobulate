@@ -140,7 +140,7 @@ impl Renderer {
                 self.inter.lists.pop();
             }
             TagEnd::Item => {
-                self.list_item_open = false;
+                self.inter.list_item_open = false;
                 if let Some(Some(n)) = self.inter.lists.last_mut() {
                     *n += 1;
                 }

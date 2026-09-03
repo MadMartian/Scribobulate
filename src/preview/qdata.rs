@@ -21,6 +21,7 @@ use std::rc::Rc;
 /// Per-render data shared by live closures on the preview `TextView`.  Stored
 /// as `Rc<RefCell<RenderData>>` qdata under `"scrib-render-data"` so that
 /// `re_render` can update it in-place without rewiring any signal handlers.
+#[derive(Default)]
 pub(crate) struct RenderData {
     pub source_map: Vec<(i32, usize)>,
     /// The inverse of `source_map`: `(source_byte_offset, buffer_char_offset)` sorted
@@ -96,34 +97,23 @@ impl RenderData {
         image_tints: Vec<(TextChildAnchor, gtk::Widget)>,
         table_anchors: Vec<(TextChildAnchor, ScribTableWidget)>,
     ) -> Self {
-        let crate::preview::build::RenderMaps {
-            source_map,
-            copymap,
-            md_owned,
-            links,
-            heading_sites,
-            heading_map,
-            collapsed_blocks,
-            disclosure_extents,
-            shifts,
-            original_owned,
-        } = maps;
-        Self {
-            source_map_inv: super::sourcemap::invert_source_map(&source_map),
-            source_map,
-            copymap,
-            md_owned,
-            links,
-            heading_map,
-            heading_sites,
-            collapsed_blocks,
-            disclosure_extents,
-            disclosure_lines: Vec::new(),
+        // **ONE definition of how a map set becomes render data.** This was a second
+        // hand-written copy of `adopt_maps`'s ten-field install, identical but for the
+        // two widget-keyed lists the first render owns outright — so a map added to
+        // `RenderMaps` was a compile error in two places and a correct assignment in
+        // one of them was no guarantee about the other (F-DRY-A-004). The exhaustive
+        // destructure that makes the compile error happen lives in `adopt_maps` alone.
+        //
+        // `disclosure_lines` stays empty, which is what the previous code did and what
+        // the route needs: it is filled when the toggles are wired, after the view
+        // exists.
+        let mut this = Self {
             image_tints,
             table_anchors,
-            shifts,
-            original_owned,
-        }
+            ..Self::default()
+        };
+        this.adopt_maps(maps);
+        this
     }
 
     /// Adopt a render's buffer-keyed maps WHOLESALE — the one way any route installs

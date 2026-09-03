@@ -34,33 +34,26 @@ pub(crate) fn splice_disclosure_in_place(
         log::debug!("window::foldsplice: refusing key {key:?} — the window has no TabState");
         return SpliceVerdict::Untouched;
     };
-    let Some(preview_sw) = super::zoom::get_preview_sw(window) else {
+    // Through the one accessor that owns the tree shape (`zoom::get_preview_view`).
+    // The two refusals it used to distinguish — no pane at all, versus a pane whose
+    // child is not a view — are one message now, because only the first is reachable in
+    // practice and the second never named a state a reader could act on differently.
+    let Some(view) = super::zoom::get_preview_view(window) else {
         log::debug!(
-            "window::foldsplice: refusing key {key:?} — this window has no preview pane \
-             (edit-only mode); nothing to splice"
-        );
-        return SpliceVerdict::Untouched;
-    };
-    let Some(view) = preview_sw
-        .child()
-        .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
-    else {
-        log::debug!(
-            "window::foldsplice: refusing key {key:?} — the preview pane's child is not a \
-             CodePreviewView; falling back to a full re-render"
+            "window::foldsplice: refusing key {key:?} — this window has no resolvable \
+             preview view (edit-only mode, or a pane whose child is not one); nothing to \
+             splice, so the caller's full re-render is what makes the toggle visible"
         );
         return SpliceVerdict::Untouched;
     };
 
-    // The mode-appropriate source, read exactly as `zoom::re_render_preview` reads it:
-    // in split mode `tab.source` is stale until a mode-switch flush (D7), so the live
-    // editor buffer is authoritative; in preview mode `tab.source` is (ScrAP-35). A
-    // second spelling of that rule here is precisely the drift the one-rule-one-
-    // implementation note on `get_preview_sw` records, so it is stated the same way.
-    let md = match mode {
-        ViewMode::Split => st.editor_text(),
-        ViewMode::Preview | ViewMode::Edit => st.source().clone(),
-    };
+    // The mode-appropriate source, through the one accessor that owns the rule: in
+    // split mode `tab.source` is stale until a mode-switch flush (D7), so the live
+    // editor buffer is authoritative; in preview mode `tab.source` is (ScrAP-35). This
+    // was a second spelling of that rule, which is precisely the drift the
+    // one-rule-one-implementation note on `get_preview_sw` records — so it is now the
+    // same CALL rather than the same words.
+    let md = st.previewed_source(mode);
 
     // In split mode, force the editor as scroll driver before the buffer changes, so
     // the preview's own settling writes cannot drive the editor (GTK4Rs/AP-16). The
@@ -75,6 +68,7 @@ pub(crate) fn splice_disclosure_in_place(
     let verdict = crate::preview::splice_disclosure(
         &view,
         crate::preview::SpliceInputs {
+            fold_epoch: st.fold_epoch(),
             md: &md,
             doc_dir: st.doc_dir().as_deref(),
             zoom: st.chrome().zoom_level.get(),

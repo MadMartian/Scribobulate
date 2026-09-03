@@ -51,10 +51,7 @@ pub(super) fn find_target(window: &ApplicationWindow) -> FindTarget {
     // `content_box.first_child().downcast::<ScrolledWindow>()` broke once the
     // persistent `SplitView` became content_box's only child (H1). Any of the three
     // steps failing now yields `PreviewUnresolved` rather than `None`.
-    match super::zoom::get_preview_sw(window)
-        .and_then(|sw| sw.child())
-        .and_then(|child| child.downcast::<CodePreviewView>().ok())
-    {
+    match super::zoom::get_preview_view(window) {
         Some(view) => FindTarget::Preview(view),
         None => FindTarget::PreviewUnresolved,
     }
@@ -222,6 +219,11 @@ enum PreviewHit {
     /// the reader can see the block and the only position it owns.
     Hidden {
         summary_off: i32,
+        /// Where a search RESUMING inside this block, once it is expanded, must start —
+        /// just past the summary label. See `CollapsedBlock::resume_offset`; passing
+        /// `summary_off` instead re-matched the summary's own text and landed the
+        /// reader back on the line they were already on (F-AP-B-104).
+        resume_off: i32,
         key: crate::fold::FoldKey,
     },
 }
@@ -377,6 +379,7 @@ fn build_preview_hits(
                     seq,
                     PreviewHit::Hidden {
                         summary_off: block.summary_offset,
+                        resume_off: block.resume_offset,
                         key: block.key,
                     },
                 ));
@@ -783,10 +786,10 @@ fn preview_find_step(
         land_on_hit(view, &st, targets, hits, (next - 1) as usize)
     });
 
-    let Some((summary_off, key)) = reveal else {
+    let Some((summary_off, resume_off, key)) = reveal else {
         return;
     };
-    reveal_and_resume(window, view, summary_off, key, text);
+    reveal_and_resume(window, view, summary_off, resume_off, key, text);
 }
 
 /// After a collapsed block has been expanded for find, land on the first match at or
@@ -829,10 +832,10 @@ fn select_preview_hit_at_or_after(window: &ApplicationWindow, min_off: i32, text
         };
         land_on_hit(&view, &st, targets, hits, idx)
     });
-    let Some((summary_off, key)) = reveal else {
+    let Some((summary_off, resume_off, key)) = reveal else {
         return;
     };
-    reveal_and_resume(window, &view, summary_off, key, text);
+    reveal_and_resume(window, &view, summary_off, resume_off, key, text);
 }
 
 /// Mark `hits[idx]` (0-based) as the current match — highlights, scroll, cursor and
@@ -859,9 +862,14 @@ fn land_on_hit(
     targets: &[(i32, Label)],
     hits: &[PreviewHit],
     idx: usize,
-) -> Option<(i32, crate::fold::FoldKey)> {
-    if let PreviewHit::Hidden { summary_off, key } = &hits[idx] {
-        return Some((*summary_off, *key));
+) -> Option<(i32, i32, crate::fold::FoldKey)> {
+    if let PreviewHit::Hidden {
+        summary_off,
+        resume_off,
+        key,
+    } = &hits[idx]
+    {
+        return Some((*summary_off, *resume_off, *key));
     }
     let next = idx as i32 + 1;
     apply_preview_highlights(view, targets, hits, next as usize);
@@ -881,13 +889,17 @@ fn reveal_and_resume(
     window: &ApplicationWindow,
     view: &CodePreviewView,
     summary_off: i32,
+    resume_off: i32,
     key: crate::fold::FoldKey,
     text: &str,
 ) {
+    // Scroll to the LINE, resume from past its LABEL — two offsets because they answer
+    // two questions. The reader is shown the block; the search starts below the text
+    // they were already on (F-AP-B-104).
     view.scroll_to_buffer_offset(summary_off);
     let text = text.to_string();
     super::foldreveal::reveal_folds(window, &[key], move |window| {
-        select_preview_hit_at_or_after(window, summary_off, &text);
+        select_preview_hit_at_or_after(window, resume_off, &text);
     });
 }
 
@@ -1377,7 +1389,14 @@ mod gtk_integration_tests {
     /// (the mixed cell alone) and fails here.
     #[gtktest::test]
     fn find_matches_a_pure_link_cell_caption() {
-        let view = view_of(crate::preview::render(MD_LINK_CELL, None, 1.0, false));
+        let view = view_of(crate::preview::render(
+            MD_LINK_CELL,
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+            0,
+        ));
         let cache = super::PreviewFindCache::default();
         assert_eq!(
             super::highlight_preview_matches(&cache, &view, "Handbook"),
@@ -1411,7 +1430,14 @@ mod gtk_integration_tests {
              A paragraph with the [Handbook](https://example.com/2) in it.\n\n\
              - a list item linking the [Handbook](https://example.com/3)\n\n\
              > a quote citing the [Handbook](https://example.com/4)\n";
-        let view = view_of(crate::preview::render(MD_LINKS, None, 1.0, false));
+        let view = view_of(crate::preview::render(
+            MD_LINKS,
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+            0,
+        ));
         let cache = super::PreviewFindCache::default();
         assert_eq!(
             super::highlight_preview_matches(&cache, &view, "handbook"),
@@ -1449,7 +1475,14 @@ mod gtk_integration_tests {
     /// transient `<span>` wrapper — the two-step revert the repaint force relies on).
     #[gtktest::test]
     fn clearing_find_highlight_is_in_place_and_leaves_cells_clean() {
-        let view = view_of(crate::preview::render(MD, None, 1.0, false));
+        let view = view_of(crate::preview::render(
+            MD,
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+            0,
+        ));
 
         // Clean markup of every cell before find touches anything.
         let clean: Vec<String> = cell_search_targets(&view)
@@ -1546,7 +1579,8 @@ mod gtk_integration_tests {
     /// the previous render's offsets and cell labels).
     #[gtktest::test]
     fn the_preview_hit_list_is_built_once_per_buffer_and_query() {
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let sw = scroller_of(pane);
         let view = view_in(&sw);
         let cache = super::PreviewFindCache::default();
@@ -1594,6 +1628,7 @@ mod gtk_integration_tests {
             1.0,
             false,
             &crate::fold::FoldState::default(),
+            0,
         );
         let view_after = view_in(&sw);
         assert_eq!(
@@ -1976,6 +2011,69 @@ mod gtk_integration_tests {
             st.find_cursor.get().preview_index(),
             1,
             "the cursor names the match, not the hidden placeholder it replaced"
+        );
+        window.destroy();
+    }
+
+    /// **F-AP-B-104: the resume must start BELOW the summary's own text.**
+    ///
+    /// `select_preview_hit_at_or_after` was handed the summary line's START, and "at or
+    /// after" includes the summary's own hit — so a query that occurs in the label as
+    /// well as in the hidden body expanded the block and then landed the reader back on
+    /// the line they were already on, reported as the next result.
+    ///
+    /// The fixture's query occurs in BOTH, which is the whole design of it: with the
+    /// query only in the body, both boundaries give the same answer and this passes
+    /// against the unfixed code.
+    #[gtktest::test]
+    fn a_query_matching_the_summary_too_still_resumes_inside_the_block() {
+        const MD_BOTH: &str = concat!(
+            "Visible prose with no match.\n\n",
+            "<details>\n<summary>A needle in the summary</summary>\n\n",
+            "pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad \
+             pad a hidden needle in here\n\n",
+            "</details>\n\n",
+            "More visible prose.\n"
+        );
+        let app = crate::window::testkit::test_app(
+            "com.extollit.scribobulate.integrationtest.findhiddenboundary",
+        );
+        let window = crate::window::new_window(&app, "IT", MD_BOTH, None);
+        let st = crate::winstate::state(&window).expect("the window has an active tab");
+        let chrome = crate::winstate::chrome(&window).expect("window chrome");
+        chrome.find_bar_revealer.set_reveal_child(true);
+        chrome.find_entry.set_text("needle");
+
+        let view = super::find_target(&window).expect_preview();
+        super::highlight_preview_matches(&st.preview_find, &view, "needle");
+        // Two steps: the first lands on the summary's own match, the second on the
+        // hidden one — which is the step that expands and resumes.
+        super::preview_find_step(&window, &view, "needle", super::SearchDir::Forward);
+        super::preview_find_step(&window, &view, "needle", super::SearchDir::Forward);
+
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "the disclosure to expand and the hidden match to appear",
+            || {
+                let super::FindTarget::Preview(v) = super::find_target(&window) else {
+                    return false;
+                };
+                let buf = v.buffer();
+                buf.slice(&buf.start_iter(), &buf.end_iter(), true)
+                    .contains("a hidden needle")
+            },
+        );
+
+        let view = super::find_target(&window).expect_preview();
+        let buf = view.buffer();
+        let cursor = buf.cursor_position();
+        let above = buf
+            .slice(&buf.start_iter(), &buf.iter_at_offset(cursor), true)
+            .to_string();
+        assert!(
+            above.contains("A needle in the summary"),
+            "the reader was resumed BELOW the summary line, not back onto it — the \
+             summary's own match is above the cursor: {above:?}"
         );
         window.destroy();
     }

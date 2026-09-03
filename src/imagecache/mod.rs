@@ -143,7 +143,9 @@ pub(crate) fn reset_for_test() {
 
 #[cfg(test)]
 mod tests {
-    use super::decoded_byte_size;
+    use super::{decoded_byte_size, get_or_fetch_at, reset_for_test, NEGATIVE_CACHE_TTL};
+    use std::cell::Cell;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn decoded_byte_size_is_four_bytes_per_pixel() {
@@ -155,21 +157,6 @@ mod tests {
         assert_eq!(decoded_byte_size(0, 100), 0);
         assert_eq!(decoded_byte_size(-1, 100), 0);
     }
-}
-
-#[cfg(all(test, feature = "gtk-integration-tests"))]
-mod gtk_integration_tests {
-    use super::*;
-    use std::cell::Cell;
-
-    /// A 1×1 texture, the cheapest real `GdkTexture` — the cache stores textures, and
-    /// substituting anything else would test a different `Cache<V>`.
-    fn pixel() -> gtk::gdk::Texture {
-        use gtk::prelude::Cast;
-        let bytes = gtk::glib::Bytes::from_owned(vec![0u8, 0, 0, 255]);
-        gtk::gdk::MemoryTexture::new(1, 1, gtk::gdk::MemoryFormat::R8g8b8a8, &bytes, 4)
-            .upcast::<gtk::gdk::Texture>()
-    }
 
     /// TDD 2.26k's decidable core, exercised against the SHIPPED thread-local rather than
     /// a cache the test constructed: a failed URL is not re-fetched inside its TTL, and
@@ -178,7 +165,7 @@ mod gtk_integration_tests {
     /// This is what the clock seam buys. Before it, the only way to reach this behaviour
     /// was to sleep for the real TTL — so nothing tested it, and the rubric's coverage
     /// line could only point at `policy`'s own tests over a private cache.
-    #[gtktest::test]
+    #[test]
     fn the_shipped_cache_re_attempts_a_dead_url_only_after_its_ttl() {
         reset_for_test();
         let attempts = Cell::new(0usize);
@@ -208,6 +195,29 @@ mod gtk_integration_tests {
         assert!(get_or_fetch_at("https://dead.invalid/a.png", past, failing).is_none());
         assert_eq!(attempts.get(), 2, "one re-attempt once the TTL has lapsed");
         reset_for_test();
+    }
+}
+
+/// **The pair is split by whether a body needs a real `GdkTexture`, not by subject.**
+///
+/// Both tests below drive the shipped thread-local cache. The one that survives here
+/// stores a texture, which needs GTK initialised; the TTL guard next door stores
+/// nothing at all — its fetch closure returns `None` — so it needs no display, and
+/// gating it here kept it out of `cargo test` and out of coverage leg A entirely
+/// (F-TEST-B-004). Stated because the next test in this area will otherwise be filed on
+/// whichever side it is written next to.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// A 1×1 texture, the cheapest real `GdkTexture` — the cache stores textures, and
+    /// substituting anything else would test a different `Cache<V>`.
+    fn pixel() -> gtk::gdk::Texture {
+        use gtk::prelude::Cast;
+        let bytes = gtk::glib::Bytes::from_owned(vec![0u8, 0, 0, 255]);
+        gtk::gdk::MemoryTexture::new(1, 1, gtk::gdk::MemoryFormat::R8g8b8a8, &bytes, 4)
+            .upcast::<gtk::gdk::Texture>()
     }
 
     /// A cached SUCCESS never re-enters the fetch either — the other half of the choke

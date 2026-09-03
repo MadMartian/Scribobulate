@@ -211,8 +211,17 @@ fn register_view_mode_action(window: &ApplicationWindow) {
                 ViewMode::Preview | ViewMode::Split => {
                     let zoom = st.chrome().zoom_level.get();
                     let allow_unsafe = st.allow_unsafe_images.get();
-                    let preview =
-                        render_and_wire_preview(&md, st.doc_dir().as_deref(), zoom, allow_unsafe);
+                    let preview = render_and_wire_preview(
+                        &md,
+                        st.doc_dir().as_deref(),
+                        zoom,
+                        allow_unsafe,
+                        // The whole of F-AP-B-101: a mode switch REBUILDS the pane, and
+                        // a rebuild that did not carry the reader's folds re-opened
+                        // every block they had closed.
+                        &st.folds.borrow(),
+                        st.fold_epoch(),
+                    );
                     st.split.set_preview(Some(&preview));
                 }
                 // Edit-only: free the preview (nothing to render/zoom/spy on there).

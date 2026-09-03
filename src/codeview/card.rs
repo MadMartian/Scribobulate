@@ -773,7 +773,8 @@ mod gtk_integration_tests {
     /// Returns `(window, view, card)`; the window is returned so the caller keeps it alive.
     fn open_card() -> (gtk::Window, CodePreviewView, AnnotationCard) {
         use gtk::subclass::prelude::*;
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 300);

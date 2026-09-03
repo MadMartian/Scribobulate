@@ -61,7 +61,11 @@ fn emit_markup(inlines: &[Inline], doc: &ExportDoc, theme: &Theme, out: &mut Str
             // difference is the whole mechanism behind `mark_fg` never reaching the
             // page (POLICY "One theme key, every application path").
             Inline::Highlight(v) => span(out, &crate::pangospan::mark(theme), v, doc, theme),
-            Inline::Claim(idx, v) => {
+            Inline::Claim {
+                idx,
+                tail,
+                inner: v,
+            } => {
                 span(
                     out,
                     &crate::pangospan::annotation_claim(theme),
@@ -72,6 +76,14 @@ fn emit_markup(inlines: &[Inline], doc: &ExportDoc, theme: &Theme, out: &mut Str
                 // The comment as a margin note beside its claim — the in-file review
                 // loop is the product thesis, and an export that drops the review is
                 // the wrong document (TDD 25.13).
+                //
+                // **Once per claim, on the TAIL fragment.** A claim spanning inline
+                // markup is several fragments and this emitted the note in each of
+                // them, so `{==a **bold** word==}` printed its comment three times
+                // (F-AP-B-204).
+                if !*tail {
+                    continue;
+                }
                 if let Some(ann) = doc.annotations.get(*idx) {
                     // TDD 18.19: the chip's colour keys, applied to the note's
                     // background/ink. Empty unless the theme sets at least one, so a

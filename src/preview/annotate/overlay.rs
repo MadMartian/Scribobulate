@@ -988,7 +988,8 @@ mod jjj_tests {
 
     /// Raise the card over a preview selection and return `(pane, view, entry)`.
     fn open_card(win: &gtk::Window) -> (gtk::Widget, CodePreviewView, gtk::Entry) {
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         win.set_default_size(700, 400);
         win.set_child(Some(&pane));
@@ -1142,7 +1143,8 @@ mod jjj_tests {
             ));
         }
         let win = gtk::Window::new();
-        let pane = crate::preview::render(&md, None, 1.0, false);
+        let pane =
+            crate::preview::render(&md, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         // The action popover only shows when the view has an annotation sink (normally
         // wired by the split view). A no-op sink is enough for this geometry test.
@@ -1212,7 +1214,8 @@ mod jjj_tests {
     /// the other two defense-in-depth layers; this pins the choke-point half.
     #[gtktest::test]
     fn popup_selection_action_is_a_no_op_on_an_unrealized_view() {
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane);
         assert!(
             !view.is_realized(),

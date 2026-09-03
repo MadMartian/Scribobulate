@@ -33,15 +33,22 @@ use super::rig::{anchor_reader, reader_offset, top_line_text, Reading};
 
 /// Paragraphs inside the disclosure body, each followed by a thematic break.
 ///
-/// The break is what makes the body carry ANCHORED CHILDREN, which is the dose the
-/// upstream `top_margin` drift scales with (MEASURED 32 / 368 / 880 px at 0 / 10 / 30).
-/// A body of plain prose exercises the smallest case and would let a broken restore
-/// pass by being within a text row of correct.
-const BODY_PARAS: usize = 20;
+/// The break is what makes the body carry ANCHORED CHILDREN, which the upstream
+/// `top_margin` drift scaled with (MEASURED 32 / 368 / 880 px at 0 / 10 / 30, by an
+/// experiment since deleted — `git log -- src/preview/splice/excursion/`). A body of
+/// plain prose exercises the smallest case and would let a broken restore pass by being
+/// within a text row of correct.
+///
+/// **Named apart from `harness::BODY_PARAS`**, which is a different number for a
+/// different rig: both were spelled the same and both were handed to the same shared
+/// functions, so a call site said nothing about which document it was describing
+/// (F-DRY-A-006).
+const WIRED_BODY_PARAS: usize = 20;
 
 /// Paragraphs after the disclosure. Enough that the settled range towers over the
-/// viewport, which is the precondition for the clamp a full re-render trips.
-const TAIL_PARAS: usize = 220;
+/// viewport, which is the precondition for the clamp a full re-render trips. Named
+/// apart from `harness::TAIL_PARAS` for the reason above.
+const WIRED_TAIL_PARAS: usize = 220;
 
 /// Text that appears ONLY when the body is genuinely expanded.
 ///
@@ -54,13 +61,23 @@ const TAIL_PARAS: usize = 220;
 /// far past the preview's character limit.
 const DEEP_IN_THE_BODY: &str = "the deepest hidden paragraph";
 
+/// The same, for the SECOND disclosure — the one that sits BELOW the spliced region.
+///
+/// Its presence in the fixture is what makes `wire_spliced_disclosure_toggles`'
+/// two documented differences reachable at all: with one block there is no survivor
+/// to be double-connected and no control below the region whose line index the splice
+/// moves (F-TEST-A-006).
+const DEEP_IN_THE_SECOND_BODY: &str = "the deepest paragraph of the second block";
+
 /// How long the adjustment must hold still before the transition counts as finished.
 ///
 /// Deliberately longer than `farscroll::settle`'s own quiet window (3 x 50 ms), so the
 /// deferred restore has always landed by the time this returns — otherwise every
 /// reading below would describe the state the restore exists to correct, and the guards
-/// would pass with the restore deleted.
-const QUIET: Duration = Duration::from_millis(400);
+/// would pass with the restore deleted. Named apart from `harness::QUIET` — the two
+/// are handed to the SAME `rig::settle`, and a bare `QUIET` at that call site does not
+/// say which window it is asking for.
+const WIRED_QUIET: Duration = Duration::from_millis(400);
 
 /// A document with one collapsed disclosure near the top and — BELOW it — a heading, a
 /// link, a distinctive paragraph and a table, which are what rubric 2.26j is about.
@@ -69,17 +86,25 @@ fn fixture() -> String {
         "# Wired fixture\n\nAn opening paragraph, before the disclosure.\n\n\
          <details>\n<summary>A collapsible section</summary>\n\n",
     );
-    for i in 0..BODY_PARAS {
+    for i in 0..WIRED_BODY_PARAS {
         md.push_str(&format!("Hidden body paragraph {i}. {FILLER}\n\n---\n\n"));
     }
     md.push_str(&format!("{DEEP_IN_THE_BODY}. {FILLER}\n\n"));
     md.push_str("</details>\n\n");
     md.push_str("| before | col |\n|---|---|\n| a | b |\n\n");
-    for i in 0..TAIL_PARAS {
+    for i in 0..WIRED_TAIL_PARAS {
         md.push_str(&format!("Tail paragraph {i}. {FILLER}\n\n"));
     }
     md.push_str("## Below the block\n\na distinctive tail paragraph\n\n");
     md.push_str("[link text](https://example.invalid/target)\n\n");
+    // A SECOND disclosure, below the first — the survivor of the first block's
+    // splice, and the control whose buffer LINE the splice moves.
+    md.push_str("<details>\n<summary>A second collapsible section</summary>\n\n");
+    for i in 0..WIRED_BODY_PARAS {
+        md.push_str(&format!("Second-block paragraph {i}. {FILLER}\n\n"));
+    }
+    md.push_str(&format!("{DEEP_IN_THE_SECOND_BODY}. {FILLER}\n\n"));
+    md.push_str("</details>\n\n");
     md.push_str("| after | col |\n|---|---|\n| e | f |\n");
     md
 }
@@ -113,14 +138,10 @@ impl Wired {
             .and_then(|c| c.downcast::<CodePreviewView>().ok())
             .expect("a preview view");
         let adjustment = sw.vadjustment();
-        {
-            let (view, adjustment) = (view.clone(), adjustment.clone());
-            testpump::until(
-                Clock::Idle,
-                "the preview to map and acquire a viewport",
-                move || view.is_mapped() && adjustment.page_size() > 0.0,
-            );
-        }
+        // The SHARED wait, not a second copy of it. `rig::await_viewport`'s own doc
+        // says the two rigs share this discipline, and this file reproduced it verbatim
+        // — so the claim was true only by coincidence (F-DRY-A-002).
+        super::rig::await_viewport(&view, &adjustment);
         let rig = Wired {
             window,
             view,
@@ -132,19 +153,19 @@ impl Wired {
     }
 
     /// See [`super::rig::settle`] — the same discipline the mechanism rig uses, with
-    /// this rig's longer [`QUIET`] window.
+    /// this rig's longer [`WIRED_QUIET`] window.
     fn settle(&self) {
-        super::rig::settle(&self.view, &self.adjustment, QUIET);
+        super::rig::settle(&self.view, &self.adjustment, WIRED_QUIET);
     }
 
     /// See [`super::rig::settle_watching_the_trough`].
     fn settle_watching_the_trough(&self) -> (f64, f64) {
-        super::rig::settle_watching_the_trough(&self.adjustment, QUIET)
+        super::rig::settle_watching_the_trough(&self.adjustment, WIRED_QUIET)
     }
 
     /// See [`super::rig::park_the_reader`].
     fn park_the_reader(&self) {
-        super::rig::park_the_reader(&self.view, &self.adjustment, QUIET);
+        super::rig::park_the_reader(&self.view, &self.adjustment, WIRED_QUIET);
     }
 
     /// The live `RenderData` — the maps every 2.26j consumer reads.
@@ -155,8 +176,19 @@ impl Wired {
     /// **Activate the control**, exactly as a click does — the one step that makes
     /// this a test of the wiring rather than of the mechanism.
     fn activate_the_disclosure(&self) {
-        let toggle = self.render_data().borrow().disclosure_lines[0].1.clone();
+        self.activate_disclosure(0);
+    }
+
+    /// Activate the `nth` disclosure control, in buffer order.
+    fn activate_disclosure(&self, nth: usize) {
+        let toggle = self.render_data().borrow().disclosure_lines[nth].1.clone();
         toggle.set_active(!toggle.is_active());
+    }
+
+    /// `(buffer line, toggle)` for every disclosure control, as the LIVE maps record
+    /// it — the list a click's line hit-test resolves against.
+    fn disclosure_lines(&self) -> Vec<(i32, gtk::ToggleButton)> {
+        self.render_data().borrow().disclosure_lines.clone()
     }
 
     fn buffer_text(&self) -> String {
@@ -186,7 +218,7 @@ fn control_collapse(md: &str) -> (f64, f64, f64, f64) {
         .and_then(|st| st.split.preview_scroller())
         .expect("a preview scroller");
     let folds = crate::fold::FoldState::default();
-    crate::preview::re_render(&sw, md, None, 1.0, false, &folds);
+    crate::preview::re_render(&sw, md, None, 1.0, false, &folds, 0);
     let (min_value, min_upper) = rig.settle_watching_the_trough();
     (before.upper, min_upper, min_value, before.page_size)
 }
@@ -554,4 +586,125 @@ fn everything_below_a_toggled_block_still_addresses_its_own_text_in_the_live_pan
          url. A stale span still resolves, still opens something, and takes the reader \
          somewhere plausible — which is why this is asserted rather than eyeballed"
     );
+}
+
+/// **`wire_spliced_disclosure_toggles`' first documented difference: only `fresh` is
+/// connected.**
+///
+/// A SURVIVOR of the splice still carries the handler it was built with. Connect a
+/// second one to it and every click folds twice — which reads to the reader as a click
+/// that does nothing, and is the exact report this construct has already produced by
+/// another route (ScrAP-79). Nothing asserted it (F-TEST-A-006): with one disclosure in
+/// the fixture there was no survivor at all.
+///
+/// The assertion is on the FIRST activation, not the round trip. A double-connected
+/// survivor is already wrong after one click — it has folded and unfolded — so a test
+/// that only compared "before" with "after two clicks" would pass on the defect.
+#[gtktest::test]
+fn a_survivor_of_a_splice_is_not_connected_twice() {
+    let md = fixture();
+    let rig = Wired::present("wired-double", &md);
+    rig.park_the_reader();
+
+    // Expand the FIRST block. That splices, and the second block's control survives it.
+    rig.activate_the_disclosure();
+    testpump::until(Clock::Idle, "the first block to expand", || {
+        rig.buffer_text().contains(DEEP_IN_THE_BODY)
+    });
+    rig.settle();
+
+    let lines = rig.disclosure_lines();
+    assert_eq!(
+        lines.len(),
+        2,
+        "the fixture carries two controls: {lines:?}"
+    );
+    let survivor = lines[1].1.clone();
+    assert!(
+        !survivor.is_active(),
+        "precondition: the second block is still collapsed"
+    );
+    assert!(
+        !rig.buffer_text().contains(DEEP_IN_THE_SECOND_BODY),
+        "precondition: and its body is genuinely hidden"
+    );
+
+    // ONE activation of the survivor.
+    survivor.set_active(true);
+    testpump::until(Clock::Idle, "the second block to expand", || {
+        rig.buffer_text().contains(DEEP_IN_THE_SECOND_BODY)
+    });
+    rig.settle();
+
+    assert!(
+        rig.buffer_text().contains(DEEP_IN_THE_SECOND_BODY),
+        "one click on a survivor expands it and leaves it expanded — a second handler \
+         would fold it straight back and the click would read as doing nothing"
+    );
+    assert!(
+        survivor.is_active(),
+        "and the control agrees with the buffer about which state it is in"
+    );
+}
+
+/// **`wire_spliced_disclosure_toggles`' second documented difference: the LINE index is
+/// rebuilt from the live anchors.**
+///
+/// A splice moves every line below its region, so the `summary_offset` a surviving
+/// control was emitted with names the PREVIOUS render's buffer. The line index is what
+/// a click's hit-test resolves a press against — get it wrong and clicking one block's
+/// summary line toggles another, or nothing. Nothing asserted it either.
+#[gtktest::test]
+fn a_control_below_a_spliced_region_still_names_its_own_line() {
+    let md = fixture();
+    let rig = Wired::present("wired-lines", &md);
+    rig.park_the_reader();
+
+    let before: Vec<i32> = rig.disclosure_lines().iter().map(|(l, _)| *l).collect();
+    rig.activate_the_disclosure();
+    testpump::until(Clock::Idle, "the first block to expand", || {
+        rig.buffer_text().contains(DEEP_IN_THE_BODY)
+    });
+    rig.settle();
+
+    let after = rig.disclosure_lines();
+    assert_eq!(after.len(), 2, "both controls survive the splice");
+    let moved: Vec<i32> = after.iter().map(|(l, _)| *l).collect();
+    assert!(
+        moved[1] > before[1],
+        "precondition: expanding the first block really did push the second control \
+          down the buffer — {before:?} then {moved:?}. If it did not, this test would \
+          pass on an index that was never rebuilt"
+    );
+
+    let buf = rig.view.buffer();
+    for (line, toggle) in &after {
+        let anchor = anchor_of(&buf, toggle).expect("every control sits at an anchor");
+        assert_eq!(
+            *line,
+            buf.iter_at_child_anchor(&anchor).line(),
+            "the recorded line for a control must be the line its ANCHOR is on — the \
+             offsets it was emitted with named the pre-splice buffer"
+        );
+    }
+}
+
+/// The child anchor `widget` is parented at, found by walking the buffer's own
+/// placeholders — GTK's pairing rather than a parallel record of ours.
+fn anchor_of(
+    buf: &gtk::TextBuffer,
+    widget: &impl IsA<gtk::Widget>,
+) -> Option<gtk::TextChildAnchor> {
+    let widget = widget.as_ref();
+    let mut iter = buf.start_iter();
+    loop {
+        if let Some(anchor) = iter.child_anchor() {
+            if anchor.widgets().iter().any(|w| w == widget) {
+                return Some(anchor);
+            }
+        }
+        if !iter.forward_find_char(|c| c == '\u{FFFC}', None) {
+            return None;
+        }
+    }
 }

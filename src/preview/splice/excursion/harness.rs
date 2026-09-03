@@ -2,11 +2,13 @@
 //! toggle can be driven through the splice.
 //!
 //! Split out of `excursion.rs` at the 500-line soft limit (POLICY § Code style), and
-//! the cut is by cause rather than by size — there are now TWO experiments over this
-//! same rig ([`super`]'s excursion comparison and [`super::drift`]'s dose-response
-//! table), so what they share stopped being one file's private detail. [`super::rig`]
-//! owns establishing a state geometry may legitimately be read from; this file owns
-//! the apparatus applied to it; each experiment file owns only its own question.
+//! the cut was by cause rather than by size — there were several experiments over this
+//! same rig, so what they shared stopped being one file's private detail. Only
+//! [`super`]'s excursion comparison survives; the others measured GTK's validation
+//! budget rather than Scribobulate and were deleted (`git log --
+//! src/preview/splice/excursion/`). [`super::rig`] owns establishing a state geometry
+//! may legitimately be read from; this file owns the apparatus applied to it; each
+//! experiment file owns only its own question.
 
 use gtk::prelude::*;
 use std::time::Duration;
@@ -203,71 +205,29 @@ pub(super) fn truncate(s: &str) -> String {
     s.chars().take(46).collect()
 }
 
-/// WHERE in [`measure_probed`]'s sequence an instrument is offered the rig.
-///
-/// Two points rather than one, and the second is not a convenience: an instrument
-/// that recorded past the last "after" reading would attribute the rig's own teardown
-/// to the toggle, which is precisely the kind of contamination the readings it feeds
-/// are used to rule out.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Phase {
-    /// Every "before" reading is taken and the toggle has not run. An instrument
-    /// armed here observes exactly the toggle and the settle that follows it.
-    BeforeToggle,
-    /// The settle has converged and every "after" reading is taken; nothing has been
-    /// torn down. An instrument disarmed here has recorded that window and no more.
-    AfterSettle,
-}
-
 /// Run one arm end to end: build, settle, scroll down, toggle, measure.
 ///
 /// `toggle` is handed the rig with `folds` ALREADY reflecting the new state, and does
 /// whatever that route does to the live buffer. Everything around it — fixture,
 /// window size, settle discipline, reading position — is identical between arms, so
 /// the route is the only variable.
+///
+/// **This was three functions and an enum until the excursion arms that used them were
+/// deleted.** `measure_probed` offered an instrument at two `Phase`s and
+/// `measure_probed_at_margin` threaded a per-view `top-margin`; both existed for the
+/// margin sweep and the per-emission trace, which measured GTK's validation budget
+/// rather than Scribobulate and were removed with it (`git log --
+/// src/preview/splice/excursion/`). What survived was a parameterisation nothing
+/// turned and an assertion nothing could reach, documented as though a caller might
+/// (F-TEST-A-005).
 pub(super) fn measure(
     route: &'static str,
     md: &str,
     start_expanded: bool,
     toggle: impl FnOnce(&Rig, &FoldState, FoldKey),
 ) -> Arm {
-    measure_probed(route, md, start_expanded, |_, _| {}, toggle)
-}
-
-/// [`measure`], with an instrument offered the rig at each [`Phase`].
-///
-/// The hook exists so a per-emission trace can be armed over exactly the toggle and
-/// its settle without a second copy of this sequence: the readings it is compared
-/// against (`before.value`, `after.value`) are the ones this function takes, and a
-/// parallel driver would be free to drift from them.
-pub(super) fn measure_probed(
-    route: &'static str,
-    md: &str,
-    start_expanded: bool,
-    probe: impl FnMut(&Rig, Phase),
-    toggle: impl FnOnce(&Rig, &FoldState, FoldKey),
-) -> Arm {
-    measure_probed_at_margin(route, md, start_expanded, None, probe, toggle)
-}
-
-/// [`measure_probed`], with the rig's view given a `top-margin` of its own.
-///
-/// The knob [`super::margin`] varies, threaded through rather than reached for from
-/// inside the experiment, because the margin has to be in place BEFORE the rig's first
-/// settle: a margin applied to an already-laid-out view would be measuring a relayout
-/// rather than a document rendered at that margin. `None` is every other caller, and
-/// leaves the configured margin standing — see [`Rig::new`] for why the
-/// override is per-view and never in `config.rs`.
-pub(super) fn measure_probed_at_margin(
-    route: &'static str,
-    md: &str,
-    start_expanded: bool,
-    top_margin: Option<i32>,
-    mut probe: impl FnMut(&Rig, Phase),
-    toggle: impl FnOnce(&Rig, &FoldState, FoldKey),
-) -> Arm {
     let spans = crate::renderer::disclosure::scan_document(md);
-    let key = FoldKey::from_source_offset(spans[0].start);
+    let key = spans[0].fold_key();
 
     // The fixture's `<details>` carries no `open`, so the default state draws it
     // COLLAPSED and one toggle expands it. Starting expanded is therefore one toggle
@@ -278,7 +238,7 @@ pub(super) fn measure_probed_at_margin(
         start.toggle(key);
     }
 
-    let rig = Rig::new(md, &start, top_margin);
+    let rig = Rig::new(md, &start);
     let adjustment = rig.adjustment();
     assert!(
         adjustment.upper() > adjustment.page_size() * 8.0,
@@ -304,7 +264,6 @@ pub(super) fn measure_probed_at_margin(
     // of `splice` must arrange.
     let mut folds = start.clone();
     folds.toggle(key);
-    probe(&rig, Phase::BeforeToggle);
     toggle(&rig, &folds, key);
 
     let immediate = Reading::of(&adjustment);
@@ -312,7 +271,6 @@ pub(super) fn measure_probed_at_margin(
     let after = Reading::of(&adjustment);
     let top_after = rig.top_line_text();
     let (anchor_offset_after, anchor_text_after) = rig.reader_offset(&anchor);
-    probe(&rig, Phase::AfterSettle);
     rig.teardown();
 
     Arm {
@@ -338,12 +296,13 @@ pub(super) fn measure_probed_at_margin(
 /// again (the module docs name that as the caller's obligation); only the region
 /// render's own outputs are new, and the region renderer has already taken them.
 ///
-/// Returns how many anchored children the REGION render itself drew, so a caller
-/// measuring a per-child effect can check the dose actually arrived. It is not the
-/// number of children in the body: a collapsed region draws none, and an expanded
-/// one draws no toggle button either (the summary line, and so the toggle, belongs
-/// to the seed walk that runs before the region begins).
-pub(super) fn splice_toggle(rig: &Rig, folds: &FoldState, key: FoldKey, md: &str) -> usize {
+/// **Returns nothing.** It used to hand back the REGION render's own child count so a
+/// caller measuring a per-child effect could check the dose arrived; the only caller
+/// that did was the dose-response sweep, deleted with the other experiments that
+/// measured GTK rather than Scribobulate (`git log --
+/// src/preview/splice/excursion/`). The count was worth having for that question and
+/// is worth nothing to this one.
+pub(super) fn splice_toggle(rig: &Rig, folds: &FoldState, key: FoldKey, md: &str) {
     let outcome = crate::preview::splice::splice(
         &rig.buf,
         Some(&rig.view),
@@ -356,9 +315,14 @@ pub(super) fn splice_toggle(rig: &Rig, folds: &FoldState, key: FoldKey, md: &str
 
     // Prove the parenting really happened before anything downstream grades a number
     // against it (ScrAP-252's family: a SETUP step that silently fails to take effect
-    // makes the next assertion answer for the previous state). Vacuous when the region
-    // drew no child at all, which is why the count is returned rather than asserted
-    // here — only the caller knows what dose it asked for.
+    // makes the next assertion answer for the previous state).
+    //
+    // **Vacuous when the region drew no child at all**, and deliberately left that way:
+    // a collapsed region draws none and an expanded one draws no toggle button either
+    // (the summary line, and so the toggle, belongs to the seed walk that runs before
+    // the region begins), so requiring a non-empty list here would fail on correct
+    // renders. The caller that could tell a real dose from an empty one was the
+    // deleted dose-response sweep.
     assert!(
         outcome
             .region
@@ -369,5 +333,4 @@ pub(super) fn splice_toggle(rig: &Rig, folds: &FoldState, key: FoldKey, md: &str
          it created them, and at least one came back unparented",
         outcome.region.anchored.len(),
     );
-    outcome.region.anchored.len()
 }

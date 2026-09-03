@@ -1,12 +1,15 @@
 //! The `vadjustment::value-changed` recorder, and the shape of an emission sequence.
 //!
-//! Split out of [`super::trace`] when a second experiment ([`super::margin`]) needed
-//! the same instrument. The cut is by cause rather than by size: this file owns
-//! **watching the adjustment being written to and describing the sequence**, and its
-//! callers own **the question each sequence is asked**. Two experiments recording the
-//! same signal through two copies of this apparatus would be free to drift apart
-//! silently, and the whole value of the second experiment is that its numbers are
-//! comparable with the first's.
+//! Split out when a second experiment needed the same instrument. Both experiments
+//! that used it — the per-emission trace and the `top-margin` dose-response sweep —
+//! have since been deleted, because they measured GTK's validation budget rather than
+//! Scribobulate; recover them from `git log -- src/preview/splice/excursion/`.
+//!
+//! The cut was by cause rather than by size, and that reading still holds: this file
+//! owns **watching the adjustment being written to and describing the sequence**, and
+//! its callers own **the question each sequence is asked**. Two experiments recording
+//! the same signal through two copies of this apparatus would have been free to drift
+//! apart silently.
 //!
 //! # Why the vadjustment, and what it can and cannot see
 //!
@@ -39,9 +42,11 @@ pub(super) struct Emission {
 
 /// A recorder for every `vadjustment::value-changed` across one window of the run.
 ///
-/// Armed and disarmed through [`super::harness::Phase`] rather than left connected for
-/// the rig's whole life, so the toggle's own settle is what it records and the rig's
-/// teardown is not attributed to it.
+/// Armed and disarmed by its caller — [`Trace::arm`] and [`Trace::disarm`] — rather
+/// than left connected for the rig's whole life, so the toggle's own settle is what it
+/// records and the rig's teardown is not attributed to it. The harness used to offer
+/// those two moments as a `Phase` enum; that hook went with the experiments that turned
+/// it.
 #[derive(Default)]
 pub(super) struct Trace {
     log: Rc<RefCell<Vec<Emission>>>,

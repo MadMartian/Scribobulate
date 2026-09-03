@@ -33,7 +33,7 @@
 //! rendering decision (rubric 2.26d) and a scanner that silently dropped an unpaired
 //! tag would deny the renderer the information it needs to recover well.
 
-use super::rawhtml::{has_attr, recognise_html_element, tag_end, RawHtmlElement};
+use super::rawhtml::{has_attr, RawHtml, RawHtmlElement, RawItem, TagKind};
 
 /// The collapsed-summary body-preview shortening rule (TDD 2.26) — split out rather
 /// than grown in here, per the 500-line soft limit (`sdd/POLICY.md` § Code style),
@@ -46,7 +46,15 @@ pub(crate) use preview::preview_insert_text;
 pub(crate) enum DetailsTag {
     /// `<details>` — opens a disclosure block. `open` carries the HTML `open`
     /// attribute, which renders the block expanded (rubric 2.26b).
-    DetailsOpen { open: bool },
+    ///
+    /// `at` is the tag's own byte offset **within the fragment**, and it is what gives
+    /// two `<details>` in ONE raw-HTML block two identities. Without it a block's
+    /// offset was the whole of a disclosure's identity, so the compact GitHub form —
+    /// two adjacent `<details>` with no blank line between them, which is one
+    /// CommonMark type-6 block — gave both the same `FoldKey`: collapsing one
+    /// collapsed both, and every lookup keyed on the offset answered with whichever
+    /// came first (F-TEST-B-005).
+    DetailsOpen { open: bool, at: usize },
     /// `</details>` — closes the innermost open disclosure block.
     DetailsClose,
     /// `<summary>` — opens the summary line.
@@ -75,7 +83,7 @@ pub(crate) enum DetailsTag {
     /// printed its body anyway and its toggle became a visible no-op, and the export
     /// dropped the run entirely.
     ///
-    /// Which runs exist at all is [`super::rawhtml::literal_text_runs`]'s decision —
+    /// Which runs exist at all is [`super::rawhtml::RawHtml`]'s decision —
     /// the allowlist still governs, so a `<script>`'s text is not here.
     ///
     /// `at` is the run's byte offset **within the fragment**, which is what lets
@@ -91,13 +99,14 @@ pub(crate) enum DetailsTag {
 /// approximately anywhere (CAM Document Rendering row 17: a construct taught to the
 /// renderer alone is silently absent from every exported artefact).
 pub(crate) fn scan_disclosure_tags(html: &str) -> Vec<DetailsTag> {
-    let lower = html.to_ascii_lowercase();
+    // **One lexer, one input** (`rawhtml::lex`). The tags and the literal-text runs
+    // arrive already interleaved in document order, from the same walk — so this
+    // scanner cannot disagree with `literal_text_runs` about what a tag is. It did:
+    // this loop found its own `<`s and knew nothing about raw-text elements, so a
+    // `<summary>` written inside a `<script>` supplied a real disclosure's label
+    // (F-SEC-210).
+    let doc = RawHtml::lex(html);
     let mut tags = Vec::new();
-    // The block's literal-text runs, merged into the tag stream by offset so each run
-    // reaches the frame it sits inside. See [`DetailsTag::Text`].
-    let mut runs = super::rawhtml::literal_text_runs(html)
-        .into_iter()
-        .peekable();
     // Byte offset just past the last `<summary>`'s `>`, while one is open. The text
     // run is closed by `</summary>`, never by the end of the fragment: an unclosed
     // `<summary>` yields no text rather than swallowing the rest of the block, which
@@ -105,32 +114,33 @@ pub(crate) fn scan_disclosure_tags(html: &str) -> Vec<DetailsTag> {
     // unclosed `<details>`.
     let mut summary_from: Option<usize> = None;
 
-    let mut i = 0usize;
-    while let Some(rel) = lower[i..].find('<') {
-        let start = i + rel;
-        // Quote-aware: a `>` inside an attribute value does not end the tag, and a
-        // scanner that thinks it does re-reads the tag's own tail as markup.
-        let Some(end) = tag_end(html, start) else {
-            break;
-        };
-        while runs.peek().is_some_and(|run| run.at < start) {
-            let Some(run) = runs.next() else { break };
-            push_text_run(&mut tags, run.at, run.text);
-        }
-        let tag_lower = &lower[start..=end];
-        match recognise_html_element(tag_lower) {
-            Some(RawHtmlElement::DetailsOpen) => tags.push(DetailsTag::DetailsOpen {
-                // `open` is boolean: presence is the whole signal.
-                open: has_attr(tag_lower, "open"),
-            }),
-            Some(RawHtmlElement::DetailsClose) => tags.push(DetailsTag::DetailsClose),
-            Some(RawHtmlElement::SummaryOpen) => {
-                tags.push(DetailsTag::SummaryOpen);
-                summary_from = Some(end + 1);
+    for item in doc.items() {
+        let tag = match item {
+            RawItem::Text(run) => {
+                push_text_run(&mut tags, run.at, run.text);
+                continue;
             }
-            Some(RawHtmlElement::SummaryClose) => {
+            RawItem::Tag(tag) => tag,
+        };
+        let TagKind::Known(el) = tag.kind else {
+            // An unrecognised element contributes no disclosure tag. Its *text* was
+            // already decided by the lexer, which is the point of reading one stream.
+            continue;
+        };
+        match el {
+            RawHtmlElement::DetailsOpen => tags.push(DetailsTag::DetailsOpen {
+                // `open` is boolean: presence is the whole signal.
+                open: has_attr(tag.lower, "open"),
+                at: tag.at,
+            }),
+            RawHtmlElement::DetailsClose => tags.push(DetailsTag::DetailsClose),
+            RawHtmlElement::SummaryOpen => {
+                tags.push(DetailsTag::SummaryOpen);
+                summary_from = Some(tag.end);
+            }
+            RawHtmlElement::SummaryClose => {
                 if let Some(from) = summary_from.take() {
-                    let text = html[from..start].trim();
+                    let text = doc.src()[from..tag.at].trim();
                     if !text.is_empty() {
                         tags.push(DetailsTag::SummaryText(text.to_owned()));
                     }
@@ -141,18 +151,11 @@ pub(crate) fn scan_disclosure_tags(html: &str) -> Vec<DetailsTag> {
             // explicitly rather than caught by a `_` arm so that adding an element to
             // the allowlist fails to compile here until someone decides whether this
             // scanner cares about it — a wildcard would render it as nothing, silently.
-            Some(
-                RawHtmlElement::PictureOpen
-                | RawHtmlElement::PictureClose
-                | RawHtmlElement::Source
-                | RawHtmlElement::Img,
-            ) => {}
-            None => {}
+            RawHtmlElement::PictureOpen
+            | RawHtmlElement::PictureClose
+            | RawHtmlElement::Source
+            | RawHtmlElement::Img => {}
         }
-        i = end + 1;
-    }
-    for run in runs {
-        push_text_run(&mut tags, run.at, run.text);
     }
     tags
 }
@@ -178,9 +181,18 @@ fn push_text_run(tags: &mut Vec<DetailsTag>, at: usize, text: &str) {
 /// walks — so the Nth span is the Nth `<details>` the renderer will open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DisclosureSpan {
-    /// Source byte offset where the opening raw-HTML **block** begins — the value
-    /// the fold model keys a disclosure on.
+    /// Source byte offset where the opening raw-HTML **block** begins.
+    ///
+    /// This is the BLOCK's offset, which is what the renderer's walk knows when it
+    /// reaches the block — so it is what the cursor's cross-check compares. It is
+    /// deliberately NOT the disclosure's identity: see [`Self::at`].
     pub start: usize,
+    /// The `<details>` tag's own byte offset **within** that block.
+    ///
+    /// `start + at` is the disclosure's identity ([`Self::fold_key`]). Two `<details>`
+    /// in one raw-HTML block share `start` and differ here, which is the whole reason
+    /// this field exists (F-TEST-B-005).
+    pub at: usize,
     /// The HTML `open` attribute, which renders the block expanded (rubric 2.26b).
     pub open: bool,
     /// Source byte range of the block's BODY: everything after the opening raw-HTML
@@ -189,6 +201,18 @@ pub(crate) struct DisclosureSpan {
     /// `None` when the block is **never closed** — and that distinction is the whole
     /// reason this scan exists. See [`scan_document`].
     pub body: Option<std::ops::Range<usize>>,
+}
+
+impl DisclosureSpan {
+    /// This disclosure's identity — the source byte offset of its own `<details>` tag.
+    ///
+    /// **The one place the key is derived from a span**, so a consumer cannot mint one
+    /// from `start` alone and collide with a sibling in the same block. The renderer
+    /// mints the same value from its own walk (`start.rs`, `event_src.start + at`);
+    /// that the two agree is what `SpanCursor` cross-checks.
+    pub(crate) fn fold_key(&self) -> crate::fold::FoldKey {
+        crate::fold::FoldKey::from_source_offset(self.start + self.at)
+    }
 }
 
 /// A document-order cursor over [`scan_document`]'s spans — the ONE answer to "is the
@@ -295,6 +319,9 @@ pub(crate) fn scan_document(md: &str) -> Vec<DisclosureSpan> {
     let md = normalized.as_str();
 
     let mut spans: Vec<DisclosureSpan> = Vec::new();
+    // Each span's own literal-text extent, parallel to `spans`. See the accumulation
+    // at `DetailsTag::Text` below for why it is per span rather than per block.
+    let mut literal: Vec<Option<std::ops::Range<usize>>> = Vec::new();
     // Indices into `spans` for the blocks still open, innermost last.
     let mut open_stack: Vec<usize> = Vec::new();
     // The raw-HTML block currently being accumulated: its source range, and the
@@ -314,26 +341,43 @@ pub(crate) fn scan_document(md: &str) -> Vec<DisclosureSpan> {
                 let Some((range, html)) = block.take() else {
                     continue;
                 };
-                // Where this block's own literal text sits in the SOURCE, if any. An
-                // unspaced `<details>` opens and closes inside ONE block, so its body
-                // is this text rather than a run of Markdown events between two
+                // Where each open disclosure's own literal text sits in the SOURCE.
+                // An unspaced `<details>` opens and closes inside ONE block, so its
+                // body is this text rather than a run of Markdown events between two
                 // blocks — and a body recorded as the degenerate `start..start` is a
                 // block the reader can collapse and never open again, because the
                 // fold splice re-renders from exactly that range.
-                let mut literal: Option<std::ops::Range<usize>> = None;
+                //
+                // **Per open FRAME, not per block** (F-AUD-201). One accumulator for
+                // the whole block gave a second `<details>` in it a body range
+                // beginning inside the FIRST one's body — measured as `31..36` and
+                // `31..84` for two siblings — so expanding the second re-rendered the
+                // first block's text as part of it. A run also belongs only to the
+                // frames enclosing it, so text before the first `<details>` extends
+                // nothing.
                 for tag in scan_disclosure_tags(&html) {
                     match tag {
                         DetailsTag::Text { at, ref text } => {
                             let run = range.start + at..range.start + at + text.len();
-                            literal = Some(match literal {
-                                Some(prev) => prev.start.min(run.start)..prev.end.max(run.end),
-                                None => run,
-                            });
+                            for &i in &open_stack {
+                                // A frame opened in an EARLIER block takes the
+                                // block-to-block range instead, so this text is not
+                                // its body.
+                                if spans[i].start != range.start {
+                                    continue;
+                                }
+                                literal[i] = Some(match literal[i].clone() {
+                                    Some(prev) => prev.start.min(run.start)..prev.end.max(run.end),
+                                    None => run.clone(),
+                                });
+                            }
                         }
-                        DetailsTag::DetailsOpen { open } => {
+                        DetailsTag::DetailsOpen { open, at } => {
                             open_stack.push(spans.len());
+                            literal.push(None);
                             spans.push(DisclosureSpan {
                                 start: range.start,
+                                at,
                                 open,
                                 // Filled in by the `</details>` that closes it; a
                                 // block never closed keeps `None`, which is the
@@ -349,7 +393,7 @@ pub(crate) fn scan_document(md: &str) -> Vec<DisclosureSpan> {
                                 // Opened in THIS block: unspaced, so the body is the
                                 // literal text the block itself carries.
                                 spans[i].body = Some(if spans[i].start == range.start {
-                                    literal.clone().unwrap_or(range.start..range.start)
+                                    literal[i].clone().unwrap_or(range.start..range.start)
                                 } else {
                                     spans[i].start..range.start
                                 });
@@ -417,7 +461,7 @@ pub(crate) fn scan_document(md: &str) -> Vec<DisclosureSpan> {
 /// hit the ordinary widget-tree scan finds; the count is right, the intermediate
 /// position is approximate.
 pub(crate) fn body_plain_text(body_src: &str) -> String {
-    use pulldown_cmark::{Event, TagEnd};
+    use pulldown_cmark::Event;
 
     // One document, like every other parse site (`super::normalize`) — and here the
     // pre-pass genuinely changes the answer: unnormalised, a tab-padded table is one
@@ -452,16 +496,7 @@ pub(crate) fn body_plain_text(body_src: &str) -> String {
                 }
             }
             Event::End(end) => {
-                if !matches!(
-                    end,
-                    TagEnd::Emphasis
-                        | TagEnd::Strong
-                        | TagEnd::Strikethrough
-                        | TagEnd::Superscript
-                        | TagEnd::Subscript
-                        | TagEnd::Link
-                        | TagEnd::Image
-                ) {
+                if !super::is_inline_tag_end(&end) {
                     plain.push('\n');
                 }
             }
@@ -545,11 +580,17 @@ mod body_text_tests {
 mod tests {
     use super::{scan_disclosure_tags, DetailsTag};
 
+    fn open_at(at: usize) -> DetailsTag {
+        DetailsTag::DetailsOpen { open: false, at }
+    }
     fn open() -> DetailsTag {
-        DetailsTag::DetailsOpen { open: false }
+        open_at(0)
+    }
+    fn open_expanded_at(at: usize) -> DetailsTag {
+        DetailsTag::DetailsOpen { open: true, at }
     }
     fn open_expanded() -> DetailsTag {
-        DetailsTag::DetailsOpen { open: true }
+        open_expanded_at(0)
     }
     fn text_at(at: usize, text: &str) -> DetailsTag {
         DetailsTag::Text {
@@ -620,8 +661,10 @@ mod tests {
         assert_eq!(
             scan_disclosure_tags("<details><details open></details></details>"),
             vec![
-                open(),
-                open_expanded(),
+                open_at(0),
+                // Each `<details>` carries its OWN offset, which is what gives two in
+                // one block two identities.
+                open_expanded_at(9),
                 DetailsTag::DetailsClose,
                 DetailsTag::DetailsClose
             ]
@@ -698,6 +741,66 @@ mod tests {
         );
     }
 
+    /// **F-SEC-210.** This scanner used to walk its own tags, knowing nothing about
+    /// raw-text elements — so a `<summary>` written inside a `<script>` supplied a
+    /// real disclosure's LABEL, and a `<details>` inside one opened a real, foldable
+    /// block. `literal_text_runs` answered the same input with nothing, which is the
+    /// two-walks-one-string divergence the shared lexer removes.
+    #[test]
+    fn a_disclosure_tag_inside_a_script_is_not_a_tag() {
+        assert_eq!(
+            scan_disclosure_tags(
+                "<details>\n<script>\n<summary>SCRIPT SOURCE AS LABEL</summary>\n</script>\n</details>"
+            ),
+            vec![open(), DetailsTag::DetailsClose],
+            "no SummaryText, and no summary frame"
+        );
+        assert_eq!(
+            scan_disclosure_tags("<details>a<script><details open></script>b</details>"),
+            vec![
+                open(),
+                DetailsTag::Text {
+                    at: 9,
+                    text: "a".into()
+                },
+                DetailsTag::Text {
+                    at: 41,
+                    text: "b".into()
+                },
+                DetailsTag::DetailsClose
+            ],
+            "the second `<details>` is script source, not a disclosure"
+        );
+        for name in [
+            "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes",
+        ] {
+            let src = format!("<details><{name}><summary>L</summary></{name}></details>");
+            assert_eq!(
+                scan_disclosure_tags(&src),
+                vec![open(), DetailsTag::DetailsClose],
+                "<{name}> content is not markup"
+            );
+        }
+    }
+
+    /// The summary label is the one string in this feature that carries RAW markup
+    /// rather than escaped text, so what can reach it matters. With the shared lexer
+    /// a script cannot; an ordinary unrecognised element still can, and this pins
+    /// that as the deliberate state rather than an oversight.
+    #[test]
+    fn a_summary_label_is_the_fragments_own_bytes() {
+        assert_eq!(
+            scan_disclosure_tags("<details><summary>a<b>c</b>d</summary></details>"),
+            vec![
+                open(),
+                DetailsTag::SummaryOpen,
+                DetailsTag::SummaryText("a<b>c</b>d".into()),
+                DetailsTag::SummaryClose,
+                DetailsTag::DetailsClose
+            ]
+        );
+    }
+
     #[test]
     fn tags_are_found_amongst_surrounding_text() {
         // And the text between them is interleaved in document order, so each run
@@ -706,7 +809,7 @@ mod tests {
             scan_disclosure_tags("lead <details open> trail </details> end"),
             vec![
                 text_at(0, "lead"),
-                open_expanded(),
+                open_expanded_at(5),
                 text_at(20, "trail"),
                 DetailsTag::DetailsClose,
                 text_at(37, "end"),
@@ -798,8 +901,72 @@ mod document_scan_tests {
     fn shape(md: &str) -> Vec<(usize, bool, bool)> {
         scan_document(md)
             .into_iter()
-            .map(|DisclosureSpan { start, open, body }| (start, open, body.is_some()))
+            .map(
+                |DisclosureSpan {
+                     start, open, body, ..
+                 }| (start, open, body.is_some()),
+            )
             .collect()
+    }
+
+    /// **F-TEST-B-005 and F-AUD-201, which always co-occur.** Two `<details>` with no
+    /// blank line between them are ONE CommonMark type-6 HTML block — ordinary
+    /// GitHub-flavoured Markdown, and what a compact hand-written document looks like.
+    /// Keyed on the block alone, both took one `FoldKey`: collapsing one collapsed
+    /// both, `foldreveal`'s lookup answered with whichever came first, and find's
+    /// hidden-hit list emitted two hits carrying one key. The body accumulator was per
+    /// block too, so the second block's recorded body began inside the first's — and
+    /// the fold splice re-renders from exactly that range.
+    #[test]
+    fn two_disclosures_in_one_block_have_two_identities() {
+        let md = "<details><summary>A</summary>alpha</details>\n                  <details><summary>B</summary>beta</details>\n";
+        let spans = scan_document(md);
+        assert_eq!(spans.len(), 2, "two disclosures: {spans:?}");
+        assert_eq!(
+            spans[0].start, spans[1].start,
+            "precondition: they really are one raw-HTML block"
+        );
+        assert_ne!(
+            spans[0].fold_key(),
+            spans[1].fold_key(),
+            "but two identities: {spans:?}"
+        );
+
+        let (first, second) = (
+            spans[0].body.clone().expect("closed"),
+            spans[1].body.clone().expect("closed"),
+        );
+        assert_eq!(&md[first.clone()], "alpha", "the first block's own body");
+        assert_eq!(&md[second.clone()], "beta", "the second block's own body");
+        assert!(
+            first.end <= second.start,
+            "and they do not overlap: {first:?} vs {second:?}"
+        );
+    }
+
+    /// The compact single-line form, which is the same shape one level down.
+    #[test]
+    fn a_single_line_disclosure_keys_on_its_own_tag() {
+        let md = "<details><summary>S</summary>body</details>\n";
+        let spans = scan_document(md);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(
+            spans[0].fold_key(),
+            crate::fold::FoldKey::from_source_offset(0),
+            "one block, one tag, at the block's own offset"
+        );
+        assert_eq!(&md[spans[0].body.clone().expect("closed")], "body");
+    }
+
+    /// Text before the first `<details>` in a block belongs to no disclosure, so it
+    /// must not extend one's body downwards. (`<hr>` opens the raw-HTML block and is
+    /// void, so `lead` is an ordinary shown run at the block's top level.)
+    #[test]
+    fn text_outside_a_disclosure_extends_no_body() {
+        let md = "<hr>lead\n<details><summary>S</summary>body</details>\n";
+        let spans = scan_document(md);
+        assert_eq!(spans.len(), 1, "one disclosure: {spans:?}");
+        assert_eq!(&md[spans[0].body.clone().expect("closed")], "body");
     }
 
     #[test]
@@ -922,6 +1089,7 @@ mod span_cursor_tests {
     fn span(start: usize, closed: bool) -> DisclosureSpan {
         DisclosureSpan {
             start,
+            at: 0,
             open: false,
             body: closed.then(|| start..start + 10),
         }

@@ -621,7 +621,8 @@ mod disclosure_click_tests {
     /// to the right of its label — which is the area this feature exists to make
     /// clickable, so a narrow fixture would prove nothing.
     fn present(md: &str) -> (gtk::Window, CodePreviewView) {
-        let widget = crate::preview::render(md, None, 1.0, false);
+        let widget =
+            crate::preview::render(md, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         // The pane widget is an Overlay wrapping the ScrolledWindow (the annotation
         // bar lives in it), so reaching the view is two steps, not one.
         let view = widget

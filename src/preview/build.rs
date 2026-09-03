@@ -8,7 +8,6 @@ use super::cells::attach_cell_copymaps;
 use super::sourcemap::{finalize_source_map, waypoint_src_offset};
 use crate::codeview::CodePreviewView;
 use crate::config::config;
-use crate::fold::FoldKey;
 use crate::palette::Palette;
 use crate::renderer::Renderer;
 use crate::widgets::table::ScribTableWidget;
@@ -384,6 +383,46 @@ pub(super) fn build_render_products_with_theme(
     ))
 }
 
+/// What a walked event earns in the render's buffer-keyed maps, given whether it was
+/// inside a collapsed disclosure BEFORE and AFTER it was processed.
+///
+/// **The one decision in `build_products`' loop that is not about a GTK object.** The
+/// dispatcher around it is 296 lines over a live `GtkTextBuffer`, so this rule was
+/// reachable only by rendering a document and reading the maps back — and the rule is
+/// three cases whose consequences are silent when wrong: a claim minted inside a
+/// collapsed body puts a buffer range on text that reached no buffer; a missing widen at
+/// the close makes a copy across the block reconstruct the summary line the reader can
+/// see rather than the block's full Markdown (rubric 2.8i). Extracted so the decision
+/// has a test rather than a document (F-DRY-A-005, the F-TEST-002 remainder).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MapClaim {
+    /// Inside a collapsed body throughout — the event reached no buffer, so it earns
+    /// nothing.
+    None,
+    /// The event that CLOSED a collapsed block. Its whole source — opening tags, hidden
+    /// body and `</details>` — belongs to the one node the summary line already owns, so
+    /// that node is WIDENED to cover it rather than a second, empty-buffered node being
+    /// minted beside it.
+    WidenOpening,
+    /// An ordinary event outside any collapsed body: it earns a node of its own, if it
+    /// has a copy kind at all.
+    OwnNode,
+}
+
+/// The rule itself: what `site_before` (the collapsed site as the event arrived) and
+/// `site_after` (as it left) mean for the maps.
+///
+/// **Asymmetric on purpose.** "Inside before, outside after" is the block CLOSING, and
+/// is the only case that widens. "Outside before" earns a node whatever happened after,
+/// because a block OPENING is an event the reader can see the summary of.
+pub(super) fn map_claim(inside_before: bool, inside_after: bool) -> MapClaim {
+    match (inside_before, inside_after) {
+        (true, true) => MapClaim::None,
+        (true, false) => MapClaim::WidenOpening,
+        (false, _) => MapClaim::OwnNode,
+    }
+}
+
 /// A whole-document render of an already-[`Prepared`] document into a fresh scratch
 /// buffer — **the splice's PASS A**, and what [`build_render_products_with_theme`] is
 /// now a thin wrapper over.
@@ -643,40 +682,43 @@ pub(super) fn build_products(buf: &TextBuffer, prepared: &Prepared<'_>) -> Rende
                 },
             });
         }
-        match (&site, r.collapsed_site()) {
-            // Inside a collapsed body and still inside it: the event reached no
-            // buffer, so it earns no claim on one.
-            (Some(_), Some(_)) => {}
-            // The event that CLOSED the block. Its whole source — opening tags,
-            // hidden body and `</details>` — belongs to the one node the summary
-            // line already owns, so that node is widened to cover it rather than a
-            // second, empty-buffered node being minted beside it. This is what makes
-            // a copy across a collapsed block reconstruct the block's full Markdown
-            // (rubric 2.8i) instead of the summary text the reader can see.
-            (Some(site), None) => {
-                let key = site
-                    .chain
-                    .first()
-                    .copied()
-                    .unwrap_or(FoldKey::from_source_offset(src_start));
+        // The decision is `map_claim`'s and is unit-tested there; this loop carries it
+        // out. The `site` the widen needs is the one the event ARRIVED inside.
+        match (
+            map_claim(site.is_some(), r.collapsed_site().is_some()),
+            &site,
+        ) {
+            (MapClaim::None, _) => {}
+            (MapClaim::WidenOpening, Some(site)) => {
+                // Matched on the outermost block's own SOURCE EVENT, not on its fold
+                // key: two `<details>` can share one raw-HTML block, so the key is no
+                // longer the offset a node carries (F-TEST-B-005).
+                let block_start = if site.chain.is_empty() {
+                    src_start
+                } else {
+                    site.block_start
+                };
                 match raw_evs
                     .iter_mut()
                     .rev()
-                    .find(|e| e.src.start == key.source_offset())
+                    .find(|e| e.src.start == block_start)
                 {
                     Some(opening) => opening.src.end = src_end,
                     // Unreachable while the summary line is emitted from the same
                     // raw-HTML block the key names. Logged rather than ignored: the
                     // consequence is a copy that silently omits the block's body.
                     None => log::error!(
-                        "copymap: collapsed disclosure at source byte {} closed with no \
-                         node covering its summary line; a copy across it will omit the \
-                         body",
-                        key.source_offset()
+                        "copymap: collapsed disclosure in the raw-HTML block at source byte \
+                         {block_start} closed with no node covering its summary line; a copy \
+                         across it will omit the body"
                     ),
                 }
             }
-            (None, _) => {
+            // Unreachable: `WidenOpening` is returned only for `inside_before`, which
+            // IS `site.is_some()`. Named rather than swallowed, so the pairing reads as
+            // the invariant it is rather than as a case someone forgot.
+            (MapClaim::WidenOpening, None) => {}
+            (MapClaim::OwnNode, _) => {
                 if let Some(kind) = copy_kind {
                     raw_evs.push(crate::copymap::RawEv {
                         buf: (before, after),
@@ -1171,6 +1213,43 @@ mod pure_tests {
 /// ```sh
 /// cargo test --features gtk-integration-tests
 /// ```
+/// **F-DRY-A-005 (the F-TEST-002 remainder): the map-claim rule, without a buffer.**
+///
+/// Three cases, each with a silent consequence when wrong — which is why the rule is
+/// worth reaching directly rather than through a rendered document and its maps.
+#[cfg(test)]
+mod map_claim_tests {
+    use super::{map_claim, MapClaim};
+
+    #[test]
+    fn an_event_that_never_left_a_collapsed_body_earns_nothing() {
+        assert_eq!(map_claim(true, true), MapClaim::None);
+    }
+
+    /// The CLOSE of a collapsed block. Minting a node of its own here instead would put
+    /// an empty-buffered node beside the summary line's, and a copy across the block
+    /// would then reconstruct the summary text the reader can see rather than the
+    /// block's full Markdown (rubric 2.8i).
+    #[test]
+    fn the_event_that_closes_a_collapsed_block_widens_the_opening() {
+        assert_eq!(map_claim(true, false), MapClaim::WidenOpening);
+    }
+
+    /// **Asymmetric on purpose, and this is the case that says so.** An event that
+    /// ARRIVES outside a collapsed body earns a node whatever happened after it — a
+    /// block OPENING is an event whose summary the reader can see. Treating the two
+    /// directions alike would deny that summary line a node of its own.
+    #[test]
+    fn an_event_that_arrives_outside_a_collapsed_body_always_earns_a_node() {
+        assert_eq!(map_claim(false, false), MapClaim::OwnNode);
+        assert_eq!(
+            map_claim(false, true),
+            MapClaim::OwnNode,
+            "including the one that OPENS a collapsed block"
+        );
+    }
+}
+
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
     use super::build_render_products;
@@ -2095,7 +2174,14 @@ mod gtk_integration_tests {
     #[gtktest::test]
     fn annotation_refresh_updates_tags_in_place_without_a_buffer_swap() {
         // Initial render WITHOUT the annotation.
-        let pane = crate::preview::render("the earth is flat ok", None, 1.0, false);
+        let pane = crate::preview::render(
+            "the earth is flat ok",
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+            0,
+        );
         let sw = pane
             .downcast::<gtk::Overlay>()
             .expect("preview pane is a GtkOverlay")
@@ -3787,7 +3873,7 @@ mod gtk_integration_tests {
 
         // Open only the FIRST. The second must be untouched.
         let mut folds = crate::fold::FoldState::default();
-        folds.toggle(crate::fold::FoldKey::from_source_offset(spans[0].start));
+        folds.toggle(spans[0].fold_key());
         let products = super::build_render_products_with_theme(
             &md,
             None,
@@ -3804,6 +3890,69 @@ mod gtk_integration_tests {
         assert!(
             !slice.contains("TAILMARKER"),
             "the other one does not: {slice:?}"
+        );
+
+        // **The other half of the name, which used to be absent from the fixture**
+        // (F-AUD-202): NESTED blocks. An inner disclosure's state is its own, and
+        // re-expanding an outer one restores it rather than resetting it.
+        // Same trick as the siblings above: the marker sits past the collapsed
+        // preview's character limit, so its absence means genuinely collapsed rather
+        // than merely truncated.
+        let inner_body = format!("inner {}INNERMARKER", "filler ".repeat(15));
+        let outer_lead = format!("outer {}OUTERMARKER", "pad ".repeat(20));
+        let md = &format!(
+            "<details open>\n<summary>Outer</summary>\n\n\
+             {outer_lead}\n\n\
+             <details>\n<summary>Inner</summary>\n\n{inner_body}\n\n</details>\n\n\
+             </details>\n"
+        );
+        let spans = crate::renderer::disclosure::scan_document(md);
+        assert_eq!(spans.len(), 2, "an outer and an inner: {spans:?}");
+        let (outer, inner) = (spans[0].fold_key(), spans[1].fold_key());
+        assert_ne!(outer, inner, "two blocks, two keys");
+
+        let render = |folds: &crate::fold::FoldState| {
+            buffer_slice(
+                &super::build_render_products_with_theme(
+                    md,
+                    None,
+                    1.0,
+                    false,
+                    crate::theme::active(),
+                    folds,
+                )
+                .buf,
+            )
+        };
+
+        // Outer open (the document says so), inner closed (the document says so).
+        let mut folds = crate::fold::FoldState::default();
+        let slice = render(&folds);
+        assert!(slice.contains("OUTERMARKER"), "outer is open: {slice:?}");
+        assert!(
+            !slice.contains("INNERMARKER"),
+            "inner is closed, independently: {slice:?}"
+        );
+
+        // Open the inner. Only the inner changes.
+        folds.toggle(inner);
+        let slice = render(&folds);
+        assert!(slice.contains("INNERMARKER"), "inner opened: {slice:?}");
+        assert!(slice.contains("OUTERMARKER"), "outer untouched: {slice:?}");
+
+        // Collapse the outer: the inner draws nothing at all, not even its summary.
+        folds.toggle(outer);
+        let slice = render(&folds);
+        assert!(!slice.contains("OUTERMARKER"), "outer collapsed: {slice:?}");
+        assert!(!slice.contains("INNERMARKER"), "and with it the inner");
+
+        // Re-expand the outer. The inner is open again because THAT is the state the
+        // reader left it in — a reset would show the summary and hide the marker.
+        folds.toggle(outer);
+        let slice = render(&folds);
+        assert!(
+            slice.contains("INNERMARKER"),
+            "the inner's own prior state survived its ancestor's round trip: {slice:?}"
         );
     }
 
@@ -4134,6 +4283,220 @@ mod gtk_integration_tests {
                 .collect::<Vec<_>>(),
             vec![true],
             "an ordinary disclosure still splices"
+        );
+    }
+
+    /// A single-colour PNG of the given size: small on disk, large in memory, which is
+    /// the whole shape of a decompression bomb.
+    fn single_colour_png(width: i32, height: i32) -> Vec<u8> {
+        let pixbuf =
+            gtk::gdk_pixbuf::Pixbuf::new(gtk::gdk_pixbuf::Colorspace::Rgb, false, 8, width, height)
+                .expect("allocate the fixture");
+        pixbuf.fill(0x336699ff);
+        pixbuf.save_to_bufferv("png", &[]).expect("encode")
+    }
+
+    /// The two pieces the REMOTE arm composes, exercised on their own.
+    ///
+    /// **Stated rather than implied: the remote arm's wiring is not driven end to end
+    /// here, because that needs a network.** What it adds over the local arm is exactly
+    /// this pair — the shared byte probe reading a header, and the cap refusing what it
+    /// read — and the three lines that compose them are in view at the call site. The
+    /// local arm's own test drives the whole path, so the composition is exercised;
+    /// this pins the half the local arm cannot reach, which is the BYTE probe.
+    #[gtktest::test]
+    fn the_shared_byte_probe_and_the_cap_agree_about_an_oversized_image() {
+        let bomb = single_colour_png(9000, 9000);
+        assert!(
+            bomb.len() < crate::limits::MAX_REMOTE_IMAGE_BYTES,
+            "precondition: inside the transfer cap, which is why the transfer cap \
+             cannot be the thing that refuses it"
+        );
+        let (w, h) = crate::sprite::probe_pixel_size(&bomb).expect("the header is read");
+        assert_eq!((w, h), (9000, 9000), "the probe reads the declared size");
+        assert!(
+            !crate::limits::image_pixels_within_cap(w, h),
+            "and the cap refuses it"
+        );
+
+        let small = single_colour_png(32, 32);
+        let (w, h) = crate::sprite::probe_pixel_size(&small).expect("the header is read");
+        assert!(
+            crate::limits::image_pixels_within_cap(w, h),
+            "while an ordinary image is admitted — without which this would pass on a \
+             cap of zero"
+        );
+    }
+
+    /// **F-SEC-209: a fold key is an offset into the CLEANED text, and a consumer that
+    /// scans the raw source is comparing two coordinate systems.**
+    ///
+    /// `foldreveal` did. Its key lookup then found no span, and its diverged-key
+    /// fallback FLIPPED the fold — closing a block the reader had just asked to see,
+    /// which is the exact inversion of what a reveal is for.
+    ///
+    /// The fixture puts the annotation ABOVE the disclosure, and that is the whole
+    /// design of it: with the annotation BELOW, the raw and cleaned offsets of the
+    /// block agree and this test passes against the unfixed code. The first assertion
+    /// states that precondition rather than assuming it.
+    #[gtktest::test]
+    fn a_disclosure_below_an_annotation_is_keyed_in_the_cleaned_space() {
+        const MD: &str = concat!(
+            "A paragraph with {==a claim==}{>>and a note about it<<} in it.\n\n",
+            "<details>\n<summary>S</summary>\n\nthe body\n\n</details>\n"
+        );
+        let raw = crate::renderer::disclosure::scan_document(MD);
+        let cleaned_text =
+            crate::annotate::extract(crate::renderer::NormalizedMd::new(MD).as_str()).cleaned;
+        let cleaned = crate::renderer::disclosure::scan_document(&cleaned_text);
+        assert_eq!(raw.len(), 1);
+        assert_eq!(cleaned.len(), 1);
+        assert_ne!(
+            raw[0].fold_key(),
+            cleaned[0].fold_key(),
+            "precondition: the annotation above the block really does move its offset — \
+             with the annotation BELOW it, both spaces agree and this proves nothing"
+        );
+
+        let products = build_render_products(MD, None, 1.0, false);
+        let extents = &products.maps.disclosure_extents;
+        assert_eq!(extents.len(), 1, "one disclosure was drawn");
+        assert_eq!(
+            extents[0].key,
+            cleaned[0].fold_key(),
+            "the key a render mints is the CLEANED offset — so a consumer that resolves \
+             it must scan the cleaned text, which is what `TabState::previewed_cleaned` \
+             is for"
+        );
+    }
+
+    /// **F-SEC-206.** A document image had no decoded-pixel bound at all, while the
+    /// project's own sprite path refused one on every theme asset — the
+    /// decompression-bomb gate applied to our content and not to the untrusted kind.
+    ///
+    /// The fixture is the shape `sprite`'s own measurement used: a large single-colour
+    /// PNG, which compresses to a few hundred kilobytes (inside every byte cap) and
+    /// decodes to hundreds of megabytes. Built here rather than checked in, because a
+    /// file whose whole point is that it is small on disk and enormous in memory is a
+    /// thing to generate rather than to ship.
+    ///
+    /// **Deliberately only just over the cap** (81 M pixels against 67 M) rather than
+    /// the 400 M-pixel bomb `limits` records. The mutation this test has to survive is
+    /// "delete the gate", and under that mutation the fixture is really decoded — so
+    /// the fixture's size is the price of the test being able to fail, and the
+    /// measured bomb's price is 1.6 GB.
+    #[gtktest::test]
+    fn a_document_image_that_decodes_past_the_cap_is_refused() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        // Canonicalised because the containment gate does: on a host where the temp
+        // root is a symlink, an uncanonicalised base makes every image Refused and the
+        // whole test vacuous.
+        let base = dir
+            .path()
+            .canonicalize()
+            .expect("canonicalise the scratch directory");
+
+        for (name, w, h) in [("small.png", 32, 32), ("bomb.png", 9000, 9000)] {
+            std::fs::File::create(base.join(name))
+                .and_then(|mut f| f.write_all(&single_colour_png(w, h)))
+                .expect("write the fixture");
+        }
+        let on_disk = std::fs::metadata(base.join("bomb.png"))
+            .map(|m| m.len())
+            .unwrap_or(u64::MAX);
+        assert!(
+            on_disk < crate::limits::MAX_REMOTE_IMAGE_BYTES as u64,
+            "precondition: the fixture is INSIDE the byte cap ({on_disk} bytes), which \
+             is the whole point — one the byte cap already refuses would prove nothing"
+        );
+
+        let products = build_render_products(
+            "![small](small.png)\n\n![bomb](bomb.png)\n",
+            Some(&base),
+            1.0,
+            false,
+        );
+        // `image_tints` carries one entry per image the render ACTUALLY drew — the
+        // anchored widget is an `Overlay` wrapping the `Picture`, so a
+        // `downcast_ref::<Picture>` over `anchored` finds none and would pass
+        // vacuously. (Measured: it did.)
+        assert_eq!(
+            products.image_tints.len(),
+            1,
+            "the ordinary image renders and the oversized one does not — ONE picture, \
+             not two and not zero: a fixture that rendered neither would satisfy a bare \
+             `< 2` while proving nothing at all"
+        );
+    }
+
+    /// **F-SEC-205.** The collapse mechanism's contract is that a hidden body's events
+    /// do not reach the buffer; raw-HTML events are exempted from that suppression
+    /// ONLY so the `</details>` which ends it can arrive. That exemption reached the
+    /// image replay, which had no gate of its own — so a raw-HTML `<img>` inside a
+    /// collapsed block was resolved, a remote one FETCHED with "Show Unsafe Images" on,
+    /// and a local one anchored visibly inside a region drawn as nothing.
+    ///
+    /// **Both halves are asserted, and the second is why.** A buffer-only assertion
+    /// passes on a build that suppresses the anchor and still fetches — which is the
+    /// worse half: the fold state is a privacy signal, and a tracking pixel behind a
+    /// fold the reader deliberately did not open reports back anyway. The fetch half is
+    /// read off the shipped cache: a fetch that HAPPENED leaves a negative-cache
+    /// verdict for the URI, so a later probe would not call its own closure. The URI is
+    /// unique per run because that cache is process-wide.
+    #[gtktest::test]
+    fn a_collapsed_body_neither_anchors_nor_fetches_its_raw_html_images() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        // Port 1 on loopback refuses instantly, so a build that DOES fetch fails this
+        // test quickly rather than hanging on a timeout.
+        let uri = format!(
+            "https://127.0.0.1:1/{}.png",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        );
+        let md = format!("<details>\n<summary>S</summary>\n\n<img src=\"{uri}\">\n\n</details>\n");
+        // `allow_unsafe_images` ON: the point is that the fold, not the setting, is what
+        // stops the request.
+        let products = build_render_products(&md, None, 1.0, true);
+
+        // Counted against the SAME document with the image line removed, rather than
+        // against zero: the summary line anchors the toggle, so an absolute count would
+        // be a fixture constant. This also catches the broken-image PLACEHOLDER, which
+        // a `Picture`-only count would let through — an unresolvable image inside a
+        // closed block must draw nothing either.
+        let baseline = build_render_products(
+            "<details>\n<summary>S</summary>\n\nplain body\n\n</details>\n",
+            None,
+            1.0,
+            true,
+        );
+        assert!(
+            products.image_tints.is_empty(),
+            "a collapsed body draws no image"
+        );
+        assert_eq!(
+            products.anchored.len(),
+            baseline.anchored.len(),
+            "and anchors nothing for it either — not a picture and not a broken-image \
+             PLACEHOLDER, which `image_tints` alone would not catch: {:?}",
+            buffer_slice(&products.buf)
+        );
+
+        let asked = Rc::new(Cell::new(false));
+        let probe = Rc::clone(&asked);
+        let _ = crate::imagecache::get_or_fetch_at(&uri, std::time::Instant::now(), move || {
+            probe.set(true);
+            None
+        });
+        assert!(
+            asked.get(),
+            "the render left a cache verdict for {uri}, so it reached the network path \
+             for content the reader has closed"
         );
     }
 

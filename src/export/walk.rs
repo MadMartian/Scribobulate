@@ -54,6 +54,19 @@ pub(super) struct Builder<'a> {
     /// Source range of the event being handled, so a raw-HTML block's own start offset
     /// is available where its disclosure frames are applied.
     event_src: std::ops::Range<usize>,
+    /// Is a `Tag::HtmlBlock` open, and the block's text so far.
+    ///
+    /// **The block is scanned once, when it CLOSES** — mirroring `renderer::end`'s
+    /// `html_acc`, and for the reason that makes the two sinks comparable at all.
+    /// pulldown-cmark emits a block's content as one `Event::Html` **per source
+    /// line**, and `rawhtml`'s lexer carries per-call state (the suppressor stack, the
+    /// summary flag, the raw-text cursor). Scanning line by line reset all three at
+    /// every newline, so an element whose open and close tags sat on different lines
+    /// lost its suppression here while the preview kept it: a `<script>` written the
+    /// way everyone writes one reached both exported artefacts as visible prose
+    /// (F-AP-B-201). All three walks now scan byte-identical input.
+    in_html_block: bool,
+    html_acc: String,
     /// Disclosure tags seen inside the raw-HTML block currently open, applied when
     /// that block ENDS.
     ///
@@ -67,6 +80,39 @@ pub(super) struct Builder<'a> {
     /// `~~ … ~~` fence wrapping other inline markup exports struck rather than as
     /// two literal `~~` — Document Rendering CAM row 17 (exports as it renders).
     scripts: BlockScripts,
+}
+
+/// The label an UNCLOSED `<details>` renders as an ordinary line, and the index just
+/// past the tags that supplied it.
+///
+/// Scans forward only to the `</summary>` that belongs to this tag — a `<details>` or
+/// `</details>` ends the search, so an unclosed block never borrows a sibling's label.
+/// With no `<summary>` of its own it takes the same default the preview applies.
+fn unclosed_label(
+    tags: &[crate::renderer::disclosure::DetailsTag],
+    from: usize,
+) -> (String, usize) {
+    use crate::renderer::disclosure::DetailsTag;
+    let mut label = None;
+    let mut i = from;
+    while i < tags.len() {
+        match &tags[i] {
+            DetailsTag::SummaryText(text) => label = Some(text.clone()),
+            DetailsTag::SummaryClose => {
+                i += 1;
+                break;
+            }
+            DetailsTag::SummaryOpen => {}
+            DetailsTag::DetailsOpen { .. } | DetailsTag::DetailsClose | DetailsTag::Text { .. } => {
+                break
+            }
+        }
+        i += 1;
+    }
+    (
+        label.unwrap_or_else(|| crate::renderer::DEFAULT_SUMMARY_LABEL.to_string()),
+        i,
+    )
 }
 
 /// A construct whose end event closes a frame.
@@ -141,6 +187,8 @@ impl<'a> Builder<'a> {
             disclosures,
             disclosure_cursor: crate::renderer::disclosure::SpanCursor::default(),
             event_src: 0..0,
+            in_html_block: false,
+            html_acc: String::new(),
             pending_details: Vec::new(),
             has_unembedded_remote: false,
         }
@@ -232,7 +280,11 @@ impl<'a> Builder<'a> {
             // the page the preview never showed) and never passed through (that would
             // put an untrusted document's markup into a file the reader is about to
             // send). TDD 25.4.
-            Event::Html(h) => self.html_block(&h),
+            Event::Html(h) => {
+                if self.in_html_block {
+                    self.html_acc.push_str(&h);
+                }
+            }
             // INLINE raw HTML takes the image scanner alone, matching the preview's
             // split for the same reason: `disclosure::scan_document` indexes block
             // spans only, so a `<details>` a paragraph merely mentions would open a
@@ -385,9 +437,14 @@ impl<'a> Builder<'a> {
             // silently absent from every exported artefact while the file still opens
             // and still looks finished — CAM Document Rendering row 17's exact failure.
 
-            // Raw HTML's content reaches the sink through `html()`, driven by the
-            // `Event::Html` lines inside this block rather than by the block tag.
-            Tag::HtmlBlock => self.open.push(Open::Transparent),
+            // Raw HTML's content is ACCUMULATED here and scanned once at the block's
+            // close — see `html_acc`. Cleared rather than assumed empty, so a block
+            // that ended abnormally cannot bleed its bytes into the next one.
+            Tag::HtmlBlock => {
+                self.in_html_block = true;
+                self.html_acc.clear();
+                self.open.push(Open::Transparent);
+            }
 
             // The tight constructs this crate scans itself: pulldown never emits them
             // (disabled in `md_options`) and they arrive as plain `Text`.
@@ -416,6 +473,10 @@ impl<'a> Builder<'a> {
         // applied after that, where they nest against the document's blocks rather
         // than against the block that spelled them.
         let details = (tag == TagEnd::HtmlBlock).then(|| {
+            // The block's tags are complete only NOW, so this is where it is scanned.
+            self.in_html_block = false;
+            let html = std::mem::take(&mut self.html_acc);
+            self.html_block(&html);
             (
                 self.event_src.start,
                 std::mem::take(&mut self.pending_details),
@@ -555,13 +616,34 @@ impl<'a> Builder<'a> {
         tags: Vec<crate::renderer::disclosure::DetailsTag>,
     ) {
         use crate::renderer::disclosure::DetailsTag;
-        for tag in tags {
+        let mut i = 0;
+        while i < tags.len() {
+            let tag = tags[i].clone();
+            i += 1;
             match tag {
-                DetailsTag::DetailsOpen { open } => {
+                DetailsTag::DetailsOpen { open, .. } => {
                     let closed = self
                         .disclosure_cursor
                         .opening_is_closed(&self.disclosures, block_start);
                     if !closed {
+                        // **The label is authored content and survives; only the
+                        // grouping is refused** — the same recovery the preview
+                        // applies (`renderer::start`, rubric 2.26d). Dropping the
+                        // whole construct lost the reader's own words from the
+                        // artefact while the pane still showed them (F-AP-B-203).
+                        //
+                        // Read ahead for it rather than waiting for `SummaryText`:
+                        // there is no frame for that arm to write onto, and the
+                        // consumed tags must not then also reach it.
+                        let (label, next) = unclosed_label(&tags, i);
+                        i = next;
+                        self.flush_implicit();
+                        let start = self.rendered;
+                        self.rendered += label.chars().count() as i32;
+                        self.push_block(Block::Paragraph(vec![Inline::Text {
+                            text: label,
+                            span: (start, self.rendered),
+                        }]));
                         continue;
                     }
                     self.flush_implicit();

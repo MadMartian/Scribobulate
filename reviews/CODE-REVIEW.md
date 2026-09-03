@@ -1,52 +1,118 @@
 # Consolidated Code Review: `feature/details-disclosure` — Scribobulate
 
 **Branch:** `feature/details-disclosure`
-**Last updated:** 2026-09-01 (Round 1)
-**Review scope:** `363790e..c0e1c0f` — 114 files, +17168 / −1270. The feature is
-squashed into `ad3dd34`; `c0e1c0f` retires the plan.
-**Requirements source:** `sdd/PLAN.details-disclosure.md`, deleted by `c0e1c0f` and
-preserved for this review at `docs/PLAN.details-disclosure.retired.md`.
+**Last updated:** 2026-09-02 (Round 2)
+**Review scope:** `363790e..0fcd25b` — full branch, 120 files, +19,213 / −1,942. Every
+citation below is pinned to **`0fcd25b`** via `git show`, never to the working tree.
+**Requirements source:** `sdd/PLAN.details-disclosure.md`, deleted by `c0e1c0f` as part of
+its own retirement. Recover it with `git show c0e1c0f^:sdd/PLAN.details-disclosure.md`.
 
-**Panel:** 6 reviewers at ×1 (operator-capped), across 13 conceptual groups with
-alternating file order — spec-compliance, security, DRY/abstraction, anti-pattern,
-testability, link-integrity. Plus the orchestrator's own gate runs.
+**Panel:** 10 reviewers at ×2 (operator-authorised), split across a core-rendering half and
+an integration/infrastructure half, with file order alternating within each pair and
+flipping across reviewer types so positional attention bias cancels rather than compounds.
+Security and link integrity ran ×1 over the whole branch. Plus two nitpick scorers, one
+adversarial spot-check auditor, and a gate run on a detached clone.
 
-**Verdict: NOT PASS.** No High findings remain open — all four are ✅ DONE. The Medium,
-Low and Tidy tables are the outstanding work; the Tidy table is terminal (optional).
+**Verdict: NOT PASS.** 8 High and 27 Medium are open. No Critical.
 
-**Round-1 correction (post spot-check audit):** F-GATE-001 has been **WITHDRAWN** as a
-false positive of the orchestrator's own making — see [Withdrawn](#-withdrawn).
-F-AP-007 promoted Medium → High. F-AP-006 and F-013 demoted to Low. F-003's export
-mechanism corrected. F-014 and F-GATE-003 added to the Medium table, having been cited
-but never tabled.
+---
 
-> **Tree-state warning.** Every line number below is verified against **`HEAD` =
-> `c0e1c0f`** via `git show HEAD:<path>`, not against the working tree. At the time of
-> writing, `linux` holds uncommitted changes in `sdd/TDD.md`, `src/preview/css.rs`,
-> `src/preview/mod.rs`, `src/widgets/disclosure.rs`, `src/widgets/table/mod.rs` and
-> `tests/MANUAL-TEST.md`. Findings citing those six files may already be stale — they
-> are marked ⚠ below and must be re-verified against the next commit.
+## 🛠 Mitigation status (developer, in progress)
+
+Each item marked **✅ DONE** below carries the commit that closed it. Every commit ran
+the full pipeline green, both coverage floors held, and every new guard is
+mutation-tested — reverting the fix reddens exactly the test written for it.
+
+| Commit | Batch | Closes |
+|---|---|---|
+| `2525be4` | One raw-HTML lexer read by all three walks | F-SEC-201, F-SEC-202, F-SEC-203, F-SEC-210, F-AP-B-201, F-SEC-204, F-TEST-A-011 |
+| `8d848be` | One identity per `<details>`; the export keeps the label | F-TEST-B-005, F-AUD-201, F-AP-B-203, F-AUD-202 |
+| `cc31b7b` | The splice's region carries the full walk's state | F-SPEC-A-002, F-AP2-006, F-TEST-A-001, F-AP2-003, F-AP2-004, F-AP2-009, F-AP2-010, F-AP2-012, F-SPEC-A-003, F-DRY-103 |
+| `6b0e881` | A closed disclosure fetches nothing; document images get a pixel bound | F-SEC-205, F-SEC-206 |
+| `c3e951e` | The excursion deletion's residue; the wired rig asserts what it documents | F-SPEC-102, F-TEST-A-005, F-TEST-A-006, F-DRY-A-002, F-DRY-A-006 |
+| `03dca3f` | The theme guards check what they claim to | F-AP-B-301, F-AP-B-302, F-AP-B-303, F-AP-B-304, F-DRY-101, F-SPEC-101 |
+| `b54a9a9` | A fold's lifetime: which text resolves a key, and how long it means what it meant | F-AP-B-101, F-AP-B-104, F-AP-B-105, F-SEC-209, F-DRY-102, F-TEST-B-003 |
+| `5ffa32b` | Gates that report on the run they actually made | F-AP-B-102, F-AP-B-106, F-AP-B-107, F-AP-B-109, F-AP-B-110, F-AP-B-113, F-AP-B-306 (and F-AP-B-108 withdrawn) |
+| `c244077` | One comment per annotation; the settle test reads its own instrument | F-AP-B-204, F-TEST-A-002 |
+| `a78580e` | The Low sweep: one owner per rule, a guard for every claim | F-SPEC-103, F-SPEC-104, F-SPEC-105, F-DRY-106, F-DRY-108, F-DRY-109, F-DRY-A-004, F-DRY-A-005, F-DRY-A-011, F-AP2-008, F-SEC-207, F-SEC-208, F-TEST-A-003, F-TEST-A-008, F-TEST-A-009, F-TEST-B-004, F-TEST-B-006, F-TEST-B-007 (and F-DRY-107 rejected) |
+
+**All 8 High are closed.** Two findings turned out to be worse than filed and are worth
+re-reading before round 3:
+
+* **F-AP2-006** was a **live rendering defect**, not a test gap. The
+  generalised tag oracle went red on its first fixture: a container's margin tag is
+  applied at its `TagEnd`, and a region walk stops when the toggled block's frame pops,
+  so expanding a disclosure inside a blockquote wrote its body with no quote bar and no
+  left margin. The buffer text is character-identical either way, which is why every
+  text-level guard passed over it.
+* **F-TEST-A-001's first fix repeated the defect one level up.** An oracle comparing two
+  INSTALLED panes measures nothing about the install: both go through `adopt_maps`, so
+  deleting a field assignment there changes both sides identically. Measured, on two
+  separate field drops. The map half now compares against a fresh BUILD.
+
+**Every High, every Medium and every Low is now closed** — 8 of 8 High; 26 of 27 Medium
+fixed with F-AP-B-108 withdrawn; the Low table swept, with F-DRY-107 assessed and
+rejected. Both push-backs carry their reasoning at the code, not only here.
+
+**F-DRY-107, rejected.** Carrying `CollapsedSite`'s chain on `CollapsedBlock` does not
+do what the finding wants, twice over: that chain is of collapsed ANCESTORS, and a block
+reaching that record has none — an ancestor being collapsed is exactly what suppresses
+its summary line — so it would always be `[self]`. Recording the nested blocks instead,
+which the renderer could do, puts their text in the list twice, and find's hidden-match
+COUNT reads exactly that range, so the label would report five matches for three. The
+re-entrant resume is bounded by nesting depth and each pass strictly reduces it. Recorded
+on `CollapsedBlock`'s own rustdoc.
+
+**One finding is pushed back on rather than fixed. F-AP-B-108 is a false positive**, and
+the measurement is short enough to repeat: `cargo llvm-cov report --features
+gtk-integration-tests` exits with `invalid option '--features' for subcommand 'report'`,
+and the flagless report over a feature-enabled run returns the full 161-file set rather
+than a unit-only one — `report` renders whatever profile data and object list the
+preceding RUN left behind. The concern's shape was right; this tool has no second
+configuration to disagree with. The reasoning is recorded at `measured_scope` in
+`scripts/coverage.sh` so nobody re-derives it.
+
+---
+
+**Round 1's ledger was checked, not trusted.** All 52 Round-1 findings were marked ✅ DONE
+by the developer. This round verified each against `0fcd25b`. **41 hold and are closed.**
+Eleven do not, and their remainders are open findings below.
 
 ---
 
 ## 🔒 Security Review
 
-The branch's central security thesis — that `<details>`/`<summary>` can join the
-raw-HTML allowlist without widening what is *trusted* — **holds at the design level
-and at every sink**. Export escaping, the URL-scheme gate in front of the image cache,
-the unclosed-`<details>` fix and collapsed-body suppression all traced clean, across
-19 recorded attack surfaces.
+**The branch's central security thesis holds. The guard implementing it does not.**
 
-What does **not** hold is the nesting guard that the plan itself calls *"the whole
-security content of this change"*. It is bypassable two ways (**F-001**, **F-010**),
-both reproduced against the shipped code by driving the extracted function
-out-of-tree. Blast radius is bounded — a `GtkTextView` with no HTML or JS engine, and
-the export sinks do not share the path — so the consequence is **content injection
-and spoofing in the rendered page, not execution**. That is why nothing here is
+The plan calls the raw-HTML nesting guard *"the whole security content of this change"*.
+The design around it is sound and unchanged: no HTML or JS engine, no scripting surface, no
+new URL position, every URL still through `links::resolve_image`'s scheme gate, and both
+export sinks escape unconditionally at a single `Inline::Text` arm. Nothing found this
+round can execute anything. Every leak below is therefore **content injection and spoofing
+in the rendered page, never execution** — the same ceiling Round 1 established. Nothing is
 Critical.
 
-No Critical findings. `unsafe` usage, panic paths on attacker-influenced values, and
-sprite/theme decode paths were traced and are clean.
+Round 1's three security fixes were re-tested by execution, not reading. **F-010
+CONFIRMED** — one shared quote-aware `tag_end`, and a tree-wide grep proves no third
+scanner survives. **F-SEC-004 CONFIRMED** — a real attribute iterator replaced the
+substring-plus-boundary rule. **F-013 CONFIRMED** — negative cache entries are now swept.
+The new lexer withstood roughly 45 hand-built attacks and a 400,000-case structured fuzz
+with no panics and correct run offsets throughout. `renderer/rawhtml/tags.rs` is a good
+module; its defects are in the *caller's* branch order, not in it.
+
+**F-001 is PARTIAL.** Both Round-1 reproductions are clean and the depth counter is
+genuinely gone. The replacement is bypassable three further ways — two created by the fix
+itself (**F-SEC-201**, **F-SEC-202**) and one that goes around it entirely
+(**F-SEC-210**). Separately, a collapsed body still fetches images (**F-SEC-205**).
+
+**One pattern accounts for most of this round.** Round 1's F-003 was two walks over one
+string that disagreed. F-001's fix hardened *one* of those two walks and left the other
+alone, so `literal_text_runs` and `scan_disclosure_tags` now give different answers about
+the same bytes (**F-SEC-210**). **F-AP-B-201** is the same shape one level down: the cursor
+*was* correctly unified into a single `SpanCursor`, and what *feeds* it was not. Each
+mitigation fixed the instance it was shown and left the species alive. The remedy worth
+considering is not another instance fix but a shared-input discipline: every walk over a
+raw-HTML fragment should take the same accumulated bytes through the same lexer.
 
 ---
 
@@ -58,337 +124,243 @@ None.
 
 ## 🟠 High
 
-### ✅ DONE — F-001 — `literal_text_runs`' nesting guard is defeated by any stray close tag, emitting a `<script>`'s text as page content
+Eight findings. Every one was **executed**, not traced — by the reviewer that filed it, and
+in six cases re-derived independently by the orchestrator or the spot-check auditor.
 
-*Found independently by **four** reviewers (F-SEC-001, F-SPEC-001, F-AP-001,
-F-TEST-001). Two rated it High; merged severity is High.*
+### F-AP-B-201 — ✅ DONE (2525be4) — The export scans raw HTML per `Event::Html`; the preview scans the accumulated block — a `<script>` or `<div>` body split across lines reaches the artefact as visible prose
 
-- **Location:** `src/renderer/rawhtml.rs:285-325`, decrement at `:313`
-- **What:** The suppression depth is a plain counter. **Any** token shaped `</…>`
-  decrements it, including one that closes nothing. Two `</x>` before the real
-  `</script>` drop the depth to 0 while the cursor is still inside the `<script>`, and
-  every run after that is emitted. `saturating_sub` is what makes it work: the counter
-  cannot go negative, so a stray close tag at depth 0 is free and one inside a
-  suppressed element is a full escape.
-- **Why it matters:** `rawhtml.rs`'s own module doc (`:274-280`) states the invariant
-  this breaks — *"never inside a `<script>`, `<style>`, `<iframe>` … whose text stays
-  dropped exactly as before"*. The plan is blunter: *"Without that this stops being a
-  narrow widening and becomes a general one."* The existing test that claims to pin
-  this (`a_script_inside_an_allowlisted_block_contributes_no_text`, `:371-382`) passes
-  only because its fixture is well-formed.
-- **Reproduced** (function extracted verbatim, `rustc -O`, no repo edits):
-  ```
-  in : "<details>x<script>y</span>LEAK</script>z</details>"
-  out: ["x", "LEAK", "z"]
-  in : "<details>\n<summary>S</summary>\n<script>\n</b>\nalert(1)\n</script>\n</details>"
-  out: ["\nalert(1)\n"]
-  ```
-- **Fix:** Stop counting; track *which* element opened suppression. Push the tag NAME
-  onto a stack and pop only on a matching name — a stray `</b>` then becomes inert in
-  both directions, which is also what a browser does. Additionally, once suppression is
-  entered by a **raw-text element** (`script`, `style`, `textarea`, `title`, `xmp`),
-  nothing inside is markup: skip literally to the matching `</name`. That one rule
-  closes this and F-010's `<script foo="a>b">` variant together.
+- **Location:** `src/export/walk.rs:635-643` (the per-line scan at `:640-641`) against `src/renderer/end.rs:376-381` (the accumulate-then-scan at `:379`) and `src/renderer/disclosure.rs:307-312` (`acc.push_str(&t)` at `:310`) (grep-confirmed at `0fcd25b`)
+- **Also found as:** F-AP-B-202
+- **Round-1 relation:** remainder of F-SPEC-002, and the mechanism behind F-003's export half not being closed
+- **What:** pulldown-cmark emits a `Tag::HtmlBlock`'s content as one `Event::Html` **per source line**. The preview (`end.rs:377-380`) and `scan_document` (`disclosure.rs:307-312`) both accumulate the whole block and call `scan_disclosure_tags` **once** on it. `export::walk` calls it **once per line** (`walk.rs:641`) and concatenates the results. `rawhtml::literal_text_runs` carries three pieces of per-call state — the `suppressors` stack, the `in_summary` flag, and the `skip_raw_text` cursor. All three are reset at every line boundary in the export, so suppression the preview maintains across a block is lost the moment the element's open and close tags are on different lines.
+- **Why it matters:** Text inside an **unallowlisted** element — precisely what TDD 25.4 and `renderer/rawhtml/mod.rs`'s own doc say is dropped, "neither executed nor shown as literal text" — is pushed as a `Block::Paragraph` by `walk.rs:581-589` and reaches **both** exported artefacts as visible prose the preview never showed. It is HTML-escaped on the way out (`export/html.rs:270`), so this is not an injection hole; it is a sanitisation-posture break and a Document Rendering CAM row 17 divergence, in the direction that puts an untrusted document's hidden content into a file the user is about to send someone. Multi-line raw HTML is the normal way people write it. `<script>` on its own line over an indented body is the shape every hand-authored page uses.
+- **Evidence:** **EXECUTED — I ran this myself**, independently of the reader who first found it, against the real crate in a pinned `0fcd25b` extract (the repository itself was not modified; `git status --porcelain` is clean). I added one probe test beside the existing single-line one and ran `cargo test --lib probe_multiline -- --nocapture`: ``` [PROBE multiline script] "before\nalert(1)\nafter\n" [PROBE div in details] "S\nhidden text\n" thread '…probe_multiline_raw_html_is_dropped_too' panicked at src/export/doc.rs:408:13: "alert" survived the drop ``` Both inputs are the existing test's own fixtures with the only change being a line break: `"before\n\n<script>\nalert(1)\n</script>\n\nafter\n"` and `"<details>\n<summary>S</summary>\n<div>\nhidden text\n</div>\n</details>\n"`.
+- **Fix:** Give `walk::Builder` an `html_acc: String` mirroring the renderer's (`end.rs:379`): the `Event::Html` arm appends, and the `TagEnd::HtmlBlock` arm (`walk.rs:418-427`) takes the accumulated string and calls `scan_disclosure_tags` **once**. That makes all three walks — `scan_document`, the preview, the export — scan byte-identical input, which is what F-SPEC-002's rationale asked for and what F-003's cursor unification silently assumes. Then add the multi-line `<script>` and multi-line `<div>` fixtures to `doc.rs:399`.
 
----
+### F-SEC-201 — ✅ DONE (2525be4) — A self-closing raw-text element (`<script/>`) bypasses the nesting guard and emits the script's source as page content
 
-### ✅ DONE — F-002 — A region render that fails *after* the live delete reports the splice as a success, leaving the block deleted from the buffer
+- **Location:** `src/renderer/rawhtml/mod.rs:269-284` (the branch order; `else if lower.ends_with("/>") || is_void_name(name)` is the sole match at `:269`, `else if is_raw_text_name(name)` the sole match at `:273`)  (grep-confirmed at 0fcd25b)
+- **Also found as:** F-SPEC-A-001
+- **Round-1 relation:** remainder of F-001 (new mechanism introduced by its fix)
+- **What:** `literal_text_runs` tests the self-closing/void arm **before** the raw-text arm. A tag whose text ends `/>` is therefore treated as enclosing nothing, *whatever its name*. In HTML5 the self-closing flag on a non-void element is a parse error and is **not** acknowledged: `<script/>` enters script-data state exactly as `<script>` does. So the application and a browser disagree, and the application is the permissive one.
+- **Why it matters:** This is precisely the invariant `rawhtml/mod.rs:212-218` states — "never inside a `<script>`, `<style>`, `<iframe>` … whose text stays dropped exactly as before" — and the one the plan calls the whole security content of the change. An untrusted document (TDD 2.7) that writes `<script/>` instead of `<script>` gets its script source printed as page text in the preview, and (via F-SPEC-002's new route) escaped-but-visible in every exported HTML/PDF artefact. Content injection and spoofing, not execution.
+- **Evidence:** **EXECUTED** — functions extracted verbatim from `0fcd25b`, `rustc -O --edition 2021`, no repo edits: ``` in : "<details>a<script/>alert(1)</script>b</details>" out: ["a", "alert(1)", "b"] in : "<details>a<script src=x/>alert(1)</script>b</details>" out: ["a", "alert(1)", "b"] in : "<details>a<script/>alert(1)" (never closed) out: ["a", "alert(1)"] in : "<details>a<style/>body{color:red}</style>b</details>" out: ["a", "body{color:red}", "b"] in : "<details>a<textarea/>SECRET</textarea>b</details>" out: ["a", "SECRET", "b"] in : "<details>a<title/>LEAK</title>b</details>" out: ["a", "LEAK", "b"] in : "<details>a<xmp/>LEAK</xmp>b</details>" out: ["a", "LEAK", "b"] ``` The correctly-spelled forms are all clean, which is why the existing tests pass: `"<details>a<script>y</script >z</details>"` → `["a","z"]`, `"<details>a<SCRIPT>y</SCRIPT>z</details>"` → `["a","z"]`.
+- **Fix:** Swap the two arms — test `is_raw_text_name(name)` **before** `lower.ends_with("/>") || is_void_name(name)`. The two name sets are disjoint (no raw-text element is void), so nothing else moves. Add a test asserting `<script/>`, `<style/>`, `<textarea/>`, `<title/>` and `<xmp/>` each still suppress; that test fails today and is the mutation guard for the arm order, which is otherwise invisible.
 
-*Found by F-AP-002 (High) and F-TEST-004; the security reviewer independently reached
-the same site but could only file it as "Needs Verification" (V-SEC-001) because it
-could not construct a reaching input, and said so honestly.*
+### F-SEC-202 — ✅ DONE (2525be4) — An outer element's close tag truncates the suppressor stack, releasing text from inside an `<iframe>`/`<noembed>`/`<noframes>`/`<plaintext>`
 
-- **Location:** `src/preview/splice.rs:155` (the delete), `:316-325` (the recovery),
-  `:196` (the unconditional `Some`)
-- **What:** `splice()` deletes the volatile region from the live buffer at `:155`, then
-  calls `render_region`. If the seed walk never reaches `key`'s region,
-  `render_region` logs an error and substitutes **a fresh renderer that has written
-  nothing** (`live.unwrap_or_else(…)`). Control returns to `splice()`, which builds and
-  returns `Some(SpliceOutcome{…})` unconditionally. The caller sees `true` and **does
-  not fall back to a full re-render**.
-- **Why it matters:** This is the one place in the entire feature where a refusal
-  arrives *after* the buffer is touched, and it is converted into a success. Three
-  compounding consequences: (a) the disclosure's whole rendered region is gone from the
-  reader's page with no visible error; (b) PASS A's copymap, source map, heading sites
-  and link spans are installed wholesale at `install.rs:189-205` against a buffer now
-  short by the region's length, so **every offset below the splice is wrong** — exactly
-  the silent map-desync the module doc names as the route's only real risk; (c) copy,
-  find, outline navigation and annotation placement then all act on wrong positions.
-  `install.rs:47-53` promises the opposite in writing: *"Every `false` here is a
-  refusal made BEFORE the buffer is touched, so a fallback re-render is always
-  operating on an untouched pane."*
-- **Reachability, stated honestly (spot-check audit):** no reaching input is known, and
-  `copymap::debug_verify` catches the divergence in debug builds. This is a **latent
-  invariant violation**, not live corruption — worth the one-line fix at each site, but
-  it is not a fire. The reason it stays High is that the code's own contract asserts the
-  opposite in writing, and the failure it guards against is silent and total.
-- **Fix:** Make `render_region` return `Option<…>` and propagate the `None`. Because
-  the buffer is already mutated, `splice()` must not merely return `None` — return a
-  distinct `SpliceError::RegionLost` that `install::splice_disclosure` maps to `false`
-  *and* the caller treats as "buffer is now inconsistent, force a full re-render".
-  `foldsplice`'s existing `false` path already does the right thing; this is one line
-  at each site.
+- **Location:** `src/renderer/rawhtml/mod.rs:266-268` (the `rposition`/`truncate` pair; `suppressors.truncate(at)` is the sole match at `:267`) and `src/renderer/rawhtml/mod.rs:342-344` (`fn is_raw_text_name` is the sole match at `:342`)  (grep-confirmed at 0fcd25b)
+- **Round-1 relation:** remainder of F-001 (new mechanism introduced by its fix)
+- **What:** `is_raw_text_name` lists `script | style | textarea | title | xmp`. HTML5 also parses `iframe`, `noembed` and `noframes` with the generic raw-text algorithm (and `plaintext` swallows everything). Because those four are absent, they take the ordinary suppressor-stack path — and there, a close tag matching an element *further out* on the stack runs `suppressors.truncate(at)`, dropping every suppressor above it, including the raw-text one the cursor is still inside. Every subsequent run is emitted at depth 0.
+- **Why it matters:** `<iframe>` is one of the three elements the function's own doc comment (`:214-215`) names as staying dropped. A document only has to nest the iframe one level deep and write the outer element's close tag inside it. In a browser the `</div>` is iframe *content* and nothing is shown; here it releases the guard.
+- **Evidence:** **EXECUTED** (same harness): ``` in : "<details>a<div>b<iframe></div>LEAK</iframe>c</details>" out: ["a", "LEAK", "c"] in : "<details>a<p>b<iframe></p>LEAK</iframe>c</details>" out: ["a", "LEAK", "c"] in : "<details>a<div>b<noembed></div>LEAK</noembed>c</details>" out: ["a", "LEAK", "c"] in : "<details>a<div>b<noframes></div>LEAK</noframes>c</details>" out: ["a", "LEAK", "c"] in : "<details>a<div>b<plaintext></div>LEAK</plaintext>c</details>" out: ["a", "LEAK", "c"] ``` For contrast, the same shape with two ordinary elements — `"<details>a<div>b<span></div>LEAK</span>c</details>"` → `["a","LEAK","c"]` — is what a browser does too (the `</div>` implicitly closes the `<span>`), so the `truncate` rule is *not* wrong in general. The defect is specifically the four missing names. `<iframe/>` also leaks by F-SEC-201's route: `"<details>a<iframe/>LEAK</iframe>b</details>"` → `["a","LEAK","b"]`.
+- **Fix:** Add `"iframe" | "noembed" | "noframes" | "plaintext"` to `is_raw_text_name` (`:342-344`), which routes them through `skip_raw_text` and makes the `truncate` rule unreachable for them by construction. Update the doc comment at `:339-341` to say the list is a security boundary (unlike `is_void_name` at `:346-350`, whose incompleteness is explicitly conservative — an unlisted void element only suppresses *more*, an unlisted raw-text element suppresses *less*). Add the two reproductions above as tests.
 
----
+### F-SEC-203 — ✅ DONE (2525be4) — An HTML comment, doctype or processing instruction silently deletes every remaining literal-text run in the block
 
-### ✅ DONE — F-003 — An inline `<details>` in ordinary prose desynchronises the pre-scan cursor, injects a summary line mid-paragraph, and silently disables the feature for the rest of the document — in **both** sinks
+- **Location:** `src/renderer/rawhtml/mod.rs:262-284` (the `None =>` arm; `suppressors.push(name.to_owned())` is the sole match at `:283`), name derived by `tags::tag_name` (`src/renderer/rawhtml/tags.rs:67-77`)  (grep-confirmed at 0fcd25b)
+- **Also found as:** F-AP2-001, F-SPEC-A-004
+- **Round-1 relation:** new
+- **What:** `tag_end` stops at the first `>` outside quotes, so `<!-- note -->` lexes as a "tag" `<!-- note -->` and `tag_name` reads its element name as `!--`. It is neither void nor raw-text, so it is pushed onto `suppressors` — where it stays forever, because nothing ever emits a close tag named `!--`. Every literal-text run after the comment, to the end of the block, is dropped. The same happens for `<!DOCTYPE html>` (`!doctype`), `<![CDATA[…]]>` (`![cdata[`) and `<?php … ?>` (`?php`).
+- **Why it matters:** A comment inside an unspaced `<details>` is entirely ordinary in a hand-written document, and the failure is total and silent — the body simply is not there. This is the *conservative* direction (text is dropped, never shown), so it is not a sanitisation hole; it is content loss in the one construct rubric 2.26d exists to make lossless. It also suppresses the collapsed-preview and the summary in the shapes below.
+- **Evidence:** **EXECUTED** (same harness): ``` in : "<details>a<!-- note -->b</details>" out: ["a"] ("b" is gone) in : "<details>a<!-- c -->b<!-- d -->e</details>" out: ["a"] in : "<details>a<!DOCTYPE html>b</details>" out: ["a"] in : "<details>a<![CDATA[x]]>b</details>" out: ["a"] in : "<details>a<?php echo 1; ?>b</details>" out: ["a"] in : "<details><!-- x --><summary>S</summary>body</details>" out: [] ``` The last one also shows the interaction with `in_summary`: a comment before the summary suppresses the body outright.
+- **Fix:** Recognise the bogus-comment family before the suppressor push. A comment is `<!--` … `-->` (not `<!--` … first `>`), so `tag_end` is the wrong function for it: skip from `<!--` to the next `-->` (or end of block) and emit nothing, and treat a tag whose name starts `!` or `?` as enclosing nothing rather than opening a suppressor. Both are a few lines in the `None =>` arm. Add the five cases above as tests; today four of them pass vacuously because nothing asserts what *follows* the comment.
 
-*F-SEC-003, extended by the orchestrator to the export path (see below).*
+### F-SEC-205 — ✅ DONE (6b0e881) — A COLLAPSED disclosure body still resolves, fetches and anchors raw-HTML images
 
-- **Location:** `src/renderer/events.rs:213` → `src/renderer/start.rs:315-316, 411`;
-  cursor at `src/renderer/mod.rs:1013`; contradicted comment at
-  `src/renderer/disclosure.rs:247-251`; export path at `src/export/walk.rs:227, 404,
-  533-552`
-- **What:** `disclosure::scan_document` deliberately ignores `Event::InlineHtml`, and
-  justifies it in a comment: *"the renderer does not open a frame for one either, so
-  the two stay agreed by both declining it."* **The renderer does not decline it.**
-  `Event::InlineHtml(t) => self.feed_html(&t)` and `feed_html` now calls
-  `feed_disclosure_html` (new on this branch — on `master` it ran only the `<picture>`
-  scanner, which is why `events.rs:209-212` still says "Non-image HTML is dropped").
-  So an inline `<details>` pushes a frame that is never popped, unconditionally
-  advances `disclosures_seen` (`mod.rs:1013`), and falls through to the unconditional
-  `emit_pending_summary()` at `start.rs:411`.
-- **Consequences in the preview:** (a) the paragraph is split by two inserted newlines
-  and a spurious `Details` label appears mid-prose — content the document never
-  contained; (b) `disclosures_seen` is off by one for the rest of the document, so
-  every real `<details>` fails the offset check, logs an error, and renders
-  `foldable = false` — **the disclosure feature silently stops working below the inline
-  tag**; (c) the stale frame stays on `disclosure_stack` for the whole render.
-- **⚠ Consequence in the export — corrected by the spot-check audit.** The routing
-  trace is verified: `export/walk.rs:227` routes `Event::Html` **and
-  `Event::InlineHtml`** to `self.html()`, which pushes into `pending_details` (`:605`);
-  `:404` flushes on `TagEnd::HtmlBlock`; `apply_details` (`:533-552`) consumes
-  `disclosures[disclosures_seen]` with **no `span.start` cross-check and no
-  diagnostic** (that gap is F-011).
+- **Location:** `src/renderer/events.rs:36` (the raw-HTML exemption; `if self.inside_collapsed_body() && !is_raw_html(&ev) {` is the sole match), `src/renderer/end.rs:380` (`self.feed_html_block(&html);`, sole match), `src/renderer/start.rs:324-337` (`fn feed_picture_html` is the sole match at `:324`; `None => self.render_image_slot(&[src]),` the sole match at `:336`), `src/renderer/start.rs:664` (`fn render_image_slot`, sole match)  (grep-confirmed at 0fcd25b)
+- **Round-1 relation:** new (Round 1's security section recorded "collapsed-body suppression … traced clean")
+- **What:** `Renderer::process` suppresses a collapsed body by dropping events — with raw-HTML events as the one deliberate exception, because the `</details>` that ends the suppression is itself a raw-HTML event (`events.rs:29-37`). That exemption reaches `TagEnd::HtmlBlock` → `feed_html_block` → `feed_picture_html`, and **`feed_picture_html` has no `inside_collapsed_body()` gate**. `DetailsTag::Text` has one (`start.rs:410`) and `emit_pending_summary` has one (`start.rs:501`); the `<picture>`/`<img>` replay does not. So an `<img>`/`<picture>` written as raw HTML inside a collapsed body is resolved through `resolve_image`, loaded via `load_texture` (`start.rs:793` → `load_remote_texture` `:812` → the network) and anchored into the buffer via `anchor_image`.
+- **Why it matters:** Two distinct consequences. (a) **A network request fires for content the reader has closed.** With "Show Unsafe Images" on, a remote `<img>` inside a collapsed `<details>` is fetched — a tracking pixel that reports back from behind a fold the reader deliberately did not open. The reader's fold state is a privacy signal here and it is not being honoured. (b) **A local image renders visibly inside a collapsed region**, with no opt-in required (`resolve_image` admits any contained local path with `allow_unsafe_images = false`). The collapse mechanism's own contract — `events.rs:28-30`, "the events simply do not reach the buffer" — does not hold for this class of content. Markdown images (`![](…)`) are unaffected: `Event::Start(Tag::Image)` is not raw HTML, so `events.rs:36` drops it before `start_tag` sees it. The gap is specific to raw-HTML images, which are new territory for the collapse rule.
+- **Evidence:** The parse half is **EXECUTED** against real `pulldown-cmark` 0.13.4 with the project's own option set, showing that a blank-line-separated `<img>` inside a `<details>` arrives as four events, every one of which `is_raw_html` admits: ``` md = "<details>\n<summary>S</summary>\n\n<img src=\"https://evil.example/track.png\">\n\n</details>\n" Start(HtmlBlock) 0..31 <- is_raw_html Html("<details>\n") <- is_raw_html Html("<summary>S</summary>\n") <- is_raw_html End(HtmlBlock) 0..31 <- is_raw_html Start(HtmlBlock) 32..75 <- is_raw_html (the image block) Html("<img src=\"https://evil.example/track.png\">\n") End(HtmlBlock) 32..75 <- is_raw_html -> end.rs:380 feed_html_block Start(HtmlBlock) 76..87 / Html("</details>\n") / End(HtmlBlock) ``` The renderer half is `TRACED, NOT EXECUTED` — `end.rs:380` → `start.rs:299-302` → `start.rs:324-337` → `start.rs:664-668` → `start.rs:793` → `start.rs:812` is
+- **Fix:** Gate the image replay the same way the literal-text replay is gated. In `feed_picture_html` (`start.rs:324`), return early when `self.inside_collapsed_body()` — taking care to still honour `flush_open_picture`'s state machine so a `<picture>` group that straddles the collapse boundary cannot strand `picture_open`. Add a `#[gtk::test]` asserting that a collapsed body containing `<img src="…">` anchors no `GtkPicture`, and a display-free assertion that `resolve_image` is not reached for it (a counting fetch closure through `imagecache::get_or_fetch_at` makes the network half testable without a network). Per Universal rule 5: mutate the new gate and both assertions must go red — a buffer-only assertion would pass on a build that suppresses the anchor but still fetches.
 
-  **But the one-disclosure case is NOT corrupted**, contrary to this finding's first
-  draft. Because `pending_details` is not flushed until the next `TagEnd::HtmlBlock` —
-  which is the real block's own — the phantom `DetailsOpen` opens its frame at exactly
-  the point the real one would have, and the off-by-one cancels. *Do not write the
-  one-block regression test: it passes, and it will mislead you into discarding this
-  half of the finding.*
+### F-SEC-210 — ✅ DONE (2525be4) — `scan_disclosure_tags` walks tags inside a `<script>`, so script source becomes the disclosure's label and can open real disclosures — and `scan_image_tags` likewise lifts an `<img src>` out of script source into a live image candidate
 
-  **The real corruption needs two real disclosures below the prose mention**, where the
-  batched flush opens two nested frames at once:
+- **Location:** `src/renderer/disclosure.rs:109-156` (`while let Some(rel) = lower[i..].find('<')` is the sole match at `:109`; `let Some(end) = tag_end(html, start) else {` the sole match at `:113`)  (grep-confirmed at 0fcd25b)
+- **Also found as:** F-DRY-A-001, F-AP2-007, F-SPEC-A-005
+- **Round-1 relation:** new (second-order defect of F-001's fix — the fix hardened one of two walks over the same string)
+- **What:** `literal_text_runs` skips raw-text element content wholesale (`rawhtml/mod.rs:273-281`). `scan_disclosure_tags` walks the *same fragment* independently, one `<` at a time, and knows nothing about raw-text elements. So `<summary>`/`</summary>`/`<details>`/`</details>` written inside a `<script>` are recognised as real tags. The text between a `<summary>` and its `</summary>` is then lifted verbatim (`disclosure.rs:133`) and becomes `DetailsTag::SummaryText`.
+- **Why it matters:** Two consequences, both of which put a `<script>`'s source on the page: (a) the disclosure's **label** — the text the renderer writes onto the summary line (`renderer/start.rs:559`, `self.insert(&format!(" {label}"))`) and the toggle's accessible name and tooltip (`widgets/disclosure.rs:76` → `a11y::name`) — is text from inside a script; (b) a `<details>` inside a script opens a real, foldable disclosure. This is the same property F-001 was High for, reached by a different road, and the road that `literal_text_runs` was hardened to close. The label is also the one string in this feature that carries *raw markup* rather than escaped text: `SummaryText("a<script>alert(1)</script>b")` for the summary `<summary>a<script>alert(1)</script>b</summary>`. It is inert everywhere it lands today (`insert` is plain buffer text; `a11y::name` uses `set_tooltip_text`, not `set_tooltip_markup`; both export sinks escape at `export/html.rs:270` and `export/markup.rs:31`) — but the string is one `set_markup` away from GTK4Rs/AP-154.
+- **Evidence:** **EXECUTED** — `scan_disclosure_tags` extracted verbatim from `0fcd25b` alongside the real `literal_text_runs`/`tag_end`/`recognise_html_element`/`has_attr`: ``` in : "<details>\n<script>\n<summary>SCRIPT SOURCE AS LABEL</summary>\n</script>\n</details>" out: [DetailsOpen{open:false}, SummaryOpen, SummaryText("SCRIPT SOURCE AS LABEL"), SummaryClose, DetailsClose] in : "<details>a<script><details open></script>b</details>" out: [DetailsOpen{open:false}, Text{at:9,"a"}, DetailsOpen{open:true}, Text{at:41,"b"}, DetailsClose] <-- a second disclosure, authored inside a script in : "<details><summary>a<script>alert(1)</script>b</summary>x</details>" out: [..., SummaryText("a<script>alert(1)</script>b"), ...] <-- raw markup as the label ``` Note that `literal_text_runs` answers the first input with `[]` — the two walks over one string disagree, which is exactly the class Universal rule 4 flags.
+- **Fix:** Give the two walks one skip. The cheapest correct shape is to make the raw-text skip a `pub(crate)` helper in `rawhtml` (it already exists as `skip_raw_text`, `rawhtml/mod.rs:320`) and have `scan_disclosure_tags`'s loop consult `recognise_html_element` → `tags::tag_name` → `is_raw_text_name` and jump the cursor the same way, so an element `literal_text_runs` treats as opaque is opaque here too. Better still, have `scan_disclosure_tags` consume a single tag stream that `rawhtml` produces, so there is one tokenizer rather than one tokenizer and one re-implementation of its outer loop — which is the same "one owner" argument `rawhtml/mod.rs:9-16` already makes for the allowlist set itself. Add a test asserting that `<summary>` inside a `<script>` yields no `SummaryText`.
 
-  ```
-  flush at first real block: [DetailsOpen(inline), DetailsOpen(real#1), SummaryOpen, SummaryText("One"), SummaryClose]
-    DetailsOpen -> spans[0] closed=true -> OPEN frame (depth 1)
-    DetailsOpen -> spans[1] closed=true -> OPEN frame (depth 2)   <-- nests, does not skip
-    "One" -> innermost frame
-  </details>      -> closes only the INNER frame
-  <details open>  -> spans[2] = None -> closed=false -> SKIPPED
-    "Two" -> written to the still-open OUTER frame
-  ```
+### F-SPEC-A-002 — ✅ DONE (cc31b7b) — `RegionSeed` does not carry the two list-spacing flags, so expanding a `<details>` that opens a list item loses the region on every toggle
 
-  The artefact becomes **one** disclosure labelled `Two` whose body contains the whole
-  `One` disclosure *and* `BODY2` — a structural re-nesting — plus a lost `open="true"`,
-  because the outer frame took `open: false` from the phantom inline tag while the
-  source said `<details open>`. Document Rendering CAM row 17's failure by a new route.
+- **Location:** `src/renderer/mod.rs:388-421` (`InterBlock`, the seed's whole membership) against `src/renderer/mod.rs:444` (`list_item_open`) and `:447` (`list_first_item`); consumed at `src/renderer/start.rs:19-31` (`apply_lead_in`), set at `src/renderer/start.rs:96`  (grep-confirmed at 0fcd25b)
+- **Round-1 relation:** remainder of F-DRY-003 — the fix made the seed *be* `InterBlock`, but `InterBlock` is not in fact "everything the walk carries between blocks"
+- **What:** `RegionSeed(InterBlock)` (`mod.rs:799`) is captured and reapplied wholesale, and `InterBlock`'s own doc (`:375-386`) states *"Membership is the contract. A field that lives here is captured and reseeded; a field that does not is a deliberate exclusion."* Two inter-block spacing flags live on `Renderer` instead of `InterBlock` and carry no note marking them deliberate: `list_item_open` (`:444`) and `list_first_item` (`:447`). Both are read by `apply_lead_in` (`start.rs:20-25`) on every `Paragraph`, `List` and `Item`. A region render constructs a **fresh** `Renderer` (`regionwriter.rs:65`) and seeds only `InterBlock`, so both flags start `false`. When the region begins inside a list item whose first block is the disclosure, the full walk stands there with `list_item_open == true`, and the region walk with `false`: | walk | `list_item_open` | `inside_list` (`!inter.lists.is_empty()`, seeded) | `lead_in(Paragraph, ..)` | |---|---|---|---| | full / PASS A | `true` | `true` | `LeadIn::Nothing` | | region render | `false` | `true` | `LeadIn::Newline` → one extra `\n` |
+- **Why it matters:** This is precisely the divergence `preview/splice.rs`'s module doc names as *"the route's only real risk"* — *"a partial walk that does not seed them differs from a full render by up to two newlines at a region boundary."* The release guard added for F-AP-017 (`splice.rs:355-364`) does catch it, so the reader is not shown corrupted maps; the visible consequences are instead: 1. **TDD 2.26c** — *"a disclosure nested inside a container — a blockquote or a **list item** — renders and toggles there exactly as it does at top level"* — fails for this shape: the splice is refused as `RegionLost`, so the pane is re-rendered whole. 2. **TDD 2.26i** (*"a toggle does not make the document travel"*) fails with it: a whole-document re-render is exactly the visible excursion the splice exists to avoid, so the feature silently degrades to the behaviour it was built to replace. 3. Every such expand emits a `log::error!` whose text says *"this should be unreachable"* (`splice.rs:357-362`), which trains the next reader to distrust the message. Collapsing is unaffected — `render_region` breaks after `summary_tail` when `target_collapsed` (`splice.rs:423-428`), so no body event is processed — which makes the failure asymmetric and easy to miss by hand.
+- **Evidence:** - **EXECUTED** (event shape): a program linked against the repo's own prebuilt `libpulldown_cmark` rlib, with `md_options()` reproduced from `renderer/normalize.rs`, over `- <details>\n <summary>S</summary>\n\n body paragraph here\n\n </details>\n\nafter\n`: ``` 0..73 Start(List(None)) 0..73 Start(Item) 2..35 Start(HtmlBlock) 2..12 Html("<details>\n") 14..35 Html("<summary>S</summary>\n") 2..35 End(HtmlBlock) <-- summary emitted; seed captured here 38..58 Start(Paragraph) <-- first event the region walk processes ... ``` Nothing between `Start(Item)` and `Start(Paragraph)` clears `list_item_open`: `Tag::HtmlBlock` touches only `in_html_block`/`html_acc` (`start.rs:264-272`), and the only clears are `start.rs:48` (`Tag::Paragraph`) and `end.rs:143` (`TagEnd::Item`). - **TRACED, NOT EXECUTED** (the renderer arithmetic): `blockspacing::lead_in` (`blockspacing.rs:62-99`) is pure and fully re
+- **Fix:** Move `list_item_open` and `list_first_item` into `InterBlock` (`mod.rs:388-421`), beside `lists` and `item_starts`, and read them through `self.inter` in `apply_lead_in` and at `start.rs:48/68/75/96` and `end.rs:143`. That is mechanical and makes the struct's stated contract true. Then add a splice test whose fixture is a `<details>` as the **first block of a list item** (the fixture above will do) driven through `assert_splice_matches_full_render`, which will go red on today's code by one character and green after the move. If any renderer field is deliberately *not* seeded, say so at the field, as the `InterBlock` doc promises.
 
-  Two facts that widen the trigger surface: **the flush fires on any HTML block, not
-  any disclosure block** (`:404` is unconditional), so a stranded phantom is flushed by
-  the next unrelated raw-HTML block — a standalone `<img>` or `<picture>` on its own
-  line will do it; and an inline mention placed *after* the last real block corrupts
-  the preview but not the export at all, since the phantom is never flushed.
+### F-TEST-B-005 — ✅ DONE (8d848be) — No fixture or test contains two `<details>` in one raw-HTML block, and both would take the same `FoldKey`
 
-- **Trigger is not exotic:** any prose that mentions `<details>` mid-sentence without
-  backticks — this project's own release notes, or `sdd/TDD.md` prose rendered in the
-  app.
-- **Why High and not Critical:** the renderer's offset check fails safe. A phantom
-  frame can never be `foldable` (an inline event's `event_src.start` can never equal an
-  `HtmlBlock`'s `range.start`), so rubric 2.26d's "suppress every remaining event"
-  catastrophe is not reachable this way.
-- **Fix:** Make the renderer decline inline disclosure tags, matching the claim
-  `disclosure.rs:250` already makes. Split `feed_html`: `Event::InlineHtml` keeps the
-  `<picture>` scanner (which genuinely needs cross-event grouping) and skips both
-  `feed_disclosure_html` and `feed_html_literal_text`. Do the same in
-  `export::walk::html()`. Correct the stale comment at `events.rs:209-212`. Add a
-  regression test asserting `para <details> tail` renders as one paragraph with no
-  `Details` label, leaves a following real `<details>` foldable, **and** — using the
-  **two-block** fixture above, not a one-block one — exports with the correct
-  summary/body pairing and preserves `open`.
-
----
-
-### ✅ DONE — F-AP-007 — Fold keys are never cleared on the split-mode live-preview path, so typing silently changes which blocks are collapsed
-
-*Promoted Medium → High by the spot-check audit; the orchestrator accepts the argument.*
-
-- **Location:** `src/fold.rs:65` (`FoldKey` is a source byte offset), `TabState::set_source`
-  (the only clear, and not on the live-preview path)
-- **What:** A `FoldKey` is the source byte offset of a disclosure's opening raw-HTML
-  block. The only thing that clears the fold map is `set_source`, which the split-mode
-  live-preview path does not go through. So **every character typed above a
-  `<details>` moves its key**, and the map is never reconciled.
-- **Why High:** two content-visible outcomes. A collapsed block silently reverts to the
-  document default mid-typing, with the reading-position restore then firing against
-  the wrong geometry. Worse, a surviving key can coincide with a *different* block's
-  new start offset and collapse **the wrong block** — hiding content the reader never
-  asked to hide. That is the same class of harm `scan_document` exists to prevent,
-  arriving through the write path nobody re-checked.
-- **Why it outranks the other Highs on likelihood:** F-003 needs a document that
-  mentions `<details>` in prose. This needs **one keystroke in split mode**, which is
-  the application's primary editing surface.
-- **Fix:** Reconcile or invalidate the fold map on the live-preview re-render path.
-  Either re-key surviving folds against the new source offsets, or clear on any source
-  mutation and accept that a live edit resets fold state — the second is cheaper and
-  defensible, but it must be a decision, not an omission.
-
+- **Location:** `src/renderer/disclosure.rs:334-341` (`start: range.start,` grep-confirmed as the sole match at `:336`); consumed at `src/renderer/start.rs:358`, `src/window/foldreveal.rs:94`; fixture `tests/fixtures/disclosure.md`
+- **Round-1 relation:** new
+- **What:** A `<details>`'s identity is the source byte offset at which its *enclosing raw-HTML block* begins — `scan_document` records `start: range.start` for every `DetailsOpen` it finds in a block (`:336`), and the renderer keys the fold on the same value (`FoldKey::from_source_offset(self.event_src.start)` at `renderer/start.rs:358`, taken when the accumulated block is flushed at `renderer/end.rs:377-380`). Two `<details>` in one block therefore share one offset, one span `start`, and one `FoldKey`. No fixture and no test in the tree contains that shape: every `<details>` in `tests/fixtures/disclosure.md` is blank-line separated (lines 7, 31, 40, 47, 56, 61, 74, 132, 240, 246, 251 — verified with `cat -A`, each preceded by a blank line, so each is its own CommonMark type-6 block), and every inline `const MD` in the new tests (`window/find.rs:1859`, `window/outline_nav.rs:1040`, `window/livepreview.rs`'s `DOC`, `export/doc.rs`'s cases, `theme/tests/sinks.rs`) does the same.
+- **Why it matters:** The compact form — `<details><summary>a</summary>b</details>` on one line, or two adjacent `<details>` blocks with no blank line between them — is ordinary GitHub-flavoured Markdown and arrives in untrusted documents. Traced consequences of the shared key: collapsing one collapses both, because `FoldState` is keyed on the offset; `foldreveal.rs:94`'s `spans.iter().find(|s| s.start == key.source_offset())` returns the *first* match, so revealing the second block reads the first block's `open` attribute; and `find`'s hidden-hit list (`window/find.rs:365-380`) would emit two `Hidden` hits carrying the same key, so stepping onto the second reveals the first. None of these is caught by anything, and the whole apparatus around fold identity — `FoldKey`'s doc, the CAM row 11 story, TDD 2.26e's "siblings toggle independently" — is written as though the key is unique per block. The rubric 2.26e manual check drives siblings, but *spaced* siblings, which is the case that works.
+- **Evidence:** ``` $ git show 0fcd25b:src/renderer/disclosure.rs | sed -n '332,341p' DetailsTag::DetailsOpen { open } => { open_stack.push(spans.len()); spans.push(DisclosureSpan { start: range.start, ... $ git show 0fcd25b:tests/fixtures/disclosure.md | awk '/<details/{print NR}' 7 31 40 47 56 61 74 132 240 246 251 # every one blank-line separated ``` `TRACED, NOT EXECUTED` — I did not build the crate to observe the collision. The *fixture gap* is executed (the greps above); the consequence is traced through `scan_document` → `FoldKey` → `FoldState` → `foldreveal`/`find`.
+- **Fix:** Two steps, and the first is cheap enough to do regardless of what the second decides. (1) Add the shape to `tests/fixtures/disclosure.md` under a new "Two blocks, one raw-HTML block" heading (two `<details>` with no blank line between them, plus one compact single-line `<details>`), and add a unit test in `src/renderer/disclosure.rs`'s existing `mod tests` asserting what `scan_document` returns for it — that pins today's behaviour whichever way the team decides it should go, and it is the test that will fail the day someone changes the keying. (2) Decide the behaviour. If two blocks in one raw-HTML block should fold independently, `DisclosureSpan` needs a tiebreaker in its key — the tag's own offset within the block is already computed by `scan_disclosure_tags` (the `at` field the `DetailsTag::Text` arm uses at `:326`), so `FoldKey` could carry `range.start + at`. If they should not, say so in TDD 2.26e and make `scan_document` collapse them to one span deliberately rather than by arithmetic accident.
 ---
 
 ## 🟡 Medium
 
-33 findings (F-AP-007 promoted out to High; F-014 and F-GATE-003 added; F-AP-006 and
-F-013 demoted to Low by the spot-check audit but left in place here with a ⬇ marker so
-the merge history stays visible). Full argument, evidence and reproduction for each is in the per-reviewer
-files listed under **Evidence trail** below; the fix column here is the actionable
-summary.
+27 findings.
 
 | ID | Finding | Location | Proposed fix |
 |---|---|---|---|
-| **F-014** ✅ DONE | Coverage ratchet lowered rather than the gate fixed: `FLOOR` 82 → 80 | `scripts/coverage.sh:577`, rationale `:60-90` | **Operator decision, not a code change.** Documented and measured (82.09 → 80.65 unit-only; 94.84 with `gtk-integration-tests`), and the alternative was raised and declined. But the comment itself notes this is the *second* drop from one cause and that "the gate is the thing to fix, not the floor". Choose: (a) accept; (b) accept + split the gate into a unit floor and a GTK-integration floor so the next instance raises a number instead of lowering one; (c) require the extraction work before landing. <br>*also found as F-AP-023, F-GATE-002, F-TEST-011*  |
-| **F-GATE-003** ✅ DONE | `coverage.scope` gained 13 new modules but not three others created by the same branch | `scripts/coverage.scope` | `window/foldsplice.rs`, `window/foldreveal.rs`, `codeview/disclosurebands.rs` are absent — and `foldsplice.rs` is named in `coverage.sh`'s own floor-drop rationale, so it is in the numerator's story but not the scope list. State the rule that decided which new modules entered scope, then either add the three or record each exclusion by name in `IGNORE`, where it is visible to whoever reads the number. |
-| **F-AP-003** ✅ DONE | Every splice refusal is silent — including one whose own rustdoc says it is logged | `src/preview/splice.rs:140` and `:146`; | `log::debug!` at each refusal with its distinguishing reason ("no render data", "no preview pane", "view is not a CodePreviewView", "key absent from the previous render's extents", "key absent from PASS A"), and `log::error!` at `splice.rs:146` as the doc already promises. Add one `#[gtktest::test]`… |
-| **F-AP-004** ✅ DONE | `ReaderAnchor::capture` mutates the buffer before two refusal points, leaking a `GtkTextMark` per refused splice | `src/preview/splice/install.rs:75` (capture) → `:77-91` | Move `ReaderAnchor::capture` to *after* the `super::splice` call's refusal points are past — it cannot, because the anchor must be read from the pre-splice buffer. So instead: give `ReaderAnchor` a `Drop` that deletes its mark unless it was consumed, or (simpler and type-enforced) have `super::splic… |
-| **F-AP-005** ✅ DONE | Two overlapping fold toggles arm two independent settle-restores over one adjustment, with no generation token | `src/preview/splice/install.rs:97-99` and `:408-437`; | Give `CodePreviewView`'s `imp` a `Cell<u64>` settle generation. `after_scroll_settles` (or a thin wrapper in `install`) bumps it, captures the new value, and the timer closure returns `Break` without running `f` if the stored generation has moved on. Equivalently, store the pending `SourceId` in the… |
-| **F-AP-006** ⬇Low ✅ DONE | The disclosure toggle's deferred work strong-captures the `ApplicationWindow`; its sibling `foldreveal` weak-captures it | `src/preview/render.rs:1040-1072` (idle armed at `:1060`), | Mirror `foldreveal`: `let win = window.downgrade();` then `let Some(window) = win.upgrade() else { return };` inside the idle, and add the `view.is_realized()` gate the AP-128 corrective pairs with it. Better still, route both deferrals through one helper so the third caller cannot get it wrong (the… |
-| **F-AP-008** ✅ DONE | The reading-position restore discards its own outcome with `let _ =` | `src/preview/splice/install.rs:412-430` (the discard at `:430`) | `if restored.is_none() { log::debug!("preview::splice: reading position not restored (…)"); }` with the reason distinguished, or return the reason as a small enum and log it. The mark deletion below must stay unconditional either way. |
-| **F-AP-009** ✅ DONE | `reveal_folds` calls `toggle` where it means "expand", relying on a caller-side invariant nothing enforces | `src/window/foldreveal.rs:44-55` (the loop at `:52-54`); | Add `FoldState::expand(&mut self, key, open_in_source)` (or a `set_collapsed(key, open_in_source, collapsed: bool)` that writes the `toggled` set to the value that yields the requested render state) and have `reveal_folds` call it. Idempotent by construction, and the duplicate-key and already-expand… |
-| **F-012** ✅ DONE | Lint check 15's brace-depth model never enters character literals, so the new gate is blind in any file containing `'{'` or `'}'` | `xtask/src/lint/patterns.rs:471` (the claim), `:476` (the | Add the missing `else if c == '\''` arm — but note Rust lifetimes (`'a`) share the delimiter, so the correct predicate is "a `'` followed within 4 chars by a closing `'` (allowing an escape)", or simply blank the two-or-three-character forms `'X'`, `'\X'`, `'\u{…}'`. Add a corpus case whose fixture … <br>*also found as F-AP-011, F-TEST-010* |
-| **F-013** ⬇Low ✅ DONE | Negative image-cache entries are excluded from the byte budget *and* from the LRU, and nothing ever sweeps them | `src/imagecache/policy.rs:61-65` (the two stores), | Give `Cache` a `max_negative_entries` and evict oldest-first when it is exceeded (a small `VecDeque<String>` of negative keys is enough), or opportunistically sweep entries older than `negative_ttl` on each `record_failure`. Either is a handful of lines, unit-testable in `policy.rs`'s existing displ… <br>*also found as F-SEC-005* |
-| **F-AP-013** ✅ DONE | `live_anchored` walks the whole buffer character by character, with a linear widget scan per anchor, on the main loop for every toggle | `src/preview/splice/install.rs:110-133` (the walk at `:119-131`, | Cheapest correct change: make `known` a `HashSet<gtk::Widget>` (glib objects hash by pointer) to remove the inner scan, and skip forward using `iter.forward_find_char(|c| c == '\u{FFFC}', None)` instead of stepping one character at a time. Better: store the `(anchor, widget)` pairs alongside the wid… |
-| **F-AP-014** ✅ DONE | `select_preview_hit_at_or_after`'s `unwrap_or(0)` turns "the expansion produced no reachable match" into "jump to the document's first match" | `src/window/find.rs:824-850` (the fallback at `:834-837`) | `let Some(idx) = … else { log::debug!(…); return None; };` — leave the current hit and count untouched rather than redirecting, since the block *has* been expanded and the reader can see it. Add a test whose hidden match lies inside a table cell in the collapsed body. |
-| **F-AP-015** ✅ DONE | Scratch-buffer and live-buffer offsets share one type, and which fields of `RenderProducts` are valid against which buffer is stated only in prose | `src/preview/splice.rs:79-95` (the `SpliceOutcome` doc), | Split `RenderProducts` into `MapProducts` (buffer-space offsets, valid against any buffer whose text matches) and `WidgetProducts` (bound to the buffer they were built for), and have `build_render_products_with_theme` return both. `splice` then structurally cannot install the widget half, and the ne… |
-| **F-AP-016** ✅ DONE | The region render's method sequence is temporal coupling enforced by one function | `src/preview/splice.rs:262-315` (`seed` `:282`, `write_at` `:283`, | Wrap the sequence in a small builder/typestate: `RegionWriter::begin(renderer, view, seed)` → `.write_at(offset)` returning a `RegionWriter<Writing>` that alone exposes `summary_tail`/`process`, and whose `finish()` yields the `RegionWidgets`. The project already climbs this enforcement ladder elsew… |
-| **F-AP-017** ✅ DONE | The splice's only correctness oracle is compiled out of release builds | `src/preview/splice.rs:183-194` (the `#[cfg(debug_assertions)]` | Keep the full `debug_verify` where it is, but add a cheap release-safe invariant at the same point — e.g. assert the live buffer's char count equals PASS A's `copymap` root span, and on mismatch `log::error!` and return `None` from `splice()` so the caller falls back to a full re-render. That is O(1… |
-| **F-DRY-001** ✅ DONE | `codeview::disclosurebands::draw` is `codeview::bands::draw` with the noun changed | `src/codeview/disclosurebands.rs:24-107` (and its twin `src/codeview/bands.rs:14-123`) | Extract the shared painter into `src/codeview/bands.rs` (it already owns `band_corner_radius`'s caller side) or a new `src/codeview/bandpaint.rs`: ```rust /// Paint one line-wide band at the content column. The one arithmetic behind /// TDD 18.25 (headings) and TDD 18.48 (disclosure summaries). pub(… |
-| **F-DRY-002** ✅ DONE | `RenderData` is filled from `RenderProducts` field-by-field at four separate sites | `src/preview/render.rs:58-73`, `src/preview/render.rs:291-306`, | Mirror the `ViewInstall` precedent. Group the buffer-keyed maps into one value carried by both types: ```rust // src/preview/build.rs /// Every buffer-keyed map a render produces — the half of `RenderProducts` that is /// installed wholesale, as one value, so no route can install a subset. pub(super… |
-| **F-DRY-003** ✅ DONE | `RegionSeed`'s twelve fields are declared, captured and re-applied by hand — a new renderer field is silently unseeded | `src/renderer/mod.rs:757-770` (struct), `src/renderer/mod.rs:844-866` | Make the seed a *sub-struct of the renderer* rather than a parallel copy of its fields: ```rust // src/renderer/mod.rs /// The renderer's INTER-BLOCK state: everything a region render must arrive with. /// Membership is the contract — a field that lives here is seeded, a field that /// does not is a… |
-| **F-011** ✅ DONE | "Is the Nth `<details>` closed?" is decided twice, and the export copy dropped the divergence guard | `src/export/walk.rs:533-552` (and its twin `src/renderer/mod.rs:1012-1026`) | Put the cursor in `renderer::disclosure`, where the spans already live, and let both walks hold one: ```rust // src/renderer/disclosure.rs /// A document-order cursor over [`scan_document`]'s spans, with the fail-safe the /// renderer already applies: a walk that disagrees with the pre-scan is answe… <br>*also found as F-AP-019* |
-| **F-DRY-006** ✅ DONE | `splice::render_region` re-implements `build_products`' renderer-construction preamble, and re-flattens `SpliceInputs` into eleven positional arguments | `src/preview/splice.rs:215-260` (and its original `src/preview/build.rs:305-357`) | One prepared-inputs value, owned by `preview::build` and consumed by both routes: ```rust // src/preview/build.rs /// A document prepared for rendering: normalised, CriticMarkup-extracted, with the /// palette its theme derives. The ONE definition of what a render's inputs are — /// PASS A and a reg… |
-| **F-DRY-010** ✅ DONE | Find's "land on this hit, or expand and re-enter" sequence is written twice | `src/window/find.rs:824-858` (and its twin `src/window/find.rs:751-809`) | Two helpers in `src/window/find.rs`: ```rust /// Mark `hits[idx]` as the current match — highlights, scroll, cursor and label, /// which must move together. `Some(..)` instead when the hit is `Hidden`: nothing is /// marked, and the caller must reveal that fold and re-enter. fn land_on_hit( view: &C… |
-| **F-010** ✅ DONE | A `>` inside a quoted attribute value splits the tag, leaking text from inside a non-allowlisted element | `src/renderer/rawhtml.rs:302-305` = tail.find('>') else {` is the sole match at 302; `let tag = &tail[..=gt];` is the sole match at 305). Same defect in the disclosure scanner at `src/renderer/disclosure.rs:88-92` = lower[start..].find('>') else {` at 88, `let tag_lower = &lower[start..=end];` at 92). | Give both scanners one shared tag-end routine that walks from `<` tracking quote state (`"` and `'`) and returns the first `>` outside quotes. It belongs in `rawhtml.rs` beside `recognise_html_element` for the same "one owner" reason the allowlist itself lives there — `disclosure.rs` and any future … <br>*also found as F-DRY-004* |
-| **F-SPEC-002** ✅ DONE | An allowlisted block's literal text reaches the preview but no exported artefact — the construct is half-taught in exactly the way CAM row 17 now warns about | `src/export/walk.rs:600-636` (`fn html`, grep-confirmed at `:600`; `scan_disclosure_tags` call at `:606`) | Call `rawhtml::literal_text_runs` from `export::walk::html()` and push each non-empty run as a `Block::Paragraph`/`Inline::Text`, so the one owner of the rule feeds both sinks — which is the stated reason the allowlist was extracted to `rawhtml.rs` in the first place. Add an `export::doc` test asser… |
-| **F-SPEC-003** ✅ DONE | A collapsed unspaced `<details>` still shows its body, and its toggle is a visible no-op | `src/renderer/start.rs:313-344` (`feed_disclosure_html` call at `:315`, `feed_html_literal_text` call at `:316`, the function body `:332-344`) | Decide the behaviour and state it in TDD 2.26d, then make the code match. The cheapest consistent answer: emit the literal runs from *inside* the disclosure frame rather than after it — i.e. drive `literal_text_runs` from the same replay as `feed_disclosure_html`, so a run sitting between `</summary… |
-| **F-SPEC-004** ✅ DONE | `sdd/TECH.md`'s module map does not describe the branch's central subsystem | `sdd/TECH.md:207` (`preview/` row), `:214` (the `codeview` painter row), `:226` (`farscroll.rs` row) | Add four rows, at the map's altitude (what each owns, not how it works): `preview/splice/` (region write + live adoption + `ReaderAnchor`), `window/foldsplice.rs` (resolves the pane and hands off; the full re-render is the fallback), `farscroll/settle.rs` (the *quiescence* wait, distinct from the la… |
-| **F-SPEC-005** ✅ DONE | `tests/MANUAL-TEST.md`'s 2.26k check documents the rubric being violated instead of the rubric being changed, and no automated test covers 2.26k at all | `tests/MANUAL-TEST.md:697-698` | Rewrite TDD 2.26k to the contract that actually shipped — the fetch is bounded by `imagefetch`'s connect timeout and is made **at most once per URL per TTL**, so a toggle costs the timeout at most once rather than every time — and move the responsiveness promise to where it can be met (an async fetc… |
-| **F-SPEC-006** ✅ DONE | Four new rubrics ship with no `tests/MANUAL-TEST.md` check | `sdd/TDD.md:340` (2.26b), `:345` (2.26c), `:360` (2.26e), `:365` (2.26f) against `tests/MANUAL-TEST.md:687-698` | Add four checks in §2 against `tests/fixtures/disclosure.md`, which already carries every shape they need (an `open` block, a body of mixed Markdown, a nested pair, a sibling pair, and a wide table). Each is two or three sentences; 2.26e's should drive the inner-state-survives-an-outer-cycle sequenc… |
-| **F-SPEC-007** ✅ DONE | The Document-Reference CAM gains no cell, though the branch's own manual check cites it and the splice introduces a new invalidation event for the preview buffer | `sdd/CAM.md:453-491` (matrix rows 1–7; row 7 grep-confirmed at `:491`) | Either add the invalidation class explicitly ("**A′ — in-place region mutation of a rendered pane**: a fold splice shifts every buffer offset below the region while the source is unchanged") and mark rows 4–6 against it with how each survives, or add a row for the preview-side maps `preview::splice`… |
-| **F-SPEC-008** ✅ DONE | The disclosure toggle publishes an interactive accessible role with no accessible name | `src/widgets/disclosure.rs:62-79` (`fn build`, grep-confirmed at `:62`) | In `build()`, call `crate::a11y::name(&toggle, …)` with the block's summary label — the caller in `renderer::start` already holds it at `:531-541` and can pass it in, which also makes the announcement say *which* disclosure. Extend the a11y walk's fixture to open a document with a disclosure so the … |
-| **F-SPEC-009** ✅ DONE | `sdd/system-overview.svg` is unchanged, and its render-pipeline caption now states something this branch measured to be false | `sdd/system-overview.svg:127-129` | Amend the render-pipeline box to name the three paths and what each preserves (append: full render; `re_render` buffer swap, which loses the reading position and re-anchors; `splice`, region-only, which keeps the widget tree *and* the position). Re-run `xmllint --noout sdd/system-overview.svg` and c… |
-| **F-TEST-005** ✅ DONE | The spliced `RenderData` install is a 14-field hand copy with three fields ever asserted, and no differential oracle against a full re-render | `src/preview/splice/install.rs:142-239` (`install_outcome`), field writes at `:190-204` | One differential test, which covers all fourteen at once and cannot rot as fields are added. `splice/tests.rs` already builds both sides (`assert_splice_matches_full_render` renders `after` fresh for the text comparison), so the marginal cost is small: after the char-identity assertion, compare the … |
-| **F-TEST-006** ✅ DONE | ~2,900 lines of the excursion rig assert properties of GTK's own validation budget inside a REQUIRED CI gate, with self-admitted order dependence | `src/preview/splice/excursion/kink.rs:255-430` (the grid), `:110` (`DOSES`), `:125` (`REPEATS`), `:118` (the order-dependence admission); same shape in `budget.rs:265`, `margin.rs:359`, `trace.rs:242`, `wholelist.rs:189`, `dose.rs`, `drift.rs:246/286/314` | Split the rig by *what the assertion is about*, which is a one-line change per body and no loss of any measurement: - **Keep in the gate:** `excursion.rs`'s two `compare_routes` bodies and all of `wired.rs`. These assert *this project's* contract (TDD 2.26h/i/j) and are exactly right where they are.… |
-| **F-TEST-007** ✅ DONE | `after_scroll_settles` has no test of any kind and no injection point for its clock, its tick source, or its layout oracle | `src/farscroll/settle.rs:103-173`, tick source at `:146`, oracle arm at `:116` | Two steps, in order of value. 1. **Make the wrapper drivable.** Split the body into `after_scroll_settles` (the public seam, unchanged) and a `fn arm_settle(view, tick: Duration, valid: Rc<Cell<bool>>, f)` it delegates to. That gives a GTK-integration test a way to run the whole state machine at, sa… |
-
+| **F-AP-B-101** | ✅ DONE (b54a9a9) — Fold state does not survive a view-mode switch, contradicting the contract two modules state — and one direction leaves the model and the view disagreeing | `src/preview/render.rs:26-31` (the fold-blind entry point), `src/window/chrome.rs:135-145` (its wrapper), `src/window/viewactions.rs:185` and `:215` (the call site), against the contracts at `src/fold.rs:45` and `src/winstate/tab.rs:99` (all grep-confirmed at `0fcd25b`) | Two changes, both small and independent. 1. Make `set_source` idempotent: `let next = normalize_lone_cr(text); if *self.source.borrow() != next { *self.source.borrow_mut() = next.into_owned(); self.note_source_offsets_moved(); }`. A flush that changes nothing then moves nothing, which fixes the Split→Preview and Edit→Preview directions *and* the same no-op clear on `save.rs:176` (Ctrl+S on a clean buffer) and `zoom.rs:261`. 2. Give `preview::render` the same `&FoldState` parameter `re_render` already takes, thread it through `render_and_wire_preview` (`chrome.rs:135`) and pass `&st.folds.borrow()` at `viewactions.rs:215`. The four first-build sites pass `&FoldState::default()` explicitly, which documents at each call site that the map is empty there rather than leaving it implicit. That makes the fold state structurally unreachable-by-omission, which is the only way this stays fixed. If  |
+| **F-AP-B-102** | ✅ DONE (5ffa32b) — Check 15 goes silently blind on a CRLF checkout — the gate reports PASS having found nothing, on the one platform whose `.gitattributes` guarantees CRLF | `xtask/src/lint/patterns.rs:557` (`text.lines()`), `:571` (`lead`), `:609` (`offset += line.chars().count() + 1`); consumed by `xtask/src/lint/checks/architecture.rs:307` (grep-confirmed at `0fcd25b`) | Normalise at the reader, where every check benefits and no future check has to remember: in `xtask/src/lint/mod.rs:186`, return the decoded text with `\r\n` folded to `\n` (`text.replace("\r\n", "\n")`), stating the `register.rs:330-341` reason beside it. Failing that, fix the accumulator locally — `offset += line.chars().count() + 1` at `patterns.rs:609` cannot be right for input `lines()` may have stripped two characters from; derive line starts from the character array itself rather than re-accumulating them. Then add the corpus case that would have caught it: a ≥30-line CRLF fixture carrying one dispatcher, asserted to report the same line number as its LF twin. Mutation to name: revert the fix and the CRLF case goes red while every existing case stays green. |
+| **F-AP-B-104** | ✅ DONE (b54a9a9) — `select_preview_hit_at_or_after`'s "at or after" boundary matches the summary line's own hit, so Find-Next lands back where the reader already was | `src/window/find.rs:823` (the predicate), against the claim it rests on at `:802-804` (grep-confirmed at `0fcd25b`) | Resume from the end of the summary **line**, not from its start — the expansion inserts the body *below* the summary line, so the summary line's end offset is as stable as `min_off` is and is the actual boundary the comment describes. Carry it alongside `summary_off` in `PreviewHit::Hidden` (the collapsed-block record already knows where the body begins), pass it as `min_off`, and correct the comment at `:802-804` to say what the value is. Add a case to the find tests whose query occurs in a summary *and* in its hidden body, asserting that expanding lands inside the body. |
+| **F-AP-B-105** | ✅ DONE (b54a9a9) — A fold key is baked into the toggle widget with no version stamp, so a toggle clicked inside the live-preview debounce is silently lost — and `MANUAL-TEST.md` 2.26l asserts the opposite | `src/preview/render.rs:994-998` (`connect_disclosure_toggle`, key captured by value) and `:1012`; the falsified clause is `tests/MANUAL-TEST.md:697` (grep-confirmed at `0fcd25b`) | Either make the loss detectable, or make the key survive. - Cheapest: stamp the key. Give `TabState` a `fold_epoch: Cell<u64>` bumped by `note_source_offsets_moved` (it is already the single choke point, `tab.rs:399-402`), capture it alongside `key` in `connect_disclosure_toggle`, and refuse the toggle with a `log::debug!` when it does not match. The click is then a *stated* no-op rather than a silent one, and the manual check can be reworded to what actually ships. - Or drop the clause: if a lost click inside a 300 ms window is acceptable, `MANUAL-TEST.md:697`'s last sentence must say so ("the click may be discarded; what must never happen is a different block toggling"), because as written it is a check that cannot pass. |
+| **F-AP-B-108** | ⛔ WITHDRAWN by the developer (5ffa32b), measured — Leg B measures with `--features gtk-integration-tests` but reports without it, so both of leg B's verdicts are derived from a differently-configured object set | `scripts/coverage.sh:998-1000` (the measuring run) against `:1013` and `:1049-1052` (the two reporting invocations) (grep-confirmed at `0fcd25b`) | Add `--features gtk-integration-tests` to all three leg-B `report` invocations, threading it into `measured_scope` as a second parameter (the helper already takes the ignore regex as `$1` for exactly this reason). Then falsify the current behaviour cheaply: run leg B once as-is and once with the flag added, and diff the two `full_now` sets. If they differ, this finding is confirmed and the recorded 94.98 measurement (`:622`) needs re-deriving. If they are identical, add a comment saying the flag was measured to be inert for `report` and why — so the next reader does not have to run it again. |
+| **F-AP-B-203** | ✅ DONE (8d848be) — An unclosed `<details>` loses its authored `<summary>` label in the export; the renderer deliberately keeps it | `src/export/walk.rs:560-573` (the `continue` at `:564`) against `src/renderer/start.rs:544-550` (the rule at `:544-546`, the branch at `:548`) (grep-confirmed at `0fcd25b`) | In the `!closed` branch, keep the label — emit the collected `SummaryText` (or `DEFAULT_SUMMARY_LABEL`) as a `Block::Paragraph`, so both sinks show the authored text and neither groups anything. Then make `doc.rs:881` assert the label reaches the model, so the test earns its name. |
+| **F-AP-B-204** | ✅ DONE (c244077) — A claim spanning inline markup emits its comment N times and N duplicate HTML `id`s | `src/export/markup.rs:64-105` (the per-fragment emission at `:75`) and `src/export/html.rs:291-307` (`id="claim-{}"` at `:295`, `<aside class="comment">` at `:301`) (grep-confirmed at `0fcd25b`) | Emit the note on the **last** fragment of a given `idx` only. Cheapest structural version: have `mark_inlines` mark the tail (`Inline::Claim(idx, tail: bool, …)`) so neither sink has to track it. Either way `id="claim-N"` must be written exactly once per annotation, with the other fragments carrying `class="claim"` alone. |
+| **F-AP-B-301** | ✅ DONE (03dca3f) — Candy's three gradient stops lost their exact-value guard in the same commit that moved them | `src/theme/tests/system.rs:322-365` (the drift guard; the licence bypass at `:345-350`) and `:409-433` (the replacement guard; its assertion at `:427-432`) (grep-confirmed at `0fcd25b`) | Give `OFF_PAGE` a fourth column — the exact hex the licence was argued for — and have `every_off_page_licence_still_covers_an_off_page_band` assert `far == licensed_value` rather than `far != page`. One value per row; exact pinning is restored for the licensed stops with the reason still attached, and moving a stop stays a deliberate edit a reviewer sees in the diff. |
+| **F-AP-B-302** | ✅ DONE (03dca3f) — A summary band stated as a sprite silently drops all three disclosure inks from the contrast sweep | `src/theme/tests/contrast.rs:294-312` (the push loop) and `:326-338` (`summary_surfaces`; the early return at `:328-330`) (grep-confirmed at `0fcd25b`) | Return `vec![page]` from `summary_surfaces` for a sprite band rather than `Vec::new()`, and skip only the band-surface measurement, matching the heading sweep. A sprite that fails to decode degrades to the page (`bandpaint.rs:95-107`), so the page is the surface the ink must clear regardless. |
+| **F-AP-B-303** | ✅ DONE (03dca3f) — The heading contrast sweep does not composite a translucent band; its disclosure sibling does — one colour, two guards, two answers<br>*also found as F-DRY-104, F-TEST-B-008* | `src/theme/tests/contrast.rs:105-110` (raw stops at `:107-108`) against `:331-337` (`over(…, page)` at `:333`) (grep-confirmed at `0fcd25b`) | Hoist `over()` above both sweeps and apply it at `:105-110` as well. Better still, give the heading sweep a `heading_surfaces(t, level, page)` mirroring `summary_surfaces`, so the two cannot drift apart again — this finding *is* the drift. |
+| **F-AP-B-304** | ✅ DONE (03dca3f) — A bare `heading_band_gradient_to_color` discarded at every level produces no diagnostic | `src/theme/resolve.rs:51-73` (the gate at `:52`) against its disclosure sibling at `:74-87`, with `src/theme/sources.rs:208-210` (`stated` is an exact-spelling lookup) (grep-confirmed at `0fcd25b`) | Warn **once** (not per level) when the bare spelling is stated and `colors(HEADING_BAND_COLOR)` is `None` at every level — a broadcast is only legitimate if it lands somewhere. That preserves the silence `a_bare_gradient_is_silent_at_the_levels_it_cannot_reach` (`headings.rs:328`) protects, because that fixture does band h1. |
+| **F-AP2-003** | ✅ DONE (cc31b7b) — `Renderer::write_at` creates a `GtkTextMark` in the **live** buffer that nothing ever deletes — one leaked mark per splice, for the life of the tab | `src/renderer/mod.rs:845-849` (the field at `:560`) | Give `Renderer` a `Drop` that deletes `self.at` when it is `Some` and not already deleted — the same shape and the same argument as `ReaderAnchor`'s (`install.rs:446-467`), and for the same reason (the create and the last use are in different functions, so a delete at each exit is the rule the next exit forgets). Add a `#[gtktest::test]` in `splice/tests.rs` asserting that a splice leaves the live buffer's mark count unchanged; mutation-check it by deleting the `Drop`. |
+| **F-AP2-006** | ✅ DONE (cc31b7b) — The splice's tag oracle covers only the two disclosure tags; the container tags applied at a `TagEnd` the region walk never reaches are unasserted | `src/preview/splice/tests/tags.rs:91-104` (the two tag names and the single top-level fixture) | Generalise `ranges_both_ways` over a list of tag names and add two fixtures: a disclosure inside a `>` blockquote and one inside a list item, asserting `blockquote`, `li-1`, `code-block` and the heading tags all match a full render's ranges. If any of them diverges, the fix belongs in the region walk (re-apply the enclosing container tags over the region after `finish_region`, from the seed's `blockquote_starts`/`item_starts`), not in the test. |
+| **F-AUD-201** | ✅ DONE (8d848be) — `scan_document`'s literal accumulator is per raw-HTML BLOCK, not per disclosure, so a second `<details>` in one block records a body range starting inside the first one's body | `src/renderer/disclosure.rs:323-332` (the accumulator), `:351-352` (the assignment at `DetailsClose`) | Reset `literal` to `None` at each `DetailsClose`, or track it per open frame rather than per block. Measured on one block holding two sibling disclosures: `body: Some(31..36)` for the first and `body: Some(31..84)` for the second — the second's recorded body begins inside the first's. The fold splice deletes and re-renders from exactly that range, so expanding the second block re-renders the first block's text as part of it. Distinct from F-TEST-B-005 and needing a distinct fix, but they always co-occur. |
+| **F-DRY-101** | ✅ DONE (03dca3f) — `export/html.rs` still has the F-DRY-001 pair: two band-CSS emitters that are each other with the noun changed<br>*also found as F-AP-B-305* | `src/export/html.rs:686-707` and `src/export/html.rs:840-864` (grep-confirmed at 0fcd25b; enclosing fns `heading_band_css` `:670-719`, `disclosure_summary_css` `:830-880`) | In `src/export/html.rs`, beside the two callers: ```rust /// The `background:` (and `border-radius:`) declarations for one band — a heading's /// (TDD 18.25) or a disclosure summary's (TDD 18.48). One emitter, for the same /// reason `codeview::bandpaint` is one painter and `pdf::decide::band_wash` is one /// resolver: the sprite -> gradient -> flat precedence and the radius gate are /// properties of the SHAPE, not of the decoration. fn band_css(decor: &crate::theme::Band<'_>, radius_design_px: i32, uris: &SpriteUris) -> String ``` `heading_band_css` calls it and then appends its padding/`box-sizing` block; `disclosure_summary_css` calls it inside its `is_present()` arm and then appends the ink rule. Both keep their own early-exit shape. |
+| **F-DRY-102** | ✅ DONE (b54a9a9) — `TabState::shown_source` is the declared single owner of "which text is the reader looking at", and three preview-render paths hand-roll a variant of it whose `Edit` arm disagrees | `src/window/zoom.rs:147-150`, `src/window/foldreveal.rs:87-90`, `src/window/foldsplice.rs:60-63`, against `src/winstate/tab.rs:556-562` (grep-confirmed at 0fcd25b) | Either (a) make the three call `st.shown_source(mode)` and, in the same change, decide and record which `Edit` answer is right (the helper's, on the argument its doc already makes — a derived view must track in-progress edits); or (b) if the render paths genuinely need the other mapping, give it a name of its own in `winstate/tab.rs` beside `shown_source`, e.g. ```rust /// The Markdown the PREVIEW PANE is showing for `mode`. Differs from /// [`Self::shown_source`] in edit-only mode, where there is no preview pane and the /// stored source is the last thing one rendered. pub(crate) fn previewed_source(&self, mode: crate::winstate::ViewMode) -> String ``` and have all three call it. Do not leave three literals and a comment. |
+| **F-DRY-103** | ✅ DONE (cc31b7b) — Nine hand-written copies of the `Overlay > ScrolledWindow > CodePreviewView` walk, four of them added by this branch — and two byte-identical `view_of` helpers in one file | `src/codeview/mod.rs:1348-1354`, `:1415-1421`, `:2124-2130`, `:2171-2177`; `src/preview/render.rs:454-459`, `:546-554`, `:786-791`, `:850-858`, `:880-885` (grep-confirmed at 0fcd25b) | One production-visible accessor in `src/preview/mod.rs`, next to `render`, since the tree shape is `preview::render`'s own product: ```rust /// The `CodePreviewView` inside a widget `render` produced: `Overlay > ScrolledWindow > /// CodePreviewView`. The ONE statement of that shape outside `window::zoom`'s /// window-rooted accessor, so a tree change is one edit rather than nine `expect`s. pub(crate) fn view_of(widget: &gtk::Widget) -> Option<crate::codeview::CodePreviewView> ``` Delete both `render.rs::view_of` helpers and all seven inline copies; test sites call `preview::view_of(&widget).expect("…")`. Fold `codeview/mod.rs:1414-1421`'s closure and `:2123-2130`'s loop body onto it too. |
+| **F-SEC-204** | ✅ DONE (2525be4) — `skip_raw_text` lowercases the whole block per raw-text element — quadratic, on the GTK main thread, per render | `src/renderer/rawhtml/mod.rs:320-337` (`fn skip_raw_text` is the sole match at `:320`; `let lower = html.to_ascii_lowercase();` is the sole match at `:321`)  (grep-confirmed at 0fcd25b) | Do not allocate. `skip_raw_text` needs a case-insensitive search for `</name`, which `str::find` over the original bytes can do directly (compare `html.as_bytes()[lt..].eq_ignore_ascii_case(needle.as_bytes())` at each `<`), or hoist the single lowercased copy `literal_text_runs` could make once and pass down. Either removes the per-element allocation and makes the pass linear. Guard it with a test that asserts the function is called with a block containing many raw-text elements and completes — or, more honestly, just assert the linear-time property is not re-lost by keeping the loop allocation-free (a timing assertion would be flaky). |
+| **F-SEC-206** | ✅ DONE (6b0e881) — Document images have no decoded-pixel bound — the project's own decompression-bomb gate is applied to sprites and not to untrusted document content | `src/renderer/start.rs:781-796` (`fn load_texture`; `ImageResolution::Remote(uri) => load_remote_texture(uri),` is the sole match at `:793`), `src/renderer/start.rs:812` (`fn load_remote_texture`), against `src/sprite.rs:596-601` (the `MAX_SPRITE_PIXELS` refusal) and `src/sprite.rs:631-658` (`fn probe_pixel_size`, `l.set_size(0, 0);` at `:642`); cap constant at `src/limits.rs:127`  (grep-confirmed at 0fcd25b) | Promote `sprite::probe_pixel_size` to a shared helper (it is currently a private `fn` in `sprite.rs`) and apply it on the document-image path with its own constant — `limits::MAX_IMAGE_PIXELS`, sized from the same measurement discipline `MAX_REMOTE_IMAGE_BYTES` documents. A refusal maps naturally onto the existing `image_placeholder_tooltip` reason set, so the reader sees a broken-image marker with a reason rather than a dead app. Note the local arm currently uses `Texture::from_file`, which has no bytes to probe: either read the file through `sprite::open_checked`-style bounded I/O first, or use `gdk_pixbuf_get_file_info`, whose path-taking form is fine here (the objection recorded at `sprite.rs:627-630` is specific to compiled-in sprites). |
+| **F-SEC-209** | ✅ DONE (b54a9a9) — `foldreveal` scans the RAW source while fold keys are `cleaned` offsets, so a reveal on an annotated document flips the fold instead of opening it<br>*also found as F-AP-B-103* | `src/window/foldreveal.rs:87-100` (`let spans = crate::renderer::disclosure::scan_document(&md);` is the sole match at `:91`; `match spans.iter().find(\|s\| s.start == key.source_offset())` the sole match at `:94`; `ViewMode::Preview \| ViewMode::Edit => st.source().clone(),` at `:89`)  (grep-confirmed at 0fcd25b) | Have `foldreveal` derive `cleaned` the way every other consumer does — `crate::annotate::extract(NormalizedMd::new(&md).as_str()).cleaned` — and scan that, so the offsets it compares are in the same coordinate space as the keys. Better, hoist "the cleaned Markdown for this tab in this mode" into one accessor beside `winstate::tab`'s existing mode-picking accessor, so a fourth consumer cannot pick a different one — which is the exact argument `winstate/tab.rs:548-551` already makes for the raw form. Regression test: an annotated document with a disclosure below the annotation, reveal, assert the block ends **open** (and per Universal rule 5, assert it on a fixture whose annotation is *before* the block — with the annotation after it, raw and cleaned offsets agree and the test passes against the unfixed code). |
+| **F-SPEC-101** | ✅ DONE (03dca3f) — `SCHEMA.md` still tells a theme author that an unset `disclosure_marker_color` keeps the desktop's ink — the branch's own last commits made that false | `sdd/SCHEMA.md:549` (grep-confirmed at `0fcd25b`; sole match for | Rewrite the Default column to `foreground` (or `foreground`, else the widget's) and replace the second sentence with the 18.53 contract: *"Unset, it takes the theme's own `foreground`. A theme that states no page of its own — System — states no marker ink either, and the indicator keeps the desktop's chevron in the desktop's colour."* Cite 18.53 beside it, as the other disclosure rows cite 18.48/18.51. |
+| **F-SPEC-102** | ✅ DONE (c3e951e) — The excursion deletion left an orphaned source file behind, referencing two modules it deleted<br>*also found as F-AP2-002, F-DRY-A-003, F-TEST-B-002, F-TEST-A-004, F-SPEC-A-006* | `src/preview/splice/excursion/budget/derivation.rs:1-123` (whole file); | `git rm -r src/preview/splice/excursion/budget/`. The conclusion the file's arithmetic supported already lives in `sdd/ANTI-PATTERNS.md` ScrAP-339, and `excursion.rs`'s module doc already tells the reader to recover the arms from `git log -- src/preview/splice/excursion/`. Separately, and independently of this file: make `IGNORE_TESTONLY`'s excursion term depth-agnostic (`preview[/\\]splice[/\\]excursion([/\\][a-z_]+)*`) so a future subdirectory cannot arrive as a leg-B scope mismatch — the `[/\\]` class discipline the same block already argues for, one axis over. |
+| **F-SPEC-A-003** | ✅ DONE (cc31b7b) — Both "inside a container" splice tests document a case their fixture does not contain | `src/preview/splice/tests.rs:132-153` (`a_fold_inside_a_container_still_changes_only_its_own_region`) and `:327-349` (`splicing_inside_a_container_matches_a_full_render`)  (grep-confirmed at 0fcd25b) | Keep the blockquote fixture (it earns its keep for `blockquote_depth`/`blockquote_starts`) and add a second fixture that puts the disclosure inside a list item, e.g. `"intro\n\n- item one\n- <details>\n <summary>S</summary>\n\n long body …\n\n </details>\n\nafter\n"`, through both `assert_one_region` and `assert_splice_matches_full_render`. Correct the two doc comments to describe the container each fixture actually builds — a comment that names a property the input does not have is the failure Universal rule 5 exists for. |
+| **F-TEST-A-001** | ✅ DONE (cc31b7b) — The splice's "differential oracle" compares a pure function's output with itself, and cannot fail<br>*also found as F-AP2-005, F-SPEC-A-008* | `src/preview/splice/tests.rs:228-283` (`assert_maps_match`), call site at `:209`; premise at `src/preview/build.rs:369-385` and `:394-404` (grep-confirmed at 0fcd25b) | make the oracle read the *live* side, the way `tags.rs` does. Two options, and the second is the one that answers F-TEST-005 as written: 1. Cheap: change `assert_maps_match`'s first argument to maps rebuilt from `starting.buf` after the splice — i.e. re-derive against the mutated buffer rather than against PASS A's own output. This at least makes it a statement about the buffer. 2. Correct: aim the oracle at the **install**, which is what F-TEST-005 named. Add a `#[gtktest::test]` in `install.rs` that renders a pane, splices through `splice_disclosure`, and compares the live `RenderData`'s eleven map fields (plus `image_tints` / `table_anchors` / `disclosure_lines` — see F-TEST-A-008) against a `RenderData` built by a full `re_render` of the same fold state. Destructure both exhaustively so a field added to `RenderData` fails to compile until it is given a side. Then delete `assert_maps_ |
+| **F-TEST-A-002** | ✅ DONE (c244077) — The settle test named for "disarmed before `f` runs" passes with `disarm()` deleted | `src/farscroll/settle.rs:347-401` (test), guard at `:172-179` and `:201` (grep-confirmed at 0fcd25b) | inject the counter the same way the tick and the latch already are — it is the third ambient input and the same argument applies. Give `arm_settle` a `writes: Rc<Cell<u64>>` parameter (`after_scroll_settles` passes a fresh one), then the body reads: ```rust let writes = Rc::new(Cell::new(0u64)); arm_settle(&view, FAST, valid, Rc::clone(&writes), { … f writes the adjustment … }); // after f has run: let at_fire = /* captured inside f, before the jump */; assert_eq!(writes.get(), at_fire, "the settle's own instrument saw nothing after it fired"); ``` A cheaper variant that needs no signature change: have `f` write the adjustment N times and assert the *second* `arm_settle` fires within its own quiet window measured from zero — but that is a timing assertion and the counter is the honest one. |
+| **F-TEST-A-006** | ✅ DONE (c3e951e) — Neither of `wire_spliced_disclosure_toggles`' two documented differences is asserted anywhere | `src/preview/render.rs:938-971` (`fresh`-only connect at `:968`; live-anchor line index at `:954-967`) (grep-confirmed at 0fcd25b) | one fixture change and two bodies in `excursion/wired.rs` (or a new `preview/splice/tests/wiring.rs` if `wired.rs` is at its soft limit): 1. Give `fixture()` a **second** disclosure below the first, and a distinctive marker inside each body. 2. `toggling_the_same_block_twice_returns_it_to_where_it_started` — activate, settle, activate, settle; assert the buffer text equals the pre-toggle text and the toggle's `is_active()` matches. A double-connected survivor folds twice per click, so the first activation alone leaves the text unchanged and this reddens on the *first* assertion, not the second. 3. `a_control_below_a_spliced_region_still_names_its_own_line` — after expanding the first block, assert for every entry of the live `disclosure_lines` that `line == buf.iter_at_child_anchor(anchor_of(toggle)).line()`, and drive one `disclosure_toggle_at(view, &rd, x, summary_y_of(second_block))`  |
+| **F-TEST-B-003** | ✅ DONE (b54a9a9) — `reveal_folds`'s per-key expand decision is pure logic inside a coverage-excluded file, with no test of any kind | `src/window/foldreveal.rs:63-108` (`pub(crate) fn reveal_folds` grep-confirmed as the sole match at `:63`; the loop at `:93-107`; the diverged-key fallback `folds.toggle(*key)` the sole match at `:104`) | Move the loop to `src/fold.rs` (gated, and already the owner of `FoldState`) as ```rust /// Expand every key in `chain` against the document's own `<details open>` /// attributes. A key naming no span is flipped and reported, because there is /// no `open` to reason from. pub(crate) fn expand_chain( &mut self, spans: &[crate::renderer::disclosure::DisclosureSpan], chain: &[FoldKey], ) -> Vec<FoldKey> /* the keys that diverged */ ``` and have `reveal_folds` call it and log the returned divergences. Three unit tests pay for it immediately: an already-expanded key stays expanded (the postcondition), an `<details open>` key resolves to expanded rather than to a flip, and a key with no span is returned as diverged *and* still flipped. None needs a display, and all three are in scope, so the extraction moves `FLOOR` in the direction POLICY's scope rule names rather than adding to the excluded  |
 ---
 
 ## 🟢 Low
 
-10 findings, post-filter. Batch these into one cleanup pass — do not round-trip them
-individually. Pushback is expected and welcome: "not worth fixing because X" closes a
-Low finding.
+33 findings, post-filter. **Batch these into one cleanup pass — do not round-trip them
+individually.** Pushback is expected and welcome: "not worth fixing because X" closes a Low
+finding. QA batch-verifies that the cleanup landed; it does not audit each fix.
 
 | ID | Finding | Location | Proposed fix |
 |---|---|---|---|
-| **F-AP-018** ✅ DONE | The deletion range is taken from a previous render's extents and used without validation; `iter_at_offset` clamps silently | `src/preview/splice.rs:140-155` | Before the delete, refuse (returning `None`, so the caller falls back) when `old_volatile.end > buf.char_count()` or `old_volatile.start > old_volatile.end`, and log it. |
-| **F-AP-020** ✅ DONE | A stale or shifted body range makes a hidden-match count silently zero | `src/window/find.rs:355-365` (the discard at `:360`) | `let Some(hidden) = rd.md_owned.get(block.body.clone()) else { log::error!("preview find: collapsed body range {:?} is outside md_owned", block.body); continue; };` |
-| **F-DRY-007** ✅ DONE | `excursion::wired::Wired` re-implements `excursion::rig::Rig`'s settle discipline, and `READING_FRACTION` is defined twice | `src/preview/splice/excursion/wired.rs:141-191` (and its twin | Extend `rig.rs`'s existing free-function seam by three more entries, and delete `wired.rs:63-66`: ```rust // src/preview/splice/excursion/rig.rs — beside top_line_text/anchor_reader/reader_offset /// Pump until line heights are validated AND the range has been quiet for `quiet`. /// The `quiet` wind… |
-| **F-DRY-014** ✅ DONE | `copymap::construct_of_tag` and `construct_of_tagend` are mirrors enforced only by a comment | `src/copymap.rs:175-203` (and its twin `src/copymap.rs:131-173`) | Generate both from one table so the mirror is structural: ```rust macro_rules! constructs { ($( $c:ident => ($tag:pat, $end:pat) ),+ $(,)?) => { fn construct_of_tag(tag: &Tag) -> Option<Construct> { Some(match tag { $( $tag => Construct::$c, )+ _ => return None }) } fn construct_of_tagend(end: TagEn… |
-| **F-DRY-015** ✅ DONE | Two "what the page would say" reductions, and the new one omits the tight-construct marker suppression | `src/renderer/disclosure.rs:295-342` (and `src/outline/mod.rs:142-158`) | One reduction, in `renderer`, taking the block-scope table both callers already build: ```rust // src/renderer/mod.rs (or a small src/renderer/plaintext.rs) /// The text a run of Markdown WOULD render as: inline markup stripped, tight-construct /// fence markers dropped through `BlockScripts`, block… |
-| **F-SEC-004** ✅ DONE | `has_attr`'s boundary rule reads `open` out of another attribute's quoted value | `src/renderer/rawhtml.rs:164-183` fn has_attr` is the sole match at 164; `let ends = tag[after..]` is the sole match at 173) | `has_attr` should not scan the raw tag text. Once F-SEC-002's quote-aware tokenizer exists, give it an attribute iterator (yielding `(name, value)` pairs with quote state honoured) and implement both `attr` and `has_attr` on top of it. That removes the whole class rather than adding a third boundary… |
-| **F-SPEC-010** ✅ DONE | A new test's doc comment states a divergence the same commit closed, and points at the deleted plan | `src/preview/build.rs:3545-3551` (the "deliberately NOT asserted" sentence grep-confirmed at `:3547`, "See the plan." at `:3549`, the test it documents at `:3551`) | Delete the paragraph and replace it with a one-line pointer to `an_unspaced_disclosure_body_shows_as_literal_text` at `:3876`, which is where that clause is now pinned. |
-| **F-TEST-002** ✅ DONE | The two dispatchers this branch grew past 280 LOC hold every new decision behind a live `GtkTextBuffer` | `src/preview/build.rs:279-604` (`build_products`, ~326 LOC); `src/renderer/start.rs:12-298` (`Renderer::start_tag`, ~287 LOC) | Not a rewrite. One targeted extraction each, chosen so it pays for itself: from `start_tag`, a pure `fn disclosure_action(event_kind, frame_stack_top, folds, open_in_source) -> DisclosureAction` returning an enum (`Suppress`, `EmitSummary`, `OpenFrame`, `PassThrough`) that the vfunc then executes — … |
-| **F-TEST-003** ✅ DONE | `splice()` has no display-free seam; the one piece of pure arithmetic in it — the delete boundary — is inline against `TextIter` | `src/preview/splice.rs:150-155` (the delete boundary), `:113-199` (`splice`) |  |
-| **F-TEST-009** ✅ DONE | `imagecache`'s thread-local cache has no reset seam and no injectable clock at the production boundary | `src/imagecache/mod.rs:75-78` (the `thread_local!`), `:98-113` (`get_or_fetch`, which supplies `Instant::now()` itself) | Add a `#[cfg(test)] pub(crate) fn reset_for_test()` that replaces the cell's contents, and take `now: Instant` as a defaulted parameter on the wrapper (or expose a `get_or_fetch_at(uri, now, fetch)` that `get_or_fetch` calls with `Instant::now()`). Both are two-line changes and together make the 2.2… |
-
+| **F-AP-B-106** | ✅ DONE (5ffa32b) — `FLOOR=80` sits immediately below a paragraph that ends "FLOOR stays 82"<br>*also found as F-TEST-B-001* | `scripts/coverage.sh:616` (the claim) and `:618` (the value); the note that actually explains 80 is 500 lines above at `:103-131` (grep-confirmed at `0fcd25b`) | Move the two-leg note (`:103-131`) to the end of the ledger where it belongs chronologically, and put a three-line summary directly above `FLOOR=80` — current value, the leg it gates, and the one-sentence lowering rule. The brief asked whether that rule "is written where the next reader will meet it"; beside `FLOOR_FULL` only is half an answer. |
+| **F-AP-B-107** | ✅ DONE (5ffa32b) — Leg A's gate verdicts are rendered against a caller-shaped run, while leg B explicitly refuses the same shaping | `scripts/coverage.sh:853` (leg A, `${PASSTHRU[@]+"${PASSTHRU[@]}"}`) against `:993-994` (leg B's stated refusal) (grep-confirmed at `0fcd25b`) | Either restrict `PASSTHRU` to the one documented use (`--html`) and reject anything else with a usage error, or — cleaner — make `--html` imply the same "this is a report, not a gate" contract `--unit-only` gets: print the report, print a PARTIAL banner, and skip the floor verdicts. A gate whose input the caller can reshape is not a gate, and this file already says so about its other leg. |
+| **F-AP-B-109** | ✅ DONE (5ffa32b) — `--update-scope` prints the same "SCOPE OK" line as a real scope check | `scripts/coverage.sh:890-898` (the rewrite) and `:951` (the verdict it renders unconditionally afterwards) (grep-confirmed at `0fcd25b`) | One word. Make `:951` conditional on `UPDATE_SCOPE`: print `coverage: SCOPE RE-PINNED — N files, not checked (this run wrote the manifest).` when it is set. The floor verdicts can still run; only the claim that the scope was *verified* has to go. |
+| **F-AP-B-110** | ✅ DONE (5ffa32b) — F-GATE-003 remainder: the paragraph written to state which rule decided each module's scope names 9 of the 13 it claims | `scripts/coverage.sh:694-715` (the claim at `:694`) (grep-confirmed at `0fcd25b`) | Add `codeview/bandpaint.rs` to the EXCLUDED list at `coverage.sh:706-715` with the one-line reason above ("a GSK painter over a live `PaintCtx`; its only decision, the radius clamp, is in the gated `decorplan`"), and either name `regionwriter.rs` and `farscroll/settle.rs` in the GATED list or change "Thirteen" to name the four handled elsewhere. A count that does not match its own enumeration is the tell the register's own header warns about (`sdd/ANTI-PATTERNS.md`, "a count is the one fact about a growing list guaranteed to be wrong by the next addition"). |
+| **F-AP-B-113** | ✅ DONE (5ffa32b) — The negative-cache sweep bounds by time, and the reasoning that makes that sufficient is false for the fast-failure cases | `src/imagecache/policy.rs:133-136` (the justification), `:137-142` (`record_failure`), `:149-155` (the sweep) (grep-confirmed at `0fcd25b`) | Either correct the justification (say the bound is "failures within one TTL", note that fast failures exist, and state the worst case as acceptable), or add the cheap count cap Round 1 also offered: sweep first, and if the map still holds more than a few hundred negatives, drop the oldest. Ten lines and it makes the bound a number instead of an argument. |
+| **F-AP-B-306** | ✅ DONE (5ffa32b) — The stale-exception guard inspects only the first of a gradient band's two endpoint pairs | `src/theme/tests/contrast.rs:393-396` (the `.find(...)` at `:395`) (grep-confirmed at `0fcd25b`) | `.filter(...)` and assert every matching pair is below its floor, or give `Pair.what` a surface discriminator so the two are distinct rows. |
+| **F-AP2-004** | ✅ DONE (cc31b7b) — `restore_when_settled`'s `ManuallyDrop` leaks the `ReaderAnchor`'s `gtk::TextMark` GObject reference on every successful splice | `src/preview/splice/install.rs:537-538` | Make the field `mark: Option<gtk::TextMark>` and add `fn take_mark(&mut self) -> Option<gtk::TextMark>`; the `Drop` then sees `None` on the consuming path and the value drops normally. (A direct destructure is not available because the type implements `Drop`.) Alternatively keep `ManuallyDrop` and move the field out with `unsafe { std::ptr::read(&anchor.mark) }` — correct, but the `Option` is cheaper to read and needs no `unsafe`. |
+| **F-AP2-008** | ✅ DONE (a78580e) — `body_plain_text` hand-mirrors `is_inline_tag`'s list as a second `TagEnd` match | `src/renderer/disclosure.rs:449-467` (the `Start` arm calls `is_inline_tag` at `:450`; the `End` arm restates the list at `:455-467`) | Add `pub(crate) fn is_inline_tag_end(end: &TagEnd) -> bool` immediately beside `is_inline_tag` in `segments.rs` (or generate both from one table, as `copymap` does), and have `body_plain_text` call it. Add a unit test asserting the two agree for every `Tag`/`TagEnd` pair the parser can emit. |
+| **F-AP2-009** | ✅ DONE (cc31b7b) — `RegionWriter<Writing>` does not enforce `summary_tail` before `process`, nor at most once | `src/preview/splice/regionwriter.rs:90-110` (`summary_tail` at `:97`, `process` at `:107`) | Add a third state. `write_at` yields `RegionWriter<Opened>`, which exposes only `summary_tail(self, collapsed) -> RegionWriter<Writing>`; `Writing` exposes `process`, `is_open` and `finish`. That is one more marker type and one signature change at the single call site, and it closes the last of the four orderings the module doc claims. |
+| **F-AP2-010** | ✅ DONE (cc31b7b) — `blockspacing::lead_in` answers `BlockGap` for a paragraph at document start; the `at_start` case is actually decided in `emit::block_sep` | `src/renderer/blockspacing.rs:62-99` (the `Paragraph` arm at `:68-76`) with `src/renderer/emit.rs:229-236` | Either add `if cx.at_start { return LeadIn::Nothing }` at the top of `lead_in` and delete `block_sep`'s guard (one decision, one place), or state in `LeadIn::BlockGap`'s doc that it is *also* a no-op at document start and add a `Paragraph` + `at_start: true` case to the test module so the interaction is pinned somewhere. |
+| **F-AP2-012** | ✅ DONE (cc31b7b) — The superseded-restore check silently declines to fire when the downcast fails | `src/preview/splice/install.rs:552-557` | ```rust let Some(v) = view.downcast_ref::<CodePreviewView>() else { log::error!("preview::splice: settle fired on a view that is not a CodePreviewView"); return Err(NotRestored::Superseded); }; if v.restore_generation() != generation { return Err(NotRestored::Superseded); } ``` Standing down is the safe direction when the generation cannot be read at all. |
+| **F-AUD-202** | ✅ DONE (8d848be) — `siblings_and_nested_blocks_render_their_own_state` asserts half its name — its fixture contains two siblings and no nesting | `src/preview/build.rs:3776` | Add a nested pair to the fixture. This is the guard for rubric 2.26e and it currently tests only the sibling half; it is also the fixture that dodges F-TEST-B-005's key collision, so fix it alongside that finding. |
+| **F-DRY-106** | ✅ DONE (a78580e) — "The active tab's `CodePreviewView`" is resolved three different ways in `src/window/`, and this branch added the third | `src/window/actions.rs:114-120`, `src/window/find.rs:54-60`, `src/window/foldsplice.rs:37-53` (grep-confirmed at 0fcd25b) | In `src/window/zoom.rs`, beside `get_preview_sw`: ```rust /// The preview pane's `CodePreviewView`, or `None` where there is no preview pane or /// its child is not one. The tree shape is stated HERE and nowhere else — see /// `find::FindTarget` for what a second spelling of it once cost. pub(super) fn get_preview_view(window: &ApplicationWindow) -> Option<crate::codeview::CodePreviewView> ``` `preview_text_view` becomes `get_preview_view(window).map(\|v\| v.upcast())`; `find_target` becomes `match get_preview_view(window) { Some(v) => Preview(v), None => PreviewUnresolved }`; `foldsplice` keeps |
+| **F-DRY-107** | ⛔ ASSESSED AND REJECTED by the developer (a78580e) — Find rediscovers one collapsed ancestor per re-render, though `CollapsedSite::chain` exists precisely so a caller does not have to | `src/window/find.rs:223-226` (`PreviewHit::Hidden`), `:374-384` (construction), `:792-836` (the re-entrant resume), against `src/renderer/mod.rs:753-761` (`CollapsedBlock`) and `:766-780` (`CollapsedSite`) (grep-confirmed at 0fcd25b) | Give `CollapsedBlock` the chain the renderer already computes — `renderer/start.rs:637` builds it inside `feed_disclosure_html`, where `self.inter.disclosure_stack` holds every enclosing collapsed frame, which is what `collapsed_site()` (`renderer/mod.rs:1011-1023`) already reads: ```rust pub(crate) struct CollapsedBlock { pub summary_offset: i32, /// Every collapsed disclosure enclosing this block's body, outermost first, ending /// at this block. The same chain [`CollapsedSite`] carries and for the same reason. pub chain: Vec<crate::fold::FoldKey>, pub body: std::ops::Range<usize>, } ``` The |
+| **F-DRY-108** | ✅ DONE (a78580e) — `a11y.rs`'s two window walks duplicate their preamble, and the fixture has already drifted onto the document the first one calls "the vacuous version of this test" | `src/a11y.rs:305-347` and `:407-422` (grep-confirmed at 0fcd25b) | One helper in the same `mod gtk_integration_tests`: ```rust /// A registered app and a window driven into the state a reader actually meets: every /// deferred surface revealed, and a document carrying the constructs whose controls /// live in the preview. ONE fixture, so two walks over the same tree cannot end up /// walking different trees — see the `<details>` note below. fn walkable_window(app_id: &str) -> (gtk::Application, ApplicationWindow) ``` carrying the `<details>` fixture and the action-kind comment (`:337-342`) once. Both tests call it. The comment at `:326-335` about the four lin |
+| **F-DRY-109** | ✅ DONE (a78580e) — `hidden_match_count` claims its case folding is "the SAME rule a visible match is decided by"; it is the same rule as a *cell* match and a different one from a *body* match | `src/window/find/plan.rs:22-40` (the claim at `:26-28`, the call at `:35-38`), against `src/window/find.rs:250` and `src/window/find.rs:315-317` (grep-confirmed at 0fcd25b) | Cheapest correct change is to make the doc true and the scope explicit: amend `plan.rs:26-28` to say the folding matches the **cell and hidden** paths and that the buffer path folds through GLib, and add a `plan.rs` test pinning one multi-character case as a known difference so it is a recorded decision rather than a surprise. If the counts must agree exactly, the honest fix is one owner — fold the haystack and needle through `glib::casefold` in `ci_match_ranges` so all three paths share GLib's rule — but that changes cell-match byte offsets and needs its own measurement. |
+| **F-DRY-A-002** | ✅ DONE (c3e951e) — `wired` re-implements `rig::await_viewport` verbatim, and `rig`'s own doc comment says it does not | `src/preview/splice/excursion/wired.rs:113-127` against | in `Wired::present`, replace the inline block with `super::rig::await_viewport(&view, &adjustment);` and delete the now-false sentence at `rig.rs:199-201`, replacing it with "both rigs call this; the mechanism rig calls it from `Rig::new`, the wired rig from `Wired::present`." |
+| **F-DRY-A-004** | ✅ DONE (a78580e) — `RenderData::new` and `adopt_maps` are two hand-written copies of the same ten-field map install | `src/preview/qdata.rs:94-127` and `src/preview/qdata.rs:142-168` | give `RenderData` a `Default` (every field already has one) and make `new` a composition rather than a second copy: ```rust pub(super) fn new( maps: crate::preview::build::RenderMaps, image_tints: Vec<(TextChildAnchor, gtk::Widget)>, table_anchors: Vec<(TextChildAnchor, ScribTableWidget)>, ) -> Self { // ONE definition of how a map set becomes render data; the first render adds // only the two widget-keyed lists it owns outright. let mut this = Self { image_tints, table_anchors, ..Self::default() }; this.adopt_maps(maps); this } ``` `disclosure_lines` stays empty, which is what the current cod |
+| **F-DRY-A-005** | ✅ DONE (a78580e) — `build_products` is still a 296-line dispatcher whose decisions are reachable only through a live `GtkTextBuffer`<br>*also found as F-SPEC-A-007, F-TEST-A-007* | `src/preview/build.rs:472-767`  (grep-confirmed at 0fcd25b; brace-matched | one extraction, chosen to be the one that pays: the "what claim does this event earn?" decision, which is asked three times in the loop against `site` and `r.collapsed_site()`. ```rust // src/preview/build.rs (or a small src/preview/mapclaim.rs) /// What a walked event earns in the maps, given whether it was inside a collapsed /// disclosure before and after it was processed. pub(super) enum MapClaim { /// Inside a collapsed body throughout — reached no buffer, earns nothing. None, /// The event that CLOSED a collapsed block: widen the summary line's node to /// cover the whole block instead o |
+| **F-DRY-A-006** | ✅ DONE (c3e951e) — `harness` and `wired` define `BODY_PARAS`, `TAIL_PARAS` and `QUIET` with the same names and different values, and both are passed to the same shared functions | `src/preview/splice/excursion/harness.rs:42`, `:47`, `:60` against | rename by role rather than by rig, at both sites: `harness::MECHANISM_QUIET` / `wired::RESTORE_QUIET` (the latter with its "longer than `farscroll::settle`'s own 3×50 ms" reason attached), and `wired::WIRED_BODY_PARAS` / `WIRED_TAIL_PARAS`. Better still for `QUIET`: derive `wired`'s from the thing it must outlast rather than restating a number — `const RESTORE_QUIET: Duration = crate::farscroll::settle_quiet_window() * 2;` with a small `pub(crate)` accessor in `farscroll::settle`, so a change to `SETTLE_QUIET_TICKS` cannot silently invalidate the guard. |
+| **F-SEC-207** | ✅ DONE (a78580e) — `scripts/gtk-run.sh` executes its `<label>` argument as shell, through the deliberately-unquoted EXIT trap | `scripts/gtk-run.sh:105-107` (`log=$(mktemp -t "scrib-$label.XXXXXX")` at `:105`, the `# shellcheck disable=SC2064` at `:106`, `trap "rm -f '$log'" EXIT` — the sole match — at `:107`)  (grep-confirmed at 0fcd25b) | `trap 'rm -f "$log"' EXIT` — single-quoted, so `$log` expands when the trap *fires*, at which point it is still in scope. The `SC2064` suppression and its comment then come out too. Separately, sanitise the label into the template (`label_safe=${label//[^A-Za-z0-9_-]/_}`) so a stray argument cannot produce a template `mktemp` refuses. |
+| **F-SEC-208** | ✅ DONE (a78580e) — `gtk-run.sh` reports an OOM-killed command as "a WEDGE", the one diagnosis the project has a written anti-pattern about | `scripts/gtk-run.sh:117-127` (`rc=$?` at `:117`; `if [ "$rc" -eq 124 ] \|\| [ "$rc" -eq 137 ]; then` — the sole match — at `:121`)  (grep-confirmed at 0fcd25b) | Distinguish the two. `timeout --preserve-status` is not enough on its own; the reliable discriminator is to record wall-clock elapsed around the `timeout` invocation and only claim a wedge when elapsed ≥ `$budget`. Otherwise print "the command was killed by a signal (exit 137) *before* its ${budget}s budget elapsed — this is not a timeout; check `dmesg \| grep -i oom` and `pgrep -a earlyoom` (GTK4Rs/AP-133)". Roughly six lines, and it converts a confidently-wrong verdict into a correctly-routed one. |
+| **F-SPEC-103** | ✅ DONE (a78580e) — `sdd/TECH.md`'s module map carries two rows for `window/foldreveal.rs`, each describing it differently<br>*also found as F-TEST-B-009* | `sdd/TECH.md:199` and `sdd/TECH.md:210` (grep-confirmed: exactly two | Delete `:199` and keep `:210`, which sits beside its sibling `window/foldsplice.rs` (`:209`) — the adjacency is what makes the intent split legible. |
+| **F-SPEC-104** | ✅ DONE (a78580e) — TDD 2.26k's `Limitation` bullet ends mid-sentence | `sdd/TDD.md:406` (grep-confirmed: sole match for | Complete the sentence, e.g. `…— an attempt on *every* toggle is.` |
+| **F-SPEC-105** | ✅ DONE (a78580e) — `system-overview.svg` still describes the network path as if `imagecache` did not exist | `sdd/system-overview.svg:227-229` (the network-egress note; grep-confirmed | One line inside the existing note, after `:229`, e.g. *"Gated by `imagecache` — a process-wide URL→texture store with a byte budget and a ~60 s negative TTL, so a re-render (a fold toggle re-walks the document) does no network work for a URL it has already answered."* Re-run `xmllint --noout sdd/system-overview.svg` and check on both backgrounds, per step 8. |
+| **F-TEST-A-003** | ✅ DONE (a78580e) — `a_view_with_no_adjustment_still_completes` never reaches the no-adjustment branch | `src/farscroll/settle.rs:429-451` (test; `set_vadjustment(None)` at `:440`), branch under test at `:165-171` (grep-confirmed at 0fcd25b) | rename the test to what it actually pins — `a_zero_range_adjustment_completes_on_a_false_quiet` — and rewrite the doc comment to say the adjustment exists and simply never emits, citing the measurement above. If the genuine `None` branch is worth covering, reach it with a widget that really has no vadjustment (any non-`GtkScrollable`) — but `arm_settle` takes `&gtk::TextView`, so the honest answer is probably to delete the `if let` at `:165` and take the adjustment unconditionally, since on this widget it is never absent. Say which, in the rustdoc, so the next reader does not re-add a branch n |
+| **F-TEST-A-005** | ✅ DONE (c3e951e) — The surviving excursion rig documents and carries a parameterisation nothing turns, with five rustdoc links to deleted modules | `src/preview/splice/excursion/harness.rs:6`, `:39`, `:206`, `:243-251`, `:255`, `:261-268`, `:307`, `:315`, `:346-372`; `.../rig.rs:77`, `:83-111`; `.../recorder.rs:3`, `:42` (grep-confirmed at 0fcd25b) | two edits, both mechanical. 1. Rewrite the five links to say what the deleted arms were, without linking: "the deleted `margin` arm (see `git log -- src/preview/splice/excursion/`)". Fix `recorder.rs:42` to describe `Trace::arm` / `Trace::disarm` as `wired` actually uses them. 2. Collapse `measure_probed_at_margin` and `measure_probed` into `measure`, delete `Phase`, delete the `top_margin` parameter from `Rig::new` and the assertion at `rig.rs:101-111` with it, and make `splice_toggle` return `()` (moving its `all(\|(_, w)\| w.parent().is_some())` assertion's dose caveat into a comment). If any |
+| **F-TEST-A-008** | ✅ DONE (a78580e) — The region-widget handoff is a non-exhaustive field take, and four of its six lists have no assertion | `src/preview/splice/regionwriter.rs:124-143` (`finish`), `src/preview/splice/install.rs:273` (`rd.image_tints`), `:249-258` (`merge` of the three bounded lists) (grep-confirmed at 0fcd25b) | two parts. 1. Make the take exhaustive at the source. Move the handoff to a `impl Renderer { pub(crate) fn take_region_widgets(&mut self) -> RegionWidgets }` in `renderer/mod.rs`, beside the field declarations, so an author adding a widget list is looking at the take when they add it. `regionwriter::finish` then calls it. (A `debug_assert!` that every widget-bearing vec is empty after the take is a weaker second-best — it still needs the enumeration.) 2. Extend `tables_outside_the_region_survive_the_splice_as_the_same_widgets` (`tests.rs:357-433`) with a fixture whose disclosure body carries a |
+| **F-TEST-A-009** | ✅ DONE (a78580e) — The disclosure-indicator selector guard covers two of the three selectors it is named for | `src/widgets/disclosure.rs:208-256` (guard; assertion at `:241-248`, floor at `:251-254`), `src/widgets/disclosure.rs:192-202` (`marker_css_node`), `src/preview/css.rs:210-218` (the array and its claim) (grep-confirmed at 0fcd25b) | assert both directions, and per-node rather than in aggregate: ```rust let produced: std::collections::BTreeSet<&str> = /* nodes seen in the walk */; assert_eq!( produced, ["image", "label"].into_iter().collect::<BTreeSet<_>>(), "the shipped themes no longer produce every indicator shape this guard covers — \ a selector for a shape nothing produces is a selector nothing checks", ); ``` and add one explicit assertion for the base node with its own rationale (`assert!(DISCLOSURE_MARKER_SELECTORS.contains(&"button.scrib-disclosure"))`, with a sentence saying what the bare button node inks that it |
+| **F-TEST-A-011** | ✅ DONE (2525be4) — `attributes()` abandons the rest of a tag on an unparseable attribute-name position | `src/renderer/rawhtml/tags.rs:102-136` (`attributes`), the abandonment at `:114-116` (grep-confirmed at 0fcd25b) | advance instead of abandoning, so one malformed byte costs one attribute rather than all of them: ```rust if i == start { // A byte that cannot begin a name (a stray `=`). Step over it rather than // abandoning the tag: `break` here hides EVERY later attribute, and `open` // on a malformed `<details ="x" open>` then reads as absent. i += 1; continue; } ``` and add the case to the test module: `assert!(has_attr(r#"<details ="x" open>"#, "open"));`. Verify the loop still terminates on `<a>` / `<br/>` / `<img src=a />` — it does, because the outer `while i < bytes.len()` bounds it and the increme |
+| **F-TEST-B-004** | ✅ DONE (a78580e) — The imagecache TTL guard needs no display but is gated behind `gtk-integration-tests`, so `cargo test` and coverage leg A never run it | `src/imagecache/mod.rs:161-213` (`mod gtk_integration_tests` grep-confirmed as the sole match at `:161`; `fn the_shipped_cache_re_attempts_a_dead_url_only_after_its_ttl` the sole match at `:182`) | Move that one body into the existing `#[cfg(test)] mod tests` at `:144-145`, as `#[test]`, keeping the two `reset_for_test()` calls. Leave `the_shipped_cache_never_re_fetches_a_hit` where it is and add one sentence to the module saying which of the pair needs a texture and why — the split is the interesting fact, and stating it stops the next test being filed on the wrong side by proximity. If `gtk::gdk::Texture` turns out to need type registration in a bare test binary, the fallback is to make `get_or_fetch_at` generic over the value type (`policy::Cache<V>` already is), which is the cleaner  |
+| **F-TEST-B-006** | ✅ DONE (a78580e) — The a11y role cross-check cannot fail on the only platform that runs the gate, and does not say so at runtime | `src/a11y.rs:380-461` (`fn every_control_of_a_known_interactive_type_publishes_a_role_the_guard_recognises` grep-confirmed as the sole match at `:407`), with the guard it protects at `:239-241` and the constant at `:147` | Make the run say which question it answered, using the runtime-skip form POLICY § Unit tests already prescribes. At the top of the test, read `gtk::minor_version()`; when it is below 10, print `SKIPPED [TDD 18.x / a11y role floor]: GTK <version> publishes Button for a GtkToggleButton, so this cross-check cannot observe a role above the v4_6 binding floor` and still run the sweep (it is a useful sanity check either way). That costs three lines, makes the pipeline output honest about what it graded, and gives the macOS/Windows seats a greppable line proving they *did* grade it. Optionally add th |
+| **F-TEST-B-007** | ✅ DONE (a78580e) — `plan::Hit::Hidden` has no unit test, so its arm can be mutated freely with the whole suite green | `src/window/find/plan.rs:146-152` (`Hit::Hidden => {}` grep-confirmed as the sole match at `:152`), against the test module at `:159-317` | Two `#[test]`s beside the existing ones, five lines each. `a_hidden_hit_occupies_an_index_and_paints_nothing`: `plan(&[body(0,4), Hit::Hidden, body(10,14)], 2)` — assert `tagged == [(0,4),(10,14)]`, `selected == None`, `cells` empty. `landing_on_a_hidden_hit_drops_the_body_selection`: the same list with `current = 2`, asserting `drop_selection` is true. Both fail under both mutations above. |
 ---
 
 ## 🧹 Tidy (Optional)
 
-6 findings, post-filter. No functional impact. Fix only where the cost is trivial *and*
-it improves clarity for the next reader. **Terminal** — no verification round follows
-and you need not explain a skip.
+No functional impact. Fix only where the cost is trivial *and* it improves clarity for the
+next reader. **Terminal** — no verification round follows, and you need not explain a skip.
 
 | ID | Finding | Location | Proposed fix |
 |---|---|---|---|
-| **F-AP-021** ✅ DONE | `FoldKey`'s field is `pub`, so the offset-space guarantee its own doc claims is not enforced | `src/fold.rs:57-65` | Make the field private with `FoldKey::from_source_offset(usize)` and `fn source_offset(self) -> usize`. Mechanical, and it makes the claim in the doc comment true. |
-| **F-AP-022** ✅ DONE | `recognise_html_element`'s tag-name boundary set omits `\n`, `\r` and `\f` | `src/renderer/rawhtml.rs:100-108` (the predicate at `:106`) | `b.is_ascii_whitespace() || b == b'>' || b == b'/'`, and add `<details\nopen>` to that test. |
-| **F-DRY-019** ✅ DONE | `imagecache::policy::record_success` carries a leftover doc paragraph describing a method that no longer exists | `src/imagecache/policy.rs:102-113` | Delete `policy.rs:102-104` (the stray paragraph), and change `policy.rs:12` and its neighbours to link the free function `[`get_or_fetch`]`. |
-| **F-SPEC-014** ✅ DONE | `Renderer::collapsed_site`'s doc comment is stranded above a different function | `src/renderer/mod.rs:999-1000` (the orphaned comment) and `:1027` (`pub(crate) fn collapsed_site`) | Move lines 999-1000 down to sit immediately above `:1027`. |
-| **F-SPEC-015** ✅ DONE | `farscroll::settle`'s module doc contradicts itself about what bounds the wait | `src/farscroll/settle.rs:41` and `:57` | Reword `:57` to "the gate is the conjunction, with an absolute tick cap **on top of** the stalled-progress term — the same 'promptly when it settles, late and against partial geometry when it never does' degradation `after_line_heights_validated` already chose." |
-| **F-TEST-008** ✅ DONE | `hidden_match_count` is a pure function left inside the coverage-excluded `window/find.rs`, with no unit test | `src/window/find.rs:386-396` | Move it beside `body_plain_text` in `src/renderer/disclosure.rs` (in scope, already carrying that module's tests) or into `find/plan.rs`, and add three cases: empty needle, empty body, and a case-mismatched match — the last pinning that hidden and visible matches fold identically, which is the sente… |
-
+| **F-DRY-A-011** | ✅ DONE (a78580e) — `after_line_heights_validated` and `arm_settle` each spell the same weak-upgrade / run-once / `is_realized` block | `src/farscroll.rs:152-160` and `src/farscroll/settle.rs:202-209` | one private helper in `farscroll`, used by both: ```rust /// Run `f` against `view` if it is still alive AND still realized, exactly once. /// The one place the AP-128 gate is spelled, so a third deferral cannot omit it. fn run_once_if_live<F: FnOnce(&gtk::TextView)>( view: Option<gtk::TextView>, once: &Rc<RefCell<Option<F>>>, ) { … } ``` `settle::arm_settle` passes its already-upgraded `alive`; `after_line_heights_validated` passes `weak.upgrade()`. |
 ---
 
 ## ⛔ Withdrawn
 
-### F-GATE-001 — "the build pipeline fails at step 1" — **WITHDRAWN, orchestrator error**
+### F-SPEC-106 — "the coverage gate has no verdict at `0fcd25b`" — **WITHDRAWN, environment**
 
-Reported as High: `cargo fmt --check` failing on `src/widgets/table/mod.rs:346,570`,
-attributed to pre-existing rustfmt drift, with the claim that fail-fast meant steps 2–9
-had never run on this branch.
+Filed Medium by a spec reviewer, on accurate observations, from the wrong artefact. It read
+an **aborted** gate run whose clone sat on a 12 GB tmpfs that filled up mid-compile, and
+attributed that host failure to the revision. The re-run, from a clone on real disk at the
+same SHA, is green end to end — see [Gate results](#gate-results). The spot-check auditor
+independently re-verified both the withdrawal and the green run.
 
-**It does not reproduce at `HEAD`:**
-
-```
-$ git archive c0e1c0f | tar -x -C /tmp/qa-pristine
-$ cd /tmp/qa-pristine && cargo fmt --check ; echo $?
-0
-```
-
-The diff lived entirely in `linux`'s uncommitted working-tree edit, in flight when the
-pipeline run read the tree. The faulty step was substituting one claim for another:
-`git diff --name-only 363790e..HEAD -- <file>` returning nothing proves the file is
-*unchanged by the branch*, not that it is *clean at HEAD*.
-
-Recorded rather than deleted because the failure is instructive: this is the same
-dirty-tree artefact the orchestrator had already caught and rejected for the
-integration suite an hour earlier, and had already written into the audit trail as a
-principle — and then the consolidated review overrode its own audit trail with a
-stronger, wrong claim. A gate result against a tree not pinned to a SHA is not
-evidence, whichever direction it points.
+The procedural fault is QA's, not the reviewer's: a superseded failure log must not sit
+where reviewers are told to look for their brief. It has been deleted. Recorded here rather
+than dropped, so the gate question is visibly asked and answered.
 
 ---
 
-## ✅ Resolved
+## ✅ Round 1 ledger — what actually held
 
-None yet — this is Round 1.
+Each of the 52 Round-1 findings was checked against `0fcd25b`. **41 hold and are closed** —
+including the promoted High **F-AP-007**, and **F-SPEC-005**, **F-SPEC-006** and
+**F-SPEC-008**, all three of which were still open at `f05e063`. The eleven below do not.
+
+| Round-1 ID | Verdict | What is left |
+|---|---|---|
+| **F-001** | **PARTIAL** | Counter replaced by a name stack; both original reproductions clean. Three new bypasses: **F-SEC-201**, **F-SEC-202**, **F-SEC-210**. |
+| **F-003** (export half) | **PARTIAL** | One `SpanCursor`, correctly shared. What feeds it differs between sinks — **F-AP-B-201**. |
+| **F-011** | **PARTIAL** | Same cause. The cursor unification is genuine; its input is not. |
+| **F-SPEC-002** | **PARTIAL** | Literal text now reaches the export and is escaped, but the export's idea of a *block* differs from the preview's — **F-AP-B-201**, **F-AP-B-203**. |
+| **F-DRY-003** | **PARTIAL** | `RegionSeed` **is** `InterBlock`, as asked. But `InterBlock` omits two inter-block spacing flags — **F-SPEC-A-002**. |
+| **F-DRY-004 / F-010** | **PARTIAL** | One shared `tag_end`, no third scanner. The *raw-text* rule was not shared — **F-SEC-210**. |
+| **F-TEST-002** | **PARTIAL** | `Renderer::start_tag`'s extraction landed as `renderer/blockspacing.rs`, with unit tests. `build_products` did not — it is still a 296-line dispatcher reachable only through a live `GtkTextBuffer` — **F-DRY-A-005**. |
+| **F-TEST-005** | **PARTIAL** | The exhaustive-destructure discipline landed and is genuinely good. The oracle it powers is vacuous — **F-TEST-A-001**. |
+| **F-TEST-006** | **PARTIAL** | The rig split is right. The deletion orphaned a module — **F-SPEC-102**. |
+| **F-GATE-003** | **PARTIAL** | A categorical `IGNORE` rule covers all three modules. The by-name record offered as the alternative does not exist — **F-AP-B-110**. |
+| **F-AP-009** | **REGRESSED** | `FoldState::expand` landed — and its new `None` arm falls back to the exact `toggle` inversion the finding removed — **F-SEC-209**. |
+
+41 closed + 11 open = 52.
+
+> **Developer note.** Every one of the eleven remainders above is now closed through the
+> round-2 finding it points at: F-001 and F-DRY-004/F-010 through F-SEC-201 and F-SEC-202;
+> F-003's export half and F-SPEC-002 through F-AP-B-201; F-011 through F-SEC-210; F-DRY-003
+> through F-SPEC-A-002; F-TEST-002 through F-DRY-A-005; F-TEST-005 through F-TEST-A-001;
+> F-TEST-006 through F-SPEC-102; F-GATE-003 through F-AP-B-110; and F-AP-009's regression
+> through F-SEC-209 — its `None` arm's flip is no longer reachable, because the lookup that
+> used to miss now scans the same coordinate space the keys are minted in. The flip stays as
+> the diagnosed last resort for a key with no span to reason from, unit-tested as such.
 
 ---
 
 ## ✅ Positives
 
-Recorded because they are load-bearing, not for morale.
-
-- **The design record is exceptional.** Nearly every non-obvious decision in this
-  branch carries a measurement, a rejected alternative and a reason. The reviewers
-  were repeatedly able to test a claim *because the claim was stated precisely enough
-  to be falsifiable* — the plan's own "the nesting caveat is the whole security content
-  of this change" is what pointed four reviewers at F-001. Vague design docs do not
-  produce findings like these; they produce shrugs.
-- **`imagecache/policy.rs` is a model extraction** — the eviction/TTL policy as a pure,
-  unit-tested core with the GTK-touching half kept thin. The DRY reviewer named
-  `install.rs`'s `merge`/`merge_pairs`/`keep_survivors` as exemplary for the same
-  reason.
-- **The unclosed-`<details>` fix is right and well-argued.** "A control that cannot
-  fold anything is a control that lies" is the correct call, and deliberately not
-  copying the browser's implicit close is defensible and documented.
-- **Export escaping traced clean.** A summary label of `</summary><script>` does not
-  become script in the exported artefact. That is the sink where this feature could
-  have gone genuinely wrong, and it did not.
-- **Link integrity is spotless.** The plan retirement in `c0e1c0f` left zero dangling
-  references tree-wide — including removing the `AGENTS.md` entry in the same commit
-  that deleted the file. Retirements usually leak; this one did not.
-- **Line-number discipline held.** 254 file:line citations across the panel, **zero**
-  out of bounds — and on the ~30 the spot-check auditor resolved semantically, every one
-  pointed at the code described (one off-by-one, at `mod.rs:1013`). Note this is a
-  bounds check plus a sample, not proof of every citation: the withdrawn F-GATE-001
-  cited two in-bounds lines that pointed at the wrong content.
-- **The coverage floor drop is documented to a standard most projects never reach** —
-  three measurements, the rejected alternative, and an explicit note that it is the
-  second instance of one cause. It is still a finding (F-014), but as a routing
-  decision, not a concealment.
+- **The mitigations were real engineering, not box-ticking.** 41 of 52 findings genuinely
+  closed, several by the harder route the finding offered rather than the cheap one. F-014
+  took option (b) — building a second ratchet leg so tested GTK code *raises* a number —
+  rather than accepting the floor drop.
+- **`renderer/rawhtml/tags.rs` is a good module.** One quote-aware `tag_end`, a real
+  attribute iterator, first-attribute-wins duplicate handling matching HTML. It survived a
+  400,000-case fuzz unmarked.
+- **`disclosure::SpanCursor` is exactly the abstraction F-011 asked for** — one type, one
+  decision site, the offset cross-check and fail-safe inside it.
+- **`bandpaint.rs` and the `land_on_hit` / `reveal_and_resume` extractions are correct.**
+  Verified term-by-term against both pre-mitigation copies; two reviewers tried to break
+  them and could not.
+- **`RenderMaps` + `adopt_maps` is the right shape** — an exhaustive destructure that fails
+  to compile when a map is added without an assertion.
+- **The two-leg coverage ratchet conforms to POLICY step 6 on every row**, verified by two
+  reviewers reading the script and by QA running it.
+- **`xtask/src/lint/corpus.rs` is a model of its kind** — it documents why it is the one
+  file exempt from its own gate, and its corpora prove the patterns fire in both directions.
 
 ---
 
@@ -396,46 +368,74 @@ Recorded because they are load-bearing, not for morale.
 
 | Area | Status | Notes |
 |------|--------|-------|
-| Functionality | ❌ | F-AP-007 changes which blocks are collapsed on one keystroke; F-003 corrupts ordinary documents in both sinks. F-002 is a **latent** invariant violation — no reaching input is known and `debug_verify` catches it in debug builds. |
-| Code Quality | ⚠️ | Strong extraction in places (`imagecache/policy`, `install::merge`); offset spaces share one integer type, and the tag tokenizer is written twice. |
-| Testing | ⚠️ | 1457 unit tests pass. But the splice's only correctness oracle is `debug_assertions`-only, `after_scroll_settles` has no test at all, and 4 new rubrics have no check. |
-| Security | ⚠️ | Thesis holds; the guard implementing it does not (F-001, F-010). Bounded blast radius — no execution surface. |
-| Performance | ⚠️ | Synchronous uncached fetch on the main loop is bounded but real (2.26k measured a 5.001s freeze); `live_anchored` walks the buffer per toggle. |
-| Documentation | ⚠️ | Plan retirement is clean, but TECH.md has no row for the branch's headline subsystem and `system-overview.svg` is unchanged. |
+| Functionality | ⚠️ | User-visible defects on the flagship feature: a disclosure at the head of a list item degrades to a whole-document re-render (**F-SPEC-A-002**); nested disclosures collide on one `FoldKey` (**F-TEST-B-005**); a second disclosure in one block records a body range starting inside the first's (**F-AUD-201**). |
+| Code Quality | ✅ | Round 1's abstraction findings were answered well. Remaining duplication is real but narrow, mostly in sinks the extraction did not reach. |
+| Testing | ⚠️ | Several guards cannot fail: a vacuous map oracle, a settle test that passes with its subject deleted, a CRLF-blind lint check, a contrast sweep that skips its own new inks, gradient stops whose exact-value guard was removed in the commit that changed them, and a find test that stays green at any number of full re-renders. Three tests left the suite silently via an orphaned module. |
+| Security | ⚠️ | Thesis holds, guard does not. Eight High, none Critical, no execution surface. |
+| Performance | ⚠️ | `skip_raw_text` is quadratic on the GTK main thread — 936 ms measured for 789 KB (**F-SEC-204**). |
+| Documentation | ⚠️ | Several documents state properties the code lacks: `InterBlock`'s membership contract, `SCHEMA.md`'s marker-colour rule, `literal_text_runs`' `<iframe>` claim, and a negative-cache comment whose stated bound is false. |
 
 ---
 
 ## Gate results
 
-All taken against `HEAD` = `c0e1c0f`, except where noted. ⚠ The integration suite result
-is inconclusive and step 1's original FAIL was withdrawn — both were artefacts of a
-dirty tree. See audit trail §6 and §11.1.
+Run on a detached clone at `0fcd25b` (`git clone --shared --no-checkout`, then `checkout
+--detach`), on real disk, with nothing writing to it. **`=== pipeline PASSED ===`**
 
-| Gate | Result |
+| Step | Verdict |
 |---|---|
-| 1. `cargo fmt --check` | ✅ **PASS at `HEAD`** — the earlier FAIL was a dirty-tree artefact; F-GATE-001 withdrawn |
-| 2. `cargo clippy --all-targets --features gtk-integration-tests -- -D warnings` | ✅ clean, zero warnings |
-| 3. `cargo build --release` | ✅ clean |
-| 4. `cargo test` | ✅ 1457 + 41 passed, 0 failed, 2 ignored |
-| 5. `scripts/run-integration.sh` | ⚠️ inconclusive — first run raced a dirty tree; re-run pending a committed SHA |
-| 6. coverage ratchet | ⚠️ not executed; inspected statically — F-014, F-GATE-003 |
-| 7–9 | not run by QA. `linux` reports `scripts/pipeline.sh` green end-to-end on their working tree; unconfirmed against a pinned SHA |
+| 1. fmt | PASS |
+| 2. clippy (`--all-targets --features gtk-integration-tests -D warnings`) | PASS |
+| 3. build --release | PASS |
+| 4. test | PASS |
+| 4b. skipreport | 1 skip — TDD 24.13 stored spelling; case-sensitive temp filesystem. Host-caused and pre-existing, **not** branch-caused. |
+| 5. integration | PASS |
+| 6. coverage ratchet | PASS — leg A 80.84% ≥ FLOOR 80; leg B 94.98% ≥ FLOOR_FULL 94; scope 160 files matching the manifest, reported first on both legs |
+| 7. uibehaviour | REVIEW (standing human obligation) |
+| 8. diagram | PASS |
+| 9. references | PASS |
+| 10. package | not run (opt-in) |
+
+**This is the first green pipeline QA has independently confirmed on any SHA in this
+campaign.** Round 1 never managed one: one attempt hit a compile error that was the
+developer saving files mid-build, one produced a false High from uncommitted `cargo fmt`
+breakage, and one "PASS" was contaminated by theme sweeps landing mid-run. The method that
+works is a detached `--shared` clone on real disk — never the working tree, and never
+`git archive`, which yields a tree with no `.git` and makes the lint corpus's anti-vacuous
+symlink guard fire as though it were a branch defect.
+
+**Link integrity: clean.** 45 checker hits were each traced to source and all 45 are false
+positives of its own regex — `[text](url)`-shaped examples inside inline code spans, and
+fixtures whose broken targets are the fixture's purpose. No surviving reference to the
+deleted plan; no `sdd/ISSUES.md` entry cited from outside the register.
 
 ---
 
-## Evidence trail
+## Accounting
 
-Per-reviewer findings, retained rather than deleted this round because `docs/` is
-gitignored and the round is not closed. Each carries the full argument, the
-reproduction and an honest per-group coverage table.
+108 findings were filed by the panel and the auditor. 22 were merged into a primary, 16
+were dropped by the nitpick filter, 1 was withdrawn, and 69 appear above. A generated
+assertion confirms every filed finding reaches exactly one row of exactly one table —
+Round 1 lost two findings to a dedup script that silently emitted neither.
 
-| File | Reviewer |
-|---|---|
-| `docs/code-review-round-1-security.md` | Security (+ 4 Needs-Verification, 19 traced-clean surfaces) |
-| `docs/code-review-round-1-spec.md` | Spec compliance vs plan, TDD, POLICY, TECH, CAM |
-| `docs/code-review-round-1-antipattern.md` | Anti-pattern / design health |
-| `docs/code-review-round-1-dry.md` | DRY / abstraction |
-| `docs/code-review-round-1-testability.md` | Testability / gate design |
-| `docs/code-review-round-1-links.md` | Link integrity (clean) |
-| `docs/code-review-round-1-orchestrator.md` | Orchestrator gate runs |
-| `docs/audit-trail.md` | Decisions, drops, corrections, coverage holes |
+This review was checked by an adversarial spot-check auditor before delivery. It sampled 22
+findings across all severities and reproduced 10 by execution, finding **zero false
+positives in the finding set**. It also rejected the document twice over: 54 of 75 rows
+were truncated by a formatting defect in the generator (all six High findings then shipped
+without a usable remedy), two severity calls were wrong, two merges were missed, one merge
+lost half a finding, one supporting argument was false, and the Round-1 ledger recorded a
+finding as closed that three reviewers had independently reported half-landed. All are
+fixed above. Two findings the panel missed entirely (**F-AUD-201**, **F-AUD-202**) were
+found by the auditor and are included.
+
+**A method defect the auditor identified, recorded here because it will recur:** the
+nitpick filter scores findings in isolation, so it cannot see corroboration. Three
+independent reports of the same defect each scored 1 and all three died. Two reviewers
+reaching the same conclusion by different routes is the strongest signal this panel
+produces, and the filter is blind to it. Next round, corroborated findings bypass the
+filter the way security findings already do.
+
+Per-reviewer findings files, coverage tables, reproductions, scoring sheets and the audit
+trail are transient QA scratch under a gitignored working directory; they are not part of
+the repository and are deliberately not cited here by path. The durable facts are the SHA,
+the gate verdict, and the findings above.

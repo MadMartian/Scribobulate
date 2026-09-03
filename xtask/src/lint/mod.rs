@@ -178,10 +178,29 @@ fn repo_root() -> Result<PathBuf, String> {
 }
 
 /// A file's text, or `None` when it is binary or unreadable.
+///
+/// **Line endings are folded to `\n` here, at the READER, so no check has to remember**
+/// (F-AP-B-102). A check that walks `text.lines()` while accumulating its own character
+/// offset gets one character less per line than the file holds on a CRLF checkout —
+/// `lines()` strips both bytes and the accumulator adds one — and the offset then
+/// desynchronises from every position-indexed array the check built. Check 15 did
+/// exactly that: after about thirty lines its depth lookup was meaningless, so it found
+/// nothing and reported PASS.
+///
+/// **On the one platform whose `.gitattributes` guarantees CRLF**, which is what makes
+/// this the worst shape a gate can take: it is silent, it is green, and it is green
+/// only where nobody looks. Every check here reports LINE NUMBERS, and folding
+/// preserves the line count and every line's index, so nothing a check says about a
+/// file changes — only the arithmetic between the lines does.
 pub(crate) fn read_text(path: &Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
     if bytes.iter().take(8192).any(|byte| *byte == 0) {
         return None;
     }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    Some(if text.contains('\r') {
+        text.replace("\r\n", "\n")
+    } else {
+        text
+    })
 }

@@ -24,10 +24,24 @@ use std::collections::HashMap;
 ///
 /// **Two rules meet here and neither owns the other.** The reduction to plain text is
 /// `renderer::disclosure`'s — it is knowledge about a disclosure body. The case folding
-/// is find's, and it must be the SAME rule a visible match is decided by, or the count
-/// in the match label disagrees with what expanding the block shows. This function is
-/// the composition, and it lives in this module for the reason the module header
-/// already gives: it is a pure decision, and `src/window/*.rs` is outside the gate.
+/// is find's. This function is the composition, and it lives in this module for the
+/// reason the module header already gives: it is a pure decision, and
+/// `src/window/*.rs` is outside the gate.
+///
+/// **The folding matches the CELL and HIDDEN paths, and not the buffer one** — this
+/// used to say it was the same rule a visible match is decided by, which is true of two
+/// of the three (F-DRY-109). `ci_match_ranges` folds with `char::to_lowercase().next()`,
+/// taking the first character of a multi-character lowering; a BODY match is decided by
+/// `GtkTextIter::forward_search` under `CASE_INSENSITIVE`, which is GLib's Unicode
+/// casefold. The two differ on the characters whose lowering is longer than one
+/// character — `İ` (U+0130) is the standing example — so a count from here can disagree
+/// with the body sweep on such a needle.
+///
+/// **Recorded as a decision rather than left as a surprise**, with a test below pinning
+/// one case. Making all three agree means folding the haystack and the needle through
+/// `glib::casefold` inside `ci_match_ranges`, which moves cell-match BYTE offsets and so
+/// needs its own measurement; it is not worth that on a difference no document this
+/// project has seen exhibits.
 pub(super) fn hidden_match_count(body_src: &str, needle: &str) -> usize {
     if needle.is_empty() || body_src.is_empty() {
         return 0;
@@ -314,5 +328,73 @@ mod tests {
             super::hidden_match_count("a **bold** word\n", "**bold**"),
             0
         );
+    }
+
+    /// **F-TEST-B-007: `Hit::Hidden` had no test at all**, so its arm could be mutated
+    /// freely with the whole suite green — and the two plausible mutations are opposite
+    /// mistakes. Painting a span for it would wash a range that belongs to whatever
+    /// content follows the collapsed block; dropping it from the list would renumber
+    /// every hit after it, so "3 of 7" would name a different match than the reader
+    /// stepped to.
+    #[test]
+    fn a_hidden_hit_occupies_an_index_and_paints_nothing() {
+        // Current = 2 is the hidden one (the encoding is 1-based; 0 means "none").
+        let p = plan(&[body(0, 4), Hit::Hidden, body(10, 14)], 2);
+        assert_eq!(
+            p.tagged,
+            vec![(0, 4), (10, 14)],
+            "the two body hits are washed and the hidden one contributes no span"
+        );
+        assert_eq!(
+            p.selected, None,
+            "and nothing is selected: there is no range on the page to select"
+        );
+        assert!(p.cells.is_empty(), "and no cell is marked");
+
+        // The index it occupies is the point: the third hit is still the third.
+        let p = plan(&[body(0, 4), Hit::Hidden, body(10, 14)], 3);
+        assert_eq!(
+            p.selected,
+            Some((10, 14)),
+            "hit 3 is the SECOND body match — a hidden hit that vanished from the list \
+             would make 3 name something else"
+        );
+    }
+
+    /// Landing on a hidden hit drops the caret selection, like every non-body hit.
+    ///
+    /// Otherwise the blue body selection from the previous match stays standing while
+    /// the reader is told they are somewhere else — two current occurrences on screen,
+    /// which is the exact confusion `drop_selection` exists to prevent.
+    #[test]
+    fn landing_on_a_hidden_hit_drops_the_body_selection() {
+        let p = plan(&[body(0, 4), Hit::Hidden, body(10, 14)], 2);
+        assert!(p.drop_selection);
+        // Contrast, so this is not satisfied by a build that always drops.
+        let p = plan(&[body(0, 4), Hit::Hidden, body(10, 14)], 1);
+        assert!(!p.drop_selection, "a body hit keeps its selection");
+    }
+
+    /// **F-DRY-109: the folding here is the CELL rule, not the body rule**, and the
+    /// difference is recorded rather than discovered.
+    ///
+    /// `ci_match_ranges` lowers with `to_lowercase().next()` — the first character of a
+    /// possibly-multi-character lowering. `İ` (U+0130) lowers to `i` + U+0307, so this
+    /// rule sees `i` and matches a needle of `i`; GLib's casefold, which the body sweep
+    /// uses, does not treat the two as equal. A hidden-match count can therefore differ
+    /// from what the body sweep reports for such a needle.
+    ///
+    /// Pinned so the day someone unifies the three paths, this test tells them what
+    /// they changed rather than a user telling them.
+    #[test]
+    fn the_hidden_count_folds_by_the_cell_rule_not_the_buffer_rule() {
+        // One occurrence by this rule. The assertion is about WHICH rule, so the value
+        // matters less than that it is stated: a change to the folding moves it.
+        assert_eq!(hidden_match_count("İstanbul", "i"), 1);
+        // The ordinary case is unaffected and agrees with every rule, which is what
+        // makes the line above a narrow, recorded exception rather than a wide one.
+        assert_eq!(hidden_match_count("Istanbul", "i"), 1);
+        assert_eq!(hidden_match_count("banana", "NA"), 2);
+        assert_eq!(hidden_match_count("banana", "q"), 0);
     }
 }

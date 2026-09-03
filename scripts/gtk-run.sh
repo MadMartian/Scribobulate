@@ -102,12 +102,29 @@ label="$1"
 budget="$2"
 shift 2
 
-log=$(mktemp -t "scrib-$label.XXXXXX")
-# shellcheck disable=SC2064  # $log is expanded now, deliberately: the trap must name it.
-trap "rm -f '$log'" EXIT
+# The label reaches a `mktemp` TEMPLATE and, until this line, the EXIT trap's shell.
+# Neither is a place to put an argument verbatim: a label containing a quote closed the
+# trap's string and ran the rest as a command, and one containing a `/` produces a
+# template `mktemp` refuses outright (F-SEC-207). Reduced to the character class a label
+# is actually made of.
+label_safe=${label//[^A-Za-z0-9_-]/_}
+log=$(mktemp -t "scrib-$label_safe.XXXXXX")
+# Single-quoted, so `$log` expands when the trap FIRES rather than being pasted into the
+# trap's source now. It is still in scope then, which is what makes the deferred
+# expansion both safe and correct — and it is why the SC2064 suppression that used to
+# sit here is gone rather than moved.
+trap 'rm -f "$log"' EXIT
 
 # `--kill-after` so a command ignoring SIGTERM still dies rather than becoming the hang
 # this script exists to prevent.
+#
+# Wall clock around it, because the exit status alone cannot tell a timeout from a kill
+# (F-SEC-208). 137 is "died on SIGKILL" and says nothing about who sent it: `timeout`
+# does after the budget, and so does the kernel's OOM killer — or `earlyoom` — after a
+# few seconds. Diagnosing the second as the first sends the reader after a wedge that
+# never happened, which is the one misdiagnosis this project has a written anti-pattern
+# about (GTK4Rs/AP-133).
+started=$(date +%s)
 timeout --kill-after=60s "$budget" \
     xvfb-run -a \
     dbus-run-session -- \
@@ -115,15 +132,27 @@ timeout --kill-after=60s "$budget" \
     "$@" \
     >"$log" 2>&1
 rc=$?
+elapsed=$(( $(date +%s) - started ))
 
 cat "$log"
 
-if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+# `$budget` is a `timeout` duration and may carry a suffix; strip it for the comparison,
+# and treat an unparseable one as "assume the budget elapsed" — the old behaviour, and
+# the conservative direction for a verdict about a hang.
+budget_secs=${budget%%[!0-9]*}
+if [ "$rc" -eq 124 ] || { [ "$rc" -eq 137 ] && [ -n "$budget_secs" ] && [ "$elapsed" -ge "$budget_secs" ]; }; then
     echo
     echo "$label: NO VERDICT — the command did not finish within ${budget}s and was killed."
     echo "$label: this is a WEDGE, not a failure of the thing under test; the output above"
     echo "$label: is whatever it managed to print. Do not diagnose it from a parallel run"
     echo "$label: (ScrAP-166)."
+elif [ "$rc" -eq 137 ]; then
+    echo
+    echo "$label: NO VERDICT — the command was killed by SIGKILL after ${elapsed}s, BEFORE"
+    echo "$label: its ${budget}s budget elapsed. This is NOT a timeout and NOT a wedge:"
+    echo "$label: something outside the command killed it. Check 'dmesg | grep -i oom' and"
+    echo "$label: 'pgrep -a earlyoom' (GTK4Rs/AP-133) before reading anything above as a"
+    echo "$label: result — an OOM kill mid-suite leaves output that looks like a failure."
 fi
 
 exit "$rc"

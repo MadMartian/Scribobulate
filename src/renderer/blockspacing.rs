@@ -66,7 +66,14 @@ pub(crate) fn lead_in(kind: BlockKind, cx: BlockContext) -> LeadIn {
         // them. Outside a list — including a blockquote's paragraphs — a full gap, which
         // is idempotent, so the first paragraph after a blockquote's own gap is free.
         BlockKind::Paragraph => {
-            if cx.list_item_open {
+            if cx.list_item_open || cx.at_start {
+                // `at_start` is stated HERE, not left to the applier. `block_sep`
+                // no-ops at the start of a document, so the two agree in the running
+                // renderer either way — but this function is the thing a reader (and a
+                // unit test) asks what the separator IS, and answering `BlockGap` for a
+                // document's first paragraph described a gap nothing emits (F-AP2-010).
+                // A decision core that is only correct once its applier has corrected
+                // it is not a decision core.
                 LeadIn::Nothing
             } else if cx.inside_list {
                 LeadIn::Newline
@@ -115,6 +122,19 @@ mod tests {
     #[test]
     fn a_top_level_paragraph_takes_a_full_block_gap() {
         assert_eq!(lead_in(BlockKind::Paragraph, fresh()), LeadIn::BlockGap);
+    }
+
+    /// F-AP2-010: the first paragraph of a document has nothing to separate from, and
+    /// this function must say so itself. It answered `BlockGap` and was correct only
+    /// because `emit::block_sep` returns early at the start — a rule stated in the
+    /// applier and contradicted in the decider.
+    #[test]
+    fn the_first_paragraph_of_a_document_takes_nothing() {
+        let cx = BlockContext {
+            at_start: true,
+            ..fresh()
+        };
+        assert_eq!(lead_in(BlockKind::Paragraph, cx), LeadIn::Nothing);
     }
 
     #[test]

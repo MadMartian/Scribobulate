@@ -403,6 +403,10 @@ fn materialize_deferred_preview(window: &ApplicationWindow, st: &Rc<TabState>) {
             st.doc_dir().as_deref(),
             zoom,
             st.allow_unsafe_images.get(),
+            // This tab's OWN folds: a deferred tab materialising, or one whose
+            // preview was freed in Edit mode, must come back as the reader left it.
+            &st.folds.borrow(),
+            st.fold_epoch(),
         );
         st.split.set_preview(Some(&preview));
     }

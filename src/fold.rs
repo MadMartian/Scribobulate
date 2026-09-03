@@ -152,6 +152,41 @@ impl FoldState {
 
     /// Forget every toggle — called when the document's text changes, since the keys
     /// are source offsets and a changed source moves them.
+    /// Expand every key in `chain` against the document's own `<details open>`
+    /// attributes, and report the ones that named no disclosure.
+    ///
+    /// **`set_collapsed(.., false)`, never `toggle`.** The caller's NAME is the
+    /// postcondition — every key in `chain` is expanded when this returns — and a
+    /// toggle only delivers that while every key really is collapsed, an invariant held
+    /// by the caller's caller and enforced by nothing. Hand it an already-expanded block
+    /// and a toggle CLOSES one the reader asked to see.
+    ///
+    /// A key naming no span is flipped and RETURNED: the fold map and the document have
+    /// diverged, so there is no `open` attribute to reason from, and the flip is the old
+    /// behaviour kept rather than a guess invented. The caller logs what comes back.
+    ///
+    /// **Here rather than in `window::foldreveal`** (F-TEST-B-003). It was a loop of
+    /// pure decisions inside a coverage-excluded file with no test of any kind; moving
+    /// it to the type that owns `FoldState` puts it inside the gate, which is the
+    /// mechanism POLICY's scope rule names for exactly this.
+    pub(crate) fn expand_chain(
+        &mut self,
+        spans: &[crate::renderer::disclosure::DisclosureSpan],
+        chain: &[FoldKey],
+    ) -> Vec<FoldKey> {
+        let mut diverged = Vec::new();
+        for key in chain {
+            match spans.iter().find(|s| s.fold_key() == *key) {
+                Some(span) => self.set_collapsed(*key, span.open, false),
+                None => {
+                    diverged.push(*key);
+                    self.toggle(*key);
+                }
+            }
+        }
+        diverged
+    }
+
     pub(crate) fn clear(&mut self) {
         self.toggled.clear();
     }
@@ -282,6 +317,61 @@ mod tests {
             folds.is_collapsed(B, true),
             b_before,
             "expanding A must not disturb B"
+        );
+    }
+
+    /// **F-TEST-B-003.** `reveal_folds`' loop was pure logic in a coverage-excluded
+    /// file with no test of any kind. Three cases pay for the extraction immediately,
+    /// and each is a different way the old shape could have been wrong.
+    #[test]
+    fn expand_chain_expands_against_the_documents_own_open_attribute() {
+        use crate::renderer::disclosure::DisclosureSpan;
+
+        let span = |start: usize, open: bool| DisclosureSpan {
+            start,
+            at: 0,
+            open,
+            body: Some(start..start + 10),
+        };
+        let key = |start: usize| FoldKey::from_source_offset(start);
+
+        // (1) An ALREADY-EXPANDED key stays expanded. This is the postcondition the
+        // function's name promises, and the one a `toggle` cannot deliver: hand a
+        // toggle an expanded block and it closes the thing the reader asked to see.
+        let spans = [span(0, false)];
+        let mut folds = FoldState::default();
+        folds.toggle(key(0)); // the reader opened a block the document says is closed
+        assert!(!folds.is_collapsed(key(0), false), "precondition: expanded");
+        assert!(folds.expand_chain(&spans, &[key(0)]).is_empty());
+        assert!(
+            !folds.is_collapsed(key(0), false),
+            "an already-expanded key is left expanded, not flipped shut"
+        );
+
+        // (2) A block the DOCUMENT marks `open`, which the reader has collapsed,
+        // resolves to expanded rather than to a flip — the two answers differ, because
+        // `set_collapsed` is stated against the document's own attribute.
+        let spans = [span(0, true)];
+        let mut folds = FoldState::default();
+        folds.toggle(key(0)); // the reader closed an `<details open>`
+        assert!(folds.is_collapsed(key(0), true), "precondition: collapsed");
+        assert!(folds.expand_chain(&spans, &[key(0)]).is_empty());
+        assert!(!folds.is_collapsed(key(0), true), "and now expanded");
+
+        // (3) A key naming NO span is returned as diverged *and* still flipped — the
+        // old behaviour kept deliberately, because with no `open` attribute there is
+        // nothing to reason from. Returning it is what lets the caller say so.
+        let spans = [span(0, false)];
+        let mut folds = FoldState::default();
+        let stray = key(999);
+        assert_eq!(
+            folds.expand_chain(&spans, &[stray]),
+            vec![stray],
+            "a key with no span is reported"
+        );
+        assert!(
+            !folds.is_collapsed(stray, false),
+            "and flipped, which is the fallback rather than a guess"
         );
     }
 }

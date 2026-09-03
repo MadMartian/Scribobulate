@@ -220,7 +220,22 @@ pub(crate) enum Inline {
     /// An annotated claim — the index into [`ExportDoc::annotations`] plus the run it
     /// covers. Produced by a post-pass over the built tree, never by the walk, so the
     /// claim's extent is decided by the one mapper the preview uses.
-    Claim(usize, Vec<Inline>),
+    ///
+    /// **One claim can be several of these.** A claim spanning inline markup —
+    /// `{==a **bold** word==}` — is split at every construct boundary, so `idx` appears
+    /// once per fragment. `tail` is true on the LAST fragment of a given `idx` and false
+    /// on the others; a sink emits the comment (and, in HTML, the `id="claim-N"` anchor)
+    /// exactly where it is true.
+    ///
+    /// **Marked here rather than tracked by each sink**, because every sink needs the
+    /// same answer and two of them got it wrong the same way: the comment was emitted
+    /// once per fragment and the artefact carried N duplicate ids, which is invalid HTML
+    /// and makes the aside's own back-link ambiguous (F-AP-B-204).
+    Claim {
+        idx: usize,
+        tail: bool,
+        inner: Vec<Inline>,
+    },
 }
 
 /// One list item. `task` is `Some(checked)` for a task-list item.
@@ -334,7 +349,7 @@ fn collect_text(inlines: &[Inline], out: &mut String) {
             | Inline::Superscript(v)
             | Inline::Subscript(v)
             | Inline::Highlight(v)
-            | Inline::Claim(_, v) => collect_text(v, out),
+            | Inline::Claim { inner: v, .. } => collect_text(v, out),
             Inline::Link { inner, .. } => collect_text(inner, out),
         }
     }

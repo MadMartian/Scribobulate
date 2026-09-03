@@ -33,6 +33,22 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+/// The most negative (failed-fetch) entries the cache will hold at once.
+///
+/// **A count, because the TTL alone is not a bound.** A negative entry carries no bytes,
+/// so it is outside the byte budget and outside the LRU, and the expiry sweep only
+/// bounds the set to "however many failures arrive within one TTL" — which is unbounded
+/// for the failures that return in microseconds (connection refused, a cached NXDOMAIN,
+/// a scheme refused before any socket opens). A machine-generated page with thousands of
+/// dead image URLs is an ordinary shape.
+///
+/// **Why 512.** A negative entry is a URL string and an `Instant`; five hundred of them
+/// is tens of kilobytes, far below anything the byte budget concerns itself with, while
+/// being far more distinct failing URLs than a document a reader is actually reading
+/// contains. Dropping one costs a single re-attempt of a URL that will fail again, so
+/// the cost of the cap being too low is bounded and the cost of it being absent is not.
+const MAX_NEGATIVES: usize = 512;
+
 /// The result of asking the cache about a key.
 pub(crate) enum Lookup<V> {
     /// A live, decoded value — the LRU order was updated.
@@ -131,14 +147,55 @@ impl<V: Clone> Cache<V> {
     /// one entry per URL in a thread-local that lives as long as the process.
     ///
     /// Swept HERE rather than on a timer or on every lookup: a failure is the only event
-    /// that can grow this set, so it is the one point where a bound is owed, and it is
-    /// already rare — each one costs a connect timeout, so they cannot arrive quickly
-    /// enough for an O(entries) pass to matter.
+    /// that can grow this set, so it is the one point where a bound is owed.
+    ///
+    /// **The bound is "failures within one TTL", and that is a number this cannot name**
+    /// (F-AP-B-113). The reasoning offered for it — that each failure costs a connect
+    /// timeout, so they cannot arrive fast enough for the set to grow — is false for the
+    /// fast cases: a refused connection, an unresolvable host on a cached NXDOMAIN, a
+    /// scheme rejected before any socket opens. Those return in microseconds, and a
+    /// document with thousands of dead image URLs is an ordinary shape for a scraped or
+    /// machine-generated page. So a second, unconditional cap follows the sweep and
+    /// makes the bound a count rather than an argument: past [`MAX_NEGATIVES`] the
+    /// OLDEST entries go, whatever their age. A dropped negative is not a correctness
+    /// problem — it costs one re-attempt of a URL that will fail again.
+    ///
+    /// The O(entries) pass is still paid per failure, which is fine at this cap: it is a
+    /// few hundred string comparisons against a request that has already been out to the
+    /// network or refused at the door.
     pub(crate) fn record_failure(&mut self, key: String, now: Instant) {
         self.remove(&key);
         self.sweep_expired_negatives(now);
         self.entries
             .insert(key, Slot::Negative { inserted_at: now });
+        // AFTER the insert, so the cap is the count the caller can observe rather than
+        // the count one short of it. Capping first left `MAX_NEGATIVES + 1` behind,
+        // which is the kind of off-by-one a bound stated as prose never catches.
+        self.cap_negatives();
+    }
+
+    /// Drop the OLDEST negative entries until at most [`MAX_NEGATIVES`] remain.
+    ///
+    /// The time bound above is the policy; this is the arithmetic that makes it a
+    /// number. Only reached when a burst of failures arrives inside one TTL, which the
+    /// sweep alone cannot bound — see [`Self::record_failure`].
+    fn cap_negatives(&mut self) {
+        let mut ages: Vec<(Instant, String)> = self
+            .entries
+            .iter()
+            .filter_map(|(k, slot)| match slot {
+                Slot::Negative { inserted_at } => Some((*inserted_at, k.clone())),
+                Slot::Positive { .. } => None,
+            })
+            .collect();
+        if ages.len() <= MAX_NEGATIVES {
+            return;
+        }
+        // Oldest first, so the drain takes the ones furthest from expiring usefully.
+        ages.sort_by_key(|(at, _)| *at);
+        for (_, key) in ages.drain(..ages.len() - MAX_NEGATIVES) {
+            self.entries.remove(&key);
+        }
     }
 
     /// Drop every negative entry whose TTL has elapsed as of `now`.
@@ -554,5 +611,53 @@ mod tests {
             Lookup::Hit(value) => assert_eq!(value, 7, "a positive entry never expires by time"),
             _ => panic!("expected a hit — the sweep took a positive entry"),
         }
+    }
+
+    /// **F-AP-B-113.** The expiry sweep bounds the negative set to "failures within one
+    /// TTL", and the argument that this is enough — that each failure costs a connect
+    /// timeout — is false for the fast ones: a refused connection, a cached NXDOMAIN, a
+    /// scheme rejected before any socket opens. The cap makes the bound a number.
+    ///
+    /// Driven with a TTL long enough that NOTHING expires, which is the whole point: a
+    /// fixture where the sweep does the work cannot see whether the cap exists.
+    #[test]
+    fn a_burst_of_failures_inside_one_ttl_is_still_bounded() {
+        use super::MAX_NEGATIVES;
+        let mut c = cache(1024, 3600);
+        let t0 = Instant::now();
+        for i in 0..(MAX_NEGATIVES + 200) {
+            // Each a microsecond apart — a plausible rate for connection-refused, and
+            // far inside the hour-long TTL, so the sweep removes nothing at all.
+            c.record_failure(
+                format!("https://dead.invalid/{i}.png"),
+                t0 + Duration::from_micros(i as u64),
+            );
+        }
+        assert!(
+            c.negative_entry_count() <= MAX_NEGATIVES,
+            "the negative set is bounded by a COUNT, not only by time: {} entries",
+            c.negative_entry_count()
+        );
+        // The OLDEST went, which is what makes the drop cheap: the survivors are the
+        // ones whose TTL has furthest to run and so are likeliest to spare a re-attempt.
+        assert!(
+            matches!(
+                c.lookup("https://dead.invalid/0.png", t0 + Duration::from_secs(1)),
+                Lookup::Miss
+            ),
+            "the FIRST failure recorded is gone — the cap drops the oldest, whose TTL \
+             has least left to run and so whose eviction spares the fewest re-attempts"
+        );
+        assert!(
+            matches!(
+                c.lookup(
+                    &format!("https://dead.invalid/{}.png", MAX_NEGATIVES + 199),
+                    t0 + Duration::from_secs(1)
+                ),
+                Lookup::NegativeHit
+            ),
+            "and the most recent is still remembered, so the cap did not simply empty \
+             the set — which would pass a bare `<= MAX_NEGATIVES` while doing nothing"
+        );
     }
 }

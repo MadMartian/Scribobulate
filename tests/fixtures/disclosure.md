@@ -230,6 +230,40 @@ Filler prose 19.
 
 Filler prose 20.
 
+## Inside a container
+
+A disclosure that lives inside a blockquote, and one that is the first block of a list
+item (TDD 2.26c). The container's own indent — the quote's accent bar and left margin,
+the item's hanging indent — must survive the toggle, in both directions.
+
+> Quoted lead-in.
+>
+> <details>
+> <summary>Quoted disclosure</summary>
+>
+> Quoted body. This line has to keep the quote's bar and margin after the toggle
+> writes it, and it is long enough to make a missing indent obvious at a glance.
+>
+> </details>
+
+- item one
+- <details>
+  <summary>Disclosure in a list item</summary>
+
+  Body inside the item. This line has to keep the item's hanging indent after the
+  toggle writes it, and it is long enough to make a missing indent obvious.
+
+  </details>
+
+## Two blocks, one raw-HTML block
+
+Adjacent `<details>` with no blank line between them are ONE CommonMark type-6 HTML
+block, which is ordinary GitHub-flavoured Markdown and what a compact hand-written
+document looks like. Each must still fold on its own.
+
+<details><summary>Compact one</summary>Compact body one.</details>
+<details><summary>Compact two</summary>Compact body two.</details>
+
 ## Malformed shapes
 
 **Last on purpose.** An unclosed `<details>` must not swallow the remainder of the
@@ -246,6 +280,21 @@ A `<details>` with no `<summary>` — the label falls back to "Details".
 <details>
 <summary>No blank lines around the body</summary>
 This line is not separated by a blank line, so CommonMark keeps it literal.
+</details>
+
+<details>
+<summary>A comment in the body</summary>
+Before the comment. <!-- an ordinary authoring note --> After the comment.
+</details>
+
+<details>
+<summary>Elements whose content is not markup</summary>
+Shown before.
+<script>
+var s = "<summary>NOT A LABEL</summary>";
+</script>
+<iframe></iframe>
+Shown after.
 </details>
 
 <details>

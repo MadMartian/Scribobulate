@@ -120,11 +120,19 @@ where
         let valid = Rc::clone(&layout_valid);
         super::after_line_heights_validated(view, move |_| valid.set(true));
     }
-    arm_settle(view, SETTLE_TICK, layout_valid, f);
+    arm_settle(view, SETTLE_TICK, layout_valid, Rc::new(Cell::new(0)), f);
 }
 
 /// The state machine [`after_scroll_settles`] IS, with its two ambient inputs — the
 /// tick interval and the layout oracle — supplied rather than constructed inline.
+///
+/// **The write counter is the THIRD ambient input, supplied for the same reason the
+/// other two are.** It is the instrument the quiet window is read from, and a test that
+/// cannot read it can only assert around it: the disarm guard used to be checked by
+/// arming a SECOND counter and observing that the restore's write landed, which passes
+/// whether or not the first handler is still connected (F-TEST-A-002). Handed in, the
+/// assertion is direct — the settle's own instrument must show the same count after
+/// `f` has written the adjustment as it did at the moment it fired.
 ///
 /// **Split out to make the wrapper drivable.** Six behaviours live here and each is a
 /// plausible silent failure: `f` running at most once; the instrument being disarmed
@@ -144,8 +152,13 @@ where
 /// validated" is precisely *"have been validated at least once, and nothing has written
 /// the adjustment since"*, and the quiet window is what carries the invariant from
 /// there.
-fn arm_settle<F>(view: &gtk::TextView, tick: Duration, layout_valid: Rc<Cell<bool>>, f: F)
-where
+fn arm_settle<F>(
+    view: &gtk::TextView,
+    tick: Duration,
+    layout_valid: Rc<Cell<bool>>,
+    writes: Rc<Cell<u64>>,
+    f: F,
+) where
     F: FnOnce(&gtk::TextView) + 'static,
 {
     // Weak capture: a strong one would pin the view alive as an unrooted zombie after
@@ -159,7 +172,6 @@ where
     // them is deliberate — a split-pane sync or an outline navigation landing mid-settle
     // is equally a reason not to restore yet, and distinguishing them would need a flag
     // that every future writer would have to remember to set.
-    let writes = Rc::new(Cell::new(0u64));
     let armed: Rc<RefCell<Option<(gtk::Adjustment, glib::SignalHandlerId)>>> =
         Rc::new(RefCell::new(None));
     if let Some(adjustment) = view.vadjustment() {
@@ -199,13 +211,11 @@ where
         // re-arms this wait from inside `f` starts from a clean count rather than
         // inheriting the write it just made.
         disarm();
-        if let (Some(view), Some(f)) = (alive, once.borrow_mut().take()) {
-            // A zombie retains its last allocation, so no geometry check can tell it
-            // from a live view — `is_realized()` is the exact test (GTK4Rs/AP-128).
-            if view.is_realized() {
-                f(&view);
-            }
-        }
+        // The SHARED gate — see `farscroll::run_once_if_live`. This module and its
+        // parent each spelled the upgrade / take / `is_realized` sequence out, which is
+        // one place too many for a rule whose omission fails by running the caller's
+        // work against a destroyed view (F-DRY-A-011).
+        super::run_once_if_live(alive, &once);
         glib::ControlFlow::Break
     });
 }
@@ -329,7 +339,7 @@ mod gtk_integration_tests {
     fn the_deferred_work_runs_exactly_once() {
         let (view, window, valid) = presented_view();
         let runs = Rc::new(Cell::new(0u32));
-        arm_settle(&view, FAST, valid, {
+        arm_settle(&view, FAST, valid, Rc::new(Cell::new(0)), {
             let runs = Rc::clone(&runs);
             move |_| runs.set(runs.get() + 1)
         });
@@ -348,38 +358,43 @@ mod gtk_integration_tests {
     /// the wait from inside `f` starts from a clean count rather than inheriting the
     /// `set_value` it just made.
     ///
-    /// Asserted the way the contract is used: the restore writes the adjustment, then
-    /// re-arms. If the first wait's handler were still connected, that write would be
-    /// counted by an instrument the second wait has no view of; if the SECOND wait
-    /// inherited a dirty count it would simply wait a tick longer — so what this pins is
-    /// that the second wait completes at all, and that the write made from inside the
-    /// first `f` did not leave a live handler behind.
+    /// **Asserted on the settle's OWN counter, which is why `arm_settle` takes one**
+    /// (F-TEST-A-002). Its predecessor armed a second, independent counter and checked
+    /// that the restore's write landed on the adjustment — which it does whether or not
+    /// the first handler is still connected, so the test passed with `disarm()` deleted.
+    /// The direct statement is that the instrument shows the same count after `f` has
+    /// written as it did at the instant it fired: a live handler would have counted that
+    /// write.
     #[gtktest::test]
     fn the_instrument_is_disarmed_before_the_deferred_work_runs() {
         let (view, window, valid) = presented_view();
         let adjustment = view.vadjustment().expect("a TextView has a vadjustment");
-        // A second, independent counter over the same adjustment: it sees every write,
-        // including the one `f` makes, so it can distinguish "no write happened" from
-        // "the write happened and the settle's own handler was gone".
-        let after_disarm = Rc::new(Cell::new(0u64));
+        let writes = Rc::new(Cell::new(0u64));
+        // What the settle's own instrument read at the moment it fired, captured inside
+        // `f` before anything writes.
+        let at_fire = Rc::new(Cell::new(u64::MAX));
         let second = Rc::new(Cell::new(false));
-        arm_settle(&view, FAST, valid, {
+        arm_settle(&view, FAST, valid, Rc::clone(&writes), {
             let view = view.clone();
-            let after_disarm = Rc::clone(&after_disarm);
+            let writes = Rc::clone(&writes);
+            let at_fire = Rc::clone(&at_fire);
             let second = Rc::clone(&second);
             move |v| {
+                at_fire.set(writes.get());
                 let adj = v.vadjustment().expect("still has a vadjustment");
-                {
-                    let after_disarm = Rc::clone(&after_disarm);
-                    adj.connect_value_changed(move |_| after_disarm.set(after_disarm.get() + 1));
-                }
                 // Through the seam, like every production write (ScrAP-260) — the
                 // point of the write here is that it lands on the adjustment at all.
                 crate::saferizer::scrollpos::jump(&adj, adj.value() + 1.0);
-                arm_settle(&view, FAST, Rc::new(Cell::new(true)), {
-                    let second = Rc::clone(&second);
-                    move |_| second.set(true)
-                });
+                arm_settle(
+                    &view,
+                    FAST,
+                    Rc::new(Cell::new(true)),
+                    Rc::new(Cell::new(0)),
+                    {
+                        let second = Rc::clone(&second);
+                        move |_| second.set(true)
+                    },
+                );
             }
         });
         until_for(
@@ -391,12 +406,19 @@ mod gtk_integration_tests {
                 move || second.get()
             },
         );
-        assert!(
-            after_disarm.get() > 0,
-            "precondition: the restore really did write the adjustment, so the count \
-             the first wait would have inherited is non-zero"
+        assert_eq!(
+            adjustment.value(),
+            1.0,
+            "precondition: the restore really did write the adjustment — with no write \
+             there is nothing for a live handler to have counted and this proves nothing"
         );
-        assert_eq!(adjustment.value(), 1.0, "and the write landed");
+        assert_ne!(at_fire.get(), u64::MAX, "precondition: `f` ran");
+        assert_eq!(
+            writes.get(),
+            at_fire.get(),
+            "the settle's own instrument saw nothing after it fired: it was disarmed \
+             before `f` wrote, so the count a re-armed wait would inherit is clean"
+        );
         window.destroy();
     }
 
@@ -410,7 +432,7 @@ mod gtk_integration_tests {
     fn a_view_unrealized_mid_wait_does_not_run_the_deferred_work() {
         let (view, window, valid) = presented_view();
         let ran = Rc::new(Cell::new(false));
-        arm_settle(&view, FAST, valid, {
+        arm_settle(&view, FAST, valid, Rc::new(Cell::new(0)), {
             let ran = Rc::clone(&ran);
             move |_| ran.set(true)
         });
@@ -426,20 +448,38 @@ mod gtk_integration_tests {
         );
     }
 
-    /// **A view with no vertical adjustment fires on the tick cap's terms, not on a
-    /// false quiet.**
+    /// **A view whose adjustment never moves completes on a FALSE quiet.**
     ///
-    /// With nothing to instrument, the write count never moves and every tick counts as
-    /// quiet — so with the latch set, the wait completes after `SETTLE_QUIET_TICKS`.
-    /// That is the documented degradation rather than a defect, and it is written down
-    /// here because the alternative reading ("no adjustment means no settle") is the one
-    /// a reader reaches for.
+    /// With nothing writing the adjustment the write count never moves and every tick
+    /// counts as quiet — so with the latch set, the wait completes after
+    /// `SETTLE_QUIET_TICKS`. That is the documented degradation rather than a defect,
+    /// and it is written down here because the alternative reading ("no writes means no
+    /// settle") is the one a reader reaches for.
+    ///
+    /// **It does NOT reach the `None` branch, and the name used to say it did**
+    /// (F-TEST-A-003). `set_vadjustment(None)` on a `GtkTextView` does not leave the
+    /// view without one: the widget is a `GtkScrollable` and substitutes a fresh
+    /// zero-range `GtkAdjustment`, so `view.vadjustment()` is still `Some` and the
+    /// handler is still connected — it simply never fires, which is what produces the
+    /// false quiet this actually pins. The genuine `None` branch is unreachable from
+    /// `arm_settle`, whose parameter is a `&gtk::TextView`; it is kept as a total answer
+    /// rather than an `expect`, for the reason every other total in this module is, and
+    /// a future reader should not add a test that claims to exercise it.
     #[gtktest::test]
-    fn a_view_with_no_adjustment_still_completes() {
+    fn a_zero_range_adjustment_completes_on_a_false_quiet() {
         let (view, window, valid) = presented_view();
+        // Substitutes a fresh zero-range adjustment rather than removing one — see the
+        // doc comment. Kept because it is the shortest way to an adjustment nothing
+        // writes.
         view.set_vadjustment(None::<&gtk::Adjustment>);
+        assert!(
+            view.vadjustment().is_some(),
+            "precondition, and the correction this test is named for: the view still \
+             HAS an adjustment — a zero-range substitute — so what follows is a false \
+             quiet and not the absent-adjustment branch"
+        );
         let ran = Rc::new(Cell::new(false));
-        arm_settle(&view, FAST, valid, {
+        arm_settle(&view, FAST, valid, Rc::new(Cell::new(0)), {
             let ran = Rc::clone(&ran);
             move |_| ran.set(true)
         });
@@ -462,10 +502,16 @@ mod gtk_integration_tests {
         let ran = Rc::new(Cell::new(false));
         // The latch left FALSE, which is the one case `settle_should_fire`'s first
         // operand can never satisfy.
-        arm_settle(&view, FAST, Rc::new(Cell::new(false)), {
-            let ran = Rc::clone(&ran);
-            move |_| ran.set(true)
-        });
+        arm_settle(
+            &view,
+            FAST,
+            Rc::new(Cell::new(false)),
+            Rc::new(Cell::new(0)),
+            {
+                let ran = Rc::clone(&ran);
+                move |_| ran.set(true)
+            },
+        );
         until_for(
             Clock::Frame,
             Duration::from_secs(10),

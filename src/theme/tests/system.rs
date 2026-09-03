@@ -344,7 +344,7 @@ fn a_shipped_bands_gradient_ends_on_that_themes_own_page() {
             let Some(far) = value.as_str() else { continue };
             if OFF_PAGE
                 .iter()
-                .any(|(theme, key, _)| *theme == id.as_str() && *key == spelling.as_str())
+                .any(|(theme, key, ..)| *theme == id.as_str() && *key == spelling.as_str())
             {
                 continue;
             }
@@ -367,13 +367,22 @@ fn a_shipped_bands_gradient_ends_on_that_themes_own_page() {
 /// Bands that deliberately do NOT fade to their theme's page, with the reason each one
 /// is worth the hard edge the guard above otherwise forbids.
 ///
-/// Keyed by `(theme id, the key's exact spelling, why)`. A spelling rather than a key
-/// name, because the levelled heading keys claim several and an exemption should licence
-/// the one band it was argued for rather than all five.
-const OFF_PAGE: &[(&str, &str, &str)] = &[
+/// Keyed by `(theme id, the key's exact spelling, the EXACT value the licence was
+/// argued for, why)`. A spelling rather than a key name, because the levelled heading
+/// keys claim several and an exemption should licence the one band it was argued for
+/// rather than all five.
+///
+/// **The value column is the point** (F-AP-B-301). Exempting a key from the
+/// "ends on its own page" guard used to exempt it from EVERY statement about its value:
+/// the three stops moved in the same commit that licensed them, and nothing was left
+/// that could tell. One value per row restores exact pinning for the licensed stops
+/// with the reason still attached, which makes moving one a deliberate edit a reviewer
+/// sees in the diff rather than a silent retune.
+const OFF_PAGE: &[(&str, &str, &str, &str)] = &[
     (
         "candy",
         "disclosure_band_gradient_to_color",
+        "#243e00",
         "operator-directed: the fold is banded in the theme's own confection hues — deep \
          raspberry running to deep lime — rather than in a lifted page surface, so a candy \
          wrapper reads across the summary line instead of a shelf. The hard edge is accepted \
@@ -384,6 +393,7 @@ const OFF_PAGE: &[(&str, &str, &str)] = &[
     (
         "candy",
         "heading_band_gradient_to_color_h1",
+        "#116364",
         "operator-directed: the h1 band runs grape → turquoise, resolving into a second hue \
          rather than dissolving into the page, so a title reads as a banner with somewhere to \
          go. Licences the _h1 spelling rather than the bare key because this theme states no \
@@ -393,6 +403,7 @@ const OFF_PAGE: &[(&str, &str, &str)] = &[
     (
         "candy",
         "heading_band_gradient_to_color_h2",
+        "#0d6811",
         "operator-directed, and the h1 entry's pair: h2 runs its hot-pink shade → green, tinted \
          to the SAME value as h1's turquoise so the two bands read as one decision at two hues. \
          The requested #149c1a is unusable undiluted — 2.88:1 under the lemon ink — which is the \
@@ -400,18 +411,24 @@ const OFF_PAGE: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Every off-page licence is still standing over a real divergence.
+/// Every off-page licence is still standing over the EXACT band it was argued for.
 ///
 /// Same discipline as the contrast sweep's `every_deliberate_exception_is_still_below_its_floor`,
 /// and for the same reason: a theme that has since been retuned to end on its page leaves
 /// an exemption over nothing, and the next band to take that spelling inherits it in
 /// silence — which is precisely the invisibility the guard above exists to end.
+///
+/// **It asserts the value, not merely that the value differs from the page.** The weaker
+/// form let all three of Candy's stops move in the commit that licensed them with nothing
+/// able to notice, which is the licence swallowing the guard rather than narrowing it
+/// (F-AP-B-301). Every ratio quoted in a `why` below was measured against the value in
+/// its own row; moving the stop without re-deriving them is what this now refuses.
 #[test]
 fn every_off_page_licence_still_covers_an_off_page_band() {
     let raw: toml::Value =
         toml::from_str(BUILTIN_THEMES_TOML).expect("the shipped themes file must parse");
     let themes = raw["themes"].as_table().expect("a themes table");
-    for (id, key, why) in OFF_PAGE {
+    for (id, key, licensed, why) in OFF_PAGE {
         let block = themes
             .get(*id)
             .and_then(toml::Value::as_table)
@@ -429,6 +446,13 @@ fn every_off_page_licence_still_covers_an_off_page_band() {
             page.to_ascii_lowercase(),
             "{id}: {key} now ends on the page after all — delete the licence rather than \
              leaving one standing over nothing ({why})"
+        );
+        assert_eq!(
+            far.to_ascii_lowercase(),
+            licensed.to_ascii_lowercase(),
+            "{id}: {key} is {far}, but the licence was argued for {licensed} and every \
+             contrast ratio in its reason was measured against that value. Re-derive \
+             the ratios and update BOTH, or put the stop back ({why})"
         );
     }
 }

@@ -194,6 +194,23 @@ impl Renderer {
     /// margin. Depth is clamped to `1..=MAX_LIST_DEPTH`, read from `tags.rs` rather
     /// than restated, so the clamp and the tag family cannot fall out of step.
     pub(super) fn apply_list_item_per_line(&self, depth: usize, start: i32, end: i32) {
+        self.apply_list_item_lines(depth, start, end, false);
+    }
+
+    /// As [`Self::apply_list_item_per_line`], but with the choice of whether the FIRST
+    /// logical line carries the inter-item gap (`li-{depth}`) or the continuation
+    /// margin (`li-{depth}-cont`).
+    ///
+    /// A region render needs the second: its first line is a continuation of an item
+    /// that began above the region, so giving it the gap would insert an inter-item
+    /// space in the middle of one item.
+    pub(super) fn apply_list_item_lines(
+        &self,
+        depth: usize,
+        start: i32,
+        end: i32,
+        first_line_cont: bool,
+    ) {
         // Derived from the tag family's own bound, NOT a literal 6 (QA round 3,
         // P-4). The two were textually decoupled: this line said `6` while the
         // comment above said `MAX_LIST_DEPTH`, so lowering the constant compiled
@@ -218,7 +235,7 @@ impl Renderer {
             // clamped 1..=MAX_LIST_DEPTH above, so the variant is always registered.
             let tag = TagName::ListItem {
                 depth: depth as u8,
-                cont: idx != 0,
+                cont: first_line_cont || idx != 0,
             };
             let e = self.buf.iter_at_offset(ei);
             self.apply(tag, &s, &e);

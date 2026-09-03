@@ -30,6 +30,30 @@ use gtk::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// Run `f` against `view` exactly once, and only if it is still alive AND still
+/// realized.
+///
+/// **The one place the GTK4Rs/AP-128 gate is spelled.** A zombie widget retains its last
+/// allocation, so no geometry check can tell it from a live one and `is_realized()` is
+/// the exact test — and every deferral in this module needs the same three steps in the
+/// same order: upgrade the weak reference, take the one-shot, check realization. Two of
+/// them spelled it out independently (F-DRY-A-011); a third would have been free to omit
+/// the last step, which fails by running the caller's work against a destroyed view
+/// rather than by not compiling.
+///
+/// `view` is taken already-upgraded because one caller has the upgrade in hand for its
+/// own reason (the settle reads it before deciding whether to fire at all).
+pub(super) fn run_once_if_live<F: FnOnce(&gtk::TextView)>(
+    view: Option<gtk::TextView>,
+    once: &Rc<RefCell<Option<F>>>,
+) {
+    if let (Some(view), Some(f)) = (view, once.borrow_mut().take()) {
+        if view.is_realized() {
+            f(&view);
+        }
+    }
+}
+
 /// Run `f` once GTK has finished validating `view`'s line heights.
 ///
 /// **Contract.** `f` runs at most once, on the main loop, at a point where
@@ -150,13 +174,7 @@ where
     // an empty slot costs one no-op turn.
     let once: Rc<RefCell<Option<F>>> = Rc::new(RefCell::new(Some(f)));
     let run = move |once: &Rc<RefCell<Option<F>>>, weak: &glib::WeakRef<gtk::TextView>| {
-        if let (Some(view), Some(f)) = (weak.upgrade(), once.borrow_mut().take()) {
-            // A zombie retains its last allocation, so no geometry check can tell it
-            // from a live view — `is_realized()` is the exact test (GTK4Rs/AP-128).
-            if view.is_realized() {
-                f(&view);
-            }
-        }
+        run_once_if_live(weak.upgrade(), once);
     };
 
     // The precise path: starved until validation finishes (see the doc comment).

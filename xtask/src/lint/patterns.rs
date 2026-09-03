@@ -554,9 +554,29 @@ pub fn parser_dispatch_wildcards(text: &str) -> Vec<usize> {
     // Line starts, and each line's depth at its first non-space character.
     // Collected up front (not a plain `.enumerate()` over the iterator) so an annotated
     // wildcard can look at the lines ABOVE it for a `DISPATCH_SELECTOR_MARKER` comment.
-    let all_lines: Vec<&str> = text.lines().collect();
+    //
+    // **Each line's start is DERIVED from the text, never re-accumulated from the
+    // lines' own lengths** (F-AP-B-102). `lines()` strips both bytes of a `\r\n` while
+    // an accumulator adding one for the terminator falls a character behind per line,
+    // so on a CRLF checkout every position-indexed lookup below reads the wrong place —
+    // and past about thirty lines the check sees no `match` block at all and reports
+    // PASS having found nothing. Windows is the one platform whose `.gitattributes`
+    // guarantees those endings, so it was silent, green, and green only where nobody
+    // looks. `lint::read_text` folds the endings too; this function is correct without
+    // that help, because a decision that is only right once its caller has corrected it
+    // is not a decision.
+    let mut all_lines: Vec<&str> = Vec::new();
+    let mut line_starts: Vec<usize> = Vec::new();
+    {
+        let mut at = 0usize;
+        for raw in text.split_inclusive('\n') {
+            let line = raw.strip_suffix('\n').unwrap_or(raw);
+            all_lines.push(line.strip_suffix('\r').unwrap_or(line));
+            line_starts.push(at);
+            at += raw.chars().count();
+        }
+    }
     let mut findings = Vec::new();
-    let mut offset = 0usize;
     let mut match_depths: Vec<(i32, bool, Vec<usize>)> = Vec::new(); // (depth, dispatches, wildcard lines)
     for (index, line) in all_lines.iter().copied().enumerate() {
         let trimmed = line.trim_start();
@@ -568,7 +588,7 @@ pub fn parser_dispatch_wildcards(text: &str) -> Vec<usize> {
         // in `copymap.rs` and missed the textually identical one below it, because by
         // then the indices had drifted past the arms. An ASCII-only corpus cannot see
         // this, which is why one of the cases below is deliberately not ASCII.
-        let lead = offset + (line.chars().count() - trimmed.chars().count());
+        let lead = line_starts[index] + (line.chars().count() - trimmed.chars().count());
         let line_depth = depth
             .get(lead.min(depth.len().saturating_sub(1)))
             .copied()
@@ -606,7 +626,6 @@ pub fn parser_dispatch_wildcards(text: &str) -> Vec<usize> {
                 break;
             }
         }
-        offset += line.chars().count() + 1;
     }
     for (_, dispatches, lines) in match_depths {
         if dispatches {

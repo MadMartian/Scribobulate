@@ -71,6 +71,28 @@ impl Theme {
                 );
             }
         }
+        // **A BROADCAST that lands nowhere is an authoring error too**, and the loop
+        // above cannot see it: it asks about the levelled spellings, and a theme
+        // stating the bare `heading_band_gradient_to_color` states none of them. So a
+        // bare gradient on a theme that bands no heading at all was discarded five
+        // times in complete silence — ScrAP-324's class again, one rung up
+        // (F-AP-B-304). Warned ONCE rather than per level, because there is one
+        // mistake; and only when the key reaches nothing at all, which preserves the
+        // silence the ordinary shape depends on (a bare gradient plus a band on h1 and
+        // h2 is what `synthwave` and `candy` ship).
+        let bare = keys::HEADING_BAND_GRADIENT_TO_COLOR.name;
+        if src.stated(bare)
+            && src
+                .colors::<HEADING_LEVELS>(&keys::HEADING_BAND_COLOR)
+                .iter()
+                .all(Option::is_none)
+        {
+            log::warn!(
+                "theme {id:?}: {bare} is ignored at every level — a gradient is a second \
+                 stop, and this theme states no heading_band_color for it to start from \
+                 at any level"
+            );
+        }
         // The summary band's own version of the same discard, diagnosed for the same
         // reason: silence makes "the key resolved fine and was then dropped for want
         // of another" indistinguishable from "the theme stated nothing" (ScrAP-324).

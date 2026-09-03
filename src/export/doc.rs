@@ -67,6 +67,10 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
         {
             mark_claim(&mut doc.blocks, idx, range);
         }
+        // The LAST fragment of this claim, in document order, is the one that carries
+        // the comment. Only knowable after every range for `idx` has been marked, since
+        // the mapper may return several and each may split further (F-AP-B-204).
+        mark_tail(&mut doc.blocks, idx);
         doc.annotations.push(ExportAnnotation {
             comment: ann.comment.clone().unwrap_or_default(),
             claim: claim_text(cleaned, hs, he),
@@ -123,6 +127,137 @@ fn mark_claim(blocks: &mut Vec<Block>, idx: usize, range: (i32, i32)) {
     }
 }
 
+/// Set `tail` on the LAST [`Inline::Claim`] fragment carrying `idx`, in document order.
+///
+/// **A separate pass, because "last" is not decidable while marking.** The mapper can
+/// return several ranges for one claim and each can split further inside emphasis, a
+/// link, a list item or a table cell — so the fragment that turns out to be last is only
+/// known once the whole tree has been walked. Two cheap walks say that plainly; threading
+/// a "furthest so far" through the recursive marker would put the same decision in six
+/// places, which is the shape F-AP-B-204 came out of.
+fn mark_tail(blocks: &mut [Block], idx: usize) {
+    let total = count_claim_fragments(blocks, idx);
+    let mut seen = 0usize;
+    set_claim_tail(blocks, idx, total, &mut seen);
+}
+
+/// How many [`Inline::Claim`] fragments carry `idx`.
+fn count_claim_fragments(blocks: &[Block], idx: usize) -> usize {
+    let mut n = 0usize;
+    for_each_claim(blocks, idx, &mut |_| n += 1);
+    n
+}
+
+/// Mark the `total`-th fragment as the tail and every other as not.
+fn set_claim_tail(blocks: &mut [Block], idx: usize, total: usize, seen: &mut usize) {
+    for_each_claim_mut(blocks, idx, &mut |tail| {
+        *seen += 1;
+        *tail = *seen == total;
+    });
+}
+
+/// Visit every claim fragment carrying `idx`, in document order.
+///
+/// The shared walk, so the counting pass and the marking pass cannot disagree about
+/// which fragments exist or in what order — the two-walk shape is only safe because
+/// they are the same walk.
+fn for_each_claim(blocks: &[Block], idx: usize, f: &mut impl FnMut(&Vec<Inline>)) {
+    fn inlines(v: &[Inline], idx: usize, f: &mut impl FnMut(&Vec<Inline>)) {
+        for inline in v {
+            match inline {
+                Inline::Claim { idx: i, inner, .. } => {
+                    if *i == idx {
+                        f(inner);
+                    }
+                    inlines(inner, idx, f);
+                }
+                Inline::Emphasis(v)
+                | Inline::Strong(v)
+                | Inline::Strikethrough(v)
+                | Inline::Superscript(v)
+                | Inline::Subscript(v)
+                | Inline::Highlight(v)
+                | Inline::Link { inner: v, .. } => inlines(v, idx, f),
+                _ => {}
+            }
+        }
+    }
+    for block in blocks {
+        match block {
+            Block::Heading { inlines: v, .. } | Block::Paragraph(v) => inlines(v, idx, f),
+            Block::BlockQuote(inner) => for_each_claim(inner, idx, f),
+            Block::Disclosure { body, .. } => for_each_claim(body, idx, f),
+            Block::List { items, .. } => {
+                for item in items {
+                    for_each_claim(&item.blocks, idx, f);
+                }
+            }
+            Block::Table { head, rows, .. } => {
+                for cell in head {
+                    inlines(cell, idx, f);
+                }
+                for row in rows {
+                    for cell in row {
+                        inlines(cell, idx, f);
+                    }
+                }
+            }
+            Block::CodeBlock { .. } | Block::Rule => {}
+        }
+    }
+}
+
+/// [`for_each_claim`] with the fragment's `tail` flag handed out for writing.
+fn for_each_claim_mut(blocks: &mut [Block], idx: usize, f: &mut impl FnMut(&mut bool)) {
+    fn inlines(v: &mut [Inline], idx: usize, f: &mut impl FnMut(&mut bool)) {
+        for inline in v.iter_mut() {
+            match inline {
+                Inline::Claim {
+                    idx: i,
+                    inner,
+                    tail,
+                } => {
+                    if *i == idx {
+                        f(tail);
+                    }
+                    inlines(inner, idx, f);
+                }
+                Inline::Emphasis(v)
+                | Inline::Strong(v)
+                | Inline::Strikethrough(v)
+                | Inline::Superscript(v)
+                | Inline::Subscript(v)
+                | Inline::Highlight(v)
+                | Inline::Link { inner: v, .. } => inlines(v, idx, f),
+                _ => {}
+            }
+        }
+    }
+    for block in blocks.iter_mut() {
+        match block {
+            Block::Heading { inlines: v, .. } | Block::Paragraph(v) => inlines(v, idx, f),
+            Block::BlockQuote(inner) => for_each_claim_mut(inner, idx, f),
+            Block::Disclosure { body, .. } => for_each_claim_mut(body, idx, f),
+            Block::List { items, .. } => {
+                for item in items {
+                    for_each_claim_mut(&mut item.blocks, idx, f);
+                }
+            }
+            Block::Table { head, rows, .. } => {
+                for cell in head {
+                    inlines(cell, idx, f);
+                }
+                for row in rows {
+                    for cell in row {
+                        inlines(cell, idx, f);
+                    }
+                }
+            }
+            Block::CodeBlock { .. } | Block::Rule => {}
+        }
+    }
+}
+
 fn mark_inlines(inlines: &mut Vec<Inline>, idx: usize, range: (i32, i32)) {
     let (rs, re) = range;
     let mut out: Vec<Inline> = Vec::with_capacity(inlines.len());
@@ -153,13 +288,16 @@ fn mark_inlines(inlines: &mut Vec<Inline>, idx: usize, range: (i32, i32)) {
                         span: (ts, os),
                     });
                 }
-                out.push(Inline::Claim(
+                out.push(Inline::Claim {
                     idx,
-                    vec![Inline::Text {
+                    // Set by `mark_tail` once the whole tree is marked — only then is
+                    // it known which fragment is last.
+                    tail: false,
+                    inner: vec![Inline::Text {
                         text: mid,
                         span: (os, oe),
                     }],
-                ));
+                });
                 if !after.is_empty() {
                     out.push(Inline::Text {
                         text: after,
@@ -414,6 +552,32 @@ mod export_doc_tests {
         }
     }
 
+    /// **F-AP-B-201.** The same fixtures as above with one thing changed: a line
+    /// break. pulldown-cmark emits a raw-HTML block's content as one `Event::Html`
+    /// PER SOURCE LINE, and this sink used to scan each line on its own — resetting
+    /// the suppressor stack at every newline, so an element whose open and close tags
+    /// sat on different lines lost its suppression HERE while the preview, which
+    /// accumulates the block, kept it. Multi-line raw HTML is how everyone writes it.
+    ///
+    /// The mutation guard is the fixture itself: revert the accumulator and the
+    /// single-line test above still passes while this one goes red.
+    #[test]
+    fn multi_line_raw_html_is_dropped_too() {
+        let doc = doc_of("before\n\n<script>\nalert(1)\n</script>\n\nafter\n");
+        let text = text_of(&doc);
+        assert!(text.contains("before") && text.contains("after"));
+        assert!(!text.contains("alert"), "{text:?}");
+
+        // The same shape inside a disclosure, where the body IS shown as literal text
+        // — so the `<div>`'s suppression is the only thing keeping its content off
+        // the page.
+        let doc =
+            doc_of("<details>\n<summary>S</summary>\n<div>\nhidden text\n</div>\n</details>\n");
+        let text = text_of(&doc);
+        assert!(text.contains('S'), "the summary label survives: {text:?}");
+        assert!(!text.contains("hidden"), "{text:?}");
+    }
+
     /// **Regression.** A **tight** list item's content arrives from pulldown-cmark as
     /// bare inline events with **no `Tag::Paragraph` around them** — unlike a loose
     /// item, which is wrapped. An item's inlines must still land in ONE paragraph.
@@ -590,7 +754,7 @@ mod export_doc_tests {
         let claimed: Vec<String> = inlines
             .iter()
             .filter_map(|i| match i {
-                Inline::Claim(_, v) => Some(crate::export::plain_text(v)),
+                Inline::Claim { inner: v, .. } => Some(crate::export::plain_text(v)),
                 _ => None,
             })
             .collect();
@@ -731,6 +895,30 @@ mod disclosure_export_tests {
 
     fn doc_of(md: &str) -> crate::export::ExportDoc {
         build(md, &RenderOptions::default())
+    }
+
+    /// Every paragraph and heading's plain text, for assertions about CONTENT rather
+    /// than block shape.
+    fn text_of(doc: &crate::export::ExportDoc) -> String {
+        fn blocks(bs: &[Block], out: &mut String) {
+            for b in bs {
+                match b {
+                    Block::Heading { inlines, .. } | Block::Paragraph(inlines) => {
+                        out.push_str(&crate::export::plain_text(inlines));
+                        out.push('\n');
+                    }
+                    Block::Disclosure { summary, body, .. } => {
+                        out.push_str(&crate::export::plain_text(summary));
+                        out.push('\n');
+                        blocks(body, out);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut out = String::new();
+        blocks(&doc.blocks, &mut out);
+        out
     }
 
     /// **Rubric 2.26g — a disclosure exports as it renders.**
@@ -894,6 +1082,22 @@ mod disclosure_export_tests {
             "and nothing after it is swallowed: {:?}",
             doc.blocks
         );
+        // **F-AP-B-203.** "Loses nothing" is half the name and used to be the whole
+        // of what was checked: the label is authored content, the preview writes it
+        // as an ordinary line, and this sink dropped it on the floor. The two sinks
+        // must name the construct the same thing.
+        assert!(
+            text_of(&doc).contains("Never closed"),
+            "the authored label survives as an ordinary line: {:?}",
+            doc.blocks
+        );
+        // And with no `<summary>` at all it takes the same default the preview does.
+        let doc = doc_of("<details>\n\nbody\n\n## After\n");
+        assert!(
+            text_of(&doc).contains(crate::renderer::DEFAULT_SUMMARY_LABEL),
+            "an unclosed, summaryless block still names itself: {:?}",
+            doc.blocks
+        );
     }
 
     /// A `<details>` with no `<summary>` takes the same default label the preview
@@ -907,6 +1111,81 @@ mod disclosure_export_tests {
         assert_eq!(
             crate::export::plain_text(summary),
             crate::renderer::DEFAULT_SUMMARY_LABEL
+        );
+    }
+    /// **F-AP-B-204: one claim, one comment, one `id`.**
+    ///
+    /// A claim spanning inline markup — `{==a **bold** word==}` — is split at every
+    /// construct boundary, so `Inline::Claim` appears once per fragment. Both sinks
+    /// emitted the comment per fragment, and HTML emitted `id="claim-N"` with it: the
+    /// note printed three times, and the artefact carried three elements with one id,
+    /// which is invalid and makes the aside's own back-link ambiguous.
+    ///
+    /// The fixture's claim MUST cross a construct boundary — that is the whole design
+    /// of it. A claim over plain text is one fragment, and this passes against the
+    /// unfixed code.
+    #[test]
+    fn a_claim_spanning_inline_markup_emits_its_comment_once() {
+        use crate::export::Inline;
+        let md = "A paragraph with {==a **bold** word==}{>>the note<<} in it.\n";
+        let doc = build(md, &RenderOptions::default());
+
+        // The precondition, stated rather than assumed: several fragments exist.
+        fn claims(v: &[Inline], n: &mut usize, tails: &mut usize) {
+            for inline in v {
+                match inline {
+                    Inline::Claim { tail, inner, .. } => {
+                        *n += 1;
+                        *tails += usize::from(*tail);
+                        claims(inner, n, tails);
+                    }
+                    Inline::Emphasis(v)
+                    | Inline::Strong(v)
+                    | Inline::Strikethrough(v)
+                    | Inline::Superscript(v)
+                    | Inline::Subscript(v)
+                    | Inline::Highlight(v)
+                    | Inline::Link { inner: v, .. } => claims(v, n, tails),
+                    _ => {}
+                }
+            }
+        }
+        let (mut n, mut tails) = (0usize, 0usize);
+        for block in &doc.blocks {
+            if let Block::Paragraph(v) = block {
+                claims(v, &mut n, &mut tails);
+            }
+        }
+        assert!(
+            n > 1,
+            "precondition: the claim really is split by the bold run — with one \
+             fragment this test passes against the defect"
+        );
+        assert_eq!(tails, 1, "exactly one fragment is the tail: {n} fragments");
+
+        let theme = crate::theme::active();
+        let ink = gtk::gdk::RGBA::BLACK;
+        let palette = crate::palette::Palette::from_base(
+            gtk::gdk::RGBA::WHITE,
+            ink,
+            ink,
+            gtk::gdk::RGBA::new(0.2, 0.5, 0.9, 1.0),
+            &theme,
+        );
+        let html = crate::export::html::render(&doc, &palette, &theme);
+        assert_eq!(
+            html.matches("<aside class=\"comment\">").count(),
+            1,
+            "the comment is written once, not once per fragment"
+        );
+        assert_eq!(
+            html.matches("id=\"claim-1\"").count(),
+            1,
+            "and exactly one element carries the id an anchor points at"
+        );
+        assert!(
+            html.matches("class=\"claim\"").count() >= n,
+            "while every fragment still carries the highlight class"
         );
     }
 }

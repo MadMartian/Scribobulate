@@ -114,7 +114,7 @@ mod gtk_integration_tests {
     /// there for the length of that window and fails it too, since nothing here pumps.
     #[gtktest::test]
     fn typing_in_split_mode_forgets_every_fold_on_the_keystroke() {
-        use crate::fold::{FoldKey, FoldState};
+        use crate::fold::FoldState;
         use gtk::prelude::TextBufferExt;
 
         let app = gtk::Application::new(
@@ -133,9 +133,7 @@ mod gtk_integration_tests {
         let spans = crate::renderer::disclosure::scan_document(DOC);
         assert_eq!(spans.len(), 2, "fixture holds two disclosures");
         for span in &spans {
-            st.folds
-                .borrow_mut()
-                .toggle(FoldKey::from_source_offset(span.start));
+            st.folds.borrow_mut().toggle(span.fold_key());
         }
         assert_ne!(
             *st.folds.borrow(),
@@ -152,6 +150,162 @@ mod gtk_integration_tests {
             *st.folds.borrow(),
             FoldState::default(),
             "the keystroke dropped every fold, without waiting for the debounced re-render"
+        );
+    }
+
+    /// **F-AP-B-105: a click that lands inside the debounce is a STATED no-op.**
+    ///
+    /// A `FoldKey` is baked into a toggle widget when it is built. In split mode the
+    /// preview re-renders on a ~300 ms debounce, so a reader can click a control in the
+    /// window between typing and the re-render — and that control's key names the
+    /// PREVIOUS document, while the fold map has already been cleared on the keystroke.
+    /// The click did nothing at all, silently, and `MANUAL-TEST.md` 2.26l asserted that
+    /// it would toggle the block clicked.
+    ///
+    /// **The loss is not fixed, it is declared.** Making the key survive means
+    /// re-deriving it against the new source, which is the "key per-fold state to
+    /// something that survives arbitrary edits" problem `crate::fold` removes rather
+    /// than solves. What must never happen is a DIFFERENT block toggling, and a stale
+    /// key can land on another block's new start offset — so the stamp refuses rather
+    /// than gambles.
+    #[gtktest::test]
+    fn a_toggle_minted_before_a_keystroke_is_refused_rather_than_applied() {
+        use crate::fold::FoldState;
+
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.foldepoch"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+
+        const DOC: &str =
+            "Lead paragraph.\n\n<details>\n<summary>One</summary>\n\nBody one.\n\n</details>\n";
+        let window = crate::window::new_window(&app, "IT-foldepoch", DOC, None);
+        change_action_state(&window, "view-mode", &"split".to_variant());
+        let st = state(&window).expect("state registered after new_window");
+
+        let toggle = st
+            .split
+            .preview_scroller()
+            .and_then(|sw| sw.child())
+            .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
+            .and_then(|v| crate::preview::scrib_render_data(&v))
+            .map(|rd| rd.borrow().disclosure_lines[0].1.clone())
+            .expect("the render emitted a control");
+
+        // The reader types, above the block. Every offset below has moved and the map
+        // has been cleared on the keystroke (2.26l).
+        let mut at = st.editor_buf.start_iter();
+        st.editor_buf.insert(&mut at, "x");
+        assert_eq!(
+            *st.folds.borrow(),
+            FoldState::default(),
+            "precondition: the keystroke cleared the map"
+        );
+
+        // ...and only THEN clicks the control the previous render built.
+        toggle.set_active(!toggle.is_active());
+
+        assert_eq!(
+            *st.folds.borrow(),
+            FoldState::default(),
+            "the stale click changed no fold at all — it was refused, not applied to a \
+             key that names the previous document"
+        );
+    }
+
+    /// **F-AP-B-101: a VIEW-MODE switch is not an edit, and must not forget the folds.**
+    ///
+    /// The other half of 2.26l's contract, and the one it did not have. `set_source`
+    /// cleared unconditionally, and every path leaving an editor-visible mode calls it
+    /// with the editor's text whether or not anything was typed — so a reader who
+    /// collapsed three blocks in Preview, glanced at Split and came back found them all
+    /// open, with nothing having changed underneath them. Ctrl+S on a clean buffer and
+    /// the zoom re-render took the same route.
+    ///
+    /// Two assertions, because the fix has two halves and either alone is a defect: the
+    /// MODEL must keep the folds, and the pane the switch rebuilds must be RENDERED at
+    /// them. A model that survives a switch onto a pane built at the document's own
+    /// state is the same bug with a longer path.
+    #[gtktest::test]
+    fn switching_view_mode_keeps_the_reader_s_folds_and_renders_at_them() {
+        use crate::fold::FoldState;
+        use crate::winstate::ViewMode;
+
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.foldacrossmode"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+
+        // The body is long enough to outrun the collapsed preview's character limit, so
+        // its absence means genuinely collapsed rather than merely truncated.
+        let body = format!("Body one. {}MARKERONE", "filler ".repeat(20));
+        let doc = format!(
+            "Lead paragraph.\n\n<details open>\n<summary>One</summary>\n\n{body}\n\n</details>\n"
+        );
+        let window = crate::window::new_window(&app, "IT-foldmode", &doc, None);
+        let st = state(&window).expect("state registered after new_window");
+
+        let spans = crate::renderer::disclosure::scan_document(&doc);
+        assert_eq!(spans.len(), 1, "fixture holds one disclosure");
+        let key = spans[0].fold_key();
+
+        let shown = || {
+            let view = st
+                .split
+                .preview_scroller()
+                .and_then(|sw| sw.child())
+                .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
+                .expect("a preview view in a preview-visible mode");
+            let buf = view.buffer();
+            buf.slice(&buf.start_iter(), &buf.end_iter(), true)
+                .to_string()
+        };
+
+        assert!(
+            shown().contains("MARKERONE"),
+            "precondition: the document says `open`, so the block starts expanded"
+        );
+
+        // The reader closes it. Re-rendered directly rather than by driving the
+        // toggle widget: this test is about what a MODE SWITCH does to the fold state,
+        // and driving the control would make it a test of the splice as well.
+        st.folds.borrow_mut().toggle(key);
+        {
+            let sw = st.split.preview_scroller().expect("a preview scroller");
+            crate::preview::re_render(
+                &sw,
+                &doc,
+                st.doc_dir().as_deref(),
+                1.0,
+                st.allow_unsafe_images.get(),
+                &st.folds.borrow(),
+                st.fold_epoch(),
+            );
+        }
+        assert!(
+            !shown().contains("MARKERONE"),
+            "precondition: the reader's collapse took effect"
+        );
+
+        // Preview → Split → Preview. Nothing was typed.
+        change_action_state(&window, "view-mode", &"split".to_variant());
+        assert_eq!(st.view_mode.get(), ViewMode::Split, "the switch took");
+        change_action_state(&window, "view-mode", &"preview".to_variant());
+
+        assert_ne!(
+            *st.folds.borrow(),
+            FoldState::default(),
+            "the MODEL kept the reader's fold across a switch that changed no text"
+        );
+        assert!(
+            !shown().contains("MARKERONE"),
+            "and the pane the switch REBUILT was rendered at it — a model that survives \
+             onto a pane built at the document's own state is the same defect by a \
+             longer route"
         );
     }
 }

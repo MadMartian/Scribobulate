@@ -85,6 +85,25 @@ pub(super) fn get_preview_sw(window: &ApplicationWindow) -> Option<gtk::Scrolled
     let st = winstate::state(window)?;
     tab_preview_sw(&st, current_mode(window))
 }
+
+/// The preview pane's `CodePreviewView`, or `None` where there is no preview pane or its
+/// child is not one.
+///
+/// **The tree shape is stated HERE and nowhere else.** `get_preview_sw` above resolves
+/// which scroller; this resolves the view inside it, and three call sites in
+/// `src/window/` each spelled the same `.child().and_then(downcast)` out — one of them
+/// added by this branch, which is how a third spelling arrives (F-DRY-106). Each still
+/// says its OWN thing about a `None`: find reports `PreviewUnresolved`, the fold splice
+/// logs a refusal naming the key, the copy target falls back to the editor. That is the
+/// part that differs and is theirs; the walk is not.
+pub(super) fn get_preview_view(
+    window: &ApplicationWindow,
+) -> Option<crate::codeview::CodePreviewView> {
+    get_preview_sw(window)?
+        .child()?
+        .downcast::<crate::codeview::CodePreviewView>()
+        .ok()
+}
 /// Re-render `tab`'s preview into `preview_sw` in place, preserving the
 /// reading position across the buffer swap (ScrAP-14/GTK4Rs/AP-15). Reads
 /// `mode`-appropriate source text straight off `tab` — in split mode
@@ -144,10 +163,10 @@ fn re_render_preview(
     zoom: f64,
     allow_unsafe: bool,
 ) {
-    let md = match mode {
-        ViewMode::Split => tab.editor_text(),
-        ViewMode::Preview | ViewMode::Edit => tab.source().clone(),
-    };
+    // The one owner of "which text is the PREVIEW PANE showing" — see
+    // `TabState::previewed_source`. This arm was hand-rolled here, and in two other
+    // render paths, with a comment for company (F-DRY-102).
+    let md = tab.previewed_source(mode);
     // In split mode, force the editor as scroll driver so the preview's validation
     // noise during the buffer swap doesn't drive the editor (GTK4Rs/AP-16).
     if mode == ViewMode::Split {
@@ -161,6 +180,7 @@ fn re_render_preview(
         zoom,
         allow_unsafe,
         &tab.folds.borrow(),
+        tab.fold_epoch(),
     );
 }
 

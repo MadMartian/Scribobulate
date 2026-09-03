@@ -546,7 +546,7 @@ banded heading does.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `disclosure_marker_color` | colour | widget foreground | The indicator's ink, **both states**. Unset, it keeps the desktop theme's ink, which is what the control always drew with. Tints a stock icon and inks a glyph alike; a sprite indicator ignores it, per the sprite-outranks-flat rule. |
+| `disclosure_marker_color` | colour | `foreground`, else the widget's | The indicator's ink, **both states**. Unset, it takes the theme's own `foreground`. A theme that states no page of its own — System — states no marker ink either, and the indicator keeps the desktop's chevron in the desktop's colour (TDD 18.53). Tints a stock icon and inks a glyph alike; a sprite indicator ignores it, per the sprite-outranks-flat rule. |
 | `disclosure_glyph` | `string` | — | A glyph drawn in place of the **collapsed** indicator. |
 | `disclosure_expanded_glyph` | `string` | — | A glyph drawn in place of the **expanded** indicator. Resolves independently of the collapsed one. |
 | `disclosure_sprite` | sprite path | — | A sprite drawn in place of the collapsed indicator. |

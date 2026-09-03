@@ -322,6 +322,7 @@ mod gtk_integration_tests {
             1.0,
             false,
             &crate::fold::FoldState::default(),
+            0,
         );
         park_reader_at(&view, 1);
 

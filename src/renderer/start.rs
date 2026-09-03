@@ -18,9 +18,9 @@ impl Renderer {
     /// rather than only by rendering a document and reading the text back.
     fn apply_lead_in(&mut self, kind: blockspacing::BlockKind) {
         let cx = blockspacing::BlockContext {
-            list_item_open: self.list_item_open,
+            list_item_open: self.inter.list_item_open,
             inside_list: !self.inter.lists.is_empty(),
-            list_first_item: self.list_first_item,
+            list_first_item: self.inter.list_first_item,
             at_start: self.inter.at_start,
         };
         match blockspacing::lead_in(kind, cx) {
@@ -45,7 +45,7 @@ impl Renderer {
                 // the flag unconditionally is equivalent to the old first-branch-only
                 // clear: the other branches are reached only when it is already false.
                 self.apply_lead_in(blockspacing::BlockKind::Paragraph);
-                self.list_item_open = false;
+                self.inter.list_item_open = false;
             }
             Tag::BlockQuote(_) => {
                 if self.inter.blockquote_depth == 0 {
@@ -65,14 +65,14 @@ impl Renderer {
                 // TagEnd::Item increments the counter, so any disordered or
                 // repeated source numerals render as 1, 2, 3 …
                 self.inter.lists.push(start.map(|_| 1u64));
-                self.list_first_item = true;
+                self.inter.list_first_item = true;
             }
             Tag::Item => {
                 // Tag::List already separated the first item; `blockspacing` holds that
                 // rule. Clearing the flag unconditionally is equivalent to the old
                 // first-branch-only clear, for the same reason as `Tag::Paragraph`.
                 self.apply_lead_in(blockspacing::BlockKind::Item);
-                self.list_first_item = false;
+                self.inter.list_first_item = false;
                 // Record where this item starts (after the leading newline) so
                 // that TagEnd::Item can apply the hanging-indent tag over the full
                 // item span. Lists inside blockquotes are buffer text too now, so
@@ -93,7 +93,7 @@ impl Renderer {
                     first_line: item_start,
                     quoted: self.inter.blockquote_depth > 0,
                 });
-                self.list_item_open = true;
+                self.inter.list_item_open = true;
                 // NO inline marker text is inserted: a bullet /
                 // number / task checkbox is drawn in a left gutter in Phase 2 and occupies
                 // ZERO buffer chars, so an item's content starts immediately with its text.
@@ -350,21 +350,30 @@ impl Renderer {
         use super::disclosure::DetailsTag;
         for tag in super::disclosure::scan_disclosure_tags(html) {
             match tag {
-                DetailsTag::DetailsOpen { open } => {
-                    // The block's identity is where its opening raw-HTML block begins
-                    // in the SOURCE — stable across every re-render that does not
-                    // change the text, which is exactly the set of events a reader
-                    // expects a fold to survive (`crate::fold`).
-                    let key = crate::fold::FoldKey::from_source_offset(self.event_src.start);
+                DetailsTag::DetailsOpen { open, at } => {
+                    // The block's identity is where its own `<details>` TAG begins in
+                    // the SOURCE — stable across every re-render that does not change
+                    // the text, which is exactly the set of events a reader expects a
+                    // fold to survive (`crate::fold`).
+                    //
+                    // The block's offset plus the tag's offset within it, because two
+                    // `<details>` can share a block: the compact GitHub form is one
+                    // CommonMark type-6 block, and keying on the block alone gave both
+                    // siblings one identity (F-TEST-B-005). The same sum is computed
+                    // by `DisclosureSpan::fold_key`, and that the two agree is what
+                    // the cursor's cross-check below is for.
+                    let block_start = self.event_src.start;
+                    let key = crate::fold::FoldKey::from_source_offset(block_start + at);
                     // A block the document never closes cannot fold — see
                     // `DisclosureFrame::foldable`. Asked FIRST, and unconditionally,
                     // because the answer comes from a cursor that must advance once
                     // per `<details>` however this block turns out.
                     let span_index = self.inter.disclosure_cursor.seen();
-                    let foldable = self.opening_details_is_closed(key.source_offset());
+                    let foldable = self.opening_details_is_closed(block_start);
                     let collapsed = foldable && self.folds.is_collapsed(key, open);
                     self.inter.disclosure_stack.push(super::DisclosureFrame {
                         key,
+                        block_start,
                         span_index,
                         foldable,
                         collapsed,
@@ -637,6 +646,14 @@ impl Renderer {
                 self.collapsed_blocks.push(super::CollapsedBlock {
                     summary_offset,
                     key,
+                    // The frame's `label_end`, which both branches above have just
+                    // written — see `CollapsedBlock::resume_offset` for why it is the
+                    // label's end and not the line's.
+                    resume_offset: self
+                        .inter
+                        .disclosure_stack
+                        .last()
+                        .map_or(summary_offset, |f| f.label_end),
                     body,
                 });
             }
@@ -662,6 +679,25 @@ impl Renderer {
     /// remote/escaping/other-scheme src is Refused unless "Show Unsafe Images" —
     /// `<picture>`/`<img>` widens what renders, never what is trusted.
     fn render_image_slot(&mut self, candidates: &[String]) {
+        // **A COLLAPSED body's images are not resolved, not fetched and not anchored.**
+        // The collapse mechanism's own contract is that a hidden body's events simply
+        // do not reach the buffer (`events.rs`), and raw-HTML events are exempted from
+        // that only so the `</details>` which ENDS the suppression can arrive. That
+        // exemption reached this far: an `<img>`/`<picture>` written as raw HTML inside
+        // a collapsed block was resolved, a remote one was FETCHED with "Show Unsafe
+        // Images" on — a tracking pixel reporting back from behind a fold the reader
+        // deliberately did not open — and a local one was anchored visibly inside a
+        // region that is meant to be drawn as nothing (F-SEC-205). Markdown images were
+        // never affected: `Event::Start(Tag::Image)` is not raw HTML, so `events.rs`
+        // drops it before this path is reached.
+        //
+        // Gated HERE rather than at the two callers because this is the single funnel
+        // for resolve → load → anchor, and a gate at a caller is a rule the next caller
+        // has to remember. `picture_open` is still tracked normally by both, so a
+        // `<picture>` group straddling the boundary cannot be stranded.
+        if self.inside_collapsed_body() {
+            return;
+        }
         for src in candidates {
             let resolution = resolve_image(src, self.doc_dir.as_deref(), self.allow_unsafe_images);
             if let Some(tex) = load_texture(&resolution) {
@@ -781,6 +817,23 @@ impl Renderer {
 pub(super) fn load_texture(resolution: &ImageResolution) -> Option<gtk::gdk::Texture> {
     match resolution {
         ImageResolution::Local(path) => {
+            // The same bound as the remote arm, by the one probe a PATH admits.
+            // `gdk_pixbuf_get_file_info` reads the header and stops; it is equivalent
+            // to the byte probe (measured in `sprite`) and takes a path, which is what
+            // this arm has. The objection recorded at `sprite::probe_pixel_size` — that
+            // re-opening a file already read and validated reintroduces a
+            // check-then-use seam — does not apply here, because nothing has read this
+            // file yet: `Texture::from_file` below opens it for the first time.
+            if let Some((_, w, h)) = gtk::gdk_pixbuf::Pixbuf::file_info(path) {
+                if !crate::limits::image_pixels_within_cap(w, h) {
+                    log::warn!(
+                        "image {} decodes to {w}×{h} pixels (cap {}) — not loaded",
+                        path.display(),
+                        crate::limits::MAX_IMAGE_PIXELS
+                    );
+                    return None;
+                }
+            }
             let file = gtk::gio::File::for_path(path);
             match gtk::gdk::Texture::from_file(&file) {
                 Ok(texture) => Some(texture),
@@ -818,6 +871,19 @@ fn load_remote_texture(uri: &str) -> Option<gtk::gdk::Texture> {
                 return None;
             }
         };
+        // **The dimension probe runs BEFORE the decode**, so an image bomb is refused
+        // without ever being expanded — `imagefetch`'s byte cap bounds the transfer and
+        // says nothing about what it expands to (F-SEC-206). Same probe the sprite path
+        // uses, so the two cannot disagree about what a header says.
+        if let Some((w, h)) = crate::sprite::probe_pixel_size(&bytes) {
+            if !crate::limits::image_pixels_within_cap(w, h) {
+                log::warn!(
+                    "remote image {uri} decodes to {w}×{h} pixels (cap {}) — not loaded",
+                    crate::limits::MAX_IMAGE_PIXELS
+                );
+                return None;
+            }
+        }
         match gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(bytes)) {
             Ok(texture) => Some(texture),
             Err(err) => {

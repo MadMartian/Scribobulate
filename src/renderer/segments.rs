@@ -38,7 +38,7 @@
 //! inside the fence) is accepted.
 
 use super::scan::{scan_script_spans, Script};
-use pulldown_cmark::{Event, Parser, Tag};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use std::collections::HashMap;
 use std::ops::Range;
 
@@ -120,6 +120,27 @@ pub(crate) fn is_inline_tag(tag: &Tag<'_>) -> bool {
             | Tag::Subscript
             | Tag::Link { .. }
             | Tag::Image { .. }
+    )
+}
+
+/// The CLOSE half of [`is_inline_tag`], for a walk that sees `TagEnd` rather than `Tag`.
+///
+/// **Beside its opening twin, not restated at a call site.** `disclosure::body_plain_text`
+/// carried this list as a second `TagEnd` match, so the two could disagree about whether
+/// a construct is inline — and the failure is silent in both directions: a boundary
+/// treated as a block emits a newline that makes a search for `foobar` miss `foo*bar*`,
+/// and one treated as inline joins two runs the reader sees apart and claims a match the
+/// page does not have (F-AP2-008).
+pub(crate) fn is_inline_tag_end(end: &TagEnd) -> bool {
+    matches!(
+        end,
+        TagEnd::Emphasis
+            | TagEnd::Strong
+            | TagEnd::Strikethrough
+            | TagEnd::Superscript
+            | TagEnd::Subscript
+            | TagEnd::Link
+            | TagEnd::Image
     )
 }
 

@@ -12,7 +12,7 @@
 //! Its own file rather than more of `tests.rs`, which is at the 500-line soft limit,
 //! and because the shape is different: a tag-range comparison rather than a text one.
 
-use crate::fold::{FoldKey, FoldState};
+use crate::fold::FoldState;
 use gtk::prelude::*;
 
 /// Every contiguous range carrying the tag `name`, as `(start, end)` char offsets.
@@ -63,7 +63,7 @@ fn ranges_both_ways(md: &str, before: &FoldState, after: &FoldState, name: &str)
         crate::theme::active(),
         before,
     );
-    let key = FoldKey::from_source_offset(crate::renderer::disclosure::scan_document(md)[0].start);
+    let key = crate::renderer::disclosure::scan_document(md)[0].fold_key();
     crate::preview::splice::splice(
         &starting.buf,
         None,
@@ -112,7 +112,7 @@ const MD: &str = concat!(
 /// would make this a test of the fixture.
 #[gtktest::test]
 fn a_spliced_collapse_inks_the_summary_line_the_way_a_full_render_does() {
-    let key = FoldKey::from_source_offset(crate::renderer::disclosure::scan_document(MD)[0].start);
+    let key = crate::renderer::disclosure::scan_document(MD)[0].fold_key();
     // The source says `open`; toggling the reader's state closes it.
     let mut closed = FoldState::default();
     closed.toggle(key);
@@ -155,7 +155,7 @@ fn a_spliced_collapse_inks_the_summary_line_the_way_a_full_render_does() {
 #[gtktest::test]
 fn a_spliced_expand_leaves_the_ink_over_the_label_alone() {
     let md = MD.replace("<details open>", "<details>");
-    let key = FoldKey::from_source_offset(crate::renderer::disclosure::scan_document(&md)[0].start);
+    let key = crate::renderer::disclosure::scan_document(&md)[0].fold_key();
     let mut opened = FoldState::default();
     opened.toggle(key);
 
@@ -183,4 +183,56 @@ fn a_spliced_expand_leaves_the_ink_over_the_label_alone() {
         "sanity: an expanded block has no preview fragment at all, which is what makes \
          the ink extent above the label's own"
     );
+}
+
+/// **The CONTAINER tags, which the two assertions above do not reach at all.**
+///
+/// `disclosure-ink` and `disclosure-preview` are written by the summary line itself,
+/// inside the region. Every other tag a spliced region inherits — a blockquote's
+/// margin, a list item's hanging indent, a code block's inset, a heading's — is applied
+/// at a `TagEnd` the region walk may never reach, because the walk stops the moment
+/// `key`'s own frame pops. That is a different failure mode from an ink extent and it
+/// had no assertion of any kind (F-AP2-006).
+///
+/// Driven over both container fixtures, and over every tag family the region can carry.
+/// A family the fixture does not produce is skipped LOUDLY rather than silently
+/// compared as two empty vectors: the whole hazard here is a check that passes because
+/// it found nothing.
+#[gtktest::test]
+fn a_spliced_region_carries_the_same_container_tags_a_full_render_does() {
+    // `li-1-cont` and `bq-1` are the families a disclosure inside a container actually
+    // inherits; `code-block` and `h2` cover the two the region's own body writes.
+    const FAMILIES: [&str; 6] = ["bq-1", "li-1", "li-1-cont", "code-block", "h1", "h2"];
+
+    for (name, md) in [
+        ("blockquote", super::IN_BLOCKQUOTE),
+        ("list item", super::IN_LIST_ITEM),
+    ] {
+        let key = crate::renderer::disclosure::scan_document(md)[0].fold_key();
+        let mut opened = FoldState::default();
+        opened.toggle(key);
+
+        let mut seen = 0usize;
+        for family in FAMILIES {
+            let BothWays { spliced, fresh } =
+                ranges_both_ways(md, &FoldState::default(), &opened, family);
+            if fresh.is_empty() && spliced.is_empty() {
+                continue;
+            }
+            seen += 1;
+            assert_eq!(
+                spliced, fresh,
+                "{name}: `{family}`'s ranges after a splice must be the ones a full \
+                 render of the same fold state produces — a container tag applied at a \
+                 TagEnd the region walk never reaches is how a spliced pane keeps a \
+                 correct buffer and a wrong indent"
+            );
+        }
+        assert!(
+            seen >= 2,
+            "{name}: only {seen} of the tag families were present in either render, so \
+             this sweep is close to vacuous — the fixture no longer contains the \
+             containers it is named for"
+        );
+    }
 }

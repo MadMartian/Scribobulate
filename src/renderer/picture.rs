@@ -31,7 +31,7 @@
 // the tag-name-boundary rule — lives in `renderer::rawhtml`, which owns it for every
 // scanner and sink. It was extracted from here when the disclosure work made the set
 // span two features; this module reads it and never restates it.
-use super::rawhtml::{attr, recognise_html_element, tag_end, RawHtmlElement};
+use super::rawhtml::{attr, RawHtml, RawHtmlElement, RawItem, TagKind};
 
 /// One image-relevant tag from a raw-HTML fragment, in document order.
 #[derive(Debug, PartialEq)]
@@ -53,32 +53,32 @@ pub(crate) enum ImgTag {
 /// renderer and the export sink alike, so the permitted set cannot be reproduced
 /// approximately anywhere.
 pub(crate) fn scan_image_tags(html: &str) -> Vec<ImgTag> {
-    let lower = html.to_ascii_lowercase();
+    // **The shared lexer, never a tag walk of this scanner's own** — see
+    // `rawhtml::lex`. Its predecessor found its own `<`s, which meant it walked
+    // straight into a `<script>`'s source and lifted an `<img src>` out of it into a
+    // live image candidate (F-SEC-210). Reading the one stream makes a raw-text
+    // element opaque here by construction rather than by remembering to skip it.
+    let doc = RawHtml::lex(html);
     let mut tags = Vec::new();
 
-    let mut i = 0usize;
-    while let Some(rel) = lower[i..].find('<') {
-        let start = i + rel;
-        // Quote-aware: a `>` inside an attribute value does not end the tag, and a
-        // scanner that thinks it does re-reads the tag's own tail as markup.
-        let Some(end) = tag_end(html, start) else {
-            break;
+    for item in doc.items() {
+        let RawItem::Tag(tag) = item else { continue };
+        let TagKind::Known(el) = tag.kind else {
+            continue;
         };
-        let tag_lower = &lower[start..=end];
-        let tag_orig = &html[start..=end];
-        match recognise_html_element(tag_lower) {
-            Some(RawHtmlElement::PictureOpen) => tags.push(ImgTag::PictureOpen),
-            Some(RawHtmlElement::PictureClose) => tags.push(ImgTag::PictureClose),
-            Some(RawHtmlElement::Source) => {
-                if let Some(url) = attr(tag_orig, "srcset")
+        match el {
+            RawHtmlElement::PictureOpen => tags.push(ImgTag::PictureOpen),
+            RawHtmlElement::PictureClose => tags.push(ImgTag::PictureClose),
+            RawHtmlElement::Source => {
+                if let Some(url) = attr(tag.text, "srcset")
                     .as_deref()
                     .and_then(first_srcset_url)
                 {
                     tags.push(ImgTag::Candidate(url));
                 }
             }
-            Some(RawHtmlElement::Img) => {
-                if let Some(src) = attr(tag_orig, "src") {
+            RawHtmlElement::Img => {
+                if let Some(src) = attr(tag.text, "src") {
                     tags.push(ImgTag::Candidate(src));
                 }
             }
@@ -88,15 +88,11 @@ pub(crate) fn scan_image_tags(html: &str) -> Vec<ImgTag> {
             // compile here until someone decides whether this scanner cares about it;
             // a wildcard would silently render it as nothing, which is the failure
             // mode TDD 2.25 pins for the parser dispatchers.
-            Some(
-                RawHtmlElement::DetailsOpen
-                | RawHtmlElement::DetailsClose
-                | RawHtmlElement::SummaryOpen
-                | RawHtmlElement::SummaryClose,
-            ) => {}
-            None => {}
+            RawHtmlElement::DetailsOpen
+            | RawHtmlElement::DetailsClose
+            | RawHtmlElement::SummaryOpen
+            | RawHtmlElement::SummaryClose => {}
         }
-        i = end + 1;
     }
     tags
 }
@@ -115,7 +111,8 @@ fn first_srcset_url(srcset: &str) -> Option<String> {
 
 #[cfg(test)]
 mod picture_tests {
-    use super::{recognise_html_element, scan_image_tags, ImgTag, RawHtmlElement};
+    use super::super::rawhtml::{recognise_html_element, RawHtmlElement};
+    use super::{scan_image_tags, ImgTag};
 
     fn cand(s: &str) -> ImgTag {
         ImgTag::Candidate(s.to_string())
@@ -215,6 +212,12 @@ mod picture_tests {
     fn non_image_html_yields_no_tags() {
         // Sanitize-by-omission stays intact for every non-image element.
         assert!(scan_image_tags("<script>alert('x')</script>").is_empty());
+        // F-SEC-210: this scanner walked its own tags, so an `<img>` written inside a
+        // `<script>` became a live image candidate — resolved, fetched and anchored.
+        // The shared lexer consumes raw-text content, so there is no tag here to lift.
+        assert!(scan_image_tags(r#"<script>var s = "<img src=x.png>";</script>"#).is_empty());
+        assert!(scan_image_tags("<style><img src=x.png></style>").is_empty());
+        assert!(scan_image_tags("<iframe><img src=x.png></iframe>").is_empty());
         assert!(scan_image_tags("<iframe src=\"file:///etc/passwd\"></iframe>").is_empty());
         assert!(scan_image_tags("<div class=\"src\">text</div>").is_empty());
         assert!(scan_image_tags("plain text, no tags").is_empty());

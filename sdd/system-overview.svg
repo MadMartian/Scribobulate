@@ -223,16 +223,17 @@
   <text class="lbl" x="36" y="887" font-size="9.5">frontmatter header naming its own document, so recovery reads the headers, never session.toml: <tspan font-style="italic">a non-empty swap/ IS the "unclean exit" signal.</tspan></text>
 
   <!-- ── network egress ─────────────────────────────────────────────────── -->
-  <rect class="note" x="26" y="900" width="948" height="52" rx="4" stroke-width="1"/>
+  <rect class="note" x="26" y="900" width="948" height="65" rx="4" stroke-width="1"/>
   <text class="t" x="36" y="917" font-size="10.5" font-weight="bold">Network — imagefetch.rs · the process's ONLY outbound connection, and only with "Show Unsafe Images" on</text>
   <text class="lbl" x="36" y="932" font-size="9.5">An in-process HTTPS GET (system trust store, system proxy), <tspan font-style="italic">not</tspan> a URI handed to GIO: GIO resolves http/https only where a backend claims the scheme — a</text>
   <text class="lbl" x="36" y="945" font-size="9.5">daemon on Linux, an in-DLL VFS on Windows, nothing on macOS. Bounded by connect/global timeouts and a byte cap; blocks the main thread for the fetch.</text>
+  <text class="lbl" x="36" y="958" font-size="9.5">Gated by <tspan class="mono">imagecache</tspan> — a URL→texture store with a byte budget and a short negative TTL, so a re-render does no network work for a URL already answered.</text>
 
   <!-- ── renderer note ──────────────────────────────────────────────────── -->
-  <rect class="note" x="26" y="968" width="948" height="52" rx="4" stroke-width="1"/>
-  <text class="t" x="36" y="985" font-size="10.5" font-weight="bold">GSK_RENDERER=cairo — set in main() before GTK initialises</text>
-  <text class="lbl" x="36" y="1000" font-size="9.5">The application never creates a GL/GLES context and never appears as a GPU client: 0 MiB VRAM, ~80 MiB RAM for a full-fidelity document.</text>
-  <text class="lbl" x="36" y="1013" font-size="9.5">This one line is why the whole stack is "GtkTextView + text tags + a few custom widgets" rather than an embedded web engine — measured, not assumed.</text>
+  <rect class="note" x="26" y="981" width="948" height="52" rx="4" stroke-width="1"/>
+  <text class="t" x="36" y="998" font-size="10.5" font-weight="bold">GSK_RENDERER=cairo — set in main() before GTK initialises</text>
+  <text class="lbl" x="36" y="1013" font-size="9.5">The application never creates a GL/GLES context and never appears as a GPU client: 0 MiB VRAM, ~80 MiB RAM for a full-fidelity document.</text>
+  <text class="lbl" x="36" y="1026" font-size="9.5">This one line is why the whole stack is "GtkTextView + text tags + a few custom widgets" rather than an embedded web engine — measured, not assumed.</text>
 
   <!-- ── export ─────────────────────────────────────────────────────────── -->
   <rect class="group" x="26" y="1036" width="948" height="66" rx="5" stroke-width="1.5"/>

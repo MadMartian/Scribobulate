@@ -336,6 +336,7 @@ pub(super) fn rerender_split_preview_driven_by_editor(window: &ApplicationWindow
         zoom,
         allow_unsafe,
         &st.folds.borrow(),
+        st.fold_epoch(),
     );
     // The FIRST live re-render after a fresh preview mount is the one whose
     // `set_buffer`-into-an-already-visible-empty-pane can leave the overlay terminally

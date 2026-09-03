@@ -66,21 +66,15 @@ pub(super) struct Rig {
 }
 
 impl Rig {
-    /// Build the pane, present it, and settle it — with this view's `top-margin`
-    /// optionally overridden after [`apply_preview_margins`] has applied the
-    /// configured one.
+    /// Build the pane, present it, and settle it, at the configured preview margin.
     ///
-    /// **The override is on THIS view and nothing else.** `top-margin` is a per-view
-    /// widget property, so an experiment that varies it varies it here — never in
-    /// `config.rs`, whose value is what the application ships with and what
-    /// `preview::interactions` asserts about. `None` leaves the configured value
-    /// standing, which is what every experiment but [`super::margin`] wants.
-    ///
-    /// The set is asserted to have taken. A margin knob that silently did not apply
-    /// would make every reading below answer for the configured margin while being
-    /// reported against another one (ScrAP-252's family) — and the failure would look
-    /// exactly like the null result the experiment is testing for.
-    pub(super) fn new(md: &str, folds: &FoldState, top_margin: Option<i32>) -> Self {
+    /// **The per-view `top-margin` override this used to take is gone with the
+    /// experiment that turned it** (the dose-response sweep — `git log --
+    /// src/preview/splice/excursion/`). What it protected is worth keeping in view: a
+    /// margin knob that silently did not apply would make every reading answer for the
+    /// configured margin while being reported against another one, which is ScrAP-252's
+    /// family and looks exactly like the null result such an experiment tests for.
+    pub(super) fn new(md: &str, folds: &FoldState) -> Self {
         let RenderProducts {
             buf,
             anchored,
@@ -98,17 +92,6 @@ impl Rig {
         view.set_wrap_mode(gtk::WrapMode::Char);
         view.set_cursor_visible(false);
         apply_preview_margins(&view, ZOOM);
-        if let Some(px) = top_margin {
-            view.set_top_margin(px);
-            assert_eq!(
-                view.top_margin(),
-                px,
-                "the top-margin knob did not take: asked for {px}px and the view \
-                 reports {}px. Every reading from this rig would describe a margin \
-                 other than the one it is reported under.",
-                view.top_margin(),
-            );
-        }
         install_content(&view, install, ZOOM);
         attach_anchored(&view, &anchored);
 

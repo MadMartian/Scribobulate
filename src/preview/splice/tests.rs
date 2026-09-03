@@ -120,7 +120,7 @@ fn a_fold_changes_exactly_one_region_of_the_rendered_text() {
         "## After\n\ntail paragraph\n"
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
-    let w = both_ways(MD, FoldKey::from_source_offset(spans[0].start));
+    let w = both_ways(MD, spans[0].fold_key());
     assert!(
         w.opened_text.len() > w.closed_text.len(),
         "the fixture's body is long enough that expanding it GROWS the document — \
@@ -129,27 +129,55 @@ fn a_fold_changes_exactly_one_region_of_the_rendered_text() {
     assert_one_region(&w);
 }
 
-/// The same claim where it is least obvious: a disclosure inside a blockquote, after
-/// a list (rubric 2.26c). That is where the renderer reaches the region with its
-/// list, quote and inline-tag state NON-EMPTY, which is what decides whether a
-/// region render's seed needs offset translation. It does not, because the text
-/// before the region is identical — which is exactly what this asserts.
+/// A disclosure inside a BLOCKQUOTE, after a list — where the renderer reaches the
+/// region with its quote and inline-tag state non-empty.
+const IN_BLOCKQUOTE: &str = concat!(
+    "intro\n\n",
+    "- item one\n",
+    "- item two\n\n",
+    "> quoted lead-in\n>\n",
+    "> <details>\n> <summary>S</summary>\n>\n",
+    "> quoted hidden body, again long enough to outrun the preview limit so ",
+    "the two renders differ in length\n>\n> </details>\n\n",
+    "closing paragraph\n"
+);
+
+/// A disclosure that is the FIRST BLOCK OF A LIST ITEM — the shape F-SPEC-A-002 was
+/// found on, and the one neither container test used to contain.
+///
+/// The full walk stands at the region with `list_item_open == true`; a region walk
+/// that did not seed it stood there with `false`, and `lead_in(Paragraph, …)` answered
+/// `Newline` where the full render answers `Nothing`. One character, and every map
+/// below the splice offset by it — which the release guard turned into a `RegionLost`
+/// refusal and a whole-document re-render.
+const IN_LIST_ITEM: &str = concat!(
+    "intro\n\n",
+    "- item one\n",
+    "- <details>\n",
+    "  <summary>S</summary>\n\n",
+    "  a hidden body inside a list item, long enough to outrun the collapsed ",
+    "preview limit so the two renders genuinely differ in length\n\n",
+    "  </details>\n\n",
+    "after\n"
+);
+
+/// The same claim where it is least obvious: a disclosure inside a container (rubric
+/// 2.26c). That is where the renderer reaches the region with its list, quote and
+/// inline-tag state NON-EMPTY, which is what decides whether a region render's seed
+/// needs offset translation. It does not, because the text before the region is
+/// identical — which is exactly what this asserts.
+///
+/// **Both containers, because the doc comment used to name a case the fixture did not
+/// contain** (F-SPEC-A-003): "inside a list item" was described and only a blockquote
+/// was built, and the list-item shape is the one that was broken.
 #[gtktest::test]
 fn a_fold_inside_a_container_still_changes_only_its_own_region() {
-    const MD: &str = concat!(
-        "intro\n\n",
-        "- item one\n",
-        "- item two\n\n",
-        "> quoted lead-in\n>\n",
-        "> <details>\n> <summary>S</summary>\n>\n",
-        "> quoted hidden body, again long enough to outrun the preview limit so ",
-        "the two renders differ in length\n>\n> </details>\n\n",
-        "closing paragraph\n"
-    );
-    let spans = crate::renderer::disclosure::scan_document(MD);
-    assert!(!spans.is_empty(), "the nested block is found at all");
-    let w = both_ways(MD, FoldKey::from_source_offset(spans[0].start));
-    assert_one_region(&w);
+    for (name, md) in [("blockquote", IN_BLOCKQUOTE), ("list item", IN_LIST_ITEM)] {
+        let spans = crate::renderer::disclosure::scan_document(md);
+        assert!(!spans.is_empty(), "the {name} block is found at all");
+        let w = both_ways(md, spans[0].fold_key());
+        assert_one_region(&w);
+    }
 }
 
 /// The route's whole correctness claim, checked against the LIVE splice itself
@@ -170,10 +198,27 @@ fn assert_splice_matches_full_render(md: &str, before: &FoldState, after: &FoldS
         crate::theme::active(),
         before,
     );
+    // **F-AP2-003.** The region render creates a `GtkTextMark` in this buffer to write
+    // at, and the buffer outlives every render — so a mark left behind is one leaked
+    // per toggle, for the life of the tab, with no visible effect until something
+    // enumerates them. `mark-deleted` is the only exact instrument GTK offers here
+    // (there is no way to enumerate a buffer's marks), and no `ReaderAnchor` is in
+    // play on this path, so the count is the region write mark alone.
+    let marks_deleted = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    starting.buf.connect_mark_deleted({
+        let seen = std::rc::Rc::clone(&marks_deleted);
+        move |_, _| seen.set(seen.get() + 1)
+    });
     let spans = crate::renderer::disclosure::scan_document(md);
-    let key = FoldKey::from_source_offset(spans[0].start);
+    let key = spans[0].fold_key();
 
-    let outcome = super::splice(
+    // The outcome's own maps are deliberately NOT asserted here. They come from the
+    // same `build_products_scratch` call a full render makes, so comparing them with a
+    // full render's compares one pure function with itself and no splice mutation can
+    // redden it (F-TEST-A-001). The claim that IS worth making is about what reaches
+    // the live view, and it lives in `install.rs`'s
+    // `a_spliced_pane_installs_what_a_full_re_render_would`.
+    let _outcome = super::splice(
         &starting.buf,
         None,
         &starting.anchored,
@@ -206,79 +251,10 @@ fn assert_splice_matches_full_render(md: &str, before: &FoldState, after: &FoldS
         "a spliced toggle must produce a buffer byte-identical to a full render of \
          the same fold state — this is the splice's whole correctness claim"
     );
-    assert_maps_match(&outcome.products.maps, &full.maps);
-}
-
-/// **Every buffer-keyed map a splice installs, against the one a full re-render of the
-/// same fold state produces.** One check covering all of [`RenderMaps`], rather than N
-/// checks reading three of ten (GEP-10).
-///
-/// The maps are the whole difficulty of this route: dropping or transposing one
-/// assignment compiles, leaves every other map internally well-formed, and produces a
-/// wrong scroll target / wrong annotation offset / wrong table pairing that reads like a
-/// different feature's bug. The text-identity assertion above cannot see any of it —
-/// the buffer is right and the maps describing it are not.
-///
-/// **Exhaustively destructured on purpose.** A map added to `RenderMaps` fails to
-/// compile here until it is given an assertion, which is the same discipline
-/// `RenderData::adopt_maps` imposes on the install side. `CopyTree` carries a derived
-/// `PartialEq` for this comparison specifically: its `Debug` string is not usable as a
-/// stand-in, because `BlockScripts` holds a `HashMap` whose Debug order varies between
-/// runs of the same code.
-fn assert_maps_match(
-    spliced: &crate::preview::build::RenderMaps,
-    full: &crate::preview::build::RenderMaps,
-) {
-    let crate::preview::build::RenderMaps {
-        source_map,
-        copymap,
-        md_owned,
-        links,
-        heading_sites,
-        heading_map,
-        collapsed_blocks,
-        disclosure_extents,
-        shifts,
-        original_owned,
-    } = spliced;
     assert_eq!(
-        source_map, &full.source_map,
-        "the buffer→source waypoint map after a splice is the one a full render builds"
-    );
-    assert_eq!(
-        copymap, &full.copymap,
-        "and so is the copy-as-Markdown tree — the map a Ctrl+C below the block reads"
-    );
-    assert_eq!(
-        md_owned, &full.md_owned,
-        "and the cleaned source it is keyed to"
-    );
-    assert_eq!(links, &full.links, "and every link's buffer span");
-    assert_eq!(
-        heading_sites, &full.heading_sites,
-        "and the outline's scroll targets"
-    );
-    assert_eq!(
-        heading_map, &full.heading_map,
-        "and the slug→offset map a `#fragment` link resolves through"
-    );
-    assert_eq!(
-        collapsed_blocks, &full.collapsed_blocks,
-        "and the blocks find must search the SOURCE of, because their bodies are in no \
-         buffer"
-    );
-    assert_eq!(
-        disclosure_extents, &full.disclosure_extents,
-        "and the extents the NEXT toggle will splice against — a stale one here is how a \
-         second toggle deletes the wrong range"
-    );
-    assert_eq!(
-        shifts, &full.shifts,
-        "and the cleaned→original shift table an annotation is anchored through"
-    );
-    assert_eq!(
-        original_owned, &full.original_owned,
-        "and the pre-extraction source the scroll-sync converts offsets against"
+        marks_deleted.get(),
+        1,
+        "the region render's write mark is deleted with the render that made it"
     );
 }
 
@@ -295,7 +271,7 @@ fn splicing_open_matches_a_full_open_render() {
         "## After\n\ntail paragraph\n"
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
-    let key = FoldKey::from_source_offset(spans[0].start);
+    let key = spans[0].fold_key();
     let mut opened = FoldState::default();
     opened.toggle(key);
     assert_splice_matches_full_render(MD, &FoldState::default(), &opened);
@@ -317,35 +293,28 @@ fn splicing_closed_matches_a_full_closed_render() {
         "## After\n\ntail paragraph\n"
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
-    let key = FoldKey::from_source_offset(spans[0].start);
+    let key = spans[0].fold_key();
     // The source says `open`; toggling the reader's state closes it.
     let mut closed = FoldState::default();
     closed.toggle(key);
     assert_splice_matches_full_render(MD, &FoldState::default(), &closed);
 }
 
-/// Rubric 2.26c's exact case, driven through the live splice: a disclosure
-/// nested inside a list item inside a blockquote, where the region render's
-/// seed must carry non-empty list/quote/inline-tag state for the spliced text
-/// to come out right.
+/// Rubric 2.26c's exact case, driven through the live splice: a disclosure inside a
+/// container, where the region render's seed must carry non-empty list/quote/
+/// inline-tag state for the spliced text to come out right.
+///
+/// **Both containers** — see the fixtures' own docs. The list-item one goes red on the
+/// pre-F-SPEC-A-002 code by exactly one character, which is what a seed omission costs.
 #[gtktest::test]
 fn splicing_inside_a_container_matches_a_full_render() {
-    const MD: &str = concat!(
-        "intro\n\n",
-        "- item one\n",
-        "- item two\n\n",
-        "> quoted lead-in\n>\n",
-        "> <details>\n> <summary>S</summary>\n>\n",
-        "> quoted hidden body, again long enough to outrun the preview limit so ",
-        "the two renders differ in length\n>\n> </details>\n\n",
-        "closing paragraph\n"
-    );
-    let spans = crate::renderer::disclosure::scan_document(MD);
-    assert!(!spans.is_empty(), "the nested block is found at all");
-    let key = FoldKey::from_source_offset(spans[0].start);
-    let mut opened = FoldState::default();
-    opened.toggle(key);
-    assert_splice_matches_full_render(MD, &FoldState::default(), &opened);
+    for (name, md) in [("blockquote", IN_BLOCKQUOTE), ("list item", IN_LIST_ITEM)] {
+        let spans = crate::renderer::disclosure::scan_document(md);
+        assert!(!spans.is_empty(), "the {name} block is found at all");
+        let mut opened = FoldState::default();
+        opened.toggle(spans[0].fold_key());
+        assert_splice_matches_full_render(md, &FoldState::default(), &opened);
+    }
 }
 
 /// The merge half of the splice — widgets, not text. A table BEFORE the
@@ -361,11 +330,15 @@ fn tables_outside_the_region_survive_the_splice_as_the_same_widgets() {
         "| before | col |\n|---|---|\n| a | b |\n\n",
         "<details>\n<summary>S</summary>\n\n",
         "| inside | col |\n|---|---|\n| c | d |\n\n",
+        // A horizontal rule as well as the table, so the region's handoff carries TWO
+        // kinds of anchored child and `width_bounded` is exercised rather than asserted
+        // empty (F-TEST-A-008).
+        "***\n\n",
         "</details>\n\n",
         "| after | col |\n|---|---|\n| e | f |\n"
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
-    let key = FoldKey::from_source_offset(spans[0].start);
+    let key = spans[0].fold_key();
 
     let starting = super::super::build::build_render_products_with_theme(
         MD,
@@ -430,6 +403,47 @@ fn tables_outside_the_region_survive_the_splice_as_the_same_widgets() {
     );
     assert_ne!(outcome.region.tables[0], before_table);
     assert_ne!(outcome.region.tables[0], after_table);
+
+    // **The OTHER four lists the handoff carries** (F-TEST-A-008). `tables` was the
+    // only one anything asserted, so a take that dropped `anchored`, `image_tints`,
+    // `width_bounded`, `image_bounded` or `disclosure_toggles` compiled, ran, and
+    // produced a pane whose maps simply did not know about those children. The
+    // fixture's body draws a table, which populates four of the five: an anchor, its
+    // selection tint, a width bound and the table itself; the summary line's own
+    // control is the fifth, and it belongs to the SEED walk rather than the region
+    // (`splice_toggle`'s doc says so), which is why it is asserted empty rather than
+    // present.
+    let region = &outcome.region;
+    assert_eq!(
+        region.anchored.len(),
+        2,
+        "the region's table AND its rule are anchored, and both anchors are handed on"
+    );
+    // The three that this fixture leaves EMPTY are asserted empty rather than skipped,
+    // and the reason is the failure mode: a take that started returning the whole
+    // render's lists instead of the region's would populate them, and a test that only
+    // checked the non-empty ones would not notice. MEASURED, not assumed — `image_tints`
+    // and `image_bounded` come from an anchored image, and `width_bounded` from a
+    // horizontal RULE (`events.rs`, the GTK4Rs/AP-23a inset), none of which this body
+    // draws.
+    assert_eq!(
+        region.image_tints.len(),
+        0,
+        "no image, so no selection tint"
+    );
+    assert_eq!(region.image_bounded.len(), 0, "and none is size-bounded");
+    assert_eq!(
+        region.width_bounded.len(),
+        1,
+        "the rule is width-bounded — an indented rule sized to the full column overflows \
+         by its indent and provokes the spurious h-scrollbar GTK4Rs/AP-23a records, so \
+         losing this bound in the handoff is a visible defect"
+    );
+    assert!(
+        region.disclosure_toggles.is_empty(),
+        "the summary line's control belongs to the seed walk that runs BEFORE the \
+         region, so the region draws none — handing one on here would double-connect it"
+    );
 }
 
 /// This module's own share of `renderer::normalize`'s "every parse site reads
@@ -450,7 +464,7 @@ fn the_region_render_normalises_tabs_the_same_way_every_other_parse_site_does() 
         "tail paragraph\n"
     );
     let spans = crate::renderer::disclosure::scan_document(MD);
-    let key = FoldKey::from_source_offset(spans[0].start);
+    let key = spans[0].fold_key();
     let mut opened = FoldState::default();
     opened.toggle(key);
     // The equality oracle already proves the table parsed identically: if the
@@ -483,7 +497,7 @@ fn everything_below_a_toggled_block_still_addresses_its_own_text() {
         "a distinctive tail paragraph\n\n",
         "[link text](https://example.invalid/target)\n"
     );
-    let key = FoldKey::from_source_offset(crate::renderer::disclosure::scan_document(MD)[0].start);
+    let key = crate::renderer::disclosure::scan_document(MD)[0].fold_key();
     let mut after = FoldState::default();
     after.toggle(key);
 

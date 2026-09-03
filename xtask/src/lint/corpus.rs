@@ -677,6 +677,46 @@ fn classify(ev: &Event) -> Option<RawKind> {
     );
 }
 
+/// **F-AP-B-102: a ≥30-line CRLF file and its LF twin must report the same line.**
+///
+/// `text.lines()` strips both bytes of a `\r\n` while the walk's own offset
+/// accumulator adds one for the terminator, so on a CRLF checkout the accumulator falls
+/// one character behind PER LINE. Past about thirty lines the drift exceeds the
+/// indentation the depth model is looking at, the check sees no `match` block at all,
+/// and it reports PASS having found nothing.
+///
+/// **Silent, green, and green only where nobody looks**: Windows is the one platform
+/// whose `.gitattributes` guarantees CRLF. The fixture has to be long, because a short
+/// one drifts by too little to change the answer — which is why nothing caught this.
+///
+/// The fold now happens at the reader (`lint::read_text`), so this case exercises the
+/// walk's own arithmetic directly rather than the reader's.
+#[test]
+fn a_crlf_file_reports_the_same_line_as_its_lf_twin() {
+    let mut lf = String::from("\nfn classify(ev: &Event) -> Option<RawKind> {\n");
+    // Padding ABOVE the match, so the accumulator has somewhere to drift.
+    for i in 0..40 {
+        lf.push_str(&format!("    // filler line {i}, long enough to matter\n"));
+    }
+    lf.push_str("    Some(match ev {\n");
+    lf.push_str("        Event::Text(t) => RawKind::Text(t.to_string()),\n");
+    lf.push_str("        Event::Rule => RawKind::Atomic,\n");
+    lf.push_str("        _ => return None,\n");
+    lf.push_str("    })\n}\n");
+
+    let found = parser_dispatch_wildcards(&lf);
+    assert_eq!(found.len(), 1, "the LF twin finds the wildcard: {found:?}");
+
+    let crlf = lf.replace('\n', "\r\n");
+    assert_eq!(
+        parser_dispatch_wildcards(&crlf),
+        found,
+        "and the CRLF twin finds it on the SAME line. A gate that reports PASS having \
+         found nothing is indistinguishable from one that passed, and this one did so \
+         on the only platform that guarantees these line endings"
+    );
+}
+
 #[test]
 fn a_guarded_wildcard_is_caught_too() {
     // `_ if cond =>` is a wildcard wearing a hat; it still absorbs every unnamed

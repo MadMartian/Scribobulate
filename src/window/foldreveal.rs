@@ -84,26 +84,22 @@ pub(crate) fn reveal_folds(
         // opening the outer block alone would only reveal the inner block's summary
         // line, and the caller would have to re-render once per level of nesting to
         // discover that (`renderer::CollapsedSite`).
-        let md = match st.view_mode.get() {
-            ViewMode::Split => st.editor_text(),
-            ViewMode::Preview | ViewMode::Edit => st.source().clone(),
-        };
+        //
+        // **The CLEANED text, in the same coordinate space the keys are in.** This read
+        // the raw source, and a `FoldKey` is an offset into the text the RENDERER
+        // walked — CriticMarkup extracted. On a document with an annotation above a
+        // disclosure the two disagree, the lookup below found no span, and the
+        // diverged-key fallback flipped the fold instead of expanding it (F-SEC-209).
+        let md = st.previewed_cleaned(st.view_mode.get());
         let spans = crate::renderer::disclosure::scan_document(&md);
-        let mut folds = st.folds.borrow_mut();
-        for key in chain {
-            match spans.iter().find(|s| s.start == key.source_offset()) {
-                Some(span) => folds.set_collapsed(*key, span.open, false),
-                // No span for the key: the fold map and the document have diverged, so
-                // there is no `open` attribute to reason from. Fall back to the flip —
-                // the old behaviour — rather than guessing, and say so.
-                None => {
-                    log::error!(
-                        "window::foldreveal: key {key:?} names no disclosure in the current \
-                         source; flipping it rather than expanding it"
-                    );
-                    folds.toggle(*key);
-                }
-            }
+        // The DECISION is `FoldState`'s and is unit-tested there; this file owns only
+        // the wiring around it and the diagnostic for what it reports back.
+        let diverged = st.folds.borrow_mut().expand_chain(&spans, chain);
+        for key in diverged {
+            log::error!(
+                "window::foldreveal: key {key:?} names no disclosure in the current \
+                 source; flipping it rather than expanding it"
+            );
         }
     }
     let mode = st.view_mode.get();

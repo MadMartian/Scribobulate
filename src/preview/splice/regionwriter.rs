@@ -2,8 +2,9 @@
 //!
 //! A live-writing [`Renderer`] must be handed its view BEFORE `write_at` (so every
 //! anchored child is parented in the same turn as its anchor), seeded before
-//! `write_at`, written-at before its summary tail, and finished exactly once at the end
-//! of the region. Each of those is an ordinary `&mut self` method on `Renderer`,
+//! `write_at`, written-at before its summary tail, tailed before its first event, and
+//! finished exactly once at the end of the region. Each of those is an ordinary
+//! `&mut self` method on `Renderer`,
 //! callable in any order; until this type existed, the only thing holding the sequence
 //! was that one function happened to call them in it, and a second caller had nothing
 //! to consult but prose.
@@ -17,11 +18,12 @@
 //! this kind of in-place write, and one that no assertion downstream of the render can
 //! attribute back to it.
 //!
-//! The typestate is deliberately small: two states, and the only way from one to the
-//! other is [`RegionWriter::write_at`]. `Ready` cannot write content; `Writing` cannot
-//! be re-seeded or re-pointed; and the region is finished by [`RegionWriter::finish`],
-//! which consumes the writer, so `finish_region` runs exactly once and its outputs can
-//! only be read after it has.
+//! The typestate is deliberately small: three states on one linear path, each
+//! transition consuming the writer. `Ready` cannot write content; `Aimed` can do
+//! nothing but write the summary tail; `Writing` cannot be re-seeded, re-pointed or
+//! re-tailed; and the region is finished by [`RegionWriter::finish`], which consumes
+//! the writer, so `finish_region` runs exactly once and its outputs can only be read
+//! after it has.
 
 use super::RegionWidgets;
 use crate::codeview::CodePreviewView;
@@ -34,8 +36,11 @@ use std::marker::PhantomData;
 
 /// Seeded and pointed at its view, but not yet aimed at a buffer offset. Cannot write.
 pub(super) struct Ready;
-/// Aimed at the region's start offset. The only state that emits content, and the only
-/// one that can be finished.
+/// Aimed at the region's start offset, and owing the summary line's tail. The only
+/// thing it can do is write that tail, which is the only way on.
+pub(super) struct Aimed;
+/// The tail is written. The only state that processes events, and the only one that
+/// can be finished.
 pub(super) struct Writing;
 
 /// A [`Renderer`] driving one region write, in a state that says what it may do next.
@@ -75,9 +80,9 @@ impl RegionWriter<Ready> {
     }
 
     /// Aim the write at `offset` — the region's start, which the caller has already
-    /// emptied. The one transition into [`Writing`], so nothing can emit content
+    /// emptied. The one transition out of [`Ready`], so nothing can emit content
     /// against the buffer end by accident.
-    pub(super) fn write_at(mut self, offset: i32) -> RegionWriter<Writing> {
+    pub(super) fn write_at(mut self, offset: i32) -> RegionWriter<Aimed> {
         self.r.write_at(offset);
         RegionWriter {
             r: self.r,
@@ -87,17 +92,31 @@ impl RegionWriter<Ready> {
     }
 }
 
-impl RegionWriter<Writing> {
+impl RegionWriter<Aimed> {
     /// The summary line's own tail: the collapsed-body preview (if `target_collapsed`),
     /// then the newline `emit_pending_summary` always writes next.
     ///
     /// A catch-up write, not double bookkeeping — the scratch walk emitted this into
     /// ITS buffer during seed capture, never into the live one. See
     /// `Renderer::write_seeded_summary_tail`.
-    pub(super) fn summary_tail(&mut self, target_collapsed: bool) {
+    ///
+    /// **The one transition into [`Writing`], and it CONSUMES the writer** — so the
+    /// tail is written before the first event and cannot be written twice. It was an
+    /// `&mut self` method on `Writing`, which the typestate's own doc claimed to order
+    /// and did not: a caller could process the whole region and then write the tail
+    /// into the middle of it, or write it twice, and either produces a well-formed
+    /// buffer with every map below the splice offset (F-AP2-009).
+    pub(super) fn summary_tail(mut self, target_collapsed: bool) -> RegionWriter<Writing> {
         self.r.write_seeded_summary_tail(target_collapsed);
+        RegionWriter {
+            r: self.r,
+            view: self.view,
+            _state: PhantomData,
+        }
     }
+}
 
+impl RegionWriter<Writing> {
     /// Process one parse event into the region.
     ///
     /// `event_src` is set here rather than by the caller because it must be set before
@@ -132,13 +151,10 @@ impl RegionWriter<Writing> {
                 view.queue_resize();
             }
         }
-        RegionWidgets {
-            anchored: std::mem::take(&mut self.r.anchored),
-            image_tints: std::mem::take(&mut self.r.image_tints),
-            width_bounded: std::mem::take(&mut self.r.width_bounded),
-            image_bounded: std::mem::take(&mut self.r.image_bounded),
-            tables: std::mem::take(&mut self.r.tables),
-            disclosure_toggles: std::mem::take(&mut self.r.disclosure_toggles),
-        }
+        // The take lives on `Renderer`, beside the fields it empties — see
+        // `Renderer::take_region_widgets`. Six `mem::take` calls here were a
+        // non-exhaustive read of another module's struct, and a seventh list would have
+        // joined it by nobody thinking to (F-TEST-A-008).
+        self.r.take_region_widgets()
     }
 }

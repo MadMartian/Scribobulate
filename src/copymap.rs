@@ -342,6 +342,10 @@ impl Node {
 
 /// A buffer-annotated construct tree for one render, plus the buffer's total char
 /// count (for the whole-document = Copy Document special case).
+///
+/// [`Default`] is an EMPTY tree over an empty document — a legitimate value (a render of
+/// nothing produces one), and it exists so `RenderData` can be composed from its default
+/// rather than assembled field by field in two places (F-DRY-A-004).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CopyTree {
     root: Node,
@@ -353,6 +357,27 @@ pub(crate) struct CopyTree {
     /// of the tree below — it is two half-delimited branches with the nested markup
     /// between them, so the tree alone cannot answer "what is the whole of this".
     scripts: std::rc::Rc<BlockScripts>,
+}
+
+impl Default for CopyTree {
+    /// The tree of an empty document: no nodes, no characters, no tight constructs.
+    ///
+    /// Hand-written rather than derived because [`Node`] carries no meaningful default —
+    /// the root is a `Branch` over nothing, which is what a walk of an empty event
+    /// stream produces, and a derived `Default` would have to invent one.
+    fn default() -> Self {
+        Self {
+            root: Node::Branch {
+                buf: (0, 0),
+                open: 0..0,
+                close: 0..0,
+                kind: BranchKind::Container,
+                children: Vec::new(),
+            },
+            char_count: 0,
+            scripts: std::rc::Rc::new(BlockScripts::default()),
+        }
+    }
 }
 
 // ── building ──────────────────────────────────────────────────────────────────

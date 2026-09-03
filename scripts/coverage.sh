@@ -613,8 +613,21 @@ cd "$(dirname "$0")/.."
 # lines of difference. Note that is the unscoped `--lib` run, not this gate's scoped
 # invocation; the differential is the claim, not the percentage.
 #
-# This buys MARGIN, not a raise. FLOOR stays 82 and the rule is unchanged -- what is
-# retired is a caveat, so the next raise is argued against the measurement alone.
+# This buys MARGIN, not a raise: the rule is unchanged and what is retired is a caveat,
+# so the next raise is argued against the measurement alone.
+#
+# ── FLOOR, in three lines, because the ledger explaining it is 500 lines above and the
+#    value is what a reader arrives at (F-AP-B-106). The paragraph that used to sit here
+#    ended "FLOOR stays 82" directly above `FLOOR=80` — a number contradicting the line
+#    under it, left behind when the value moved and the prose did not.
+#
+#    * 80 is the current value. It gates LEG A: the unit tests alone, which is the only
+#      leg that can see whether a decision core was extracted at all.
+#    * It may be LOWERED only in a change that RAISES `FLOOR_FULL`. That is the rule
+#      making the pair a ratchet rather than two numbers, and no script can enforce it —
+#      a script cannot see history.
+#    * Whole numbers only, one point at a time, and only once the measurement reaches the
+#      next integer with room to spare on every host that runs the gate.
 FLOOR=80
 
 # ── LEG B's floor: the same 160 files, measured with the GTK integration suite running.
@@ -691,24 +704,37 @@ FULL_BUDGET="${SCRIB_COVERAGE_FULL_BUDGET:-1800}"
 #                   blank line — the renderer and the copy map then disagreeing about how
 #                   many characters a block occupies — which is why it is worth reaching
 #                   directly rather than through a rendered document.
-#   the disclosure  Thirteen modules arrived with the fold/splice feature and the split
+#   the disclosure  The fold/splice feature arrived as a group of modules and the split
 #   feature        between them is the same one, stated here because a reviewer asked
 #                   which rule had decided it and the answer was only derivable from the
-#                   regex. GATED: `fold.rs` (the display-free fold model),
+#                   regex. **Deliberately no count.** It said "Thirteen" and then named
+#                   nine, which is the tell the register's own header warns about — a
+#                   count is the one fact about a growing list guaranteed to be wrong by
+#                   the next addition, and this list has grown twice since (F-AP-B-110).
+#                   The enumeration is the claim.
+#                   GATED: `fold.rs` (the display-free fold model),
 #                   `renderer/disclosure.rs` and `renderer/disclosure/preview.rs` (the
 #                   pre-scan, its cursor, and the plain-text reduction),
 #                   `widgets/disclosure.rs`, and BOTH halves of `preview/splice.rs` /
 #                   `preview/splice/install.rs` — the splice carries real arithmetic (the
 #                   delete boundary, the survivor merge, the reading-position restore) and
 #                   is the one place in the feature where a wrong answer is silent, so it
-#                   is gated despite needing a live buffer for some of its bodies.
+#                   is gated despite needing a live buffer for some of its bodies. Also
+#                   `preview/splice/regionwriter.rs` (the region write's typestate — the
+#                   ordering IS the decision), `renderer/rawhtml/lex.rs` (one tag stream
+#                   for every walk over a fragment; pure, and the security boundary),
+#                   `renderer/blockspacing.rs` (see its own entry above) and
+#                   `farscroll/settle.rs` (the quiet-window arithmetic, injected rather
+#                   than read from the clock precisely so it is reachable here).
 #                   EXCLUDED by the existing `window/[a-z_]+\.rs` and
 #                   `codeview/[a-z_]+\.rs` terms, needing no new one:
 #                   `window/foldsplice.rs` and `window/foldreveal.rs` resolve a pane and
 #                   hand off (which tab, which source, which settings — every branch a
 #                   `downcast` or a `state()` lookup against a live window), and
 #                   `codeview/disclosurebands.rs` is a Cairo painter, the same shape as
-#                   its `codeview/bands.rs` sibling. Note `foldsplice.rs` IS named in the
+#                   its `codeview/bands.rs` sibling, and `codeview/bandpaint.rs` is a GSK
+#                   painter over a live `PaintCtx` whose only decision — the radius clamp
+#                   — is in the gated `decorplan`. Note `foldsplice.rs` IS named in the
 #                   floor-drop rationale above while sitting outside the measured set:
 #                   that is not a contradiction — it is named there as one of the modules
 #                   whose arrival added denominator elsewhere, not as a file this gate
@@ -813,12 +839,17 @@ IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app
 # the number without saying anything about the code under test — the same argument the
 # `gtk_suite|suite_registry` entry in `IGNORE` already makes.
 #
+# The excursion term is depth-AGNOSTIC (`([/\\][a-z_]+)*`, not `?`): the rig had a
+# subdirectory once, and a term that matched exactly one level meant a file inside it
+# arrived as a leg-B scope mismatch rather than being recognised as the scaffolding it
+# is. One axis over from the `[/\\]` class discipline this block already argues for.
+#
 # This names a path SHAPE and will not know about a seventh scaffolding file added later.
 # That is deliberate and is why leg B carries its own scope check: an unrecognised file
 # entering is NAMED and stops the run, rather than being quietly absorbed at whatever
 # coverage a test file happens to have. Same `[/\\]` class rule as `IGNORE` above, and
 # for the same reason.
-IGNORE_TESTONLY='src[/\\](testpump|preview[/\\]splice[/\\]excursion([/\\][a-z_]+)?)\.rs'
+IGNORE_TESTONLY='src[/\\](testpump|preview[/\\]splice[/\\]excursion([/\\][a-z_]+)*)\.rs'
 
 # SCOPE_FILE — the measured set, recorded. Its own header states its role; the one thing
 # worth repeating HERE, where the enforcement lives, is what keeps the two files from
@@ -828,12 +859,31 @@ SCOPE_FILE="scripts/coverage.scope"
 
 UPDATE_SCOPE=0
 UNIT_ONLY=0
-PASSTHRU=()
 for arg in "$@"; do
     case "$arg" in
         --update-scope) UPDATE_SCOPE=1 ;;
         --unit-only)    UNIT_ONLY=1 ;;
-        *)              PASSTHRU+=("$arg") ;;
+        # **A caller may not reshape a GATE RUN** (F-AP-B-107). Leg B refuses forwarded
+        # arguments outright, saying in as many words that a gate run is not a report the
+        # caller shapes — while leg A forwarded whatever it was handed and rendered its
+        # floor verdict against the result anyway. An argument narrowing the run to a
+        # single test still printed "FLOOR OK".
+        #
+        # Rejected rather than tolerated with a caveat, because the one documented use
+        # does not work either: MEASURED 2026-09-02, `scripts/coverage.sh --html` dies in
+        # llvm-cov with `--summary-only may not be used together with --html`, since this
+        # script passes `--summary-only` on every invocation. So the forwarding had no
+        # working use at all — only the failure mode.
+        *)
+            echo "coverage: unknown argument ${arg@Q}." >&2
+            echo "coverage: this is a GATE, not a report the caller shapes: its verdicts are" >&2
+            echo "coverage: only meaningful over the run it defines. The two accepted flags are" >&2
+            echo "coverage:   --unit-only     leg A only, PARTIAL, no FLOOR_FULL verdict" >&2
+            echo "coverage:   --update-scope  re-pin scripts/coverage.scope (does not CHECK it)" >&2
+            echo "coverage: (--html is not among them: llvm-cov refuses it alongside the" >&2
+            echo "coverage: --summary-only this script passes on every run.)" >&2
+            exit 2
+            ;;
     esac
 done
 
@@ -850,7 +900,7 @@ done
 #    reads whatever profile data the last `cargo llvm-cov` left behind, so leg B's run
 #    replaces leg A's. The ordering below is load-bearing, not stylistic.
 # --------------------------------------------------------------------------------------
-cargo llvm-cov --summary-only --ignore-filename-regex "$IGNORE" ${PASSTHRU[@]+"${PASSTHRU[@]}"}
+cargo llvm-cov --summary-only --ignore-filename-regex "$IGNORE"
 
 # --------------------------------------------------------------------------------------
 # 2. SCOPE verdict — reported first, and separately, from any verdict about the number.
@@ -863,6 +913,18 @@ cargo llvm-cov --summary-only --ignore-filename-regex "$IGNORE" ${PASSTHRU[@]+"$
 # Takes the ignore regex as `$1`, because leg B measures the same manifest through a wider
 # filter (`IGNORE|IGNORE_TESTONLY`) and the two must derive their sets the same way — a
 # second copy of this awk is exactly where two "identical" scope checks stop being.
+#
+# ⚠ `report` TAKES NO `--features`, AND DOES NOT NEED ONE. Leg B measures with
+# `--features gtk-integration-tests` and every `report` below runs without it, which
+# reads like a gate deriving its verdict from a differently-configured object set. It is
+# not. MEASURED 2026-09-02, and twice: `cargo llvm-cov report --features
+# gtk-integration-tests` exits with `invalid option '--features' for subcommand
+# 'report'`, and the flagless report over a feature-enabled run returns the full 161-file
+# set rather than the unit-only one. `report` renders whatever profile data and object
+# list the preceding `cargo llvm-cov` RUN left behind; the feature selection belongs to
+# that run and is already baked into what it wrote. Recorded here so the next reader does
+# not re-derive it — the shape of the concern is right, and the answer is that this
+# particular tool has no second configuration to disagree with.
 measured_scope() {
     cargo llvm-cov report --lcov --summary-only --ignore-filename-regex "$1" \
         | awk -v root="$PWD/" '
@@ -948,7 +1010,16 @@ EOF
     } >&2
     exit 1
 fi
-echo "coverage: SCOPE OK — $(printf '%s\n' "$now" | wc -l) files measured, matching $SCOPE_FILE."
+# A run that WROTE the manifest has not checked it against anything — it made the two
+# equal by construction, and comparing them afterwards is comparing a value with itself.
+# Printing the same "SCOPE OK" line either way meant the one output a reader scans for
+# said "verified" when nothing had been (F-AP-B-109). The floor verdicts below still run;
+# only the claim goes.
+if [ "$UPDATE_SCOPE" = 1 ]; then
+    echo "coverage: SCOPE RE-PINNED — $(printf '%s\n' "$now" | wc -l) files, NOT checked (this run wrote $SCOPE_FILE)."
+else
+    echo "coverage: SCOPE OK — $(printf '%s\n' "$now" | wc -l) files measured, matching $SCOPE_FILE."
+fi
 
 # --------------------------------------------------------------------------------------
 # 3. FLOOR verdict — only now, and only over a scope that has been shown to be unchanged.
@@ -990,8 +1061,8 @@ fi
 #    verdicts would be tidier and is wrong twice: `cargo llvm-cov` sets `cfg(coverage)`
 #    and changes the build profile, so the suite would no longer be verified in the shape
 #    it ships in, and a coverage-tool failure would then also read as a test failure.
-#    `PASSTHRU` is deliberately not forwarded — leg B is a gate run, not a report the
-#    caller shapes.
+#    Nothing is forwarded from the caller here either — see the argument parser, which
+#    now refuses an unknown flag rather than letting one reshape leg A's run.
 # --------------------------------------------------------------------------------------
 echo
 echo "coverage: leg B — measuring the same scope with the GTK integration suite..."

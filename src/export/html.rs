@@ -288,13 +288,31 @@ fn inlines_html(inlines: &[Inline], page: &Page<'_>, out: &mut String) {
                 out.push_str("</a>");
             }
             Inline::Image(img) => image_html(img, out),
-            Inline::Claim(idx, v) => {
+            Inline::Claim {
+                idx,
+                tail,
+                inner: v,
+            } => {
                 // The claim highlight, plus its comment as an aside beside it — the
                 // in-file review loop is the product thesis, so an export that drops
                 // the review is the wrong document (TDD 25.13).
-                let _ = write!(out, "<span class=\"claim\" id=\"claim-{}\">", idx + 1);
+                //
+                // **The `id` and the aside ride the TAIL fragment only.** A claim
+                // spanning inline markup is several fragments, and emitting both per
+                // fragment wrote the comment N times and N duplicate `id="claim-N"`
+                // — invalid HTML, and it makes the aside's own back-link ambiguous
+                // (F-AP-B-204). The other fragments carry `class="claim"` alone, which
+                // is what the highlight styling reads.
+                if *tail {
+                    let _ = write!(out, "<span class=\"claim\" id=\"claim-{}\">", idx + 1);
+                } else {
+                    out.push_str("<span class=\"claim\">");
+                }
                 inlines_html(v, page, out);
                 out.push_str("</span>");
+                if !*tail {
+                    continue;
+                }
                 if let Some(ann) = page.doc.annotations.get(*idx) {
                     let _ = write!(
                         out,
@@ -667,16 +685,22 @@ fn heading_rules(p: &Palette, t: &Theme, uris: &SpriteUris) -> String {
 ///
 /// The band spans the heading's own box, which is the content column in both media —
 /// that is why the preview draws it at the content column rather than edge-to-edge.
-fn heading_band_css(t: &Theme, level_index: usize, uris: &SpriteUris) -> String {
-    // The engine decides which of the band's three appearances applies
-    // (`theme::Band`), so this sink emits an answer rather than re-deriving the
-    // precedence — which is what let all three renderers agree with each other and
-    // disagree with SCHEMA about a sprite needing a fill.
-    let decor = t.heading_band_decor(level_index);
+/// The `background:` (and `border-radius:`) declarations for ONE band — a heading's
+/// (TDD 18.25) or a disclosure summary's (TDD 18.48).
+///
+/// **One emitter, for the same reason `codeview::bandpaint` is one painter and
+/// `pdf::decide::band_wash` is one resolver**: the sprite → gradient → flat precedence
+/// and the radius gate are properties of the SHAPE, not of the decoration. The two
+/// callers below were this function with the noun changed — twenty-odd lines each,
+/// identical but for which `decor` they read — which is how a precedence fix reaches
+/// one band and not the other (F-DRY-101).
+///
+/// Empty for a band that is not present, so a theme stating none emits the exact bytes
+/// it emitted before these keys existed (TDD 18.2).
+fn band_css(decor: &crate::theme::Band<'_>, radius_design_px: i32, uris: &SpriteUris) -> String {
     if !decor.is_present() {
         return String::new();
     }
-    let radius = t.metrics.heading_band_radius[level_index];
     let mut out = String::new();
     // A sprite outranks the fill and the gradient, the same precedence the drawn gutter
     // applies to a marker — and it TILES at natural size here too, so the artefact and
@@ -702,9 +726,23 @@ fn heading_band_css(t: &Theme, level_index: usize, uris: &SpriteUris) -> String 
             None => {}
         },
     }
-    if radius > 0 {
-        let _ = write!(out, " border-radius: {radius}px;");
+    // Consulted only for a band that exists, the same gate the preview applies.
+    if radius_design_px > 0 {
+        let _ = write!(out, " border-radius: {radius_design_px}px;");
     }
+    out
+}
+
+fn heading_band_css(t: &Theme, level_index: usize, uris: &SpriteUris) -> String {
+    // The engine decides which of the band's three appearances applies
+    // (`theme::Band`), so this sink emits an answer rather than re-deriving the
+    // precedence — which is what let all three renderers agree with each other and
+    // disagree with SCHEMA about a sprite needing a fill.
+    let decor = t.heading_band_decor(level_index);
+    if !decor.is_present() {
+        return String::new();
+    }
+    let mut out = band_css(&decor, t.metrics.heading_band_radius[level_index], uris);
     // The band's internal padding, and `box-sizing` is half the fix rather than a tidy-up:
     // CSS padding grows the box OUTWARDS by default, so a bare `padding` would widen the
     // band past the content column and leave the text exactly where it was — the opposite
@@ -830,39 +868,13 @@ fn rule_sprite_css(t: &Theme) -> String {
 fn disclosure_summary_css(t: &Theme, uris: &SpriteUris) -> String {
     // The engine decides which of the band's three appearances applies
     // (`theme::Band`), so this sink emits an answer rather than re-deriving the
-    // precedence — the same reason `heading_band_css` beside it does.
-    let decor = t.disclosure_band_decor();
-    let mut out = String::new();
-    if decor.is_present() {
-        // A sprite outranks the fill and the gradient and TILES at natural size, and
-        // one that cannot be embedded degrades to whatever the band would have been
-        // without it — exactly as the preview does.
-        match decor.sprite.and_then(|r| uris.get(r)) {
-            Some((uri, _, _)) => {
-                let _ = write!(out, " background: url({uri}) repeat;");
-            }
-            None => match decor.without_sprite() {
-                Some(crate::theme::BandPaint::Gradient { from, to }) => {
-                    let _ = write!(
-                        out,
-                        " background: linear-gradient({}, {});",
-                        to_hex_rgba(from),
-                        to_hex_rgba(to)
-                    );
-                }
-                Some(crate::theme::BandPaint::Flat(fill)) => {
-                    let _ = write!(out, " background: {};", to_hex_rgba(fill));
-                }
-                None => {}
-            },
-        }
-        // Consulted only for a band that exists, the same gate the preview and the
-        // per-level heading radius apply.
-        let radius = t.metrics.disclosure_band_radius;
-        if radius > 0 {
-            let _ = write!(out, " border-radius: {radius}px;");
-        }
-    }
+    // precedence — the same reason `heading_band_css` beside it does, through the same
+    // emitter.
+    let mut out = band_css(
+        &t.disclosure_band_decor(),
+        t.metrics.disclosure_band_radius,
+        uris,
+    );
     // The INK is independent of the fill in both directions: a theme may re-ink a
     // summary without banding it, and vice versa. It sits on the `summary` element,
     // which is the artefact's spelling of the priority the preview gets from

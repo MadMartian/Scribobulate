@@ -31,6 +31,9 @@ use crate::preview::qdata::{scrib_anchor_widgets, scrib_labels, scrib_render_dat
 /// once instead of each half reaching for `TabState` on its own.
 pub(crate) struct SpliceInputs<'a> {
     pub(crate) md: &'a str,
+    /// The source generation the reader's folds were read at — carried onto every
+    /// control this splice wires. See `TabState::fold_epoch`.
+    pub(crate) fold_epoch: u64,
     pub(crate) doc_dir: Option<&'a std::path::Path>,
     pub(crate) zoom: f64,
     pub(crate) allow_unsafe_images: bool,
@@ -142,7 +145,7 @@ pub(crate) fn splice_disclosure(
         Err(refusal) => return SpliceVerdict::from(refusal),
     };
 
-    install_outcome(view, &render_data, outcome, inputs.zoom);
+    install_outcome(view, &render_data, outcome, inputs.zoom, inputs.fold_epoch);
 
     // AFTER the install, so the geometry the restore reads is the geometry of the
     // document the reader is now looking at.
@@ -227,6 +230,7 @@ fn install_outcome(
     render_data: &Rc<RefCell<crate::preview::qdata::RenderData>>,
     outcome: super::SpliceOutcome,
     zoom: f64,
+    fold_epoch: u64,
 ) {
     let super::SpliceOutcome {
         products,
@@ -281,6 +285,7 @@ fn install_outcome(
         render_data,
         region.disclosure_toggles,
         &merged_anchored,
+        fold_epoch,
     );
     // Every surviving control is re-pointed at the state it now shows. The toggle the
     // reader clicked is a SURVIVOR — it sits on the summary line, above the region a
@@ -437,7 +442,16 @@ fn toggle_at(
 /// which is the end of the summary label. So the mark lands ON the summary line and the
 /// restore puts that line where the reader's old line was.
 struct ReaderAnchor {
-    mark: gtk::TextMark,
+    /// `None` once the anchor has been CONSUMED — see
+    /// [`ReaderAnchor::restore_when_settled`], which moves the mark into the deferred
+    /// closure and leaves this empty so [`Drop`] stands down.
+    ///
+    /// An `Option` rather than a `ManuallyDrop` around the whole anchor. That
+    /// suppressed the `Drop` correctly and never ran ANY field's destructor, so the
+    /// mark's GObject reference was leaked on every successful splice — one per
+    /// toggle, for the life of the process (F-AP2-004). Emptying one field says the
+    /// same thing and lets the value drop normally.
+    mark: Option<gtk::TextMark>,
     /// The marked line's `y` minus the adjustment's `value`, in pixels — negative or
     /// zero, since the line at the top of the viewport starts at or above it.
     offset: f64,
@@ -457,11 +471,14 @@ impl Drop for ReaderAnchor {
     /// new `return` is the rule that gets missed by the next one added. The consuming
     /// path suppresses this — see [`ReaderAnchor::restore_when_settled`].
     fn drop(&mut self) {
-        if self.mark.is_deleted() {
+        let Some(mark) = self.mark.take() else {
+            return;
+        };
+        if mark.is_deleted() {
             return;
         }
-        if let Some(buffer) = self.mark.buffer() {
-            buffer.delete_mark(&self.mark);
+        if let Some(buffer) = mark.buffer() {
+            buffer.delete_mark(&mark);
         }
     }
 }
@@ -515,9 +532,22 @@ impl ReaderAnchor {
         // that would silently move it.
         let mark = view.buffer().create_mark(None, &iter, true);
         Some(ReaderAnchor {
-            mark,
+            mark: Some(mark),
             offset: offset_below_viewport_top(y, adjustment.value()),
         })
+    }
+
+    /// Hand the mark and the offset out, leaving the anchor empty so its [`Drop`]
+    /// stands down.
+    ///
+    /// **The whole of the "consumed" state, in one place.** Its predecessor was a
+    /// `ManuallyDrop` around the anchor, which suppressed `Drop` correctly and ran NO
+    /// field's destructor — so the mark's GObject reference was never released, one
+    /// leaked per successful splice for the life of the process (F-AP2-004). Emptying
+    /// one field says the same thing to `Drop` and lets the value die normally.
+    fn consume(mut self) -> Option<(gtk::TextMark, f64)> {
+        let offset = self.offset;
+        self.mark.take().map(|mark| (mark, offset))
     }
 
     /// Put the reader back, once GTK has finished moving the viewport on its own.
@@ -531,11 +561,17 @@ impl ReaderAnchor {
     fn restore_when_settled(self, view: &CodePreviewView) {
         // The deferred restore OWNS the mark from here: it has to survive until the
         // scroll settles, which is well after this call returns. So the refusal-path
-        // `Drop` must not run — it would delete the mark out from under the closure and
-        // the restore would report `MarkDeleted` every time. The closure below deletes
-        // it itself, on every path, which is where the responsibility now sits.
-        let anchor = std::mem::ManuallyDrop::new(self);
-        let (mark, offset) = (anchor.mark.clone(), anchor.offset);
+        // `Drop` must not delete it — that would take the mark out from under the
+        // closure and the restore would report `MarkDeleted` every time. Taking it
+        // leaves the anchor empty, `Drop` stands down, and the closure below deletes
+        // the mark itself on every path, which is where the responsibility now sits.
+        let Some((mark, offset)) = self.consume() else {
+            // Unreachable: `capture` always fills it and this method consumes the
+            // anchor. Stated rather than unwrapped, because the consequence of being
+            // wrong is a panic on the reader's toggle.
+            log::error!("preview::splice: reader anchor consumed twice; not restoring");
+            return;
+        };
         // Claim the restore. A reader toggling two blocks in quick succession arms two of
         // these over the SAME adjustment — each with its own quiet-counter and each ending
         // in a `set_value` — and the older one's anchor was captured against a buffer that
@@ -549,10 +585,25 @@ impl ReaderAnchor {
                 // waiting. Stand down WITHOUT scrolling — the newer restore owns the
                 // reader's place, and writing this one's would move them off it. The mark
                 // is still deleted below, on every path.
-                if view
-                    .downcast_ref::<CodePreviewView>()
-                    .is_some_and(|v| v.restore_generation() != generation)
-                {
+                //
+                // **The downcast failing is not "not superseded".** `is_some_and`
+                // answered `false` there, so a view this check could not read was
+                // treated as up to date and the restore proceeded — the check declining
+                // to fire is exactly the state it exists to catch, and it did so
+                // silently (F-AP2-012). It cannot happen today (the caller holds a
+                // `CodePreviewView` and hands its upcast to the settle), which is why
+                // this is a `log::error!` and a refusal rather than a panic: a
+                // superseded restore that runs moves the reader off the place a newer
+                // one just put them.
+                let Some(preview) = view.downcast_ref::<CodePreviewView>() else {
+                    log::error!(
+                        "preview::splice: the settled view is not a CodePreviewView, so \
+                         the supersede check cannot be made; standing down rather than \
+                         restoring a position that may already be stale"
+                    );
+                    return Err(NotRestored::Superseded);
+                };
+                if preview.restore_generation() != generation {
                     return Err(NotRestored::Superseded);
                 }
                 let adjustment = view.vadjustment().ok_or(NotRestored::NoAdjustment)?;
@@ -721,7 +772,10 @@ mod gtk_integration_tests {
 
         let watched = mark.clone();
         {
-            let _anchor = ReaderAnchor { mark, offset: -3.0 };
+            let _anchor = ReaderAnchor {
+                mark: Some(mark),
+                offset: -3.0,
+            };
             assert!(
                 !watched.is_deleted(),
                 "precondition: the mark is live while the anchor holds it"
@@ -730,6 +784,42 @@ mod gtk_integration_tests {
         assert!(
             watched.is_deleted(),
             "dropping an unconsumed anchor deletes its mark from the buffer"
+        );
+    }
+
+    /// **F-AP2-004.** Consuming an anchor must hand the mark ON, not merely stop
+    /// `Drop` from deleting it. The `ManuallyDrop` it used to do that with left the
+    /// anchor's own GObject reference alive forever — invisible to every other test,
+    /// because the mark still works and the buffer still deletes it.
+    ///
+    /// Driven through the production `consume` rather than a reconstruction of it, so
+    /// a future "optimisation" back to `ManuallyDrop` reddens this.
+    #[gtktest::test]
+    fn consuming_a_reader_anchor_releases_its_own_reference() {
+        use gtk::glib::object::ObjectExt;
+        let buffer = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
+        buffer.set_text("one\ntwo\n");
+        let mark = buffer.create_mark(None, &buffer.start_iter(), true);
+        let weak = mark.downgrade();
+
+        let anchor = ReaderAnchor {
+            mark: Some(mark),
+            offset: -3.0,
+        };
+        let (taken, offset) = anchor.consume().expect("a fresh anchor holds its mark");
+        assert_eq!(offset, -3.0, "the offset travels with the mark");
+        assert!(
+            !taken.is_deleted(),
+            "the anchor's Drop stood down — the caller owns the mark now"
+        );
+
+        // Release every reference the way the deferred closure does, then check none
+        // is left. With the anchor still holding one, this upgrade succeeds.
+        buffer.delete_mark(&taken);
+        drop(taken);
+        assert!(
+            weak.upgrade().is_none(),
+            "the consumed anchor left no reference behind"
         );
     }
 
@@ -743,7 +833,10 @@ mod gtk_integration_tests {
         let mark = buffer.create_mark(None, &buffer.start_iter(), true);
         buffer.delete_mark(&mark);
         assert!(mark.is_deleted(), "precondition");
-        drop(ReaderAnchor { mark, offset: 0.0 });
+        drop(ReaderAnchor {
+            mark: Some(mark),
+            offset: 0.0,
+        });
     }
 
     /// The anchor scan finds one at offset 0, one in the middle and one at the end.
@@ -804,5 +897,199 @@ mod gtk_integration_tests {
             first,
             "which is exactly the test a superseded restore makes on itself"
         );
+    }
+
+    /// **The differential oracle F-TEST-005 actually asked for, aimed at the INSTALL.**
+    ///
+    /// Its predecessor compared `build_products_scratch`'s output against a thin
+    /// wrapper over `build_products_scratch` with identical arguments — one pure
+    /// function against itself, which no splice mutation can redden (F-TEST-A-001).
+    /// The claim worth making is about the LIVE view: after a splice, everything the
+    /// pane holds must be what a full re-render of the same fold state would have put
+    /// there. So this drives `splice_disclosure` against a real rendered pane and
+    /// compares its installed `RenderData` field by field against a second pane taken
+    /// to the same fold state by `re_render`.
+    ///
+    /// **Both `RenderData` values are destructured exhaustively**, so a field added to
+    /// it fails to compile here until someone decides which side it belongs on — the
+    /// same discipline `adopt_maps` imposes on the install itself, and the reason
+    /// `assert_maps_match`'s ten fields were never the whole story: `disclosure_lines`,
+    /// `image_tints` and `table_anchors` are installed by a DIFFERENT route (the merge)
+    /// and were outside the old oracle entirely.
+    ///
+    /// The three widget-keyed lists are compared by shape rather than by identity: the
+    /// splice deliberately keeps the survivors of its own delete, so the widgets are
+    /// not the same objects a fresh render made, and requiring identity would assert
+    /// the opposite of the design.
+    #[gtktest::test]
+    fn a_spliced_pane_installs_what_a_full_re_render_would() {
+        const MD: &str = concat!(
+            "# Heading one\n\n",
+            "intro with a [link](https://example.invalid/) in it\n\n",
+            "| a | b |\n|---|---|\n| 1 | 2 |\n\n",
+            "<details>\n<summary>S</summary>\n\n",
+            "## Hidden heading\n\n",
+            "a hidden body long enough to outrun the collapsed preview limit so the two \
+             renders genuinely differ in length\n\n",
+            "</details>\n\n",
+            "## Heading two\n\n",
+            "| c | d |\n|---|---|\n| 3 | 4 |\n\n",
+            "tail paragraph\n"
+        );
+        let spans = crate::renderer::disclosure::scan_document(MD);
+        assert_eq!(spans.len(), 1, "one disclosure in the fixture");
+        let key = spans[0].fold_key();
+        let mut after = crate::fold::FoldState::default();
+        after.toggle(key);
+
+        // The pane under test: rendered at the document's own fold state, then SPLICED.
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
+        let view = crate::preview::view_of(&pane).expect("the preview tree render() built");
+        let verdict = splice_disclosure(
+            &view,
+            SpliceInputs {
+                md: MD,
+                fold_epoch: 0,
+                doc_dir: None,
+                zoom: 1.0,
+                allow_unsafe_images: false,
+                folds: &after,
+            },
+            key,
+        );
+        assert_eq!(
+            verdict,
+            SpliceVerdict::Spliced,
+            "precondition: this fixture takes the splice route, not the fallback — an \
+             oracle that silently measured the fallback would prove nothing"
+        );
+
+        // The reference pane: the same document taken to the same fold state by the
+        // route the splice is claiming to be indistinguishable from.
+        let reference_pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
+        let reference_view =
+            crate::preview::view_of(&reference_pane).expect("the preview tree render() built");
+        let scroller = reference_view
+            .parent()
+            .and_then(|p| p.downcast::<gtk::ScrolledWindow>().ok())
+            .expect("render() puts the view in a ScrolledWindow");
+        crate::preview::re_render(&scroller, MD, None, 1.0, false, &after, 0);
+
+        // **And the maps as BUILT, which is the side that makes this oracle able to
+        // fail at all.** Comparing two installed panes measures nothing about the
+        // install: both go through `adopt_maps`, so dropping a field there changes
+        // both sides identically and the comparison stays green — MEASURED, by doing
+        // exactly that. The map half is therefore compared against a fresh build,
+        // which shares no code with the install; only the WIDGET-keyed lists, which no
+        // build produces, are compared pane to pane.
+        let built = crate::preview::build::build_render_products_with_theme(
+            MD,
+            None,
+            1.0,
+            false,
+            crate::theme::active(),
+            &after,
+        );
+        let built_inv = crate::preview::sourcemap::invert_source_map(&built.maps.source_map);
+
+        let spliced = scrib_render_data(&view).expect("the spliced pane holds RenderData");
+        let full =
+            scrib_render_data(&reference_view).expect("the re-rendered pane holds RenderData");
+        let spliced = spliced.borrow();
+        let full = full.borrow();
+
+        let crate::preview::qdata::RenderData {
+            source_map,
+            source_map_inv,
+            copymap,
+            md_owned,
+            links,
+            heading_map,
+            heading_sites,
+            collapsed_blocks,
+            disclosure_extents,
+            disclosure_lines,
+            image_tints,
+            table_anchors,
+            shifts,
+            original_owned,
+        } = &*spliced;
+
+        assert_eq!(source_map, &built.maps.source_map, "source_map");
+        assert_eq!(source_map_inv, &built_inv, "source_map_inv");
+        assert_eq!(copymap, &built.maps.copymap, "copymap");
+        assert_eq!(md_owned, &built.maps.md_owned, "md_owned");
+        assert_eq!(links, &built.maps.links, "links");
+        assert_eq!(heading_map, &built.maps.heading_map, "heading_map");
+        assert_eq!(heading_sites, &built.maps.heading_sites, "heading_sites");
+        assert_eq!(
+            collapsed_blocks, &built.maps.collapsed_blocks,
+            "collapsed_blocks"
+        );
+        assert_eq!(
+            disclosure_extents, &built.maps.disclosure_extents,
+            "disclosure_extents"
+        );
+        assert_eq!(shifts, &built.maps.shifts, "shifts");
+        assert_eq!(original_owned, &built.maps.original_owned, "original_owned");
+
+        // The re-rendered pane must agree with the same build, which is what makes the
+        // two panes comparable at all — and catches a divergence that lives in
+        // `re_render` rather than in the splice.
+        assert_eq!(
+            full.source_map, built.maps.source_map,
+            "re_render source_map"
+        );
+        assert_eq!(
+            full.disclosure_extents, built.maps.disclosure_extents,
+            "re_render disclosure_extents"
+        );
+
+        // The widget-keyed three, by shape. Identity is deliberately NOT asserted: the
+        // splice keeps the survivors of its own delete, so these are not the objects a
+        // fresh render made — that is the design, not a divergence.
+        let lines: Vec<i32> = disclosure_lines.iter().map(|(line, _)| *line).collect();
+        let full_lines: Vec<i32> = full.disclosure_lines.iter().map(|(l, _)| *l).collect();
+        assert_eq!(lines, full_lines, "disclosure_lines (buffer lines)");
+
+        // `image_tints` is EMPTY on both sides for this fixture — no images, because a
+        // rendered image needs a file on disk and this test is about map installation.
+        // Said out loud rather than left as a passing line: the assertion is real but
+        // it is not evidence, and `table_anchors` below is what carries the
+        // widget-keyed claim.
+        assert_eq!(
+            image_tints.len(),
+            full.image_tints.len(),
+            "image_tints (count; both empty for this fixture)"
+        );
+        let table_offsets: Vec<i32> = table_anchors
+            .iter()
+            .map(|(anchor, _)| buffer_offset_of(&view.buffer(), anchor))
+            .collect();
+        let full_table_offsets: Vec<i32> = full
+            .table_anchors
+            .iter()
+            .map(|(anchor, _)| buffer_offset_of(&reference_view.buffer(), anchor))
+            .collect();
+        assert_eq!(
+            table_offsets, full_table_offsets,
+            "table_anchors (buffer offsets)"
+        );
+    }
+
+    /// Where a child anchor sits in `buf`, or `-1` if it is no longer in it — which is
+    /// itself a divergence worth failing on rather than skipping.
+    fn buffer_offset_of(buf: &gtk::TextBuffer, anchor: &gtk::TextChildAnchor) -> i32 {
+        let mut iter = buf.start_iter();
+        loop {
+            if iter.child_anchor().as_ref() == Some(anchor) {
+                return iter.offset();
+            }
+            if !iter.forward_find_char(|c| c == ANCHOR_PLACEHOLDER, None) {
+                return -1;
+            }
+        }
     }
 }

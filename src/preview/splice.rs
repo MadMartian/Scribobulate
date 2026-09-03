@@ -152,13 +152,13 @@ impl From<RenderProducts> for ScratchProducts {
 /// (offsets, spans) are never read: [`SpliceOutcome::products`] already carries the
 /// whole document's, from PASS A, and those are what a caller installs.
 #[derive(Default)]
-pub(super) struct RegionWidgets {
-    pub(super) anchored: Vec<(gtk::TextChildAnchor, gtk::Widget)>,
-    pub(super) image_tints: Vec<(gtk::TextChildAnchor, gtk::Widget)>,
-    pub(super) width_bounded: Vec<(gtk::Widget, i32)>,
-    pub(super) image_bounded: Vec<(gtk::Widget, i32, i32)>,
-    pub(super) tables: Vec<crate::widgets::table::ScribTableWidget>,
-    pub(super) disclosure_toggles: Vec<DisclosureToggle>,
+pub(crate) struct RegionWidgets {
+    pub(crate) anchored: Vec<(gtk::TextChildAnchor, gtk::Widget)>,
+    pub(crate) image_tints: Vec<(gtk::TextChildAnchor, gtk::Widget)>,
+    pub(crate) width_bounded: Vec<(gtk::Widget, i32)>,
+    pub(crate) image_bounded: Vec<(gtk::Widget, i32, i32)>,
+    pub(crate) tables: Vec<crate::widgets::table::ScribTableWidget>,
+    pub(crate) disclosure_toggles: Vec<DisclosureToggle>,
 }
 
 /// Where the region delete ends: `from`, advanced through the run of newlines that
@@ -418,8 +418,9 @@ fn render_region(
                     // offset, the offset before any content, `finish_region` exactly
                     // once at the end — is held by `RegionWriter`'s two states rather
                     // than by the order of the lines below.
-                    let mut r = RegionWriter::begin(prepared, buf, view, seed).write_at(at_offset);
-                    r.summary_tail(target_collapsed);
+                    let r = RegionWriter::begin(prepared, buf, view, seed)
+                        .write_at(at_offset)
+                        .summary_tail(target_collapsed);
                     if target_collapsed {
                         // A collapsed target has no body events to process at all
                         // — `Renderer::process`'s own suppression would swallow

@@ -284,6 +284,49 @@ mod gtk_integration_tests {
         }
         text_in(w, 2)
     }
+    /// A registered app and a window driven into the state a reader actually meets:
+    /// every deferred surface revealed, and a document carrying the constructs whose
+    /// controls live in the preview.
+    ///
+    /// **ONE fixture, so two walks over "the same tree" cannot end up walking different
+    /// trees** (F-DRY-108). They already had: the second walk was still opening `# Doc`
+    /// alone — the document the first one's own comment calls "the vacuous version of
+    /// this test" — while the first had gained a `<details>` precisely because the
+    /// preview's disclosure toggle shipped unnamed for as long as the fixture had no
+    /// constructs in it.
+    ///
+    /// **The reveals do not change what the walk SEES, measured**: `descendants` walks
+    /// the widget TREE and filters on type, never on visibility or mapping, and every
+    /// one of these controls is a child of its container whether or not the container is
+    /// revealed — 61 candidates with all four lines present, 61 with all four deleted.
+    /// Two successive comments once claimed otherwise, both inferred from the mechanism
+    /// and neither measured. They are kept as a state-of-the-window setup, not as the
+    /// guard's reach; each caller's own sanity floor is what proves reach.
+    ///
+    /// **Route per action KIND, and the kinds differ**: `find-replace` is a stateless
+    /// `SimpleAction::new(.., None)` (`window/findbar.rs`), so it must be ACTIVATED — a
+    /// `change_action_state` on it is a silent no-op that emits `GLib-GIO-CRITICAL
+    /// g_action_change_state: assertion 'state_type != NULL'`, which went unread until
+    /// the suite ran under `G_DEBUG=fatal-criticals` and it became a SIGTRAP
+    /// (ScrAP-277). The two sidebars ARE stateful toggles, so they keep the state route
+    /// (ScrAP-252).
+    fn walkable_window(app_id: &str) -> (gtk::Application, gtk::ApplicationWindow) {
+        let app = gtk::Application::new(Some(app_id), gtk::gio::ApplicationFlags::NON_UNIQUE);
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register before building any window");
+        let window = crate::window::new_window(
+            &app,
+            "IT",
+            "# Doc\n\nBody.\n\n<details>\n<summary>Show the details</summary>\n\nHidden.\n\n</details>\n",
+            None,
+        );
+        let chrome = crate::winstate::chrome(&window).expect("window chrome");
+        chrome.find_bar_revealer.set_reveal_child(true);
+        gtk::prelude::ActionGroupExt::activate_action(&window, "find-replace", None);
+        window.change_action_state("outline", &true.to_variant());
+        window.change_action_state("annotations", &true.to_variant());
+        (app, window)
+    }
 
     /// **Every icon-only control and label-less text field in a window carries an
     /// accessible name.**
@@ -303,48 +346,11 @@ mod gtk_integration_tests {
     /// entry points fails this with the offending widgets named in the message.
     #[gtktest::test]
     fn every_icon_only_control_in_a_window_has_an_accessible_name() {
-        let app = gtk::Application::new(
-            Some("com.extollit.scribobulate.integrationtest.a11ynames"),
-            gtk::gio::ApplicationFlags::NON_UNIQUE,
-        );
-        app.register(gtk::gio::Cancellable::NONE)
-            .expect("register before building any window");
-        // The document carries a `<details>` on purpose. The preview's disclosure toggle
-        // is an anchored child of the `GtkTextView` — inside this walk's reach but only
-        // if a rendered document actually produces one — and it shipped unnamed for
-        // exactly as long as this fixture was `# Doc` alone. A guard whose coverage
-        // grows with the application still needs a fixture that exercises the
-        // application; a document with no constructs in it is the vacuous version of
-        // this test.
-        let window = crate::window::new_window(
-            &app,
-            "IT",
-            "# Doc\n\nBody.\n\n<details>\n<summary>Show the details</summary>\n\nHidden.\n\n</details>\n",
-            None,
-        );
-
-        // Reveal the surfaces whose controls are built but hidden, so the test drives the
-        // window into the state a reader actually meets. **These four lines do not change
-        // what the walk sees, MEASURED**: `descendants` below walks the widget TREE and
-        // filters on type, never on visibility or mapping, and every one of these controls
-        // is a child of its container whether or not the container is revealed — 61
-        // candidates with all four lines present, 61 with all four deleted. Two successive
-        // comments here claimed otherwise (that the walk would pass over an empty tree, and
-        // that a broken reveal left it inspecting a smaller one); both were inferred from
-        // the mechanism and neither was measured. They are kept as a state-of-the-window
-        // setup, not as the guard's reach — the sanity floor below is what proves reach.
-        //
-        // Route per action KIND, and the kinds differ: `find-replace` is a stateless
-        // `SimpleAction::new(.., None)` (window/findbar.rs), so it must be ACTIVATED — a
-        // `change_action_state` on it is a silent no-op that emits `GLib-GIO-CRITICAL
-        // g_action_change_state: assertion 'state_type != NULL'`, which went unread until
-        // the suite ran under `G_DEBUG=fatal-criticals` and it became a SIGTRAP (ScrAP-277).
-        // The two sidebars ARE stateful toggles, so they keep the state route (ScrAP-252).
-        let chrome = crate::winstate::chrome(&window).expect("window chrome");
-        chrome.find_bar_revealer.set_reveal_child(true);
-        gtk::prelude::ActionGroupExt::activate_action(&window, "find-replace", None);
-        window.change_action_state("outline", &true.to_variant());
-        window.change_action_state("annotations", &true.to_variant());
+        // The fixture carries a `<details>` on purpose — see `walkable_window`. The
+        // preview's disclosure toggle is an anchored child of the `GtkTextView`, inside
+        // this walk's reach but only if a rendered document actually produces one, and
+        // it shipped unnamed for exactly as long as the fixture was `# Doc` alone.
+        let (_app, window) = walkable_window("com.extollit.scribobulate.integrationtest.a11ynames");
 
         let all = descendants(window.upcast_ref::<gtk::Widget>());
         let candidates: Vec<gtk::Widget> = all.into_iter().filter(owes_a_name).collect();
@@ -407,19 +413,29 @@ mod gtk_integration_tests {
     fn every_control_of_a_known_interactive_type_publishes_a_role_the_guard_recognises() {
         use gtk::glib::translate::IntoGlib;
 
-        let app = gtk::Application::new(
-            Some("com.extollit.scribobulate.integrationtest.rolecrosscheck"),
-            gtk::gio::ApplicationFlags::NON_UNIQUE,
-        );
-        app.register(gtk::gio::Cancellable::NONE)
-            .expect("register before building any window");
-        let window = crate::window::new_window(&app, "IT", "# Doc\n\nBody.\n", None);
+        // **The run says which question it answered** (F-TEST-B-006). `ROLE_TOGGLE_BUTTON`
+        // is GTK 4.10's `AccessibleRole::ToggleButton`; below that version a
+        // `GtkToggleButton` publishes `Button`, so the cross-check cannot observe a role
+        // above this project's v4_6 binding floor and cannot fail on the platform the
+        // gate runs on. The sweep still runs — it is a useful sanity check either way —
+        // but a silent pass here would read as "the roles were verified", and the seats
+        // on other GTK versions have no way to tell what this graded. POLICY § Unit
+        // tests' skip marker, applied to a check that is PARTIALLY inert rather than
+        // wholly skipped.
+        if gtk::minor_version() < 10 {
+            println!(
+                "SKIPPED [a11y role floor]: GTK 4.{} publishes Button for a \
+                 GtkToggleButton, so the ToggleButton arm of this cross-check cannot be \
+                 observed above the v4_6 binding floor; the sweep below still runs",
+                gtk::minor_version()
+            );
+        }
 
-        let chrome = crate::winstate::chrome(&window).expect("window chrome");
-        chrome.find_bar_revealer.set_reveal_child(true);
-        gtk::prelude::ActionGroupExt::activate_action(&window, "find-replace", None);
-        window.change_action_state("outline", &true.to_variant());
-        window.change_action_state("annotations", &true.to_variant());
+        // The SAME fixture the name walk uses. This one was still on `# Doc` alone —
+        // the document that walk's own comment calls vacuous — so the two "walks over
+        // the same window" were walking different windows (F-DRY-108).
+        let (_app, window) =
+            walkable_window("com.extollit.scribobulate.integrationtest.rolecrosscheck");
 
         let all = descendants(window.upcast_ref::<gtk::Widget>());
 

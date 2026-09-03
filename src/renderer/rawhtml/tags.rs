@@ -112,6 +112,14 @@ pub(crate) fn attributes(tag: &str) -> Vec<TagAttr> {
             i += 1;
         }
         if i == start {
+            // A position where no attribute NAME can start — a stray `=`, say. HTML's
+            // tokenizer reports the parse error and carries on with the next
+            // character; abandoning the tag here instead lost every attribute after
+            // it, so `<img =x src=a.png>` yielded no `src` at all (F-TEST-A-011).
+            if i < bytes.len() {
+                i += 1;
+                continue;
+            }
             break;
         }
         let name = s[start..i].to_ascii_lowercase();
@@ -289,6 +297,17 @@ mod tests {
             Some("b.png".into())
         );
         assert!(!has_attr("<details opened>", "open"));
+    }
+
+    /// F-TEST-A-011: a stray `=` where a name should start made the reader abandon
+    /// the whole tag, so every attribute after it was invisible — including the one
+    /// carrying the URL.
+    #[test]
+    fn a_stray_delimiter_does_not_abandon_the_rest_of_the_tag() {
+        assert_eq!(attr("<img =x src=a.png>", "src"), Some("a.png".into()));
+        assert_eq!(attr("<img = src=a.png>", "src"), Some("a.png".into()));
+        assert_eq!(attr("<details == open>", "open"), None);
+        assert!(has_attr("<details == open>", "open"));
     }
 
     #[test]

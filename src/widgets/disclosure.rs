@@ -253,6 +253,55 @@ mod vocabulary {
             "no shipped theme produces an inkable indicator shape — this guard is vacuous"
         );
     }
+
+    /// **The other direction: every selector the sheet states is a shape something
+    /// PRODUCES**, and the bare button node is asserted on its own terms.
+    ///
+    /// The guard above proves each produced shape has a selector; it says nothing about
+    /// a selector for a shape nothing produces — a rule inking a node that never
+    /// appears, which reads as coverage and is not. Two of the three selectors were
+    /// covered; the third, `button.scrib-disclosure` itself, is not a shape at all and
+    /// so was reached by neither direction (F-TEST-A-009).
+    #[test]
+    fn every_selector_the_sheet_states_is_a_node_something_draws_on() {
+        use std::collections::BTreeSet;
+
+        let themes = crate::theme::Themes::builtin();
+        let mut produced: BTreeSet<&'static str> = BTreeSet::new();
+        for entry in themes.chooser_list() {
+            let theme = themes.resolve(&entry.id);
+            for expanded in [false, true] {
+                for shape in theme.disclosure_marker_decor(expanded).candidates() {
+                    if let Some(node) = marker_css_node(&shape) {
+                        produced.insert(node);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            produced,
+            ["image", "label"].into_iter().collect::<BTreeSet<_>>(),
+            "the shipped themes no longer produce every indicator shape this guard \
+             covers — a selector for a shape nothing produces is a selector nothing \
+             checks, and the sheet is then inking a node that never appears"
+        );
+
+        // The BASE node, which is not a shape and so is reached by neither sweep. It
+        // inks the button itself: the stock chevron GTK draws when a theme states no
+        // shape of its own is not a child node at all, so without this selector a themed
+        // page's default indicator keeps the desktop's ink (TDD 18.53).
+        assert!(
+            DISCLOSURE_MARKER_SELECTORS.contains(&"button.scrib-disclosure"),
+            "the bare button node must be inked — it is what a theme stating no glyph \
+             and no sprite draws on"
+        );
+        assert_eq!(
+            DISCLOSURE_MARKER_SELECTORS.len(),
+            produced.len() + 1,
+            "and the sheet states exactly the produced shapes plus that base node — a \
+             fourth selector would be one nothing here has an opinion about"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
