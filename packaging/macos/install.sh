@@ -265,6 +265,24 @@ codesign --verify --deep --strict "$ANCHOR" 2>/dev/null || {
     exit 1
 }
 
+# AND THEN THE BUILD COPY GOES, or this script leaves behind exactly the second
+# registration its own gate refuses. MEASURED with a probe pair sharing one identifier,
+# one in ~/Applications and one in target/macos, neither ever launched and neither
+# manually registered: BOTH appear in `lsregister -dump` within seconds — a build
+# directory is not exempt from Launch Services by virtue of being a build directory —
+# and `open -b <id>` launches the ~/Applications one. Remove the anchor and the same
+# command launches the target/macos one. So the build copy does not merely sit there: it
+# is a live candidate that loses while the anchor exists and takes over the moment it
+# does not, which is a stale build-directory bundle silently becoming the application.
+#
+# Deleting it is not the overreach the /Applications rule forbids. The distinction is
+# authorship, not location: bundle.sh produced this one seconds ago in this same run,
+# where a dragged copy was installed by the user through a different route. Only the
+# .app is removed, never OUT_DIR itself, which may be a directory the caller named.
+# dmg.sh is unaffected — it invokes bundle.sh itself rather than consuming a bundle
+# somebody else left.
+rm -rf "$BUILT"
+
 TARGET="$ANCHOR/Contents/MacOS/scribobulate"
 echo ":: Linking $LINK -> $TARGET"
 mkdir -p "$BIN_DIR"
@@ -330,8 +348,11 @@ echo "  app : $ANCHOR"
 echo "  cli : $LINK"
 echo "  man : $MAN_DIR/man{1,5}/scribobulate.{1,5}.gz"
 echo
-echo "  The build output at $BUILT is a build artefact; the install above does not"
-echo "  resolve into it, so 'cargo clean' is safe."
+echo "  Exactly one Scribobulate.app is installed. The build copy this run produced at"
+echo "  $BUILT"
+echo "  has been removed: Launch Services registers a bundle in a build directory like"
+echo "  any other, so leaving it would be leaving a second candidate for the same"
+echo "  identifier. Nothing above resolves into the build tree, so 'cargo clean' is safe."
 case ":$PATH:" in
     *":$BIN_DIR:"*)
         echo

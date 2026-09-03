@@ -5,8 +5,12 @@
 # WHAT IT REMOVES is exactly what that script created, and nothing else:
 #   the `scribobulate` symlink in Homebrew's bin/ (the thing on PATH), the manual-page
 #   symlinks in Homebrew's share/man/man{1,5}/, the anchored bundle at
-#   ~/Applications/Scribobulate.app that they all resolve into, and the bundle in the
-#   build directory that install.sh's own build produced and copied from.
+#   ~/Applications/Scribobulate.app that they all resolve into, and any bundle left in
+#   the build directory. install.sh removes its own build copy on success, so that last
+#   one is normally already gone; it is swept here for the run that failed part-way and
+#   for a bare `bundle.sh` invocation, because Launch Services registers a bundle sitting
+#   in a build directory like any other and a second registration for one identifier is
+#   the state both scripts exist to prevent.
 #
 # WHAT IT DELIBERATELY LEAVES: a copy dragged to /Applications from the .dmg. That is the
 # redistributable route (dmg.sh), installed by the user rather than by this script, and a
