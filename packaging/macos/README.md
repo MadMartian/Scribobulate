@@ -196,7 +196,7 @@ duti -s com.extollit.scribobulate net.daringfireball.markdown all
 ## Putting `scribobulate` on PATH, and taking it off again
 
 ```bash
-./install.sh                 # -> target/macos/Scribobulate.app, plus a symlink on PATH
+./install.sh                 # -> ~/Applications/Scribobulate.app, plus a symlink on PATH
 scribobulate path/to/document.md
 ./uninstall.sh               # removes both
 ```
@@ -208,13 +208,31 @@ when you are already working inside this directory. The router is named first
 deliberately: documenting the direct path as primary is how the router came to be
 unmentioned in every README that existed.
 
-Builds the bundle (via `bundle.sh`) and symlinks its own executable —
-`Scribobulate.app/Contents/MacOS/scribobulate` — into Homebrew's `bin/`
-directory, which this project already requires for its GTK4 dependencies and
-which is therefore already writable with no `sudo` and already on PATH. The
-symlink stays inside `Contents/MacOS/`, so a terminal launch runs the identical
+Builds the bundle (via `bundle.sh`), copies it to `~/Applications/Scribobulate.app`,
+and symlinks that copy's own executable — `Scribobulate.app/Contents/MacOS/scribobulate`
+— into Homebrew's `bin/` directory, which this project already requires for its GTK4
+dependencies and which is therefore already writable with no `sudo` and already on PATH.
+The symlink stays inside `Contents/MacOS/`, so a terminal launch runs the identical
 executable Finder or the Dock would, Dock/Cmd-Tab identity included — a copy
 made outside the bundle would not carry that.
+
+**Nothing resolves into `target/`, and that is deliberate.** The links used to point at
+the build directory, so `cargo clean` — or a Finder drag to `/Applications`, which within
+one volume is a move rather than a copy — left them dangling. A dangling symlink is not
+an error the shell reports: it skips the entry and keeps walking PATH, so the next
+`scribobulate` down the line runs instead, silently. `~/Applications` is per-user, needs
+no `sudo`, and is scanned by Launch Services, so the anchored copy has a real Dock tile
+and Cmd-Tab entry. The build copy is removed once the anchor is verified, because Launch
+Services registers a bundle in a build directory like any other and two registrations for
+one `CFBundleIdentifier` is the state these scripts exist to prevent.
+
+**The install refuses rather than adding a second copy.** Before it spends a release
+build it checks that no other `Scribobulate.app` is installed and that nothing earlier on
+PATH already answers to `scribobulate`; either one is a hard error naming the path and
+the exact command to clear it. It reports and refuses — it never deletes a bundle it did
+not install. So on a machine with a copy dragged to `/Applications`, choose one: keep
+that copy and launch from the Dock, or remove it and let the developer install own
+`~/Applications`.
 
 This is the developer-convenience counterpart to `packaging/linux/install.sh` on Linux,
 not the redistributable installer — that is `dmg.sh` above.
@@ -231,15 +249,37 @@ failing. Two behaviours are worth knowing before you need them:
   and how to remove it, because an uninstaller that prints success while a working copy
   of the app is still installed is worse than one that fails.
 
-**The symlink is the part nobody guesses**, and it is the reason this section exists. It
-lives outside the repository, in `$(brew --prefix)/bin`, so deleting the checkout without
-running `./uninstall.sh` first leaves a dangling `scribobulate` on PATH that fails with
-nothing useful to say. Uninstall before you remove the clone.
+**Both halves of the install live outside the repository**, and that is the part nobody
+guesses: the symlink in `$(brew --prefix)/bin` and the bundle in `~/Applications`.
+Deleting the checkout removes neither, so run `./uninstall.sh` before you remove the
+clone or both outlive it — the bundle keeps its Dock and `Open With` entries, and the
+symlink goes on resolving into it. (It no longer *dangles* when the checkout goes, which
+is what the anchor bought; it is simply still installed.)
 
 Launch Services may go on offering a bundle that is gone, because `bundle.sh` registers
 every build with it (`lsregister -f`) so the Dock and Finder take the icon up without a
-cache delay. It corrects itself on the next rescan, or immediately with the
-`lsregister -kill -r -domain local -domain user` command `uninstall.sh` prints.
+cache delay. `uninstall.sh` now unregisters the paths it installed rather than telling you
+to do it, and it **verifies that by reading the database back** rather than trusting the
+exit status — `lsregister -u` returns non-zero for a path it holds no registration for,
+which is the ordinary case, so the status answers a different question than the one being
+asked. When a path is still registered afterwards, or `lsregister` is not where it is
+expected, the run says which paths were not cleared instead of claiming they were. For a
+copy installed some other way, unregister it **by path**:
+
+```bash
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u '/path/to/Scribobulate.app'
+```
+
+That works even when the path has already been deleted — measured against 20 such
+registrations, all cleared.
+
+⚠️ **Do not reach for `lsregister -kill`.** This README and `uninstall.sh` both used to
+recommend `lsregister -kill -r -domain local -domain user`; the option has been REMOVED.
+MEASURED on macOS 26 (Darwin 25.0.5): it answers *"The -kill option has been removed
+because it was dangerous and no longer useful"* and changes nothing — 20 stale
+registrations before, the same 20 after. A remedy that no-ops is worse than none, because
+the reader has no reason to doubt it. `-f` and `-u` are both still present and both still
+work; `-f` was re-verified functionally on the same version.
 
 ## Verifying a bundle
 

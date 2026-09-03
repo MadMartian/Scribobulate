@@ -112,6 +112,19 @@ APP_ID="$(plutil -extract CFBundleIdentifier raw "$REPO_ROOT/packaging/macos/Inf
 # and returned a pile of registrations for bundles that no longer exist (deleted /tmp
 # staging directories, an unmounted .dmg volume) — a gate built on it would refuse to run
 # over copies that are not there. Every mdfind hit is therefore existence-tested anyway.
+#
+# KNOW WHERE THE mdfind TIER STOPS. It is a Spotlight-INDEX query, so its coverage is
+# whatever Spotlight indexes and it is blind everywhere Spotlight is excluded — which is
+# not a corner case. MEASURED on this machine: /private/tmp held FIFTEEN real bundles
+# (841 MB, executables present, every one carrying this identifier and registered with
+# Launch Services) left by an earlier porting session, and mdfind returned exactly ONE
+# path. Spotlight does not index /private/tmp; Launch Services registers it.
+#
+# That is a bound on the tier, not a hole in the gate, and the distinction is the reason
+# the mandatory tier is a direct test rather than a query. The two fixed locations are the
+# ones that decide the outcome — Launch Services ranks by location, and a /private/tmp
+# bundle cannot outrank /Applications — so what mdfind misses cannot win. Do not promote
+# mdfind to the mandatory tier on the strength of it usually agreeing.
 found_foreign=""
 note_transient=""
 
