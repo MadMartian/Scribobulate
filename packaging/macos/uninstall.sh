@@ -4,14 +4,28 @@
 #
 # WHAT IT REMOVES is exactly what that script created, and nothing else:
 #   the `scribobulate` symlink in Homebrew's bin/ (the thing on PATH), the manual-page
-#   symlinks in Homebrew's share/man/man{1,5}/, and the Scribobulate.app they all
-#   resolve into.
+#   symlinks in Homebrew's share/man/man{1,5}/, the anchored bundle at
+#   ~/Applications/Scribobulate.app that they all resolve into, and any bundle left in
+#   the build directory. install.sh removes its own build copy on success, so that last
+#   one is normally already gone; it is swept here for the run that failed part-way and
+#   for a bare `bundle.sh` invocation, because Launch Services registers a bundle sitting
+#   in a build directory like any other and a second registration for one identifier is
+#   the state both scripts exist to prevent.
 #
 # WHAT IT DELIBERATELY LEAVES: a copy dragged to /Applications from the .dmg. That is the
 # redistributable route (dmg.sh), installed by the user rather than by this script, and a
 # developer uninstall that quietly deletes it would be removing something it never put
 # there. It is REPORTED instead, because the failure this script exists to end is an
 # uninstaller that announces success while a working copy of the app is still installed.
+#
+# THE TWO ARE NOW DISTINCT BY CONSTRUCTION, which is what makes that split honest. The
+# developer install anchors at ~/Applications and the .dmg route lands in /Applications,
+# so "remove what I created, report what I did not" names two different bundles rather
+# than two claims about one. It used to anchor inside the build directory, where a Finder
+# drag to /Applications MOVED the bundle out from under the symlinks and left them
+# dangling — at which point this script's account of what it had installed was wrong.
+# install.sh's own gate now refuses to build a second bundle while another is installed,
+# so the state this script is asked to clean up is the one it describes.
 #
 # It is idempotent: every removal is guarded, so a second run reports what is already gone
 # rather than failing on it.
@@ -21,7 +35,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="${1:-$REPO_ROOT/target/macos}"
-APP="$OUT_DIR/Scribobulate.app"
+BUILT="$OUT_DIR/Scribobulate.app"
+ANCHOR="$HOME/Applications/Scribobulate.app"
 
 [ "$(uname -s)" = "Darwin" ] || { echo "error: macOS only (see packaging/linux/uninstall.sh)" >&2; exit 1; }
 
@@ -69,12 +84,14 @@ else
     echo "  pages at \$(brew --prefix)/share/man/man{1,5}/scribobulate.{1,5}.gz." >&2
 fi
 
-if [ -d "$APP" ]; then
-    echo ":: Removing $APP"
-    rm -rf "$APP"
-else
-    echo ":: No bundle at $APP"
-fi
+for app in "$ANCHOR" "$BUILT"; do
+    if [ -d "$app" ]; then
+        echo ":: Removing $app"
+        rm -rf "$app"
+    else
+        echo ":: No bundle at $app"
+    fi
+done
 
 DRAGGED="/Applications/Scribobulate.app"
 if [ -d "$DRAGGED" ]; then
