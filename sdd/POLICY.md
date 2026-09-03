@@ -142,11 +142,25 @@ Before any change is considered valid, run these steps in order:
    `/run/user/1000/at-spi/bus_0` on teardown: a rig that claims that path takes the
    operator's session down with it.
 6. **Coverage gate** — `scripts/coverage.sh` must pass. Scoped line coverage is a
-   no-regression **ratchet**, not a target: the script owns both the floor (`FLOOR`)
-   and the scope (`IGNORE`), and is the only place either is written down. **Do not
-   restate either value here** — a second copy is exactly how the floor silently fell
-   ~2pt behind the code and stopped protecting it. The aspiration is 80%.
-   **`FLOOR` is a WHOLE NUMBER, and it advances one whole point at a time.** It rises
+   no-regression **ratchet**, not a target: the script owns the floors (`FLOOR`,
+   `FLOOR_FULL`) and the scope (`IGNORE`), and is the only place any of them is written
+   down. **Do not restate any value here** — a second copy is exactly how the floor
+   silently fell ~2pt behind the code and stopped protecting it.
+   **The gate measures one scope TWICE and renders a floor verdict on each.** Leg A runs
+   the unit tests alone (`FLOOR`); leg B runs them plus the GTK integration suite
+   (`FLOOR_FULL`), under the same throwaway-session wrapper step 5 uses. Two legs exist
+   because a unit-only number cannot see code that `#[gtktest::test]` bodies exercise
+   thoroughly — landing such code *dropped* the figure, and the only lever a single
+   number offers is to lower the floor, which happened twice. Leg B turns that event
+   round: tested GTK-wired code raises `FLOOR_FULL`, untested GTK-wired code lowers it,
+   and neither reads as ordinary drift. Leg A stays because it is the only leg that can
+   see whether a decision core was extracted at all.
+   **`FLOOR` may only be lowered in a change that RAISES `FLOOR_FULL`.** That is the
+   rule that makes the pair a ratchet rather than two numbers, and no script can enforce
+   it — a script cannot see history. It is stated in `scripts/coverage.sh`'s header, next
+   to the numbers, and repeated here only because it is a rule about how to *work*, which
+   is this document's job.
+   **Both floors are WHOLE NUMBERS, and each advances one whole point at a time.** It rises
    only once measured coverage *reliably* reaches the next integer — on every host that
    runs the gate, not on the machine that happened to measure it. Coverage sitting at
    76.8 keeps a floor of 76; the floor becomes 77 when the figure reaches 77 with room
@@ -176,7 +190,11 @@ Before any change is considered valid, run these steps in order:
    the reader after untested code they had just written; when the entering files were
    small it cleared the floor and said nothing at all, which is worse. It catches the
    opposite direction too — a floor that climbs because an exclusion was widened is now
-   a failure rather than a success. Update the manifest with
+   a failure rather than a success. **Leg B is scope-checked against the same manifest**,
+   which is what makes its number comparable to anything: enabling the feature compiles
+   test scaffolding as whole files, `IGNORE_TESTONLY` removes the ones known to be
+   scaffolding, and the equality check names anything else rather than absorbing it at
+   whatever coverage a test file happens to have. Update the manifest with
    `scripts/coverage.sh --update-scope`, after deciding which side each named file
    belongs on, in the same commit as the layout change, exactly as raising `FLOOR` is.
    The manifest records what IS measured; `IGNORE` remains the policy about what should

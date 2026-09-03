@@ -38,7 +38,7 @@
 //! inside the fence) is accepted.
 
 use super::scan::{scan_script_spans, Script};
-use pulldown_cmark::{Event, Parser, Tag};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use std::collections::HashMap;
 use std::ops::Range;
 
@@ -71,7 +71,7 @@ impl Seg {
 /// the copymap, the outline and the export walk all segment a run identically —
 /// the same single-definition discipline `scan_script_spans` already carries, one
 /// level up.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct BlockScripts {
     /// Keyed by the `Text` event's source byte start, which is unique per parse.
     by_event: HashMap<usize, Vec<Seg>>,
@@ -123,6 +123,27 @@ pub(crate) fn is_inline_tag(tag: &Tag<'_>) -> bool {
     )
 }
 
+/// The CLOSE half of [`is_inline_tag`], for a walk that sees `TagEnd` rather than `Tag`.
+///
+/// **Beside its opening twin, not restated at a call site.** `disclosure::body_plain_text`
+/// carried this list as a second `TagEnd` match, so the two could disagree about whether
+/// a construct is inline — and the failure is silent in both directions: a boundary
+/// treated as a block emits a newline that makes a search for `foobar` miss `foo*bar*`,
+/// and one treated as inline joins two runs the reader sees apart and claims a match the
+/// page does not have (F-AP2-008).
+pub(crate) fn is_inline_tag_end(end: &TagEnd) -> bool {
+    matches!(
+        end,
+        TagEnd::Emphasis
+            | TagEnd::Strong
+            | TagEnd::Strikethrough
+            | TagEnd::Superscript
+            | TagEnd::Subscript
+            | TagEnd::Link
+            | TagEnd::Image
+    )
+}
+
 impl BlockScripts {
     /// Scan `md` — the same text, with the same [`super::md_options`], that the
     /// caller is about to walk.
@@ -171,13 +192,30 @@ impl BlockScripts {
                         block.push_text(src.start, t);
                     }
                 }
-                // Rendered width with unscannable contents.
-                Event::Code(_) | Event::InlineHtml(_) | Event::InlineMath(_) => block.push_filler(),
+                // Rendered width with unscannable contents. `DisplayMath` belongs here
+                // beside `InlineMath` on the merits, NOT because it is reachable: it is
+                // inert today only because `md_options()` does not enable `ENABLE_MATH`,
+                // which is inertness by option rather than by design — the shape this
+                // check exists to catch. Naming it costs one token and stops the day the
+                // option is enabled from being the day this scanner silently mis-stitches.
+                Event::Code(_)
+                | Event::InlineHtml(_)
+                | Event::InlineMath(_)
+                | Event::DisplayMath(_) => block.push_filler(),
                 // A line break is real whitespace: it must be able to close a
                 // tight `^x^`/`~x~` exactly as a space does, while still leaving a
                 // `~~`/`==` fence (whose content may contain spaces) able to span it.
                 Event::SoftBreak | Event::HardBreak => block.push_break(),
-                _ => {}
+                // Named rather than wildcarded, each because it contributes no
+                // stitchable text — which is a DECISION about the variant, not an
+                // absence of one. `Rule` and `TaskListMarker` carry no text at all;
+                // `Html` is block HTML, which per this module's doc never arrives as a
+                // `Text` event; `FootnoteReference` carries a label the scanner has no
+                // reason to search for a delimiter.
+                Event::Rule
+                | Event::TaskListMarker(_)
+                | Event::Html(_)
+                | Event::FootnoteReference(_) => {}
             }
         }
         block.flush(&mut out);
@@ -195,6 +233,25 @@ impl BlockScripts {
         match self.by_event.get(&src_start) {
             Some(segs) => segs.clone(),
             None => segments_of(rendered),
+        }
+    }
+
+    /// Append the RENDERED text of one `Event::Text` at source offset `src_start`,
+    /// dropping the tight-construct delimiters the page never shows.
+    ///
+    /// The one implementation of "what this event's text WOULD say on the page", shared
+    /// by every reduction that has to agree with the rendered document: the outline's
+    /// heading labels and slugs, and the searchable text of a collapsed disclosure body.
+    /// It exists because those two had it written out twice and the second copy omitted
+    /// the marker suppression entirely — so a `^superscript^` inside a collapsed block
+    /// contributed its `^` delimiters to the text find searched, which both invents
+    /// matches on a character the reader cannot see and misses a search for the word as
+    /// rendered.
+    pub(crate) fn push_rendered_text(&self, src_start: usize, rendered: &str, out: &mut String) {
+        for seg in self.segments(src_start, rendered) {
+            if !seg.marker {
+                out.push_str(seg.text(rendered));
+            }
         }
     }
 

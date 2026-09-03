@@ -156,6 +156,14 @@ fn apply(
             sim.anchor();
             sim.newline();
         }
+        // dispatch-selector: TEST-ONLY infrastructure, deliberately narrower than the
+        // real renderer (module doc above: "mirrors renderer.rs ... for the constructs
+        // these tests use"). Unlike a PRODUCTION `_ => return None` (check 15's own
+        // motivating defect — copymap::classify swallowed raw HTML into no copy node
+        // for as long as `<picture>` existed, gate green throughout), a variant missing
+        // here does not render invisibly — it desyncs this sim's buffer char count from
+        // the real render the gtk-integration-tests compare it against, so the gap
+        // fails the suite loudly rather than shipping silently.
         _ => {}
     }
 }
@@ -412,6 +420,10 @@ fn cell_trees(md: &str) -> Vec<CopyTree> {
                 maps.push(build(md, &evs, off, &scripts));
                 active = false;
             }
+            // dispatch-selector: selects EVERY event while inside the cell (`active`),
+            // not by which Event/Tag/TagEnd variant it is — `classify(&ev)` above is
+            // the real, already-exhaustive dispatcher; this arm only decides whether an
+            // already-classified event belongs to the cell being built.
             _ if active => {
                 if let Some(k) = &kind {
                     let w = cell_width(&scripts, src.start, k);
@@ -423,6 +435,9 @@ fn cell_trees(md: &str) -> Vec<CopyTree> {
                     off += w;
                 }
             }
+            // dispatch-selector: sibling of the arm above — document content OUTSIDE
+            // any table cell is irrelevant to a per-cell copymap builder, regardless of
+            // its variant, so this discards on the same `active` axis, not on identity.
             _ => {}
         }
     }

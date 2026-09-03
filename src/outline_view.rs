@@ -9,7 +9,7 @@
 //! This module is GTK-construction code (custom GObject + signal factory), not
 //! headlessly testable, so it sits outside the unit-test coverage gate alongside
 //! `codeview.rs` — the pure model and tree-folding it consumes live in
-//! `outline.rs`, where they are unit-tested.
+//! `outline/`, where they are unit-tested.
 
 use crate::outline::HeadingNode;
 use crate::span::OriginalByteOffset;

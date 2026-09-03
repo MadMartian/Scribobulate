@@ -2055,3 +2055,137 @@ fn a_long_document_reports_the_pages_it_actually_occupies() {
         "a 400-paragraph document occupies one page — the paginator is not being run"
     );
 }
+
+/// **Rubric 2.26g at the PDF sink.** A PDF has no disclosure to offer, so a collapsed
+/// block's body must be LAID OUT — a page the reader cannot expand must not be the one
+/// place the document's content is missing.
+///
+/// Measured against a control rendered with the block's contents at top level: the
+/// disclosure must cost at least as many lines, or the body is going somewhere other
+/// than the page.
+#[test]
+fn a_collapsed_disclosure_lays_its_body_out_on_the_page() {
+    let t = theme();
+    let ctx = ctx();
+    const BODY: &str = "the hidden paragraph\n\n- alpha\n- beta\n";
+    let with_block = format!("<details>\n<summary>Show me</summary>\n\n{BODY}\n</details>\n");
+
+    let laid = lay_out(
+        &doc::build(&with_block, &RenderOptions::default()),
+        &ctx,
+        PAGE_WIDTH_PT,
+        PAGE_HEIGHT_PT,
+        &t,
+    );
+    let bare = lay_out(
+        &doc::build(BODY, &RenderOptions::default()),
+        &ctx,
+        PAGE_WIDTH_PT,
+        PAGE_HEIGHT_PT,
+        &t,
+    );
+    assert!(!bare.lines.is_empty(), "control: the body lays out at all");
+    assert!(
+        laid.lines.len() > bare.lines.len(),
+        "the body must reach the page, plus a line for the summary label: \
+         {} lines with the disclosure vs {} for its body alone",
+        laid.lines.len(),
+        bare.lines.len()
+    );
+    assert!(
+        laid.fragments.iter().all(|f| f.height > 0.0),
+        "every fragment is drawable"
+    );
+}
+
+/// **TDD 18.51 — a themed summary band reaches the page as a fill on the label's own
+/// line, and the label's own ink reaches the run.**
+///
+/// Display-free on purpose, which is what puts this half of the decoration inside the
+/// coverage gate rather than resting on the cross-surface sweep (which needs a live
+/// tag table and is therefore feature-gated). Two-sided: a theme stating nothing must
+/// fill nothing, or the assertion below is satisfied by a sink that bands every line.
+#[test]
+fn a_themed_disclosure_band_fills_the_summary_label_line() {
+    const DOC: &str = "<details>\n<summary>Show me</summary>\n\nbody text\n\n</details>\n";
+    let ctx = ctx();
+
+    let plain = theme();
+    let bare = lay_out(
+        &doc::build(DOC, &RenderOptions::default()),
+        &ctx,
+        PAGE_WIDTH_PT,
+        PAGE_HEIGHT_PT,
+        &plain,
+    );
+    assert!(
+        !bare.lines.iter().any(|l| l.is_filled_for_test()),
+        "System bands no summary line — an unset key is absent, never a default"
+    );
+
+    let mut themes = crate::theme::Themes::builtin();
+    themes.merge_over_for_test(
+        "[themes.banded]\ndisclosure_band_color = \"#339966\"\n\
+         disclosure_band_gradient_to_color = \"#0a1830\"\n\
+         disclosure_fg = \"#ffe9a8\"\n",
+    );
+    let t = themes.resolve("banded");
+    let laid = lay_out(
+        &doc::build(DOC, &RenderOptions::default()),
+        &ctx,
+        PAGE_WIDTH_PT,
+        PAGE_HEIGHT_PT,
+        &t,
+    );
+    let filled = laid.lines.iter().filter(|l| l.is_filled_for_test()).count();
+    assert_eq!(
+        filled, 1,
+        "exactly the summary LABEL's line carries the band — the body is ordinary \
+         prose and must not be banded with it"
+    );
+    // The band must be the FIRST line, not some line of the body: the label opens the
+    // block. Asserted separately because a count alone cannot tell which line it was.
+    assert!(
+        laid.lines.first().is_some_and(|l| l.is_filled_for_test()),
+        "the band belongs to the summary label, which is the block's first line"
+    );
+
+    // …and the ink, which travels in the MARKUP rather than as a cairo pen on the
+    // line. That is not a stylistic choice: `ink::draw_page` sets `blockquote_fg` as
+    // the source for every line inside a quote, and only an attribute on the run can
+    // override it (`markup::disclosure_span`).
+    let (open, close) = crate::export::markup::disclosure_span(&t);
+    assert!(open.contains("foreground=\"#ffe9a8\"") && close == "</span>");
+    assert_eq!(
+        crate::export::markup::disclosure_span(&plain),
+        (String::new(), ""),
+        "a theme stating no disclosure_fg must wrap the label in nothing at all"
+    );
+
+    // **The container context** (Document Rendering CAM row 2). A disclosure inside a
+    // blockquote is a real construct here — MEASURED: its label reaches this sink with
+    // `quote` set — so it is the case where the ink's spelling matters, and it must be
+    // banded exactly as one at top level is.
+    const QUOTED: &str =
+        "> <details>\n> <summary>Show me</summary>\n>\n> body text\n>\n> </details>\n";
+    let quoted = lay_out(
+        &doc::build(QUOTED, &RenderOptions::default()),
+        &ctx,
+        PAGE_WIDTH_PT,
+        PAGE_HEIGHT_PT,
+        &t,
+    );
+    let label = quoted
+        .lines
+        .first()
+        .expect("the quoted disclosure lays out a label line");
+    assert!(
+        label.is_filled_for_test(),
+        "a quoted summary must carry the band a top-level one does"
+    );
+    assert!(
+        label.quote_indent_for_test().is_some(),
+        "the fixture must actually put the label INSIDE the quote, or this case is \
+         the top-level one wearing a different fixture"
+    );
+}

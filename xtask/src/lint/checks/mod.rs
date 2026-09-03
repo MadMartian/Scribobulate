@@ -32,6 +32,7 @@ pub fn run_all(tree: &Tree) -> bool {
         architecture::windows_illegal_paths(tree),
         register::body_without_toc_row(tree),
         architecture::powershell_encoding(tree),
+        architecture::parser_dispatch_exhaustive(tree),
     ];
     verdicts.into_iter().all(|ok| ok)
 }

@@ -95,20 +95,13 @@ fn every_theme_heading_contrast_clears_the_legibility_floor() {
             // theme with a dark fill and a PALE second stop passed on the fill and was
             // unreadable across the bottom half of its own band, and where a SPRITE
             // outranks the fill the gate was measuring a colour that is never painted.
-            let decor = t.heading_band_decor(level);
-            if decor.sprite.is_some() {
-                // A sprite is arbitrary pixels; no ratio this gate can compute says
-                // anything about reading text on it. Skipped with the reason named,
-                // rather than measured against a fill nobody sees.
-                continue;
-            }
-            let surfaces: Vec<gdk::RGBA> = match decor.without_sprite() {
-                // BOTH endpoints: a gradient is legible only if its whole run is.
-                Some(crate::theme::BandPaint::Gradient { from, to }) => vec![from, to],
-                Some(crate::theme::BandPaint::Flat(c)) => vec![c],
-                None => vec![bg],
-            };
-            for behind in surfaces {
+            //
+            // **Through the SHARED resolver**, not a second copy of the same match. The
+            // two sweeps had one each and they had already drifted: this one read the
+            // stops RAW while the disclosure sweep composited them over the page, so a
+            // translucent band gave the same colour two different verdicts depending on
+            // which decoration was asking (F-AP-B-303). One function, one answer.
+            for behind in band_surfaces(&t.heading_band_decor(level), bg) {
                 let c = crate::palette::contrast(*ink, behind);
                 assert!(
                     c >= TEXT,
@@ -195,15 +188,19 @@ const TEXT: f64 = crate::palette::WCAG_AA_TEXT;
 ///
 /// **Reviewed as a whole and ratified by the operator 2026-08-27** — recorded because a
 /// list like this otherwise accretes one row at a time and no one ever reads it back.
-/// The five rows do NOT all mean the same thing, and the table cannot say so itself:
+/// The rows do NOT all mean the same thing, and the table cannot say so itself:
 ///
 /// - **Terminal `rule_color`** — settled. The ANSI 8 reproduction is the point.
 /// - **Bedtime `mark_fg`, `rule_color`** — settled *for this project*: that palette is
 ///   owned by a different operator and is not ours to retune.
-/// - **Pixel Quest `link_color`, `list_task_color`** — **postponed, not settled.** The
-///   ruling was "we'll address those later", so these two are a licence standing over an
-///   open question rather than over a decision. Tracked in the known-issues register; do
-///   not treat their presence here as agreement that the colours are right.
+///
+/// That ratification also covered **Pixel Quest `link_color` and `list_task_color`**,
+/// which were **postponed, not settled** — and both have since been RETIRED, by moving
+/// that theme's page rather than by relaxing anything: the pale page cleared them at
+/// 6.08:1 and 4.05:1 and the rows came out. Recorded here because the count is the part
+/// a reader checks against, and this paragraph claimed five rows over a table of three
+/// for as long as it stood. The mechanism is the standing lesson, not the two colours:
+/// a licence over an open question is retired by closing the question.
 const DELIBERATE: &[(&str, &str, &str)] = &[
     (
         "bedtime",
@@ -278,7 +275,70 @@ fn ink_pairs(t: &Theme, page: gdk::RGBA) -> Vec<Pair> {
         .map(|bg| over(bg, page))
         .unwrap_or(page);
     push("annotation_chip_fg", t.annotation_chip_fg, chip, TEXT);
+    // ── the disclosure summary line ───────────────────────────────────────────
+    //
+    // All three of its inks — the label, the collapsed-body preview beside it and the
+    // indicator in front of it — are read on the summary BAND wherever the theme states
+    // one (TDD 18.48), not on the page. The same correction the heading sweep above
+    // makes for a banded heading, and it matters in the same direction: a band picked to
+    // carry a pale label is exactly the change a page-only check sails past. This ink
+    // used to be measured against the page with a comment saying there was no panel
+    // behind a summary line, which was true until the band key existed.
+    for behind in summary_surfaces(t, page) {
+        push("disclosure_fg", t.disclosure_fg, behind, TEXT);
+        push(
+            "disclosure_preview_fg",
+            t.disclosure_preview_fg,
+            behind,
+            TEXT,
+        );
+        // An indicator is a drawn mark, held to the non-text floor like every other
+        // marker here. Measured whatever the winning rung is: a sprite indicator ignores
+        // this key, but the key still inks the GLYPH the sprite falls back to, so it is
+        // read by somebody on every theme that states it.
+        push(
+            "disclosure_marker_color",
+            t.disclosure_marker_color,
+            behind,
+            GRAPHIC,
+        );
+    }
     out
+}
+
+/// Every surface text drawn on `decor` can be read on.
+///
+/// The page where the theme bands nothing; the band's fill where it bands flat; BOTH
+/// endpoints where it bands with a gradient, since a gradient is legible only if its
+/// whole run is. Every one composited OVER the page, so a translucent wash is measured
+/// as the colour a reader actually sees rather than as its own unpainted value.
+///
+/// **One resolver for both sweeps** — the heading band's and the disclosure summary's.
+/// They were two copies of this match and had drifted on exactly that compositing step,
+/// which meant one colour could pass one gate and fail the other (F-AP-B-303).
+///
+/// A **sprite** band yields the PAGE. Its own pixels are arbitrary and no ratio computed
+/// over a fill says anything about reading text on one, so the band surface is not
+/// measured — but a sprite that fails to decode degrades to the page
+/// (`codeview::bandpaint`), so the page is the surface the ink must clear regardless.
+/// Returning nothing instead dropped every ink on such a theme out of the sweep
+/// entirely, which is a gate silently switching itself off (F-AP-B-302).
+fn band_surfaces(decor: &crate::theme::Band<'_>, page: gdk::RGBA) -> Vec<gdk::RGBA> {
+    if decor.sprite.is_some() {
+        return vec![page];
+    }
+    match decor.without_sprite() {
+        Some(crate::theme::BandPaint::Gradient { from, to }) => {
+            vec![over(from, page), over(to, page)]
+        }
+        Some(crate::theme::BandPaint::Flat(c)) => vec![over(c, page)],
+        None => vec![page],
+    }
+}
+
+/// Every surface a disclosure's summary line can be read on — see [`band_surfaces`].
+fn summary_surfaces(t: &Theme, page: gdk::RGBA) -> Vec<gdk::RGBA> {
+    band_surfaces(&t.disclosure_band_decor(), page)
 }
 
 /// **Every ink a shipped theme states clears its floor on the surface it is read on.**
@@ -334,16 +394,101 @@ fn every_deliberate_exception_is_still_below_its_floor() {
         let page = t
             .background
             .unwrap_or_else(|| panic!("{id}: an exception on a theme with no page of its own"));
-        let pair = ink_pairs(&t, page)
+        // **EVERY pair the key produces, not the first** (F-AP-B-306). One ink on a
+        // GRADIENT band is two pairs — one per endpoint — and `find` inspected only the
+        // one that happened to come first. A theme that has retuned the OTHER stop back
+        // above its floor then keeps a licence standing over nothing, which is the exact
+        // invisibility this guard exists to end, one endpoint over.
+        let pairs: Vec<_> = ink_pairs(&t, page)
             .into_iter()
-            .find(|p| p.what == *what)
-            .unwrap_or_else(|| panic!("{id}: states no {what}, so the exception is stale"));
-        let c = crate::palette::contrast(pair.ink, pair.surface);
+            .filter(|p| p.what == *what)
+            .collect();
         assert!(
-            c < pair.floor,
-            "{id}: {what} is now {c:.2}:1, at or above its {:.1}:1 floor — delete the \
-             exception rather than leaving a licence over nothing ({why})",
-            pair.floor
+            !pairs.is_empty(),
+            "{id}: states no {what}, so the exception is stale"
         );
+        for pair in pairs {
+            let c = crate::palette::contrast(pair.ink, pair.surface);
+            assert!(
+                c < pair.floor,
+                "{id}: {what} on {} is now {c:.2}:1, at or above its {:.1}:1 floor — \
+                 delete the exception rather than leaving a licence over nothing ({why})",
+                crate::palette::to_hex_opaque(pair.surface),
+                pair.floor
+            );
+        }
     }
+}
+
+/// **The surface resolver's own arms, including the two no shipped theme reaches.**
+///
+/// No theme in `themes.toml` states a band SPRITE, so the sweep above never enters
+/// that arm — and an arm no fixture reaches is exactly where a gate switches itself off
+/// unnoticed. It did: returning `Vec::new()` there dropped all three disclosure inks
+/// out of the sweep for any theme that stated one (F-AP-B-302).
+///
+/// The compositing arms are pinned here for the same reason the resolver is shared at
+/// all: the heading sweep read its stops RAW and the disclosure sweep composited them,
+/// so one colour had two verdicts (F-AP-B-303).
+#[test]
+fn the_band_surface_resolver_answers_every_arm() {
+    use crate::theme::{Band, BandPaint};
+    let page = gdk::RGBA::new(0.0, 0.0, 0.0, 1.0);
+    let opaque = gdk::RGBA::new(1.0, 1.0, 1.0, 1.0);
+    let half = gdk::RGBA::new(1.0, 1.0, 1.0, 0.5);
+
+    // No band at all: the page is the surface.
+    let none = Band {
+        sprite: None,
+        gradient: None,
+        flat: None,
+    };
+    assert_eq!(band_surfaces(&none, page), vec![page], "no band");
+
+    // A flat band, composited.
+    let flat = Band {
+        sprite: None,
+        gradient: None,
+        flat: Some(half),
+    };
+    assert_eq!(
+        band_surfaces(&flat, page),
+        vec![over(half, page)],
+        "a translucent fill is measured as the colour a reader sees"
+    );
+    assert_ne!(
+        band_surfaces(&flat, page),
+        vec![half],
+        "and NOT as its own unpainted value — which is the drift this resolver ended"
+    );
+
+    // A gradient: both endpoints, both composited.
+    let grad = Band {
+        sprite: None,
+        gradient: Some((half, opaque)),
+        flat: Some(half),
+    };
+    assert_eq!(
+        band_surfaces(&grad, page),
+        vec![over(half, page), over(opaque, page)],
+        "a gradient is legible only if its whole run is"
+    );
+    assert!(matches!(
+        grad.without_sprite(),
+        Some(BandPaint::Gradient { .. })
+    ));
+
+    // A sprite: the band surface is not measured, but the PAGE still is.
+    let sprite = crate::sprite::SpriteRef::Compiled("nothing-in-particular");
+    let with_sprite = Band {
+        sprite: Some(&sprite),
+        gradient: Some((half, opaque)),
+        flat: Some(half),
+    };
+    assert_eq!(
+        band_surfaces(&with_sprite, page),
+        vec![page],
+        "a sprite band still gates its inks against the page it degrades to — an empty \
+         list here is a gate switching itself off"
+    );
 }

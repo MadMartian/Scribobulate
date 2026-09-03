@@ -90,6 +90,19 @@ pub(crate) struct TabState {
     /// the rebuilt tree re-select the same heading (without re-navigating) so the
     /// panel keeps its position across a view-mode switch.
     pub(crate) outline_selected: Cell<Option<usize>>,
+    /// Which disclosure blocks this document's reader has collapsed.
+    ///
+    /// Per-tab and NOT round-tripped through `session.rs`: the keys are source byte
+    /// offsets, so they mean nothing against a document that has changed underneath
+    /// them, and HTML's own model treats a disclosure's state as a property of the
+    /// document (the `open` attribute) rather than of the session. Survives every
+    /// re-render that leaves the source alone — zoom, theme, view-mode, live preview —
+    /// which is the set a reader expects, and is cleared when the text changes.
+    pub(crate) folds: RefCell<crate::fold::FoldState>,
+    /// The generation of the source the fold keys are minted against — see
+    /// [`TabState::fold_epoch`]. Private, because the only legitimate write is
+    /// `note_source_offsets_moved`'s.
+    fold_epoch: std::cell::Cell<u64>,
     /// The current outline's heading source-byte-offsets, in document order —
     /// `refresh_outline`'s own `extract_headings` result, kept around so a caret
     /// move (`editor_cursor_doc_index`) can binary-search it instead of re-parsing
@@ -358,7 +371,73 @@ impl TabState {
     /// The substitution is length- and position-preserving, so every offset any caller
     /// holds into this text still indexes the same logical position.
     pub(crate) fn set_source(&self, text: &str) {
-        *self.source.borrow_mut() = crate::lineendings::normalize_lone_cr(text).into_owned();
+        // **A flush that changes nothing moves nothing** (F-AP-B-101). Every path that
+        // leaves an editor-visible mode calls this with the editor's text, whether or
+        // not the reader typed anything — and so does Ctrl+S on a clean buffer, and the
+        // zoom re-render. Clearing unconditionally meant a reader who collapsed three
+        // blocks in Preview, glanced at Split and came back found them all open, with
+        // nothing having changed underneath them. The comparison is against the
+        // NORMALISED text, so a document whose only difference is a line ending it did
+        // not have is still a change.
+        let next = crate::lineendings::normalize_lone_cr(text);
+        if *self.source.borrow() == next {
+            return;
+        }
+        *self.source.borrow_mut() = next.into_owned();
+        // Fold keys are source byte offsets, so a new document text moves every one of
+        // them: a key that still matched would collapse an unrelated block. Clearing
+        // here — at the single choke point every document replacement passes through —
+        // also gives the behaviour HTML itself specifies, where a disclosure's state is
+        // the `open` attribute and therefore a property of the document rather than of
+        // the session (`crate::fold`).
+        self.note_source_offsets_moved();
+    }
+
+    /// Forget every reader-held state keyed on a SOURCE OFFSET, because the source
+    /// text has moved underneath it.
+    ///
+    /// Today that is the fold map alone. It is a named method rather than an inline
+    /// `folds.clear()` because [`Self::set_source`] is **not** the only way the text a
+    /// preview renders can change: in split mode the editor buffer is authoritative and
+    /// `window::livepreview` re-renders straight from it, so the source moves without
+    /// this field ever being written. That path called nothing, and a `FoldKey` is a
+    /// byte offset — so every character typed above a `<details>` moved its key while
+    /// the map kept the old one, silently reverting a collapsed block or, when a stale
+    /// key happened to land on a different block's new start offset, collapsing THE
+    /// WRONG BLOCK.
+    ///
+    /// **Clearing is the decision, not a shortcut.** `crate::fold`'s module doc already
+    /// states that fold state is deliberately not stable across an edit, matching HTML,
+    /// where a disclosure's state is the `open` attribute and therefore a property of
+    /// the document rather than of the reader. Re-keying survivors against the new
+    /// offsets was the alternative and is rejected: it would have to decide what a
+    /// disclosure's identity is across an edit that can split, merge or delete one, and
+    /// the answer it produced would be a guess the reader could not predict.
+    pub(crate) fn note_source_offsets_moved(&self) {
+        self.folds.borrow_mut().clear();
+        // **The stamp a control carries** — see [`Self::fold_epoch`]. Bumped here, at
+        // the same choke point the map is cleared at, so the two cannot disagree about
+        // when a key stopped meaning what it meant.
+        self.fold_epoch.set(self.fold_epoch.get().wrapping_add(1));
+    }
+
+    /// How many times the source has moved under the fold keys, so a control minted
+    /// against an older document can tell.
+    ///
+    /// A `FoldKey` is baked into a toggle widget when it is built. In split mode the
+    /// preview re-renders on a ~300 ms debounce, so a reader can click a control in the
+    /// window between typing and the re-render — and that control's key names the
+    /// PREVIOUS document. The map has already been cleared, so the click did nothing at
+    /// all, silently; `MANUAL-TEST.md` 2.26l asserted the opposite (F-AP-B-105).
+    ///
+    /// **This makes the loss STATED rather than fixed**, deliberately. Making the key
+    /// survive would mean re-deriving it against the new source, which is exactly the
+    /// "key per-fold state to something that survives arbitrary edits" problem
+    /// `crate::fold` removes rather than solves. A click inside the debounce is
+    /// discarded; what must never happen is a DIFFERENT block toggling, and a stamp
+    /// mismatch is how that is refused rather than gambled on.
+    pub(crate) fn fold_epoch(&self) -> u64 {
+        self.fold_epoch.get()
     }
 
     /// Construct a fresh tab, filling in the universal-default fields that do
@@ -386,6 +465,7 @@ impl TabState {
             chrome,
         } = init;
         Self {
+            fold_epoch: std::cell::Cell::new(0),
             id,
             // Every tab is born with a fresh recovery identity; restore overwrites it
             // with the persisted one (see the field's doc for why that is safe).
@@ -401,6 +481,7 @@ impl TabState {
             split,
             content_box,
             outline_selected: Cell::new(None),
+            folds: RefCell::new(crate::fold::FoldState::default()),
             heading_src_offsets: RefCell::new(Vec::new()),
             annotations_selected: Cell::new(None),
             outline_spy_selecting: Cell::new(false),
@@ -518,6 +599,43 @@ impl TabState {
             ViewMode::Edit | ViewMode::Split => self.editor_text(),
             ViewMode::Preview => self.source().clone(),
         }
+    }
+
+    /// The Markdown the PREVIEW PANE is showing for `mode`.
+    ///
+    /// **Differs from [`Self::shown_source`] in EDIT-only mode, and the difference is
+    /// the point** (F-DRY-102). A derived view — the outline, the annotations viewer —
+    /// must track in-progress edits, so `shown_source` reads the editor buffer there.
+    /// A preview pane in edit-only mode does not exist: it was freed on the way in, and
+    /// the last text one rendered is the stored source. Three render paths hand-rolled
+    /// this arm with a comment for company; two names is what stops the fourth from
+    /// picking whichever it read first.
+    pub(crate) fn previewed_source(&self, mode: crate::winstate::ViewMode) -> String {
+        use crate::winstate::ViewMode;
+        match mode {
+            ViewMode::Split => self.editor_text(),
+            ViewMode::Preview | ViewMode::Edit => self.source().clone(),
+        }
+    }
+
+    /// The CLEANED Markdown the preview's maps are keyed to for `mode` — the text the
+    /// renderer actually walked, with tabs normalised and CriticMarkup lifted out.
+    ///
+    /// **Every offset a render hands back is in THIS space**, fold keys included, and
+    /// a consumer comparing one against the raw source is comparing two different
+    /// coordinate systems (F-SEC-209). `foldreveal` did: on a document with an
+    /// annotation ABOVE a disclosure the two disagree, its key lookup found no span,
+    /// and its diverged-key fallback FLIPPED the fold — closing a block the reader had
+    /// just asked to see, which is the exact inversion of what a reveal is for. With
+    /// the annotation below the block the offsets agree and the defect is invisible.
+    ///
+    /// Named beside [`Self::previewed_source`] for the reason that one exists: the
+    /// derivation is three calls deep and a fourth consumer would be free to get one of
+    /// them wrong.
+    pub(crate) fn previewed_cleaned(&self, mode: crate::winstate::ViewMode) -> String {
+        let raw = self.previewed_source(mode);
+        let normalised = crate::renderer::NormalizedMd::new(&raw);
+        crate::annotate::extract(normalised.as_str()).cleaned
     }
 
     /// True when the editor differs from the saved baseline (unsaved changes).

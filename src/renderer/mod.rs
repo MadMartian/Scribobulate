@@ -42,12 +42,15 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 
 mod blockquote;
+mod blockspacing;
+pub(crate) mod disclosure;
 mod emit;
 mod end;
 mod events;
 mod image;
 mod normalize;
 pub(crate) mod picture;
+pub(crate) mod rawhtml;
 mod scan;
 pub(crate) mod segments;
 mod start;
@@ -56,7 +59,7 @@ pub(crate) use image::image_placeholder_tooltip;
 pub(crate) use normalize::{md_options, NormalizedMd};
 pub(crate) use picture::{scan_image_tags, ImgTag};
 pub(crate) use scan::{scan_script_spans, Script, ScriptSpan};
-pub(crate) use segments::{is_inline_tag, segments_of, BlockScripts, Seg};
+pub(crate) use segments::{is_inline_tag, is_inline_tag_end, segments_of, BlockScripts, Seg};
 
 // ── table-cell annotation markup (table-cell annotation display path) ───────────────────────
 
@@ -369,6 +372,72 @@ pub(crate) struct ListMarker {
     pub quoted: bool,
 }
 
+/// A [`Renderer`]'s INTER-BLOCK state: everything a walk carries from one block to
+/// the next, and therefore everything a region render must ARRIVE with.
+///
+/// **Membership is the contract.** A field that lives here is captured and reseeded;
+/// a field that does not is a deliberate exclusion. There is no third list to keep in
+/// step — [`RegionSeed`] is this value, not a parallel copy of its fields, so a new
+/// inter-block field cannot be added to the renderer and silently left unseeded.
+/// `preview::splice`'s module docs name that omission as the route's only real risk:
+/// *a partial walk that does not seed them differs from a full render by up to two
+/// newlines at a region boundary — and a one-character divergence silently offsets
+/// every map below the splice*, which the compiler could not have seen while the two
+/// lists were written out by hand.
+#[derive(Debug, Clone, Default)]
+struct InterBlock {
+    /// The fixed inline [`TagName`](crate::tags::TagName)s currently open, applied to
+    /// every [`Self::insert`](self) until their `TagEnd` pops them. Typed (not raw
+    /// strings) so the name that reaches the buffer can only come from the enum (N6).
+    inline_tags: Vec<crate::tags::TagName>,
+    lists: Vec<Option<u64>>,
+    /// Buffer offset where each open list item began (one per nesting level).
+    item_starts: Vec<i32>,
+    /// Buffer offset where the current heading's text begins (anchor scroll target).
+    heading_start: i32,
+    /// Per-document slug occurrence counter for GitHub-style `-1`/`-2` suffixing.
+    slug_seen: HashMap<String, u32>,
+    blockquote_depth: usize,
+    /// Buffer offset where each currently-open blockquote LEVEL began, innermost last.
+    /// A stack rather than a single `Option`, because every level records its own span:
+    /// a nested quote draws its own bar at its own offset (TDD 2.11b), which the old
+    /// "remember only the 0→1 transition" shape could not express.
+    blockquote_starts: Vec<i32>,
+    link_start: Option<(i32, String)>,
+    at_start: bool,
+    trailing_newlines: usize,
+    /// True immediately after a list marker is emitted; cleared by the first
+    /// `Tag::Paragraph` inside the item so that paragraph does not get a
+    /// `block_sep()` inserted between the marker and the item text.
+    ///
+    /// **Here rather than on the renderer, because `apply_lead_in` reads it for every
+    /// paragraph, list and item — which makes it inter-block state by the definition
+    /// this struct's doc gives.** It lived on `Renderer` and so was not seeded: a
+    /// region beginning inside a list item whose first block is the disclosure met
+    /// `false` where the full walk had `true`, and emitted one newline the full render
+    /// does not. The release guard caught the divergence and refused the splice as
+    /// `RegionLost`, so the reader was never shown a corrupted map — but the refusal
+    /// degrades the toggle to the whole-document re-render the splice exists to avoid,
+    /// and logs an error saying it should be unreachable (F-SPEC-A-002).
+    list_item_open: bool,
+    /// Set by `Tag::List` and cleared by the first `Tag::Item` it fires; tells
+    /// `Tag::Item` not to prepend a newline (`Tag::List` already provided one).
+    /// Seeded for the same reason as [`Self::list_item_open`].
+    list_first_item: bool,
+    /// One frame per `<details>` currently open, innermost last — the disclosure
+    /// pairing state, carried ACROSS events for the same reason `picture_open` is.
+    ///
+    /// A **stack** rather than a flag because disclosures nest (rubric 2.26e), and
+    /// because the parser hands the pieces over separately: a disclosure's opening
+    /// tags, its body and its closing tag are three different events with ordinary
+    /// Markdown in between (MEASURED — see `renderer::disclosure`'s module docs), so
+    /// nothing about the nesting is visible from any one of them.
+    disclosure_stack: Vec<DisclosureFrame>,
+    /// The document-order cursor over [`Self::disclosures`], shared in KIND with the
+    /// export walk so neither carries a private copy of the fail-safe.
+    disclosure_cursor: disclosure::SpanCursor,
+}
+
 pub(crate) struct Renderer {
     buf: TextBuffer,
     /// Cleaned-document highlight ranges `(start, end)` for CriticMarkup claims
@@ -387,36 +456,12 @@ pub(crate) struct Renderer {
     /// `Rc` so the buffer the renderer fills and the map that indexes it cannot
     /// disagree about which bytes were delimiters.
     pub(crate) scripts: std::rc::Rc<BlockScripts>,
-    /// The fixed inline [`TagName`](crate::tags::TagName)s currently open, applied to
-    /// every [`Self::insert`](self) until their `TagEnd` pops them. Typed (not raw
-    /// strings) so the name that reaches the buffer can only come from the enum (N6).
-    inline_tags: Vec<crate::tags::TagName>,
-    lists: Vec<Option<u64>>,
-    /// Buffer offset where each open list item began (one per nesting level).
-    item_starts: Vec<i32>,
-    /// True immediately after a list marker is emitted; cleared by the first
-    /// Tag::Paragraph inside the item so that paragraph does not get a
-    /// block_sep() inserted between the marker and the item text.
-    list_item_open: bool,
-    /// Set by Tag::List and cleared by the first Tag::Item it fires; tells
-    /// Tag::Item not to prepend a newline (Tag::List already provided one).
-    list_first_item: bool,
     code: Option<(String, String)>,
     heading: Option<HeadingLevel>,
-    /// Buffer offset where the current heading's text begins (anchor scroll target).
-    heading_start: i32,
     /// Plain text of the current heading, accumulated to compute its anchor slug.
     heading_text: String,
-    /// Per-document slug occurrence counter for GitHub-style `-1`/`-2` suffixing.
-    slug_seen: HashMap<String, u32>,
     /// (anchor slug, buffer offset) for every heading — drives `#fragment` links.
     pub headings: Vec<(String, i32)>,
-    blockquote_depth: usize,
-    /// Buffer offset where each currently-open blockquote LEVEL began, innermost last.
-    /// A stack rather than a single `Option`, because every level records its own span:
-    /// a nested quote draws its own bar at its own offset (TDD 2.11b), which the old
-    /// "remember only the 0→1 transition" shape could not express.
-    blockquote_starts: Vec<i32>,
     /// The buffer span of every blockquote LEVEL, with its depth.
     /// Blockquotes are buffer TEXT now (selectable, links work, no anchored widget
     /// to churn — GTK4Rs/AP-23); the preview view draws the left accent bar over each
@@ -427,7 +472,6 @@ pub(crate) struct Renderer {
     /// would make the render's OUTPUT depend on the theme, so a theme switch would need
     /// a re-render rather than a repaint.
     pub heading_spans: Vec<HeadingSpan>,
-    link_start: Option<(i32, String)>,
     pub links: Vec<(i32, i32, String)>,
     /// The theme THIS render is built against.
     ///
@@ -462,8 +506,6 @@ pub(crate) struct Renderer {
     /// through `gutter::draw_list_marker`. No marker text is inserted into the buffer.
     pub list_markers: Vec<ListMarker>,
     table: Option<TableState>,
-    at_start: bool,
-    trailing_newlines: usize,
     syntect_theme: String,
     /// The zoom this render is being built at. Themed decoration metrics are
     /// design-time px at zoom 1.0, so any the renderer applies directly to a widget
@@ -500,9 +542,654 @@ pub(crate) struct Renderer {
     /// Closed and rendered at `</picture>` or its container's end (`start::feed_html`
     /// / `flush_open_picture`). See ScrAP-147.
     picture_open: Option<Vec<String>>,
+    /// Which disclosures the reader has collapsed — a render INPUT, not renderer
+    /// state. A collapsed body is never emitted, which is what keeps invisible text
+    /// out of the buffer entirely (see `crate::fold`).
+    folds: crate::fold::FoldState,
+    /// **Where this render writes.** `None` appends at the buffer end, which is what
+    /// every render does today and is the cheapest thing a fresh buffer can do.
+    ///
+    /// `Some(mark)` writes at that mark instead, so a render can fill a REGION of a
+    /// buffer that already holds content either side of it. That is the shape a fold
+    /// toggle needs: clearing and refilling the whole buffer discards every line's
+    /// height validation, which collapses the vadjustment and throws the reader to the
+    /// top for the ~17 idle passes it takes to measure the document again (MEASURED,
+    /// ScrAP-339), while an edit confined to one region leaves every
+    /// untouched line validated and the reader where they were.
+    ///
+    /// The mark is **right-gravity**, so text inserted at it lands BEFORE it and the
+    /// cursor advances on its own — the same way appending to `end_iter` advances for
+    /// free. A left-gravity mark would write every run at the same place and lay the
+    /// document down backwards.
+    ///
+    /// Copying a pre-rendered region in with `insert_range` is the alternative, and it
+    /// is closed: it skips `GtkTextChildAnchor`s without leaving their `U+FFFC`, so the
+    /// destination comes up one character short per table or image and every offset map
+    /// misaligns from the first one (GTK4Rs/AP-320). Writing at a mark means the
+    /// renderer creates the anchors itself, which is why this is the seam rather than a
+    /// buffer-to-buffer copy.
+    at: Option<WriteMark>,
+    /// Buffer offset a REGION render began writing at, `None` for a full render.
+    ///
+    /// Kept because [`Self::finish_region`] needs the region's own extent and the write
+    /// mark has moved to its end by then — see that method for what it does with it.
+    region_start: Option<i32>,
+    /// The LIVE `GtkTextView` this render is writing into, when there is one.
+    ///
+    /// Set only by a REGION render splicing into a view that is already on screen
+    /// ([`Self::set_live_view`]); `None` for every full render, which builds its
+    /// buffer offline and hands the widget list to `preview::build::attach_anchored`
+    /// afterwards. When it is set, [`Self::push_anchored`] parents each child in the
+    /// same turn as its anchor is created — see that method for why the timing is
+    /// load-bearing rather than cosmetic.
+    live_view: Option<gtk::TextView>,
+    /// Every disclosure toggle this render emitted.
+    pub(crate) disclosure_toggles: Vec<DisclosureToggle>,
+    /// Every block this render drew collapsed, in document order.
+    pub(crate) collapsed_blocks: Vec<CollapsedBlock>,
+    /// Where each disclosure this render DREW sits in the buffer. See
+    /// [`DisclosureExtent`].
+    pub(crate) disclosure_extents: Vec<DisclosureExtent>,
+    /// Every `<details>` the document declares, paired with the `</details>` that
+    /// closes it — scanned from the source before the walk begins.
+    ///
+    /// The walk is forwards and one-pass, so at a `<details>` the renderer cannot yet
+    /// know whether the block is ever closed; this is that answer, pre-computed. See
+    /// [`disclosure::scan_document`] for what assuming "yes" costs.
+    disclosures: Vec<disclosure::DisclosureSpan>,
+    /// This walk's inter-block state — see [`InterBlock`], which is also exactly
+    /// what a region render is seeded with.
+    inter: InterBlock,
+}
+
+/// The label a `<details>` with no `<summary>` shows.
+///
+/// Browser convention, and deliberately not a themed or configurable string: it is a
+/// fallback for malformed markup, not a design surface.
+pub(crate) const DEFAULT_SUMMARY_LABEL: &str = "Details";
+
+/// One open `<details>` block's state while the renderer is inside it.
+#[derive(Debug, Clone)]
+pub(crate) struct DisclosureFrame {
+    /// This block's identity — the source offset its own `<details>` tag begins at.
+    /// Carried on the frame so the emitted toggle can be handed back to the caller
+    /// paired with the fold it drives, rather than re-derived later from a widget's
+    /// position (which would not survive a re-render).
+    pub key: crate::fold::FoldKey,
+    /// The source offset the enclosing raw-HTML BLOCK begins at.
+    ///
+    /// Distinct from [`Self::key`] since two `<details>` can share a block, and both
+    /// are needed: the key identifies the disclosure, the block start identifies the
+    /// EVENT it was written in — which is what `copymap` matches a node on, and what
+    /// the pre-scan's cross-check compares.
+    pub block_start: usize,
+    /// The summary label, once `<summary>` has supplied one. `None` until then, which
+    /// is what lets the renderer apply the default label for a disclosure that never
+    /// carries a `<summary>` at all (rubric 2.26d).
+    pub label: Option<String>,
+    /// True between `<summary>` and `</summary>`.
+    pub in_summary: bool,
+    /// Whether this block renders collapsed — the fold model's verdict for this
+    /// block, resolved ONCE when the frame is pushed rather than re-asked per event,
+    /// so a single disclosure cannot be half-collapsed across its own body.
+    pub collapsed: bool,
+    /// Index into [`Renderer::disclosures`] of the pre-scan span this frame came
+    /// from, so the block's BODY source range is reachable once its summary is
+    /// written. `usize::MAX` when the walk and the pre-scan disagreed and the frame
+    /// was opened defensively.
+    pub span_index: usize,
+    /// Whether this block can fold at all — that is, whether the document ever
+    /// closes it.
+    ///
+    /// An unclosed `<details>` renders its summary line and nothing else changes:
+    /// it never collapses, and it is given no toggle, because a control that cannot
+    /// fold anything is a control that lies. Collapsing it is not merely unhelpful
+    /// but destructive — the frame would never pop, so every remaining event would
+    /// be suppressed and the rest of the document would vanish (rubric 2.26d).
+    pub foldable: bool,
+    /// Whether this block's summary line has been written to the buffer yet.
+    ///
+    /// The label arrives AFTER the `<details>` tag that opens the frame — both are in
+    /// the same raw-HTML fragment, so the line cannot be emitted when the frame is
+    /// pushed or it would always carry the default label. It is written at
+    /// `</summary>`, or at the end of the fragment for a `<details>` that never
+    /// carries one (rubric 2.26d).
+    pub emitted: bool,
+    /// Has this frame written LITERAL text of its own — i.e. is this an UNSPACED
+    /// disclosure? See [`DisclosureExtent::spliceable`], which it decides.
+    pub wrote_literal: bool,
+    /// Buffer char offset of this block's summary line, once written.
+    ///
+    /// **The visible place everything inside a collapsed block is reached at.** A
+    /// heading in a collapsed body, a find hit in one, and the source span a copy
+    /// crossing one must reconstruct all resolve to this one offset, because it is
+    /// the only position in the buffer the block owns. Recorded here rather than
+    /// re-derived from the toggle's anchor later: an anchor's offset is a live
+    /// widget-tree read, and this is a fact about the render that produced it.
+    ///
+    /// Meaningless until `emitted`; [`Renderer::collapsed_site`] is the only reader
+    /// and it consults that flag first.
+    pub summary_offset: i32,
+    /// Buffer char offset one past the last character of the summary LINE's text —
+    /// the position its newline occupies. Meaningless until `emitted`.
+    pub summary_end: i32,
+    /// Buffer char offset the block's BODY begins at: immediately after the summary
+    /// line's newline. Meaningless until `emitted`.
+    ///
+    /// This is the splice point. Note it sits BEFORE any block separator the body's
+    /// first block emits, because `block_sep` is written lazily by the next block
+    /// rather than eagerly by the previous one — so a render that fills this region
+    /// must arrive with the same inter-block state a full render would have had
+    /// here, or the spliced text differs from a full render's by a newline.
+    pub body_start: i32,
+    /// Buffer char offset immediately after this block's summary LABEL, and before
+    /// anything whose presence depends on the fold state. Meaningless until `emitted`.
+    ///
+    /// The label is authored content and renders the same either way; the body preview
+    /// after it exists only while the block is COLLAPSED. So this — not the body start
+    /// — is where the two fold states begin to differ.
+    pub label_end: i32,
+}
+
+/// Where one disclosure's rendered content sits in the buffer this render produced.
+///
+/// **The buffer-side counterpart to [`disclosure::scan_document`]'s source-side
+/// pairing**, and the thing a fold toggle needs that nothing else records: the source
+/// range of a body is known without rendering, but the range of buffer it OCCUPIES is
+/// a fact only the render knows. Collapsing a block is a delete of [`Self::body`];
+/// expanding one is a write at its (empty) start.
+///
+/// One entry per disclosure this render actually DREW, in document order. A block
+/// nested inside a collapsed one draws nothing — not even a summary line — and so has
+/// no extent; its content is inside its ancestor's body and moves with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DisclosureExtent {
+    /// The fold this extent belongs to.
+    pub key: crate::fold::FoldKey,
+    /// The summary line's text, newline excluded — what a line-wide decoration paints
+    /// over, and what a hit test on the summary line answers about.
+    pub summary: crate::span::BufferSpan,
+    /// The rendered body. **Empty for a block drawn collapsed**, and empty is the
+    /// honest answer there rather than a missing entry: the block still owns a
+    /// position, and that position is where its body would be written.
+    pub body: crate::span::BufferSpan,
+    /// **Everything a toggle changes, as one contiguous range** — from just after the
+    /// summary label to the end of the rendered body. This is the splice region.
+    ///
+    /// Wider than [`Self::body`], and the difference is not a detail: a collapsed
+    /// block previews its body's opening text ON the summary line (TDD 2.26), and that
+    /// fragment is present in one fold state and absent in the other. A splice over
+    /// the body alone would leave the stale preview behind — or delete a live one —
+    /// and every offset below it would be wrong by the fragment's length. MEASURED:
+    /// the collapsed render reads `S hidden body…` where the expanded one reads `S`.
+    ///
+    /// Contiguous because the preview, the line terminator and the body are adjacent,
+    /// so one delete and one region render still cover the whole difference.
+    pub volatile: crate::span::BufferSpan,
+    /// Can a REGION render reproduce this block's body, or must a toggle fall back to
+    /// a full re-render?
+    ///
+    /// **False for an UNSPACED disclosure** (rubric 2.26d), whose body is literal text
+    /// inside the block's own opening raw-HTML event rather than the Markdown events
+    /// between two blocks. A region walk is seeded at the region's start and replays
+    /// the events BELOW it, so that event sits above the region and its text is never
+    /// written — the splice would delete the body and put nothing back, leaving the
+    /// reader having collapsed a block that can never be opened again. MEASURED by
+    /// driving the running app; the unit tests could not see it, because a full render
+    /// of either fold state is correct and only the SPLICE between them is not.
+    ///
+    /// The full re-render is correct there and costs one render of a document that by
+    /// construction contains a malformed shape — not a hot path. ScrAP-340.
+    pub spliceable: bool,
+}
+
+/// A disclosure toggle this render emitted, with everything a caller needs to drive
+/// it — so nothing downstream re-derives which block a widget belongs to, or where.
+pub(crate) struct DisclosureToggle {
+    pub toggle: gtk::ToggleButton,
+    /// The fold this control flips.
+    pub key: crate::fold::FoldKey,
+    /// Buffer char offset the toggle is anchored at, which is the start of the
+    /// summary line it sits on.
+    ///
+    /// Carried because the whole LINE is the click target, not just the ~16px arrow:
+    /// a small indicator is right for reading and wrong for aiming at, and a browser
+    /// makes the whole `<summary>` clickable for the same reason. The line is a fact
+    /// about this render, so it is handed forward from the producer rather than
+    /// re-discovered by walking the widget tree later (ScrAP-10).
+    pub summary_offset: i32,
+}
+
+/// A disclosure this render drew COLLAPSED, and whose summary line the reader can
+/// therefore see.
+///
+/// Recorded for the consumers that must reach content the render withheld — find
+/// (rubric 11.10) most of all, which has to answer "does this hidden body contain the
+/// query?" from the source, because the body is in no buffer to search.
+///
+/// Only blocks whose summary was actually written appear here. A disclosure nested
+/// inside a collapsed one draws nothing at all, so it has no summary line to name and
+/// no position a reader could act on; its text is inside its ancestor's body range and
+/// is found through that instead. Expanding the ancestor then makes it a visible
+/// collapsed block in the NEXT render, with an entry of its own.
+///
+/// **That one-per-render rediscovery is deliberate, and carrying a chain here was
+/// assessed and rejected** (F-DRY-107). The suggestion was to give this struct the
+/// chain [`CollapsedSite`] carries, so find could expand a whole nest in one
+/// re-render instead of re-entering per level. It does not work, for two reasons that
+/// compound:
+///
+/// * The chain [`CollapsedSite`] holds is of collapsed ANCESTORS. A block that reaches
+///   this record has none — an ancestor being collapsed is exactly what stops its
+///   summary being written — so the chain would always be `[self]`.
+/// * Recording the nested blocks as well, which the renderer could do (their frames ARE
+///   pushed; only their summary lines are suppressed), would put their text in this list
+///   twice: once inside the ancestor's `body` range and once as their own. `find`'s
+///   hidden-match COUNT reads exactly that range, so the label would say "5 matches"
+///   for three.
+///
+/// The re-entrant resume is bounded by nesting depth, and every pass strictly reduces
+/// the collapsed ancestors between the reader and the match. The cost is one extra
+/// re-render per level of a construct that is rare at depth 1 and vanishing at depth 2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CollapsedBlock {
+    /// Buffer char offset of the summary line — where the block sits in document
+    /// order, and the position anything inside it resolves to until it is expanded.
+    pub summary_offset: i32,
+    /// The fold to expand to reveal this block's body.
+    pub key: crate::fold::FoldKey,
+    /// Buffer char offset just past the summary LABEL — where a search resuming inside
+    /// this block after expanding it must start from.
+    ///
+    /// **Not [`Self::summary_offset`]**, which is where the line BEGINS: resuming there
+    /// re-matches the summary's own text, so Find-Next expanded the block and landed
+    /// the reader back on the line they were already on, reporting it as the next
+    /// result (F-AP-B-104).
+    ///
+    /// **And not the summary line's END either**, which is the obvious alternative and
+    /// is not stable across the expansion: a collapsed block previews its body's
+    /// opening text ON the summary line, and that fragment is gone once the block
+    /// opens, so every offset after the label moves. The label's end does not — the
+    /// expansion inserts below the line and the label itself never changes — which is
+    /// the same stability argument `summary_offset` rests on.
+    pub resume_offset: i32,
+    /// Source byte range of the hidden body.
+    pub body: std::ops::Range<usize>,
+}
+
+/// Where a collapsed disclosure is hiding the renderer's current position, for the
+/// consumers that must resolve a position inside it: the folds to expand, and the
+/// buffer offset standing in for the hidden content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CollapsedSite {
+    /// **Every** collapsed disclosure enclosing this point, outermost first.
+    ///
+    /// A chain rather than the innermost block alone, because expanding one is not
+    /// enough: a collapsed disclosure nested inside another collapsed one renders
+    /// nothing at all, not even its own summary line, so opening the outer block
+    /// only reveals the inner block's summary. Handing back the whole chain lets a
+    /// caller reach hidden content in ONE re-render instead of discovering the next
+    /// ancestor after each one. Never empty.
+    pub chain: Vec<crate::fold::FoldKey>,
+    /// Buffer char offset of the OUTERMOST block's summary line — the only position
+    /// in the buffer any of this content owns, and the nearest one a reader can see.
+    pub summary_offset: i32,
+    /// Source offset of the raw-HTML BLOCK the outermost collapsed disclosure was
+    /// written in — which is the offset a `copymap` node carries, and is not the
+    /// disclosure's own key when two share a block.
+    pub block_start: usize,
+}
+
+/// A [`Renderer`]'s inter-block state, captured mid-walk at the exact point it
+/// reaches a disclosure's splice region, and reapplied to a second renderer that
+/// writes that region into the LIVE buffer instead of a scratch one.
+///
+/// It IS the renderer's [`InterBlock`] — a moved copy of the whole value, not a
+/// hand-written selection of its fields — which is what makes "everything the walk
+/// carries between blocks" a single list the compiler maintains.
+///
+/// See `preview::splice`'s module docs for the mechanism this exists for. The
+/// buffer-offset-carrying fields it contains (`DisclosureFrame::label_end` and
+/// friends, `heading_start`, `link_start`) need no translation between the scratch
+/// and live coordinate spaces, because those spaces coincide up to the region — the
+/// text before it renders identically under either fold state — so they are captured
+/// and reapplied VERBATIM, the same offsets meaning the same place in both buffers.
+/// Everything else here is a fact about how the NEXT thing written should be tagged
+/// and numbered.
+#[derive(Debug, Clone)]
+pub(crate) struct RegionSeed(InterBlock);
+
+/// A region render's write mark, which deletes itself from the buffer when the render
+/// that made it goes away.
+///
+/// **A wrapper rather than a `Drop` on [`Renderer`]**, and the reason is mechanical:
+/// `Renderer` has its maps moved out of it field by field when a render finishes
+/// (`preview::build`), and a type that implements `Drop` cannot be partially moved
+/// from. Owning the mark in a one-field guard keeps the guarantee and costs the
+/// callers nothing.
+///
+/// The guarantee itself is `ReaderAnchor`'s argument one module over: the create and
+/// the last use are in different functions, so a delete at each exit is the rule the
+/// next exit forgets. The mark lives in the LIVE buffer, which a tab keeps for its
+/// whole life, so one left behind is never collected — and a `GtkTextMark` has no
+/// visible effect until something enumerates them, which is why it accumulated
+/// silently, one per splice (F-AP2-003).
+#[derive(Debug)]
+pub(crate) struct WriteMark(gtk::TextMark);
+
+impl Drop for WriteMark {
+    fn drop(&mut self) {
+        use gtk::prelude::{TextBufferExt, TextMarkExt};
+        if self.0.is_deleted() {
+            return;
+        }
+        if let Some(buffer) = self.0.buffer() {
+            buffer.delete_mark(&self.0);
+        }
+    }
 }
 
 impl Renderer {
+    /// Tell this render it is writing into a LIVE, on-screen view, so every anchored
+    /// child it creates is parented in the same turn as its anchor rather than by a
+    /// later `attach_anchored` pass. See [`Self::push_anchored`].
+    pub(crate) fn set_live_view(&mut self, view: &impl gtk::prelude::IsA<gtk::TextView>) {
+        self.live_view = Some(view.as_ref().clone());
+    }
+
+    /// Record an anchored child — and, when this render is writing into a live view,
+    /// PARENT IT NOW, in the same turn its anchor was created.
+    ///
+    /// **Why the timing is expressible here at all, and what it was measured to
+    /// buy — which is nothing.** A full render builds its buffer offline and parents
+    /// every child afterwards (`preview::build::attach_anchored`); a region render
+    /// splicing into a live view can parent as it goes, so the first wrap of the new
+    /// (above-viewport, priority-125-validated) lines already reads
+    /// `gtk_widget_get_preferred_size` rather than whatever a widget-less anchor
+    /// wraps at. That was the predicted fix for the reader displacement
+    /// `preview::splice::excursion` records, and it is NOT one: MEASURED on GTK 4.6.9,
+    /// the two timings are identical to the pixel, with the eager arm's children
+    /// asserted to have been parented. (The experiment that established it has since
+    /// been deleted along with the rest of the GTK-characterization arms — `git log --
+    /// src/preview/splice/excursion/`; the conclusion is ScrAP-339.) The seam is kept
+    /// because a live region render is the production path and parenting as it goes is
+    /// the simpler shape there — not as a fix, and not as a thing to re-derive.
+    pub(super) fn push_anchored(&mut self, anchor: TextChildAnchor, widget: gtk::Widget) {
+        if let Some(view) = &self.live_view {
+            use gtk::prelude::TextViewExt;
+            view.add_child_at_anchor(&widget, &anchor);
+        }
+        self.anchored.push((anchor, widget));
+    }
+
+    /// Point this render at `offset` instead of the buffer end, so it fills a REGION
+    /// of a buffer that already holds content on both sides.
+    ///
+    /// The caller has already deleted whatever used to occupy the region; this only
+    /// decides where the new content goes. The mark is right-gravity so the cursor
+    /// advances as the render writes (see [`Renderer::at`]), and it is anonymous
+    /// because it lives exactly as long as this renderer does — a named mark would
+    /// outlive the render and be found by the next one.
+    ///
+    /// **"Exactly as long as this renderer does" is now enforced by [`Drop`]**, not
+    /// stated. The mark is created in the LIVE buffer, which outlives every render, so
+    /// nothing deleting it meant one leaked mark per splice for the life of the tab
+    /// (F-AP2-003) — the same shape, and the same argument, as `ReaderAnchor`'s own
+    /// `Drop`: the create and the last use are in different functions, so a delete at
+    /// each exit is the rule the next exit forgets.
+    ///
+    /// `preview::splice` is this seam's only caller, and it is the live disclosure
+    /// toggle's own path — see that module's docs for the whole mechanism.
+    pub(crate) fn write_at(&mut self, offset: i32) {
+        use gtk::prelude::TextBufferExt;
+        let iter = self.buf.iter_at_offset(offset);
+        // Assigning over an existing mark drops it, and dropping it deletes it: a
+        // second `write_at` cannot strand the first.
+        self.at = Some(WriteMark(self.buf.create_mark(None, &iter, false)));
+        self.region_start = Some(offset);
+    }
+
+    /// The iter this render writes at — the buffer end, or the mark a region render
+    /// was given. **The one definition of "where the renderer is"**, so no emission
+    /// site re-derives it; the whole point of the seam is that `end_iter()` appearing
+    /// anywhere below it would silently append to the document while the rest of the
+    /// render filled a region.
+    pub(super) fn tip(&self) -> gtk::TextIter {
+        use gtk::prelude::TextBufferExt;
+        match &self.at {
+            Some(mark) => self.buf.iter_at_mark(&mark.0),
+            None => self.buf.end_iter(),
+        }
+    }
+
+    /// Capture this renderer's inter-block state, if it has JUST written `key`'s
+    /// summary line and is standing at the start of that block's splice region —
+    /// the position [`DisclosureFrame::label_end`] names.
+    ///
+    /// `None` everywhere else, including once the walk has moved past the region
+    /// (the frame will have popped by then) — so a caller driving this renderer
+    /// through the document's events can call this after every one and stop at the
+    /// first `Some`, which is guaranteed to be the event that emitted `key`'s
+    /// summary line and no other. See `preview::splice` for why this is safe to
+    /// hand to a SEPARATE renderer wholesale, with no offset translation: the
+    /// scratch and live coordinate spaces coincide up to the region.
+    pub(crate) fn capture_region_seed(&self, key: crate::fold::FoldKey) -> Option<RegionSeed> {
+        let frame = self.inter.disclosure_stack.last()?;
+        if frame.key != key || !frame.emitted {
+            return None;
+        }
+        Some(RegionSeed(self.inter.clone()))
+    }
+
+    /// Take every widget list a REGION render produced, leaving each empty.
+    ///
+    /// **Beside the field declarations, so an author adding a widget list is looking at
+    /// the take when they add it** (F-TEST-A-008). It lived in
+    /// `preview::splice::regionwriter::finish` as six hand-written `mem::take` calls —
+    /// a non-exhaustive read of this struct from another module, which a seventh list
+    /// would join by nobody thinking to. The consequence is not a crash: the region's
+    /// children of that kind are simply never handed to the install, so they are
+    /// created, parented and then unknown to every map that describes the pane.
+    ///
+    /// Destructured exhaustively rather than assembled field by field, so a field added
+    /// to `RegionWidgets` fails to compile here until it is given a source.
+    pub(crate) fn take_region_widgets(&mut self) -> crate::preview::splice::RegionWidgets {
+        crate::preview::splice::RegionWidgets {
+            anchored: std::mem::take(&mut self.anchored),
+            image_tints: std::mem::take(&mut self.image_tints),
+            width_bounded: std::mem::take(&mut self.width_bounded),
+            image_bounded: std::mem::take(&mut self.image_bounded),
+            tables: std::mem::take(&mut self.tables),
+            disclosure_toggles: std::mem::take(&mut self.disclosure_toggles),
+        }
+    }
+
+    /// Reapply a [`RegionSeed`] captured from a scratch walk to this (freshly
+    /// constructed) renderer, so it resumes exactly where the scratch walk stood
+    /// at the region's start — see [`Self::capture_region_seed`]. Call once,
+    /// immediately after construction and before [`Self::write_at`].
+    pub(crate) fn seed(&mut self, seed: RegionSeed) {
+        self.inter = seed.0;
+    }
+
+    /// Is this renderer currently anywhere inside the disclosure `key` names —
+    /// i.e. has its frame been pushed and not yet popped? A region render uses
+    /// this to know when it has finished: once `key`'s frame is gone, the block
+    /// (and everything nested inside it) has fully closed, and nothing after that
+    /// belongs to this region.
+    pub(crate) fn is_open(&self, key: crate::fold::FoldKey) -> bool {
+        self.inter.disclosure_stack.iter().any(|f| f.key == key)
+    }
+
+    /// Write a SEEDED region render's summary-line TAIL: the collapsed-body
+    /// preview (if `target_collapsed`), then the newline
+    /// [`start::emit_pending_summary`](self) always writes next, whichever branch
+    /// it took, right before `body_start`.
+    ///
+    /// A region render never runs `emit_pending_summary` itself — the frame it
+    /// was seeded with already has `emitted = true`, which is exactly what stops
+    /// that function running a second time. So this tail — which
+    /// `emit_pending_summary` wrote into the SCRATCH buffer during seed capture,
+    /// and which the seed's own `trailing_newlines`/`at_start` already account
+    /// for — has to be written into THIS renderer's (live) buffer explicitly, or
+    /// its buffer is missing exactly one newline that every consumer downstream
+    /// of the seed assumes already exists.
+    ///
+    /// Written with raw buffer inserts rather than [`Self::insert`]/
+    /// [`Self::newline`], which reset `trailing_newlines`/`at_start` to reflect
+    /// only what THIS call wrote — wrong here, because the seed already carries
+    /// the CORRECT values for the state immediately after this tail (that is the
+    /// instant it was captured at). The seeded values are saved before writing
+    /// and restored after, so this call is a pure buffer catch-up with no visible
+    /// effect on the renderer's own bookkeeping.
+    ///
+    /// Assumes `self` was just constructed and seeded via [`Self::seed`] and
+    /// pointed at the region via [`Self::write_at`], so `disclosure_stack`'s top
+    /// frame is the disclosure this region belongs to and nothing has been
+    /// written into this renderer's buffer yet.
+    ///
+    /// # The ink is re-applied, and it has to be
+    ///
+    /// `emit_pending_summary` inks the summary line — label AND collapsed preview —
+    /// with [`crate::tags::TagName::DisclosureInk`] over `[summary_offset,
+    /// summary_end]`, because both sit on the drawn summary band and both have to
+    /// stay legible on it (TDD 18.49). A splice deletes from `label_end`, so the live
+    /// buffer keeps the ink over the LABEL and loses it over whatever the previous
+    /// preview occupied — and text inserted at a point where a tag is toggled OFF
+    /// does not inherit it. Without this, expanding-then-collapsing leaves the
+    /// preview fragment un-inked on the band: a legibility defect on exactly the
+    /// themes that state `disclosure_fg`, and one no text comparison can see.
+    ///
+    /// Applied on BOTH branches rather than only the collapsed one, so the extent is
+    /// re-established from the frame's own numbers rather than from an assumption
+    /// about which fold direction ran; on an expanded target it re-covers the label
+    /// it already covered, which is a no-op by construction.
+    pub(crate) fn write_seeded_summary_tail(&mut self, target_collapsed: bool) {
+        use gtk::prelude::TextBufferExt;
+        let (trailing_newlines, at_start) = (self.inter.trailing_newlines, self.inter.at_start);
+        if target_collapsed {
+            let body_range = self.inter.disclosure_stack.last().and_then(|frame| {
+                self.disclosures
+                    .get(frame.span_index)
+                    .and_then(|span| span.body.clone())
+            });
+            if let Some(insert) = disclosure::preview_insert_text(&self.cleaned, body_range) {
+                let preview_start = self.end_offset();
+                let mut iter = self.tip();
+                self.buf.insert(&mut iter, &insert);
+                let si = self.buf.iter_at_offset(preview_start);
+                let ei = self.tip();
+                self.apply(crate::tags::TagName::DisclosurePreview, &si, &ei);
+            }
+        }
+        // Before the newline, exactly as `emit_pending_summary` does: the ink covers
+        // the summary line's TEXT, never its terminator. A region render only ever
+        // exists for a block that closed — an unclosed one earns no
+        // `DisclosureExtent` and so no splice — so `emit_pending_summary`'s
+        // `foldable` gate is already satisfied here and is read off the frame rather
+        // than assumed.
+        if let Some(frame) = self.inter.disclosure_stack.last() {
+            let (foldable, summary_offset) = (frame.foldable, frame.summary_offset);
+            let summary_end = self.end_offset();
+            if foldable && summary_end > summary_offset {
+                let si = self.buf.iter_at_offset(summary_offset);
+                let ei = self.buf.iter_at_offset(summary_end);
+                self.apply(crate::tags::TagName::DisclosureInk, &si, &ei);
+            }
+        }
+        let mut iter = self.tip();
+        self.buf.insert(&mut iter, "\n");
+        self.inter.trailing_newlines = trailing_newlines;
+        self.inter.at_start = at_start;
+    }
+
+    /// Re-establish the block separator a region render's own content does not
+    /// own. `block_sep` is written LAZILY by the next block's own `Start` event —
+    /// but a region render's next block is not being re-rendered at all; it is
+    /// already sitting in the live buffer immediately past the splice, untouched,
+    /// so nothing will ever call `block_sep` on its behalf. This is a region
+    /// render's last action, whichever fold state it wrote.
+    pub(crate) fn finish_region(&mut self) {
+        self.block_sep();
+        self.apply_enclosing_container_tags();
+    }
+
+    /// Apply the tags of every container the region sits INSIDE, over the region's own
+    /// lines.
+    ///
+    /// **A container's margin tag is applied at its `TagEnd`, and a region walk never
+    /// reaches one.** The walk stops the moment the toggled block's frame pops, so a
+    /// `</blockquote>` or `</li>` below it is an event this renderer never sees — and
+    /// the text it just wrote came out with no quote indent and no hanging indent,
+    /// while a full render of the same fold state gives it both. The buffer is
+    /// character-identical either way, so every text-level guard passes over it; only a
+    /// tag-range comparison can see it (F-AP2-006).
+    ///
+    /// The enclosing levels are read from the seed's own stacks, which is the same
+    /// state the full walk would have been holding at this point — so this reproduces
+    /// what the missing `TagEnd`s would have done rather than approximating it. It does
+    /// NOT record `blockquote_ranges` or list markers: those are drawn from PASS A's
+    /// full-document maps, which the install adopts wholesale.
+    fn apply_enclosing_container_tags(&mut self) {
+        let Some(start) = self.region_start else {
+            return;
+        };
+        let end = self.end_offset();
+        if end <= start {
+            return;
+        }
+        // The item's first line sits ABOVE the region, so every line here is a
+        // continuation: giving the first one `li-{depth}` would open an inter-item gap
+        // inside one item.
+        if !self.inter.item_starts.is_empty() {
+            self.apply_list_item_lines(self.inter.lists.len(), start, end, true);
+        }
+        // Every open level, so the deepest wins on priority exactly as it does when the
+        // levels close in order.
+        for depth in 1..=self.inter.blockquote_starts.len() {
+            let depth = (depth as u8).clamp(1, crate::tags::MAX_QUOTE_DEPTH);
+            self.apply_tag_per_line(crate::tags::TagName::Blockquote { depth }, start, end);
+        }
+        if !self.inter.blockquote_starts.is_empty() {
+            // The quote's ink is a property of the QUOTE and rides the outermost range,
+            // which includes this region.
+            self.apply_tag_per_line(crate::tags::TagName::BlockquoteInk, start, end);
+        }
+    }
+
+    /// Is the `<details>` the walk is about to open ever CLOSED?
+    ///
+    /// Only a closed block may collapse: a collapsed frame that never pops suppresses
+    /// every remaining event, so an unclosed one would delete the rest of the document
+    /// (rubric 2.26d — see [`disclosure::scan_document`]).
+    ///
+    /// Consumed in document order, and the pre-scan's own offset is checked against
+    /// the live one. A disagreement means the two walks have diverged, which cannot
+    /// happen while both parse the same string with the same options — so it is
+    /// logged and answered **`false`**, the reply that can only ever render MORE of
+    /// the document, never less.
+    fn opening_details_is_closed(&mut self, block_start: usize) -> bool {
+        self.inter
+            .disclosure_cursor
+            .opening_is_closed(&self.disclosures, block_start)
+    }
+
+    /// The collapsed disclosures the renderer is currently inside, or `None` when it
+    /// is not inside one. See [`CollapsedSite`].
+    pub(crate) fn collapsed_site(&self) -> Option<CollapsedSite> {
+        let outermost = self.inter.disclosure_stack.iter().find(|f| f.collapsed)?;
+        Some(CollapsedSite {
+            block_start: outermost.block_start,
+            chain: self
+                .inter
+                .disclosure_stack
+                .iter()
+                .filter(|f| f.collapsed)
+                .map(|f| f.key)
+                .collect(),
+            summary_offset: outermost.summary_offset,
+        })
+    }
     /// A parser construct this renderer deliberately renders as nothing, announced
     /// rather than dropped in silence.
     ///
@@ -542,7 +1229,12 @@ impl Renderer {
         cleaned: String,
         ann_highlights: Vec<(usize, usize)>,
         zoom: f64,
+        folds: crate::fold::FoldState,
     ) -> Self {
+        // Scanned before `cleaned` is moved into the struct — the pairing scan reads
+        // the same string the walk below parses, which is what makes its Nth span the
+        // Nth `<details>` the walk opens.
+        let scanned = cleaned.clone();
         Renderer {
             buf,
             theme,
@@ -551,22 +1243,12 @@ impl Renderer {
             cleaned,
             zoom,
             event_src: 0..0,
-            inline_tags: Vec::new(),
-            lists: Vec::new(),
-            item_starts: Vec::new(),
-            list_item_open: false,
-            list_first_item: false,
             code: None,
             heading: None,
-            heading_start: 0,
             heading_text: String::new(),
-            slug_seen: HashMap::new(),
             headings: Vec::new(),
-            blockquote_depth: 0,
-            blockquote_starts: Vec::new(),
             blockquote_ranges: Vec::new(),
             heading_spans: Vec::new(),
-            link_start: None,
             links: Vec::new(),
             anchored: Vec::new(),
             width_bounded: Vec::new(),
@@ -575,8 +1257,6 @@ impl Renderer {
             code_blocks: Vec::new(),
             list_markers: Vec::new(),
             table: None,
-            at_start: true,
-            trailing_newlines: 0,
             syntect_theme,
             doc_dir,
             allow_unsafe_images,
@@ -585,6 +1265,21 @@ impl Renderer {
             html_acc: String::new(),
             in_html_block: false,
             picture_open: None,
+            folds,
+            at: None,
+            region_start: None,
+            live_view: None,
+            disclosure_toggles: Vec::new(),
+            collapsed_blocks: Vec::new(),
+            disclosure_extents: Vec::new(),
+            disclosures: disclosure::scan_document(&scanned),
+            // A fresh walk stands at the document start with nothing open. Stated as
+            // one value rather than twelve initialisers, so this list and the seed's
+            // cannot fall out of step.
+            inter: InterBlock {
+                at_start: true,
+                ..InterBlock::default()
+            },
         }
     }
 

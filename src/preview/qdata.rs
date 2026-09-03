@@ -21,6 +21,7 @@ use std::rc::Rc;
 /// Per-render data shared by live closures on the preview `TextView`.  Stored
 /// as `Rc<RefCell<RenderData>>` qdata under `"scrib-render-data"` so that
 /// `re_render` can update it in-place without rewiring any signal handlers.
+#[derive(Default)]
 pub(crate) struct RenderData {
     pub source_map: Vec<(i32, usize)>,
     /// The inverse of `source_map`: `(source_byte_offset, buffer_char_offset)` sorted
@@ -37,16 +38,35 @@ pub(crate) struct RenderData {
     pub md_owned: String,
     pub links: Vec<(i32, i32, String)>,
     pub heading_map: HashMap<String, i32>,
-    /// Buffer char offset of each heading's text start, in document order — the
-    /// outline sidebar's scroll targets (indexed by `outline::HeadingNode::doc_index`).
-    pub heading_offsets: Vec<i32>,
-    /// Each heading's anchor slug, in the same document order as `heading_offsets`
-    /// and indexed by the same `doc_index`. `heading_map` answers slug→offset;
-    /// this answers the inverse the Back/Forward history needs, so an outline
-    /// activation can record the *slug* it navigated to (a reference that
-    /// survives an edit) rather than the positional index it was handed
-    /// (the weakest reference there is — Document-Reference CAM).
-    pub heading_slugs: Vec<String>,
+    /// Where each heading the SOURCE declares is reachable in this render, in
+    /// document order and indexed by `outline::HeadingNode::doc_index` — the outline
+    /// sidebar's scroll targets. One entry per source heading, including the ones a
+    /// collapsed disclosure is hiding; see [`crate::outline::HeadingSite`] for why
+    /// the rendered list cannot be used directly.
+    ///
+    /// Each entry carries the heading's anchor slug as well. `heading_map` answers
+    /// slug→offset; this answers the inverse the Back/Forward history needs, so an
+    /// outline activation can record the *slug* it navigated to (a reference that
+    /// survives an edit) rather than the positional index it was handed (the weakest
+    /// reference there is — Document-Reference CAM).
+    pub heading_sites: Vec<crate::outline::HeadingSite>,
+    /// Every disclosure this render drew COLLAPSED, in document order. Find reads it
+    /// to answer "does a hidden body hold the query?" — the body is in no buffer, so
+    /// the question can only be asked of the source (`renderer::CollapsedBlock`).
+    pub collapsed_blocks: Vec<crate::renderer::CollapsedBlock>,
+    /// Where every disclosure this render DREW sits in the buffer, in document order
+    /// — see [`crate::renderer::DisclosureExtent`].
+    ///
+    /// Distinct from `collapsed_blocks`, which holds only the folded ones and answers
+    /// a question about the SOURCE they withheld. This answers where a block's
+    /// rendered content is, which is what a toggle must delete or write into, and it
+    /// covers expanded blocks too — the ones a collapse has to find.
+    pub disclosure_extents: Vec<crate::renderer::DisclosureExtent>,
+    /// Each disclosure summary's buffer LINE and the toggle that sits on it, so a
+    /// click anywhere along that line reaches the control. The arrow is ~16px and is
+    /// meant to be — it reads as an indicator in prose — but that makes it a poor
+    /// thing to aim at, which is why the hit target is the line and not the glyph.
+    pub disclosure_lines: Vec<(i32, gtk::ToggleButton)>,
     /// (anchor, tint widget) for every rendered image: the click-through overlay box
     /// shown when the image is inside the buffer selection (`connect_image_tints`).
     pub image_tints: Vec<(TextChildAnchor, gtk::Widget)>,
@@ -62,6 +82,78 @@ pub(crate) struct RenderData {
     /// scroll-sync char↔byte conversions across the shift table (Fork 2-B). Equals
     /// `md_owned` when the document has no CriticMarkup.
     pub original_owned: String,
+}
+
+impl RenderData {
+    /// The FIRST render's state: a render's maps, plus the two widget-keyed lists
+    /// that route owns outright (there is nothing yet to merge them with).
+    ///
+    /// Exhaustively destructures [`RenderMaps`](crate::preview::build::RenderMaps),
+    /// exactly as [`Self::adopt_maps`] does, so a map added there is a compile error
+    /// at both — which is the whole point of the type. `disclosure_lines` starts
+    /// empty: it is filled when the toggles are wired, after the view exists.
+    pub(super) fn new(
+        maps: crate::preview::build::RenderMaps,
+        image_tints: Vec<(TextChildAnchor, gtk::Widget)>,
+        table_anchors: Vec<(TextChildAnchor, ScribTableWidget)>,
+    ) -> Self {
+        // **ONE definition of how a map set becomes render data.** This was a second
+        // hand-written copy of `adopt_maps`'s ten-field install, identical but for the
+        // two widget-keyed lists the first render owns outright — so a map added to
+        // `RenderMaps` was a compile error in two places and a correct assignment in
+        // one of them was no guarantee about the other (F-DRY-A-004). The exhaustive
+        // destructure that makes the compile error happen lives in `adopt_maps` alone.
+        //
+        // `disclosure_lines` stays empty, which is what the previous code did and what
+        // the route needs: it is filled when the toggles are wired, after the view
+        // exists.
+        let mut this = Self {
+            image_tints,
+            table_anchors,
+            ..Self::default()
+        };
+        this.adopt_maps(maps);
+        this
+    }
+
+    /// Adopt a render's buffer-keyed maps WHOLESALE — the one way any route installs
+    /// them, so a map added to [`RenderMaps`](crate::preview::build::RenderMaps)
+    /// reaches every route or none.
+    ///
+    /// `source_map_inv` is derived here, and only here: it is a pure function of
+    /// `source_map`, so no caller can install one without the other or leave the two
+    /// describing different renders.
+    ///
+    /// Deliberately does NOT touch `image_tints`, `table_anchors` or
+    /// `disclosure_lines` — those reference live anchor WIDGETS, and each route
+    /// answers for them differently (a full render replaces, the splice merges
+    /// survivors, the annotation refresh leaves them alone because the buffer was not
+    /// swapped).
+    pub(super) fn adopt_maps(&mut self, maps: crate::preview::build::RenderMaps) {
+        let crate::preview::build::RenderMaps {
+            source_map,
+            copymap,
+            md_owned,
+            links,
+            heading_sites,
+            heading_map,
+            collapsed_blocks,
+            disclosure_extents,
+            shifts,
+            original_owned,
+        } = maps;
+        self.source_map_inv = super::sourcemap::invert_source_map(&source_map);
+        self.source_map = source_map;
+        self.copymap = copymap;
+        self.md_owned = md_owned;
+        self.links = links;
+        self.heading_sites = heading_sites;
+        self.heading_map = heading_map;
+        self.collapsed_blocks = collapsed_blocks;
+        self.disclosure_extents = disclosure_extents;
+        self.shifts = shifts;
+        self.original_owned = original_owned;
+    }
 }
 
 /// The three render-state qdata keys, each binding its name to its one concrete

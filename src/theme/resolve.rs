@@ -50,7 +50,19 @@ impl Theme {
         // therefore diagnosed rather than removed.
         for level in 0..HEADING_LEVELS {
             let key = keys::HEADING_BAND_GRADIENT_TO_COLOR.spelling(level);
-            if src.colors::<HEADING_LEVELS>(&keys::HEADING_BAND_GRADIENT_TO_COLOR)[level].is_some()
+            // **Only a gradient STATED AT THIS LEVEL is a mistake**, which is what the
+            // paragraph above already says and what this loop did not do. A theme may
+            // state ONE bare `heading_band_gradient_to_color` and band only its top two
+            // levels — a perfectly ordinary shape, and both `synthwave` and `candy` ship
+            // it. The bare key is a BROADCAST, and a broadcast that does not apply
+            // everywhere it reaches is not an authoring error; the resolved per-level
+            // value cannot tell the two apart, so asking it produced three warnings per
+            // theme on shipped defaults, forever, for nothing the author did wrong.
+            // That matters beyond tidiness: several manual checks verify a theme by
+            // running with warnings on and expecting SILENCE, so noise here does not
+            // merely annoy, it spends the signal those checks read.
+            let stated_here = src.stated(&key);
+            if stated_here
                 && src.colors::<HEADING_LEVELS>(&keys::HEADING_BAND_COLOR)[level].is_none()
             {
                 log::warn!(
@@ -58,6 +70,42 @@ impl Theme {
                      this level states no heading_band_color for it to start from"
                 );
             }
+        }
+        // **A BROADCAST that lands nowhere is an authoring error too**, and the loop
+        // above cannot see it: it asks about the levelled spellings, and a theme
+        // stating the bare `heading_band_gradient_to_color` states none of them. So a
+        // bare gradient on a theme that bands no heading at all was discarded five
+        // times in complete silence — ScrAP-324's class again, one rung up
+        // (F-AP-B-304). Warned ONCE rather than per level, because there is one
+        // mistake; and only when the key reaches nothing at all, which preserves the
+        // silence the ordinary shape depends on (a bare gradient plus a band on h1 and
+        // h2 is what `synthwave` and `candy` ship).
+        let bare = keys::HEADING_BAND_GRADIENT_TO_COLOR.name;
+        if src.stated(bare)
+            && src
+                .colors::<HEADING_LEVELS>(&keys::HEADING_BAND_COLOR)
+                .iter()
+                .all(Option::is_none)
+        {
+            log::warn!(
+                "theme {id:?}: {bare} is ignored at every level — a gradient is a second \
+                 stop, and this theme states no heading_band_color for it to start from \
+                 at any level"
+            );
+        }
+        // The summary band's own version of the same discard, diagnosed for the same
+        // reason: silence makes "the key resolved fine and was then dropped for want
+        // of another" indistinguishable from "the theme stated nothing" (ScrAP-324).
+        if src
+            .color(&keys::DISCLOSURE_BAND_GRADIENT_TO_COLOR)
+            .is_some()
+            && src.color(&keys::DISCLOSURE_BAND_COLOR).is_none()
+        {
+            log::warn!(
+                "theme {id:?}: disclosure_band_gradient_to_color is ignored — a gradient \
+                 is a second stop, and this theme states no disclosure_band_color for it \
+                 to start from"
+            );
         }
 
         Theme {
@@ -130,6 +178,30 @@ impl Theme {
                 task: src.glyph(&keys::LIST_TASK_GLYPH),
                 task_checked: src.glyph(&keys::LIST_TASK_CHECKED_GLYPH),
             },
+            disclosure_glyphs: crate::theme::model::DisclosureGlyphs {
+                collapsed: src.glyph(&keys::DISCLOSURE_GLYPH),
+                expanded: src.glyph(&keys::DISCLOSURE_EXPANDED_GLYPH),
+            },
+            // Folded down to the page's own ink, the way `table_head_fg` folds to the
+            // heading's — and for a sharper reason than tidiness. An unstated marker
+            // colour left the indicator on the DESKTOP theme's ink, which is a colour
+            // the reading theme does not own: wrong on a themed page even focused, and
+            // not stable when the window loses focus, since the desktop states an
+            // unfocused ink for the node the mark is drawn on (TDD 18.52). This is the
+            // rule the drawn list markers already follow at their own paint site —
+            // marker ink is the body's until the theme says otherwise — so the fold
+            // makes the two agree rather than introducing a new one.
+            //
+            // System states no foreground, so this stays `None` there and the theme
+            // sheet emits no rule at all: the stock chevron on the desktop's ink,
+            // byte-identical to what it has always drawn (TDD 18.2).
+            disclosure_marker_color: src
+                .color(&keys::DISCLOSURE_MARKER_COLOR)
+                .or_else(|| src.color(&keys::FOREGROUND)),
+            disclosure_preview_fg: src.color(&keys::DISCLOSURE_PREVIEW_FG),
+            disclosure_band_color: src.color(&keys::DISCLOSURE_BAND_COLOR),
+            disclosure_band_gradient_to: src.color(&keys::DISCLOSURE_BAND_GRADIENT_TO_COLOR),
+            disclosure_fg: src.color(&keys::DISCLOSURE_FG),
             mark_fg: src.color(&keys::MARK_FG),
             annotation_hl_color: ThemeColor(src.color_floored(&keys::ANNOTATION_HL_COLOR)),
             find_hl_all_color: ThemeColor(src.color_floored(&keys::FIND_HL_ALL_COLOR)),
@@ -158,6 +230,8 @@ impl Theme {
                 table_cell_padding_h: src.int(&keys::TABLE_CELL_PADDING_H),
                 table_border_width: src.int(&keys::TABLE_BORDER_WIDTH),
                 table_cell_radius: src.int(&keys::TABLE_CELL_RADIUS),
+                disclosure_marker_size: src.int(&keys::DISCLOSURE_MARKER_SIZE),
+                disclosure_band_radius: src.int(&keys::DISCLOSURE_BAND_RADIUS),
             },
             annotation_chip_bg: src.color(&keys::ANNOTATION_CHIP_BG),
             annotation_chip_fg: src.color(&keys::ANNOTATION_CHIP_FG),
@@ -173,6 +247,9 @@ impl Theme {
                 heading_band: src.sprites(&keys::HEADING_BAND_SPRITE),
                 blockquote_bar: src.sprite(&keys::BLOCKQUOTE_BAR_SPRITE),
                 rule: src.sprite(&keys::RULE_SPRITE),
+                disclosure: src.sprite(&keys::DISCLOSURE_SPRITE),
+                disclosure_expanded: src.sprite(&keys::DISCLOSURE_EXPANDED_SPRITE),
+                disclosure_band: src.sprite(&keys::DISCLOSURE_BAND_SPRITE),
             },
         }
     }

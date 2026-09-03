@@ -1458,7 +1458,8 @@ mod a11y_integration_tests {
     #[gtktest::test]
     fn enter_commits_in_the_marker_edit_popover() {
         use gtk::subclass::prelude::*;
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 400);
@@ -1526,7 +1527,8 @@ mod a11y_integration_tests {
     /// symptom seen when driving the app by hand (no chip ever observed).
     #[gtktest::test]
     fn a_presented_preview_paints_marker_hitboxes() {
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 400);
@@ -1547,7 +1549,8 @@ mod a11y_integration_tests {
     /// spot with no scroll. This is the common case (annotate, then read it back).
     #[gtktest::test]
     fn next_annotation_opens_the_popover_for_an_on_screen_marker() {
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 400);
@@ -1575,7 +1578,8 @@ mod a11y_integration_tests {
     /// test fails if that regresses to an idle.
     #[gtktest::test]
     fn next_annotation_scrolls_to_an_off_screen_marker_and_opens_it() {
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 400);
@@ -1629,7 +1633,8 @@ mod a11y_integration_tests {
     #[gtktest::test]
     fn a_navigation_leaves_the_document_scrolled_to_the_target() {
         use gtk::subclass::prelude::*;
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 400);
@@ -1714,7 +1719,8 @@ mod a11y_integration_tests {
     #[gtktest::test]
     fn the_repin_guard_holds_the_post_scroll_position_not_the_pre_scroll_one() {
         use gtk::subclass::prelude::*;
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 400);
@@ -1774,7 +1780,8 @@ mod a11y_integration_tests {
     #[gtktest::test]
     fn an_expired_pending_open_is_discarded_without_opening_a_popover() {
         use gtk::subclass::prelude::*;
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 400);
@@ -1826,7 +1833,14 @@ mod a11y_integration_tests {
     /// cleanly rather than pop an empty popover.
     #[gtktest::test]
     fn next_annotation_is_a_clean_no_op_without_annotations() {
-        let pane = crate::preview::render("Just prose, no annotations.\n", None, 1.0, false);
+        let pane = crate::preview::render(
+            "Just prose, no annotations.\n",
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+            0,
+        );
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 400);
@@ -1868,7 +1882,8 @@ mod a11y_integration_tests {
     #[gtktest::test]
     fn dispose_popdowns_the_marker_popover_before_unparenting_it() {
         use gtk::subclass::prelude::*;
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 400);
@@ -1930,7 +1945,8 @@ mod a11y_integration_tests {
     /// torn-down view — defense-in-depth, either alone prevents the crash.
     #[gtktest::test]
     fn open_marker_popover_is_a_no_op_on_an_unrealized_view() {
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane);
         assert!(
             !view.is_realized(),
@@ -1962,7 +1978,8 @@ mod a11y_integration_tests {
     #[gtktest::test]
     fn opening_an_annotation_moves_the_caret_to_it_so_the_next_step_advances() {
         use gtk::subclass::prelude::*;
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 400);
@@ -2035,7 +2052,8 @@ mod a11y_integration_tests {
     /// distinguish the two failures is not measuring the thing it names).
     #[gtktest::test]
     fn a_card_takes_the_focus_only_when_the_opener_asked_for_it() {
-        let pane = crate::preview::render(MD, None, 1.0, false);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
         let view = view_of(pane.clone());
         let win = gtk::Window::new();
         win.set_default_size(700, 400);

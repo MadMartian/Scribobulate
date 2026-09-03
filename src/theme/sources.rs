@@ -194,6 +194,21 @@ impl Sources<'_> {
     // alone at 13 call sites — with nothing checking a pairing, so a key wired to the
     // wrong range compiled and passed.
 
+    /// Did EITHER source write this exact spelling, rather than a broader one that
+    /// resolves to it?
+    ///
+    /// The resolved value cannot answer this: a bare `heading_band_gradient_to_color`
+    /// reaches every level, so `colors()[level]` is `Some` at levels the author never
+    /// mentioned. That distinction is the difference between an authoring mistake worth
+    /// naming and an ordinary broadcast — see the gradient diagnostic in `resolve`.
+    ///
+    /// Deliberately asks both sources, because a diagnostic about a key that renders
+    /// nothing should fire wherever the key was written, and `[themes.system]` is an
+    /// ordinary theme rather than a second-class one.
+    pub(crate) fn stated(&self, spelling: &str) -> bool {
+        self.selected.get(spelling).is_some() || self.system.get(spelling).is_some()
+    }
+
     pub(crate) fn text(&self, key: &Key) -> Option<String> {
         self.bare(key, |v| v.text().map(str::to_string))
     }

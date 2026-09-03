@@ -206,3 +206,73 @@ fn an_unknown_event_falls_back_to_a_standalone_scan() {
         "an unknown event must degrade to the single-run scan",
     );
 }
+
+/// **F-AP2-008: the two halves of the inline/block split must agree.**
+///
+/// `disclosure::body_plain_text` carried the close list as a second `TagEnd` match, free
+/// to disagree with the open one. The failure is silent in both directions: a boundary
+/// treated as a block emits a newline, so a search for `foobar` misses `foo*bar*`; one
+/// treated as inline joins two runs the reader sees apart and claims a match the page
+/// does not have.
+#[test]
+fn the_inline_predicate_agrees_with_itself_across_open_and_close() {
+    use pulldown_cmark::{CodeBlockKind, HeadingLevel, LinkType, Tag};
+
+    let link = |t| Tag::Link {
+        link_type: t,
+        dest_url: "".into(),
+        title: "".into(),
+        id: "".into(),
+    };
+    let image = Tag::Image {
+        link_type: LinkType::Inline,
+        dest_url: "".into(),
+        title: "".into(),
+        id: "".into(),
+    };
+    let cases: Vec<Tag<'static>> = vec![
+        Tag::Emphasis,
+        Tag::Strong,
+        Tag::Strikethrough,
+        Tag::Superscript,
+        Tag::Subscript,
+        link(LinkType::Inline),
+        image,
+        Tag::Paragraph,
+        Tag::Heading {
+            level: HeadingLevel::H1,
+            id: None,
+            classes: Vec::new(),
+            attrs: Vec::new(),
+        },
+        Tag::BlockQuote(None),
+        Tag::CodeBlock(CodeBlockKind::Indented),
+        Tag::List(None),
+        Tag::Item,
+        Tag::Table(Vec::new()),
+        Tag::TableHead,
+        Tag::TableRow,
+        Tag::TableCell,
+        Tag::HtmlBlock,
+    ];
+    let (mut inline, mut block) = (0usize, 0usize);
+    for tag in cases {
+        let open = super::is_inline_tag(&tag);
+        let close = super::is_inline_tag_end(&tag.to_end());
+        assert_eq!(
+            open,
+            close,
+            "{tag:?} is {} on the way in and {} on the way out",
+            if open { "inline" } else { "block" },
+            if close { "inline" } else { "block" }
+        );
+        if open {
+            inline += 1;
+        } else {
+            block += 1;
+        }
+    }
+    // Both sides non-empty, so a predicate answering one value for everything — which
+    // agrees with itself perfectly — cannot satisfy this.
+    assert!(inline >= 7 && block >= 7, "{inline} inline, {block} block");
+}

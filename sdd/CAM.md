@@ -186,7 +186,8 @@ part of row 1 is about *showing* the markup, not editing it.
 | 14 | **Switches theme at runtime** without restart, in every open window | `re_render_all_windows` |
 | 15 | **Legibility floor** asserted per theme (body contrast gate, headless) | `palette::contrast` |
 | 16 | **Keyboard parity in container contexts** — a rendering choice that puts a **focusable** widget in the document must not disable the pane's own keyboard behaviour: with focus on that widget, every document-navigation key (←, →, ↑, ↓, Home, End, PageUp, PageDown and their Ctrl forms) still moves the *document*, exactly as with the pane focused, while a selection-extending (Shift) key still acts on the widget's own text. A focused child with key bindings of its own consumes them in its target phase and they never reach the view — silently, with no warning and no log line. **Swept** when written (2026-08-09): the renderer anchors four child kinds — the table widget, a rule `GtkSeparator`, an image `GtkPicture` and a missing-image `GtkImage` — and only the table's cells take focus; the repair is sited on the pane rather than per child, so it covers those and any future one | `keynav`; `codeview::navkeys`; ScrAP-264 |
-| 17 | **Exports as it renders** — the construct reaches an exported artefact as the preview shows it, in every container context of row 2. A rendering feature has **two** consumers: the preview widget and `export`'s display-free pipeline, which walks the same normalised event stream. They agree by construction only for constructs both were taught; a construct added to the renderer alone is silently *absent* from every export, and absence is exactly what nobody notices — the artefact still opens, still looks finished, and is simply missing something. Cheap to satisfy and invisible to omit, which is what earns it a cell. **Swept** when written (2026-08-19): the export pipeline was built against the full construct list and every construct in it is covered by `export::doc`'s tests | `export::doc`; `export::html`; `export::pdf`; TDD 25.3 |
+| 17 | **Exports as it renders** — the construct reaches an exported artefact as the preview shows it, in every container context of row 2. A rendering feature has **two** consumers: the preview widget and `export`'s display-free pipeline, which walks the same normalised event stream. They agree by construction only for constructs both were taught; a construct added to the renderer alone is silently *absent* from every export, and absence is exactly what nobody notices — the artefact still opens, still looks finished, and is simply missing something. Cheap to satisfy and invisible to omit, which is what earns it a cell. **Swept** when written (2026-08-19): the export pipeline was built against the full construct list and every construct in it is covered by `export::doc`'s tests. **A construct can be HALF-taught, and that is harder to see than a missing one** — a disclosure's body is ordinary Markdown events the walk never had to be taught, so it exported correctly from the first day, while the `<summary>` label lived inside raw HTML and reached no artefact at all. The export was neither absent nor right, and the part that worked is what made the part that did not look fine. So check the cell against the construct's *pieces*, not against whether it appears | `export::doc`; `export::html`; `export::pdf`; TDD 25.3 |
+| 18 | **Holds while the window is UNFOCUSED** — every mark the feature renders as a WIDGET rather than as buffer text states its own ink, never inherits it from the page. A desktop GTK theme styles the widget nodes this project anchors in its documents — `label:backdrop { color: … }` is in Breeze — and an inherited value loses to any rule that MATCHES the node, from any provider, so the app's own sheet does not defend a mark it only reaches by inheritance. The failure is invisible where a feature is built (the window under test has focus) and invisible to every assertion on the generated stylesheet, since the rule that should exist is the one that is missing. MEASURED: on a themed page a table's body cells and a disclosure's glyph indicator both re-inked to the desktop's unfocused grey the moment another window was activated, beside prose that did not move. Cover it by naming the node the mark is drawn on — including the CHILD a widget puts its text or icon in, which `color` reaches only by inheritance | `preview::css`'s `LINK_CELL_SELECTORS` / `DISCLOSURE_MARKER_SELECTORS`; TDD 18.52 |
 
 Row 17 is the export twin of row 1: row 1 governs a construct's appearance on
 screen, row 17 governs its appearance in an artefact the reader hands to someone
@@ -200,6 +201,8 @@ those concerns ([`THEMING.md`](THEMING.md) and the "No hard-coded styling" rule 
 POLICY.md; the footprint gate in POLICY.md and TDD §6; ScrAP-127/ScrAP-64).
 They appear in the matrix so the obligation is not forgotten, but the CAM does not
 restate their rules.
+
+Row 18 is row 12 pointed at a STATE rather than a container: 12 asks whether one theme key feeds both paths, 18 asks whether the path that renders through a widget survives the window's own focus changing. Both are about a mark that is drawn by a widget rather than by the buffer, which is why a feature that reaches for a real widget owes them together.
 
 Row 12 is the rendering twin of row 11: row 11 governs a feature's *interaction*
 inside a table cell, row 12 governs its *appearance* there. Row 16 is the third of
@@ -307,20 +310,35 @@ the top**, because a transiently shrinking-then-growing `upper` clamps `value`
 perfectly, only the scroll is wrong, and only on the one event that forgot — the
 textbook latent gap.
 
-The two perturbation kinds need different *restore mechanisms*, never a different
+The perturbation kinds need different *restore mechanisms*, never a different
 *concern*:
 
 - **Geometry change** (width): the text re-wraps, no buffer swap. The raw pixel
   `value` survives but no longer maps to the same logical line.
-- **Content rebuild** (buffer swap): the buffer is new; `value` may or may not
-  survive.
+- **Content rebuild, same text** (buffer swap, identical rendered content): the buffer
+  is new; `value` may or may not survive.
+- **Content rebuild, DIFFERENT text** (buffer swap where lines appear or vanish — a
+  disclosure opening or closing): neither `value` nor the line survives, because the
+  place a line number names has moved.
 
-Both preserve the **same way**: capture the top buffer **line**, restore it after
-validation. The only variable is view *warmth* — a warm, already-validated view takes
-a deferred `scroll_to_mark`; a freshly-built or cold view with a far target needs the
-progressive `set_value`-off-`notify::upper` restore, because a one-shot lands at the
-top (ScrAP-115). **That warm/fresh choice is made once inside the choke point, never
-by the call site.**
+The first two preserve the **same way**: capture the top buffer **line**, restore it
+after validation. The only variable is view *warmth* — a warm, already-validated view
+takes a deferred `scroll_to_mark`; a freshly-built or cold view with a far target
+needs the progressive `set_value`-off-`notify::upper` restore, because a one-shot
+lands at the top (ScrAP-115). **That warm/fresh choice is made once inside the choke
+point, never by the call site.**
+
+**The third kind breaks the line anchor, and it fails in exactly the shape this
+matrix warns about.** A line number is only a reading position while the buffer holds
+the same lines; once a fold adds or removes some, the same number names different
+content, and past the shortened document's end it clamps — MEASURED on a reader parked
+mid-document opening a block above them: the line anchor put them back at source byte
+0, the top. The anchor for this kind is the one coordinate the change does not move,
+the source: `readingpos::DocPosition`, the same value row 5 carries between panes.
+**So a re-render declares which kind it is** (`window::zoom::RenderShape`) rather than
+every call site remembering — the two anchors are each correct for one kind and
+silently wrong for the other, which is not a difference a reader of the call site can
+see.
 
 | # | Perturbing event | Kind | Editor | Preview | Status today |
 |---|---|---|:-:|:-:|---|
@@ -334,6 +352,7 @@ by the call site.**
 | 8 | **Split-pane drag** (divider move → the preview pane's width changes) | geometry | ◑ | ✓ | ✓ (preview) — same re-anchor; the width key is **cause-agnostic**, so #7's fix covers this too. Live-verify pending |
 | 9 | **Sidebar toggle** (show/hide outline / annotations → the preview pane's width changes) | geometry | ◑ | ✓ | ✓ (preview) — same cause-agnostic re-anchor as #7. Live-verify pending |
 | 10 | **Crash recovery applies a snapshot** (buffer replaced with recovered content) | rebuild | n/a | n/a | n/a **by position in the lifecycle, not by exemption** — see below |
+| 11 | **Disclosure expand / collapse** (`<details>` toggled, by the reader or by find/outline reaching into a collapsed block) | rebuild, **different text** | — | ✓ | ✓ `RenderShape::ChangedContent` — a `readingpos::DocPosition`, because the line anchor is invalid here by construction (TDD 2.26h) |
 
 **Why the three geometry rows collapse to one fix (preview).** The re-anchor keys on
 the preview's **raw allocation width inside its own `size_allocate`**, so it is
@@ -463,16 +482,25 @@ The invalidation classes (matrix columns):
 - **C — re-derivation**: a re-scan or re-render that rebuilds the *collection* a
   positional reference indexes into (the marker list, the entry list), even when
   the document text is unchanged.
+- **A′ — in-place region mutation of a rendered pane**: a disclosure fold splices one
+  block's region into the live preview buffer, deleting and rewriting it without
+  rebuilding the pane (`preview/splice/`). Distinct from A because the SOURCE does not
+  change at all — so anything keyed on source bytes is untouched — while every **buffer**
+  offset below the splice shifts by the region's length delta. It is the mirror image of
+  C, which replaces the collection while the text stands still. Stated as its own class
+  because a reference that survives A and C by being a source-byte reference can still be
+  wrong under A′ if it is in fact a buffer offset, and the two are the same Rust type.
 
-| # | Held reference | Points into | A | B | C | How it survives |
-|---|---|---|:-:|:-:|:-:|---|
-| 1 | Annotation card's Remove / Edit target | source bytes | ✓ | ✓ | ✓ | `AnchoredSpan` — carries the construct's own text and re-resolves at apply time; mutations total (ScrAP-187) |
-| 2 | Annotations viewer's selected row | source bytes | ✓ | ✓ | ✓ | Stored as the annotation's start byte and **re-resolved against a fresh scan on every rebuild**; a vanished annotation simply loses the selection |
-| 3 | Task-checkbox toggle span | source bytes | ✓ | ✓ | — | The toggle re-locates a well-formed marker at the span and returns `None` otherwise, which the caller makes a clean no-op |
-| 4 | Pending marker-open request | marker-list **index** + buffer offset | ✓ | ✓ | ⚠ | Bounded by a wall-clock deadline and re-aimed each frame, but the target is a **positional index** into a list a re-render replaces — see the rule on positional references below |
-| 5 | Scroll re-anchor target line | buffer line | ✓ | ✓ | — | Re-read each frame; a drifted line mis-positions the viewport only, and the next settle corrects it |
-| 6 | Back/Forward history entry's **place** in a document (TDD §23) | heading **slug**, or a buffer line | ◑ | ✓ | ✓ | Two strengths, chosen by what the recording site can know. A slug is re-resolved against the tab's live heading map, and a render that no longer contains it **degrades the entry to "just this document"** rather than letting it point somewhere wrong (23.14). A line is the weak form — an arbitrary scroll position offers no stronger handle — and takes row 5's bargain: it clamps and mis-positions the viewport only |
-| 7 | Reading position carried across a view-mode switch | source bytes (`readingpos::DocPosition`) | ✓ | n/a | ✓ | Held only for the span of the swap — captured from the pane being left, resolved into the pane being entered — so class B cannot reach it (a wholesale replacement is not in flight during a mode switch), and the editor flushes to source before the capture so class A is settled. Class C is what makes it a `DocPosition` rather than a preview buffer offset: the preview is REBUILT by the very switch being crossed, so any reference into its buffer would be resolved against a collection that no longer exists |
+| # | Held reference | Points into | A | A′ | B | C | How it survives |
+|---|---|---|:-:|:-:|:-:|:-:|---|
+| 1 | Annotation card's Remove / Edit target | source bytes | ✓ | n/a | ✓ | ✓ | `AnchoredSpan` — carries the construct's own text and re-resolves at apply time; mutations total (ScrAP-187) |
+| 2 | Annotations viewer's selected row | source bytes | ✓ | n/a | ✓ | ✓ | Stored as the annotation's start byte and **re-resolved against a fresh scan on every rebuild**; a vanished annotation simply loses the selection |
+| 3 | Task-checkbox toggle span | source bytes | ✓ | n/a | ✓ | — | The toggle re-locates a well-formed marker at the span and returns `None` otherwise, which the caller makes a clean no-op |
+| 4 | Pending marker-open request | marker-list **index** + buffer offset | ✓ | ⚠ | ✓ | ⚠ | Bounded by a wall-clock deadline and re-aimed each frame, but the target is a **positional index** into a list a re-render replaces — see the rule on positional references below |
+| 5 | Scroll re-anchor target line | buffer line | ✓ | ✓ | ✓ | — | Re-read each frame; a drifted line mis-positions the viewport only, and the next settle corrects it |
+| 6 | Back/Forward history entry's **place** in a document (TDD §23) | heading **slug**, or a buffer line | ◑ | ◑ | ✓ | ✓ | Two strengths, chosen by what the recording site can know. A slug is re-resolved against the tab's live heading map, and a render that no longer contains it **degrades the entry to "just this document"** rather than letting it point somewhere wrong (23.14). A line is the weak form — an arbitrary scroll position offers no stronger handle — and takes row 5's bargain: it clamps and mis-positions the viewport only |
+| 7 | Reading position carried across a view-mode switch | source bytes (`readingpos::DocPosition`) | ✓ | n/a | n/a | ✓ | Held only for the span of the swap — captured from the pane being left, resolved into the pane being entered — so class B cannot reach it (a wholesale replacement is not in flight during a mode switch), and the editor flushes to source before the capture so class A is settled. Class C is what makes it a `DocPosition` rather than a preview buffer offset: the preview is REBUILT by the very switch being crossed, so any reference into its buffer would be resolved against a collection that no longer exists |
+| 8 | Every buffer-keyed map a render installs — copymap, source map, heading sites, link spans, annotation placements, collapsed-block body ranges | preview **buffer** char offsets | n/a | ✓ | ✓ | ✓ | The splice reinstalls **all of them wholesale** from its own full re-parse (PASS A), never patching the live ones — so they are replaced rather than shifted, and a partial update is not a state the code can reach. The one way this fails is the splice reporting success having not written the region, which is why that refusal is a typed `SpliceVerdict::RegionLost` the caller must re-render on rather than a `bool` — a review finding, since a `bool` was reporting success with the region already deleted. Class A is `n/a` because a source mutation clears the fold map and forces a full re-render before any splice can run |
 
 **Row 6's `◑` under content mutation is the one deliberate weakness in this matrix,
 and it is bounded rather than unnoticed.** A slug survives an edit (class A) by
@@ -489,6 +517,17 @@ The sweep this row's addition obliges (the cross-CAM new-row rule): the only oth
 state pointing into a document across time is rows 1–5, all of which predate it and
 were re-read when this row was written; no gap was found, so nothing was fixed under
 it. Rows 1–5 are unchanged.
+
+**Class A′ and row 8 were added by the disclosure fold-splice work, and the sweep it
+obliges is recorded here.** Rows 1, 2, 3 and 7 are keyed on SOURCE bytes and a splice
+changes no source, so A′ cannot reach them — `n/a`, not `✓`. Row 5 already re-reads its
+line every frame and takes the mis-position bargain, which is what an A′ shift costs it.
+Row 6's line half takes the same bargain, hence `◑` for the same reason as its A cell.
+Row 4 is the one that earns a `⚠`: it holds a marker-list index **and** a buffer offset,
+and a splice re-derives the list and shifts the offset at once — it is bounded by its
+wall-clock deadline and re-aimed each frame, which is the same mitigation it already
+relies on under C, so no new mechanism was owed, but it is the row to re-read first if a
+pending marker ever opens on the wrong annotation after a fold.
 
 Rules that give the matrix its teeth:
 

@@ -137,8 +137,10 @@ pub(crate) fn render_and_wire_preview(
     doc_dir: Option<&std::path::Path>,
     zoom: f64,
     allow_unsafe_images: bool,
+    folds: &crate::fold::FoldState,
+    fold_epoch: u64,
 ) -> gtk::Widget {
-    let widget = render(md, doc_dir, zoom, allow_unsafe_images);
+    let widget = render(md, doc_dir, zoom, allow_unsafe_images, folds, fold_epoch);
     widget.set_vexpand(true);
     attach_context_menu(&widget);
     widget
@@ -164,7 +166,17 @@ pub(super) fn build_chrome(
     // SplitView.
     let content_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content_box.set_vexpand(true);
-    let initial_preview = render_and_wire_preview(md, doc_dir, zoom_level, show_unsafe_images);
+    // A FIRST build: there is no reader state yet, and saying so here is the point of
+    // the argument existing (F-AP-B-101).
+    let initial_preview = render_and_wire_preview(
+        md,
+        doc_dir,
+        zoom_level,
+        show_unsafe_images,
+        &crate::fold::FoldState::default(),
+        // A first build has no earlier source to be stale against.
+        0,
+    );
 
     // ── tab strip (widgets/tab) ────────────────────────────────────────
     // content_box becomes this window's first (and, until a second tab is

@@ -2,13 +2,34 @@
 //! blockquote spacing, table-cell markup accumulation, inline-tag pushes, and the
 //! image safety gate + anchored-picture (or broken-image placeholder) build.
 
+use super::blockspacing;
 use super::image::image_placeholder_tooltip;
-use super::{Renderer, TableState};
+use super::{Renderer, TableState, DEFAULT_SUMMARY_LABEL};
 use crate::links::{resolve_image, ImageResolution};
 use gtk::prelude::*;
 use pulldown_cmark::{CodeBlockKind, Tag};
 
 impl Renderer {
+    /// Write whatever separator `kind` needs before its own content.
+    ///
+    /// The GTK half of `blockspacing`: that module decides, this applies. Split so the
+    /// spacing rules — the most-exercised decisions in the renderer, and the ones whose
+    /// failure is a silently missing or doubled blank line — are reachable by a unit test
+    /// rather than only by rendering a document and reading the text back.
+    fn apply_lead_in(&mut self, kind: blockspacing::BlockKind) {
+        let cx = blockspacing::BlockContext {
+            list_item_open: self.inter.list_item_open,
+            inside_list: !self.inter.lists.is_empty(),
+            list_first_item: self.inter.list_first_item,
+            at_start: self.inter.at_start,
+        };
+        match blockspacing::lead_in(kind, cx) {
+            blockspacing::LeadIn::Nothing => {}
+            blockspacing::LeadIn::Newline => self.newline(),
+            blockspacing::LeadIn::BlockGap => self.block_sep(),
+        }
+    }
+
     pub(super) fn start_tag(&mut self, tag: Tag) {
         match tag {
             Tag::Heading { level, .. } => {
@@ -16,29 +37,18 @@ impl Renderer {
                 self.heading = Some(level);
                 // Record where the heading text starts and reset its accumulator;
                 // the slug is computed at TagEnd::Heading.
-                self.heading_start = self.end_offset();
+                self.inter.heading_start = self.end_offset();
                 self.heading_text.clear();
             }
             Tag::Paragraph => {
-                if self.list_item_open {
-                    // First paragraph immediately follows the list marker — no
-                    // separator; clearing the flag allows subsequent paragraphs
-                    // (loose lists) to get a newline via the else-if below.
-                    self.list_item_open = false;
-                } else if !self.lists.is_empty() {
-                    // Subsequent paragraphs inside a loose list item: one newline
-                    // is enough; a full block_sep would double-space them.
-                    self.newline();
-                } else {
-                    // Top-level paragraphs AND blockquote paragraphs: block_sep is
-                    // idempotent via trailing_newlines, so the first paragraph after
-                    // a Tag::BlockQuote (which already block_sep'd) is a no-op and
-                    // subsequent quote paragraphs get their blank line.
-                    self.block_sep();
-                }
+                // The RULE is `blockspacing`'s; this arm only carries it out. Setting
+                // the flag unconditionally is equivalent to the old first-branch-only
+                // clear: the other branches are reached only when it is already false.
+                self.apply_lead_in(blockspacing::BlockKind::Paragraph);
+                self.inter.list_item_open = false;
             }
             Tag::BlockQuote(_) => {
-                if self.blockquote_depth == 0 {
+                if self.inter.blockquote_depth == 0 {
                     self.block_sep();
                 }
                 // Blockquote content flows into the buffer as normal text + tags
@@ -46,56 +56,44 @@ impl Renderer {
                 // EVERY level records where it starts, not just the outermost: each one
                 // closes into its own span so it can draw its own accent bar at its own
                 // offset (TDD 2.11b). Innermost is last, so the matching TagEnd pops.
-                self.blockquote_starts.push(self.end_offset());
-                self.blockquote_depth += 1;
+                self.inter.blockquote_starts.push(self.end_offset());
+                self.inter.blockquote_depth += 1;
             }
             Tag::List(start) => {
-                if self.lists.is_empty() {
-                    // Top-level list: full block gap from preceding content.
-                    self.block_sep();
-                } else {
-                    // Nested list inside a parent item: one newline is enough;
-                    // block_sep would insert an empty line before the sub-list.
-                    if !self.at_start {
-                        self.newline();
-                    }
-                }
+                self.apply_lead_in(blockspacing::BlockKind::List);
                 // Always start ordered lists at 1 regardless of source numbers;
                 // TagEnd::Item increments the counter, so any disordered or
                 // repeated source numerals render as 1, 2, 3 …
-                self.lists.push(start.map(|_| 1u64));
-                self.list_first_item = true;
+                self.inter.lists.push(start.map(|_| 1u64));
+                self.inter.list_first_item = true;
             }
             Tag::Item => {
-                // Tag::List already inserted one newline (nested) or a full
-                // block_sep (top-level).  Skip the newline for the first item
-                // in each list; subsequent items each need exactly one.
-                if self.list_first_item {
-                    self.list_first_item = false;
-                } else if !self.at_start {
-                    self.newline();
-                }
+                // Tag::List already separated the first item; `blockspacing` holds that
+                // rule. Clearing the flag unconditionally is equivalent to the old
+                // first-branch-only clear, for the same reason as `Tag::Paragraph`.
+                self.apply_lead_in(blockspacing::BlockKind::Item);
+                self.inter.list_first_item = false;
                 // Record where this item starts (after the leading newline) so
                 // that TagEnd::Item can apply the hanging-indent tag over the full
                 // item span. Lists inside blockquotes are buffer text too now, so
                 // this is unconditional — they just ALSO carry the blockquote tag,
                 // whose margin the `li-{depth}` tag accumulates onto (`quoted` below).
                 let item_start = self.end_offset();
-                self.item_starts.push(item_start);
+                self.inter.item_starts.push(item_start);
                 // Record this item's marker for the drawn gutter. Ordered/bullet is
                 // known here; a task item is upgraded to `Task` when its
                 // `TaskListMarker` fires.
-                let kind = match self.lists.last() {
+                let kind = match self.inter.lists.last() {
                     Some(Some(n)) => crate::renderer::ListMarkerKind::Ordered(*n),
                     _ => crate::renderer::ListMarkerKind::Bullet,
                 };
                 self.list_markers.push(crate::renderer::ListMarker {
-                    depth: self.lists.len(),
+                    depth: self.inter.lists.len(),
                     kind,
                     first_line: item_start,
-                    quoted: self.blockquote_depth > 0,
+                    quoted: self.inter.blockquote_depth > 0,
                 });
-                self.list_item_open = true;
+                self.inter.list_item_open = true;
                 // NO inline marker text is inserted: a bullet /
                 // number / task checkbox is drawn in a left gutter in Phase 2 and occupies
                 // ZERO buffer chars, so an item's content starts immediately with its text.
@@ -163,7 +161,7 @@ impl Renderer {
                         ts.cell_markup.push_str(&open);
                     }
                 } else {
-                    self.inline_tags.push(crate::tags::TagName::Bold);
+                    self.inter.inline_tags.push(crate::tags::TagName::Bold);
                 }
             }
             Tag::Emphasis => {
@@ -172,7 +170,7 @@ impl Renderer {
                         ts.cell_markup.push_str("<i>");
                     }
                 } else {
-                    self.inline_tags.push(crate::tags::TagName::Italic);
+                    self.inter.inline_tags.push(crate::tags::TagName::Italic);
                 }
             }
             Tag::Strikethrough => {
@@ -185,7 +183,7 @@ impl Renderer {
                         ts.cell_markup.push_str(&open);
                     }
                 } else {
-                    self.inline_tags.push(crate::tags::TagName::Strike);
+                    self.inter.inline_tags.push(crate::tags::TagName::Strike);
                 }
             }
             Tag::Superscript => {
@@ -196,7 +194,9 @@ impl Renderer {
                         ts.cell_markup.push_str(&open);
                     }
                 } else {
-                    self.inline_tags.push(crate::tags::TagName::Superscript);
+                    self.inter
+                        .inline_tags
+                        .push(crate::tags::TagName::Superscript);
                 }
             }
             Tag::Subscript => {
@@ -207,7 +207,7 @@ impl Renderer {
                         ts.cell_markup.push_str(&open);
                     }
                 } else {
-                    self.inline_tags.push(crate::tags::TagName::Subscript);
+                    self.inter.inline_tags.push(crate::tags::TagName::Subscript);
                 }
             }
             Tag::Link { dest_url, .. } => {
@@ -230,8 +230,8 @@ impl Renderer {
                             .push_str(&crate::widgets::table::link_markup_open(&dest_url));
                     }
                 } else {
-                    self.link_start = Some((self.end_offset(), dest_url.to_string()));
-                    self.inline_tags.push(crate::tags::TagName::Link);
+                    self.inter.link_start = Some((self.end_offset(), dest_url.to_string()));
+                    self.inter.inline_tags.push(crate::tags::TagName::Link);
                 }
             }
             Tag::Image { dest_url, .. } => {
@@ -296,7 +296,32 @@ impl Renderer {
     /// is not a CommonMark HTML block, so pulldown-cmark emits its tags as separate
     /// `Event::InlineHtml` events — grouping within one call would lose the fallback.
     /// `flush_open_picture` closes a still-open group at the end of its container.
-    pub(super) fn feed_html(&mut self, html: &str) {
+    pub(super) fn feed_html_block(&mut self, html: &str) {
+        self.feed_picture_html(html);
+        self.feed_disclosure_html(html);
+    }
+
+    /// The INLINE half: an `Event::InlineHtml` carries a tag sitting mid-paragraph,
+    /// and only the `<picture>` scanner may read it.
+    ///
+    /// **A disclosure is a BLOCK construct here, and declining it is a contract, not a
+    /// simplification.** `disclosure::scan_document`'s pre-scan indexes block-HTML
+    /// spans only, and the renderer checks each `<details>` it opens against that
+    /// index by source offset — so an inline tag the renderer *accepted* would push a
+    /// frame the pre-scan never counted, advance the shared cursor, and make every
+    /// real disclosure below it fail the offset check and render unfoldable. Prose
+    /// that merely mentions `<details>` mid-sentence is enough to trigger it. The two
+    /// walks stay agreed by both declining an inline tag, and this function is the
+    /// renderer's half of that agreement.
+    ///
+    /// Literal text is declined for the same reason it is emitted for a block: the
+    /// rubric-2.26d case is a whole unspaced construct arriving as ONE raw-HTML block,
+    /// which an inline event by definition is not.
+    pub(super) fn feed_inline_html(&mut self, html: &str) {
+        self.feed_picture_html(html);
+    }
+
+    fn feed_picture_html(&mut self, html: &str) {
         use super::picture::ImgTag;
         for tag in super::picture::scan_image_tags(html) {
             match tag {
@@ -310,6 +335,327 @@ impl Renderer {
                     Some(group) => group.push(src),
                     None => self.render_image_slot(&[src]),
                 },
+            }
+        }
+    }
+
+    /// Replay the disclosure tag stream against the renderer's `disclosure_stack`.
+    ///
+    /// Separate from the `<picture>` replay above rather than interleaved with it:
+    /// the two constructs share a fragment but nothing else, and one loop handling
+    /// both would make each one's state machine harder to read than either is alone.
+    /// Both are driven from `feed_html` so a caller cannot reach one and miss the
+    /// other.
+    fn feed_disclosure_html(&mut self, html: &str) {
+        use super::disclosure::DetailsTag;
+        for tag in super::disclosure::scan_disclosure_tags(html) {
+            match tag {
+                DetailsTag::DetailsOpen { open, at } => {
+                    // The block's identity is where its own `<details>` TAG begins in
+                    // the SOURCE — stable across every re-render that does not change
+                    // the text, which is exactly the set of events a reader expects a
+                    // fold to survive (`crate::fold`).
+                    //
+                    // The block's offset plus the tag's offset within it, because two
+                    // `<details>` can share a block: the compact GitHub form is one
+                    // CommonMark type-6 block, and keying on the block alone gave both
+                    // siblings one identity (F-TEST-B-005). The same sum is computed
+                    // by `DisclosureSpan::fold_key`, and that the two agree is what
+                    // the cursor's cross-check below is for.
+                    let block_start = self.event_src.start;
+                    let key = crate::fold::FoldKey::from_source_offset(block_start + at);
+                    // A block the document never closes cannot fold — see
+                    // `DisclosureFrame::foldable`. Asked FIRST, and unconditionally,
+                    // because the answer comes from a cursor that must advance once
+                    // per `<details>` however this block turns out.
+                    let span_index = self.inter.disclosure_cursor.seen();
+                    let foldable = self.opening_details_is_closed(block_start);
+                    let collapsed = foldable && self.folds.is_collapsed(key, open);
+                    self.inter.disclosure_stack.push(super::DisclosureFrame {
+                        key,
+                        block_start,
+                        span_index,
+                        foldable,
+                        collapsed,
+                        label: None,
+                        in_summary: false,
+                        emitted: false,
+                        wrote_literal: false,
+                        summary_offset: 0,
+                        summary_end: 0,
+                        body_start: 0,
+                        label_end: 0,
+                    });
+                }
+                DetailsTag::SummaryOpen => {
+                    if let Some(frame) = self.inter.disclosure_stack.last_mut() {
+                        frame.in_summary = true;
+                    }
+                }
+                DetailsTag::SummaryText(text) => {
+                    if let Some(frame) = self.inter.disclosure_stack.last_mut() {
+                        frame.label = Some(text);
+                    }
+                }
+                DetailsTag::SummaryClose => {
+                    if let Some(frame) = self.inter.disclosure_stack.last_mut() {
+                        frame.in_summary = false;
+                    }
+                    self.emit_pending_summary();
+                }
+                // A literal-text run, in the frame it sits inside (rubric 2.26d, the
+                // unspaced case). The summary line is written FIRST — it is what makes
+                // `inside_collapsed_body` true, so writing the body before it would
+                // put a closed block's body on the page under a toggle that then had
+                // nothing to fold.
+                DetailsTag::Text { text, .. } => {
+                    self.emit_pending_summary();
+                    // Recorded whatever the fold state: the extent this frame produces
+                    // must say "not spliceable" in BOTH states, or the collapsed
+                    // render would offer a splice the expanded one cannot fulfil.
+                    if let Some(frame) = self.inter.disclosure_stack.last_mut() {
+                        frame.wrote_literal = true;
+                    }
+                    if !self.inside_collapsed_body() {
+                        self.block_sep();
+                        self.insert(&text);
+                    }
+                }
+                // A stray `</details>` closes nothing rather than underflowing —
+                // malformed input degrades predictably (rubric 2.26d).
+                DetailsTag::DetailsClose => {
+                    self.record_disclosure_extent();
+                    self.inter.disclosure_stack.pop();
+                }
+            }
+        }
+        // A `<details>` with no `<summary>` still gets its line, with the default
+        // label — the affordance must exist wherever the construct does, or the
+        // rendering is lossy with respect to the source (rubric 2.26d).
+        self.emit_pending_summary();
+    }
+
+    /// Record where the disclosure now closing put its content, for
+    /// [`super::DisclosureExtent`]'s consumers. Called at `</details>`, before the
+    /// frame is popped, because the body's end is the renderer's position right now
+    /// and nothing later can recover it.
+    ///
+    /// Two blocks get NO extent, and both omissions are deliberate. A block whose
+    /// summary was never written (`emitted` false) drew nothing. A block nested
+    /// inside a COLLAPSED ancestor also drew nothing — `emit_pending_summary`
+    /// returns early for it, marking it emitted without writing a line — so the test
+    /// is whether an ancestor is collapsed, not whether this frame is: a collapsed
+    /// block that IS drawn earns an extent with an empty body, which is exactly the
+    /// position a later expansion writes at.
+    fn record_disclosure_extent(&mut self) {
+        let Some(frame) = self.inter.disclosure_stack.last() else {
+            return;
+        };
+        if !frame.emitted {
+            return;
+        }
+        let ancestors = &self.inter.disclosure_stack[..self.inter.disclosure_stack.len() - 1];
+        if ancestors.iter().any(|f| f.collapsed && f.emitted) {
+            return;
+        }
+        let (key, summary_offset, summary_end, body_start, label_end, wrote_literal) = (
+            frame.key,
+            frame.summary_offset,
+            frame.summary_end,
+            frame.body_start,
+            frame.label_end,
+            frame.wrote_literal,
+        );
+        let body_end = self.end_offset();
+        self.disclosure_extents.push(super::DisclosureExtent {
+            key,
+            summary: crate::span::BufferSpan::new(summary_offset, summary_end),
+            body: crate::span::BufferSpan::new(body_start, body_end),
+            volatile: crate::span::BufferSpan::new(label_end, body_end),
+            spliceable: !wrote_literal,
+        });
+    }
+
+    /// Is the renderer currently inside a collapsed disclosure's BODY?
+    ///
+    /// True once a collapsed block's summary has been written and until its
+    /// `</details>` pops the frame. An ancestor's collapse suppresses everything
+    /// below it, which is why this asks about the whole stack rather than the top.
+    ///
+    /// Visible beyond the renderer because the buffer is not the only thing built
+    /// from the event stream: the copy map, the per-cell copy maps, the source map
+    /// and the heading index are built alongside it by `preview::build`, from the
+    /// SAME events, and every one of them is wrong if it records an event the buffer
+    /// never received. Asking the renderer is what keeps that one decision in one
+    /// place — `preview::build` re-deriving "is this inside a collapsed body?" from
+    /// the events would be a second implementation of the suppression rule, free to
+    /// disagree with the first.
+    pub(crate) fn inside_collapsed_body(&self) -> bool {
+        self.inter
+            .disclosure_stack
+            .iter()
+            .any(|f| f.collapsed && f.emitted)
+    }
+
+    /// Write the innermost open disclosure's summary line, if it has not been written.
+    ///
+    /// The line is a real buffer line — an anchored toggle followed by the label as
+    /// ordinary text — so find, selection and the `snapshot_layer` chrome all keep
+    /// working across it. Only the affordance is a widget; nothing else about the
+    /// disclosure leaves the buffer.
+    fn emit_pending_summary(&mut self) {
+        // A disclosure nested inside a COLLAPSED one is not rendered at all — not
+        // even its summary. Checked before the frame is marked emitted so that the
+        // inner block cannot leak a summary line into a body the reader has closed.
+        if self.inside_collapsed_body() {
+            if let Some(frame) = self.inter.disclosure_stack.last_mut() {
+                frame.emitted = true;
+            }
+            return;
+        }
+        let Some(frame) = self.inter.disclosure_stack.last_mut() else {
+            return;
+        };
+        if frame.emitted {
+            return;
+        }
+        frame.emitted = true;
+        let (key, span_index, expanded, foldable, label) = (
+            frame.key,
+            frame.span_index,
+            !frame.collapsed,
+            frame.foldable,
+            frame
+                .label
+                .clone()
+                .unwrap_or_else(|| DEFAULT_SUMMARY_LABEL.to_owned()),
+        );
+        // This block's BODY source range, resolved once and reused below — first by
+        // the COLLAPSED preview (which needs it before the summary line ends), then
+        // by the `CollapsedBlock` find-reach record (which needs it after). The
+        // pre-scanned span `disclosure::scan_document` already produced; never
+        // re-derived.
+        let body_range = self
+            .disclosures
+            .get(span_index)
+            .and_then(|span| span.body.clone());
+
+        self.block_sep();
+        let mut iter = self.tip();
+        // Where the line starts, recorded on the frame before anything is written
+        // into it: this is the offset every consumer that must address content
+        // INSIDE the block resolves to, so it has to be the anchor's own position
+        // rather than anywhere in the block separator ahead of it.
+        let summary_offset = iter.offset();
+        if let Some(frame) = self.inter.disclosure_stack.last_mut() {
+            frame.summary_offset = summary_offset;
+        }
+        // An UNCLOSED block gets its label and no toggle. The label is authored
+        // content and stays; the control does not, because there is no body for it
+        // to fold — the block has no end, so "collapse" would mean hiding the rest
+        // of the document (`DisclosureFrame::foldable`, rubric 2.26d).
+        if foldable {
+            let anchor = self.buf.create_child_anchor(&mut iter);
+            let toggle = crate::widgets::disclosure::build(expanded, self.zoom, &label);
+            // Handed back paired with its fold so the preview layer can wire
+            // activation without re-deriving which block a widget belongs to.
+            self.disclosure_toggles.push(super::DisclosureToggle {
+                toggle: toggle.clone(),
+                key,
+                summary_offset,
+            });
+            self.push_anchored(anchor, toggle.upcast());
+            self.insert(&format!(" {label}"));
+            // Before the preview below: the label renders the same under either fold
+            // state, the preview does not, so this is where the two begin to diverge.
+            let label_end = self.end_offset();
+            if let Some(frame) = self.inter.disclosure_stack.last_mut() {
+                frame.label_end = label_end;
+            }
+            // A short preview of the body's OPENING text, dimmed by the active
+            // reading theme (TDD 2.26) — collapsed blocks only: an expanded block
+            // shows its body directly, so it needs no hint of what the body holds.
+            //
+            // These are real buffer characters, appended to the SAME summary line,
+            // still inside the ONE `End(HtmlBlock)` event this whole `<details>`
+            // opening fragment is processed under — which is exactly the buffer
+            // range `preview::build`'s `(Some(site), None)` arm widens at
+            // `</details>` to cover the block's whole source. So a copy across this
+            // block still reconstructs its Markdown; this text is never part of it.
+            //
+            // Derived from `disclosure::preview_insert_text`, which reuses
+            // `body_plain_text` — the SAME reduction find already applies to a
+            // collapsed body (rubric 5): never the raw Markdown, or an emphasised
+            // word would show its own `*`.
+            if !expanded {
+                let insert =
+                    super::disclosure::preview_insert_text(&self.cleaned, body_range.clone());
+                if let Some(insert) = insert {
+                    let preview_start = self.end_offset();
+                    self.insert(&insert);
+                    let si = self.buf.iter_at_offset(preview_start);
+                    let ei = self.tip();
+                    self.apply(crate::tags::TagName::DisclosurePreview, &si, &ei);
+                }
+            }
+        } else {
+            self.insert(&label);
+            let label_end = self.end_offset();
+            if let Some(frame) = self.inter.disclosure_stack.last_mut() {
+                frame.label_end = label_end;
+            }
+        }
+        // Recorded on either side of the newline, because the two answer different
+        // questions: a line-wide decoration paints over the summary's TEXT, and a
+        // splice writes the body AFTER the line terminator.
+        let summary_end = self.end_offset();
+        // The summary line's own INK (TDD 18.49), over the same extent the drawn band
+        // fills — the label AND the collapsed preview, because both sit on the band
+        // and both have to stay legible on it. Applied whatever the theme says: the
+        // tag sets no foreground at all unless `disclosure_fg` is stated, so a theme
+        // that states none re-inks nothing (TDD 18.2) — the same discipline the quote
+        // panel's ink follows in `end.rs`. `disclosure-preview` is registered AFTER
+        // this tag, so a theme stating both still dims the preview fragment.
+        //
+        // **Gated on `foldable`, which is what keeps the ink and the BAND agreeing.**
+        // A block the document never closes gets a label and no toggle (rubric 2.26d),
+        // and — because `record_disclosure_extent` runs at `</details>` and that event
+        // never arrives — no `DisclosureExtent`, so no span reaches the drawn band
+        // either. Inking a line the band cannot reach would put a themed foreground on
+        // the one summary that is not drawn as a summary; the two are one decoration
+        // and are absent together. `foldable` is exactly "this block is closed", so it
+        // is the same fact both sides read rather than two conditions that can drift.
+        if foldable && summary_end > summary_offset {
+            let si = self.buf.iter_at_offset(summary_offset);
+            let ei = self.buf.iter_at_offset(summary_end);
+            self.apply(crate::tags::TagName::DisclosureInk, &si, &ei);
+        }
+        self.newline();
+        let body_start = self.end_offset();
+        if let Some(frame) = self.inter.disclosure_stack.last_mut() {
+            frame.summary_end = summary_end;
+            frame.body_start = body_start;
+        }
+        // A block drawn COLLAPSED is announced with the source range it withheld, so
+        // the consumers that must reach inside it — find above all — have something
+        // to search. Recorded here rather than at `</details>`, because this is the
+        // one place that knows the summary line was actually written: a disclosure
+        // nested in a collapsed one returns above without reaching this.
+        if !expanded {
+            if let Some(body) = body_range {
+                self.collapsed_blocks.push(super::CollapsedBlock {
+                    summary_offset,
+                    key,
+                    // The frame's `label_end`, which both branches above have just
+                    // written — see `CollapsedBlock::resume_offset` for why it is the
+                    // label's end and not the line's.
+                    resume_offset: self
+                        .inter
+                        .disclosure_stack
+                        .last()
+                        .map_or(summary_offset, |f| f.label_end),
+                    body,
+                });
             }
         }
     }
@@ -333,6 +679,25 @@ impl Renderer {
     /// remote/escaping/other-scheme src is Refused unless "Show Unsafe Images" —
     /// `<picture>`/`<img>` widens what renders, never what is trusted.
     fn render_image_slot(&mut self, candidates: &[String]) {
+        // **A COLLAPSED body's images are not resolved, not fetched and not anchored.**
+        // The collapse mechanism's own contract is that a hidden body's events simply
+        // do not reach the buffer (`events.rs`), and raw-HTML events are exempted from
+        // that only so the `</details>` which ENDS the suppression can arrive. That
+        // exemption reached this far: an `<img>`/`<picture>` written as raw HTML inside
+        // a collapsed block was resolved, a remote one was FETCHED with "Show Unsafe
+        // Images" on — a tracking pixel reporting back from behind a fold the reader
+        // deliberately did not open — and a local one was anchored visibly inside a
+        // region that is meant to be drawn as nothing (F-SEC-205). Markdown images were
+        // never affected: `Event::Start(Tag::Image)` is not raw HTML, so `events.rs`
+        // drops it before this path is reached.
+        //
+        // Gated HERE rather than at the two callers because this is the single funnel
+        // for resolve → load → anchor, and a gate at a caller is a rule the next caller
+        // has to remember. `picture_open` is still tracked normally by both, so a
+        // `<picture>` group straddling the boundary cannot be stranded.
+        if self.inside_collapsed_body() {
+            return;
+        }
         for src in candidates {
             let resolution = resolve_image(src, self.doc_dir.as_deref(), self.allow_unsafe_images);
             if let Some(tex) = load_texture(&resolution) {
@@ -359,7 +724,7 @@ impl Renderer {
     /// in the buffer — the shared build for a Markdown image and a `<picture>`.
     fn anchor_image(&mut self, tex: &gtk::gdk::Texture) {
         self.block_sep();
-        let mut iter = self.buf.end_iter();
+        let mut iter = self.tip();
         let anchor = self.buf.create_child_anchor(&mut iter);
         // GTK4Rs/AP-58 (researcher-sourced, 4.6 source-verified): an anchored GtkPicture
         // defaults to `can_shrink` → `min_width` 0, so the GtkTextView measures its
@@ -399,10 +764,10 @@ impl Renderer {
         overlay.set_halign(gtk::Align::Start);
         overlay.set_child(Some(&pic));
         overlay.add_overlay(&tint);
-        self.anchored.push((anchor.clone(), overlay.upcast()));
+        self.push_anchored(anchor.clone(), overlay.upcast());
         self.image_tints.push((anchor, tint.upcast()));
-        self.trailing_newlines = 0;
-        self.at_start = false;
+        self.inter.trailing_newlines = 0;
+        self.inter.at_start = false;
     }
 
     /// Anchor a broken-image placeholder icon with `tooltip` — shown for any image
@@ -414,7 +779,7 @@ impl Renderer {
         // height (no GTK4Rs/AP-58 issue — GtkImage reports a definite size, unlike GtkPicture
         // with can_shrink).
         self.block_sep();
-        let mut iter = self.buf.end_iter();
+        let mut iter = self.tip();
         let anchor = self.buf.create_child_anchor(&mut iter);
         let icon = gtk::Image::from_icon_name(crate::icons::Icon::ImageMissing.name());
         icon.set_pixel_size(32);
@@ -424,9 +789,9 @@ impl Renderer {
         // reach it, so it sat on desktop colours under every reading theme.
         icon.add_css_class("scrib-broken-image");
         crate::a11y::name(&icon, tooltip);
-        self.anchored.push((anchor, icon.upcast()));
-        self.trailing_newlines = 0;
-        self.at_start = false;
+        self.push_anchored(anchor, icon.upcast());
+        self.inter.trailing_newlines = 0;
+        self.inter.at_start = false;
     }
 }
 
@@ -452,6 +817,23 @@ impl Renderer {
 pub(super) fn load_texture(resolution: &ImageResolution) -> Option<gtk::gdk::Texture> {
     match resolution {
         ImageResolution::Local(path) => {
+            // The same bound as the remote arm, by the one probe a PATH admits.
+            // `gdk_pixbuf_get_file_info` reads the header and stops; it is equivalent
+            // to the byte probe (measured in `sprite`) and takes a path, which is what
+            // this arm has. The objection recorded at `sprite::probe_pixel_size` — that
+            // re-opening a file already read and validated reintroduces a
+            // check-then-use seam — does not apply here, because nothing has read this
+            // file yet: `Texture::from_file` below opens it for the first time.
+            if let Some((_, w, h)) = gtk::gdk_pixbuf::Pixbuf::file_info(path) {
+                if !crate::limits::image_pixels_within_cap(w, h) {
+                    log::warn!(
+                        "image {} decodes to {w}×{h} pixels (cap {}) — not loaded",
+                        path.display(),
+                        crate::limits::MAX_IMAGE_PIXELS
+                    );
+                    return None;
+                }
+            }
             let file = gtk::gio::File::for_path(path);
             match gtk::gdk::Texture::from_file(&file) {
                 Ok(texture) => Some(texture),
@@ -473,19 +855,41 @@ pub(super) fn load_texture(resolution: &ImageResolution) -> Option<gtk::gdk::Tex
 /// GVfs gap above invisible for as long as it was: the placeholder tooltip said
 /// "Could not load image", which reads as *the bytes were not an image* when in
 /// fact no request had been made (ScrAP-292).
+///
+/// **Routed through [`crate::imagecache`].** A disclosure fold-toggle re-renders
+/// its document into a scratch buffer to rebuild its offset maps, which walks
+/// every image tag again — without a cache every toggle would re-run the fetch
+/// below for every remote image in the document, freezing the UI each time.
+/// `imagecache::get_or_fetch` calls this closure only on an outright cache miss;
+/// a hit or a live cached failure returns with no network access at all.
 fn load_remote_texture(uri: &str) -> Option<gtk::gdk::Texture> {
-    let bytes = match crate::imagefetch::fetch_image_bytes(uri) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            log::warn!("remote image not fetched: {uri} ({err})");
-            return None;
+    crate::imagecache::get_or_fetch(uri, || {
+        let bytes = match crate::imagefetch::fetch_image_bytes(uri) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                log::warn!("remote image not fetched: {uri} ({err})");
+                return None;
+            }
+        };
+        // **The dimension probe runs BEFORE the decode**, so an image bomb is refused
+        // without ever being expanded — `imagefetch`'s byte cap bounds the transfer and
+        // says nothing about what it expands to (F-SEC-206). Same probe the sprite path
+        // uses, so the two cannot disagree about what a header says.
+        if let Some((w, h)) = crate::sprite::probe_pixel_size(&bytes) {
+            if !crate::limits::image_pixels_within_cap(w, h) {
+                log::warn!(
+                    "remote image {uri} decodes to {w}×{h} pixels (cap {}) — not loaded",
+                    crate::limits::MAX_IMAGE_PIXELS
+                );
+                return None;
+            }
         }
-    };
-    match gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(bytes)) {
-        Ok(texture) => Some(texture),
-        Err(err) => {
-            log::warn!("remote image fetched but not decoded: {uri} ({err})");
-            None
+        match gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(bytes)) {
+            Ok(texture) => Some(texture),
+            Err(err) => {
+                log::warn!("remote image fetched but not decoded: {uri} ({err})");
+                None
+            }
         }
-    }
+    })
 }

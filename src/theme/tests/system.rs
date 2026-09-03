@@ -297,19 +297,28 @@ fn chooser_lists_system_first() {
 
 /// **A gradient's far stop must not silently drift from the page it fades into.**
 ///
-/// Both shipped uses of `heading_band_gradient_to_color` restate the theme's own
-/// `background` — Synthwave's `#1a1033`, Candy's `#101a4d` — and the file's own prose
-/// says why: *"the gradient runs from each level's own fill down to the deep indigo of
-/// the page, so the band dissolves into the page instead of ending on a hard edge"*.
-/// Nothing linked the two hexes, so re-tinting a theme's page left its bands ending on
-/// a hard edge against the old one, with no gate and no log line.
+/// Every shipped gradient stop restates its own theme's `background` — Synthwave's
+/// `#1a1033`, Candy's `#101a4d` — and the file's own prose says why: *"the gradient runs
+/// from each level's own fill down to the deep indigo of the page, so the band dissolves
+/// into the page instead of ending on a hard edge"*. Nothing linked the two hexes, so
+/// re-tinting a theme's page left its bands ending on a hard edge against the old one,
+/// with no gate and no log line.
+///
+/// **It covers every gradient key, not the heading band's.** The hazard belongs to the
+/// SHAPE — a second stop that names a colour it must keep agreeing with — so the sweep
+/// is driven off the registry rather than off a list of keys, and the disclosure band's
+/// stop (TDD 18.48) was covered by this guard the moment it was declared. The
+/// discriminator is the spelling, because the vocabulary has no gradient *kind* for the
+/// registry to expose; a future stop key spelled otherwise would need adding here, which
+/// is the one thing this derivation cannot catch for itself.
 ///
 /// **This is a drift guard, not a rule that a gradient must end at the page.** A future
 /// theme may legitimately fade somewhere else; the point is that doing so becomes a
 /// deliberate edit to this test with a reason attached, where today the divergence is
 /// invisible. The alternative — making the value DERIVABLE from `background` — needs a
 /// cross-key reference grammar in `themes.toml`, which is a vocabulary change and not
-/// this guard's to make.
+/// this guard's to make. That edit has since been made once — see [`OFF_PAGE`], which is
+/// where the reason lives, exactly as the assert message below instructs.
 #[test]
 fn a_shipped_bands_gradient_ends_on_that_themes_own_page() {
     let raw: toml::Value =
@@ -320,22 +329,32 @@ fn a_shipped_bands_gradient_ends_on_that_themes_own_page() {
         let Some(page) = table.get("background").and_then(toml::Value::as_str) else {
             continue;
         };
-        // Every spelling the key CLAIMS — the bare form and each `_hN` — walked off
-        // the block rather than generated, because `Key::spelling` never yields the
-        // bare form for a levelled key and the bare form is what both shipped themes
-        // actually write.
+        // Every spelling every gradient key CLAIMS — the bare form and each `_hN` —
+        // walked off the block rather than generated, because `Key::spelling` never
+        // yields the bare form for a levelled key and the bare form is what the shipped
+        // themes actually write.
         for (spelling, value) in table {
-            if !keys::HEADING_BAND_GRADIENT_TO_COLOR.claims(spelling) {
+            if !keys::KEYS
+                .iter()
+                .filter(|k| k.name.ends_with("_gradient_to_color"))
+                .any(|k| k.claims(spelling))
+            {
                 continue;
             }
             let Some(far) = value.as_str() else { continue };
+            if OFF_PAGE
+                .iter()
+                .any(|(theme, key, ..)| *theme == id.as_str() && *key == spelling.as_str())
+            {
+                continue;
+            }
             checked += 1;
             assert_eq!(
                 far.to_ascii_lowercase(),
                 page.to_ascii_lowercase(),
                 "theme {id:?}: {spelling} is {far} but the page is {page}, so this \
                  theme's bands end on a hard edge against a colour the page no longer \
-                 has. Either follow the page, or change this guard and say why."
+                 has. Either follow the page, or name it in OFF_PAGE and say why."
             );
         }
     }
@@ -343,4 +362,97 @@ fn a_shipped_bands_gradient_ends_on_that_themes_own_page() {
         checked > 0,
         "no shipped theme states a band gradient — this guard is vacuous"
     );
+}
+
+/// Bands that deliberately do NOT fade to their theme's page, with the reason each one
+/// is worth the hard edge the guard above otherwise forbids.
+///
+/// Keyed by `(theme id, the key's exact spelling, the EXACT value the licence was
+/// argued for, why)`. A spelling rather than a key name, because the levelled heading
+/// keys claim several and an exemption should licence the one band it was argued for
+/// rather than all five.
+///
+/// **The value column is the point** (F-AP-B-301). Exempting a key from the
+/// "ends on its own page" guard used to exempt it from EVERY statement about its value:
+/// the three stops moved in the same commit that licensed them, and nothing was left
+/// that could tell. One value per row restores exact pinning for the licensed stops
+/// with the reason still attached, which makes moving one a deliberate edit a reviewer
+/// sees in the diff rather than a silent retune.
+const OFF_PAGE: &[(&str, &str, &str, &str)] = &[
+    (
+        "candy",
+        "disclosure_band_gradient_to_color",
+        "#243e00",
+        "operator-directed: the fold is banded in the theme's own confection hues — deep \
+         raspberry running to deep lime — rather than in a lifted page surface, so a candy \
+         wrapper reads across the summary line instead of a shelf. The hard edge is accepted \
+         as the cost of that, and the pair is legible at BOTH stops, which is the property \
+         that actually protects the reader (see data/themes.toml's `disclosure_band_color` \
+         for why the requested full-strength hues could not be used)",
+    ),
+    (
+        "candy",
+        "heading_band_gradient_to_color_h1",
+        "#116364",
+        "operator-directed: the h1 band runs grape → turquoise, resolving into a second hue \
+         rather than dissolving into the page, so a title reads as a banner with somewhere to \
+         go. Licences the _h1 spelling rather than the bare key because this theme states no \
+         bare one — it bands exactly h1 and h2 and narrows both (see data/themes.toml for why, \
+         and for why the turquoise had to be tinted)",
+    ),
+    (
+        "candy",
+        "heading_band_gradient_to_color_h2",
+        "#0d6811",
+        "operator-directed, and the h1 entry's pair: h2 runs its hot-pink shade → green, tinted \
+         to the SAME value as h1's turquoise so the two bands read as one decision at two hues. \
+         The requested #149c1a is unusable undiluted — 2.88:1 under the lemon ink — which is the \
+         luminance law, not a rejection of the hue",
+    ),
+];
+
+/// Every off-page licence is still standing over the EXACT band it was argued for.
+///
+/// Same discipline as the contrast sweep's `every_deliberate_exception_is_still_below_its_floor`,
+/// and for the same reason: a theme that has since been retuned to end on its page leaves
+/// an exemption over nothing, and the next band to take that spelling inherits it in
+/// silence — which is precisely the invisibility the guard above exists to end.
+///
+/// **It asserts the value, not merely that the value differs from the page.** The weaker
+/// form let all three of Candy's stops move in the commit that licensed them with nothing
+/// able to notice, which is the licence swallowing the guard rather than narrowing it
+/// (F-AP-B-301). Every ratio quoted in a `why` below was measured against the value in
+/// its own row; moving the stop without re-deriving them is what this now refuses.
+#[test]
+fn every_off_page_licence_still_covers_an_off_page_band() {
+    let raw: toml::Value =
+        toml::from_str(BUILTIN_THEMES_TOML).expect("the shipped themes file must parse");
+    let themes = raw["themes"].as_table().expect("a themes table");
+    for (id, key, licensed, why) in OFF_PAGE {
+        let block = themes
+            .get(*id)
+            .and_then(toml::Value::as_table)
+            .unwrap_or_else(|| panic!("{id}: no such shipped theme, so the licence is stale"));
+        let page = block
+            .get("background")
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("{id}: states no page of its own ({why})"));
+        let far = block
+            .get(*key)
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("{id}: states no {key}, so the licence is stale ({why})"));
+        assert_ne!(
+            far.to_ascii_lowercase(),
+            page.to_ascii_lowercase(),
+            "{id}: {key} now ends on the page after all — delete the licence rather than \
+             leaving one standing over nothing ({why})"
+        );
+        assert_eq!(
+            far.to_ascii_lowercase(),
+            licensed.to_ascii_lowercase(),
+            "{id}: {key} is {far}, but the licence was argued for {licensed} and every \
+             contrast ratio in its reason was measured against that value. Re-derive \
+             the ratios and update BOTH, or put the stop back ({why})"
+        );
+    }
 }

@@ -367,3 +367,272 @@ pub fn prose_prescriptions(files: &[(String, String)]) -> Vec<ProseHit> {
     }
     hits
 }
+
+/// A `match` over pulldown-cmark's `Event`/`Tag`/`TagEnd` vocabulary that carries a
+/// wildcard arm — reported as 1-based line numbers of the offending `_ =>`.
+///
+/// # Why this is discovered rather than enumerated
+///
+/// The obvious implementation is a list of the dispatcher functions to check. That
+/// list is the bug: `copymap::classify` was a fourth dispatcher over this exact
+/// vocabulary that nobody had counted among the three TDD 2.25 names, and it ended in
+/// `_ => return None` for as long as it existed — so raw HTML put a `U+FFFC` in the
+/// buffer, earned no copy node, and silently omitted its construct from copied source.
+/// A membership list would have had the same hole, for the same reason.
+///
+/// So a match is judged by what it MATCHES ON. Any match with an arm naming an
+/// `Event::`/`Tag::`/`TagEnd::` variant is a dispatcher over the parser vocabulary,
+/// wherever it lives and whatever it is called, and must be exhaustive — so that
+/// adding a construct upstream fails to COMPILE rather than rendering as nothing.
+///
+/// Arms are considered at the match's own brace depth only, so a nested match over
+/// some other type keeps its own wildcard and does not indict its parent.
+/// Does `line` name a variant of exactly the type `token` ("Event::") introduces —
+/// rather than of some other type whose name merely ENDS in it?
+///
+/// `FileMonitorEvent::AttributeChanged` contains "Event::" and is not a pulldown
+/// event; GIO's `FileMonitorEvent` is `#[non_exhaustive]`, so its wildcard arm is
+/// mandatory and flagging it would be telling the author to write uncompilable code.
+/// A check that does that gets switched off, which is worse than no check.
+fn names_variant_of(line: &str, token: &str) -> bool {
+    let mut from = 0usize;
+    while let Some(rel) = line[from..].find(token) {
+        let at = from + rel;
+        let preceded_by_name = line[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if !preceded_by_name {
+            return true;
+        }
+        from = at + token.len();
+    }
+    false
+}
+
+/// The check 15 opt-out marker. A wildcard arm carrying this token — same line, or on an
+/// unbroken run of `//` comment lines immediately above with no blank-line gap — is a
+/// declared SELECTOR (it chooses among events by something other than which
+/// `Event`/`Tag`/`TagEnd` variant arrived, e.g. caller state already computed above the
+/// match) rather than a dispatcher absorbing unnamed variants, and is accepted.
+///
+/// Deliberately not tied to a number the way `ScrAP-N` is a permanent register entry:
+/// check numbers in this gate are stable identifiers already (POLICY cites them as
+/// "check 5", "check 8" …), but the marker names what it excuses rather than where the
+/// rule lives, so it keeps meaning the same thing if checks are ever renumbered. One
+/// hyphenated token, like `ScrAP-N`/`GTK4Rs/AP-N`, so it cannot be split by a `rustfmt`
+/// or Markdown wrap and stays grep-able as a whole word.
+///
+/// FORM ONLY, same limit as check 8's citation rule: this cannot verify the reason is
+/// TRUE, only that one was written. `<marker>: ` followed by an empty or all-whitespace
+/// remainder does not count — a bare marker with no reason is indistinguishable from a
+/// sweep that copied the token without writing the sentence it stands for.
+pub const DISPATCH_SELECTOR_MARKER: &str = "dispatch-selector:";
+
+/// The text after [`DISPATCH_SELECTOR_MARKER`] on `line`, or `None` when the marker is
+/// absent or carries no reason. Shared by the annotation scan below and by the corpus,
+/// so a corpus case is evidence about this exact predicate rather than a re-typed copy.
+pub fn marker_reason(line: &str) -> Option<&str> {
+    let reason = line.split_once(DISPATCH_SELECTOR_MARKER)?.1.trim();
+    if reason.is_empty() {
+        None
+    } else {
+        Some(reason)
+    }
+}
+
+/// Is the wildcard arm at `lines[index]` annotated with [`DISPATCH_SELECTOR_MARKER`]?
+///
+/// Same line first (a trailing comment on the arm itself), then an unbroken run of `//`
+/// comment lines immediately above — no gap, so the marker cannot be misread as excusing
+/// a DIFFERENT wildcard arm sitting a few lines up, or a stale comment left behind when
+/// the code beneath it moved. Scanning stops the moment a non-comment line is met.
+fn wildcard_is_annotated(lines: &[&str], index: usize) -> bool {
+    if marker_reason(lines[index]).is_some() {
+        return true;
+    }
+    let mut i = index;
+    while i > 0 {
+        i -= 1;
+        let trimmed = lines[i].trim_start();
+        if !trimmed.starts_with("//") {
+            break;
+        }
+        if marker_reason(trimmed).is_some() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Does the `'` at `quote` open a character literal, or a lifetime?
+///
+/// The two share a delimiter and only lookahead separates them. A backslash can only
+/// begin an escape (`'\n'`, `'\\'`, `'\''`, `'\u{1F600}'`) — no lifetime starts with
+/// one — and an unescaped literal is exactly one character wide, so a closing quote two
+/// positions on settles it. `'a`, `'static` and `'_` all fail both tests.
+///
+/// Closing the literal is the `string || chr` branch's escape machinery, shared with
+/// string literals and exercised by their corpus cases. It is deliberately NOT given a
+/// char-literal case of its own: braces inside a literal are blanked by that branch
+/// whether or not the escape is honoured, and a mis-closed `'\''` leaves a bare quote
+/// this predicate then declines — so every mutation of it was found to be unobservable
+/// through the brace depth. A test that cannot fail is worse than no test — it occupies
+/// the slot a real check would take and reports a pass forever (GEP-1).
+fn opens_char_literal(chars: &[char], quote: usize) -> bool {
+    match chars.get(quote + 1) {
+        Some('\\') => true,
+        Some(_) => chars.get(quote + 2) == Some(&'\''),
+        None => false,
+    }
+}
+
+pub fn parser_dispatch_wildcards(text: &str) -> Vec<usize> {
+    const VOCABULARY: [&str; 3] = ["Event::", "Tag::", "TagEnd::"];
+    let bytes: Vec<char> = text.chars().collect();
+    // Depth of every character, with comments and literals blanked so a brace inside
+    // one cannot move it. `None` marks a character that is inside a comment/literal.
+    let mut depth = vec![0i32; bytes.len()];
+    let mut inert = vec![false; bytes.len()];
+    let (mut d, mut i) = (0i32, 0usize);
+    let (mut line_comment, mut block_comment, mut string, mut chr, mut escape) =
+        (false, false, false, false, false);
+    while i < bytes.len() {
+        let c = bytes[i];
+        let next = bytes.get(i + 1).copied().unwrap_or('\0');
+        if line_comment {
+            inert[i] = true;
+            if c == '\n' {
+                line_comment = false;
+            }
+        } else if block_comment {
+            inert[i] = true;
+            if c == '*' && next == '/' {
+                inert[i + 1] = true;
+                i += 1;
+                block_comment = false;
+            }
+        } else if string || chr {
+            inert[i] = true;
+            if escape {
+                escape = false;
+            } else if c == '\\' {
+                escape = true;
+            } else if (string && c == '"') || (chr && c == '\'') {
+                string = false;
+                chr = false;
+            }
+        } else if c == '/' && next == '/' {
+            line_comment = true;
+            inert[i] = true;
+        } else if c == '/' && next == '*' {
+            block_comment = true;
+            inert[i] = true;
+        } else if c == '"' {
+            string = true;
+            inert[i] = true;
+        } else if c == '\'' && opens_char_literal(&bytes, i) {
+            // Rust spells a CHARACTER LITERAL and a LIFETIME with the same delimiter, so
+            // this arm cannot be a bare `c == '\''` — that would open a "literal" at the
+            // first `'a` and blank the rest of the file, which is why the arm was simply
+            // missing rather than wrong. With no arm at all the model never entered a
+            // char literal, so `'{'` and `'}'` moved the brace depth and the check went
+            // blind in every file containing one.
+            chr = true;
+            inert[i] = true;
+        } else {
+            if c == '{' {
+                d += 1;
+            } else if c == '}' {
+                d -= 1;
+            }
+        }
+        depth[i] = d;
+        i += 1;
+    }
+
+    // Line starts, and each line's depth at its first non-space character.
+    // Collected up front (not a plain `.enumerate()` over the iterator) so an annotated
+    // wildcard can look at the lines ABOVE it for a `DISPATCH_SELECTOR_MARKER` comment.
+    //
+    // **Each line's start is DERIVED from the text, never re-accumulated from the
+    // lines' own lengths** (F-AP-B-102). `lines()` strips both bytes of a `\r\n` while
+    // an accumulator adding one for the terminator falls a character behind per line,
+    // so on a CRLF checkout every position-indexed lookup below reads the wrong place —
+    // and past about thirty lines the check sees no `match` block at all and reports
+    // PASS having found nothing. Windows is the one platform whose `.gitattributes`
+    // guarantees those endings, so it was silent, green, and green only where nobody
+    // looks. `lint::read_text` folds the endings too; this function is correct without
+    // that help, because a decision that is only right once its caller has corrected it
+    // is not a decision.
+    let mut all_lines: Vec<&str> = Vec::new();
+    let mut line_starts: Vec<usize> = Vec::new();
+    {
+        let mut at = 0usize;
+        for raw in text.split_inclusive('\n') {
+            let line = raw.strip_suffix('\n').unwrap_or(raw);
+            all_lines.push(line.strip_suffix('\r').unwrap_or(line));
+            line_starts.push(at);
+            at += raw.chars().count();
+        }
+    }
+    let mut findings = Vec::new();
+    let mut match_depths: Vec<(i32, bool, Vec<usize>)> = Vec::new(); // (depth, dispatches, wildcard lines)
+    for (index, line) in all_lines.iter().copied().enumerate() {
+        let trimmed = line.trim_start();
+        // CHAR offsets, not byte offsets. `depth`/`inert` are indexed by character
+        // position, so accumulating `line.len()` (bytes) silently desynchronises them
+        // the moment the file contains a multi-byte character — and this tree's
+        // comments are full of box-drawing rules and em dashes. The first version of
+        // this predicate did exactly that: it reported the first offending dispatcher
+        // in `copymap.rs` and missed the textually identical one below it, because by
+        // then the indices had drifted past the arms. An ASCII-only corpus cannot see
+        // this, which is why one of the cases below is deliberately not ASCII.
+        let lead = line_starts[index] + (line.chars().count() - trimmed.chars().count());
+        let line_depth = depth
+            .get(lead.min(depth.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(0);
+        let is_inert = inert.get(lead).copied().unwrap_or(false);
+
+        if !is_inert && trimmed.contains("match ") {
+            // A match block's arms sit one level deeper than the `match` line itself.
+            match_depths.push((line_depth + 1, false, Vec::new()));
+        }
+        if let Some(open) = match_depths
+            .iter_mut()
+            .rev()
+            .find(|(md, _, _)| *md == line_depth)
+        {
+            if !is_inert {
+                if VOCABULARY.iter().any(|v| names_variant_of(trimmed, v)) {
+                    open.1 = true;
+                }
+                if (trimmed.starts_with("_ =>") || trimmed.starts_with("_ if "))
+                    && !wildcard_is_annotated(&all_lines, index)
+                {
+                    open.2.push(index + 1);
+                }
+            }
+        }
+        // Close out any match whose arm level is no longer live.
+        while let Some((md, dispatches, lines)) = match_depths.last() {
+            if *md > line_depth + 1 {
+                if *dispatches {
+                    findings.extend(lines.iter().copied());
+                }
+                match_depths.pop();
+            } else {
+                break;
+            }
+        }
+    }
+    for (_, dispatches, lines) in match_depths {
+        if dispatches {
+            findings.extend(lines);
+        }
+    }
+    findings.sort_unstable();
+    findings.dedup();
+    findings
+}

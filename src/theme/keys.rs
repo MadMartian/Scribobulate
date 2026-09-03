@@ -606,6 +606,60 @@ keys! {
                                                   the box at every interior join — SCHEMA states the \
                                                   limit", "");
 
+    // ── disclosure (`<details>`) ─────────────────────────────────────────────
+    // The indicator is a two-state control and takes ONE colour key for both, the
+    // same shape and the same reason as `list_task_marker_color`: a collapsed and an
+    // expanded arrow are one control in two positions, and the GLYPH carries the
+    // state while the colour carries the identity.
+    DISCLOSURE_MARKER_COLOR = "disclosure_marker_color" : Color,
+                             Reach::preview_only("a PDF has no disclosure to draw a marker for —                                                   the body is laid out flat under a bold label —                                                   and an exported `<details>` is drawn by the                                                   reader's own browser");
+    DISCLOSURE_GLYPH       = "disclosure_glyph"        : Glyph,
+                             Reach::preview_only("as `disclosure_marker_color`");
+    DISCLOSURE_EXPANDED_GLYPH = "disclosure_expanded_glyph" : Glyph,
+                             Reach::preview_only("as `disclosure_marker_color`");
+    DISCLOSURE_SPRITE      = "disclosure_sprite"       : Sprite,
+                             Reach::preview_only("as `disclosure_marker_color`");
+    DISCLOSURE_EXPANDED_SPRITE = "disclosure_expanded_sprite" : Sprite,
+                             Reach::preview_only("as `disclosure_marker_color`");
+    // Adwaita's disclosure metric is a 16x16 minimum (`_common.scss`), which is what
+    // the control drew at before this key existed — so the default IS today's
+    // rendering and System stays byte-identical (TDD 18.2).
+    DISCLOSURE_MARKER_SIZE = "disclosure_marker_size"  : Int    | int(&[16], METRIC),
+                             Reach::preview_only("as `disclosure_marker_color`");
+    // The collapsed summary's body-opening PREVIEW ink (TDD 2.26), the same shape as
+    // `BLOCKQUOTE_FG`: `Bound::Inherited` (no floor, unset ⇒ NOT PRESENT — the preview
+    // text keeps the body foreground like any other line, never a guessed default).
+    // Preview-only for the same reason as every other disclosure key: an export lays
+    // the FULL body out unconditionally (TDD 2.26g), so it has no preview to ink.
+    DISCLOSURE_PREVIEW_FG  = "disclosure_preview_fg"   : Color,
+                             Reach::preview_only("a PDF/HTML export lays the disclosure's whole body out \
+                                                  unconditionally (TDD 2.26g) — there is no preview \
+                                                  fragment on either sink for this ink to colour");
+    // The summary LINE's band (TDD 18.48) — the same three-way shape as the heading
+    // band, and the reason it is a DRAWN decoration rather than CSS is stated in
+    // `sdd/THEMING.md`: the preview's stylesheet reaches about ten widget nodes and
+    // the summary label is buffer text, so a line-wide fill has to be painted.
+    //
+    // Unlike every key above it, these are NOT preview-only: an exported `<details>`
+    // has a real `<summary>` element to fill, and the PDF's bold label line takes the
+    // same `BlockFill` a banded heading does.
+    DISCLOSURE_BAND_COLOR  = "disclosure_band_color"   : Color;
+    DISCLOSURE_BAND_GRADIENT_TO_COLOR
+                           = "disclosure_band_gradient_to_color" : Color,
+                             Reach::gated_on("disclosure_band_color = \"#123456\"\n");
+    DISCLOSURE_BAND_SPRITE = "disclosure_band_sprite"  : Sprite;
+    // No summary line carries a band until a theme states a fill or a sprite for it,
+    // so the radius is only ever consulted for a band that exists.
+    DISCLOSURE_BAND_RADIUS = "disclosure_band_radius"  : Int    | int(&[0], METRIC),
+                             Reach::not_on_paper("the page draws line by line, so a wrapped summary band \
+                                                  is several abutting rects and rounding each would \
+                                                  pinch it at every interior join — the same limit \
+                                                  `heading_band_radius` states",
+                                                 "disclosure_band_color = \"#123456\"\n");
+    // The summary LINE's ink. A tag rather than part of the band, because ink is a
+    // priority question where a fill is an extent one — `blockquote_fg`'s shape.
+    DISCLOSURE_FG          = "disclosure_fg"           : Color;
+
     // ── horizontal rule ──────────────────────────────────────────────────────
     RULE_COLOR             = "rule_color"              : Color;
     RULE_SPRITE            = "rule_sprite"             : Sprite;

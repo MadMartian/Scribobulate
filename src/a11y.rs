@@ -130,6 +130,23 @@ pub(crate) fn describe(control: &impl IsA<gtk::Widget>, description: Option<&str
 // broader `cfg(test)`: a bare `cargo test` does not compile that module and reported
 // this as dead.
 #[cfg(all(test, feature = "gtk-integration-tests"))]
+/// `GTK_ACCESSIBLE_ROLE_TOGGLE_BUTTON`, as a raw enum value.
+///
+/// **A literal because the binding is structurally unable to name it here**, not
+/// because naming it was overlooked. GTK 4.10 gave `GtkToggleButton` an accessible
+/// role of its own, appended to the runtime enum after `WINDOW` — so a toggle
+/// publishes 78 from 4.10 onward and `BUTTON` (3) below it. This project pins gtk4 to
+/// `v4_6` (Cargo.toml), and **both** `gtk4::AccessibleRole::ToggleButton` **and**
+/// `gtk4_sys::GTK_ACCESSIBLE_ROLE_TOGGLE_BUTTON` are `#[cfg(feature = "v4_10")]` —
+/// CHECKED in gtk4/gtk4-sys 0.10.3, not assumed, which is why the sys constant is not
+/// used in its place. `accessible_role()` therefore yields `__Unknown(78)` here and
+/// every `matches!` arm over named variants misses it.
+///
+/// It lives in one named place so no comparison site carries a bare 78, and so the
+/// next reader meets the reasoning rather than the number.
+pub(crate) const ROLE_TOGGLE_BUTTON: i32 = 78;
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
 pub(crate) fn has_name(control: &impl IsA<gtk::Widget>) -> bool {
     use gtk::glib::translate::{IntoGlib, ToGlibPtr};
     let accessible = control.as_ref().clone().upcast::<gtk::Accessible>();
@@ -213,11 +230,17 @@ mod gtk_integration_tests {
     /// check earning its keep. A role is what the accessibility tree actually publishes, it
     /// is assigned to subclasses and custom widgets alike, and it does not enumerate types.
     fn is_interactive_role(role: gtk::AccessibleRole) -> bool {
+        use gtk::glib::translate::IntoGlib;
+        // Checked by VALUE, ahead of the named arms, for the reason recorded on the
+        // constant: at this project's floor there is no variant to put in the `matches!`.
+        // Omitting it silently narrowed this guard on every runtime from 4.10 — MEASURED
+        // on GTK 4.22.4, where ten icon-only toggles in a real window fell out of scope
+        // and the guard still reported green.
+        if role.into_glib() == super::ROLE_TOGGLE_BUTTON {
+            return true;
+        }
         matches!(
             role,
-            // No `ToggleButton` arm: that variant is above this project's 4.6 floor
-            // (GTK4Rs/AP-114 — it compiles against a newer gtk4 and is simply absent here),
-            // and at 4.6 a GtkToggleButton publishes `Button` anyway.
             gtk::AccessibleRole::Button
                 | gtk::AccessibleRole::MenuItem
                 | gtk::AccessibleRole::MenuItemCheckbox
@@ -261,6 +284,49 @@ mod gtk_integration_tests {
         }
         text_in(w, 2)
     }
+    /// A registered app and a window driven into the state a reader actually meets:
+    /// every deferred surface revealed, and a document carrying the constructs whose
+    /// controls live in the preview.
+    ///
+    /// **ONE fixture, so two walks over "the same tree" cannot end up walking different
+    /// trees** (F-DRY-108). They already had: the second walk was still opening `# Doc`
+    /// alone — the document the first one's own comment calls "the vacuous version of
+    /// this test" — while the first had gained a `<details>` precisely because the
+    /// preview's disclosure toggle shipped unnamed for as long as the fixture had no
+    /// constructs in it.
+    ///
+    /// **The reveals do not change what the walk SEES, measured**: `descendants` walks
+    /// the widget TREE and filters on type, never on visibility or mapping, and every
+    /// one of these controls is a child of its container whether or not the container is
+    /// revealed — 61 candidates with all four lines present, 61 with all four deleted.
+    /// Two successive comments once claimed otherwise, both inferred from the mechanism
+    /// and neither measured. They are kept as a state-of-the-window setup, not as the
+    /// guard's reach; each caller's own sanity floor is what proves reach.
+    ///
+    /// **Route per action KIND, and the kinds differ**: `find-replace` is a stateless
+    /// `SimpleAction::new(.., None)` (`window/findbar.rs`), so it must be ACTIVATED — a
+    /// `change_action_state` on it is a silent no-op that emits `GLib-GIO-CRITICAL
+    /// g_action_change_state: assertion 'state_type != NULL'`, which went unread until
+    /// the suite ran under `G_DEBUG=fatal-criticals` and it became a SIGTRAP
+    /// (ScrAP-277). The two sidebars ARE stateful toggles, so they keep the state route
+    /// (ScrAP-252).
+    fn walkable_window(app_id: &str) -> (gtk::Application, gtk::ApplicationWindow) {
+        let app = gtk::Application::new(Some(app_id), gtk::gio::ApplicationFlags::NON_UNIQUE);
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register before building any window");
+        let window = crate::window::new_window(
+            &app,
+            "IT",
+            "# Doc\n\nBody.\n\n<details>\n<summary>Show the details</summary>\n\nHidden.\n\n</details>\n",
+            None,
+        );
+        let chrome = crate::winstate::chrome(&window).expect("window chrome");
+        chrome.find_bar_revealer.set_reveal_child(true);
+        gtk::prelude::ActionGroupExt::activate_action(&window, "find-replace", None);
+        window.change_action_state("outline", &true.to_variant());
+        window.change_action_state("annotations", &true.to_variant());
+        (app, window)
+    }
 
     /// **Every icon-only control and label-less text field in a window carries an
     /// accessible name.**
@@ -280,36 +346,11 @@ mod gtk_integration_tests {
     /// entry points fails this with the offending widgets named in the message.
     #[gtktest::test]
     fn every_icon_only_control_in_a_window_has_an_accessible_name() {
-        let app = gtk::Application::new(
-            Some("com.extollit.scribobulate.integrationtest.a11ynames"),
-            gtk::gio::ApplicationFlags::NON_UNIQUE,
-        );
-        app.register(gtk::gio::Cancellable::NONE)
-            .expect("register before building any window");
-        let window = crate::window::new_window(&app, "IT", "# Doc\n\nBody.\n", None);
-
-        // Reveal the surfaces whose controls are built but hidden, so the test drives the
-        // window into the state a reader actually meets. **These four lines do not change
-        // what the walk sees, MEASURED**: `descendants` below walks the widget TREE and
-        // filters on type, never on visibility or mapping, and every one of these controls
-        // is a child of its container whether or not the container is revealed — 61
-        // candidates with all four lines present, 61 with all four deleted. Two successive
-        // comments here claimed otherwise (that the walk would pass over an empty tree, and
-        // that a broken reveal left it inspecting a smaller one); both were inferred from
-        // the mechanism and neither was measured. They are kept as a state-of-the-window
-        // setup, not as the guard's reach — the sanity floor below is what proves reach.
-        //
-        // Route per action KIND, and the kinds differ: `find-replace` is a stateless
-        // `SimpleAction::new(.., None)` (window/findbar.rs), so it must be ACTIVATED — a
-        // `change_action_state` on it is a silent no-op that emits `GLib-GIO-CRITICAL
-        // g_action_change_state: assertion 'state_type != NULL'`, which went unread until
-        // the suite ran under `G_DEBUG=fatal-criticals` and it became a SIGTRAP (ScrAP-277).
-        // The two sidebars ARE stateful toggles, so they keep the state route (ScrAP-252).
-        let chrome = crate::winstate::chrome(&window).expect("window chrome");
-        chrome.find_bar_revealer.set_reveal_child(true);
-        gtk::prelude::ActionGroupExt::activate_action(&window, "find-replace", None);
-        window.change_action_state("outline", &true.to_variant());
-        window.change_action_state("annotations", &true.to_variant());
+        // The fixture carries a `<details>` on purpose — see `walkable_window`. The
+        // preview's disclosure toggle is an anchored child of the `GtkTextView`, inside
+        // this walk's reach but only if a rendered document actually produces one, and
+        // it shipped unnamed for exactly as long as the fixture was `# Doc` alone.
+        let (_app, window) = walkable_window("com.extollit.scribobulate.integrationtest.a11ynames");
 
         let all = descendants(window.upcast_ref::<gtk::Widget>());
         let candidates: Vec<gtk::Widget> = all.into_iter().filter(owes_a_name).collect();
@@ -340,6 +381,98 @@ mod gtk_integration_tests {
             unnamed.len(),
             candidates.len(),
             unnamed.join("\n  ")
+        );
+
+        window.destroy();
+    }
+
+    /// **The recurrence guard for [`is_interactive_role`] itself.**
+    ///
+    /// The walk above decides scope from the ROLE a widget publishes, which is the right
+    /// mechanism — it covers subclasses and custom widgets, and it does not enumerate
+    /// types. But it has one failure mode, and it is silent: when GTK gives a control a
+    /// NEW role above this project's binding floor, `is_interactive_role` stops
+    /// recognising it, the control drops out of scope, and the walk goes on passing over a
+    /// smaller candidate set with nothing to say so. MEASURED, and this is not
+    /// hypothetical: `GTK_ACCESSIBLE_ROLE_TOGGLE_BUTTON` landed in GTK 4.10 and every
+    /// icon-only toggle silently left the guard on every runtime from 4.10 onward — ten of
+    /// them in one real window on 4.22.4 — while the suite stayed green on 4.6.
+    ///
+    /// So this cross-checks the role answer against an INDEPENDENT signal: the widget's
+    /// TYPE. A `GtkToggleButton` is an interactive control on every GTK there has ever
+    /// been, whatever role it publishes this year, so if the role classifier disagrees the
+    /// classifier is what is wrong.
+    ///
+    /// **The type list is deliberately a SAMPLE, not a definition.** Deciding scope by
+    /// naming types is the exact weakness the module doc records and `owes_a_name`
+    /// replaced — it never grows with the application. Its job here is the opposite and
+    /// much narrower: a handful of controls we are certain about, used as a tripwire on
+    /// the mechanism that does the real work. It does not need to be complete to catch the
+    /// classifier going blind, and it must never be treated as the scope rule.
+    #[gtktest::test]
+    fn every_control_of_a_known_interactive_type_publishes_a_role_the_guard_recognises() {
+        use gtk::glib::translate::IntoGlib;
+
+        // **The run says which question it answered** (F-TEST-B-006). `ROLE_TOGGLE_BUTTON`
+        // is GTK 4.10's `AccessibleRole::ToggleButton`; below that version a
+        // `GtkToggleButton` publishes `Button`, so the cross-check cannot observe a role
+        // above this project's v4_6 binding floor and cannot fail on the platform the
+        // gate runs on. The sweep still runs — it is a useful sanity check either way —
+        // but a silent pass here would read as "the roles were verified", and the seats
+        // on other GTK versions have no way to tell what this graded. POLICY § Unit
+        // tests' skip marker, applied to a check that is PARTIALLY inert rather than
+        // wholly skipped.
+        if gtk::minor_version() < 10 {
+            println!(
+                "SKIPPED [a11y role floor]: GTK 4.{} publishes Button for a \
+                 GtkToggleButton, so the ToggleButton arm of this cross-check cannot be \
+                 observed above the v4_6 binding floor; the sweep below still runs",
+                gtk::minor_version()
+            );
+        }
+
+        // The SAME fixture the name walk uses. This one was still on `# Doc` alone —
+        // the document that walk's own comment calls vacuous — so the two "walks over
+        // the same window" were walking different windows (F-DRY-108).
+        let (_app, window) =
+            walkable_window("com.extollit.scribobulate.integrationtest.rolecrosscheck");
+
+        let all = descendants(window.upcast_ref::<gtk::Widget>());
+
+        // `GtkLinkButton` is excluded rather than forgotten: it is a `GtkButton` subclass
+        // that publishes `Link`, which is interactive but is a different question from the
+        // one this guard asks, and folding it in would make the tripwire fire on correct
+        // behaviour.
+        let known_interactive = |w: &gtk::Widget| -> bool {
+            (w.is::<gtk::Button>() && !w.is::<gtk::LinkButton>())
+                || w.is::<gtk::Entry>()
+                || w.is::<gtk::SearchEntry>()
+                || w.is::<gtk::Switch>()
+        };
+
+        let sample: Vec<&gtk::Widget> = all.iter().filter(|w| known_interactive(w)).collect();
+        assert!(
+            !sample.is_empty(),
+            "sanity: no control of a known interactive type was found at all, so this              cross-check would pass vacuously"
+        );
+
+        let blind: Vec<String> = sample
+            .iter()
+            .filter(|w| !is_interactive_role(w.accessible_role()))
+            .map(|w| {
+                format!(
+                    "{} publishes role {}",
+                    w.type_(),
+                    w.accessible_role().into_glib()
+                )
+            })
+            .collect();
+        assert!(
+            blind.is_empty(),
+            "{} of {} controls of a known interactive type publish a role              `is_interactive_role` does not recognise, so they have silently left the              accessible-name walk. GTK has almost certainly added a role above this              project's gtk4 feature floor: add its raw value beside `ROLE_TOGGLE_BUTTON`              with the same reasoning.\n  {}",
+            blind.len(),
+            sample.len(),
+            blind.join("\n  ")
         );
 
         window.destroy();

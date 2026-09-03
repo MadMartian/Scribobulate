@@ -6,10 +6,36 @@ use super::scan::{script_tag, Script};
 use super::Renderer;
 use gtk::glib;
 use gtk::prelude::*;
-use pulldown_cmark::Event;
+use pulldown_cmark::{Event, Tag, TagEnd};
+
+/// Is this an event carrying raw HTML, or the block wrapper around one?
+///
+/// The predicate is stated once, here, because it is the boundary of the collapse
+/// suppression above: get it wrong in the narrow direction and a disclosure never
+/// closes; wrong in the wide direction and collapsed content renders anyway.
+fn is_raw_html(ev: &Event) -> bool {
+    matches!(
+        ev,
+        Event::Html(_)
+            | Event::InlineHtml(_)
+            | Event::Start(Tag::HtmlBlock)
+            | Event::End(TagEnd::HtmlBlock)
+    )
+}
 
 impl Renderer {
     pub(crate) fn process(&mut self, ev: Event) {
+        // A COLLAPSED disclosure's body is not rendered at all — this is the whole of
+        // the collapse mechanism. Nothing is hidden, tagged invisible or parked
+        // off-canvas; the events simply do not reach the buffer, so none of the
+        // hazards that come with invisible text can exist (see `crate::fold`).
+        //
+        // Raw-HTML events are the ONE exception and must still be processed: the
+        // `</details>` that ends the suppression arrives as one, and a suppression
+        // that swallowed its own terminator would eat the rest of the document.
+        if self.inside_collapsed_body() && !is_raw_html(&ev) {
+            return;
+        }
         match ev {
             Event::Start(tag) => self.start_tag(tag),
             Event::End(end) => self.end_tag(end),
@@ -91,11 +117,11 @@ impl Renderer {
                         }
                         let tag = script_tag(seg.script);
                         if let Some(name) = tag {
-                            self.inline_tags.push(name);
+                            self.inter.inline_tags.push(name);
                         }
                         self.insert(seg.text(&t));
                         if tag.is_some() {
-                            self.inline_tags.pop();
+                            self.inter.inline_tags.pop();
                         }
                     }
                 }
@@ -122,7 +148,7 @@ impl Renderer {
                     let start = self.end_offset();
                     self.insert(&t);
                     let si = self.buf.iter_at_offset(start);
-                    let ei = self.buf.end_iter();
+                    let ei = self.tip();
                     self.apply(crate::tags::TagName::CodeInline, &si, &ei);
                 }
             }
@@ -181,10 +207,13 @@ impl Renderer {
                 }
             }
             // Inline raw HTML (mid-paragraph, e.g. a bare `<img …>`, or the separate
-            // tags of a single-line `<picture>`): feed each tag through the scanner,
-            // which honours the `<picture>` grouping carried across events. Non-image
-            // HTML is dropped (sanitize by omission). See ScrAP-147 / TDD 2.23.
-            Event::InlineHtml(t) => self.feed_html(&t),
+            // tags of a single-line `<picture>`): feed each tag through the IMAGE
+            // scanner alone, which honours the `<picture>` grouping carried across
+            // events. Everything else — a `<details>` a paragraph merely mentions
+            // included — is dropped (sanitize by omission), and `feed_inline_html`
+            // carries why declining the disclosure scanner here is a contract with
+            // `disclosure::scan_document` rather than a shortcut. ScrAP-147 / TDD 2.23.
+            Event::InlineHtml(t) => self.feed_inline_html(&t),
 
             Event::Rule => {
                 self.block_sep();
@@ -223,16 +252,16 @@ impl Renderer {
                 let space = crate::theme::px(theme.metrics.rule_space, self.zoom);
                 sep.set_margin_top(space);
                 sep.set_margin_bottom(space);
-                let mut iter = self.buf.end_iter();
+                let mut iter = self.tip();
                 let anchor = self.buf.create_child_anchor(&mut iter);
                 // Inset a rule nested in a list/blockquote by its enclosing content margin
                 // so it fills `content − inset`, not the whole column — an indented rule
                 // sized to the full column overflows by the indent → spurious Automatic
                 // h-scrollbar → GTK4Rs/AP-22/23 churn (GTK4Rs/AP-23a). 0 at top level.
                 self.width_bounded.push((sep.clone(), self.block_inset()));
-                self.anchored.push((anchor, sep));
-                self.trailing_newlines = 0;
-                self.at_start = false;
+                self.push_anchored(anchor, sep.upcast());
+                self.inter.trailing_newlines = 0;
+                self.inter.at_start = false;
                 self.newline();
             }
 

@@ -24,6 +24,17 @@
 //! | right margin | `[width − rm + 2, …]` | annotation chip |
 //! | card top-right | inside the card | copy button |
 //!
+//! **The disclosure summary band is in the content-column row of that table**, so it
+//! overlaps exactly what a heading band does and takes the same answers: it lands ON
+//! the quote panel a disclosure can sit inside (TDD 2.26c), and UNDER the accent bar
+//! and the gutter markers that cross its row. Pair 10 below drives the containing
+//! case in pixels; the other two are the same two constraints the heading band's
+//! pairs 5 and 7 already prove about a rectangle at the same column in the same layer,
+//! and `decorplan::tests` states all three as intent. Against the heading band and the
+//! code card it is not an overlap at all: a summary line is text this renderer writes
+//! for a raw-HTML block, and no heading or fence can be laid on it, so their spans are
+//! always disjoint.
+//!
 //! **Three pairs are therefore NOT overlaps, and they are stated rather than
 //! omitted** — an absent row and a ruled-out one look identical:
 //!
@@ -74,6 +85,7 @@ const BAND: (u8, u8, u8) = (0x33, 0x66, 0x99);
 const CARD: (u8, u8, u8) = (0xcc, 0x33, 0x00);
 const BAR: (u8, u8, u8) = (0x00, 0xff, 0x00);
 const MARKER: (u8, u8, u8) = (0xff, 0x00, 0xff);
+const SUMMARY_BAND: (u8, u8, u8) = (0x33, 0x99, 0x66);
 
 /// A theme stating `extra` over a plain white page, activated for this test only.
 fn themed(extra: &str) -> crate::theme::ActiveThemeGuard {
@@ -195,6 +207,41 @@ fn a_heading_band_inside_a_quote_lands_on_the_quote_panel() {
 
     let data = painted(&view);
     assert_on_top(&data, BAND, "heading band", PANEL, "quote panel");
+}
+
+/// **Pair 10 — a disclosure's summary band inside a blockquote lands ON the quote
+/// panel.**
+///
+/// The new decoration's own instance of pair 1: a `<details>` nests in a quote
+/// (TDD 2.26c) and its band fills the same content column a heading band does, so the
+/// panel is its ground too. Driven rather than reasoned from the heading band's result
+/// because the step is a separate entry in `PAINT_ORDER` and could be moved on its own.
+#[gtktest::test]
+fn a_disclosure_summary_band_inside_a_quote_lands_on_the_quote_panel() {
+    let _theme = themed(
+        "blockquote_bg = \"#0a1830\"\nblockquote_bar_color = \"#00ff00\"\n\
+         blockquote_bar_width = 8\ndisclosure_band_color = \"#339966\"\n",
+    );
+    let summary = "Quoted summary";
+    let text = format!("{summary}\n\nquoted body\n");
+    let view = view_with(&text);
+    view.set_blockquotes(
+        vec![QuoteSpan {
+            span: BufferSpan::new(0, chars(&text)),
+            depth: 1,
+        }],
+        gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
+    );
+    view.set_disclosure_bands(vec![BufferSpan::new(0, chars(summary))]);
+
+    let data = painted(&view);
+    assert_on_top(
+        &data,
+        SUMMARY_BAND,
+        "disclosure summary band",
+        PANEL,
+        "quote panel",
+    );
 }
 
 /// **Pair 2 — a code block inside a blockquote lands ON the quote panel.**

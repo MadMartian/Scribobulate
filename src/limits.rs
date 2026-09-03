@@ -126,6 +126,40 @@ pub(crate) const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
 /// is not addressed here (`GdkTexture` owns the decode either way).
 pub(crate) const MAX_REMOTE_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 
+/// The largest DECODED raster a document image may expand to, in pixels.
+///
+/// **Decoding, not transfer, is where an image bomb pays off**, and the paragraph
+/// above says so while bounding only the transfer — so a document carried the exposure
+/// the project's own sprite path had already refused. MEASURED on this project's Linux
+/// reference host, by `sprite`'s own measurement: a 20000×20000 single-colour PNG
+/// compresses to 388 332 bytes — inside `MAX_REMOTE_IMAGE_BYTES` by a factor of forty
+/// — and decoding it allocates ~1.2 GB, because neither `GdkTexture` nor `GdkPixbuf`
+/// refuses on dimensions or offers a configurable limit. A local file has the identical
+/// exposure and no byte cap at all in front of it.
+///
+/// **Why 8192×8192, and why it is not `MAX_SPRITE_PIXELS`.** A sprite is a tile or a
+/// chip and its cap is sized to that vocabulary; a document image is a photograph or a
+/// screenshot the author chose, and refusing one the reader can see in every other
+/// viewer is a worse failure than the one this prevents. 67 M pixels is four times a
+/// 40-megapixel camera's output and ~6× under the measured bomb, so no image a document
+/// legitimately embeds comes near it. Re-measure rather than re-reason if this ever
+/// needs raising.
+pub(crate) const MAX_IMAGE_PIXELS: i64 = 8192 * 8192;
+
+/// Is an image of `width`×`height` within [`MAX_IMAGE_PIXELS`]?
+///
+/// The arithmetic, separated from the two GTK probes that supply the dimensions, so the
+/// rule is one statement and is unit-tested with no GTK type at all — the same split
+/// `sprite::decoded_byte_size` makes for the cache's budget. A non-positive dimension
+/// is admitted: it means the probe learned nothing, and refusing on an unknown is a
+/// denial of service of its own.
+pub(crate) fn image_pixels_within_cap(width: i32, height: i32) -> bool {
+    if width <= 0 || height <= 0 {
+        return true;
+    }
+    i64::from(width) * i64::from(height) <= MAX_IMAGE_PIXELS
+}
+
 /// Why a path was refused for loading. Distinct variants because the three
 /// cases need different words in front of a user: an oversized document is the
 /// user's document and they may reasonably be annoyed; a FIFO or device is
@@ -298,5 +332,21 @@ mod tests {
             is_regular_file_within_limit(&meta),
             Err(LoadRefusal::NotARegularFile)
         );
+    }
+
+    /// F-SEC-206: the rule, without a GTK loader in sight.
+    #[test]
+    fn the_image_pixel_cap_admits_a_photograph_and_refuses_a_bomb() {
+        // A 40-megapixel camera, and a 4K screenshot: both well inside.
+        assert!(image_pixels_within_cap(7728, 5152));
+        assert!(image_pixels_within_cap(3840, 2160));
+        // The measured bomb: 400 M pixels, ~1.2 GB decoded.
+        assert!(!image_pixels_within_cap(20000, 20000));
+        // Exactly at the cap is admitted; one row past it is not.
+        assert!(image_pixels_within_cap(8192, 8192));
+        assert!(!image_pixels_within_cap(8192, 8193));
+        // A probe that learned nothing must not become a refusal of its own.
+        assert!(image_pixels_within_cap(0, 0));
+        assert!(image_pixels_within_cap(-1, 5));
     }
 }

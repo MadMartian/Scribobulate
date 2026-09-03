@@ -17,15 +17,15 @@ impl Renderer {
             TagEnd::Heading(level) => {
                 // Compute this heading's GitHub-style anchor slug and record its
                 // position so `#slug` links can scroll here.
-                let slug = unique_slug(&slugify(&self.heading_text), &mut self.slug_seen);
-                self.headings.push((slug, self.heading_start));
+                let slug = unique_slug(&slugify(&self.heading_text), &mut self.inter.slug_seen);
+                self.headings.push((slug, self.inter.heading_start));
                 // …and its EXTENT, for the drawn band (TDD 18.25). Recorded BEFORE the
                 // terminating newline, so the span covers the heading's content only —
                 // the same content-not-separator discipline the blockquote range below
                 // follows, and what keeps a band from reaching into the blank line after
                 // the heading.
                 self.heading_spans.push(crate::renderer::HeadingSpan {
-                    span: crate::span::BufferSpan::new(self.heading_start, self.end_offset()),
+                    span: crate::span::BufferSpan::new(self.inter.heading_start, self.end_offset()),
                     // h5 and h6 share the deepest slot, the same fold `emit.rs`
                     // applies when it picks the heading's tag — the same call, so
                     // they cannot disagree about it.
@@ -40,9 +40,9 @@ impl Renderer {
             TagEnd::Paragraph => self.flush_open_picture(),
             TagEnd::BlockQuote(_) => {
                 // This level's own depth, BEFORE decrementing: 1 for an unnested quote.
-                let depth = self.blockquote_depth;
-                self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
-                if let Some(start) = self.blockquote_starts.pop() {
+                let depth = self.inter.blockquote_depth;
+                self.inter.blockquote_depth = self.inter.blockquote_depth.saturating_sub(1);
+                if let Some(start) = self.inter.blockquote_starts.pop() {
                     // Close THIS level: apply its depth's margin tag and record its range
                     // so the preview view draws that level's accent bar over it in
                     // snapshot_layer (the proven, never-flickers code-block pattern — no
@@ -113,7 +113,7 @@ impl Renderer {
                         });
                     }
                 }
-                if self.blockquote_depth == 0 {
+                if self.inter.blockquote_depth == 0 {
                     // The quote's own ink (TDD 18.29) is a property of the QUOTE, not of a
                     // level, so it rides one pass over the OUTERMOST range on its own
                     // LOWEST-priority tag — a link, heading or `==mark==` inside the quote
@@ -137,11 +137,11 @@ impl Renderer {
                 }
             }
             TagEnd::List(_) => {
-                self.lists.pop();
+                self.inter.lists.pop();
             }
             TagEnd::Item => {
-                self.list_item_open = false;
-                if let Some(Some(n)) = self.lists.last_mut() {
+                self.inter.list_item_open = false;
+                if let Some(Some(n)) = self.inter.lists.last_mut() {
                     *n += 1;
                 }
                 // Apply the uniform per-level content-margin tags over the complete item
@@ -149,9 +149,9 @@ impl Renderer {
                 // line gets the inter-item gap; every later logical line (each hard-broken
                 // source line — breaks are real newlines again — and any loose continuation
                 // paragraph) shares the same absolute left-margin with indent=0. Depth is
-                // self.lists.len() at this point (inner list already popped if this item
+                // self.inter.lists.len() at this point (inner list already popped if this item
                 // contained a nested list).
-                if let Some(start) = self.item_starts.pop() {
+                if let Some(start) = self.inter.item_starts.pop() {
                     let end = self.end_offset();
                     // An item that produced NO content — a bullet / number / checkbox with
                     // nothing after it (`- `, `1. `, `- [ ]`) — draws no gutter marker: the
@@ -171,7 +171,7 @@ impl Renderer {
                             self.list_markers.pop();
                         }
                     } else {
-                        self.apply_list_item_per_line(self.lists.len(), start, end);
+                        self.apply_list_item_per_line(self.inter.lists.len(), start, end);
                     }
                 }
             }
@@ -275,13 +275,13 @@ impl Renderer {
                     // goes over-wide → no spurious Automatic h-scrollbar (GTK4Rs/AP-23a).
                     // Zero for a top-level table.
                     table.set_bound_inset(self.block_inset());
-                    let mut iter = self.buf.end_iter();
+                    let mut iter = self.tip();
                     let anchor = self.buf.create_child_anchor(&mut iter);
                     self.tables.push(table.clone());
-                    self.anchored.push((anchor, table.upcast()));
+                    self.push_anchored(anchor, table.upcast());
                     // Anchor char is not a newline; reset so block_sep inserts \n\n after.
-                    self.trailing_newlines = 0;
-                    self.at_start = false;
+                    self.inter.trailing_newlines = 0;
+                    self.inter.at_start = false;
                 }
             }
             TagEnd::Strong => {
@@ -290,7 +290,8 @@ impl Renderer {
                         ts.cell_markup.push_str(super::BOLD_CLOSE);
                     }
                 } else {
-                    self.inline_tags
+                    self.inter
+                        .inline_tags
                         .retain(|&t| t != crate::tags::TagName::Bold);
                 }
             }
@@ -300,7 +301,8 @@ impl Renderer {
                         ts.cell_markup.push_str("</i>");
                     }
                 } else {
-                    self.inline_tags
+                    self.inter
+                        .inline_tags
                         .retain(|&t| t != crate::tags::TagName::Italic);
                 }
             }
@@ -311,7 +313,8 @@ impl Renderer {
                         ts.cell_markup.push_str(close);
                     }
                 } else {
-                    self.inline_tags
+                    self.inter
+                        .inline_tags
                         .retain(|&t| t != crate::tags::TagName::Strike);
                 }
             }
@@ -321,7 +324,8 @@ impl Renderer {
                         ts.cell_markup.push_str(super::SUPERSCRIPT_CLOSE);
                     }
                 } else {
-                    self.inline_tags
+                    self.inter
+                        .inline_tags
                         .retain(|&t| t != crate::tags::TagName::Superscript);
                 }
             }
@@ -331,7 +335,8 @@ impl Renderer {
                         ts.cell_markup.push_str(super::SUBSCRIPT_CLOSE);
                     }
                 } else {
-                    self.inline_tags
+                    self.inter
+                        .inline_tags
                         .retain(|&t| t != crate::tags::TagName::Subscript);
                 }
             }
@@ -347,10 +352,11 @@ impl Renderer {
                         }
                     }
                 } else {
-                    if let Some((start_off, url)) = self.link_start.take() {
+                    if let Some((start_off, url)) = self.inter.link_start.take() {
                         self.links.push((start_off, self.end_offset(), url));
                     }
-                    self.inline_tags
+                    self.inter
+                        .inline_tags
                         .retain(|&t| t != crate::tags::TagName::Link);
                 }
             }
@@ -371,7 +377,7 @@ impl Renderer {
                 if self.in_html_block {
                     self.in_html_block = false;
                     let html = std::mem::take(&mut self.html_acc);
-                    self.feed_html(&html);
+                    self.feed_html_block(&html);
                     self.flush_open_picture();
                 } else {
                     self.dropped_construct("an HTML-block close with no open block");

@@ -50,7 +50,7 @@ fn collect_segs(inlines: &[Inline], out: &mut Vec<Seg>) {
                 | Inline::Superscript(v)
                 | Inline::Subscript(v)
                 | Inline::Highlight(v)
-                | Inline::Claim(_, v) => collect_segs(v, out),
+                | Inline::Claim { inner: v, .. } => collect_segs(v, out),
                 Inline::Link { inner, .. } => collect_segs(inner, out),
                 other => push_text(out, other.clone()),
             },
@@ -76,7 +76,7 @@ pub(crate) fn contains_image(inline: &Inline) -> bool {
         | Inline::Superscript(v)
         | Inline::Subscript(v)
         | Inline::Highlight(v)
-        | Inline::Claim(_, v) => v.iter().any(contains_image),
+        | Inline::Claim { inner: v, .. } => v.iter().any(contains_image),
         Inline::Link { inner, .. } => inner.iter().any(contains_image),
         _ => false,
     }

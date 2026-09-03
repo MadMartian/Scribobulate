@@ -75,6 +75,10 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
     follows at once and nothing is re-read.
 - **Full-fidelity Markdown**
   - Tables, syntax-highlighted code, images, and task-list checkboxes
+  - Collapsible `<details>` sections — click a summary line to fold a verbose
+    aside away, and the document keeps your place rather than jumping. Find,
+    the outline and copy all reach inside a collapsed block, so folding hides
+    it from the page without hiding it from you
   - Hover a code block for a copy button — one click puts the code on the
     clipboard, fences and all container markers left behind
   - Clickable links with a hover preview of the destination

@@ -35,7 +35,11 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
 
     // One block-scope scan of the same cleaned text the walk below parses, so the
     // export segments every tight construct exactly as the preview does.
-    let mut builder = Builder::new(opts, crate::renderer::BlockScripts::scan(cleaned));
+    let mut builder = Builder::new(
+        opts,
+        crate::renderer::BlockScripts::scan(cleaned),
+        crate::renderer::disclosure::scan_document(cleaned),
+    );
     for (ev, src) in Parser::new_ext(cleaned, crate::renderer::md_options()).into_offset_iter() {
         builder.event(ev, src);
     }
@@ -63,6 +67,10 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
         {
             mark_claim(&mut doc.blocks, idx, range);
         }
+        // The LAST fragment of this claim, in document order, is the one that carries
+        // the comment. Only knowable after every range for `idx` has been marked, since
+        // the mapper may return several and each may split further (F-AP-B-204).
+        mark_tail(&mut doc.blocks, idx);
         doc.annotations.push(ExportAnnotation {
             comment: ann.comment.clone().unwrap_or_default(),
             claim: claim_text(cleaned, hs, he),
@@ -95,6 +103,10 @@ fn mark_claim(blocks: &mut Vec<Block>, idx: usize, range: (i32, i32)) {
                 mark_inlines(inlines, idx, range)
             }
             Block::BlockQuote(inner) => mark_claim(inner, idx, range),
+            // The BODY takes claims like any other content — it is ordinary document
+            // text that the preview happened not to draw. The summary does not: it
+            // lives inside raw HTML, which carries no annotations.
+            Block::Disclosure { body, .. } => mark_claim(body, idx, range),
             Block::List { items, .. } => {
                 for item in items {
                     mark_claim(&mut item.blocks, idx, range);
@@ -107,6 +119,137 @@ fn mark_claim(blocks: &mut Vec<Block>, idx: usize, range: (i32, i32)) {
                 for row in rows {
                     for cell in row {
                         mark_inlines(cell, idx, range);
+                    }
+                }
+            }
+            Block::CodeBlock { .. } | Block::Rule => {}
+        }
+    }
+}
+
+/// Set `tail` on the LAST [`Inline::Claim`] fragment carrying `idx`, in document order.
+///
+/// **A separate pass, because "last" is not decidable while marking.** The mapper can
+/// return several ranges for one claim and each can split further inside emphasis, a
+/// link, a list item or a table cell — so the fragment that turns out to be last is only
+/// known once the whole tree has been walked. Two cheap walks say that plainly; threading
+/// a "furthest so far" through the recursive marker would put the same decision in six
+/// places, which is the shape F-AP-B-204 came out of.
+fn mark_tail(blocks: &mut [Block], idx: usize) {
+    let total = count_claim_fragments(blocks, idx);
+    let mut seen = 0usize;
+    set_claim_tail(blocks, idx, total, &mut seen);
+}
+
+/// How many [`Inline::Claim`] fragments carry `idx`.
+fn count_claim_fragments(blocks: &[Block], idx: usize) -> usize {
+    let mut n = 0usize;
+    for_each_claim(blocks, idx, &mut |_| n += 1);
+    n
+}
+
+/// Mark the `total`-th fragment as the tail and every other as not.
+fn set_claim_tail(blocks: &mut [Block], idx: usize, total: usize, seen: &mut usize) {
+    for_each_claim_mut(blocks, idx, &mut |tail| {
+        *seen += 1;
+        *tail = *seen == total;
+    });
+}
+
+/// Visit every claim fragment carrying `idx`, in document order.
+///
+/// The shared walk, so the counting pass and the marking pass cannot disagree about
+/// which fragments exist or in what order — the two-walk shape is only safe because
+/// they are the same walk.
+fn for_each_claim(blocks: &[Block], idx: usize, f: &mut impl FnMut(&Vec<Inline>)) {
+    fn inlines(v: &[Inline], idx: usize, f: &mut impl FnMut(&Vec<Inline>)) {
+        for inline in v {
+            match inline {
+                Inline::Claim { idx: i, inner, .. } => {
+                    if *i == idx {
+                        f(inner);
+                    }
+                    inlines(inner, idx, f);
+                }
+                Inline::Emphasis(v)
+                | Inline::Strong(v)
+                | Inline::Strikethrough(v)
+                | Inline::Superscript(v)
+                | Inline::Subscript(v)
+                | Inline::Highlight(v)
+                | Inline::Link { inner: v, .. } => inlines(v, idx, f),
+                _ => {}
+            }
+        }
+    }
+    for block in blocks {
+        match block {
+            Block::Heading { inlines: v, .. } | Block::Paragraph(v) => inlines(v, idx, f),
+            Block::BlockQuote(inner) => for_each_claim(inner, idx, f),
+            Block::Disclosure { body, .. } => for_each_claim(body, idx, f),
+            Block::List { items, .. } => {
+                for item in items {
+                    for_each_claim(&item.blocks, idx, f);
+                }
+            }
+            Block::Table { head, rows, .. } => {
+                for cell in head {
+                    inlines(cell, idx, f);
+                }
+                for row in rows {
+                    for cell in row {
+                        inlines(cell, idx, f);
+                    }
+                }
+            }
+            Block::CodeBlock { .. } | Block::Rule => {}
+        }
+    }
+}
+
+/// [`for_each_claim`] with the fragment's `tail` flag handed out for writing.
+fn for_each_claim_mut(blocks: &mut [Block], idx: usize, f: &mut impl FnMut(&mut bool)) {
+    fn inlines(v: &mut [Inline], idx: usize, f: &mut impl FnMut(&mut bool)) {
+        for inline in v.iter_mut() {
+            match inline {
+                Inline::Claim {
+                    idx: i,
+                    inner,
+                    tail,
+                } => {
+                    if *i == idx {
+                        f(tail);
+                    }
+                    inlines(inner, idx, f);
+                }
+                Inline::Emphasis(v)
+                | Inline::Strong(v)
+                | Inline::Strikethrough(v)
+                | Inline::Superscript(v)
+                | Inline::Subscript(v)
+                | Inline::Highlight(v)
+                | Inline::Link { inner: v, .. } => inlines(v, idx, f),
+                _ => {}
+            }
+        }
+    }
+    for block in blocks.iter_mut() {
+        match block {
+            Block::Heading { inlines: v, .. } | Block::Paragraph(v) => inlines(v, idx, f),
+            Block::BlockQuote(inner) => for_each_claim_mut(inner, idx, f),
+            Block::Disclosure { body, .. } => for_each_claim_mut(body, idx, f),
+            Block::List { items, .. } => {
+                for item in items {
+                    for_each_claim_mut(&mut item.blocks, idx, f);
+                }
+            }
+            Block::Table { head, rows, .. } => {
+                for cell in head {
+                    inlines(cell, idx, f);
+                }
+                for row in rows {
+                    for cell in row {
+                        inlines(cell, idx, f);
                     }
                 }
             }
@@ -145,13 +288,16 @@ fn mark_inlines(inlines: &mut Vec<Inline>, idx: usize, range: (i32, i32)) {
                         span: (ts, os),
                     });
                 }
-                out.push(Inline::Claim(
+                out.push(Inline::Claim {
                     idx,
-                    vec![Inline::Text {
+                    // Set by `mark_tail` once the whole tree is marked — only then is
+                    // it known which fragment is last.
+                    tail: false,
+                    inner: vec![Inline::Text {
                         text: mid,
                         span: (os, oe),
                     }],
-                ));
+                });
                 if !after.is_empty() {
                     out.push(Inline::Text {
                         text: after,
@@ -267,6 +413,11 @@ mod export_doc_tests {
                     }
                     Block::CodeBlock { text, .. } => out.push_str(text),
                     Block::BlockQuote(inner) => blocks(inner, out),
+                    Block::Disclosure { summary, body, .. } => {
+                        out.push_str(&crate::export::plain_text(summary));
+                        out.push('\n');
+                        blocks(body, out);
+                    }
                     Block::List { items, .. } => {
                         for i in items {
                             blocks(&i.blocks, out);
@@ -399,6 +550,32 @@ mod export_doc_tests {
                 "{dropped:?} survived the drop: {text:?}"
             );
         }
+    }
+
+    /// **F-AP-B-201.** The same fixtures as above with one thing changed: a line
+    /// break. pulldown-cmark emits a raw-HTML block's content as one `Event::Html`
+    /// PER SOURCE LINE, and this sink used to scan each line on its own — resetting
+    /// the suppressor stack at every newline, so an element whose open and close tags
+    /// sat on different lines lost its suppression HERE while the preview, which
+    /// accumulates the block, kept it. Multi-line raw HTML is how everyone writes it.
+    ///
+    /// The mutation guard is the fixture itself: revert the accumulator and the
+    /// single-line test above still passes while this one goes red.
+    #[test]
+    fn multi_line_raw_html_is_dropped_too() {
+        let doc = doc_of("before\n\n<script>\nalert(1)\n</script>\n\nafter\n");
+        let text = text_of(&doc);
+        assert!(text.contains("before") && text.contains("after"));
+        assert!(!text.contains("alert"), "{text:?}");
+
+        // The same shape inside a disclosure, where the body IS shown as literal text
+        // — so the `<div>`'s suppression is the only thing keeping its content off
+        // the page.
+        let doc =
+            doc_of("<details>\n<summary>S</summary>\n<div>\nhidden text\n</div>\n</details>\n");
+        let text = text_of(&doc);
+        assert!(text.contains('S'), "the summary label survives: {text:?}");
+        assert!(!text.contains("hidden"), "{text:?}");
     }
 
     /// **Regression.** A **tight** list item's content arrives from pulldown-cmark as
@@ -577,7 +754,7 @@ mod export_doc_tests {
         let claimed: Vec<String> = inlines
             .iter()
             .filter_map(|i| match i {
-                Inline::Claim(_, v) => Some(crate::export::plain_text(v)),
+                Inline::Claim { inner: v, .. } => Some(crate::export::plain_text(v)),
                 _ => None,
             })
             .collect();
@@ -700,5 +877,315 @@ mod export_independence_tests {
         let before = build("original\n", &RenderOptions::default());
         let after = build("edited\n", &RenderOptions::default());
         assert_ne!(before, after);
+    }
+}
+
+#[cfg(test)]
+mod disclosure_export_tests {
+    use super::build;
+    use crate::export::{Block, RenderOptions};
+
+    const MD: &str = concat!(
+        "# Doc\n\n",
+        "<details>\n<summary>Show me</summary>\n\n",
+        "body **text**\n\n",
+        "</details>\n\n",
+        "after\n"
+    );
+
+    fn doc_of(md: &str) -> crate::export::ExportDoc {
+        build(md, &RenderOptions::default())
+    }
+
+    /// Every paragraph and heading's plain text, for assertions about CONTENT rather
+    /// than block shape.
+    fn text_of(doc: &crate::export::ExportDoc) -> String {
+        fn blocks(bs: &[Block], out: &mut String) {
+            for b in bs {
+                match b {
+                    Block::Heading { inlines, .. } | Block::Paragraph(inlines) => {
+                        out.push_str(&crate::export::plain_text(inlines));
+                        out.push('\n');
+                    }
+                    Block::Disclosure { summary, body, .. } => {
+                        out.push_str(&crate::export::plain_text(summary));
+                        out.push('\n');
+                        blocks(body, out);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut out = String::new();
+        blocks(&doc.blocks, &mut out);
+        out
+    }
+
+    /// **Rubric 2.26g — a disclosure exports as it renders.**
+    ///
+    /// MEASURED before this: the body exported fine, because it is ordinary Markdown
+    /// events the walk never had to be taught, and the SUMMARY was dropped entirely —
+    /// so every artefact was missing the one piece of the construct that names it,
+    /// while still opening looking finished (Document Rendering CAM row 17).
+    #[test]
+    fn a_disclosures_summary_and_body_both_reach_the_model() {
+        let doc = doc_of(MD);
+        let disclosure = doc
+            .blocks
+            .iter()
+            .find_map(|b| match b {
+                Block::Disclosure { summary, body, .. } => Some((summary, body)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected a Disclosure block, got {:?}", doc.blocks));
+        assert_eq!(
+            crate::export::plain_text(disclosure.0),
+            "Show me",
+            "the summary label reaches the artefact"
+        );
+        assert!(
+            matches!(disclosure.1.first(), Some(Block::Paragraph(_))),
+            "the body is nested inside it, as Markdown: {:?}",
+            disclosure.1
+        );
+        // And the content around it is untouched.
+        assert!(matches!(doc.blocks.first(), Some(Block::Heading { .. })));
+        assert!(matches!(doc.blocks.last(), Some(Block::Paragraph(_))));
+    }
+
+    /// A collapsed block exports exactly as an open one does. The preview's fold state
+    /// is not an input to this builder at all — the document's own `open` attribute is
+    /// the only thing that differs, and only in the flag a sink may offer.
+    #[test]
+    fn the_readers_fold_state_is_not_an_input_to_the_export() {
+        let closed = doc_of(MD);
+        let opened = doc_of(&MD.replace("<details>", "<details open>"));
+        let body_of = |d: &crate::export::ExportDoc| {
+            d.blocks.iter().find_map(|b| match b {
+                Block::Disclosure { body, .. } => Some(body.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            body_of(&closed),
+            body_of(&opened),
+            "the same body, whichever way the document asked it to be shown"
+        );
+        let open_flag = |d: &crate::export::ExportDoc| {
+            d.blocks.iter().find_map(|b| match b {
+                Block::Disclosure { open, .. } => Some(*open),
+                _ => None,
+            })
+        };
+        assert_eq!(open_flag(&closed), Some(false));
+        assert_eq!(open_flag(&opened), Some(true));
+    }
+
+    /// **F-SPEC-002.** An unspaced disclosure's body is literal text rather than
+    /// Markdown events, and it reached the preview through one owner and the export
+    /// through none — the construct half-taught in exactly the way Document Rendering
+    /// CAM row 17 warns about. Both sinks now read the same interleaved stream, so the
+    /// run lands INSIDE the disclosure in the artefact too.
+    #[test]
+    fn an_unspaced_bodys_literal_text_reaches_the_artefact() {
+        let doc = doc_of("<details>\n<summary>S</summary>\nnot separated\n</details>\n");
+        let body = doc
+            .blocks
+            .iter()
+            .find_map(|b| match b {
+                Block::Disclosure { body, .. } => Some(body.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected a Disclosure block, got {:?}", doc.blocks));
+        let text: String = body
+            .iter()
+            .filter_map(|b| match b {
+                Block::Paragraph(inlines) => Some(crate::export::plain_text(inlines)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            text.contains("not separated"),
+            "the body is in the artefact, inside its own disclosure: {body:?}"
+        );
+    }
+
+    /// **F-003, the export half.** A `<details>` merely MENTIONED in prose used to be
+    /// scanned as a real tag, and its phantom frame was flushed with the next real
+    /// block's — so two sibling disclosures below the mention nested into one another,
+    /// and the outer one took the phantom's `open: false` in place of its own
+    /// `<details open>`.
+    ///
+    /// **Two real blocks are required to see it.** With one, the phantom's frame opens
+    /// at exactly the point the real one would have and the off-by-one cancels; a
+    /// one-block fixture passes against the defect and reads as proof.
+    #[test]
+    fn a_details_mentioned_in_prose_does_not_re_nest_the_real_ones() {
+        let doc = doc_of(concat!(
+            "Wrap an aside in <details> to fold it away.\n\n",
+            "<details>\n<summary>One</summary>\n\nBODY1\n\n</details>\n\n",
+            "<details open>\n<summary>Two</summary>\n\nBODY2\n\n</details>\n"
+        ));
+        let disclosures: Vec<_> = doc
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Disclosure { summary, open, .. } => {
+                    Some((crate::export::plain_text(summary), *open))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            disclosures,
+            vec![("One".to_owned(), false), ("Two".to_owned(), true)],
+            "two SIBLINGS, each with its own summary and its own `open`: {:?}",
+            doc.blocks
+        );
+    }
+
+    /// Nesting falls out of the frame stack, exactly as it does for a blockquote in a
+    /// list item — so a disclosure inside a disclosure needs no case of its own.
+    #[test]
+    fn a_nested_disclosure_nests_in_the_model() {
+        let doc = doc_of(concat!(
+            "<details>\n<summary>Outer</summary>\n\n",
+            "<details>\n<summary>Inner</summary>\n\ninner body\n\n</details>\n\n",
+            "</details>\n"
+        ));
+        let Some(Block::Disclosure { body, .. }) = doc.blocks.first() else {
+            panic!("expected an outer Disclosure, got {:?}", doc.blocks);
+        };
+        assert!(
+            body.iter().any(|b| matches!(b, Block::Disclosure { .. })),
+            "the inner block nests inside the outer one: {body:?}"
+        );
+    }
+
+    /// An UNCLOSED `<details>` groups nothing — the same recovery the preview applies
+    /// (rubric 2.26d), and it is the same pre-scan that decides it in both, so the two
+    /// cannot disagree about which blocks are real.
+    #[test]
+    fn an_unclosed_disclosure_groups_nothing_and_loses_nothing() {
+        let doc = doc_of("<details>\n<summary>Never closed</summary>\n\nbody\n\n## After\n");
+        assert!(
+            !doc.blocks
+                .iter()
+                .any(|b| matches!(b, Block::Disclosure { .. })),
+            "an unpaired block is not a disclosure: {:?}",
+            doc.blocks
+        );
+        assert!(
+            doc.blocks
+                .iter()
+                .any(|b| matches!(b, Block::Heading { .. })),
+            "and nothing after it is swallowed: {:?}",
+            doc.blocks
+        );
+        // **F-AP-B-203.** "Loses nothing" is half the name and used to be the whole
+        // of what was checked: the label is authored content, the preview writes it
+        // as an ordinary line, and this sink dropped it on the floor. The two sinks
+        // must name the construct the same thing.
+        assert!(
+            text_of(&doc).contains("Never closed"),
+            "the authored label survives as an ordinary line: {:?}",
+            doc.blocks
+        );
+        // And with no `<summary>` at all it takes the same default the preview does.
+        let doc = doc_of("<details>\n\nbody\n\n## After\n");
+        assert!(
+            text_of(&doc).contains(crate::renderer::DEFAULT_SUMMARY_LABEL),
+            "an unclosed, summaryless block still names itself: {:?}",
+            doc.blocks
+        );
+    }
+
+    /// A `<details>` with no `<summary>` takes the same default label the preview
+    /// shows, so the two do not name one construct two different things.
+    #[test]
+    fn a_summaryless_disclosure_takes_the_default_label() {
+        let doc = doc_of("<details>\n\nbody\n\n</details>\n");
+        let Some(Block::Disclosure { summary, .. }) = doc.blocks.first() else {
+            panic!("expected a Disclosure, got {:?}", doc.blocks);
+        };
+        assert_eq!(
+            crate::export::plain_text(summary),
+            crate::renderer::DEFAULT_SUMMARY_LABEL
+        );
+    }
+    /// **F-AP-B-204: one claim, one comment, one `id`.**
+    ///
+    /// A claim spanning inline markup — `{==a **bold** word==}` — is split at every
+    /// construct boundary, so `Inline::Claim` appears once per fragment. Both sinks
+    /// emitted the comment per fragment, and HTML emitted `id="claim-N"` with it: the
+    /// note printed three times, and the artefact carried three elements with one id,
+    /// which is invalid and makes the aside's own back-link ambiguous.
+    ///
+    /// The fixture's claim MUST cross a construct boundary — that is the whole design
+    /// of it. A claim over plain text is one fragment, and this passes against the
+    /// unfixed code.
+    #[test]
+    fn a_claim_spanning_inline_markup_emits_its_comment_once() {
+        use crate::export::Inline;
+        let md = "A paragraph with {==a **bold** word==}{>>the note<<} in it.\n";
+        let doc = build(md, &RenderOptions::default());
+
+        // The precondition, stated rather than assumed: several fragments exist.
+        fn claims(v: &[Inline], n: &mut usize, tails: &mut usize) {
+            for inline in v {
+                match inline {
+                    Inline::Claim { tail, inner, .. } => {
+                        *n += 1;
+                        *tails += usize::from(*tail);
+                        claims(inner, n, tails);
+                    }
+                    Inline::Emphasis(v)
+                    | Inline::Strong(v)
+                    | Inline::Strikethrough(v)
+                    | Inline::Superscript(v)
+                    | Inline::Subscript(v)
+                    | Inline::Highlight(v)
+                    | Inline::Link { inner: v, .. } => claims(v, n, tails),
+                    _ => {}
+                }
+            }
+        }
+        let (mut n, mut tails) = (0usize, 0usize);
+        for block in &doc.blocks {
+            if let Block::Paragraph(v) = block {
+                claims(v, &mut n, &mut tails);
+            }
+        }
+        assert!(
+            n > 1,
+            "precondition: the claim really is split by the bold run — with one \
+             fragment this test passes against the defect"
+        );
+        assert_eq!(tails, 1, "exactly one fragment is the tail: {n} fragments");
+
+        let theme = crate::theme::active();
+        let ink = gtk::gdk::RGBA::BLACK;
+        let palette = crate::palette::Palette::from_base(
+            gtk::gdk::RGBA::WHITE,
+            ink,
+            ink,
+            gtk::gdk::RGBA::new(0.2, 0.5, 0.9, 1.0),
+            &theme,
+        );
+        let html = crate::export::html::render(&doc, &palette, &theme);
+        assert_eq!(
+            html.matches("<aside class=\"comment\">").count(),
+            1,
+            "the comment is written once, not once per fragment"
+        );
+        assert_eq!(
+            html.matches("id=\"claim-1\"").count(),
+            1,
+            "and exactly one element carries the id an anchor points at"
+        );
+        assert!(
+            html.matches("class=\"claim\"").count() >= n,
+            "while every fragment still carries the highlight class"
+        );
     }
 }

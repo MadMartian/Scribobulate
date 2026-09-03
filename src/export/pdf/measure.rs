@@ -177,6 +177,29 @@ impl Layouter<'_> {
         })
     }
 
+    /// The band behind a disclosure's summary line (TDD 18.51), or `None` where the
+    /// theme bands no summary — resolved from the same key the preview reads, so the
+    /// artefact bands exactly what the screen does (TDD 25.3).
+    ///
+    /// No padding: unlike a heading band this decoration insets no text, so the label
+    /// keeps the column it would have had and the band keeps the printable one.
+    fn disclosure_band_ink(&self) -> Option<BlockFill> {
+        let decor = self.theme.disclosure_band_decor();
+        if !decor.is_present() {
+            return None;
+        }
+        // The whole precedence — sprite, else gradient, else flat — settled ONCE, by
+        // `decide`, with the sprite load as its injection point. A sprite that will
+        // not decode degrades to the gradient rather than erasing the band, the same
+        // degradation the preview and the HTML sink perform.
+        Some(BlockFill {
+            padding: 0.0,
+            wash: super::decide::band_wash(&decor, |r| {
+                crate::sprite::surface(r).map(|(surface, _, _)| surface)
+            }),
+        })
+    }
+
     /// The points a blockquote's content is stepped in from its container: the bar,
     /// plus the themed gap between the bar and the quoted text.
     ///
@@ -417,6 +440,57 @@ impl Layouter<'_> {
                 });
                 for b in inner {
                     self.block(b, doc, indent + step, quote, list_depth);
+                }
+            }
+            // **A PDF has no disclosure to offer**, so the body is laid out
+            // unconditionally, `open` attribute or not: a page the reader cannot
+            // expand must not be the one place the document's content is missing
+            // (TDD 2.26g). The summary becomes a bold label line and the body is
+            // measured at the same indent — nested rather than indented, because the
+            // block is a grouping and not a quotation, and an indent would read as
+            // one.
+            Block::Disclosure { summary, body, .. } => {
+                // The summary line's BAND (TDD 18.51): the same rect at the same
+                // column a banded heading and a code card get, which is why all three
+                // share `BlockFill`. Resolved before the label is laid out so the
+                // sprite is decoded once per disclosure rather than once per line.
+                let band = self.disclosure_band_ink();
+                // …and its INK, as a span AROUND the run rather than a pen on the
+                // line, so a link inside the label keeps its own colour — the
+                // artefact's spelling of `TagName::DisclosureInk`'s low priority.
+                let (span_open, span_close) = super::super::markup::disclosure_span(self.theme);
+                let markup = format!(
+                    "{span_open}<b>{}</b>{span_close}",
+                    inline_markup(summary, doc, self.theme)
+                );
+                let first = self.lines.len();
+                self.paragraph(
+                    &markup,
+                    ParagraphSpec {
+                        family: None,
+                        space_above: BLOCK_GAP_PT,
+                        space_below: 0.0,
+                        size_pt: BASE_PT,
+                        weight: PANGO_WEIGHT_NORMAL,
+                        indent,
+                        quote,
+                        // The label and the body it names belong together: a page
+                        // break between them would leave a heading-shaped orphan.
+                        keep_with_next: true,
+                        right_inset: 0.0,
+                    },
+                );
+                // EVERY line of the label, so a summary that wrapped is one continuous
+                // band rather than a stripe per row — the same reason a wrapped
+                // heading's band is applied per line. Applied BEFORE the body is laid
+                // out, so `first..` names the label's own lines and nothing else.
+                if let Some(band) = band {
+                    for line in &mut self.lines[first..] {
+                        line.fill = Some(band.clone());
+                    }
+                }
+                for b in body {
+                    self.block(b, doc, indent, quote, list_depth);
                 }
             }
             Block::List { start, items } => {

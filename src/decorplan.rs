@@ -41,6 +41,14 @@ pub(crate) enum PaintStep {
     /// The band behind a heading (TDD 18.25) — before every per-block decoration
     /// except the panel, for the same containment reason.
     HeadingBand,
+    /// The band behind a disclosure's summary line (TDD 18.48). Beside the heading
+    /// band because it is the same shape of decoration — a line-wide fill at the
+    /// content column — and therefore takes the same place in the order: on the quote
+    /// panel a disclosure can sit inside, under the accent bar and the gutter markers
+    /// that cross it. Its span and a heading's cannot coincide (a summary line is
+    /// raw-HTML-derived text, and no heading can be laid on it), so the order BETWEEN
+    /// these two is stated by adjacency and constrained by nothing.
+    DisclosureBand,
     /// A fenced code block's card, and the rectangles the copy button is placed from.
     CodeCard,
     /// A blockquote's accent bar. After the panel it shares an extent with, and after
@@ -72,6 +80,7 @@ impl PaintStep {
         match self {
             PaintStep::QuotePanel
             | PaintStep::HeadingBand
+            | PaintStep::DisclosureBand
             | PaintStep::CodeCard
             | PaintStep::QuoteBar
             | PaintStep::ListGutter => TextViewLayer::BelowText,
@@ -87,6 +96,7 @@ impl PaintStep {
 pub(crate) const PAINT_ORDER: &[PaintStep] = &[
     PaintStep::QuotePanel,
     PaintStep::HeadingBand,
+    PaintStep::DisclosureBand,
     PaintStep::CodeCard,
     PaintStep::QuoteBar,
     PaintStep::ListGutter,
@@ -114,7 +124,9 @@ pub(crate) fn offset_on_screen(offset: i32, vis_start: i32, vis_end: i32) -> boo
     offset >= vis_start && offset <= vis_end
 }
 
-/// The corner radius to round a heading band's rectangle by.
+/// The corner radius to round a band's rectangle by — a heading's (TDD 18.25) or a
+/// disclosure summary's (TDD 18.48), which are one arithmetic and share this one copy
+/// of it rather than each rounding its own way.
 ///
 /// `design_px` is the theme's design-time value at zoom 1.0 — pixel metrics are widget
 /// properties and do not follow the CSS `font-size` rule, so they are scaled here
@@ -224,6 +236,7 @@ mod tests {
         let all = [
             PaintStep::QuotePanel,
             PaintStep::HeadingBand,
+            PaintStep::DisclosureBand,
             PaintStep::CodeCard,
             PaintStep::QuoteBar,
             PaintStep::ListGutter,
@@ -257,6 +270,10 @@ mod tests {
         // drives in pixels; here it is the intent behind them.
         for inside in [
             PaintStep::HeadingBand,
+            // A disclosure nests in a quote exactly as a heading does (TDD 2.26c), and
+            // its summary band fills the same content column, so the panel is its
+            // ground too.
+            PaintStep::DisclosureBand,
             PaintStep::CodeCard,
             PaintStep::QuoteBar,
             PaintStep::ListGutter,
@@ -273,6 +290,7 @@ mod tests {
         // The bar runs the whole quote, including the rows a quoted heading band or
         // code card covers, and it must stay visible across them.
         assert!(at(PaintStep::HeadingBand) < at(PaintStep::QuoteBar));
+        assert!(at(PaintStep::DisclosureBand) < at(PaintStep::QuoteBar));
         assert!(at(PaintStep::CodeCard) < at(PaintStep::QuoteBar));
     }
 
@@ -281,6 +299,9 @@ mod tests {
         // `- # Heading` and an item whose first line is a fence both put a marker
         // inside a full-content-column rectangle, measured against the renderer.
         assert!(at(PaintStep::HeadingBand) < at(PaintStep::ListGutter));
+        // A disclosure inside a list item puts its summary band on the item's own
+        // first row, which is the row the marker is drawn on.
+        assert!(at(PaintStep::DisclosureBand) < at(PaintStep::ListGutter));
         assert!(at(PaintStep::CodeCard) < at(PaintStep::ListGutter));
     }
 

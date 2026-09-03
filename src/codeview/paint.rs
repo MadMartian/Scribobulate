@@ -142,6 +142,7 @@ pub(super) fn run(step: PaintStep, snapshot: &gtk::Snapshot, ctx: &PaintCtx) {
     match step {
         PaintStep::QuotePanel => super::quotes::draw_panel(snapshot, ctx),
         PaintStep::HeadingBand => super::bands::draw(snapshot, ctx),
+        PaintStep::DisclosureBand => super::disclosurebands::draw(snapshot, ctx),
         PaintStep::CodeCard => super::cards::draw(snapshot, ctx),
         PaintStep::QuoteBar => super::quotes::draw_accent_bar(snapshot, ctx),
         PaintStep::ListGutter => super::listmarkers::draw(snapshot, ctx),

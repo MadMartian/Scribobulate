@@ -117,6 +117,13 @@ a fenced code block
 
 ---
 
+<details>
+<summary>A disclosure summary</summary>
+
+Hidden body text.
+
+</details>
+
 Text with {==an annotated claim==}{>>a comment<<} in it.
 ";
 
@@ -348,6 +355,30 @@ fn decoration_digest(t: &Theme) -> String {
             t.find_hl_current_color,
             t.selection_bg,
             t.selection_fg,
+        ),
+    );
+    // The disclosure indicator: its two states resolve independently, so both are
+    // named — a digest of one would report the other's key as reaching nothing.
+    let _ = std::fmt::Write::write_fmt(
+        &mut out,
+        format_args!(
+            "|{:?}|{:?}|{:?}",
+            t.disclosure_marker_decor(false),
+            t.disclosure_marker_decor(true),
+            t.metrics.disclosure_marker_size,
+        ),
+    );
+    // The summary line's BAND and its radius (TDD 18.48). The band is drawn from the
+    // resolved decoration and the radius is scaled by the paint, so both belong in
+    // this arm; the summary's INK is not here, because it reaches the preview as a
+    // `GtkTextTag` and must therefore show in the tag digest above — the same division
+    // this function's header states.
+    let _ = std::fmt::Write::write_fmt(
+        &mut out,
+        format_args!(
+            "|{:?}|{:?}",
+            t.disclosure_band_decor(),
+            t.metrics.disclosure_band_radius,
         ),
     );
     let _ = std::fmt::Write::write_fmt(&mut out, format_args!("|{:?}", t.syntect_theme));

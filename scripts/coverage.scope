@@ -76,6 +76,8 @@ src/export/pdf/mod.rs
 src/export/pdftable.rs
 src/export/walk.rs
 src/farscroll.rs
+src/farscroll/settle.rs
+src/fold.rs
 src/forensics/identity.rs
 src/forensics/mod.rs
 src/forensics/rawbuf.rs
@@ -95,6 +97,8 @@ src/format/mod.rs
 src/format/quote.rs
 src/format/text.rs
 src/icons.rs
+src/imagecache/mod.rs
+src/imagecache/policy.rs
 src/imagefetch.rs
 src/keynav.rs
 src/limits.rs
@@ -103,7 +107,8 @@ src/links.rs
 src/macwordnav.rs
 src/mdtable.rs
 src/notices.rs
-src/outline.rs
+src/outline/mod.rs
+src/outline/tree.rs
 src/palette/mod.rs
 src/pangospan.rs
 src/preview/annotate.rs
@@ -115,8 +120,14 @@ src/preview/qdata.rs
 src/preview/render.rs
 src/preview/scroll.rs
 src/preview/sourcemap.rs
+src/preview/splice.rs
+src/preview/splice/install.rs
+src/preview/splice/regionwriter.rs
 src/readingpos.rs
 src/renderer/blockquote.rs
+src/renderer/blockspacing.rs
+src/renderer/disclosure.rs
+src/renderer/disclosure/preview.rs
 src/renderer/emit.rs
 src/renderer/end.rs
 src/renderer/events.rs
@@ -124,6 +135,9 @@ src/renderer/image.rs
 src/renderer/mod.rs
 src/renderer/normalize.rs
 src/renderer/picture.rs
+src/renderer/rawhtml/lex.rs
+src/renderer/rawhtml/mod.rs
+src/renderer/rawhtml/tags.rs
 src/renderer/scan.rs
 src/renderer/segments.rs
 src/renderer/start.rs
@@ -159,6 +173,7 @@ src/theme/sources.rs
 src/theme/spec.rs
 src/theme/value.rs
 src/widgets/comment_entry.rs
+src/widgets/disclosure.rs
 src/widgets/mod.rs
 src/widgets/rule.rs
 src/widgets/tab/layout.rs

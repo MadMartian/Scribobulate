@@ -23,11 +23,17 @@ use std::rc::Rc;
 /// Scroll a preview scroller (a `ScrolledWindow` wrapping the `CodePreviewView`) so
 /// the heading at document-order index `doc_index` sits at the top of the view.
 ///
-/// The buffer offset comes from the per-render `RenderData.heading_offsets` (same
-/// document order as `outline::extract_headings`), so the outline's `doc_index`
-/// maps straight to a scroll target without re-parsing.  A no-op if the scroller
-/// does not wrap a preview view or the index is out of range (e.g. headings
-/// changed).
+/// The target comes from the per-render `RenderData.heading_sites` (same document
+/// order as `outline::extract_headings`), so the outline's `doc_index` maps straight
+/// to a scroll target without re-parsing.  A no-op if the scroller does not wrap a
+/// preview view or the index is out of range (e.g. headings changed).
+///
+/// **Returns the folds that must be expanded**, when the heading is inside a
+/// collapsed disclosure (empty otherwise). This function still scrolls in that case — to the
+/// disclosure's summary line, the nearest position the reader can see — so the
+/// caller that cannot expand (there is no reader fold state to write in the export
+/// sink, and none in a test) still lands somewhere honest rather than nowhere. The
+/// caller that CAN expand (rubric 12.22) re-issues the scroll afterwards.
 ///
 /// Scrolling goes through a `GtkTextMark` + `scroll_to_mark`, NOT `scroll_to_iter`:
 /// `scroll_to_iter` scrolls *immediately* using whatever line heights are computed
@@ -36,22 +42,29 @@ use std::rc::Rc;
 /// into an as-yet-unvalidated region — the preview went blank-gray and GTK spammed
 /// "snapshot … without a current allocation" every frame (GTK4Rs/AP-22).  `scroll_to_mark`
 /// records the target and defers the scroll until after validation, which is robust.
-pub(crate) fn scroll_preview_to_heading(sw: &ScrolledWindow, doc_index: usize) {
-    let Some(view) = sw
+pub(crate) fn scroll_preview_to_heading(
+    sw: &ScrolledWindow,
+    doc_index: usize,
+) -> Vec<crate::fold::FoldKey> {
+    let Some(site) = sw
         .child()
         .and_then(|c| c.downcast::<CodePreviewView>().ok())
+        .and_then(|view| {
+            let site = scrib_render_data(&view)?
+                .borrow()
+                .heading_sites
+                .get(doc_index)
+                .cloned()?;
+            // The view owns the coalesced, validation-safe scroll (mark +
+            // scroll_to_mark on an idle, with rapid re-targeting collapsed to the
+            // latest) — GTK4Rs/AP-22.
+            view.scroll_to_buffer_offset(site.offset);
+            Some(site)
+        })
     else {
-        return;
+        return Vec::new();
     };
-    let Some(rd) = scrib_render_data(&view) else {
-        return;
-    };
-    let offset = rd.borrow().heading_offsets.get(doc_index).copied();
-    if let Some(offset) = offset {
-        // The view owns the coalesced, validation-safe scroll (mark + scroll_to_mark
-        // on an idle, with rapid re-targeting collapsed to the latest) — GTK4Rs/AP-22.
-        view.scroll_to_buffer_offset(offset);
-    }
+    site.hidden_by
 }
 
 /// Scroll a preview scroller (a `ScrolledWindow` wrapping the `CodePreviewView`)

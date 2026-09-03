@@ -318,7 +318,17 @@ pub(crate) fn create_tab_in_window(
     // A deferred (background) tab starts preview-less — a fully-supported state
     // (identical to Edit mode). Its preview is rendered on first activation
     // (`materialize_deferred_preview`), keeping a big multi-file open O(1).
-    let preview = (!defer).then(|| render_and_wire_preview(md, doc_dir, zoom, allow_unsafe_images));
+    // A first build for a new tab: no reader state yet.
+    let preview = (!defer).then(|| {
+        render_and_wire_preview(
+            md,
+            doc_dir,
+            zoom,
+            allow_unsafe_images,
+            &crate::fold::FoldState::default(),
+            0,
+        )
+    });
     let core = assemble_tab_core(&content_box, md, preview.as_ref());
 
     let tab_id = winstate::alloc_tab_id();

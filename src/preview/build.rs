@@ -16,21 +16,48 @@ use gtk::{TextBuffer, TextChildAnchor};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use std::collections::HashMap;
 
-/// Everything one render hands to the `CodePreviewView` — the CONTENT half.
+/// Everything one render hands to the `CodePreviewView` — the CONTENT half, in its
+/// two halves.
 ///
 /// A named struct, so a new render product is one field here plus one line in
 /// [`install_content`] and the compiler propagates the rest. As twelve positional
 /// arguments it was nine coordinated edits, and `heading_spans` — the product this
 /// branch added — is what made the count concrete.
+///
+/// **The split is a coordinate/ownership boundary, not tidiness.** [`InstallDecor`] is
+/// measured in BUFFER SPACE and is valid against any buffer whose text matches;
+/// [`InstallWidgets`] is a set of live children BOUND TO THE BUFFER THEY WERE BUILT
+/// FOR. A splice's PASS A renders the whole document into a scratch buffer that is then
+/// dropped, so its decor transfers to the live pane and its widgets emphatically do
+/// not — they are children of nothing. That distinction used to live only in prose and
+/// in six `_`-named fields at the splice's destructure, which is the ScrAP-131 shape:
+/// adding a field produced a compile error whose obvious fix was another `_`.
 pub(super) struct ViewInstall {
+    pub(super) decor: InstallDecor,
+    pub(super) widgets: InstallWidgets,
+}
+
+/// The BUFFER-SPACE half of [`ViewInstall`]: spans, colours and marker data, all
+/// measured in char offsets into the buffer the render filled.
+///
+/// Valid against any buffer whose text matches the one it was measured in — which is
+/// exactly the property a splice relies on when it installs PASS A's decor into the
+/// live pane after proving the two buffers hold the same characters.
+pub(super) struct InstallDecor {
     pub(super) code_blocks: Vec<crate::span::BufferSpan>,
     pub(super) code_block_bg: gtk::gdk::RGBA,
     pub(super) blockquote_ranges: Vec<crate::span::QuoteSpan>,
     pub(super) blockquote_bar: gtk::gdk::RGBA,
     pub(super) heading_spans: Vec<crate::renderer::HeadingSpan>,
-    pub(super) width_bounded: Vec<(gtk::Widget, i32)>,
-    pub(super) image_bounded: Vec<(gtk::Widget, i32, i32)>,
-    pub(super) tables: Vec<ScribTableWidget>,
+    /// One span per disclosure this render DREW: its summary LINE's text, newline
+    /// excluded — the extent the drawn summary band paints over (TDD 18.48).
+    ///
+    /// Derived from [`crate::renderer::DisclosureExtent::summary`] rather than
+    /// recorded a second time, so the band and the splice cannot disagree about where
+    /// a summary line is. No colour travels with them, for the same reason
+    /// `heading_spans` carries none: the fill is read from the ACTIVE theme at paint
+    /// time, so selecting a theme repaints rather than re-renders.
+    pub(super) disclosure_bands: Vec<crate::span::BufferSpan>,
     /// One entry per rendered list item — the data seam for the drawn marker gutter,
     /// drawn in `snapshot_layer(BelowText)`.
     ///
@@ -38,6 +65,71 @@ pub(super) struct ViewInstall {
     /// task-checkbox toggle changes a marker's checked state without changing a byte of
     /// buffer text, so the structural guard passes and nothing else would update it.
     pub(super) list_markers: Vec<crate::renderer::ListMarker>,
+}
+
+/// The WIDGET half of [`ViewInstall`]: live children, each parented in (or created
+/// for) the buffer this render filled.
+///
+/// **Never transferable between buffers.** A render whose buffer is discarded — a
+/// splice's PASS A, an export render — owns a set of widgets that are children of
+/// nothing, and installing one puts an unparented widget into a live view's record.
+/// The splice builds this half itself, by merging the survivors of its delete with the
+/// region render's fresh children; PASS A's copy never reaches it, because the type it
+/// hands on does not contain one.
+#[derive(Default)]
+pub(super) struct InstallWidgets {
+    pub(super) width_bounded: Vec<(gtk::Widget, i32)>,
+    pub(super) image_bounded: Vec<(gtk::Widget, i32, i32)>,
+    pub(super) tables: Vec<ScribTableWidget>,
+}
+
+/// Every buffer-keyed map a render produces — the half of [`RenderProducts`] that is
+/// installed WHOLESALE, so no install route can carry a subset of it.
+///
+/// The `ViewInstall` precedent, applied to the map half. All four routes that put a
+/// render into a live pane (first render, `re_render`, the annotation refresh, and the
+/// splice's `install_outcome`) used to copy these out field by field, and three of the
+/// four do it by assignment rather than by struct literal — so a map added to the
+/// producer and missed at one route compiled clean and simply left that route showing
+/// the PREVIOUS render's value. That defect shape (the outline landing on the wrong
+/// heading only after a splice; find reading a stale `collapsed_blocks` only after an
+/// annotation refresh) is among the hardest here to attribute, and the surface grew
+/// with every map added. Adding map number eleven is now one field and one producer
+/// line.
+///
+/// `image_tints` and `table_anchors` are deliberately NOT here: they reference live
+/// anchor widgets, and each route answers for them differently — a full render
+/// replaces, the splice merges survivors, the annotation refresh leaves them entirely
+/// alone. `source_map_inv` is not here either, because it is DERIVED — see
+/// [`crate::preview::qdata::RenderData::adopt_maps`], which is the only place it is
+/// built, so no route can forget it.
+pub(super) struct RenderMaps {
+    pub(super) source_map: Vec<(i32, usize)>,
+    /// The character-precise copy-as-Markdown tree for this render.
+    pub(super) copymap: crate::copymap::CopyTree,
+    pub(super) md_owned: String,
+    pub(super) links: Vec<(i32, i32, String)>,
+    /// One entry per heading the SOURCE declares, in the outline's own document
+    /// order — see [`crate::outline::HeadingSite`] for why it is not the rendered
+    /// list.
+    pub(super) heading_sites: Vec<crate::outline::HeadingSite>,
+    pub(super) heading_map: HashMap<String, i32>,
+    /// Every block this render drew collapsed, in document order — see
+    /// [`crate::renderer::CollapsedBlock`].
+    pub(super) collapsed_blocks: Vec<crate::renderer::CollapsedBlock>,
+    /// Where every disclosure this render DREW sits in the buffer — see
+    /// [`crate::renderer::DisclosureExtent`]. The splice reads it to know what a
+    /// toggle changes; the summary band reads it to know what to paint over.
+    pub(super) disclosure_extents: Vec<crate::renderer::DisclosureExtent>,
+    /// Cleaned→original byte-offset shift table (CriticMarkup extraction), for
+    /// translating a preview selection back to the editor's original source
+    /// (identity `[(0,0)]` when the document has no annotations).
+    pub(super) shifts: Vec<(usize, usize)>,
+    /// The **original** (pre-extraction) normalized source the editor buffer holds
+    /// — needed to convert the editor's char offsets ↔ bytes when the scroll-sync
+    /// translates a position across the CriticMarkup shift table (Fork 2-B). Equals
+    /// `md_owned` (the cleaned text) when the document has no annotations.
+    pub(super) original_owned: String,
 }
 
 /// Everything a Markdown parse+render produces up to (but not including) widget
@@ -49,16 +141,13 @@ pub(super) struct ViewInstall {
 /// change would compile and silently break exactly one render route (M5).
 pub(super) struct RenderProducts {
     pub(super) buf: TextBuffer,
-    pub(super) source_map: Vec<(i32, usize)>,
-    /// The character-precise copy-as-Markdown tree for this render.
-    pub(super) copymap: crate::copymap::CopyTree,
-    pub(super) md_owned: String,
-    pub(super) links: Vec<(i32, i32, String)>,
+    /// Every buffer-keyed map this render produced, as ONE value — see [`RenderMaps`].
+    pub(super) maps: RenderMaps,
+    /// Every disclosure toggle this render emitted, paired with the fold it drives.
+    /// The preview layer connects activation; the renderer stays GTK-signal-free.
+    pub(super) disclosure_toggles: Vec<crate::renderer::DisclosureToggle>,
     pub(super) anchored: Vec<(TextChildAnchor, gtk::Widget)>,
     pub(super) image_tints: Vec<(TextChildAnchor, gtk::Widget)>,
-    pub(super) heading_offsets: Vec<i32>,
-    pub(super) heading_slugs: Vec<String>,
-    pub(super) heading_map: HashMap<String, i32>,
     /// CriticMarkup comment markers to draw in the preview's right margin.
     pub(super) markers: Vec<crate::codeview::MarkerData>,
     /// Everything the VIEW itself is handed, as one value.
@@ -79,15 +168,6 @@ pub(super) struct RenderProducts {
     /// `buf` already has, exposed so the incremental annotation refresh can re-tag an
     /// EXISTING (structurally identical) buffer without rebuilding it at all.
     pub(super) highlight_ranges: Vec<crate::span::BufferSpan>,
-    /// Cleaned→original byte-offset shift table (CriticMarkup extraction), for
-    /// translating a preview selection back to the editor's original source
-    /// (identity `[(0,0)]` when the document has no annotations).
-    pub(super) shifts: Vec<(usize, usize)>,
-    /// The **original** (pre-extraction) normalized source the editor buffer holds
-    /// — needed to convert the editor's char offsets ↔ bytes when the scroll-sync
-    /// translates a position across the CriticMarkup shift table (Fork 2-B). Equals
-    /// `md_owned` (the cleaned text) when the document has no annotations.
-    pub(super) original_owned: String,
 }
 
 /// Empty a buffer so a render can fill it again: drop its text (which also drops
@@ -118,6 +198,130 @@ fn reset_buffer_for_render(buf: &TextBuffer) {
     }
 }
 
+/// A document PREPARED for rendering: tab-normalised, CriticMarkup-extracted, with
+/// the palette its theme derives — and the ONE way a [`Renderer`] over those inputs is
+/// constructed.
+///
+/// **The one definition of what a render's inputs are.** PASS A (the whole-document
+/// scratch render) and a region render must be built from *identically* prepared
+/// inputs, because the entire splice route rests on "the scratch text equals the
+/// spliced live text". Two hand-written preambles is precisely how they stop being
+/// identical: a change to the CriticMarkup filter, to the normalisation pre-pass, or a
+/// tenth `Renderer::new` argument had to be mirrored in both, and a mismatch produces a
+/// document that is subtly not the one PASS A's maps describe — the silent map offset
+/// this design names as its only real risk. A splice now builds ONE of these and drives
+/// both passes from it, so the premise is structural rather than mirrored.
+///
+/// It is also what retires the eleven-argument positional hand-off between the splice's
+/// layers — the same hazard [`RenderProducts::install`] already fixed for the widget
+/// half.
+pub(super) struct Prepared<'a> {
+    /// The RAW source, before tab normalisation.
+    ///
+    /// Marker constructs are captured from this rather than from the normalised text:
+    /// normalisation is length- and position-preserving, so a `src_span` indexes both
+    /// identically, but only the raw text is byte-identical to the editor buffer a
+    /// mutation is later applied to — and an anchor is matched by its TEXT, so a
+    /// normalised tab would make it unfindable.
+    raw_src: &'a str,
+    /// Inline hard tabs normalised to spaces, so tab-separated table rows parse as GFM
+    /// tables (a tab in a delimiter row otherwise makes pulldown reject the whole block
+    /// — ScrAP-75), without disturbing code content or block indentation. The
+    /// substitution is length- and position-preserving, so every offset map built below
+    /// stays aligned with the editor's text.
+    md_norm: crate::renderer::NormalizedMd<'a>,
+    /// CriticMarkup lifted out of the source *before* pulldown sees it. Every render map
+    /// is keyed to `extraction.cleaned`, which is exactly what the buffer reflects;
+    /// translation back to the editor's original text happens per-position at the
+    /// scroll-sync boundary and is identity when the document has no annotations.
+    extraction: crate::annotate::scan::Extraction,
+    /// The cleaned byte ranges of the annotations that are HIGHLIGHTS, which is the
+    /// subset the renderer tags. Derived once here — the filter used to be written out
+    /// at each preamble.
+    ann_highlights: Vec<(usize, usize)>,
+    palette: Palette,
+    theme: std::rc::Rc<crate::theme::Theme>,
+    doc_dir: Option<std::path::PathBuf>,
+    zoom: f64,
+    allow_unsafe_images: bool,
+    folds: crate::fold::FoldState,
+}
+
+impl<'a> Prepared<'a> {
+    /// Prepare `md` against an explicit theme.
+    ///
+    /// The theme is a parameter rather than a read of `crate::theme::active()` because
+    /// the construction used to reach for the process global in three places — the
+    /// palette, the tag set, and the renderer's own themed cell markup — so the whole
+    /// of it could only be exercised against whatever the process happened to have
+    /// active (F-BUILDPRODUCTS-001). The palette is DERIVED from it here rather than
+    /// passed alongside, so the two cannot describe different themes.
+    pub(super) fn new(
+        md: &'a str,
+        doc_dir: Option<&std::path::Path>,
+        zoom: f64,
+        allow_unsafe_images: bool,
+        theme: std::rc::Rc<crate::theme::Theme>,
+        folds: &crate::fold::FoldState,
+    ) -> Self {
+        let md_norm = crate::renderer::NormalizedMd::new(md);
+        let extraction = crate::annotate::extract(md_norm.as_str());
+        let ann_highlights = extraction
+            .annotations
+            .iter()
+            .filter(|a| a.kind == crate::annotate::AnnKind::Highlight)
+            .map(|a| (a.cleaned_content.start.raw(), a.cleaned_content.end.raw()))
+            .collect();
+        let palette = Palette::for_theme(&theme);
+        Self {
+            raw_src: md,
+            md_norm,
+            extraction,
+            ann_highlights,
+            palette,
+            theme,
+            doc_dir: doc_dir.map(|d| d.to_path_buf()),
+            zoom,
+            allow_unsafe_images,
+            folds: folds.clone(),
+        }
+    }
+
+    /// The CriticMarkup-free text every render map is keyed to, and the only text a
+    /// parser is ever handed.
+    pub(super) fn cleaned(&self) -> &str {
+        self.extraction.cleaned.as_str()
+    }
+
+    /// A [`Renderer`] over `buf` carrying exactly these inputs — the only constructor
+    /// either render route calls, so a tenth `Renderer::new` argument cannot reach one
+    /// route and miss the other.
+    pub(super) fn renderer(&self, buf: TextBuffer) -> Renderer {
+        Renderer::new(
+            buf,
+            self.theme.clone(),
+            self.palette.syntect_theme.clone(),
+            self.doc_dir.clone(),
+            self.allow_unsafe_images,
+            self.cleaned().to_string(),
+            self.ann_highlights.clone(),
+            self.zoom,
+            self.folds.clone(),
+        )
+    }
+
+    /// Give `buf` the tag set these inputs' theme and zoom define — the step that must
+    /// precede any write, since a body event applies tags as it writes and an untagged
+    /// buffer answers every `apply_tag_by_name` with a `Gtk-WARNING`.
+    pub(super) fn setup_tags(&self, buf: &TextBuffer) {
+        crate::tags::setup_tags_with_theme(buf, &self.palette, self.zoom, &self.theme);
+    }
+
+    pub(super) fn palette(&self) -> &Palette {
+        &self.palette
+    }
+}
+
 /// Parse `md` and render it into a fresh `GtkTextBuffer`, returning the buffer
 /// plus the renderer's typed outputs (see [`RenderProducts`]). This is the one
 /// place the palette resolve, tag setup, the pulldown-cmark offset-iterator
@@ -136,12 +340,16 @@ pub(super) fn build_render_products(
     zoom: f64,
     allow_unsafe_images: bool,
 ) -> RenderProducts {
+    // No reader fold state: every disclosure renders as the document states. This is
+    // the right default for the export sink and for every test that is not about
+    // folding, which is why it stays a thin wrapper rather than a second path.
     build_render_products_with_theme(
         md,
         doc_dir,
         zoom,
         allow_unsafe_images,
         crate::theme::active(),
+        &crate::fold::FoldState::default(),
     )
 }
 
@@ -163,18 +371,75 @@ pub(super) fn build_render_products_with_theme(
     zoom: f64,
     allow_unsafe_images: bool,
     theme: std::rc::Rc<crate::theme::Theme>,
+    folds: &crate::fold::FoldState,
 ) -> RenderProducts {
-    let fresh = TextBuffer::new(None::<&gtk::TextTagTable>);
-    let palette = Palette::for_theme(&theme);
-    build_products(
-        &fresh,
+    build_products_scratch(&Prepared::new(
         md,
         doc_dir,
         zoom,
         allow_unsafe_images,
         theme,
-        palette,
-    )
+        folds,
+    ))
+}
+
+/// What a walked event earns in the render's buffer-keyed maps, given whether it was
+/// inside a collapsed disclosure BEFORE and AFTER it was processed.
+///
+/// **The one decision in `build_products`' loop that is not about a GTK object.** The
+/// dispatcher around it is 296 lines over a live `GtkTextBuffer`, so this rule was
+/// reachable only by rendering a document and reading the maps back — and the rule is
+/// three cases whose consequences are silent when wrong: a claim minted inside a
+/// collapsed body puts a buffer range on text that reached no buffer; a missing widen at
+/// the close makes a copy across the block reconstruct the summary line the reader can
+/// see rather than the block's full Markdown (rubric 2.8i). Extracted so the decision
+/// has a test rather than a document (F-DRY-A-005, the F-TEST-002 remainder).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MapClaim {
+    /// Inside a collapsed body throughout — the event reached no buffer, so it earns
+    /// nothing.
+    None,
+    /// The event that CLOSED a collapsed block. Its whole source — opening tags, hidden
+    /// body and `</details>` — belongs to the one node the summary line already owns, so
+    /// that node is WIDENED to cover it rather than a second, empty-buffered node being
+    /// minted beside it.
+    WidenOpening,
+    /// An ordinary event outside any collapsed body: it earns a node of its own, if it
+    /// has a copy kind at all.
+    OwnNode,
+}
+
+/// The rule itself: what `site_before` (the collapsed site as the event arrived) and
+/// `site_after` (as it left) mean for the maps.
+///
+/// **Asymmetric on purpose.** "Inside before, outside after" is the block CLOSING, and
+/// is the only case that widens. "Outside before" earns a node whatever happened after,
+/// because a block OPENING is an event the reader can see the summary of.
+pub(super) fn map_claim(inside_before: bool, inside_after: bool) -> MapClaim {
+    match (inside_before, inside_after) {
+        (true, true) => MapClaim::None,
+        (true, false) => MapClaim::WidenOpening,
+        (false, _) => MapClaim::OwnNode,
+    }
+}
+
+/// A whole-document render of an already-[`Prepared`] document into a fresh scratch
+/// buffer — **the splice's PASS A**, and what [`build_render_products_with_theme`] is
+/// now a thin wrapper over.
+///
+/// Exposed separately so a splice can drive PASS A and its region walk from ONE
+/// `Prepared`, rather than each re-deriving the document from the same raw arguments
+/// and being trusted to agree.
+pub(super) fn build_products_scratch(prepared: &Prepared<'_>) -> RenderProducts {
+    // ⚠️ A FRESH TAG TABLE, which is correct here and is the trap spelling anywhere a
+    // splice is contemplated: `insert_range` copies tags only into a buffer sharing
+    // the SOURCE's table by POINTER, and a fresh one gets a `Gtk-CRITICAL` and a
+    // silent no-op. This buffer is never a splice source — PASS A's output is a set of
+    // MAPS, and the live region is written by a second renderer rather than copied out
+    // of here — so it owns its own table. A future scratch buffer meant to be spliced
+    // FROM must take `Some(&live.tag_table())` (GTK4Rs/AP-320).
+    let fresh = TextBuffer::new(None::<&gtk::TextTagTable>);
+    build_products(&fresh, prepared)
 }
 
 /// [`build_render_products`] rendering into an EXISTING buffer, clearing whatever
@@ -222,60 +487,42 @@ pub(super) fn build_render_products_into(
     doc_dir: Option<&std::path::Path>,
     zoom: f64,
     allow_unsafe_images: bool,
+    folds: &crate::fold::FoldState,
 ) -> RenderProducts {
     build_products(
         buf,
-        md,
-        doc_dir,
-        zoom,
-        allow_unsafe_images,
-        crate::theme::active(),
-        Palette::resolve(),
+        &Prepared::new(
+            md,
+            doc_dir,
+            zoom,
+            allow_unsafe_images,
+            crate::theme::active(),
+            folds,
+        ),
     )
 }
 
-/// The one construction both entry points above call, with the two things that used to
-/// be read from process globals — the theme and the palette derived from it — supplied.
-#[allow(clippy::too_many_arguments)] // the theme and its palette are the two seams this
-                                     // function exists to take; every other parameter is
-                                     // a render input the callers already had
-fn build_products(
-    buf: &TextBuffer,
-    md: &str,
-    doc_dir: Option<&std::path::Path>,
-    zoom: f64,
-    allow_unsafe_images: bool,
-    theme: std::rc::Rc<crate::theme::Theme>,
-    palette: Palette,
-) -> RenderProducts {
+/// The one construction every entry point above calls — **PASS A included** — over an
+/// already-[`Prepared`] document.
+///
+/// Taking the prepared value rather than the raw inputs is what makes "PASS A and a
+/// region render see the same document" structural: there is one preamble, and the
+/// splice hands the same `Prepared` to this and to its region walk.
+pub(super) fn build_products(buf: &TextBuffer, prepared: &Prepared<'_>) -> RenderProducts {
+    let Prepared {
+        raw_src,
+        md_norm,
+        extraction,
+        ..
+    } = prepared;
     let buf = buf.clone();
     reset_buffer_for_render(&buf);
-    crate::tags::setup_tags_with_theme(&buf, &palette, zoom, &theme);
+    prepared.setup_tags(&buf);
 
-    // Normalise inline hard tabs to spaces so tab-separated table rows parse as GFM
-    // tables (a tab in a delimiter row otherwise makes pulldown reject the whole
-    // block — ScrAP-75), without disturbing code content or block indentation. The
-    // substitution is length/position-preserving, so every offset map built below
-    // (`source_map`, `copymap`, cell maps) stays aligned with the editor's text.
-    // The RAW original, kept before `md` is shadowed by the cleaned text below.
-    // Marker constructs are captured from this rather than from `md_norm`: tab
-    // normalisation is length- and position-preserving, so a `src_span` indexes
-    // both identically, but only the raw text is byte-identical to the editor
-    // buffer the mutation will later be applied to — and an anchor is matched by
-    // its TEXT, so a normalised tab would make it unfindable.
-    let raw_src = md;
-    let md_norm = crate::renderer::NormalizedMd::new(md);
-
-    // Pre-parse CriticMarkup extraction (the pure `annotate::scan` pass): lift annotations
-    // out of the source *before* pulldown sees them, and render the CriticMarkup
-    // -free `cleaned` text. Every render map below stays in this cleaned coordinate
-    // system (which is exactly what the buffer reflects); translation back to the
-    // editor's original text happens per-position at the scroll-sync boundary and
-    // is identity when the doc has no annotations. When there is no CriticMarkup,
-    // `cleaned == md_norm`, so this is behaviour-preserving for every existing doc.
-    let extraction = crate::annotate::extract(md_norm.as_str());
-    let md = extraction.cleaned.as_str();
-
+    // The normalisation and the CriticMarkup extraction both happened in `Prepared`,
+    // which is the point: a region render is built from the same value, so the two
+    // walks cannot see differently-prepared documents.
+    let md = prepared.cleaned();
     let md_owned = md.to_string();
     let mut source_map: Vec<(i32, usize)> = Vec::new();
     // Per-event records (cleaned src byte range + produced buffer char range) for
@@ -300,29 +547,38 @@ fn build_products(
     let mut cell_evs: Vec<crate::copymap::RawEv> = Vec::new();
     let mut cell_off: i32 = 0;
 
-    let ann_highlights: Vec<(usize, usize)> = extraction
-        .annotations
-        .iter()
-        .filter(|a| a.kind == crate::annotate::AnnKind::Highlight)
-        .map(|a| (a.cleaned_content.start.raw(), a.cleaned_content.end.raw()))
-        .collect();
-    let mut r = Renderer::new(
-        buf.clone(),
-        theme.clone(),
-        palette.syntect_theme,
-        doc_dir.map(|d| d.to_path_buf()),
-        allow_unsafe_images,
-        md.to_string(),
-        ann_highlights,
-        zoom,
-    );
+    let mut r = prepared.renderer(buf.clone());
     // Streamed: no list-item look-ahead is needed any more — list markers are never
     // inserted as buffer text (they are drawn in the gutter), so
     // there is nothing to suppress and thus no reason to peek the next event.
+    // One entry per heading the SOURCE declares, in document order, whether or not a
+    // collapsed disclosure kept it out of the buffer. See `outline::HeadingSite`.
+    let mut heading_sites: Vec<crate::outline::HeadingSite> = Vec::new();
     for (ev, src_range) in Parser::new_ext(md, crate::renderer::md_options()).into_offset_iter() {
-        let before = buf.char_count();
+        // Where the RENDERER is about to write, not how long the buffer is. The two
+        // agree only while a render appends; a region render (`Renderer::write_at`)
+        // writes into the middle of a buffer that already holds content on both
+        // sides, and `char_count()` would then record every waypoint, highlight run
+        // and copy node at the document's end.
+        let before = r.end_offset();
         let (src_start, src_end) = (src_range.start, src_range.end);
-        source_map.push((before, waypoint_src_offset(&ev, &src_range)));
+        // **Is this event inside a COLLAPSED disclosure's body?** Asked of the
+        // renderer, and asked BEFORE it processes the event, because the answer
+        // changes during the very event that closes such a block.
+        //
+        // Everything below builds a map from the source onto the buffer — the copy
+        // map, the per-cell copy maps, the source map, the heading index — and a
+        // collapsed body reaches the buffer as nothing at all. An entry recorded for
+        // content that was never written does not merely go unused: it claims buffer
+        // positions belonging to whatever came NEXT, shifting every later claim by
+        // the length of the body. MEASURED, before this gate existed: a selection
+        // after a collapsed block copied the block's source instead of its own, and
+        // `copymap::debug_verify` reported 1:1 leaf drift on every such document.
+        let site = r.collapsed_site();
+        let collapsed = site.is_some();
+        if !collapsed {
+            source_map.push((before, waypoint_src_offset(&ev, &src_range)));
+        }
         let copy_kind = crate::copymap::classify(&ev);
         r.event_src = src_range.clone();
         // Only CONTENT runs anchor highlight tags / markers. A block-structure
@@ -339,48 +595,138 @@ fn build_products(
         );
         // Per-cell capture (cells insert no buffer text — their content lives in the
         // label widgets — so this runs on a separate cell-plain offset counter).
-        match &ev {
-            Event::Start(Tag::TableCell) => {
-                cell_active = true;
-                cell_evs.clear();
-                cell_off = 0;
-            }
-            Event::End(TagEnd::TableCell) => {
-                cell_maps.push(crate::copymap::build(md, &cell_evs, cell_off, &r.scripts));
-                let span = if cell_evs.is_empty() {
-                    0..0
-                } else {
-                    let lo = cell_evs.iter().map(|e| e.src.start).min().unwrap_or(0);
-                    let hi = cell_evs.iter().map(|e| e.src.end).max().unwrap_or(0);
-                    lo..hi
-                };
-                cell_src_spans.push(span);
-                cell_active = false;
-            }
-            _ if cell_active => {
-                if let Some(kind) = &copy_kind {
-                    let w = crate::copymap::cell_width(&r.scripts, src_start, kind);
-                    cell_evs.push(crate::copymap::RawEv {
-                        buf: (cell_off, cell_off + w),
-                        src: src_range.clone(),
-                        kind: kind.clone(),
-                    });
-                    cell_off += w;
+        //
+        // Skipped wholesale inside a collapsed body: a table in there builds no cell
+        // widgets, so a cell map produced for it would make `cell_maps` longer than
+        // the rendered cell list and `attach_cell_copymaps` would pair every LATER
+        // table's cells with the wrong map — the same off-by-N as the copy map above,
+        // one list over.
+        //
+        // Hoisted OUT of the match rather than added to it as a guard arm: an
+        // `_ if collapsed` arm reads as one more variant this dispatcher declines to
+        // name, which is exactly what `cargo xtask lint-references` check 15 exists
+        // to catch. The condition is about the whole capture, not about any event.
+        if !collapsed {
+            match &ev {
+                Event::Start(Tag::TableCell) => {
+                    cell_active = true;
+                    cell_evs.clear();
+                    cell_off = 0;
                 }
+                Event::End(TagEnd::TableCell) => {
+                    cell_maps.push(crate::copymap::build(md, &cell_evs, cell_off, &r.scripts));
+                    let span = if cell_evs.is_empty() {
+                        0..0
+                    } else {
+                        let lo = cell_evs.iter().map(|e| e.src.start).min().unwrap_or(0);
+                        let hi = cell_evs.iter().map(|e| e.src.end).max().unwrap_or(0);
+                        lo..hi
+                    };
+                    cell_src_spans.push(span);
+                    cell_active = false;
+                }
+                // dispatch-selector: selects on whether the walk is INSIDE a table
+                // cell, not on which variant arrived. Which variants carry copyable
+                // width is decided by `copymap::classify` above, which is itself
+                // exhaustive — so a new variant reaches this arm already classified,
+                // and adding an arm per variant here would restate that decision in a
+                // second place free to disagree with the first.
+                _ if cell_active => {
+                    if let Some(kind) = &copy_kind {
+                        let w = crate::copymap::cell_width(&r.scripts, src_start, kind);
+                        cell_evs.push(crate::copymap::RawEv {
+                            buf: (cell_off, cell_off + w),
+                            src: src_range.clone(),
+                            kind: kind.clone(),
+                        });
+                        cell_off += w;
+                    }
+                }
+                // dispatch-selector: the sibling of the arm above on the same
+                // `cell_active` axis — everything OUTSIDE a cell, which this loop's
+                // per-cell capture has nothing to do with.
+                _ => {}
             }
-            _ => {}
         }
+        let is_heading_end = matches!(ev, Event::End(TagEnd::Heading(_)));
         r.process(ev);
-        let after = buf.char_count();
+        // Paired with `before` above: the renderer's cursor, not the buffer's length.
+        let after = r.end_offset();
         if is_content_run && after > before {
             hl_evs.push((src_start, src_end, before, after));
         }
-        if let Some(kind) = copy_kind {
-            raw_evs.push(crate::copymap::RawEv {
-                buf: (before, after),
-                src: src_range,
-                kind,
+        if is_heading_end {
+            // Counted from the SOURCE stream, so the list has one entry per heading
+            // the document declares. A rendered heading takes the buffer offset and
+            // slug the renderer just recorded for it; a hidden one takes the
+            // collapsed block's summary line instead (`outline::HeadingSite`).
+            heading_sites.push(match (&site, r.headings.last()) {
+                (Some(site), _) => crate::outline::HeadingSite {
+                    offset: site.summary_offset,
+                    hidden_by: site.chain.clone(),
+                    slug: None,
+                },
+                (None, Some((slug, offset))) => crate::outline::HeadingSite {
+                    offset: *offset,
+                    hidden_by: Vec::new(),
+                    slug: Some(slug.clone()),
+                },
+                // A rendered heading always records itself at its `End` event, so
+                // this arm is unreachable — but the list's LENGTH is what stops
+                // every later index slipping, so it gets a placeholder rather than
+                // a gap.
+                (None, None) => crate::outline::HeadingSite {
+                    offset: before,
+                    hidden_by: Vec::new(),
+                    slug: None,
+                },
             });
+        }
+        // The decision is `map_claim`'s and is unit-tested there; this loop carries it
+        // out. The `site` the widen needs is the one the event ARRIVED inside.
+        match (
+            map_claim(site.is_some(), r.collapsed_site().is_some()),
+            &site,
+        ) {
+            (MapClaim::None, _) => {}
+            (MapClaim::WidenOpening, Some(site)) => {
+                // Matched on the outermost block's own SOURCE EVENT, not on its fold
+                // key: two `<details>` can share one raw-HTML block, so the key is no
+                // longer the offset a node carries (F-TEST-B-005).
+                let block_start = if site.chain.is_empty() {
+                    src_start
+                } else {
+                    site.block_start
+                };
+                match raw_evs
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.src.start == block_start)
+                {
+                    Some(opening) => opening.src.end = src_end,
+                    // Unreachable while the summary line is emitted from the same
+                    // raw-HTML block the key names. Logged rather than ignored: the
+                    // consequence is a copy that silently omits the block's body.
+                    None => log::error!(
+                        "copymap: collapsed disclosure in the raw-HTML block at source byte \
+                         {block_start} closed with no node covering its summary line; a copy \
+                         across it will omit the body"
+                    ),
+                }
+            }
+            // Unreachable: `WidenOpening` is returned only for `inside_before`, which
+            // IS `site.is_some()`. Named rather than swallowed, so the pairing reads as
+            // the invariant it is rather than as a case someone forgot.
+            (MapClaim::WidenOpening, None) => {}
+            (MapClaim::OwnNode, _) => {
+                if let Some(kind) = copy_kind {
+                    raw_evs.push(crate::copymap::RawEv {
+                        buf: (before, after),
+                        src: src_range,
+                        kind,
+                    });
+                }
+            }
         }
     }
     let char_count = buf.char_count();
@@ -410,39 +756,55 @@ fn build_products(
     // The cleaned→original shift table, for translating a preview selection /
     // scroll position back to the editor's original source.
     let shifts = extraction.shifts.clone();
-    let original_owned = md_norm.into_owned();
+    let original_owned = md_norm.as_str().to_string();
 
-    let heading_offsets: Vec<i32> = r.headings.iter().map(|&(_, off)| off).collect();
-    let heading_slugs: Vec<String> = r.headings.iter().map(|(slug, _)| slug.clone()).collect();
+    // Slug → buffer offset, over the headings that actually reached the buffer: a
+    // `#fragment` names a position, and a heading inside a collapsed block has none
+    // until the reader expands it.
     let heading_map: HashMap<String, i32> = r.headings.into_iter().collect();
 
+    // The drawn summary band's extents, PROJECTED from the extents rather than
+    // recorded beside them: one producer, so the band cannot come to disagree with
+    // the splice about where a summary line sits.
+    let disclosure_extents = std::mem::take(&mut r.disclosure_extents);
+    let disclosure_bands = disclosure_extents.iter().map(|e| e.summary).collect();
+
     RenderProducts {
+        disclosure_toggles: std::mem::take(&mut r.disclosure_toggles),
         buf,
-        source_map,
-        copymap,
-        md_owned,
-        links: r.links,
+        maps: RenderMaps {
+            collapsed_blocks: std::mem::take(&mut r.collapsed_blocks),
+            disclosure_extents,
+            source_map,
+            copymap,
+            md_owned,
+            links: r.links,
+            heading_sites,
+            heading_map,
+            shifts,
+            original_owned,
+        },
         anchored: r.anchored,
         image_tints: r.image_tints,
         install: ViewInstall {
-            code_blocks: r.code_blocks,
-            code_block_bg: palette.code_block_bg,
-            blockquote_ranges: r.blockquote_ranges,
-            blockquote_bar: palette.blockquote_bar,
-            heading_spans: r.heading_spans,
-            width_bounded: r.width_bounded,
-            image_bounded: r.image_bounded,
-            tables: r.tables,
-            list_markers: r.list_markers,
+            decor: InstallDecor {
+                code_blocks: r.code_blocks,
+                code_block_bg: prepared.palette().code_block_bg,
+                blockquote_ranges: r.blockquote_ranges,
+                blockquote_bar: prepared.palette().blockquote_bar,
+                heading_spans: r.heading_spans,
+                disclosure_bands,
+                list_markers: r.list_markers,
+            },
+            widgets: InstallWidgets {
+                width_bounded: r.width_bounded,
+                image_bounded: r.image_bounded,
+                tables: r.tables,
+            },
         },
-        heading_offsets,
-        heading_slugs,
-        heading_map,
         markers,
         cell_src_spans,
         highlight_ranges,
-        shifts,
-        original_owned,
     }
 }
 
@@ -646,15 +1008,22 @@ fn highlight_tag_ranges(
 /// out of nine.
 pub(super) fn install_content(view: &CodePreviewView, install: ViewInstall, zoom: f64) {
     let ViewInstall {
-        code_blocks,
-        code_block_bg,
-        blockquote_ranges,
-        blockquote_bar,
-        heading_spans,
-        width_bounded,
-        image_bounded,
-        tables,
-        list_markers,
+        decor:
+            InstallDecor {
+                code_blocks,
+                code_block_bg,
+                blockquote_ranges,
+                blockquote_bar,
+                heading_spans,
+                disclosure_bands,
+                list_markers,
+            },
+        widgets:
+            InstallWidgets {
+                width_bounded,
+                image_bounded,
+                tables,
+            },
     } = install;
     view.set_code_blocks(code_blocks, code_block_bg);
     view.set_blockquotes(blockquote_ranges, blockquote_bar);
@@ -663,6 +1032,11 @@ pub(super) fn install_content(view: &CodePreviewView, install: ViewInstall, zoom
     // else is: a decoration installed at one route and not the other is absent on
     // whichever path the person testing it did not take.
     view.set_heading_spans(heading_spans);
+    // The disclosure summary band's spans (TDD 18.48), installed at the same choke
+    // point and for the same reason: a decoration installed on one full-render route
+    // and not the other is absent on whichever path the person testing it did not
+    // take.
+    view.set_disclosure_bands(disclosure_bands);
     view.set_width_bounded(width_bounded);
     view.set_image_bounded(image_bounded);
     view.set_tables(tables);
@@ -839,6 +1213,43 @@ mod pure_tests {
 /// ```sh
 /// cargo test --features gtk-integration-tests
 /// ```
+/// **F-DRY-A-005 (the F-TEST-002 remainder): the map-claim rule, without a buffer.**
+///
+/// Three cases, each with a silent consequence when wrong — which is why the rule is
+/// worth reaching directly rather than through a rendered document and its maps.
+#[cfg(test)]
+mod map_claim_tests {
+    use super::{map_claim, MapClaim};
+
+    #[test]
+    fn an_event_that_never_left_a_collapsed_body_earns_nothing() {
+        assert_eq!(map_claim(true, true), MapClaim::None);
+    }
+
+    /// The CLOSE of a collapsed block. Minting a node of its own here instead would put
+    /// an empty-buffered node beside the summary line's, and a copy across the block
+    /// would then reconstruct the summary text the reader can see rather than the
+    /// block's full Markdown (rubric 2.8i).
+    #[test]
+    fn the_event_that_closes_a_collapsed_block_widens_the_opening() {
+        assert_eq!(map_claim(true, false), MapClaim::WidenOpening);
+    }
+
+    /// **Asymmetric on purpose, and this is the case that says so.** An event that
+    /// ARRIVES outside a collapsed body earns a node whatever happened after it — a
+    /// block OPENING is an event whose summary the reader can see. Treating the two
+    /// directions alike would deny that summary line a node of its own.
+    #[test]
+    fn an_event_that_arrives_outside_a_collapsed_body_always_earns_a_node() {
+        assert_eq!(map_claim(false, false), MapClaim::OwnNode);
+        assert_eq!(
+            map_claim(false, true),
+            MapClaim::OwnNode,
+            "including the one that OPENS a collapsed block"
+        );
+    }
+}
+
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
     use super::build_render_products;
@@ -873,12 +1284,12 @@ mod gtk_integration_tests {
         // back to its own source (it would drift if capture used get_text).
         let a = char_off(&text, "bold");
         assert_eq!(
-            crate::copymap::resolve(&products.copymap, md, a, a + 4),
+            crate::copymap::resolve(&products.maps.copymap, md, a, a + 4),
             "bold"
         );
         // Crossing out of the bold run reconstructs the delimiters.
         assert_eq!(
-            crate::copymap::resolve(&products.copymap, md, a, a + 10),
+            crate::copymap::resolve(&products.maps.copymap, md, a, a + 10),
             "**bold** table"
         );
     }
@@ -889,7 +1300,10 @@ mod gtk_integration_tests {
         let md = "# Title\n\nA **bold** and `code` line.";
         let products = build_render_products(md, None, 1.0, false);
         let n = products.buf.char_count();
-        assert_eq!(crate::copymap::resolve(&products.copymap, md, 0, n), md);
+        assert_eq!(
+            crate::copymap::resolve(&products.maps.copymap, md, 0, n),
+            md
+        );
     }
 
     /// A real table cell's label carries its own copymap (attached as qdata), and
@@ -919,7 +1333,7 @@ mod gtk_integration_tests {
         let md = "> qa\n> qb\n\n- li one\n- li two";
         let products = build_render_products(md, None, 1.0, false);
         let slice = buffer_slice(&products.buf);
-        let cmap = &products.copymap;
+        let cmap = &products.maps.copymap;
         // within the 2nd quote line → bare text, continuation `> ` suppressed.
         let a = char_off(&slice, "qb");
         assert_eq!(crate::copymap::resolve(cmap, md, a, a + 2), "qb");
@@ -946,7 +1360,7 @@ mod gtk_integration_tests {
         let md = "intro\n\n```rust\nlet a = 1;\nlet b = 2;\n```\n\nafter";
         let products = build_render_products(md, None, 1.0, false);
         let slice = buffer_slice(&products.buf);
-        let cmap = &products.copymap;
+        let cmap = &products.maps.copymap;
         // Within the body: the reported bug — this used to copy the whole block.
         let a = char_off(&slice, "a = 1");
         assert_eq!(crate::copymap::resolve(cmap, md, a, a + 5), "a = 1");
@@ -974,7 +1388,7 @@ mod gtk_integration_tests {
         let md = "x\n\n- a\n  - nested\n- b";
         let products = build_render_products(md, None, 1.0, false);
         let slice = buffer_slice(&products.buf);
-        let cmap = &products.copymap;
+        let cmap = &products.maps.copymap;
         // within the nested item → bare text, no `- ` marker.
         let a = char_off(&slice, "nested");
         assert_eq!(crate::copymap::resolve(cmap, md, a, a + 6), "nested");
@@ -993,7 +1407,10 @@ mod gtk_integration_tests {
         let ep = build_render_products(esc, None, 1.0, false);
         let etext = buffer_slice(&ep.buf);
         let s = char_off(&etext, "*");
-        assert_eq!(crate::copymap::resolve(&ep.copymap, esc, s, s + 1), "\\*");
+        assert_eq!(
+            crate::copymap::resolve(&ep.maps.copymap, esc, s, s + 1),
+            "\\*"
+        );
     }
 
     /// Phase 1: a list item inserts NO inline marker at all — no bullet,
@@ -1025,6 +1442,7 @@ mod gtk_integration_tests {
         // for the drawn gutter). Task `src` spans vary with pulldown, so normalise them.
         let kinds: Vec<crate::renderer::ListMarkerKind> = products
             .install
+            .decor
             .list_markers
             .iter()
             .map(|m| match &m.kind {
@@ -1050,7 +1468,7 @@ mod gtk_integration_tests {
             ]
         );
         // Copy is exact: Select-All reconstructs the source, task boxes and all.
-        let cmap = &products.copymap;
+        let cmap = &products.maps.copymap;
         let n = products.buf.char_count();
         assert_eq!(crate::copymap::resolve(cmap, md, 0, n), md);
     }
@@ -1067,6 +1485,7 @@ mod gtk_integration_tests {
         let products = build_render_products(md, None, 1.0, false);
         let got: Vec<(usize, crate::renderer::ListMarkerKind)> = products
             .install
+            .decor
             .list_markers
             .iter()
             .map(|m| (m.depth, m.kind.clone()))
@@ -1110,6 +1529,7 @@ mod gtk_integration_tests {
         // Each first_line offset lands on a real line and increases in document order.
         let offs: Vec<i32> = products
             .install
+            .decor
             .list_markers
             .iter()
             .map(|m| m.first_line)
@@ -1119,7 +1539,7 @@ mod gtk_integration_tests {
             "offsets are monotonic"
         );
         // Task markers carry a non-empty source span (the `[ ]`/`[x]` to flip on toggle).
-        for m in &products.install.list_markers {
+        for m in &products.install.decor.list_markers {
             if let Task { src, .. } = &m.kind {
                 assert!(src.start < src.end, "task marker has a real source span");
             }
@@ -1138,9 +1558,9 @@ mod gtk_integration_tests {
         for md in ["- ", "- \n", "1. ", "1. \n", "- [ ]\n", "- [ ] "] {
             let p = build_render_products(md, None, 1.0, false);
             assert!(
-                p.install.list_markers.is_empty(),
+                p.install.decor.list_markers.is_empty(),
                 "empty item {md:?} must record no marker, got {:?}",
-                p.install.list_markers
+                p.install.decor.list_markers
             );
         }
         // Empty items interleaved with content: only the content items keep a marker,
@@ -1149,6 +1569,7 @@ mod gtk_integration_tests {
         let p = build_render_products(md, None, 1.0, false);
         let kinds: Vec<_> = p
             .install
+            .decor
             .list_markers
             .iter()
             .map(|m| match &m.kind {
@@ -1202,6 +1623,7 @@ mod gtk_integration_tests {
             ..
         } = *products
             .install
+            .decor
             .blockquote_ranges
             .first()
             .expect("one blockquote range");
@@ -1286,7 +1708,10 @@ mod gtk_integration_tests {
             );
             // Copy still reconstructs the byte-exact source across the break.
             let n = buf.char_count();
-            assert_eq!(crate::copymap::resolve(&products.copymap, md, 0, n), md);
+            assert_eq!(
+                crate::copymap::resolve(&products.maps.copymap, md, 0, n),
+                md
+            );
         }
 
         // A genuine LOOSE item (blank line between paragraphs) also yields a second
@@ -1340,7 +1765,7 @@ mod gtk_integration_tests {
         let slice = buffer_slice(buf);
 
         // (1) One span per level, and the outer contains the inner.
-        let spans = &products.install.blockquote_ranges;
+        let spans = &products.install.decor.blockquote_ranges;
         assert_eq!(
             spans.len(),
             2,
@@ -1385,7 +1810,7 @@ mod gtk_integration_tests {
              the buffer's separators are the renderer's own, not the document's"
         );
         assert_eq!(
-            crlf.install.blockquote_ranges, *spans,
+            crlf.install.decor.blockquote_ranges, *spans,
             "…and therefore to the same per-level quote spans, on every platform"
         );
 
@@ -1473,6 +1898,7 @@ mod gtk_integration_tests {
         // The renderer flags it for the gutter, so the marker uses the quoted base.
         let m = products
             .install
+            .decor
             .list_markers
             .first()
             .expect("the quoted item recorded a marker");
@@ -1748,7 +2174,14 @@ mod gtk_integration_tests {
     #[gtktest::test]
     fn annotation_refresh_updates_tags_in_place_without_a_buffer_swap() {
         // Initial render WITHOUT the annotation.
-        let pane = crate::preview::render("the earth is flat ok", None, 1.0, false);
+        let pane = crate::preview::render(
+            "the earth is flat ok",
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+            0,
+        );
         let sw = pane
             .downcast::<gtk::Overlay>()
             .expect("preview pane is a GtkOverlay")
@@ -1846,7 +2279,7 @@ mod gtk_integration_tests {
         let text = buffer_slice(&products.buf);
         let a = char_off(&text, "verification");
         let b = a + "verification".len() as i32; // ascii
-        let span = crate::copymap::wrap_span(&products.copymap, &products.md_owned, a, b)
+        let span = crate::copymap::wrap_span(&products.maps.copymap, &products.maps.md_owned, a, b)
             .expect("a wrap span");
         assert_eq!(&md[span], "verification");
     }
@@ -1864,7 +2297,7 @@ mod gtk_integration_tests {
         let text = buffer_slice(&products.buf);
         let a = char_off(&text, "verification");
         let b = a + "verification".len() as i32; // ascii
-        let span = crate::copymap::wrap_span(&products.copymap, &products.md_owned, a, b)
+        let span = crate::copymap::wrap_span(&products.maps.copymap, &products.maps.md_owned, a, b)
             .expect("a wrap span");
         assert_eq!(
             &md[span], "verification",
@@ -1921,9 +2354,9 @@ mod gtk_integration_tests {
         let a = char_off(&text, "with");
         let b = char_off(&text, "word") + 4; // end of "word"
         let create = crate::preview::annotate::create_from_selection(
-            &products.copymap,
-            &products.shifts,
-            &products.md_owned,
+            &products.maps.copymap,
+            &products.maps.shifts,
+            &products.maps.md_owned,
             a,
             b,
             "note",
@@ -1962,12 +2395,12 @@ mod gtk_integration_tests {
         assert_eq!(buffer_slice(&products.buf), cleaned);
         let b = char_off(cleaned, "beta");
         assert_eq!(
-            crate::copymap::resolve(&products.copymap, cleaned, b, b + 4),
+            crate::copymap::resolve(&products.maps.copymap, cleaned, b, b + 4),
             "beta"
         );
         let n = products.buf.char_count();
         assert_eq!(
-            crate::copymap::resolve(&products.copymap, cleaned, 0, n),
+            crate::copymap::resolve(&products.maps.copymap, cleaned, 0, n),
             cleaned
         );
     }
@@ -2594,6 +3027,7 @@ mod gtk_integration_tests {
             1.0,
             false,
             std::rc::Rc::new(themes.resolve("alpha")),
+            &crate::fold::FoldState::default(),
         );
         let beta = super::build_render_products_with_theme(
             md,
@@ -2601,11 +3035,12 @@ mod gtk_integration_tests {
             1.0,
             false,
             std::rc::Rc::new(themes.resolve("beta")),
+            &crate::fold::FoldState::default(),
         );
 
         // The palette-derived half.
         assert_ne!(
-            alpha.install.code_block_bg, beta.install.code_block_bg,
+            alpha.install.decor.code_block_bg, beta.install.decor.code_block_bg,
             "the palette came from the active theme, not the one handed in"
         );
         // The tag half, read off each render's own buffer.
@@ -2644,7 +3079,7 @@ mod gtk_integration_tests {
             1.0,
             false,
         );
-        let spans = &products.install.heading_spans;
+        let spans = &products.install.decor.heading_spans;
         assert_eq!(spans.len(), 3, "{spans:?}");
         assert_eq!(spans[0].level_index, 0);
         assert_eq!(spans[1].level_index, 2);
@@ -2675,10 +3110,10 @@ mod gtk_integration_tests {
         let _theme = crate::theme::activate_for_test(themes.resolve("banded"));
         let products = build_render_products("# only a heading\n", None, 1.0, false);
         // Nothing else is present — this is the document the gate would have skipped.
-        assert!(products.install.code_blocks.is_empty());
-        assert!(products.install.blockquote_ranges.is_empty());
-        assert!(products.install.list_markers.is_empty());
-        assert_eq!(products.install.heading_spans.len(), 1);
+        assert!(products.install.decor.code_blocks.is_empty());
+        assert!(products.install.decor.blockquote_ranges.is_empty());
+        assert!(products.install.decor.list_markers.is_empty());
+        assert_eq!(products.install.decor.heading_spans.len(), 1);
     }
 
     /// TDD 2.1a — the preview has FIVE heading tiers, and h6 folds onto the h5 tag:
@@ -2862,7 +3297,7 @@ mod gtk_integration_tests {
                   </picture>\n\nAfter the hero.";
         let products = build_render_products(md, Some(dir.path()), 1.0, false);
         assert_eq!(
-            products.install.image_bounded.len(),
+            products.install.widgets.image_bounded.len(),
             1,
             "exactly one GtkPicture anchored from the <picture> block"
         );
@@ -2894,11 +3329,11 @@ mod gtk_integration_tests {
                   </picture>";
         let products = build_render_products(md, Some(dir.path()), 1.0, false);
         assert_eq!(
-            products.install.image_bounded.len(),
+            products.install.widgets.image_bounded.len(),
             1,
             "one anchored image"
         );
-        let (_widget, nat_w, nat_h) = &products.install.image_bounded[0];
+        let (_widget, nat_w, nat_h) = &products.install.widgets.image_bounded[0];
         assert_eq!(
             (*nat_w, *nat_h),
             (8, 8),
@@ -2924,7 +3359,7 @@ mod gtk_integration_tests {
             false,
         );
         assert_eq!(
-            ungrouped.install.image_bounded.len(),
+            ungrouped.install.widgets.image_bounded.len(),
             2,
             "ungrouped <source> + <img> render as two independent images"
         );
@@ -2936,11 +3371,11 @@ mod gtk_integration_tests {
             false,
         );
         assert_eq!(
-            grouped.install.image_bounded.len(),
+            grouped.install.widgets.image_bounded.len(),
             1,
             "<picture> groups into one slot"
         );
-        let (_widget, nat_w, _nat_h) = &grouped.install.image_bounded[0];
+        let (_widget, nat_w, _nat_h) = &grouped.install.widgets.image_bounded[0];
         assert_eq!(*nat_w, 8, "the <source> (8×8) won the <picture> fallback");
     }
 
@@ -2953,7 +3388,7 @@ mod gtk_integration_tests {
         let products =
             build_render_products("<img src=\"logo.png\">", Some(dir.path()), 1.0, false);
         assert_eq!(
-            products.install.image_bounded.len(),
+            products.install.widgets.image_bounded.len(),
             1,
             "bare <img> anchors a picture"
         );
@@ -2967,7 +3402,10 @@ mod gtk_integration_tests {
                   <iframe src=\"file:///etc/passwd\"></iframe>\n\n\
                   <div class=\"src\">hi</div>\n\nAfter.";
         let products = build_render_products(md, None, 1.0, false);
-        assert!(products.install.image_bounded.is_empty(), "no images");
+        assert!(
+            products.install.widgets.image_bounded.is_empty(),
+            "no images"
+        );
         assert!(
             products.anchored.is_empty(),
             "non-image HTML anchors nothing (no stray broken-image marker)"
@@ -2992,7 +3430,10 @@ mod gtk_integration_tests {
                   <img src=\"nope.png\">\n\
                   </picture>";
         let products = build_render_products(md, Some(dir.path()), 1.0, false);
-        assert!(products.install.image_bounded.is_empty(), "nothing decoded");
+        assert!(
+            products.install.widgets.image_bounded.is_empty(),
+            "nothing decoded"
+        );
         assert_eq!(
             products.anchored.len(),
             1,
@@ -3038,12 +3479,1355 @@ mod gtk_integration_tests {
         let md = std::fs::read_to_string(root.join("README.md")).expect("read README");
         let products = build_render_products(&md, Some(root), 1.0, false);
         assert!(
-            !products.install.image_bounded.is_empty(),
+            !products.install.widgets.image_bounded.is_empty(),
             "the README <picture> hero must render as an anchored image, not be dropped"
         );
         assert!(
             !buffer_slice(&products.buf).contains("<picture"),
             "the <picture> markup must not leak into the rendered text"
+        );
+    }
+
+    /// A document whose collapsed disclosure hides a heading and a body — the shape
+    /// every assertion below is about.
+    const HIDDEN: &str =
+        "# A\n\n<details>\n<summary>S</summary>\n\n## Hidden\n\nbody text\n\n</details>\n\n# B\n";
+
+    /// **Rubric 2.8i / the copy map's alignment.** A collapsed body reaches the
+    /// buffer as nothing, so nothing it contains may claim a buffer position.
+    ///
+    /// The strongest assertion here is the one with no `assert!` in front of it:
+    /// `build_render_products` runs `copymap::debug_verify`, which is FATAL under
+    /// test, so a map that claims buffer ranges for unrendered content fails this
+    /// test before it reaches a line of its own. MEASURED before the fix: the guard
+    /// reported `1:1 leaf source/buffer drift at buffer (7, 16): "body text" != ""` —
+    /// the body's nine characters claimed as buffer positions belonging to the text
+    /// AFTER the block, shifting every later claim by exactly that much.
+    ///
+    /// Mutation-tested: skipping the `collapsed` gate in the build loop makes the
+    /// guard fire and this test die at construction.
+    #[gtktest::test]
+    fn a_collapsed_body_claims_no_buffer_positions_in_the_copy_map() {
+        let products = build_render_products(HIDDEN, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        // The body's OPENING text now previews on the summary line (TDD 2.26) — not a
+        // leak: the fixture's whole short body fits inside the preview's limit, so it
+        // shows in full, ellipsised. What must still hold is that it renders ONLY as
+        // that preview fragment, never a second time as the ordinary heading + prose
+        // a full render would have produced.
+        assert!(
+            slice.contains("Hidden body text…"),
+            "the short body previews, ellipsised, on the summary line: {slice:?}"
+        );
+        assert_eq!(
+            slice.matches("Hidden").count(),
+            1,
+            "the body must not ALSO render as an ordinary heading: {slice:?}"
+        );
+
+        // Text AFTER the block copies as itself, not as the block. This is the half
+        // the drift broke: the trailing heading's own characters resolved to the
+        // disclosure's source.
+        let b = char_off(&slice, "B");
+        assert_eq!(
+            crate::copymap::resolve(&products.maps.copymap, HIDDEN, b, b + 1),
+            "B",
+            "text after a collapsed disclosure must copy as itself"
+        );
+    }
+
+    /// **Rubric 2.8i.** A selection that spans the collapsed block reconstructs the
+    /// block's WHOLE Markdown — the `<details>` tags, the `<summary>`, and the body
+    /// the reader cannot see — because a copy reflects the document rather than the
+    /// viewport.
+    #[gtktest::test]
+    fn copying_across_a_collapsed_disclosure_yields_its_full_source() {
+        let products = build_render_products(HIDDEN, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        let s = char_off(&slice, "S");
+        let copied = crate::copymap::resolve(&products.maps.copymap, HIDDEN, s, s + 1);
+        for expected in [
+            "<details>",
+            "<summary>S</summary>",
+            "## Hidden",
+            "body text",
+            "</details>",
+        ] {
+            assert!(
+                copied.contains(expected),
+                "a copy over the collapsed block must carry {expected:?}, got {copied:?}"
+            );
+        }
+    }
+
+    /// **Rubric 12.22 / `outline::HeadingSite`.** One site per heading the SOURCE
+    /// declares, so the outline's `doc_index` can never index a different heading.
+    ///
+    /// MEASURED before the fix: this document produced two rendered heading offsets
+    /// against three source headings, so activating "Hidden" scrolled to "B" and
+    /// activating "B" did nothing at all.
+    #[gtktest::test]
+    fn every_source_heading_gets_a_site_even_when_a_disclosure_hides_it() {
+        let products = build_render_products(HIDDEN, None, 1.0, false);
+        let sites = &products.maps.heading_sites;
+        assert_eq!(
+            sites.len(),
+            crate::outline::extract_headings(HIDDEN).len(),
+            "one site per SOURCE heading, or every later doc_index slips: {sites:?}"
+        );
+
+        let slice = buffer_slice(&products.buf);
+        assert_eq!(sites[0].offset, char_off(&slice, "A"));
+        assert_eq!(sites[0].slug.as_deref(), Some("a"));
+        assert!(sites[0].hidden_by.is_empty());
+
+        // The hidden one is reachable at the summary line — the nearest position the
+        // reader can see — and names the fold that has to be expanded to reach it.
+        assert_eq!(sites[1].offset, char_off(&slice, "S") - 2);
+        assert_eq!(
+            sites[1].hidden_by.len(),
+            1,
+            "the one fold to expand is named"
+        );
+        assert_eq!(
+            sites[1].slug, None,
+            "a slug names a buffer position and a hidden heading has none"
+        );
+
+        assert_eq!(sites[2].offset, char_off(&slice, "B"));
+        assert_eq!(sites[2].slug.as_deref(), Some("b"));
+        assert!(sites[2].hidden_by.is_empty());
+
+        // Non-decreasing, which is what keeps the scroll-spy's binary search valid.
+        assert!(
+            sites.windows(2).all(|w| w[0].offset <= w[1].offset),
+            "sites must stay in document order: {sites:?}"
+        );
+    }
+
+    /// The same document with its disclosure OPEN: every heading is rendered, so
+    /// every site is a real one. The positive control for the test above — without
+    /// it, a `HeadingSite` list that marked everything hidden would pass.
+    #[gtktest::test]
+    fn an_open_disclosure_hides_no_heading() {
+        let md = HIDDEN.replace("<details>", "<details open>");
+        let products = build_render_products(&md, None, 1.0, false);
+        assert_eq!(products.maps.heading_sites.len(), 3);
+        assert!(
+            products
+                .maps
+                .heading_sites
+                .iter()
+                .all(|s| s.hidden_by.is_empty()),
+            "nothing is hidden when the block is open: {:?}",
+            products.maps.heading_sites
+        );
+        assert!(buffer_slice(&products.buf).contains("Hidden"));
+    }
+
+    /// **Rubric 2.26d — an unclosed `<details>` does not swallow the document.**
+    ///
+    /// MEASURED before the pairing pre-scan: this exact document rendered as `before`
+    /// and the summary line, and NOTHING else. The frame never popped, so suppression
+    /// ran to the end of the event stream. For an untrusted document (TDD 2.7) one
+    /// stray tag blanked the page, and it failed in total silence.
+    #[gtktest::test]
+    fn an_unclosed_details_does_not_swallow_the_rest_of_the_document() {
+        let md = concat!(
+            "before\n\n",
+            "<details>\n<summary>Never closed</summary>\n\n",
+            "inside\n\n",
+            "## After\n\ntail prose\n"
+        );
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        for expected in ["before", "Never closed", "inside", "After", "tail prose"] {
+            assert!(
+                slice.contains(expected),
+                "everything after an unclosed <details> must still render; {expected:?}                  missing from {slice:?}"
+            );
+        }
+        // And it offers no control: a toggle that cannot fold anything would, if
+        // activated, hide the remainder of the document.
+        assert!(
+            products.disclosure_toggles.is_empty(),
+            "an unclosed block gets no toggle"
+        );
+        // The headings after it are still the document's, and still reachable.
+        assert_eq!(products.maps.heading_sites.len(), 1);
+        assert!(products.maps.heading_sites[0].hidden_by.is_empty());
+    }
+
+    /// The positive control: the SAME document with the block closed folds normally.
+    /// Without this, a build that simply stopped collapsing anything would pass the
+    /// test above.
+    #[gtktest::test]
+    fn a_closed_details_still_collapses_its_body() {
+        // A TAIL marker past the preview's character limit (item 3 / TDD 2.26) — the
+        // opening word previewing is expected; the marker proves the rest is genuinely
+        // collapsed rather than pasted onto the page in full.
+        let long_body = format!("inside {}TAILMARKER", "filler ".repeat(15));
+        let md = format!(
+            "before\n\n<details>\n<summary>Closed</summary>\n\n{long_body}\n\n</details>\n\n\
+             ## After\n\ntail prose\n"
+        );
+        let products = build_render_products(&md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        assert!(
+            !slice.contains("TAILMARKER"),
+            "the body is collapsed: {slice:?}"
+        );
+        assert!(slice.contains("After") && slice.contains("tail prose"));
+        assert_eq!(
+            products.disclosure_toggles.len(),
+            1,
+            "a foldable block carries its toggle"
+        );
+    }
+
+    /// Nesting: an unclosed INNER block inside a closed outer one must not consume the
+    /// outer block's `</details>`. The inner one becomes unfoldable; the outer one is
+    /// unaffected and still folds.
+    #[gtktest::test]
+    fn an_unclosed_inner_block_does_not_steal_its_parents_close_tag() {
+        let md = concat!(
+            "<details open>\n<summary>Outer</summary>\n\nouter body\n\n",
+            "<details>\n<summary>Inner</summary>\n\ninner body\n\n</details>\n\n",
+            "after everything\n"
+        );
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        // The one `</details>` closes the INNER block (it is innermost), leaving the
+        // OUTER one unclosed — so the outer gets no toggle, and nothing is swallowed.
+        assert!(
+            slice.contains("after everything"),
+            "content past the blocks survives: {slice:?}"
+        );
+        assert!(slice.contains("Outer") && slice.contains("Inner"));
+        assert!(
+            slice.contains("outer body"),
+            "the open outer block shows its body"
+        );
+    }
+
+    /// **Rubric 2.26** — a collapsed disclosure renders as a summary LINE: the label
+    /// shows, the body does not, and none of the raw HTML reaches the page as text.
+    ///
+    /// The third clause is the one with a history: raw HTML is sanitised by omission,
+    /// so a construct the scanner half-understands leaks its own markup as prose.
+    #[gtktest::test]
+    fn a_collapsed_disclosure_renders_as_a_summary_line() {
+        // The body is engineered past the preview's character limit (item 3 /
+        // `disclosure::preview::MAX_PREVIEW_CHARS`), with a TAIL marker word that can
+        // never fit inside it — so "the body is not on the page" still means what it
+        // says, distinct from "the body's opening text previews" (TDD 2.26).
+        let long_body = format!("hidden body {}TAILMARKER", "filler ".repeat(15));
+        let products = build_render_products(
+            &format!("<details>\n<summary>Show me</summary>\n\n{long_body}\n\n</details>\n"),
+            None,
+            1.0,
+            false,
+        );
+        let slice = buffer_slice(&products.buf);
+        assert!(
+            slice.contains("Show me"),
+            "the label is on the page: {slice:?}"
+        );
+        // The body's OPENING text previews on the summary line (TDD 2.26)...
+        assert!(
+            slice.contains("hidden body"),
+            "the preview shows the body's opening text: {slice:?}"
+        );
+        assert!(slice.contains('…'), "and ends in an ellipsis: {slice:?}");
+        // ...but the WHOLE body is not: it is a short preview, not the body pasted
+        // onto the summary line in full.
+        assert!(
+            !slice.contains("TAILMARKER"),
+            "the body is a PREVIEW, not the whole body: {slice:?}"
+        );
+        for markup in ["<details", "</details", "<summary", "</summary"] {
+            assert!(
+                !slice.contains(markup),
+                "{markup:?} leaked as literal text: {slice:?}"
+            );
+        }
+        // The affordance exists, carrying the collapsed state.
+        assert_eq!(products.disclosure_toggles.len(), 1);
+        assert!(!products.disclosure_toggles[0].toggle.is_active());
+    }
+
+    /// **Rubric 2.26c** — everything inside a body renders as it does at top level.
+    ///
+    /// Asserted by CONSTRUCT, not by text: a body that reached the buffer as prose
+    /// would satisfy a `contains` check while rendering none of this as Markdown.
+    #[gtktest::test]
+    fn every_construct_inside_a_body_renders_as_it_does_at_top_level() {
+        let md = concat!(
+            "<details open>\n<summary>S</summary>\n\n",
+            "para with **bold**, *em* and `code`\n\n",
+            "```rust\nfn f() {}\n```\n\n",
+            "- one\n- two\n\n",
+            "> quoted\n\n",
+            "| h |\n|---|\n| c |\n\n",
+            "[link](https://example.com)\n\n",
+            "</details>\n"
+        );
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        assert!(
+            slice.contains("para with bold"),
+            "emphasis markers stripped: {slice:?}"
+        );
+        assert!(
+            !products.install.decor.code_blocks.is_empty(),
+            "the fence is a code block, not prose"
+        );
+        assert!(
+            !products.install.decor.blockquote_ranges.is_empty(),
+            "the quote is a quote"
+        );
+        assert!(
+            !products.install.decor.list_markers.is_empty(),
+            "the list is a list"
+        );
+        assert!(
+            !products.install.widgets.tables.is_empty(),
+            "the table is a table"
+        );
+        assert!(!products.maps.links.is_empty(), "the link is a link");
+    }
+
+    /// **Rubric 2.26c's second half** — a disclosure INSIDE a container renders and
+    /// folds there exactly as it does at top level.
+    #[gtktest::test]
+    fn a_disclosure_inside_a_blockquote_or_a_list_item_still_folds() {
+        // Long enough that a TAIL marker sits past the preview's character limit
+        // (item 3 / TDD 2.26) — the preview showing the body's OPENING text is
+        // expected; the whole body pasted in is what this test guards against.
+        let filler = "filler ".repeat(12);
+        let quoted = format!(
+            "> <details>\n> <summary>Quoted</summary>\n>\n> hidden here {filler}TAILMARKER\n>\n> </details>\n"
+        );
+        let listed = format!(
+            "- <details>\n  <summary>Listed</summary>\n\n  hidden here {filler}TAILMARKER\n\n  </details>\n"
+        );
+        for md in [quoted, listed] {
+            let products = build_render_products(&md, None, 1.0, false);
+            let slice = buffer_slice(&products.buf);
+            assert_eq!(
+                products.disclosure_toggles.len(),
+                1,
+                "a disclosure in a container is still a disclosure: {slice:?}"
+            );
+            assert!(
+                !slice.contains("TAILMARKER"),
+                "and it still collapses its body: {slice:?}"
+            );
+        }
+    }
+
+    /// **Rubric 2.26d** — a `<details>` with no `<summary>` shows the default label
+    /// and still folds.
+    ///
+    /// The rubric's unspaced-body clause is pinned separately, by
+    /// [`an_unspaced_disclosure_body_shows_as_literal_text`].
+    #[gtktest::test]
+    fn a_summaryless_block_shows_the_default_label() {
+        // A TAIL marker past the preview's character limit (item 3 / TDD 2.26) — the
+        // opening words previewing on the summary line is expected; the whole body is
+        // what stays collapsed.
+        let long_body = format!("body {}TAILMARKER", "filler ".repeat(15));
+        let products = build_render_products(
+            &format!("<details>\n\n{long_body}\n\n</details>\n"),
+            None,
+            1.0,
+            false,
+        );
+        let slice = buffer_slice(&products.buf);
+        assert!(
+            slice.contains(crate::renderer::DEFAULT_SUMMARY_LABEL),
+            "a block with no <summary> takes the default label: {slice:?}"
+        );
+        assert_eq!(products.disclosure_toggles.len(), 1, "and still folds");
+        assert!(
+            !slice.contains("TAILMARKER"),
+            "with its body collapsed like any other"
+        );
+    }
+
+    /// **Rubric 2.26e at the RENDER level.** `fold.rs` proves the model keeps sibling
+    /// and nested state apart; this proves a render honours it — a correct model
+    /// wired to the wrong block would pass one and fail the other.
+    #[gtktest::test]
+    fn siblings_and_nested_blocks_render_their_own_state() {
+        // The second (still-collapsed) sibling's body carries a TAIL marker past the
+        // preview's character limit (item 3 / TDD 2.26) — its opening words previewing
+        // is expected; the marker proves the rest stays genuinely collapsed.
+        let beta_body = format!("beta {}TAILMARKER", "filler ".repeat(15));
+        let md = format!(
+            "<details>\n<summary>One</summary>\n\nalpha\n\n</details>\n\n\
+             <details>\n<summary>Two</summary>\n\n{beta_body}\n\n</details>\n"
+        );
+        let spans = crate::renderer::disclosure::scan_document(&md);
+        assert_eq!(spans.len(), 2, "two siblings");
+
+        // Open only the FIRST. The second must be untouched.
+        let mut folds = crate::fold::FoldState::default();
+        folds.toggle(spans[0].fold_key());
+        let products = super::build_render_products_with_theme(
+            &md,
+            None,
+            1.0,
+            false,
+            crate::theme::active(),
+            &folds,
+        );
+        let slice = buffer_slice(&products.buf);
+        assert!(
+            slice.contains("alpha"),
+            "the opened sibling shows: {slice:?}"
+        );
+        assert!(
+            !slice.contains("TAILMARKER"),
+            "the other one does not: {slice:?}"
+        );
+
+        // **The other half of the name, which used to be absent from the fixture**
+        // (F-AUD-202): NESTED blocks. An inner disclosure's state is its own, and
+        // re-expanding an outer one restores it rather than resetting it.
+        // Same trick as the siblings above: the marker sits past the collapsed
+        // preview's character limit, so its absence means genuinely collapsed rather
+        // than merely truncated.
+        let inner_body = format!("inner {}INNERMARKER", "filler ".repeat(15));
+        let outer_lead = format!("outer {}OUTERMARKER", "pad ".repeat(20));
+        let md = &format!(
+            "<details open>\n<summary>Outer</summary>\n\n\
+             {outer_lead}\n\n\
+             <details>\n<summary>Inner</summary>\n\n{inner_body}\n\n</details>\n\n\
+             </details>\n"
+        );
+        let spans = crate::renderer::disclosure::scan_document(md);
+        assert_eq!(spans.len(), 2, "an outer and an inner: {spans:?}");
+        let (outer, inner) = (spans[0].fold_key(), spans[1].fold_key());
+        assert_ne!(outer, inner, "two blocks, two keys");
+
+        let render = |folds: &crate::fold::FoldState| {
+            buffer_slice(
+                &super::build_render_products_with_theme(
+                    md,
+                    None,
+                    1.0,
+                    false,
+                    crate::theme::active(),
+                    folds,
+                )
+                .buf,
+            )
+        };
+
+        // Outer open (the document says so), inner closed (the document says so).
+        let mut folds = crate::fold::FoldState::default();
+        let slice = render(&folds);
+        assert!(slice.contains("OUTERMARKER"), "outer is open: {slice:?}");
+        assert!(
+            !slice.contains("INNERMARKER"),
+            "inner is closed, independently: {slice:?}"
+        );
+
+        // Open the inner. Only the inner changes.
+        folds.toggle(inner);
+        let slice = render(&folds);
+        assert!(slice.contains("INNERMARKER"), "inner opened: {slice:?}");
+        assert!(slice.contains("OUTERMARKER"), "outer untouched: {slice:?}");
+
+        // Collapse the outer: the inner draws nothing at all, not even its summary.
+        folds.toggle(outer);
+        let slice = render(&folds);
+        assert!(!slice.contains("OUTERMARKER"), "outer collapsed: {slice:?}");
+        assert!(!slice.contains("INNERMARKER"), "and with it the inner");
+
+        // Re-expand the outer. The inner is open again because THAT is the state the
+        // reader left it in — a reset would show the summary and hide the marker.
+        folds.toggle(outer);
+        let slice = render(&folds);
+        assert!(
+            slice.contains("INNERMARKER"),
+            "the inner's own prior state survived its ancestor's round trip: {slice:?}"
+        );
+    }
+
+    /// **The renderer can fill a REGION of a buffer, not only append to one.**
+    ///
+    /// This is the seam a fold toggle needs: clearing and refilling the whole buffer
+    /// discards every line's height validation, which collapses the vadjustment and
+    /// throws the reader to the top (MEASURED — ScrAP-339), while
+    /// an edit confined to one region leaves every untouched line validated.
+    ///
+    /// Asserted as CONTENT rather than as a call: a right-gravity mark is what makes
+    /// the cursor advance, and a left-gravity one would lay the document down
+    /// backwards while every individual insert still "worked".
+    #[gtktest::test]
+    fn a_render_can_be_pointed_at_a_region_instead_of_the_buffer_end() {
+        use gtk::prelude::*;
+        let buf = TextBuffer::new(None::<&gtk::TextTagTable>);
+        buf.set_text("BEFORE\n\nAFTER\n");
+        let at = char_off(
+            &buf.slice(&buf.start_iter(), &buf.end_iter(), true),
+            "AFTER",
+        );
+
+        let mut r = crate::renderer::Renderer::new(
+            buf.clone(),
+            crate::theme::active(),
+            "InspiredGitHub".into(),
+            None,
+            false,
+            String::new(),
+            Vec::new(),
+            1.0,
+            crate::fold::FoldState::default(),
+        );
+        r.write_at(at);
+        for (ev, src) in
+            pulldown_cmark::Parser::new_ext("one two\n\nthree\n", crate::renderer::md_options())
+                .into_offset_iter()
+        {
+            r.event_src = src;
+            r.process(ev);
+        }
+
+        let out = buf
+            .slice(&buf.start_iter(), &buf.end_iter(), true)
+            .to_string();
+        assert!(
+            out.starts_with("BEFORE"),
+            "the region's left side survives: {out:?}"
+        );
+        assert!(
+            out.trim_end().ends_with("AFTER"),
+            "and its right side: {out:?}"
+        );
+        let (one, three, after) = (
+            out.find("one two").expect("the rendered run"),
+            out.find("three").expect("the second block"),
+            out.find("AFTER").expect("the tail"),
+        );
+        assert!(
+            one < three && three < after,
+            "the render lays down FORWARDS inside the region — a left-gravity cursor \
+             writes each run at the same place and reverses the document: {out:?}"
+        );
+    }
+
+    /// **An expanded disclosure records the buffer range its body actually occupies.**
+    ///
+    /// This is the collapse direction's input and the one thing no earlier render
+    /// product carried: a body's SOURCE range is known from the pre-scan without
+    /// rendering at all, but the stretch of buffer it occupies is a fact only the
+    /// render knows. Without it a collapse has nothing to delete.
+    ///
+    /// Asserted by slicing the recorded range out of the buffer and comparing TEXT,
+    /// not by comparing offsets against offsets — an extent derived from the wrong
+    /// cursor still produces a plausible pair of integers, and only the slice says
+    /// whether they name the body.
+    #[gtktest::test]
+    fn an_expanded_disclosure_records_the_buffer_range_its_body_occupies() {
+        let products = build_render_products(
+            "before\n\n<details open>\n<summary>S</summary>\n\nbody text\n\n</details>\n\nafter\n",
+            None,
+            1.0,
+            false,
+        );
+        let extents = &products.maps.disclosure_extents;
+        assert_eq!(extents.len(), 1, "one drawn disclosure");
+        let slice = buffer_slice(&products.buf);
+        let chars: Vec<char> = slice.chars().collect();
+        let body = &extents[0].body;
+        let inside: String = chars[body.start as usize..body.end as usize]
+            .iter()
+            .collect();
+        assert!(
+            inside.contains("body text"),
+            "the recorded body range holds the body: {inside:?}"
+        );
+        assert!(
+            !inside.contains("before") && !inside.contains("after"),
+            "and nothing outside the block: {inside:?}"
+        );
+        assert!(
+            !inside.contains('S'),
+            "nor its own summary label, which is not part of the body: {inside:?}"
+        );
+    }
+
+    /// **A collapsed block's extent is EMPTY, and empty at the point an expansion
+    /// would write.**
+    ///
+    /// A missing entry would have been the other plausible design and is the wrong
+    /// one: the block still owns a position, and that position is precisely what the
+    /// expand direction needs. So the entry exists and its body has zero width.
+    #[gtktest::test]
+    fn a_collapsed_disclosure_records_an_empty_body_at_its_write_point() {
+        let products = build_render_products(
+            "<details>\n<summary>S</summary>\n\nhidden\n\n</details>\n\ntail\n",
+            None,
+            1.0,
+            false,
+        );
+        let extents = &products.maps.disclosure_extents;
+        assert_eq!(extents.len(), 1, "a collapsed block is still DRAWN");
+        assert!(
+            extents[0].body.is_empty(),
+            "it rendered no body: {:?}",
+            extents[0].body
+        );
+        assert_eq!(
+            extents[0].body.start,
+            extents[0].summary.end + 1,
+            "and the write point is immediately past the summary line's newline"
+        );
+    }
+
+    /// The summary span covers the line's TEXT and stops before its newline — what a
+    /// line-wide decoration paints over — the themed summary band — and
+    /// what a hit test on the summary line answers about.
+    #[gtktest::test]
+    fn the_summary_span_covers_the_line_text_and_not_its_newline() {
+        let products = build_render_products(
+            "<details>\n<summary>Show me</summary>\n\nx\n\n</details>\n",
+            None,
+            1.0,
+            false,
+        );
+        let chars: Vec<char> = buffer_slice(&products.buf).chars().collect();
+        let s = &products.maps.disclosure_extents[0].summary;
+        let line: String = chars[s.start as usize..s.end as usize].iter().collect();
+        assert!(line.contains("Show me"), "the label is inside: {line:?}");
+        assert!(!line.contains('\n'), "and the terminator is not: {line:?}");
+        assert_eq!(
+            chars[s.end as usize], '\n',
+            "the span ends exactly at the newline"
+        );
+    }
+
+    /// **A disclosure nested inside a COLLAPSED one gets no extent**, because it drew
+    /// nothing — not even a summary line.
+    ///
+    /// The distinction that makes this non-obvious: the inner frame IS marked
+    /// `emitted`, so a naive "did this block emit?" test would record an extent
+    /// pointing at whatever offsets the frame happened to be initialised with. The
+    /// question is whether an ANCESTOR is collapsed, not whether this frame is.
+    #[gtktest::test]
+    fn a_disclosure_inside_a_collapsed_one_records_no_extent() {
+        let products = build_render_products(
+            "<details>\n<summary>Outer</summary>\n\n\
+             <details>\n<summary>Inner</summary>\n\ndeep\n\n</details>\n\n</details>\n",
+            None,
+            1.0,
+            false,
+        );
+        let extents = &products.maps.disclosure_extents;
+        assert_eq!(
+            extents.len(),
+            1,
+            "only the outer block drew anything: {extents:?}"
+        );
+        assert!(
+            extents[0].body.is_empty(),
+            "and it drew it collapsed: {:?}",
+            extents[0].body
+        );
+    }
+
+    /// An UNCLOSED `<details>` earns no extent — it never reaches a `</details>`, and
+    /// it is given no toggle either, so there is nothing that could fold it (rubric
+    /// 2.26d). A extent recorded for it would name a region reaching to the end of
+    /// the document, which is exactly the swallow that rubric forbids.
+    #[gtktest::test]
+    fn an_unclosed_disclosure_records_no_extent() {
+        let products = build_render_products(
+            "before\n\n<details>\n<summary>S</summary>\n\nbody\n\n## After\n",
+            None,
+            1.0,
+            false,
+        );
+        assert!(
+            products.maps.disclosure_extents.is_empty(),
+            "nothing foldable, so nothing to record: {:?}",
+            products.maps.disclosure_extents
+        );
+        let slice = buffer_slice(&products.buf);
+        assert!(
+            slice.contains("After"),
+            "and the rest of the document is untouched: {slice:?}"
+        );
+        // …so the drawn band gets no span, and — the half worth asserting — its label
+        // carries no `disclosure-ink` either (TDD 18.48). The ink and the band are one
+        // decoration: an inked-but-unbanded line would be the one summary in the
+        // document wearing half of it. Both are gated on the same fact (`foldable`),
+        // and this is what says so.
+        assert!(products.install.decor.disclosure_bands.is_empty());
+        assert!(
+            !buffer_carries_tag(&products.buf, crate::tags::TagName::DisclosureInk),
+            "an unclosed disclosure's label was inked while its band has no span to \
+             paint from — the two halves of one decoration must be absent together"
+        );
+
+        // The control, without which both assertions above are satisfied by a build
+        // that never applies the ink or installs a band span at all (ScrAP-209).
+        let closed = build_render_products(
+            "before\n\n<details>\n<summary>S</summary>\n\nbody\n\n</details>\n\n## After\n",
+            None,
+            1.0,
+            false,
+        );
+        assert_eq!(
+            closed.install.decor.disclosure_bands.len(),
+            1,
+            "a closed block installs exactly one band span"
+        );
+        assert!(
+            buffer_carries_tag(&closed.buf, crate::tags::TagName::DisclosureInk),
+            "…and its summary line carries the ink the band's own line takes"
+        );
+        assert_eq!(
+            closed.install.decor.disclosure_bands.first().copied(),
+            closed.maps.disclosure_extents.first().map(|e| e.summary),
+            "the band's span is the extent's own summary, projected rather than \
+             recorded a second time — two producers is how the band and the splice \
+             come to disagree about where a summary line is"
+        );
+    }
+
+    /// Whether ANY character of `buf` carries `tag`.
+    fn buffer_carries_tag(buf: &TextBuffer, tag: crate::tags::TagName) -> bool {
+        let Some(tag) = buf.tag_table().lookup(tag.name()) else {
+            return false;
+        };
+        let mut it = buf.start_iter();
+        loop {
+            if it.has_tag(&tag) {
+                return true;
+            }
+            if !it.forward_char() {
+                return false;
+            }
+        }
+    }
+
+    /// **Rubric 2.26d, the unspaced body.** With no blank lines the whole construct is
+    /// ONE raw-HTML block, so the body never becomes Markdown events. It used to vanish
+    /// — sanitise-by-omission applied to text an author meant to be read, which is the
+    /// silent loss TDD 2.25 forbids. It now shows as literal text.
+    #[gtktest::test]
+    fn an_unspaced_disclosure_body_shows_as_literal_text() {
+        let products = build_render_products(
+            "<details open>\n<summary>S</summary>\nnot separated\n</details>\n",
+            None,
+            1.0,
+            false,
+        );
+        let slice = buffer_slice(&products.buf);
+        assert!(
+            slice.contains("not separated"),
+            "the body is shown rather than dropped: {slice:?}"
+        );
+        assert_eq!(
+            slice.matches('S').count(),
+            1,
+            "and the summary label appears ONCE — it has its own rendering path, so \
+             emitting it as body text too would print it twice: {slice:?}"
+        );
+    }
+
+    /// **An unspaced disclosure refuses the SPLICE, and must.** Its body is literal
+    /// text inside its own opening raw-HTML event, which a region walk seeded below
+    /// that event cannot write — so a splice would delete the body and put nothing
+    /// back, leaving a block the reader had collapsed and could never open again.
+    ///
+    /// MEASURED by driving the running app: neither fold state's full render is wrong,
+    /// so only the transition between them showed it.
+    #[gtktest::test]
+    fn an_unspaced_disclosure_is_not_spliceable_and_a_spaced_one_is() {
+        let unspaced = build_render_products(
+            "<details>\n<summary>S</summary>\nnot separated\n</details>\n\n## After\n",
+            None,
+            1.0,
+            false,
+        );
+        assert_eq!(
+            unspaced
+                .maps
+                .disclosure_extents
+                .iter()
+                .map(|e| e.spliceable)
+                .collect::<Vec<_>>(),
+            vec![false],
+            "the toggle must fall back to a full re-render"
+        );
+
+        // The control, without which a build that marked EVERY extent unspliceable
+        // would satisfy the assertion above and quietly retire the splice (ScrAP-209).
+        let spaced = build_render_products(
+            "<details>\n<summary>S</summary>\n\nseparated\n\n</details>\n\n## After\n",
+            None,
+            1.0,
+            false,
+        );
+        assert_eq!(
+            spaced
+                .maps
+                .disclosure_extents
+                .iter()
+                .map(|e| e.spliceable)
+                .collect::<Vec<_>>(),
+            vec![true],
+            "an ordinary disclosure still splices"
+        );
+    }
+
+    /// A single-colour PNG of the given size: small on disk, large in memory, which is
+    /// the whole shape of a decompression bomb.
+    fn single_colour_png(width: i32, height: i32) -> Vec<u8> {
+        let pixbuf =
+            gtk::gdk_pixbuf::Pixbuf::new(gtk::gdk_pixbuf::Colorspace::Rgb, false, 8, width, height)
+                .expect("allocate the fixture");
+        pixbuf.fill(0x336699ff);
+        pixbuf.save_to_bufferv("png", &[]).expect("encode")
+    }
+
+    /// The two pieces the REMOTE arm composes, exercised on their own.
+    ///
+    /// **Stated rather than implied: the remote arm's wiring is not driven end to end
+    /// here, because that needs a network.** What it adds over the local arm is exactly
+    /// this pair — the shared byte probe reading a header, and the cap refusing what it
+    /// read — and the three lines that compose them are in view at the call site. The
+    /// local arm's own test drives the whole path, so the composition is exercised;
+    /// this pins the half the local arm cannot reach, which is the BYTE probe.
+    #[gtktest::test]
+    fn the_shared_byte_probe_and_the_cap_agree_about_an_oversized_image() {
+        let bomb = single_colour_png(9000, 9000);
+        assert!(
+            bomb.len() < crate::limits::MAX_REMOTE_IMAGE_BYTES,
+            "precondition: inside the transfer cap, which is why the transfer cap \
+             cannot be the thing that refuses it"
+        );
+        let (w, h) = crate::sprite::probe_pixel_size(&bomb).expect("the header is read");
+        assert_eq!((w, h), (9000, 9000), "the probe reads the declared size");
+        assert!(
+            !crate::limits::image_pixels_within_cap(w, h),
+            "and the cap refuses it"
+        );
+
+        let small = single_colour_png(32, 32);
+        let (w, h) = crate::sprite::probe_pixel_size(&small).expect("the header is read");
+        assert!(
+            crate::limits::image_pixels_within_cap(w, h),
+            "while an ordinary image is admitted — without which this would pass on a \
+             cap of zero"
+        );
+    }
+
+    /// **F-SEC-209: a fold key is an offset into the CLEANED text, and a consumer that
+    /// scans the raw source is comparing two coordinate systems.**
+    ///
+    /// `foldreveal` did. Its key lookup then found no span, and its diverged-key
+    /// fallback FLIPPED the fold — closing a block the reader had just asked to see,
+    /// which is the exact inversion of what a reveal is for.
+    ///
+    /// The fixture puts the annotation ABOVE the disclosure, and that is the whole
+    /// design of it: with the annotation BELOW, the raw and cleaned offsets of the
+    /// block agree and this test passes against the unfixed code. The first assertion
+    /// states that precondition rather than assuming it.
+    #[gtktest::test]
+    fn a_disclosure_below_an_annotation_is_keyed_in_the_cleaned_space() {
+        const MD: &str = concat!(
+            "A paragraph with {==a claim==}{>>and a note about it<<} in it.\n\n",
+            "<details>\n<summary>S</summary>\n\nthe body\n\n</details>\n"
+        );
+        let raw = crate::renderer::disclosure::scan_document(MD);
+        let cleaned_text =
+            crate::annotate::extract(crate::renderer::NormalizedMd::new(MD).as_str()).cleaned;
+        let cleaned = crate::renderer::disclosure::scan_document(&cleaned_text);
+        assert_eq!(raw.len(), 1);
+        assert_eq!(cleaned.len(), 1);
+        assert_ne!(
+            raw[0].fold_key(),
+            cleaned[0].fold_key(),
+            "precondition: the annotation above the block really does move its offset — \
+             with the annotation BELOW it, both spaces agree and this proves nothing"
+        );
+
+        let products = build_render_products(MD, None, 1.0, false);
+        let extents = &products.maps.disclosure_extents;
+        assert_eq!(extents.len(), 1, "one disclosure was drawn");
+        assert_eq!(
+            extents[0].key,
+            cleaned[0].fold_key(),
+            "the key a render mints is the CLEANED offset — so a consumer that resolves \
+             it must scan the cleaned text, which is what `TabState::previewed_cleaned` \
+             is for"
+        );
+    }
+
+    /// **F-SEC-206.** A document image had no decoded-pixel bound at all, while the
+    /// project's own sprite path refused one on every theme asset — the
+    /// decompression-bomb gate applied to our content and not to the untrusted kind.
+    ///
+    /// The fixture is the shape `sprite`'s own measurement used: a large single-colour
+    /// PNG, which compresses to a few hundred kilobytes (inside every byte cap) and
+    /// decodes to hundreds of megabytes. Built here rather than checked in, because a
+    /// file whose whole point is that it is small on disk and enormous in memory is a
+    /// thing to generate rather than to ship.
+    ///
+    /// **Deliberately only just over the cap** (81 M pixels against 67 M) rather than
+    /// the 400 M-pixel bomb `limits` records. The mutation this test has to survive is
+    /// "delete the gate", and under that mutation the fixture is really decoded — so
+    /// the fixture's size is the price of the test being able to fail, and the
+    /// measured bomb's price is 1.6 GB.
+    #[gtktest::test]
+    fn a_document_image_that_decodes_past_the_cap_is_refused() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        // Canonicalised because the containment gate does: on a host where the temp
+        // root is a symlink, an uncanonicalised base makes every image Refused and the
+        // whole test vacuous.
+        let base = dir
+            .path()
+            .canonicalize()
+            .expect("canonicalise the scratch directory");
+
+        for (name, w, h) in [("small.png", 32, 32), ("bomb.png", 9000, 9000)] {
+            std::fs::File::create(base.join(name))
+                .and_then(|mut f| f.write_all(&single_colour_png(w, h)))
+                .expect("write the fixture");
+        }
+        let on_disk = std::fs::metadata(base.join("bomb.png"))
+            .map(|m| m.len())
+            .unwrap_or(u64::MAX);
+        assert!(
+            on_disk < crate::limits::MAX_REMOTE_IMAGE_BYTES as u64,
+            "precondition: the fixture is INSIDE the byte cap ({on_disk} bytes), which \
+             is the whole point — one the byte cap already refuses would prove nothing"
+        );
+
+        let products = build_render_products(
+            "![small](small.png)\n\n![bomb](bomb.png)\n",
+            Some(&base),
+            1.0,
+            false,
+        );
+        // `image_tints` carries one entry per image the render ACTUALLY drew — the
+        // anchored widget is an `Overlay` wrapping the `Picture`, so a
+        // `downcast_ref::<Picture>` over `anchored` finds none and would pass
+        // vacuously. (Measured: it did.)
+        assert_eq!(
+            products.image_tints.len(),
+            1,
+            "the ordinary image renders and the oversized one does not — ONE picture, \
+             not two and not zero: a fixture that rendered neither would satisfy a bare \
+             `< 2` while proving nothing at all"
+        );
+    }
+
+    /// **F-SEC-205.** The collapse mechanism's contract is that a hidden body's events
+    /// do not reach the buffer; raw-HTML events are exempted from that suppression
+    /// ONLY so the `</details>` which ends it can arrive. That exemption reached the
+    /// image replay, which had no gate of its own — so a raw-HTML `<img>` inside a
+    /// collapsed block was resolved, a remote one FETCHED with "Show Unsafe Images" on,
+    /// and a local one anchored visibly inside a region drawn as nothing.
+    ///
+    /// **Both halves are asserted, and the second is why.** A buffer-only assertion
+    /// passes on a build that suppresses the anchor and still fetches — which is the
+    /// worse half: the fold state is a privacy signal, and a tracking pixel behind a
+    /// fold the reader deliberately did not open reports back anyway. The fetch half is
+    /// read off the shipped cache: a fetch that HAPPENED leaves a negative-cache
+    /// verdict for the URI, so a later probe would not call its own closure. The URI is
+    /// unique per run because that cache is process-wide.
+    #[gtktest::test]
+    fn a_collapsed_body_neither_anchors_nor_fetches_its_raw_html_images() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        // Port 1 on loopback refuses instantly, so a build that DOES fetch fails this
+        // test quickly rather than hanging on a timeout.
+        let uri = format!(
+            "https://127.0.0.1:1/{}.png",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        );
+        let md = format!("<details>\n<summary>S</summary>\n\n<img src=\"{uri}\">\n\n</details>\n");
+        // `allow_unsafe_images` ON: the point is that the fold, not the setting, is what
+        // stops the request.
+        let products = build_render_products(&md, None, 1.0, true);
+
+        // Counted against the SAME document with the image line removed, rather than
+        // against zero: the summary line anchors the toggle, so an absolute count would
+        // be a fixture constant. This also catches the broken-image PLACEHOLDER, which
+        // a `Picture`-only count would let through — an unresolvable image inside a
+        // closed block must draw nothing either.
+        let baseline = build_render_products(
+            "<details>\n<summary>S</summary>\n\nplain body\n\n</details>\n",
+            None,
+            1.0,
+            true,
+        );
+        assert!(
+            products.image_tints.is_empty(),
+            "a collapsed body draws no image"
+        );
+        assert_eq!(
+            products.anchored.len(),
+            baseline.anchored.len(),
+            "and anchors nothing for it either — not a picture and not a broken-image \
+             PLACEHOLDER, which `image_tints` alone would not catch: {:?}",
+            buffer_slice(&products.buf)
+        );
+
+        let asked = Rc::new(Cell::new(false));
+        let probe = Rc::clone(&asked);
+        let _ = crate::imagecache::get_or_fetch_at(&uri, std::time::Instant::now(), move || {
+            probe.set(true);
+            None
+        });
+        assert!(
+            asked.get(),
+            "the render left a cache verdict for {uri}, so it reached the network path \
+             for content the reader has closed"
+        );
+    }
+
+    /// **The other half of 2.26d's unspaced case, and F-SPEC-003.** A literal run is
+    /// the block's BODY, so a CLOSED block hides it like any other body. It used to be
+    /// emitted after the whole tag stream — outside the frame — so a collapsed
+    /// disclosure printed its body anyway and its toggle was a visible no-op.
+    #[gtktest::test]
+    fn a_collapsed_unspaced_disclosure_hides_its_literal_body() {
+        let products = build_render_products(
+            "<details>\n<summary>S</summary>\nnot separated\n</details>\n",
+            None,
+            1.0,
+            false,
+        );
+        let slice = buffer_slice(&products.buf);
+        // The text survives ONLY as the dimmed preview fragment on the summary line —
+        // the same one-line shape a spaced collapsed block takes. A body of its own is
+        // exactly what the block is hiding.
+        let lines: Vec<&str> = slice.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(
+            lines.len(),
+            1,
+            "a collapsed block is one summary line, body and all: {lines:?}"
+        );
+        assert!(
+            lines[0].contains('S'),
+            "the summary line still shows: {slice:?}"
+        );
+        assert_eq!(
+            products.disclosure_toggles.len(),
+            1,
+            "and the toggle it carries has something to fold"
+        );
+
+        // The control: with `open`, the same body IS a line of its own — without it, a
+        // build that rendered nothing at all would satisfy the assertions above
+        // (ScrAP-209).
+        let opened = build_render_products(
+            "<details open>\n<summary>S</summary>\nnot separated\n</details>\n",
+            None,
+            1.0,
+            false,
+        );
+        let opened = buffer_slice(&opened.buf);
+        assert!(
+            opened.lines().any(|l| l.trim() == "not separated"),
+            "expanded, the body is a line of its own: {opened:?}"
+        );
+    }
+
+    /// **F-003.** Prose that MENTIONS `<details>` mid-sentence — this project's own
+    /// release notes do — used to be read as a disclosure: the renderer opened a frame
+    /// the block-level pre-scan never counted, split the paragraph with a spurious
+    /// `Details` label, and left every real disclosure below it failing the offset
+    /// check and rendering unfoldable. One inline tag disabled the feature for the rest
+    /// of the document.
+    #[gtktest::test]
+    fn a_details_mentioned_in_prose_is_not_a_disclosure() {
+        let md = "Wrap an aside in <details> to fold it away.\n\n\
+                  <details>\n<summary>Real</summary>\n\nreal body\n\n</details>\n\n\
+                  ## After\n";
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+
+        assert!(
+            slice.contains("Wrap an aside in  to fold it away.")
+                || slice.contains("Wrap an aside in to fold it away."),
+            "the paragraph stays one paragraph, with the tag dropped and no label \
+             inserted mid-prose: {slice:?}"
+        );
+        assert_eq!(
+            products.disclosure_toggles.len(),
+            1,
+            "and the REAL disclosure below it is still foldable — the mention must not \
+             consume the pre-scan cursor that the offset check pairs against"
+        );
+        assert_eq!(
+            products.maps.disclosure_extents.len(),
+            1,
+            "with its extent recorded: {:?}",
+            products.maps.disclosure_extents
+        );
+        assert!(slice.contains("Real") && slice.contains("After"));
+    }
+
+    /// **Rubric 2.26d's security clause**, end to end. The unspaced case puts the
+    /// script INSIDE the block being shown, so this is what keeps showing an
+    /// allowlisted element's own text from becoming a general widening of the
+    /// sanitisation posture.
+    #[gtktest::test]
+    fn a_script_inside_an_unspaced_body_reaches_the_page_as_nothing() {
+        let products = build_render_products(
+            "<details open>\n<summary>S</summary>\nvisible text\n\
+             <script>alert('pwned')</script>\n</details>\n",
+            None,
+            1.0,
+            false,
+        );
+        let slice = buffer_slice(&products.buf);
+        assert!(
+            slice.contains("visible text"),
+            "the body's own text shows: {slice:?}"
+        );
+        for banned in ["alert", "pwned", "<script"] {
+            assert!(
+                !slice.contains(banned),
+                "the script contributes nothing, not even as text: {banned:?} in {slice:?}"
+            );
+        }
+    }
+
+    /// A table inside a collapsed body builds no cell widgets, so it must contribute
+    /// no cell copy map either — otherwise `attach_cell_copymaps` pairs every LATER
+    /// table's cells with the map belonging to the invisible one.
+    #[gtktest::test]
+    fn a_table_in_a_collapsed_body_does_not_shift_the_cell_copy_maps() {
+        let md = concat!(
+            "<details>\n<summary>S</summary>\n\n",
+            "| h |\n|---|\n| hidden |\n\n",
+            "</details>\n\n",
+            "| v |\n|---|\n| shown |\n"
+        );
+        let products = build_render_products(md, None, 1.0, false);
+        let anchors = collect_table_anchors(&products.anchored);
+        assert_eq!(
+            anchors.len(),
+            1,
+            "only the visible table is built; buffer = {:?}",
+            buffer_slice(&products.buf)
+        );
+        let labels = collect_cell_labels(&products.anchored);
+        let texts: Vec<String> = labels.iter().map(|l| l.text().to_string()).collect();
+        assert!(
+            texts.iter().any(|t| t == "shown"),
+            "the visible table's own cells: {texts:?}"
+        );
+        // Its cells carry the VISIBLE table's copy map, not the hidden table's.
+        let map = cell_copymap(&labels[1]).expect("the visible table's cell has a copy map");
+        assert_eq!(crate::copymap::resolve_cell(&map, md, 0, 5), "shown");
+    }
+
+    // ── the body-opening PREVIEW (item 3 / TDD 2.26) ──────────────────────────
+
+    /// TDD 2.26 / item 3 — a COLLAPSED disclosure's summary previews the body's
+    /// OPENING text, shortened to `disclosure::preview::MAX_PREVIEW_CHARS` and ending
+    /// in an ellipsis; content past that limit is not on the page at all.
+    #[gtktest::test]
+    fn a_collapsed_summary_previews_the_bodys_opening_text() {
+        let long_tail = "filler ".repeat(20);
+        let md = format!(
+            "<details>\n<summary>Show me</summary>\n\nopening words. {long_tail}TAILMARKER\n\n</details>\n"
+        );
+        let products = build_render_products(&md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        let line = slice
+            .lines()
+            .find(|l| l.contains("Show me"))
+            .expect("the summary line is on the page");
+        assert!(
+            line.contains("opening words."),
+            "the preview shows the body's OPENING text: {line:?}"
+        );
+        assert!(line.ends_with('…'), "and ends in an ellipsis: {line:?}");
+        assert!(
+            !slice.contains("TAILMARKER"),
+            "content past the preview's limit is not on the page: {slice:?}"
+        );
+    }
+
+    /// **Rubric 1** — the preview appears ONLY on a block drawn COLLAPSED. An EXPANDED
+    /// block shows its body directly, so it needs no hint of what the body holds.
+    #[gtktest::test]
+    fn an_expanded_disclosure_carries_no_body_preview() {
+        let md =
+            "<details open>\n<summary>Show me</summary>\n\nthe body is right here.\n\n</details>\n";
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        assert!(
+            slice.contains("the body is right here."),
+            "the body renders in full: {slice:?}"
+        );
+        let line = slice
+            .lines()
+            .find(|l| l.contains("Show me"))
+            .expect("the summary line is on the page");
+        assert!(
+            !line.contains('…'),
+            "an expanded block's summary line carries no preview: {line:?}"
+        );
+    }
+
+    /// A body with nothing to preview (all whitespace) adds no ellipsis — the
+    /// unit-level case (`disclosure::preview::body_preview`) proved at the RENDER
+    /// level, where a stray ellipsis would be the visible symptom of a missed `None`.
+    #[gtktest::test]
+    fn a_whitespace_only_collapsed_body_adds_no_preview() {
+        let md = "<details>\n<summary>Show me</summary>\n\n   \n\n</details>\n";
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        let line = slice
+            .lines()
+            .find(|l| l.contains("Show me"))
+            .expect("the summary line is on the page");
+        assert!(
+            !line.contains('…'),
+            "nothing to preview must add no ellipsis: {line:?}"
+        );
+    }
+
+    /// TDD 2.26 / SCHEMA § Disclosure — the preview's ink comes from the active
+    /// reading theme's `disclosure_preview_fg`, the same shape as `blockquote_fg`
+    /// (`tags::TagName::BlockquoteInk`'s sibling, `TagName::DisclosurePreview`).
+    #[gtktest::test]
+    fn the_body_preview_takes_its_ink_from_the_active_theme() {
+        let md = "<details>\n<summary>Show me</summary>\n\nUNIQUEBODY text here.\n\n</details>\n";
+        let mut themes = crate::theme::themes();
+        themes.merge_over_for_test("[themes.previewink]\ndisclosure_preview_fg = \"#ff00aa\"\n");
+        let _theme = crate::theme::activate_for_test(themes.resolve("previewink"));
+        let products = build_render_products(md, None, 1.0, false);
+        let text = buffer_slice(&products.buf);
+
+        let label_off = char_off(&text, "Show me");
+        assert_ne!(
+            winning_tag(&products.buf, label_off, "foreground-set").as_deref(),
+            Some("disclosure-preview"),
+            "the label itself must not take the preview's ink"
+        );
+
+        let preview_off = char_off(&text, "UNIQUEBODY");
+        assert_eq!(
+            winning_tag(&products.buf, preview_off, "foreground-set").as_deref(),
+            Some("disclosure-preview"),
+            "the preview text takes the themed ink"
+        );
+    }
+
+    /// TDD 18.2, the other side of the floor above: unset, the preview tag sets no
+    /// foreground at all — a claim about the TAG, not about the pixels it happens to
+    /// produce, exactly as the quote panel's ink floor is (see
+    /// `without_a_quote_ink_the_heading_and_mark_tags_set_no_foreground`).
+    #[gtktest::test]
+    fn without_a_themed_ink_the_body_preview_tag_sets_no_foreground() {
+        let md = "<details>\n<summary>Show me</summary>\n\nUNIQUEBODY text here.\n\n</details>\n";
+        let products = with_theme(crate::theme::SYSTEM_ID, || {
+            build_render_products(md, None, 1.0, false)
+        });
+        let text = buffer_slice(&products.buf);
+        let preview_off = char_off(&text, "UNIQUEBODY");
+        assert_eq!(
+            winning_tag(&products.buf, preview_off, "foreground-set"),
+            None,
+            "System must leave the preview on the page's own colour"
+        );
+    }
+
+    /// **TDD 2.26's copy clause — "the preview never alters the document's copyable
+    /// source": copying a collapsed disclosure must yield ONLY its Markdown, never the
+    /// preview text or its ellipsis.**
+    ///
+    /// The preview is real buffer text ON the summary line, INSIDE the one atomic copy
+    /// node `</details>` widens to cover the block's whole source (the
+    /// `(Some(site), None)` arm above, in `build_render_products`'s own loop) — so
+    /// this is a property of that widening reaching every character the summary line
+    /// now carries, not just the label it carried before this feature existed.
+    /// MUTATION-TESTED (by hand, recorded in the session report): reverting that arm
+    /// to mint a second, empty-buffered node instead of widening the existing one
+    /// makes this test fail.
+    #[gtktest::test]
+    fn copying_a_collapsed_disclosure_never_leaks_the_preview_text_or_its_ellipsis() {
+        let md = "<details>\n<summary>S</summary>\n\nUNIQUEBODYWORD trailing prose.\n\n\
+                  </details>\n\nafter\n";
+        let products = build_render_products(md, None, 1.0, false);
+        let slice = buffer_slice(&products.buf);
+        // Sanity: the preview DID render — this test proves nothing otherwise.
+        assert!(
+            slice.contains("UNIQUEBODYWORD"),
+            "the preview must show the body's opening text: {slice:?}"
+        );
+        assert!(slice.contains('…'), "and end in an ellipsis: {slice:?}");
+
+        let s = char_off(&slice, "S");
+        let copied = crate::copymap::resolve(&products.maps.copymap, md, s, s + 1);
+        for expected in ["<details>", "</details>", "UNIQUEBODYWORD trailing prose."] {
+            assert!(
+                copied.contains(expected),
+                "a copy over the collapsed block must carry its real Markdown, incl. \
+                 {expected:?}: {copied:?}"
+            );
+        }
+        assert!(
+            !copied.contains('…'),
+            "the copy must never carry the preview's ellipsis: {copied:?}"
+        );
+    }
+
+    /// TDD 2.26g / item 6 — the body-opening PREVIEW (TDD 2.26) is a preview-pane
+    /// affordance for a fold state neither export sink has; it must never reach
+    /// either.
+    ///
+    /// The fixture's body is engineered past `disclosure::preview::MAX_PREVIEW_CHARS`,
+    /// so a leak would show up as the HTML export silently agreeing with the
+    /// preview's truncation (missing the tail) or carrying its ellipsis. The PDF sink
+    /// is verified by source rather than pixels here: `export/pdf/measure.rs`'s
+    /// `Block::Disclosure` arm lays the body out unconditionally from the same
+    /// `ExportDoc` this test builds, and neither it nor anything else under
+    /// `export/` references `disclosure::preview` or `TagName::DisclosurePreview` —
+    /// grep-confirmed, recorded in the session report.
+    #[gtktest::test]
+    fn the_body_preview_never_reaches_the_html_export_sink() {
+        let tail = "TAILMARKER ".repeat(20);
+        let md =
+            format!("<details>\n<summary>S</summary>\n\nopening words. {tail}\n\n</details>\n");
+        let theme = crate::theme::active();
+        let palette = crate::palette::Palette::for_theme(&theme);
+        let doc = crate::export::doc::build(
+            &md,
+            &crate::export::RenderOptions {
+                doc_dir: None,
+                allow_unsafe_images: false,
+            },
+        );
+        let html = crate::export::html::render(&doc, &palette, &theme);
+        assert_eq!(
+            html.matches("TAILMARKER").count(),
+            20,
+            "the export must include the FULL body, never truncated by the preview: {html}"
+        );
+        assert!(
+            !html.contains('…'),
+            "the export must not carry the preview's ellipsis: {html}"
         );
     }
 }

@@ -315,7 +315,15 @@ mod gtk_integration_tests {
 
         // The document comes back from disk without either section — the reload
         // path's re-render, driven directly so the test states its own cause.
-        crate::preview::re_render(&sw, "# Guide\n\nnothing else\n", None, 1.0, false);
+        crate::preview::re_render(
+            &sw,
+            "# Guide\n\nnothing else\n",
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+            0,
+        );
         park_reader_at(&view, 1);
 
         assert!(

@@ -285,14 +285,18 @@ mod gtk_integration_tests {
 
     impl DisplayCss {
         fn install(css: &str) -> Self {
+            Self::install_at(css, gtk::STYLE_PROVIDER_PRIORITY_USER)
+        }
+
+        /// The same, at a stated priority — for a test whose subject is the CASCADE:
+        /// the app's own theme sheet goes on at `APPLICATION + 1` (`app::setup`) and a
+        /// desktop GTK theme at `THEME`, so a test that models both needs to say where
+        /// each of its providers sits rather than taking one fixed rung.
+        fn install_at(css: &str, priority: u32) -> Self {
             let display = gdk::Display::default().expect("this test needs a display");
             let provider = gtk::CssProvider::new();
             provider.load_from_data(css);
-            gtk::style_context_add_provider_for_display(
-                &display,
-                &provider,
-                gtk::STYLE_PROVIDER_PRIORITY_USER,
-            );
+            gtk::style_context_add_provider_for_display(&display, &provider, priority);
             Self(provider)
         }
     }
@@ -303,6 +307,95 @@ mod gtk_integration_tests {
                 gtk::style_context_remove_provider_for_display(&display, &self.0);
             }
         }
+    }
+
+    /// **A cell keeps the theme's ink when the window goes to the back.** The
+    /// regression the operator reported: on a themed page every table cell changed
+    /// colour the moment the window lost focus, while the prose around it did not.
+    ///
+    /// The cause is a cascade fact rather than a GTK one, and it is why no assertion on
+    /// the generated sheet's TEXT can see it: a cell is a `GtkLabel`, desktop themes
+    /// style that node in the backdrop state (Breeze ships
+    /// `label:backdrop { color: @theme_unfocused_text_color }`), and an INHERITED value
+    /// — which is all the page's `textview` rule gave a cell — loses to any declaration
+    /// that MATCHES the node, from any provider. Provider priority arbitrates rules that
+    /// match; it cannot rescue one that does not (GTK4Rs/AP-101, ScrAP-127).
+    ///
+    /// So the hostile rule here sits *below* this test's own sheet and still wins until
+    /// the cell's ink is stated. The control cell is the discriminator: it proves the
+    /// backdrop rule really reaches a cell of this shape, so the assertion after it is
+    /// about the fix rather than about a rule that never applied.
+    ///
+    /// **Both priorities are stated relative to the app's own provider rather than at
+    /// `PRIORITY_THEME`, where a real desktop theme sits.** `app::setup`'s theme provider
+    /// is installed on the display once per PROCESS and never removed, so in a full-suite
+    /// run any earlier test that reloaded it leaves a themed sheet — including a
+    /// `scribtable .cell` ink of its own — live at `APPLICATION + 1`. A hostile rule
+    /// underneath that is simply outranked, and the control then reads the leftover
+    /// theme's ink and fails on its own precondition (MEASURED: `#5b4636`, Sepia's, in a
+    /// suite run that passed in isolation). Priority is not what this test is about;
+    /// stacking both rules above the ambient provider keeps the subject — inheritance
+    /// versus a matching rule — the only thing the outcome can turn on.
+    ///
+    /// **The control is a SECOND cell, not a second reading of the first**, and that is
+    /// not tidiness: an UNROOTED widget's computed style is cached at the first read and
+    /// a provider added afterwards does not invalidate it (no frame clock to service the
+    /// invalidation), so a read/install/read on one label reports the hostile colour
+    /// twice and reads as a broken fix. Each reading gets a freshly built cell.
+    ///
+    /// Mutation: dropping `cell_ink` from `preview::css`'s `.cell` rule fails this.
+    /// TDD 18.52.
+    #[gtktest::test]
+    fn a_cell_keeps_the_themes_ink_in_the_backdrop_state() {
+        use crate::palette::Palette;
+
+        // A desktop theme's backdrop ink, in a colour nothing else here can produce.
+        const HOSTILE: &str = "label:backdrop { color: #ff0000; }";
+
+        let mut themes = crate::theme::Themes::builtin();
+        themes.merge_over_for_test("[themes.probe]\nforeground = \"#33ddaa\"\n");
+        let theme = themes.resolve("probe");
+        let palette = Palette::for_paper(&theme);
+        let want = theme
+            .foreground
+            .expect("the probe theme states a foreground");
+
+        // A plain cell in an unfocused table, built as `renderer::end` builds one.
+        // BACKDROP is an inherited state flag, so setting it on the table reaches the
+        // cell — which is what a window losing focus does to every widget it holds.
+        let backdrop_cell = || {
+            let cell = gtk::Label::new(Some("Core GTK4"));
+            cell.add_css_class("cell");
+            let table = ScribTableWidget::new(vec![vec![cell.clone().upcast()]]);
+            table.set_state_flags(gtk::StateFlags::BACKDROP, false);
+            (table, cell)
+        };
+
+        // +2 and +3: above the app's own provider (+1, see above), hostile below ours.
+        let _hostile =
+            DisplayCss::install_at(HOSTILE, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+        let (_control_table, control) = backdrop_cell();
+        let hijacked = control.style_context().color();
+        assert_eq!(
+            (hijacked.red(), hijacked.green(), hijacked.blue()),
+            (1.0, 0.0, 0.0),
+            "fixture no longer discriminates: a desktop theme's `label:backdrop` rule \
+             must actually reach this cell, or the assertion below proves nothing"
+        );
+
+        let _theme_css = DisplayCss::install_at(
+            &crate::preview::theme_css(&theme, &palette),
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 3,
+        );
+        let (_table, cell) = backdrop_cell();
+        let inked = cell.style_context().color();
+        assert_eq!(
+            (inked.red(), inked.green(), inked.blue()),
+            (want.red(), want.green(), want.blue()),
+            "an unfocused window's table cell fell back to the desktop theme's backdrop \
+             ink — the page's own `color` only INHERITS to a cell, and inheritance loses \
+             to a rule that matches the label node"
+        );
     }
 
     /// **The preview's link-cell rules reach the widget** — asserted on the colour the

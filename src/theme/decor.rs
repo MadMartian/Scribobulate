@@ -306,6 +306,46 @@ impl Theme {
         (0..super::HEADING_LEVELS).all(|i| !self.heading_band_decor(i).is_present())
     }
 
+    /// The band behind a disclosure's summary LINE (TDD 18.48).
+    ///
+    /// The same three-way [`Band`] the heading band resolves to, and deliberately the
+    /// same type rather than a parallel one: the precedence (sprite, else gradient,
+    /// else flat), the "a sprite alone is a band" rule and the degradation when a
+    /// sprite will not decode are properties of the SHAPE, not of the decoration —
+    /// and the drawn gutter's history is what a second copy of them would repeat.
+    ///
+    /// Flat rather than per level: a disclosure has no levels. Its gradient keeps the
+    /// same precondition a heading band's does, because a gradient is a second stop.
+    pub(crate) fn disclosure_band_decor(&self) -> Band<'_> {
+        let flat = self.disclosure_band_color;
+        Band {
+            sprite: self.sprites.disclosure_band.as_ref(),
+            gradient: flat.zip(self.disclosure_band_gradient_to),
+            flat,
+        }
+    }
+
+    /// What the disclosure indicator may be painted as, in the state `expanded`.
+    ///
+    /// A [`MarkerChoice`] — sprite → glyph → the stock icon — because it is the same
+    /// shape of decision as a list marker: a themed picture, else a themed character,
+    /// else what the engine draws. Two states resolving independently, exactly as the
+    /// task checkbox's do, so a theme may restyle one and leave the other stock.
+    pub(crate) fn disclosure_marker_decor(&self, expanded: bool) -> MarkerChoice<'_> {
+        let (sprite, glyph) = if expanded {
+            (
+                &self.sprites.disclosure_expanded,
+                &self.disclosure_glyphs.expanded,
+            )
+        } else {
+            (&self.sprites.disclosure, &self.disclosure_glyphs.collapsed)
+        };
+        MarkerChoice {
+            sprite: sprite.as_ref(),
+            glyph: glyph.as_ref(),
+        }
+    }
+
     /// What a list marker of `kind` at 1-based nesting `depth` may be painted as.
     ///
     /// Only the **bullet** varies by depth (TDD 18.26); an ordered numeral at depth 3
@@ -349,6 +389,9 @@ static NO_GLYPHS: ListGlyphs = ListGlyphs {
 /// A `Sprites` that states nothing — the mirror of [`NO_GLYPHS`], for a caller asking
 /// only about GLYPHS.
 static NO_SPRITES: Sprites = Sprites {
+    disclosure: None,
+    disclosure_expanded: None,
+    disclosure_band: None,
     annotation_chip: None,
     list_bullet: [None, None, None],
     list_ordered: None,

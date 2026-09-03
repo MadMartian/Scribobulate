@@ -273,3 +273,62 @@ pub fn ps1_encoding_violation(bytes: &[u8]) -> Option<(usize, u8)> {
         .position(|byte| *byte > 0x7F)
         .map(|at| (at, bytes[at]))
 }
+
+/// Check 15 — a `match` over pulldown-cmark's vocabulary carries no UNANNOTATED
+/// wildcard arm.
+///
+/// TDD 2.25 already requires the renderer's event dispatchers to match `Event`, `Tag`
+/// and `TagEnd` EXHAUSTIVELY, so that a parser upgrade adding a construct fails to
+/// compile rather than rendering it as nothing. The rule was sound and its MEMBERSHIP
+/// was not: `copymap::classify` is a fourth dispatcher over the same vocabulary that
+/// nobody had counted among the three, and it ended in `_ => return None`. Raw HTML
+/// therefore put a `U+FFFC` in the buffer, earned no copy node, and silently omitted
+/// its construct from copied source — for as long as `<picture>` had existed, with
+/// every gate green.
+///
+/// So the check DISCOVERS dispatchers by the variants they name rather than reading a
+/// list of them. A list would carry the identical hole: the next dispatcher written by
+/// someone who did not know the list exists is exactly the case that produced this.
+///
+/// This is the compiler's own exhaustiveness enforcement, held open — the lint's only
+/// job is to stop a wildcard being added back, since `Event` is not `#[non_exhaustive]`
+/// and the compiler does the rest once no arm absorbs the remainder.
+///
+/// NOT EVERY WILDCARD FOUND THIS WAY IS A DISPATCH, though: a match can also SELECT
+/// among already-classified events by something other than variant identity (`_ if
+/// active =>`, gating on caller state a line above), and that shape is textually a
+/// wildcard whether or not it behaves like one — pattern shape alone cannot tell the
+/// two apart. Rather than guess from the arm's shape, the check accepts a wildcard that
+/// carries `DISPATCH_SELECTOR_MARKER` (`dispatch-selector:`, `patterns.rs`) with a
+/// non-empty reason, same line or an unbroken comment run directly above. A wildcard
+/// with none is refused by DEFAULT — the marker is an opt-out that must be written, not
+/// inferred, so a new dispatcher's wildcard fails until someone states why it is safe.
+pub fn parser_dispatch_exhaustive(tree: &Tree) -> bool {
+    header("15", "a pulldown-cmark dispatch swallows variants with `_`");
+    let mut findings = Vec::new();
+    for (name, text) in tree.subset_texts(|path| path.starts_with("src/") && path.ends_with(".rs"))
+    {
+        for line in rx::parser_dispatch_wildcards(text) {
+            let body = text.lines().nth(line - 1).unwrap_or_default().trim();
+            findings.push(format!("{name}:{line}: {body}"));
+        }
+    }
+    if findings.is_empty() {
+        return pass();
+    }
+    fail(
+        "these matches absorb unnamed parser variants instead of naming them:",
+        &findings,
+        &[
+            "Replace `_` with one arm per remaining variant. An arm that does nothing is",
+            "still a DECISION — write it, with the reason. A construct that reaches the",
+            "buffer without a deliberate arm is one that renders, or copies, as nothing.",
+            "",
+            "If the arm genuinely SELECTS on something other than which variant arrived",
+            "(caller state, not Event/Tag/TagEnd identity), mark it instead of rewriting",
+            "it: add `// dispatch-selector: <why this is a selection, not a dispatch>` on",
+            "the arm's own line or directly above it. A bare marker with no reason does",
+            "not count.",
+        ],
+    )
+}

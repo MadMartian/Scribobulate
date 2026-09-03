@@ -332,7 +332,16 @@ pub(crate) fn apply_external_reload(window: &ApplicationWindow, content: &str) {
             let zoom = st.chrome().zoom_level.get();
             let allow_unsafe = st.allow_unsafe_images.get();
             let new_widget =
-                render_and_wire_preview(content, st.doc_dir().as_deref(), zoom, allow_unsafe);
+                // The reader's folds, which a reload has already cleared if the text
+                // moved (`TabState::set_source`) and kept if it did not.
+                render_and_wire_preview(
+                    content,
+                    st.doc_dir().as_deref(),
+                    zoom,
+                    allow_unsafe,
+                    &st.folds.borrow(),
+                    st.fold_epoch(),
+                );
             // Close any open marker popover BEFORE `set_preview` drops the view it is
             // parented to. That popover is autohide and holds a real X11 seat grab
             // (GTK4Rs/AP-83); destroying its parent while the grab is live strands it and the

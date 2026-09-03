@@ -113,6 +113,14 @@ const BUILTIN_SPRITES: &[(&str, &[u8])] = &[
         include_bytes!("../data/sprites/grass-platform.png"),
     ),
     (
+        "sprites/sign-down.png",
+        include_bytes!("../data/sprites/sign-down.png"),
+    ),
+    (
+        "sprites/sign-right.png",
+        include_bytes!("../data/sprites/sign-right.png"),
+    ),
+    (
         "sprites/sword.png",
         include_bytes!("../data/sprites/sword.png"),
     ),
@@ -601,6 +609,12 @@ fn admit_for_decode(r: &SpriteRef) -> Option<std::borrow::Cow<'static, [u8]>> {
 
 /// The natural pixel dimensions an image's header declares, without decoding it.
 ///
+/// **Shared with the DOCUMENT image path** (`renderer::start::load_remote_texture`),
+/// which had no decoded-pixel bound at all while this module refused one on every
+/// sprite — the project's own decompression-bomb gate applied to its assets and not to
+/// untrusted content (F-SEC-206). One probe rather than two, so the two paths cannot
+/// disagree about what an image's header says.
+///
 /// Feeds a `GdkPixbufLoader` in chunks only until `size-prepared` fires, then **aborts
 /// the load from inside that handler with `set_size(0, 0)`**. Returns `None` for bytes
 /// no installed loader recognises.
@@ -620,7 +634,7 @@ fn admit_for_decode(r: &SpriteRef) -> Option<std::borrow::Cow<'static, [u8]>> {
 /// (18 MB, same measurement) but takes a **path**: a compiled-in sprite has none, and
 /// re-opening a file the caller has already read and validated would reintroduce the
 /// check-then-use seam [`open_checked`] closes.
-fn probe_pixel_size(raw: &[u8]) -> Option<(i32, i32)> {
+pub(crate) fn probe_pixel_size(raw: &[u8]) -> Option<(i32, i32)> {
     use gtk::gdk_pixbuf::prelude::PixbufLoaderExt;
     use std::cell::Cell;
     use std::rc::Rc;

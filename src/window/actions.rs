@@ -112,11 +112,7 @@ pub(crate) fn active_text_view(window: &ApplicationWindow) -> Option<TextView> {
 /// The preview pane's text view (the `CodePreviewView`, upcast), or `None` in
 /// edit-only mode where there is no preview. Split-swap-aware via `get_preview_sw`.
 pub(crate) fn preview_text_view(window: &ApplicationWindow) -> Option<TextView> {
-    super::zoom::get_preview_sw(window)?
-        .child()?
-        .downcast::<crate::codeview::CodePreviewView>()
-        .ok()
-        .map(|v| v.upcast())
+    super::zoom::get_preview_view(window).map(|v| v.upcast())
 }
 /// The text view `win.copy` / `win.select-all` act on. In split mode this is the
 /// pane that stickily holds focus (`WindowChrome::focused_pane`); in preview- or

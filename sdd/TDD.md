@@ -3,7 +3,7 @@
 | # | Functional area | Rubrics |
 |---|-----------------|---------|
 | 1 | Opening & displaying documents | 1.1 – 1.11a |
-| 2 | Rendering fidelity | 2.1 – 2.24 |
+| 2 | Rendering fidelity | 2.1 – 2.26l |
 | 3 | Live reload (external edits) | 3.1 – 3.4 |
 | 4 | Editing & saving | 4.1 – 4.9 |
 | 5 | Reconciliation (conflict handling) | 5.1 – 5.4 |
@@ -12,14 +12,14 @@
 | 8 | Single-instance lifecycle | 8.1 – 8.7 |
 | 9 | Menu bar, toolbar, and actions | 9.1 – 9.36 |
 | 10 | Markdown formatting commands | 10.1 – 10.20 |
-| 11 | Find & replace | 11.1 – 11.8 |
-| 12 | Document outline | 12.1 – 12.21 |
+| 11 | Find & replace | 11.1 – 11.10 |
+| 12 | Document outline | 12.1 – 12.22 |
 | 13 | Preview zoom | 13.1 – 13.10 |
 | 14 | Show Unsafe Images | 14.1 – 14.10 |
 | 15 | Tabbed documents | 15.1 – 15.22 |
 | 16 | Keyboard-shortcuts help & status surfaces | 16.1 – 16.9 |
 | 17 | Annotation & review (CriticMarkup) | 17.1 – 17.53 |
-| 18 | Preview reading themes | 18.1 – 18.47 |
+| 18 | Preview reading themes | 18.1 – 18.53 |
 | 19 | Local document-link navigation | 19.1 – 19.13 |
 | 20 | Annotations viewer | 20.1 – 20.18 |
 | 21 | Crash forensics | 21.1 – 21.12 |
@@ -311,7 +311,7 @@
 - **And** the fallback grouping is established **only** by an enclosing `<picture>`: a `<source>` and an `<img>` (or several `<img>`s) that are **not** wrapped in a `<picture>` render as **independent** images — an ungrouped `<source>` never suppresses a sibling `<img>`
 - **And** each candidate `src` is subject to the **same** "Show Unsafe Images" / document-containment gate as a Markdown image (2.5, 2.7, §14): a remote, escaping, or other-scheme `src` is blocked, and an `onerror`/script attribute is never executed
 - **And** a candidate whose image format the system has no decoder for (e.g. WebP with no WebP loader installed) is skipped in favour of the next candidate in its `<picture>`; when a format's decoder **is** installed, that candidate renders; if nothing in the group can be decoded, the broken-image placeholder is shown (with the `<img>` fallback's `src` in its tooltip)
-- **And** raw HTML that is **not** a `<picture>`/`<source>`/`<img>` image element (e.g. `<script>`, `<iframe>`, `<div>`) continues to be dropped entirely — neither rendered nor shown as literal text (sanitize-by-omission is unchanged)
+- **And** raw HTML outside the rendered allowlist — `<picture>`/`<source>`/`<img>` plus `<details>`/`<summary>` (2.26) — (e.g. `<script>`, `<iframe>`, `<div>`) continues to be dropped entirely — neither rendered nor shown as literal text (sanitize-by-omission is unchanged)
 - **And** an animated GIF/WebP shows its **static first frame** (frame animation is out of scope)
 
 ### 2.25 A Markdown construct the renderer cannot render is visible, never silently dropped
@@ -321,6 +321,106 @@
 - **And** the parser is asked for **only** the extensions the renderer has handlers for, so those constructs never become parser events at all
 - **And** the three event dispatchers match the parser's `Event`, `Tag` and `TagEnd` vocabularies **exhaustively**: a parser upgrade that adds a construct fails to compile rather than rendering it as nothing
 - **Rationale** the failure mode this pins is *silence*: an enabled-but-unhandled extension is dropped, not degraded, so `$E=mc^2$` rendered empty and `[^1]` vanished with every gate green (ScrAP-78)
+
+### 2.26 Disclosure blocks render as a collapsed summary
+- **Given** a document containing a raw-HTML `<details>` element with a `<summary>`
+- **When** it is rendered
+- **Then** the summary shows as a single line carrying a disclosure indicator, its body is **not** shown, and none of the raw HTML appears as literal text
+- **And** the collapsed line shows a short **preview of the body's opening text ending in an ellipsis**, in a dimmed secondary colour taken from the active reading theme — so a collapsed block still hints at what it contains rather than hiding it entirely
+- **And** the preview never alters the document's copyable source: copying the collapsed block yields its Markdown, with no preview text or ellipsis introduced
+
+### 2.26a Activating a summary toggles its body
+- **Given** a rendered collapsed disclosure block
+- **When** the user activates its summary
+- **Then** the body appears beneath the summary, the disclosure indicator reflects the open state, and activating it again hides the body
+- **And** the whole **summary line** is the click target — the label, and the empty space to the right of it — not merely the indicator, which stays small because it reads as an indicator set in prose rather than as a button dropped into a paragraph
+- **And** a click on the indicator itself toggles exactly **once**, and drag-selecting the summary's own text does not toggle at all
+- **And** the pointer shows the **hand cursor** across that whole line, not the I-beam it would show over ordinary prose — an affordance that works while looking inert is one a reader never tries
+
+### 2.26b A disclosure marked `open` renders expanded
+- **Given** a `<details open>` element
+- **When** it is rendered
+- **Then** its body is visible without any user action, and it can still be collapsed like any other disclosure
+
+### 2.26c Markdown inside a disclosure body renders as Markdown
+- **Given** a disclosure whose body contains fenced code, lists, emphasis, inline code, links, blockquotes, tables or images
+- **When** the body is shown
+- **Then** each construct renders exactly as the same construct renders at top level — the body is ordinary document content, not literal text and not a reduced subset
+- **And** a disclosure nested **inside** a container — a blockquote or a list item — renders and toggles there exactly as it does at top level
+
+### 2.26d A malformed disclosure degrades predictably
+- **Given** a `<details>` with no `<summary>`, or whose body is not separated by the blank lines CommonMark requires, or which is never closed
+- **When** it is rendered
+- **Then** a missing `<summary>` shows the label "Details"; a body without blank lines renders as **literal text** rather than parsed Markdown (matching CommonMark and GitHub — this is correct, not a defect); and an unclosed `<details>` does not swallow the remainder of the document
+- **And** that literal text is the block's **body**, so it folds with the block: a closed unspaced disclosure hides it and an `open` one shows it, exactly as a spaced body behaves. Emitted outside the block instead, a collapsed disclosure would print the body it had just hidden and its own control would be a visible no-op
+- **And** toggling it is **lossless in both directions**: the body returns on expand. Its rendered body is not a range of Markdown events, so the region splice cannot reproduce it and the toggle takes the full-re-render path instead
+- **And** an unclosed `<details>` shows its summary text as an ordinary line with **no disclosure control** — there is nothing it could fold, and everything after it renders exactly as it would if the tag were absent
+- **And given** an unspaced body that also contains a `<script>` element
+- **Then** the body's own text appears as literal text and the script's text appears nowhere — the allowlist still governs which elements may contribute text at all, so showing an allowlisted element's own text is not a licence for its children's
+- **And** that holds however the element is spelled and wherever its close tag sits: a self-closing `<script/>` suppresses exactly as `<script>` does (HTML5 does not acknowledge the flag on a non-void element), the same applies to every element whose content HTML parses as text rather than markup (`<style>`, `<textarea>`, `<title>`, `<xmp>`, `<iframe>`, `<noembed>`, `<noframes>`, `<plaintext>`), and no close tag written inside one of them can release it
+- **And given** an unspaced body containing an HTML comment, a doctype, a CDATA section or a processing instruction
+- **Then** the rest of the body still appears, and the construct itself appears nowhere — none of them is an element, so none can open a suppression that never closes and silently delete the remainder of the block
+- **Rationale** browsers close an unclosed `<details>` implicitly at the end of its parent, making the rest of the document its body; that is deliberately not copied, because a document is untrusted content (TDD 2.7) and an authoring slip — or a half-typed tag in a live-preview session — must not be able to hide a document
+
+### 2.26e Sibling and nested disclosures toggle independently
+- **Given** a document with two sibling disclosures, and a disclosure nested inside another
+- **When** the user toggles one of them
+- **Then** its siblings are unaffected, an inner disclosure toggles independently of its outer, and re-expanding an outer disclosure restores the inner one's **own** prior state rather than resetting it
+- **And** that holds for siblings that share one raw-HTML block — two adjacent `<details>` with no blank line between them, or a compact one-line `<details><summary>…</summary>…</details>`, which CommonMark makes a single type-6 block. A disclosure's identity is its own `<details>` tag's source offset, not its block's, so siblings in one block are two blocks to the reader in every respect: two folds, two bodies, two hidden-match records
+
+### 2.26f A collapsed body claims no space in the pane
+- **Given** a collapsed disclosure whose body contains a table or image wider than the preview pane
+- **When** the document is displayed
+- **Then** no horizontal scrollbar appears and the preview does not blank — content inside a collapsed block imposes no width on the pane (the ScrAP-23a over-wide chain must not be reachable through collapsed content)
+
+### 2.26g A disclosure exports as it renders
+- **Given** a document containing disclosure blocks, both collapsed and `open`
+- **When** it is exported to HTML or to PDF
+- **Then** each disclosure's summary **and its full body** appear in the artefact, with the body's Markdown rendered as Markdown — an export is the document, not the viewport, so a collapsed block is never omitted
+- **And** the artefact reproduces the preview's *omissions* as exactly as its content, for raw HTML written across **more than one line** as well as on one: every walk over a raw-HTML block scans the whole accumulated block, never a line at a time, so a `<script>` whose open and close tags sit on different lines — which is how one is normally written — cannot be dropped from the pane and present in the file
+- **And** an HTML export carries a real `<details>` element, so the reader of the artefact gets the affordance too; its `open` attribute follows the **document**, never the reader's fold state. A PDF has no such affordance, so it lays every body out unconditionally
+- **Rationale** the preview and the export are two consumers of one event stream and agree only for constructs both were taught; a construct added to the renderer alone is silently absent from every export, and the artefact still opens looking finished (Document Rendering CAM row 17)
+
+### 2.26h Toggling a disclosure holds the reader's place
+- **Given** a document being read at some position, with a collapsed disclosure above that position
+- **When** the reader expands or collapses that disclosure
+- **Then** the reader stays on the same *content* — the view is never thrown back to the top of the document, nor clamped to its end, nor moved by the length of the block that opened
+- **And** content below the toggled block moves with it, down as the block opens and up as it closes, which is what the reader asked for
+- **And given** the reading position is **inside** a block the reader is collapsing
+- **Then** the view settles on that block's summary line — the nearest position that still exists
+
+### 2.26i A toggle does not make the document travel
+- **Given** a long document being read some distance down, with a disclosure block above the reading position
+- **When** the reader expands or collapses that block
+- **Then** the view does not visibly travel — the document never drops to its top and glides back — and the line under the reader's eye is still under it when the transition finishes
+- **And** this does not degrade with document length: a longer document must not make the transition more visible
+- **Rationale** 2.26h promises the destination; this promises the journey. They are different failures — a re-render that lands correctly after visibly throwing the reader to the top satisfies 2.26h and is still the thing the reader complains about
+
+### 2.26j Everything that points into the document survives a toggle
+- **Given** a document containing a disclosure, with headings, links, an image and a table positioned **below** it
+- **When** the reader expands or collapses that disclosure
+- **Then** copying any selection below the block yields that selection's own Markdown, activating a link below it opens that link's own target, the outline still scrolls to the heading it names, and find still lands on the match it reports
+- **And** nothing below the toggled block addresses the wrong text — a reference that silently *acts* on the wrong place is the failure here, not a redraw glitch
+
+### 2.26k An unreachable image is fetched at most once per URL per TTL, not once per toggle
+- **Given** a document containing a remote image, with "Show Unsafe Images" enabled, whose host is slow or unreachable
+- **When** the reader toggles a disclosure several times
+- **Then** the dead URL is requested **at most once per TTL**, not once per toggle — a toggle that lands while a negative entry is live does no network work at all
+- **And** each attempt that does run is **bounded** by `imagefetch`'s connect timeout rather than open-ended, so the cost of a failure is a known quantity
+- **And** the negative entry expires on a deliberately short TTL, so a transient outage does not read as permanent for the rest of the session; a re-attempt roughly once a minute per URL is the contract, not a defect
+- **Limitation, stated rather than promised** the fetch is synchronous on the main thread, so the toggle on which an attempt actually runs **does block the window** for the connect timeout (MEASURED at 5.001s against the 5s timeout). This rubric therefore gates the FREQUENCY of that stall, which is what the cache can deliver; it does not promise responsiveness, which only an asynchronous fetch could. Do not read a stall on the attempting toggle as a failure of this rubric; an attempt on *every* toggle is one.
+- **Rationale** a toggle re-walks the document, so every image tag is re-visited, and an uncached fetch would re-run per toggle. The earlier wording promised "the window stays responsive throughout", which the shipped synchronous fetch does not deliver — so the manual check spent its text documenting the rubric being violated. A rubric that states a contract the code cannot meet trains its reader to ignore the check
+- **Coverage** the decidable half is tested against the **shipped** thread-local cache, not a stand-in — `imagecache::the_shipped_cache_re_attempts_a_dead_url_only_after_its_ttl` counts fetch attempts across a run of toggles inside and past the TTL, which the injected clock (`get_or_fetch_at`) makes reachable without sleeping through a real minute; `imagecache::policy`'s own tests cover the cache type beneath it. The attempt count across REAL toggles is `tests/MANUAL-TEST.md` §2.26k, read from the log rather than the clock
+
+### 2.26l An edit forgets which blocks the reader had collapsed
+- **Given** a document open in split mode with one or more disclosures collapsed by the reader
+- **When** the user types anywhere in the editor — above, inside or below a collapsed block
+- **Then** every block returns to the state the document states for it (`<details open>` expanded, plain `<details>` collapsed), and no block is left collapsed that the document does not itself mark collapsed
+- **And** the reset takes effect on the **keystroke**, not on the debounced re-render that follows it, so a disclosure toggled during that window is decided against the edited source rather than against the pre-edit one
+- **And given** a control the reader activates in the window between the keystroke and the re-render — a control the PREVIOUS render built, whose key names text that has moved
+- **Then** the activation is **discarded**, and discarded visibly enough to be diagnosed (a `debug` record naming the generation it was minted against). It is not honoured, and it is not guessed at: re-keying it would have to define a disclosure's identity across an edit, which is the guess this rubric exists to refuse
+- **And** no block other than the one whose summary the reader activates ever changes its collapsed state as a result of an edit — which is what the discard is *for*, since a stale key can land on a different block's new start offset
+- **Rationale** a fold is keyed on the source byte offset of its opening raw-HTML block, and an edit moves every offset after it. Re-keying survivors would have to define a disclosure's identity across an edit that can split, merge or delete one — a guess the reader cannot predict — so the state is dropped instead, matching HTML, where a disclosure's state is the `open` attribute and therefore a property of the document rather than of the reader. Left unreset, a stale key silently reverts a collapsed block mid-typing or, when it collides with a different block's new start offset, **collapses the wrong block** — hiding content the reader never asked to hide
 
 ### 2.12 Links within blockquotes
 - **Given** a blockquote containing a Markdown hyperlink
@@ -365,6 +465,12 @@
 - **And given** an image whose `src` is an absolute path, a `..` traversal, or a symlink (under the doc folder) pointing outside the document's directory
 - **When** it is rendered
 - **Then** the file is **not** loaded — the canonicalized target must stay at or beneath the document's directory (an untitled document, having no directory, resolves no local images)
+- **And given** an image, local or remote, whose header declares dimensions that decode past the project's pixel cap — a decompression bomb, which is small enough on disk to clear every byte limit and expands to hundreds of megabytes or more
+- **When** it is rendered
+- **Then** its dimensions are read from the header and it is refused **before** the decode, showing the ordinary broken-image placeholder — cost is part of the threat model, and a byte cap bounds the transfer while saying nothing about what it expands to
+- **And given** a disclosure the reader has COLLAPSED, whose body contains a raw-HTML `<img>`
+- **When** the document is rendered
+- **Then** nothing is resolved, nothing is fetched and nothing is anchored for it — a reader's fold state is a privacy signal, so a remote image behind a fold they did not open must not report back, and a local one must not draw inside a region rendered as nothing
 
 ### 2.8 Rendered text is selectable and copyable as Markdown
 - **Given** a rendered document with prose, headings, code blocks, bold/italic, and links
@@ -423,6 +529,12 @@
 - **And** an **indented** (4-space) code block behaves the same, its continuation indent preserved so the copy re-parses as the same block, and a code block inside a blockquote or list item excludes that container's `> `/indent markers within (2.8g)
 - **And** annotating (`{==…==}`) a selection inside a code block still wraps the **whole** block — a copy may be divided at a character; an annotation may not
 
+
+### 2.8i Copying across a collapsed disclosure includes its body
+- **Given** a selection that spans a collapsed disclosure block
+- **When** the user copies
+- **Then** the clipboard contains the Markdown source **including** the collapsed body and its `<details>`/`<summary>` markup — a copy reflects the document, not what happens to be on screen
+- **And** this holds for every anchored affordance the construct introduces: a widget anchored in the buffer contributes a `U+FFFC` that the copy map must account for, and an unaccounted one silently omits the construct's source rather than failing loudly
 ### 2.18 Selecting over an image marks it as selected
 - **Given** a rendered document containing an image
 - **When** the user drag-selects (or Select-All) a region that spans the image
@@ -1467,6 +1579,13 @@
 - **Then** nothing is highlighted, scrolled or counted, and the failure is logged — the hidden editor is never searched as a fallback, because acting on an invisible buffer is worse than not acting
 - **And** the match counter shows no matches rather than the hidden editor's count, which would be a confidently wrong number in place of a missing one
 
+### 11.10 Find reaches a match inside a collapsed disclosure
+- **Given** a document with a collapsed disclosure whose body contains the search term
+- **When** the user searches for that term
+- **Then** the disclosure containing the match expands, and the match is scrolled to and highlighted like any other — a match is never reported at a location the user cannot see
+- **And** the match **counter counts it before it is reached**: what a document contains is not what the viewport shows, and reporting "No matches" for text plainly in the document is the failure 11.8 already names as worse than not acting
+- **And** a match inside a disclosure nested in another collapsed disclosure is reached by the same single step — expanding the outer block reveals only the inner block's summary, so one gesture opens as many levels as stand in the way
+
 ## 12. Document outline
 
 > A collapsible sidebar lists the document's headings and navigates to them.
@@ -1659,6 +1778,11 @@
 - **Then** a fixed caption reading "Outline" sits at the top of the panel and does not scroll with the heading list
 - **And** the header carries a close (×) button that hides the sidebar (sharing the same `win.outline` toggle as the toolbar button / View menu / F9)
 
+
+### 12.22 The outline includes headings inside collapsed disclosures
+- **Given** a document with headings inside a collapsed disclosure block
+- **When** the outline is shown
+- **Then** those headings are listed in order like any others, and activating one expands its disclosure and navigates to it — the outline models the document, not the viewport
 ---
 
 ## 14. Show Unsafe Images
@@ -2526,7 +2650,44 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **And** two decorations whose drawn columns cannot intersect are ordered by nothing and are recorded as such rather than left unmentioned — the right-margin annotation chip against anything in the content column, and a quoted list's markers against the accent bar they are deliberately placed clear of
 - **Rationale** the pairs are derived from the vectors the paint draws from, not enumerated by hand: a pair overlaps only if the two constructs nest in Markdown AND their rectangles intersect in x. Both halves are measurable — the nestings against the renderer's own products, the columns against the arithmetic the painters share — so the list is auditable rather than remembered, which is what a decoration added later needs
 
-## 19. Local document-link navigation
+### 18.48 A theme can band a disclosure's summary line
+- **Given** a theme setting `disclosure_band_color` (optionally with `disclosure_band_gradient_to_color` or `disclosure_band_radius`), or a `disclosure_band_sprite` as the band's fill
+- **When** a document containing a `<details>` is rendered — collapsed and expanded, at top level and nested inside a blockquote or a list item
+- **Then** the band sits behind the whole summary line, spanning the same width a banded heading spans rather than only the width of the label's text, and survives soft-wrap as one continuous band
+- **And** a **sprite alone bands the line**: `disclosure_band_sprite` with no `disclosure_band_color` beside it paints the band, exactly as a heading's sprite does without a fill
+- **And** a `disclosure_band_gradient_to_color` with no fill beneath it is **ignored and logged** — a gradient is a second stop and needs a first one, and a key that renders nothing says so
+
+### 18.49 A theme can re-colour a disclosure's summary text
+- **Given** a theme setting `disclosure_fg`
+- **When** a document containing a `<details>` is rendered
+- **Then** the summary line's own text takes that colour, and no other line does
+- **And** a summary inside a blockquote takes this colour rather than the quote's, while a collapsed block's body preview keeps `disclosure_preview_fg` where a theme states one — the narrower statement wins
+
+### 18.50 A disclosure's band and its summary colour are set independently
+- **Given** a theme setting only one of `disclosure_band_color` and `disclosure_fg`
+- **When** a document containing a `<details>` is rendered
+- **Then** the stated one applies and the unstated one leaves its surface exactly as it was — a theme may band without re-colouring, and re-colour without banding
+
+### 18.51 A disclosure's band and summary colour reach an exported document
+- **Given** a theme setting a disclosure band and summary colour
+- **When** a document containing a `<details>` is exported to HTML and to PDF
+- **Then** both artefacts show the band behind each summary line and the summary text in its themed colour
+- **And** the band's corner rounding reaches neither artefact, as no drawn corner rounding does
+
+### 18.52 A themed page keeps its colours when the window loses focus
+- **Given** a reading theme that states its own page colours (any theme but System)
+- **When** the reader activates another window, so this one is drawn as unfocused
+- **Then** the rendered document is unchanged — every part of it, including the parts drawn as widgets rather than as buffer text: a table's cells and header cells, a link in either cell shape, and a disclosure's indicator
+- **And** only the window's own chrome follows the desktop's unfocused styling, because that is the desktop's to decide
+- **And** under System, which states no colours of its own, the whole page follows the desktop together — the cells never dim while the prose does, or the reverse
+- **Rationale** the widget-borne parts take their ink by INHERITANCE from the page, and a desktop theme states an unfocused ink on the node each of them actually draws with (`label:backdrop`), which an inherited value loses to regardless of which provider it came from — so a page that looks right focused can re-ink half of itself the moment focus leaves, and the half it re-inks is the half no stylesheet assertion can see
+
+### 18.53 A themed page inks its disclosure indicator, stating it or inheriting the page's
+- **Given** a reading theme that states a page of its own — whether or not it says anything about the disclosure fold
+- **When** a document containing a `<details>` is rendered
+- **Then** the indicator is drawn in a colour the theme owns: the one it states for the marker, or the page's own text colour where it states none
+- **And** under System, which states no page, the indicator keeps the desktop's chevron in the desktop's colour, exactly as it did before any of these keys existed
+- **Rationale** the fallback is the rule the drawn list markers already follow — a marker's ink is the body's until the theme says otherwise — so the two kinds of marker cannot disagree; and an indicator left on the desktop's colour is not merely off-palette, it is the one part of a themed page that changes when the window loses focus (18.52)
 
 ### 19.1 A relative link to a Markdown sibling opens as a new tab
 - **Given** a rendered document containing a relative link to another `.md`/`.markdown` file that resolves within the current document's folder
@@ -3183,6 +3344,7 @@ up doing.
 - **Given** a document carrying CriticMarkup annotations
 - **Then** the export shows each claim highlighted and its comment beside it — an aside in HTML, a margin note in PDF, matching what the preview shows
 - **And** the highlight covers exactly the annotated characters, even where the rendered text is shorter than its source because construct markers were stripped
+- **And** the comment appears **once per annotation**, however many pieces the highlight is drawn in. A claim that spans inline markup — `{==a **bold** word==}` — is split at every construct boundary, and in HTML the anchor the aside links back to is written on exactly one of those pieces: N copies of a comment is a different document, and N elements sharing one `id` is invalid and makes the back-link ambiguous
 
 ### 25.14 An export announces itself, either way
 - **Given** a completed export

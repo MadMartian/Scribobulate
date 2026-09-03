@@ -24,6 +24,7 @@ use crate::lint::patterns::{
     bare_ap_citations, declares_whole_id, issues_rx, prose_prescriptions, reverse_dns_rx,
     win_illegal_path,
 };
+use crate::lint::patterns::{marker_reason, parser_dispatch_wildcards};
 use std::path::{Path, PathBuf};
 
 // ── Check 1: the ISSUES citation forms ────────────────────────────────────────
@@ -648,4 +649,406 @@ fn prefix_and_last_segment_drift_are_still_caught() {
 fn an_extension_does_not_make_the_id_a_different_one() {
     assert!(declares_whole_id("com.extollit.scribobulate.svg", CANON));
     assert!(declares_whole_id("com.extollit.scribobulate.png", CANON));
+}
+
+// ── check: parser-vocabulary dispatchers are exhaustive ──────────────────────
+//
+// The gate on this gate. The predicate has to fire on the shape that actually
+// shipped (`copymap::classify`'s `_ => return None`) and stay silent on the three
+// shapes that look like it and are not: an exhaustive dispatcher, a wildcard in a
+// match over some OTHER type, and the vocabulary named in prose.
+
+#[test]
+fn wildcard_in_a_parser_dispatch_is_caught() {
+    // The exact shape that let raw HTML acquire no copy node.
+    let src = r#"
+fn classify(ev: &Event) -> Option<RawKind> {
+    Some(match ev {
+        Event::Text(t) => RawKind::Text(t.to_string()),
+        Event::Rule => RawKind::Atomic,
+        _ => return None,
+    })
+}
+"#;
+    assert_eq!(
+        parser_dispatch_wildcards(src),
+        vec![6],
+        "the `_ =>` arm must be found"
+    );
+}
+
+/// **F-AP-B-102: a ≥30-line CRLF file and its LF twin must report the same line.**
+///
+/// `text.lines()` strips both bytes of a `\r\n` while the walk's own offset
+/// accumulator adds one for the terminator, so on a CRLF checkout the accumulator falls
+/// one character behind PER LINE. Past about thirty lines the drift exceeds the
+/// indentation the depth model is looking at, the check sees no `match` block at all,
+/// and it reports PASS having found nothing.
+///
+/// **Silent, green, and green only where nobody looks**: Windows is the one platform
+/// whose `.gitattributes` guarantees CRLF. The fixture has to be long, because a short
+/// one drifts by too little to change the answer — which is why nothing caught this.
+///
+/// The fold now happens at the reader (`lint::read_text`), so this case exercises the
+/// walk's own arithmetic directly rather than the reader's.
+#[test]
+fn a_crlf_file_reports_the_same_line_as_its_lf_twin() {
+    let mut lf = String::from("\nfn classify(ev: &Event) -> Option<RawKind> {\n");
+    // Padding ABOVE the match, so the accumulator has somewhere to drift.
+    for i in 0..40 {
+        lf.push_str(&format!("    // filler line {i}, long enough to matter\n"));
+    }
+    lf.push_str("    Some(match ev {\n");
+    lf.push_str("        Event::Text(t) => RawKind::Text(t.to_string()),\n");
+    lf.push_str("        Event::Rule => RawKind::Atomic,\n");
+    lf.push_str("        _ => return None,\n");
+    lf.push_str("    })\n}\n");
+
+    let found = parser_dispatch_wildcards(&lf);
+    assert_eq!(found.len(), 1, "the LF twin finds the wildcard: {found:?}");
+
+    let crlf = lf.replace('\n', "\r\n");
+    assert_eq!(
+        parser_dispatch_wildcards(&crlf),
+        found,
+        "and the CRLF twin finds it on the SAME line. A gate that reports PASS having \
+         found nothing is indistinguishable from one that passed, and this one did so \
+         on the only platform that guarantees these line endings"
+    );
+}
+
+#[test]
+fn a_guarded_wildcard_is_caught_too() {
+    // `_ if cond =>` is a wildcard wearing a hat; it still absorbs every unnamed
+    // variant that satisfies the guard.
+    let src = r#"
+match ev {
+    Tag::Paragraph => a(),
+    _ if flag => b(),
+}
+"#;
+    assert_eq!(parser_dispatch_wildcards(src), vec![4]);
+}
+
+#[test]
+fn a_brace_inside_a_char_literal_does_not_move_the_depth() {
+    // MEASURED blind spot: the depth model had no arm to ENTER a char literal, so `'{'`
+    // counted as an opening brace and every dispatch below it sat at the wrong depth —
+    // the check then saw no `match` block at all and passed vacuously. A file holding
+    // `'{'` or `'}'` is not exotic: any hand-rolled lexer has one, and this tree's own
+    // raw-HTML scanners are full of them.
+    // The literal must sit INSIDE the match block, and be unbalanced there. The model is
+    // relative — arms are recognised at the `match` line's depth plus one — so a stray
+    // brace ABOVE the block shifts every level equally and nothing breaks. Put one in an
+    // early ARM and the later arms sit a level too deep to be recognised at all, which
+    // is how the check went silently blind rather than noisily wrong. Both facts were
+    // learned by mutation: the first draft of this case used a balanced `'{' || '}'`
+    // above the block and survived removal of the fix. GEP-1 holds the general rule —
+    // plant the violation where the mechanism CONSUMES it, and establish first what
+    // quantity it measures and from which anchor.
+    let src = r#"
+match ev {
+    Event::Text(t) => lex(t, '{'),
+    _ => other(),
+}
+"#;
+    assert_eq!(
+        parser_dispatch_wildcards(src),
+        vec![4],
+        "an arm carrying a brace-bearing char literal does not hide the wildcard below it"
+    );
+}
+
+#[test]
+fn a_lifetime_is_not_read_as_a_char_literal() {
+    // The other half of the same arm, and the reason it cannot be a bare `'` test: a
+    // lifetime shares the delimiter, so treating every `'` as an opener blanks the rest
+    // of the file from the first `&'a` — trading one blind spot for a larger one.
+    // The arm carries a REAL brace pair that must still be counted. Under a naive
+    // `c == '\''` opener the lifetime opens a literal with no closing quote after it, so
+    // everything to end-of-file goes inert — the arm's own `}` included — and the
+    // wildcard below is never seen.
+    let src = r#"
+match ev {
+    Event::Text(t) => { helper::<'a>(t) }
+    _ => rest(),
+}
+"#;
+    assert_eq!(
+        parser_dispatch_wildcards(src),
+        vec![4],
+        "a lifetime inside an arm leaves the wildcard below it visible"
+    );
+}
+
+#[test]
+fn an_exhaustive_parser_dispatch_is_clean() {
+    let src = r#"
+match ev {
+    Event::Text(t) => one(t),
+    Event::Rule | Event::TaskListMarker(_) => two(),
+    Event::Html(_) => three(),
+}
+"#;
+    assert!(parser_dispatch_wildcards(src).is_empty());
+}
+
+#[test]
+fn a_wildcard_over_some_other_type_is_not_this_checks_business() {
+    // Most matches in the tree legitimately end in `_`. A check that flagged them all
+    // would be turned off within a day.
+    let src = r#"
+match colour {
+    Colour::Red => a(),
+    _ => b(),
+}
+"#;
+    assert!(parser_dispatch_wildcards(src).is_empty());
+}
+
+#[test]
+fn a_nested_wildcard_does_not_indict_its_parent() {
+    // The inner match is over another vocabulary and keeps its own wildcard; the
+    // outer one is exhaustive and must stay clean.
+    let src = r#"
+match ev {
+    Event::Text(t) => match kind {
+        Kind::A => a(),
+        _ => b(),
+    },
+    Event::Rule => c(),
+}
+"#;
+    assert!(
+        parser_dispatch_wildcards(src).is_empty(),
+        "the inner match's wildcard belongs to the inner match"
+    );
+}
+
+#[test]
+fn the_vocabulary_named_in_prose_does_not_make_a_dispatcher() {
+    // Comments and strings routinely name these types — this module does it above.
+    let src = r#"
+match colour {
+    // Event::Text is not handled here, see the renderer.
+    Colour::Red => a(),
+    _ => b(),
+}
+"#;
+    assert!(parser_dispatch_wildcards(src).is_empty());
+}
+#[test]
+fn two_sequential_dispatchers_are_both_reported() {
+    let src = r#"
+fn a(tag: &Tag) -> Option<C> {
+    Some(match tag {
+        Tag::Emphasis => C::E,
+        _ => return None,
+    })
+}
+
+fn b(end: TagEnd) -> Option<C> {
+    Some(match end {
+        TagEnd::Emphasis => C::E,
+        _ => return None,
+    })
+}
+"#;
+    assert_eq!(parser_dispatch_wildcards(src), vec![5, 12]);
+}
+
+#[test]
+fn a_dispatcher_following_a_block_arm_is_still_seen() {
+    // REGRESSION. The first version of this predicate reported `construct_of_tag`'s
+    // wildcard and silently missed `construct_of_tagend`'s, 18 lines below and
+    // textually identical — found by mutation-testing the gate against the real tree,
+    // not by its corpus, which is the failure this file exists to prevent.
+    let src = r#"
+fn classify(ev: &Event) -> Option<RawKind> {
+    Some(match ev {
+        Event::Text(t) => RawKind::Text(t.to_string()),
+        Event::InlineMath(_) | Event::DisplayMath(_) => {
+            return None
+        }
+    })
+}
+
+fn construct_of_tag(tag: &Tag) -> Option<C> {
+    Some(match tag {
+        Tag::Emphasis => C::E,
+        _ => return None,
+    })
+}
+
+fn construct_of_tagend(end: TagEnd) -> Option<C> {
+    Some(match end {
+        TagEnd::Emphasis => C::E,
+        _ => return None,
+    })
+}
+"#;
+    assert_eq!(
+        parser_dispatch_wildcards(src),
+        vec![14, 21],
+        "both wildcards must be reported, not just the first"
+    );
+}
+
+#[test]
+fn a_type_whose_name_ends_in_event_is_not_a_parser_dispatch() {
+    // REGRESSION, found by running the gate over the real tree: GIO's
+    // `FileMonitorEvent::AttributeChanged` contains the substring "Event::". That type
+    // is `#[non_exhaustive]`, so its wildcard is REQUIRED — flagging it would demand
+    // code that does not compile, and a check that does that gets disabled.
+    let src = r#"
+match event {
+    FileMonitorEvent::Changed => a(),
+    _ => b(),
+}
+"#;
+    assert!(parser_dispatch_wildcards(src).is_empty());
+}
+
+#[test]
+fn a_multibyte_comment_does_not_desynchronise_the_scan() {
+    // REGRESSION. `depth` is indexed by CHARACTER; accumulating byte lengths drifts
+    // the moment a non-ASCII character appears, and this tree's comments are full of
+    // box-drawing rules. The first version reported the first dispatcher in a file and
+    // silently missed the next — invisible to an ASCII-only corpus.
+    let src = "
+// ── a box-drawing rule — with an em dash ──
+match ev {
+    Event::Text(t) => one(t),
+    _ => return None,
+}
+";
+    assert_eq!(parser_dispatch_wildcards(src), vec![5]);
+}
+
+// ── the `dispatch-selector:` opt-out (check 15's accept-with-reason path) ──
+//
+// The design ratified over blanket-failing every wildcard: check 15 no longer tries to
+// tell a selector from a dispatcher by the ARM'S SHAPE (`_ if cond =>` reads like a
+// selector and IS one here, but a bare `_ =>` can be either, and a match's true nature
+// is not visible to a text scan). Instead a wildcard is accepted only when it carries
+// the marker with a real reason; unmarked stays refused by default. `marker_reason`
+// is the predicate the annotation scan calls, so a corpus case here is evidence about
+// what the CHECK does, not a re-typed copy of it.
+
+#[test]
+fn marker_reason_requires_nonempty_text_after_the_token() {
+    assert_eq!(
+        marker_reason("    // dispatch-selector: gates on caller state, not variant"),
+        Some("gates on caller state, not variant")
+    );
+    assert_eq!(
+        marker_reason("    _ => {} // dispatch-selector: same-line form"),
+        Some("same-line form")
+    );
+    // A bare marker — copied without writing the sentence it stands for — does not
+    // count, same limit as check 8's citation FORM rule: presence is checkable,
+    // truth is not, so at minimum something must have been written.
+    assert_eq!(marker_reason("    // dispatch-selector:"), None);
+    assert_eq!(marker_reason("    // dispatch-selector:    "), None);
+    assert_eq!(marker_reason("    _ => {}"), None);
+}
+
+#[test]
+fn a_marker_on_the_wildcards_own_line_is_accepted() {
+    let src = r#"
+match ev {
+    Event::Text(t) => one(t),
+    _ if active => two(), // dispatch-selector: selects on `active`, not on which
+                           // variant arrived; classify() above already named it
+    _ => {} // dispatch-selector: everything outside the active span is irrelevant here
+}
+"#;
+    assert!(
+        parser_dispatch_wildcards(src).is_empty(),
+        "both wildcards carry a same-line reason and must be accepted"
+    );
+}
+
+#[test]
+fn a_marker_directly_above_the_wildcard_is_accepted() {
+    let src = r#"
+match ev {
+    Event::Text(t) => one(t),
+    // dispatch-selector: this arm selects by table-cell activity computed above the
+    // match, never by which Event/Tag/TagEnd variant is under it.
+    _ if active => two(),
+}
+"#;
+    assert!(
+        parser_dispatch_wildcards(src).is_empty(),
+        "a marker on the comment run directly above the arm must be accepted"
+    );
+}
+
+#[test]
+fn an_unmarked_wildcard_still_fails_by_default() {
+    // The control for the two cases above: same shape, no marker anywhere — refused,
+    // exactly as before this feature existed. Accept-with-reason must not become
+    // accept-unconditionally by accident.
+    let src = r#"
+match ev {
+    Event::Text(t) => one(t),
+    _ if active => two(),
+}
+"#;
+    assert_eq!(parser_dispatch_wildcards(src), vec![4]);
+}
+
+#[test]
+fn a_bare_marker_with_no_reason_does_not_excuse_the_wildcard() {
+    let src = r#"
+match ev {
+    Event::Text(t) => one(t),
+    // dispatch-selector:
+    _ if active => two(),
+}
+"#;
+    assert_eq!(
+        parser_dispatch_wildcards(src),
+        vec![5],
+        "a marker with nothing after the colon is indistinguishable from a copied \
+         token and must not exempt the arm"
+    );
+}
+
+#[test]
+fn a_marker_separated_by_a_blank_line_does_not_reach_the_wildcard() {
+    // Tight binding on purpose: without the no-gap rule this marker could be read as
+    // excusing the WRONG arm once the code beneath either one moves.
+    let src = r#"
+match ev {
+    Event::Text(t) => one(t),
+    // dispatch-selector: explains the arm below, or so it looks
+
+    _ if active => two(),
+}
+"#;
+    assert_eq!(
+        parser_dispatch_wildcards(src),
+        vec![6],
+        "a blank line between the marker and the arm must not exempt it"
+    );
+}
+
+#[test]
+fn a_marker_on_a_different_arm_does_not_excuse_this_one() {
+    // Two wildcards in one dispatcher, only one carrying a reason — the annotation is
+    // PER ARM, not per match block.
+    let src = r#"
+match ev {
+    Event::Text(t) => one(t),
+    _ if active => two(), // dispatch-selector: selects on caller state
+    _ => three(),
+}
+"#;
+    assert_eq!(
+        parser_dispatch_wildcards(src),
+        vec![5],
+        "only the unmarked arm should be reported"
+    );
 }

@@ -313,6 +313,87 @@ fn a_band_sprite_needs_no_fill_beside_it() {
     );
 }
 
+/// **A BARE gradient is a broadcast, and a broadcast that does not reach every level is
+/// not an authoring mistake.** The sibling test above covers the mistake: a gradient
+/// STATED at a level that bands nothing. This covers the shape both `synthwave` and
+/// `candy` actually ship — one bare `heading_band_gradient_to_color` above per-level
+/// fills for the top levels only — which must resolve in SILENCE.
+///
+/// It is a test about the signal channel rather than about headings. Several manual
+/// checks verify a theme by running it with warnings on and expecting silence, so three
+/// warnings per theme on shipped defaults do not merely annoy: they spend the signal
+/// those checks read, and every line a reader learns to skip past is one they will skip
+/// past when it matters.
+#[test]
+fn a_bare_gradient_is_silent_at_the_levels_it_cannot_reach() {
+    let cap = crate::testlog::capture();
+    let mut themes = Themes::builtin();
+    themes.merge_over(
+        Themes::parse_compiled(
+            "[themes.broadcast]\nheading_band_color_h1 = \"#101010\"\n\
+             heading_band_gradient_to_color = \"#ffffff\"\n",
+        )
+        .unwrap(),
+    );
+    let t = themes.resolve("broadcast");
+    assert!(
+        !t.bands_nothing(),
+        "h1 states a fill, so the theme does band something"
+    );
+    let noise: Vec<String> = cap
+        .records()
+        .into_iter()
+        .filter(|r| r.message.contains("heading_band_gradient_to_color"))
+        .map(|r| r.message)
+        .collect();
+    assert!(
+        noise.is_empty(),
+        "a bare gradient reaching levels that state no fill is the ordinary authoring \
+         shape, not a mistake to report once per level: {noise:?}"
+    );
+}
+
+/// **F-AP-B-304: a broadcast that lands NOWHERE is an authoring error, and was silent.**
+///
+/// The guard above is about the ordinary shape — one bare gradient, a fill on some
+/// levels — and it must stay silent there. This is the other end: a bare gradient on a
+/// theme that bands no heading at all is discarded five times over, and the per-level
+/// loop cannot see it, because a theme stating the bare key states none of the levelled
+/// spellings the loop asks about. A broadcast is only legitimate if it lands somewhere.
+///
+/// Warned ONCE, because there is one mistake — the same reasoning that made the
+/// per-level version noise.
+#[test]
+fn a_bare_gradient_that_reaches_no_level_at_all_is_diagnosed_once() {
+    let cap = crate::testlog::capture();
+    let mut themes = Themes::builtin();
+    themes.merge_over(
+        Themes::parse_compiled("[themes.nowhere]\nheading_band_gradient_to_color = \"#ffffff\"\n")
+            .unwrap(),
+    );
+    let t = themes.resolve("nowhere");
+    assert!(
+        t.bands_nothing(),
+        "precondition: this theme bands no heading at all, which is what makes the \
+         broadcast reach nothing"
+    );
+    let noise: Vec<String> = cap
+        .records()
+        .into_iter()
+        .filter(|r| r.message.contains("heading_band_gradient_to_color"))
+        .map(|r| r.message)
+        .collect();
+    assert_eq!(
+        noise.len(),
+        1,
+        "exactly one line: one mistake, not one per level — {noise:?}"
+    );
+    assert!(
+        noise[0].contains("at every level"),
+        "and it says the key reached nothing rather than naming one level: {noise:?}"
+    );
+}
+
 /// A gradient's second stop with no first one renders nothing — SCHEMA says so, and it
 /// is now SAID rather than done in silence.
 #[test]

@@ -11,67 +11,104 @@ use super::build::{
 use super::cells::{attach_cell_marker_widgets, collect_cell_labels, collect_table_anchors};
 use super::interactions::{
     connect_image_tints, wire_checkbox_toggle_gesture, wire_copy_button_gesture,
-    wire_copy_clipboard, wire_link_gestures, wire_table_click_gesture,
+    wire_copy_clipboard, wire_disclosure_click_gesture, wire_link_gestures,
+    wire_table_click_gesture,
 };
 use super::qdata::{
     scrib_anchor_widgets, scrib_labels, scrib_render_data, set_scrib_render_state, RenderData,
 };
-use super::sourcemap::invert_source_map;
 use crate::codeview::CodePreviewView;
 use gtk::prelude::*;
 use gtk::{Label, ScrolledWindow, TextChildAnchor, WrapMode};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// The [`CodePreviewView`](crate::codeview::CodePreviewView) inside a widget [`render`]
+/// produced: `Overlay > ScrolledWindow > CodePreviewView`.
+///
+/// **The ONE statement of that tree shape outside `window::zoom`'s window-rooted
+/// accessor.** It was hand-written nine times across `codeview` and `preview::render`
+/// — including two byte-identical private `view_of` helpers in one file — so a change
+/// to what `render` builds was nine edits, eight of which nobody would think to make
+/// (F-DRY-103). The shape is `render`'s own product, so the accessor lives beside it.
+///
+/// `None` when the widget is not one `render` produced, which is a caller error
+/// everywhere it can happen today; the call sites `expect` it and say so.
+///
+/// Gated to the integration-test cfg because every caller is one — production reaches
+/// the view through `window::zoom`'s window-rooted accessor instead. Carrying the
+/// callers' own cfg rather than a bare `#[cfg(test)]` keeps `-D warnings` satisfiable
+/// without an `#[allow]` (POLICY § GTK-object integration tests); if a production
+/// caller ever appears, the gate comes off in that change.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) fn view_of(widget: &gtk::Widget) -> Option<crate::codeview::CodePreviewView> {
+    use gtk::prelude::*;
+    widget
+        .downcast_ref::<gtk::Overlay>()
+        .and_then(|o| o.child())
+        .and_then(|c| c.downcast::<gtk::ScrolledWindow>().ok())
+        .and_then(|sw| sw.child())
+        .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
+}
+
+/// Build a fresh preview widget for `md` at `folds`.
+///
+/// **`folds` is a parameter and not a default** (F-AP-B-101). This entry point took no
+/// fold state at all, so every route that BUILDS a pane rather than re-rendering one —
+/// a view-mode switch above all — silently rendered the document as the document says
+/// rather than as the reader left it. `re_render` has always taken it; the asymmetry
+/// was the defect, and the only way it stays fixed is for the argument to exist, so a
+/// new call site has to answer the question rather than inherit an answer.
+///
+/// A first build with no reader state passes `&FoldState::default()` explicitly, which
+/// says at the call site that the map is empty THERE rather than leaving it implicit.
+///
+/// `fold_epoch` is the source generation `folds` was read at — see
+/// `TabState::fold_epoch`. Every control this render builds carries it, so a click that
+/// arrives after the source has moved is refused rather than applied to a key naming
+/// the previous document (F-AP-B-105).
 pub(crate) fn render(
     md: &str,
     doc_dir: Option<&std::path::Path>,
     zoom: f64,
     allow_unsafe_images: bool,
+    folds: &crate::fold::FoldState,
+    fold_epoch: u64,
 ) -> gtk::Widget {
     let RenderProducts {
         buf,
-        source_map,
-        copymap,
-        md_owned,
-        links,
+        maps,
+        disclosure_toggles,
         anchored,
         image_tints,
         install,
-        heading_offsets,
-        heading_slugs,
-        heading_map,
         mut markers,
         cell_src_spans,
         highlight_ranges: _,
-        shifts,
-        original_owned,
-    } = build_render_products(md, doc_dir, zoom, allow_unsafe_images);
+    } = crate::preview::build::build_render_products_with_theme(
+        md,
+        doc_dir,
+        zoom,
+        allow_unsafe_images,
+        crate::theme::active(),
+        folds,
+    );
 
     // Wrap per-render data in a shared cell so `re_render` can update it in
     // place without disconnecting and reconnecting any signal handlers.
     let table_anchors = collect_table_anchors(&anchored);
-    let source_map_inv = invert_source_map(&source_map);
-    let render_data: Rc<RefCell<RenderData>> = Rc::new(RefCell::new(RenderData {
-        source_map,
-        source_map_inv,
-        copymap,
-        md_owned,
-        links,
-        heading_map,
-        heading_offsets,
-        heading_slugs,
+    let render_data: Rc<RefCell<RenderData>> = Rc::new(RefCell::new(RenderData::new(
+        maps,
         image_tints,
         table_anchors,
-        shifts,
-        original_owned,
-    }));
+    )));
     // Tint images that fall inside the buffer selection (the buffer was just built).
     connect_image_tints(&buf, &render_data);
 
     let view = CodePreviewView::new();
     view.add_css_class("scrib-preview");
     view.set_buffer(Some(&buf));
+    wire_disclosure_toggles(&view, &render_data, disclosure_toggles, fold_epoch);
     view.set_editable(false);
     // Found by the naming guard once its scope became the accessible ROLE rather than a
     // list of widget types: this view publishes role TextBox and had no accessible name, so
@@ -127,6 +164,7 @@ pub(crate) fn render(
     // copy-clipboard → char-precise Markdown copy.
     wire_table_click_gesture(&view);
     wire_link_gestures(&view, &render_data);
+    wire_disclosure_click_gesture(&view, &render_data);
     // Left-gutter task checkbox → undoable `[ ]`↔`[x]` source toggle (Phase 3b).
     wire_checkbox_toggle_gesture(&view, &render_data);
     // Code-block copy button → that block's code on the clipboard.
@@ -203,6 +241,8 @@ pub(crate) fn re_render(
     doc_dir: Option<&std::path::Path>,
     zoom: f64,
     allow_unsafe_images: bool,
+    folds: &crate::fold::FoldState,
+    /* see `render`'s own `fold_epoch` */ fold_epoch: u64,
 ) {
     let Some(view) = sw
         .child()
@@ -246,39 +286,42 @@ pub(crate) fn re_render(
     // doc comment describes.
     let RenderProducts {
         buf: _,
-        source_map,
-        copymap,
-        md_owned,
-        links,
+        disclosure_toggles,
+        maps,
         anchored,
         image_tints,
         install,
-        heading_offsets,
-        heading_slugs,
-        heading_map,
         mut markers,
         cell_src_spans,
         highlight_ranges: _,
-        shifts,
-        original_owned,
-    } = build_render_products_into(&view.buffer(), md, doc_dir, zoom, allow_unsafe_images);
+    } = build_render_products_into(
+        &view.buffer(),
+        md,
+        doc_dir,
+        zoom,
+        allow_unsafe_images,
+        folds,
+    );
 
     // Update the shared RenderData cell — live closures on the view borrow this.
     let render_data = scrib_render_data(&view);
+    // Every render emits fresh toggles (the previous ones were unparented with the
+    // old anchored children), so activation is re-wired here rather than assumed to
+    // have survived — the same rebuild-boundary rule the find highlight follows. It
+    // needs the cell, because the summary LINES it records live there for the
+    // line-wide click hit-test, so it runs after the cell is resolved.
+    if let Some(rd) = &render_data {
+        wire_disclosure_toggles(&view, rd, disclosure_toggles, fold_epoch);
+    }
     if let Some(rd) = &render_data {
         let mut rd = rd.borrow_mut();
-        rd.source_map_inv = invert_source_map(&source_map);
-        rd.source_map = source_map;
-        rd.copymap = copymap;
-        rd.md_owned = md_owned;
-        rd.links = links;
-        rd.heading_map = heading_map;
-        rd.heading_offsets = heading_offsets;
-        rd.heading_slugs = heading_slugs;
+        rd.adopt_maps(maps);
+        // The widget-keyed halves, which `adopt_maps` deliberately does not own: this
+        // route swapped the buffer's contents, so both lists are REPLACED wholesale
+        // rather than merged (the splice's route) or left alone (the annotation
+        // refresh's).
         rd.image_tints = image_tints;
         rd.table_anchors = collect_table_anchors(&anchored);
-        rd.shifts = shifts;
-        rd.original_owned = original_owned;
     }
 
     // Rebuild the table label list from the new table widgets.
@@ -432,7 +475,7 @@ pub(crate) fn refresh_annotations_in_place(
     // checkbox's CHECKED state lives in the markers, not in any buffer tag. Without
     // re-installing them the drawn box keeps its stale state and the toggle appears to do
     // nothing in preview-only mode.
-    install_annotations(&view, products.install.list_markers, zoom);
+    install_annotations(&view, products.install.decor.list_markers, zoom);
 
     // Refresh the offset-based render maps (source↔buffer / copy / shift), which DO change
     // — the source shifted by the inserted/removed CriticMarkup even though the buffer did
@@ -440,17 +483,7 @@ pub(crate) fn refresh_annotations_in_place(
     // anchor widgets, which are unchanged (the products' fresh widgets are discarded), and
     // the buffer was not swapped, so the image-tint handler stays attached.
     if let Some(rd) = scrib_render_data(&view) {
-        let mut rd = rd.borrow_mut();
-        rd.source_map_inv = invert_source_map(&products.source_map);
-        rd.source_map = products.source_map;
-        rd.copymap = products.copymap;
-        rd.md_owned = products.md_owned;
-        rd.links = products.links;
-        rd.heading_map = products.heading_map;
-        rd.heading_offsets = products.heading_offsets;
-        rd.heading_slugs = products.heading_slugs;
-        rd.shifts = products.shifts;
-        rd.original_owned = products.original_owned;
+        rd.borrow_mut().adopt_maps(products.maps);
     }
     true
 }
@@ -470,14 +503,15 @@ mod gtk_integration_tests {
     #[gtktest::test]
     fn preview_view_and_code_tag_avoid_wordchar_the_atspi_abort_trigger() {
         // Site A — the preview view's default wrap mode (GetDefaultAttributes).
-        let widget = render("A `code` span and some **prose**.", None, 1.0, false);
-        let view = widget
-            .downcast_ref::<gtk::Overlay>()
-            .and_then(|o| o.child())
-            .and_then(|c| c.downcast::<ScrolledWindow>().ok())
-            .and_then(|sw| sw.child())
-            .and_then(|c| c.downcast::<CodePreviewView>().ok())
-            .expect("Overlay > ScrolledWindow > CodePreviewView");
+        let widget = render(
+            "A `code` span and some **prose**.",
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+            0,
+        );
+        let view = crate::preview::view_of(&widget).expect("the preview tree render() built");
         assert_ne!(
             view.wrap_mode(),
             WrapMode::WordChar,
@@ -529,8 +563,9 @@ mod gtk_integration_tests {
         const MD: &str = "# Target heading\n\n\
              | Language | Issue |\n|---|---|\n\
              | Python | \u{2611} [#6378](https://example.com/i?a=1&b=2) filed |\n";
-        let pane = crate::preview::render(MD, None, 1.0, false);
-        let view = view_of(&pane);
+        let pane =
+            crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default(), 0);
+        let view = crate::preview::view_of(&pane).expect("the preview tree render() built");
 
         let cell = crate::preview::cell_search_targets(&view)
             .into_iter()
@@ -562,16 +597,6 @@ mod gtk_integration_tests {
              scroll, local-document navigation, visible refusal) rather than straight \
              to the external URL gate"
         );
-    }
-
-    fn view_of(widget: &gtk::Widget) -> CodePreviewView {
-        widget
-            .downcast_ref::<gtk::Overlay>()
-            .and_then(|o| o.child())
-            .and_then(|c| c.downcast::<ScrolledWindow>().ok())
-            .and_then(|sw| sw.child())
-            .and_then(|c| c.downcast::<CodePreviewView>().ok())
-            .expect("Overlay > ScrolledWindow > CodePreviewView")
     }
 
     /// Not migrated to `crate::testpump` (M31 inventory): this is called BOTH as a
@@ -648,8 +673,15 @@ mod gtk_integration_tests {
              {WIDE_ROW}\n|---|---|\n{WIDE_ROW}\n"
         );
 
-        let widget = render(&md, None, zoom, false);
-        let view = view_of(&widget);
+        let widget = render(
+            &md,
+            None,
+            zoom,
+            false,
+            &crate::fold::FoldState::default(),
+            0,
+        );
+        let view = crate::preview::view_of(&widget).expect("the preview tree render() built");
         let window = gtk::Window::new();
         window.set_default_size(700, 600);
         window.set_child(Some(&widget));
@@ -753,8 +785,9 @@ mod gtk_integration_tests {
         let mut offenders: Vec<String> = Vec::new();
         for pane_w in [400i32, 500, 700, 900] {
             for (name, md) in &cases {
-                let widget = render(md, None, 1.0, false);
-                let view = view_of(&widget);
+                let widget = render(md, None, 1.0, false, &crate::fold::FoldState::default(), 0);
+                let view =
+                    crate::preview::view_of(&widget).expect("the preview tree render() built");
                 let window = gtk::Window::new();
                 window.set_default_size(pane_w, 600);
                 window.set_child(Some(&widget));
@@ -829,8 +862,15 @@ mod gtk_integration_tests {
     /// replaced — is the checkable thing; the crash is not.
     #[gtktest::test]
     fn re_render_rebuilds_the_live_buffer_and_never_swaps_it() {
-        let pane = render("# One\n\nFirst body paragraph.\n", None, 1.0, false);
-        let view = view_of(&pane);
+        let pane = render(
+            "# One\n\nFirst body paragraph.\n",
+            None,
+            1.0,
+            false,
+            &crate::fold::FoldState::default(),
+            0,
+        );
+        let view = crate::preview::view_of(&pane).expect("the preview tree render() built");
         let sw = scroller_of(&pane);
         let before = view.buffer();
 
@@ -840,6 +880,8 @@ mod gtk_integration_tests {
             None,
             1.0,
             false,
+            &crate::fold::FoldState::default(),
+            0,
         );
 
         let after = view.buffer();
@@ -866,17 +908,6 @@ mod gtk_integration_tests {
 mod choke_point_tests {
     use super::*;
 
-    /// The `CodePreviewView` inside a rendered preview widget.
-    fn view_of(widget: &gtk::Widget) -> CodePreviewView {
-        widget
-            .downcast_ref::<gtk::Overlay>()
-            .and_then(|o| o.child())
-            .and_then(|c| c.downcast::<ScrolledWindow>().ok())
-            .and_then(|sw| sw.child())
-            .and_then(|c| c.downcast::<CodePreviewView>().ok())
-            .expect("Overlay > ScrolledWindow > CodePreviewView")
-    }
-
     /// **Every route that installs anything bumps the render generation** — including
     /// the annotation refresh, which is the route that used to skip it.
     ///
@@ -894,8 +925,8 @@ mod choke_point_tests {
     #[gtktest::test]
     fn the_annotation_refresh_route_invalidates_like_every_other_route() {
         let md = "A paragraph with {==a claim==}{>>a note<<} in it.\n";
-        let widget = render(md, None, 1.0, false);
-        let view = view_of(&widget);
+        let widget = render(md, None, 1.0, false, &crate::fold::FoldState::default(), 0);
+        let view = crate::preview::view_of(&widget).expect("the preview tree render() built");
         let sw = widget
             .downcast_ref::<gtk::Overlay>()
             .and_then(|o| o.child())
@@ -925,4 +956,148 @@ mod choke_point_tests {
              previous one derived"
         );
     }
+}
+
+/// Connect each disclosure toggle a FULL render emitted to the fold it drives.
+///
+/// # Why the connection is made here rather than in the renderer
+///
+/// The renderer is deliberately free of GTK signal wiring — it produces buffer content
+/// and widgets and hands them back. What a toggle MEANS (flip this document's fold,
+/// then change what is drawn) is a per-tab concern, and the tab is reachable from the
+/// view's root rather than from the renderer.
+fn wire_disclosure_toggles(
+    view: &CodePreviewView,
+    render_data: &Rc<RefCell<RenderData>>,
+    toggles: Vec<crate::renderer::DisclosureToggle>,
+    fold_epoch: u64,
+) {
+    // The whole summary LINE is the click target, not just the arrow, so the line each
+    // toggle sits on is recorded for `interactions`' line hit-test. Rebuilt per render
+    // because both the widgets and the lines are (see `re_render`).
+    render_data.borrow_mut().disclosure_lines = toggles
+        .iter()
+        .map(|t| {
+            let line = view.buffer().iter_at_offset(t.summary_offset).line();
+            (line, t.toggle.clone())
+        })
+        .collect();
+    for crate::renderer::DisclosureToggle { toggle, key, .. } in toggles {
+        connect_disclosure_toggle(view, &toggle, key, fold_epoch);
+    }
+}
+
+/// The same wiring after a SPLICE, where most of the controls are survivors.
+///
+/// Two differences from [`wire_disclosure_toggles`], and each is a defect if got
+/// wrong. **Only `fresh` is connected** — a survivor still carries the handler it was
+/// built with, and a second one would fold twice per click, which reads as a click
+/// that does nothing (the exact report this construct has already produced by another
+/// route, ScrAP-79). And the LINE index is rebuilt from the live anchors rather than
+/// from `summary_offset`: a splice moves every line below its region, so the offsets
+/// the surviving controls were emitted with named the previous render's buffer.
+pub(super) fn wire_spliced_disclosure_toggles(
+    view: &CodePreviewView,
+    render_data: &Rc<RefCell<RenderData>>,
+    fresh: Vec<crate::renderer::DisclosureToggle>,
+    merged_anchored: &[(TextChildAnchor, gtk::Widget)],
+    fold_epoch: u64,
+) {
+    let buf = view.buffer();
+    render_data.borrow_mut().disclosure_lines = merged_anchored
+        .iter()
+        .filter_map(|(anchor, widget)| {
+            let toggle = widget.clone().downcast::<gtk::ToggleButton>().ok()?;
+            // The class the line hit-test itself resolves a press against, so
+            // "is this a disclosure control?" is asked once, in one vocabulary
+            // (`widgets::disclosure::CSS_CLASS`) — a second predicate here would be
+            // free to disagree with the one deciding what a click means.
+            if !toggle.has_css_class(crate::widgets::disclosure::CSS_CLASS) {
+                return None;
+            }
+            Some((buf.iter_at_child_anchor(anchor).line(), toggle))
+        })
+        .collect();
+    for crate::renderer::DisclosureToggle { toggle, key, .. } in fresh {
+        connect_disclosure_toggle(view, &toggle, key, fold_epoch);
+    }
+}
+
+/// What activating a disclosure control MEANS — one definition, reached from both the
+/// full-render and the spliced wiring above.
+///
+/// # Why the work is deferred to an idle
+///
+/// Changing what is drawn re-parents anchored children — under the fallback, every one
+/// of them, INCLUDING the toggle whose signal is still on the stack. Doing that
+/// synchronously destroys the emitting widget inside its own handler. The task-checkbox
+/// toggle defers for exactly this reason (GTK4Rs/AP-30); this follows it rather than
+/// inventing a second answer.
+///
+/// # Why the splice is tried first, and why the fallback is unconditional
+///
+/// A full re-render discards every line's height validation, which collapses the
+/// vadjustment's `upper` and throws the reader to the top of the document before the
+/// restore can land (MEASURED: `upper` 36 168 → 672, `value` 21 340 → 2). Splicing the
+/// toggled block's own region costs none of that. But a splice is only possible when
+/// this render actually DREW the block — `preview::splice` refuses otherwise, and its
+/// `SpliceVerdict` says whether that refusal came before the buffer was touched (the
+/// pane is intact and the fallback merely shows the toggle) or after the region was
+/// already deleted (the fallback is the repair).
+fn connect_disclosure_toggle(
+    view: &CodePreviewView,
+    toggle: &gtk::ToggleButton,
+    key: crate::fold::FoldKey,
+    epoch: u64,
+) {
+    toggle.connect_toggled(glib::clone!(
+        #[weak]
+        view,
+        move |_| {
+            let Some(window) = view
+                .root()
+                .and_then(|r| r.downcast::<gtk::ApplicationWindow>().ok())
+            else {
+                return;
+            };
+            let Some(st) = crate::winstate::state(&window) else {
+                return;
+            };
+            // **The control's key names the document it was BUILT against.** In split
+            // mode the preview re-renders on a debounce, so a click can land in the
+            // window between a keystroke and the re-render — and by then every offset
+            // has moved and the fold map has been cleared. Refused rather than applied:
+            // the key would name either nothing or, worse, a DIFFERENT block's new
+            // start offset (F-AP-B-105). A `debug!` rather than silence, because the
+            // click is a stated no-op and not an error the reader can act on.
+            if st.fold_epoch() != epoch {
+                log::debug!(
+                    "preview: discarding a disclosure toggle minted against source \
+                     generation {epoch}; the document has moved to {} and the key names \
+                     the previous text",
+                    st.fold_epoch()
+                );
+                return;
+            }
+            st.folds.borrow_mut().toggle(key);
+            let mode = st.view_mode.get();
+            // Through the shared deferral, which holds the window WEAKLY — a strong
+            // capture here kept the whole window tree alive for as long as the idle was
+            // pending (POLICY "widget-owned closures capture weakly", ScrAP-60), and its
+            // sibling in `foldreveal` had always done it correctly.
+            crate::window::defer_with_window(&window, move |window| {
+                // Anything but a landed splice falls back to a full re-render — which
+                // for `RegionLost` is not a nicety but the repair: the region has
+                // already been deleted from the live buffer.
+                if crate::window::splice_disclosure_in_place(window, mode, key).spliced() {
+                    return;
+                }
+                crate::window::rerender_preview_in_place(
+                    window,
+                    mode,
+                    crate::window::RenderShape::ChangedContent,
+                );
+            });
+        }
+    ));
 }
