@@ -963,6 +963,12 @@
 - **And** the routes cannot diverge on *what* an install consists of: the payload is defined once and every route reads that definition
 - **And** the from-source route pins the desktop entry's `Exec`/`TryExec` to the absolute binary path, because its bin directory is frequently absent from the launcher's `PATH`
 - **And** installing does not widen permissions on directories it did not create — a user-private directory under the install prefix keeps the mode the user gave it
+- **And given** the macOS route — `packaging/macos/install.sh`, backed by the `.app` that `bundle.sh` produces
+- **Then** both manual pages are present inside the bundle at `Contents/Resources/man/man{1,5}/scribobulate.{1,5}.gz`, and are reachable **by name** from a man directory the platform actually searches
+- **And** that directory is established by **measurement** (`manpath`) rather than by carrying the Linux XDG location across: macOS searches no per-user man directory at all, so `~/.local/share/man` would be a directory nothing reads and an install into it is indistinguishable from a successful one until someone runs `man`
+- **And** the pages are staged by the same shared helper every other route uses, so the substitutions, the date policy and the compression cannot drift per platform
+- **And** the bundle holds the only copy — what the install places is a link into it, as it already is for the executable — so the `.dmg` route carries the pages too, present and readable by path even though a bundle is not on MANPATH
+- **And** uninstalling removes them **including when the bundle was deleted first**: the links dangle at that point, and a guard that tests for existence rather than for a link reports success while leaving them behind
 
 ---
 

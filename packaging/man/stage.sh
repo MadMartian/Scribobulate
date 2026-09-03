@@ -30,6 +30,17 @@
 man_date() {
     local file="$1" repo="$2"
     if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+        # SHAPE-CHECKED BEFORE USE, and this is not belt-and-braces: BSD `date -r` accepts
+        # "filename|seconds", so a value that happens to name a readable file converts to
+        # THAT FILE'S mtime and passes the output check below -- a wrong answer rather than
+        # a failure, in the one code path whose entire purpose is to honour a date the
+        # caller named exactly. Raised by the macOS seat against real BSD userland.
+        case "$SOURCE_DATE_EPOCH" in
+            "" | *[!0-9]*)
+                echo "man: SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH is not a whole number of seconds" >&2
+                return 1
+                ;;
+        esac
         # A HARD FAILURE, not a fall-through to the next source. A builder that sets this
         # has asked for a reproducible artefact by name, and quietly substituting a
         # different date would answer a question nobody asked -- MEASURED during a
