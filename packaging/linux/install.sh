@@ -13,7 +13,7 @@
 #   desktop  -> ~/.local/share/applications/scribobulate.desktop
 #   icon     -> ~/.local/share/icons/hicolor/scalable/apps/<app-id>.svg
 #   themes   -> ~/.local/share/scribobulate/themes.toml
-#   man page -> ~/.local/share/man/man1/scribobulate.1.gz
+#   man pages -> ~/.local/share/man/man{1,5}/scribobulate.{1,5}.gz
 #   notices  -> ~/.local/share/doc/scribobulate/THIRD-PARTY-LICENSES.md
 #
 # WHAT GOES WHERE IS NOT DECIDED HERE. payload.sh owns the layout and all three routes

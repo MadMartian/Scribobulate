@@ -780,6 +780,7 @@ gtk4-rs skill's dev-loop doc on why geometry/rendering bugs leave no warning.
 
 - [ ] **7.20** **A tab opened into an already-overflowing strip lands after its neighbour, and is visible (TDD 7.20).** Launch with enough documents that the strip overflows and shows its chevrons — `scribobulate -n sdd/*.md` (14) is the reproduction on record — and let every background tab finish rendering (each drops its loading spinner, which **narrows its handle**: that width change is the whole mechanism, so do not skip the wait). Then open one more document that is not already open (File ▸ Open, or `app.new`, or Ctrl+N). Read the strip: the new tab is drawn **after** the last one, evenly spaced, and it is the active tab, **fully visible** at the right-hand edge — not clipped past it, and above all not superimposed on its left-hand neighbour with both labels unreadable. The failure this guards is *computed layout*, not a stale-pixel artefact — it survives a window resize and a switch away and back, which is how to tell the two apart. Then cycle every tab (Ctrl+PageDown ×N) → each is revealed in turn, still evenly spaced. Machine-drivable end to end: launch, then `gdbus call --session --dest <the app's unique bus name for YOUR pid, per §1.2> --object-path /com/extollit/scribobulate --method org.gtk.Actions.Activate "new" "[]" "{}"`, and capture the strip. (ScrAP-290/ScrAP-291; the strip's slot arithmetic and the reveal are both automated in `widgets::tab::bar`, this covers the real strip under a real session.)
 
+- [ ] **7.21m** **macOS: both manual pages install and resolve BY NAME (TDD, "Every install route delivers the same payload").** *macOS only, and `m`-suffixed because the mechanism is this platform's: the pages live inside the `.app` and the install links them out, where the Linux routes copy them into a share tree directly.* Run `packaging/macos/install.sh` (platform procedure: §A.2, *Install*), then `man scribobulate` and `man 5 scribobulate` → each renders, and each **footer** carries the version and a date (`scribobulate 0.1.0    2026-09-02    SCRIBOBULATE(1)`). A literal `@VERSION@` or `@DATE@` anywhere in either page means the substitution missed one; `install_man_page` refuses on that, so seeing it means the staging guard itself is broken and not merely the page. Confirm `man -w scribobulate` resolves into `$(brew --prefix)/share/man`, **not** into the bundle: a bundle is not on MANPATH, and a page reachable only by full path is not installed. If `man` reports no entry, run `manpath` before suspecting the install — the question is whether Homebrew's prefix appears in that output. **Then the uninstall half, which carries the real trap and must be run in this order**: delete `target/macos/Scribobulate.app` **first**, as a user dragging the app to the Trash would, and *only then* run `packaging/macos/uninstall.sh` → both man links are gone and `man scribobulate` reports "No manual entry". The links are **dangling** at that moment, so `[ -e ]` on them is false while `[ -L ]` is true; an uninstaller guarding on existence prints a clean success and leaves them behind permanently, and the only way to see that is to look at the filesystem after it says it is done. Confirm a second run is idempotent — it reports what is already gone rather than failing. **Linux/Windows: not applicable** — the payload-parity procedure in §1 covers the Linux routes.
 - [ ] **7.21** **A freshly opened document puts the working position at its beginning (TDD 7.21).** Open a document that comfortably fits on screen (a ~27-line file is the reproduction on record) and switch to **Edit** → the footer's Ln/Col indicator reads **Ln 1, Col 1** and the caret is on the first line — not `Ln 28, Col 1` on the last one. Check the **outline sidebar** in the same breath: it highlights the document's FIRST section, not its last; that is the surface that made the defect visible, since a sidebar pointing at the wrong section reads as a rendering fault rather than a stray caret. Repeat on all three routes into edit mode, which reproduced it identically and are the reason the fix is at the shared load rather than at any one of them: the **View ▸ Edit** action, the **toolbar** button, and **session restore** (quit while in edit mode, relaunch). Also confirm it on a document too long to fit, where the pane must still be scrolled to the TOP, and after a **live reload** (append a line to the open file from a shell).
 
 ### §8 Single-instance lifecycle
@@ -1764,18 +1765,21 @@ env HOME=/tmp/scribtest XDG_DATA_HOME=/tmp/scribtest/.local/share \
     XDG_CONFIG_HOME=/tmp/scribtest/.config packaging/linux/install.sh --no-build
 ```
 
-**All six payload files must be present**, because `payload.sh` is shared with the two
+**Every payload file must be present**, because `payload.sh` is shared with the two
 package builders and a file missing here is a file missing from the `.deb` and `.rpm`
 too — `bin/scribobulate`, `share/applications/scribobulate.desktop`,
 `share/icons/hicolor/scalable/apps/<app-id>.svg`, `share/scribobulate/themes.toml`,
-`share/man/man1/scribobulate.1.gz`, and
+`share/scribobulate/sprites/`, `share/man/man1/scribobulate.1.gz`,
+`share/man/man5/scribobulate.5.gz`, and
 `share/doc/scribobulate/THIRD-PARTY-LICENSES.md`. The last is an attribution
 obligation, not documentation: the syntax grammars are statically linked into the
 binary and their licences require the notice to travel with it, so an install missing
 it is a licence violation rather than a cosmetic gap. Confirm `Exec=`/`TryExec=` in the
 installed desktop entry are the **absolute** binary path, not the bare command.
 
-Then `packaging/linux/uninstall.sh` and confirm all six are gone. A generated
+Open both manual pages from the installed tree (`man scribobulate` and `man 5 scribobulate`) and confirm each renders with a version and a date in its footer — an unsubstituted `@VERSION@` means the staging step's placeholder substitution silently missed one.
+
+Then `packaging/linux/uninstall.sh` and confirm every one of them is gone. A generated
 `applications/mimeinfo.cache` legitimately remains — it is the desktop database's, not
 ours. (TDD 7.21)
 
@@ -2021,7 +2025,10 @@ because a bundle does not inherit the shell's working directory. To also confirm
 `scribobulate` PATH command (`packaging/macos/install.sh`), open a **fresh** terminal
 after running it — a shell opened before the symlink was created still has the old
 `hash`ed PATH lookup — and run `scribobulate "$PWD/<file>.md"`; `which scribobulate`
-should resolve into `$(brew --prefix)/bin`.
+should resolve into `$(brew --prefix)/bin`. That script also links both manual pages
+into `$(brew --prefix)/share/man/man{1,5}/`, and those need no fresh shell — `man` has
+no equivalent of the PATH `hash`, so `man scribobulate` works immediately from the same
+terminal that ran the install.
 
 **6. Tokened (desktop-integrated) launch.** Finder ▸ Open With, or
 `open -a Scribobulate.app <file>`.

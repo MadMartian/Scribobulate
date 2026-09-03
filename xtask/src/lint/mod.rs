@@ -15,8 +15,11 @@
 //! `#[gtk::test]` attribute has neither returned nor been prescribed in prose); document
 //! paths, that every file this tree points at still exists; the application ID, which
 //! several non-Rust packaging files restate and none derives; the citation FORM itself;
-//! the registers' own integrity (number immutability, TOC/body agreement, growth); and
-//! path legality, that no tracked path is one Windows refuses to check out.
+//! the registers' own integrity (number immutability, TOC/body agreement, growth); path
+//! legality, that no tracked path is one Windows refuses to check out; and the
+//! VOCABULARIES the shipped manuals restate -- the theme keys, the config settings and the
+//! About dialog's attribution -- none of which any build can see, and all of which a
+//! reader outside this project takes as the truth about the program.
 //!
 //! WHY THIS EXISTS. Two of those classes were found in one session, in a single 103-line
 //! change, by human review — after `cargo fmt`, `cargo clippy -D warnings` and 625 passing
@@ -42,7 +45,12 @@ mod contract;
 // the one file this gate excludes from its own text checks.
 #[cfg(test)]
 mod corpus;
+// The man-page corpora. A file of their own: corpus.rs is already twice the size limit,
+// and it carries a self-exclusion these cases do not need.
+#[cfg(test)]
+mod corpus_manpage;
 mod patterns;
+pub mod vocab;
 
 use contract::{Contract, ScanSet};
 use std::path::{Path, PathBuf};
@@ -54,12 +62,24 @@ use std::path::{Path, PathBuf};
 /// there", and a MISSING register would make check 3 compare nothing against nothing and
 /// print PASS. A gate that reports success because its input vanished is the worst outcome
 /// available to it. Check existence once, explicitly, and name the file.
-const REQUIRED: [&str; 5] = [
+/// A SLICE, not a sized array: the count is a fact about a growing list, and the one thing
+/// guaranteed to be wrong by the next addition — the same reason nothing here counts the
+/// checks.
+const REQUIRED: &[&str] = &[
     "sdd/ANTI-PATTERNS.md",
     "sdd/ISSUES.md",
+    "sdd/SCHEMA.md",
     "src/icons.rs",
     "src/lib.rs",
     "src/gtk_suite.rs",
+    // Checks 16 and 17 compare these against each other. A missing one would make a
+    // vocabulary comparison compare nothing against nothing, which is the outcome this
+    // list exists to make impossible.
+    "src/theme/keys.rs",
+    "src/config.rs",
+    "src/app/appactions.rs",
+    "packaging/man/scribobulate.1",
+    "packaging/man/scribobulate.5",
 ];
 
 /// The one path this gate excludes from its own text checks: the corpus module quotes the

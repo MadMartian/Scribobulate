@@ -283,6 +283,17 @@ Before any change is considered valid, run these steps in order:
    resolvable. ScrAP-231 records what the previous, laxer version of this rule cost.
    Checks 4, 5, 6, 7 and 8 were each mutation-tested when written, and so were the
    corpora that now stand in for the old self-test.
+   Another class is over the **VOCABULARIES THE SHIPPED MANUALS RESTATE** — the reading-theme
+   keys (`src/theme/keys.rs`), the `config.toml` settings (`src/config.rs`) and the About
+   dialog's attribution strings (`src/app/appactions.rs`) — against `packaging/man/*` and,
+   for the theme keys, `sdd/SCHEMA.md`. A manual is the one document nobody on the project
+   reads: it is written for a stranger with a terminal, so a key added to the code breaks
+   nothing, fails no test, and leaves a manual wrong in the direction that reads as
+   complete (ScrAP-123's species). It compares **names**, never meanings — a key whose
+   default or behaviour changed passes in all three documents, and re-reading its paragraph
+   stays a review obligation. The manuals are CARRIED SOURCE under `packaging/man/` for
+   this gate's sake: they were generated from a heredoc, and a gate cannot check a string
+   that exists only during a build.
    One check is over **tracked PATH LEGALITY**: `< > : " | ? *` and a trailing dot or
    space are illegal in a Win32 filename, so **one such path makes `git checkout` refuse
    the entire tree** — not that file, the whole tree — blocking every Windows clone and

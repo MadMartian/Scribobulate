@@ -55,6 +55,13 @@ require_fresh_binary() {
     fi
 }
 
+# The manual pages' staging helpers, shared with every other platform that installs them.
+# Sourced rather than restated for the reason this whole file is: one definition, every
+# consumer reads it. Anchored on REPO_DIR like every other path here, so it does not
+# matter which directory a builder invoked us from.
+# shellcheck source=../man/stage.sh
+. "$REPO_DIR/packaging/man/stage.sh"
+
 # Install the payload into $1 as a filesystem root. ALL THREE Linux install routes get
 # exactly this — the two package builders and install.sh.
 #
@@ -138,42 +145,20 @@ stage_payload() {
         "$base/share/doc/$PKG/THIRD-PARTY-LICENSES.md"
 
     # A binary on $PATH with no `man` entry is an incomplete install on a system where
-    # `man` is how you ask. Generated rather than carried as a source file: everything
-    # in it is already stated in Cargo.toml or the desktop entry, and a second
-    # hand-maintained copy would drift. `gzip -9n` because the timestamp gzip would
-    # otherwise embed makes the artefact non-reproducible.
-    mkdir -p "$base/share/man/man1"
-    cat > "$base/share/man/man1/$PKG.1" <<EOF
-.TH SCRIBOBULATE 1 "$(date +%Y-%m-%d)" "$PKG $version" "User Commands"
-.SH NAME
-$PKG \- native Markdown viewer and editor that renders on the CPU
-.SH SYNOPSIS
-.B $PKG
-.RI [ FILE .\|.\|.]
-.SH DESCRIPTION
-Renders Markdown into native GTK4 widgets and forces the GSK Cairo software
-renderer, so the process holds no GL context and no video memory. Opening a
-second document reuses the running instance rather than starting a new process.
-.PP
-Supports live reload of externally edited files, split editing, a document
-outline, preview reading themes, find and replace, and CriticMarkup annotation
-review.
-.SH ENVIRONMENT
-.TP
-.B RUST_LOG
-Log filter, e.g. \fBinfo\fR or \fB$PKG=debug\fR. Application and GTK
-diagnostics share one sink.
-.SH FILES
-.TP
-.I ~/.config/$PKG/themes.toml
-User overrides for preview reading themes, merged over the installed
-.I /usr/share/$PKG/themes.toml
-per theme id.
-.SH LICENSE
-Apache License 2.0.
-EOF
-    gzip -9n "$base/share/man/man1/$PKG.1"
-    chmod 644 "$base/share/man/man1/$PKG.1.gz"
+    # `man` is how you ask.
+    #
+    # CARRIED as source files under packaging/man/, no longer generated here. This was a
+    # heredoc, on the reasoning that everything in it was already stated in Cargo.toml or
+    # the desktop entry so a second copy would drift. That reasoning held only while the
+    # pages said almost nothing. They now document the option set, the state directory,
+    # the attribution the About dialog carries, and eighty-odd theme keys -- none of which
+    # is stated anywhere a build can read, and all of which drifts. The answer is the
+    # opposite one: make them source, and GATE them (`cargo xtask lint-references` checks
+    # 16 and 17), which is impossible for a string that exists only during a build.
+    for section in 1 5; do
+        install_man_page "$REPO_DIR/packaging/man/$PKG.$section" \
+            "$base/share/man/man$section/$PKG.$section" "$version" "$REPO_DIR"
+    done
 
     # Directory permissions set EXPLICITLY, not inherited. `mkdir -p`/`install -D`
     # apply the building user's umask, and on a 002 umask that yields group-writable
@@ -195,7 +180,7 @@ EOF
         # owns, never their ancestors and never their unrelated siblings.
         for d in "bin" "share/applications" "share/icons/hicolor/scalable/apps" \
                  "share/$PKG" "share/$PKG/sprites" "share/doc/$PKG" \
-                 "share/man/man1"; do
+                 "share/man/man1" "share/man/man5"; do
             [ -d "$base/$d" ] && chmod 755 "$base/$d"
         done
     fi

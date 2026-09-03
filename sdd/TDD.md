@@ -957,12 +957,18 @@
 ### 7.21 Every install route delivers the same payload, attribution included
 - **Given** any of the three Linux install routes — the `.deb`, the `.rpm`, or the from-source install into `~/.local`
 - **When** the install completes
-- **Then** all six payload files are present: the binary, the desktop entry, the application icon, the reading-themes file, the man page, and `THIRD-PARTY-LICENSES.md`
+- **Then** every file the payload defines is present: the binary, the desktop entry, the application icon, the reading-themes file, the sprites those themes name, **both** manual pages (`scribobulate.1` and `scribobulate.5`), and `THIRD-PARTY-LICENSES.md` — stated as a list rather than a count, because a count is the one fact about a payload guaranteed to be wrong by the next addition, and this one already was
 - **And** `THIRD-PARTY-LICENSES.md` is not optional documentation — the syntax-highlighting grammars are statically linked into the binary under licences that require their notices to accompany a binary distribution, so an install lacking it is a licence violation rather than a cosmetic gap
 - **And** the rpm marks that file as a licence, so `--excludedocs` cannot drop it
 - **And** the routes cannot diverge on *what* an install consists of: the payload is defined once and every route reads that definition
 - **And** the from-source route pins the desktop entry's `Exec`/`TryExec` to the absolute binary path, because its bin directory is frequently absent from the launcher's `PATH`
 - **And** installing does not widen permissions on directories it did not create — a user-private directory under the install prefix keeps the mode the user gave it
+- **And given** the macOS route — `packaging/macos/install.sh`, backed by the `.app` that `bundle.sh` produces
+- **Then** both manual pages are present inside the bundle at `Contents/Resources/man/man{1,5}/scribobulate.{1,5}.gz`, and are reachable **by name** from a man directory the platform actually searches
+- **And** that directory is established by **measurement** (`manpath`) rather than by carrying the Linux XDG location across: macOS searches no per-user man directory at all, so `~/.local/share/man` would be a directory nothing reads and an install into it is indistinguishable from a successful one until someone runs `man`
+- **And** the pages are staged by the same shared helper every other route uses, so the substitutions, the date policy and the compression cannot drift per platform
+- **And** the bundle holds the only copy — what the install places is a link into it, as it already is for the executable — so the `.dmg` route carries the pages too, present and readable by path even though a bundle is not on MANPATH
+- **And** uninstalling removes them **including when the bundle was deleted first**: the links dangle at that point, and a guard that tests for existence rather than for a link reports success while leaving them behind
 
 ---
 

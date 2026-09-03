@@ -107,7 +107,8 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
   - Outline sidebar jumps to any heading (F9)
 - **Comfortable reading**
   - Reading themes: **Sepia**, **Bedtime**, **Synthwave**, **Terminal**,
-    **Candy**, or match your desktop (**System**)
+    **Candy**, or match your desktop (**System**) — and you can adjust one, or
+    write your own, in `themes.toml` (`man 5 scribobulate`)
   - Zoom the preview from 50% to 300% — remembered across sessions
   - Arrange the split any way you like (left/right or top/bottom)
 - **Tabs and windows that stay out of the way**
@@ -145,9 +146,9 @@ cargo build --release
 ./target/release/scribobulate path/to/document.md
 ```
 
-Or install from source into `~/.local` — binary, desktop entry, icon, themes, man
-page and the third-party notices — which also registers Scribobulate as a Markdown
-handler so a double-click in your file manager opens it:
+Or install from source into `~/.local` — binary, desktop entry, icon, themes, both
+manual pages and the third-party notices — which also registers Scribobulate as a
+Markdown handler so a double-click in your file manager opens it:
 
 ```bash
 ./install.sh          # needs cargo and the -dev libraries above

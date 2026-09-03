@@ -1,0 +1,610 @@
+.\" Manual page for scribobulate's configuration files, section 5.
+.\"
+.\" THIS FILE IS THE SOURCE, not a generated artefact. Packaging substitutes
+.\" @VERSION@ and @DATE@ and installs the result.
+.\"
+.\" IT IS A THIRD COPY OF A VOCABULARY, AND THAT IS WHY IT IS GATED. The theme
+.\" keys are declared once in src/theme/keys.rs (the `keys!` table), described
+.\" for developers in sdd/SCHEMA.md, and described for users here; the
+.\" config.toml settings are declared in src/config.rs and described here.
+.\" `cargo xtask lint-references` check 16 fails when any of those vocabularies
+.\" disagrees, in either direction. What it CANNOT check is whether a
+.\" description is still TRUE -- a key renamed nowhere but retyped, or given a
+.\" new default, passes. Re-read the prose when you change a key's meaning;
+.\" the gate only guarantees no key is silently added or dropped (ScrAP-123 is
+.\" the species it does close: a fact restated in prose with nothing comparing
+.\" it to its source).
+.TH SCRIBOBULATE 5 "@DATE@" "scribobulate @VERSION@" "File Formats"
+.SH NAME
+scribobulate \- configuration and reading-theme files for scribobulate
+.SH SYNOPSIS
+.I ~/.config/scribobulate/config.toml
+.br
+.I ~/.config/scribobulate/themes.toml
+.SH DESCRIPTION
+.BR scribobulate (1)
+reads two optional TOML files. Neither has to exist.
+.PP
+.I config.toml
+holds application settings \(em window size, page margins, the code font. It is
+read once at startup from the user configuration directory only; there is no
+system-wide copy.
+.PP
+.I themes.toml
+holds the preview reading themes: the colours, typography and decoration
+geometry the rendered document is drawn with. It is searched for in several
+places and merged, so a user file can adjust a single key of a shipped theme
+without restating it.
+.PP
+.B A malformed file never prevents startup.
+A file that does not parse is reported in the log and ignored. Within a file
+that does parse, an unrecognised key is reported and skipped, and an
+out-of-range value is clamped to its stated range rather than rejected. The
+worst outcome of a bad theme is a decoration that is absent.
+.SH CONFIGURATION FILE
+.I config.toml
+has four sections, all optional, and every key within them is optional. An
+omitted key takes the default shown.
+.SS [window]
+.TP
+.BR width " (integer, default " 900 )
+Width in pixels of a new window, when no session is restored.
+.TP
+.BR height " (integer, default " 720 )
+Height in pixels of a new window, when no session is restored.
+.SS [view]
+Page margins for the preview, in pixels.
+.TP
+.BR left_margin " (integer, default " 20 )
+Space between the window edge and the text column, left.
+.TP
+.BR right_margin " (integer, default " 20 )
+Space between the window edge and the text column, right.
+.TP
+.BR top_margin " (integer, default " 16 )
+Space above the first block of the document.
+.TP
+.BR bottom_margin " (integer, default " 16 )
+Space below the last block of the document.
+.SS [code]
+.TP
+.BR font " (string, default " monospace )
+CSS font-family string for inline code and fenced code blocks.
+.TP
+.BR block_padding " (integer, default " 12 )
+Padding inside a fenced code block, in pixels.
+.TP
+.BR light_theme " (string, default " InspiredGitHub )
+Syntax-highlighting theme used when the desktop is light. Also settable per
+reading theme; see
+.B syntect_theme
+below, which takes precedence.
+.TP
+.BR dark_theme " (string, default " base16-ocean.dark )
+Syntax-highlighting theme used when the desktop is dark.
+.SS [outline]
+.TP
+.BR width " (integer, default " 240 )
+Default width in pixels of the document-outline sidebar.
+.SS Example
+.PP
+.RS 4
+.nf
+[window]
+width = 1200
+height = 900
+
+[view]
+left_margin = 48
+right_margin = 48
+
+[code]
+font = "JetBrains Mono, monospace"
+light_theme = "Solarized (light)"
+.fi
+.RE
+.SH READING THEMES
+.SS Search path
+The first file found at each row is read; all of them are merged, per theme id
+and per key, with earlier rows winning.
+.PP
+.RS 4
+.nf
+1.  ${XDG_CONFIG_HOME:-~/.config}/scribobulate/themes.toml
+2.  ${XDG_DATA_HOME:-~/.local/share}/scribobulate/themes.toml
+3.  each $XDG_DATA_DIRS entry -> .../scribobulate/themes.toml
+.fi
+.RE
+.PP
+Because the merge is per key, a user file may override one key of a shipped
+theme, override an application-wide default through the
+.B [themes.system]
+block, or define an entirely new theme. A theme the application does not ship
+appears in the theme chooser alongside the built-in ones.
+.SS File structure
+Each theme is a table named for its id:
+.PP
+.RS 4
+.nf
+[themes.midnight]
+name = "Midnight"
+symbol = "\(bu"
+background = "#11131a"
+foreground = "#d6d9e0"
+heading_color_h1 = "#8fb7ff"
+heading_band_color_h1 = "#1b2030"
+link_underline = "none"
+.fi
+.RE
+.PP
+.B [themes.system]
+is an ordinary theme with one extra role: it is where a value the application
+would otherwise derive for itself is stated. No key is system-only and no theme
+is second-class.
+.SS Key resolution
+Each key resolves at the first source that states it:
+.PP
+.RS 4
+.nf
+1.  the selected theme's specific key   (heading_color_h2, list_marker_color_3)
+2.  the selected theme's bare key       (heading_color, list_marker_color)
+3.  [themes.system]'s specific key
+4.  [themes.system]'s bare key
+5.  the key's own default, or a value derived from the desktop theme
+.fi
+.RE
+.PP
+A theme's own bare key therefore outranks
+.BR [themes.system] 's
+specific one. An unset key means
+.IR "not present" ,
+never
+.IR guess :
+a decoration nobody asks for is not drawn.
+.SS Key naming
+A key's suffix states its type.
+.TP
+.B _color
+A colour. So are the paired
+.B _bg
+and
+.B _fg
+spellings, which are a surface's fill and its ink; the page's own pair is
+spelled
+.B background
+and
+.BR foreground .
+.TP
+.B _sprite
+A path to an image, drawn or tiled in place of a flat value. Relative to the
+directory of the
+.I themes.toml
+that states it. Absolute paths, and any path leaving that directory, are
+refused; so is an extension other than
+.IR png ", " webp " or " jpg ,
+an oversized file, and an image whose pixel dimensions are implausibly large. A
+refused sprite is logged and the decoration is simply absent.
+.TP
+.B _glyph
+A short string drawn in place of a marker the application would otherwise draw.
+Refused if empty, longer than 8 characters, or carrying a control character.
+.TP
+.BR _h1 " \(em " _h5
+Narrows a heading key to one level.
+.TP
+.BR _2 ", " _3
+Narrows a list key to one nesting depth.
+.PP
+Colours are strings:
+.IR #RRGGBB ", " #RRGGBBAA ", " #RRGGBB_AA ", or a CSS colour name."
+The underscored form is a colour plus a hex alpha byte.
+.PP
+.B No key takes an array.
+Anything that varies by heading level or list depth is stated as a suffixed key,
+one value each.
+.PP
+.B A sprite outranks its flat sibling.
+Where a decoration has both a
+.B _sprite
+and a colour or glyph, a theme that states both gets the sprite; the other value
+is ignored rather than composited under it.
+.PP
+Pixel metrics are design-time values at a zoom of 1.0 and are scaled with the
+view. Every metric is clamped to the range given with it.
+.SS Heading levels
+Every key in
+.B Headings
+below may be written bare, applying to every level, or suffixed
+.BR _h1 " \(em " _h5
+to apply to one. There are five levels, not six: a level-6 heading is drawn as a
+level 5, so no key spells
+.BR _h6 .
+Where a default varies by level it is given below as five values in order.
+.SH THEME KEYS
+Every key is optional; omitting one means "derive or inherit it".
+.SS Base
+.TP
+.B name
+String. Display name in the theme chooser. Defaults to the theme id.
+.TP
+.B symbol
+String. Decorative symbol shown left of the name in the chooser.
+.TP
+.B background
+Colour. Page background. One of the three base colours every derived colour
+follows from.
+.TP
+.B foreground
+Colour. Body text.
+.TP
+.B accent_color
+Colour. Accent colour.
+.TP
+.B font_family
+String. Body font stack. Always terminated with a generic family.
+.TP
+.B syntect_theme
+String. Syntax-highlighting theme for code blocks. Chosen by the
+.IR page 's
+luminance rather than the desktop's when unset.
+.SS Headings
+.TP
+.B heading_color
+Colour. Heading ink. Defaults to the body foreground. A link inside a heading
+still takes the link colour.
+.TP
+.B heading_font
+String. Heading font stack. Defaults to
+.BR font_family .
+.TP
+.B heading_scale
+Number. Size relative to the body. Default 2.2 \(bu 1.8 \(bu 1.48 \(bu 1.2 \(bu
+1.0. Clamped 0.25\-8.0.
+.TP
+.B heading_weight
+Integer, default 700. Clamped 100\-1000.
+.TP
+.B heading_overline
+.IR none " or " single ", default " none .
+A rule above the heading text, in the heading's own ink. There is deliberately
+no overline colour key.
+.TP
+.B heading_underline
+.IR none ", " single ", " double " or " wavy ", default " none .
+A rule below the heading text \(em the decoration line under the glyphs, not a
+column-width divider.
+.TP
+.B heading_underline_color
+Colour. The below-rule's colour. Omitted, it follows the heading's ink.
+.TP
+.B heading_band_color
+Colour. A band behind the heading's text, spanning the content column and
+surviving soft-wrap as one continuous band. Absent means that level carries no
+band.
+.TP
+.B heading_band_gradient_to_color
+Colour. A second stop: the band becomes a vertical gradient down to this
+colour. Ignored where the level states no fill.
+.TP
+.B heading_band_sprite
+Sprite. Tiled at its natural size across the band in place of its fill.
+Outranks the fill and the gradient.
+.TP
+.B heading_band_radius
+Integer, default 0. Corner radius of the band. Clamped 0\-400. Not drawn in an
+exported PDF.
+.TP
+.B heading_band_padding
+Integer, default 12. Space between the band's edge and the text inside it, each
+side. Clamped 0\-400. Applied only to a level that carries a band.
+.TP
+.B heading_space_above
+Integer, default 0. Clamped 0\-400.
+.TP
+.B heading_space_below
+Integer. Default 4 \(bu 4 \(bu 2 \(bu 2 \(bu 2. Clamped 0\-400.
+.SS Body and inline text
+.TP
+.B bold_weight
+Integer, default 700. Clamped 100\-1000.
+.TP
+.B supsub_scale
+Number, default 0.72. Superscript and subscript size. Clamped 0.25\-8.0.
+.TP
+.B superscript_rise
+Integer, default 4. Clamped \-64\-64.
+.TP
+.B subscript_rise
+Integer, default \-2. Clamped \-64\-64.
+.TP
+.B strikethrough_color
+Colour. The line through
+.IR ~~text~~ .
+Omitted, it follows the struck text's own ink.
+.TP
+.B mark_bg
+Colour, default
+.IR #fff59d_88 .
+Background band behind
+.I ==marked==
+text.
+.TP
+.B mark_fg
+Colour. Ink for marked text. Omitted, marked text keeps the body foreground and
+only its background changes \(em which is how a highlighter behaves on paper.
+State it when the band is opaque enough to need its own ink.
+.TP
+.B code_inline_bg
+Colour. Inline code-span background.
+.TP
+.B code_block_bg
+Colour. Fenced code-block background.
+.SS Links
+.TP
+.B link_color
+Colour. Link ink.
+.TP
+.B link_underline
+.IR none ", " single ", " double " or " wavy ", default " single .
+.TP
+.B link_underline_color
+Colour. Stated independently of the link's ink; omitted, the line follows it.
+.SS Lists
+The three keys marked
+.B (tiered)
+also take
+.B _2
+and
+.B _3
+forms \(em the bullet at nesting depth 2, and at depth 3 and deeper. Each falls
+back to the next shallower tier rather than to the bare key, so stating only the
+.B _2
+form reaches every depth from 2 down. Only bullets are tiered: a nested numeral
+is still a numeral and a nested task box is still a box.
+.TP
+.B list_marker_color \fR(tiered)\fP
+Colour. Bullet, numeral and task-checkbox ink; the item's text keeps the body
+foreground. The bare key colours all three marker kinds, but its
+.BR _2 / _3
+forms are bullet only.
+.TP
+.B list_task_marker_color
+Colour. The task checkbox, in both states. Defaults to
+.BR list_marker_color .
+.TP
+.B list_bullet_glyph \fR(tiered)\fP
+Glyph drawn in place of the bullet dot.
+.TP
+.B list_ordered_glyph
+Glyph drawn in place of the ordered numeral. This discards the ordinal.
+.TP
+.B list_task_glyph
+Glyph drawn in place of the unchecked task box.
+.TP
+.B list_task_checked_glyph
+Glyph drawn in place of the checked task box. Resolves independently of the
+unchecked one.
+.TP
+.B list_bullet_sprite \fR(tiered)\fP
+Sprite drawn in place of the bullet dot.
+.TP
+.B list_ordered_sprite
+Sprite drawn in place of the ordered numeral.
+.TP
+.B list_task_sprite
+Sprite drawn in place of the unchecked task box.
+.TP
+.B list_task_checked_sprite
+Sprite drawn in place of the checked task box.
+.TP
+.B list_step
+Integer, default 28. Indent added per nesting depth. Clamped 4\-400.
+.TP
+.B list_item_gap
+Integer, default 8. Space between items. Clamped 0\-400.
+.SS Blockquote
+.TP
+.B blockquote_bar_color
+Colour. The quote's accent bar.
+.TP
+.B blockquote_bar_sprite
+Sprite tiled at its natural size down the accent bar. The tile is clipped to the
+bar, so set
+.B blockquote_bar_width
+to the tile's own width.
+.TP
+.B blockquote_bar_width
+Integer, default 3. Clamped 0\-400. With
+.B blockquote_text_gap
+it is also the per-level step by which a nested quote indents, to a cap of six
+levels.
+.TP
+.B blockquote_text_gap
+Integer, default 10. Bar to quoted text. Clamped 0\-400.
+.TP
+.B blockquote_bg
+Colour. A panel behind quoted text; absent unless stated. It does not nest \(em a
+quote inside a quote inherits its parent's fill rather than painting a second
+panel over it, so a translucent value is composited once however deep the
+nesting goes.
+.TP
+.B blockquote_fg
+Colour. The ink quoted body text takes. A link, heading or mark inside the quote
+keeps its own colour.
+.SS Table
+.TP
+.B table_border_color
+Colour.
+.TP
+.B table_border_width
+Integer, default 1. Clamped 0\-400.
+.TP
+.B table_head_bg
+Colour. Header-row background.
+.TP
+.B table_head_fg
+Colour. Header-row ink. Omitted, it takes the bare
+.BR heading_color ;
+omitting that too leaves it on the body ink.
+.TP
+.B table_cell_padding_v
+Integer, default 4. Clamped 0\-400.
+.TP
+.B table_cell_padding_h
+Integer, default 10. Clamped 0\-400.
+.TP
+.B table_cell_radius
+Integer, default 0. Corner radius of a table cell and of nothing else. Clamped
+0\-400. Not drawn in an exported PDF.
+.SS Disclosure
+The
+.RI < details >
+indicator is a two-state control and takes one colour key for both states; the
+glyph is what carries the state, and the two glyph and sprite keys resolve
+independently.
+.PP
+The five indicator keys \(em
+.BR disclosure_marker_color ,
+the two glyphs, the two sprites \(em reach the preview only. An exported PDF has
+no disclosure to draw a marker for, and an exported HTML
+.RI < details >
+is drawn by the reader's own browser. The summary line's band and ink reach all
+three.
+.TP
+.B disclosure_marker_color
+Colour. The indicator's ink, both states. Unset, it takes the theme's own
+.BR foreground ,
+and a theme that states no page of its own keeps the desktop's chevron in the
+desktop's colour.
+.TP
+.B disclosure_glyph
+Glyph drawn in place of the collapsed indicator.
+.TP
+.B disclosure_expanded_glyph
+Glyph drawn in place of the expanded indicator.
+.TP
+.B disclosure_sprite
+Sprite drawn in place of the collapsed indicator.
+.TP
+.B disclosure_expanded_sprite
+Sprite drawn in place of the expanded indicator.
+.TP
+.B disclosure_marker_size
+Integer, default 16. The indicator's box. Clamped 0\-400.
+.TP
+.B disclosure_preview_fg
+Colour. The ink of the body-opening fragment shown beside a collapsed summary.
+Unset, it keeps the body foreground.
+.TP
+.B disclosure_band_color
+Colour. A band behind the whole summary line, spanning the content column.
+Absent unless stated.
+.TP
+.B disclosure_band_gradient_to_color
+Colour. A second stop, making the band a vertical gradient. Ignored where no
+fill is stated.
+.TP
+.B disclosure_band_sprite
+Sprite tiled at its natural size across the band. Outranks the fill and the
+gradient; a sprite alone is a band.
+.TP
+.B disclosure_band_radius
+Integer, default 0. Clamped 0\-400. Not drawn in an exported PDF.
+.TP
+.B disclosure_fg
+Colour. The ink of the summary line \(em its label, and the body preview beside
+it on a collapsed block. Omitted, the summary is ordinary body text. A summary
+inside a blockquote takes this ink rather than
+.BR blockquote_fg .
+.SS Horizontal rule
+.TP
+.B rule_color
+Colour. The
+.I ---
+rule.
+.TP
+.B rule_sprite
+Sprite tiled horizontally at its natural size across the rule. The rule's height
+becomes the tile's own, and
+.B rule_thickness
+is then ignored.
+.TP
+.B rule_space
+Integer, default 4. Space above and below the rule. Clamped 0\-400.
+.TP
+.B rule_thickness
+Integer, default 1. The flat rule's weight. Read by the preview, the HTML export
+and the PDF export alike. Clamped 0\-400.
+.SS Selection
+.TP
+.B selection_bg
+Colour. Selection background.
+.TP
+.B selection_fg
+Colour. Ink for selected text. Omitted, it is derived from
+.B selection_bg
+and the page so that selected text cannot be stranded by accident. State it when
+the derived answer is legible but wrong.
+.SS Annotations and find
+.TP
+.B annotation_hl_color
+Colour, default
+.IR #FFD133_61 .
+Annotation highlight overlay.
+.TP
+.B annotation_chip_bg
+Colour. The CriticMarkup comment gutter chip's fill.
+.TP
+.B annotation_chip_fg
+Colour. Ink for the chip's overflow-count numeral.
+.TP
+.B annotation_chip_sprite
+Sprite drawn in place of the flat chip fill. Has no expression in an exported
+PDF.
+.TP
+.B find_hl_all_color
+Colour, default
+.IR #f6d32d .
+Highlight for every find match.
+.TP
+.B find_hl_current_color
+Colour, default
+.IR #ff7800 .
+Highlight for the current find match.
+.SH EXAMPLES
+Darken one shipped theme's headings without restating the theme:
+.PP
+.RS 4
+.nf
+# ~/.config/scribobulate/themes.toml
+[themes.sepia]
+heading_color = "#3a2a18"
+.fi
+.RE
+.PP
+Change an application-wide default for every theme that does not state its own:
+.PP
+.RS 4
+.nf
+[themes.system]
+list_step = 36
+blockquote_bar_width = 5
+.fi
+.RE
+.SH FILES
+.TP
+.I ~/.config/scribobulate/config.toml
+Application settings.
+.TP
+.I ~/.config/scribobulate/themes.toml
+User reading-theme overrides.
+.TP
+.I /usr/share/scribobulate/themes.toml
+The installed reading themes. Useful as a worked reference; edit the user file
+rather than this one, which an upgrade replaces.
+.SH SEE ALSO
+.BR scribobulate (1)
+.PP
+The TOML specification:
+.UR https://toml.io/
+.UE

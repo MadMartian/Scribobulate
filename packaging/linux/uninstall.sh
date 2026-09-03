@@ -39,6 +39,7 @@ rm -fv "$DATA_DIR/$PKG/themes.toml"
 rm -rfv "$DATA_DIR/$PKG/sprites"
 rm -fv "$DATA_DIR/doc/$PKG/THIRD-PARTY-LICENSES.md"
 rm -fv "$DATA_DIR/man/man1/$PKG.1.gz"
+rm -fv "$DATA_DIR/man/man5/$PKG.5.gz"
 
 # Only the directories this install created, and only when empty — `rmdir` without -p
 # refuses a non-empty directory, which is the guard we want: a user who put something of

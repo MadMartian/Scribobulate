@@ -376,6 +376,32 @@ fi
 cp "$REPO_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$REPO_ROOT/THIRD-PARTY-LICENSES.md" "$APP/Contents/Resources/THIRD-PARTY-LICENSES.md"
 
+# --- Manual pages ---------------------------------------------------------------
+#
+# STAGED INTO THE BUNDLE, not straight into a man directory, because the bundle is this
+# platform's artefact and everything the app ships travels inside it -- the same rule the
+# GTK runtime, the icon theme and the licence notices above already follow. install.sh
+# then symlinks these into a directory `manpath` actually searches, exactly as it does for
+# the executable; there is one copy of each page, inside the .app.
+#
+# A bundle is NOT on MANPATH, so `man scribobulate` does not work from these alone. That
+# is intentional: the .dmg route (dmg.sh) has no install step to register anything, so
+# what a dragged-to-/Applications copy gets is the pages present on disk, and the
+# developer route (install.sh) gets them resolvable by name.
+#
+# THE SHARED STAGER, sourced rather than reimplemented. The substitutions, the date
+# policy and the reproducible `gzip -9n` are identical on every platform; a second macOS
+# copy of them would drift silently, since each artefact installs cleanly on its own and
+# nothing compares them. This is also what puts the helper's BSD `date -r`/`stat -f`
+# branches on the real build path on this host rather than in a side test.
+# shellcheck source=../man/stage.sh
+. "$REPO_ROOT/packaging/man/stage.sh"
+for section in 1 5; do
+    install_man_page "$REPO_ROOT/packaging/man/scribobulate.$section" \
+        "$APP/Contents/Resources/man/man$section/scribobulate.$section" \
+        "$VERSION" "$REPO_ROOT"
+done
+
 # --- Licence attribution for the redistributed runtime --------------------------
 #
 # The bundle now carries a GTK runtime it did not build, so the notices travel with it.
