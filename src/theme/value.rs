@@ -676,7 +676,13 @@ mod tests {
     fn the_shipped_sepia_stack_survives_sanitising_intact() {
         let t = Themes::builtin().resolve("sepia");
         let f = t.font_family.unwrap();
-        for want in ["Charter", "Georgia", "Liberation Serif", "Noto Serif"] {
+        for want in [
+            "Tiempos",
+            "Charter",
+            "Georgia",
+            "Liberation Serif",
+            "Noto Serif",
+        ] {
             assert!(f.contains(want), "sepia stack lost {want}: {f}");
         }
         assert!(f.ends_with("serif"));

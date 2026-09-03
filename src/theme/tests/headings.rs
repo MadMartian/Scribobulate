@@ -6,11 +6,16 @@ use super::super::value::*;
 use super::super::*;
 
 /// A theme can colour its headings; omitted, `heading_color` stays `None` so
-/// headings inherit the body foreground (the default).
+/// headings inherit the body foreground (the default). Sepia opts in with a
+/// true-black heading ink, distinct from its near-black body text.
 #[test]
 fn heading_color_is_opt_in() {
     assert!(Themes::builtin().resolve(SYSTEM_ID).heading_color.is_none());
-    assert!(Themes::builtin().resolve("sepia").heading_color.is_none());
+    let sep = Themes::builtin().resolve("sepia");
+    assert_eq!(
+        crate::palette::to_hex_opaque(sep.heading_color.expect("sepia sets it")),
+        "#141414"
+    );
     let sw = Themes::builtin().resolve("synthwave");
     assert_eq!(
         crate::palette::to_hex_opaque(sw.heading_color.expect("synthwave sets it")),
@@ -91,8 +96,10 @@ fn per_level_heading_colour_and_face_fall_back_and_merge() {
     }
 
     // A theme that states NEITHER the array nor the singular leaves the level unset.
+    // System, not Sepia, is the exemplar here — Sepia now states a bare heading_color
+    // of its own (a true-black heading ink over its near-black body text).
     assert!(themes
-        .resolve("sepia")
+        .resolve(SYSTEM_ID)
         .heading_colors
         .iter()
         .all(Option::is_none));
@@ -100,25 +107,25 @@ fn per_level_heading_colour_and_face_fall_back_and_merge() {
     // A user override of a theme that states no per-level value of its own.
     let mut user = Themes::builtin();
     user.merge_over(
-        Themes::parse_compiled(
-            "[themes.sepia]\nheading_color_h2 = \"#123456\"\n\
-                 heading_font_h2 = \"Georgia, serif\"\n",
-        )
+        Themes::parse_compiled(&format!(
+            "[themes.{SYSTEM_ID}]\nheading_color_h2 = \"#123456\"\n\
+                 heading_font_h2 = \"Georgia, serif\"\n"
+        ))
         .unwrap(),
     );
-    let sep = user.resolve("sepia");
+    let sys = user.resolve(SYSTEM_ID);
     assert_eq!(
-        crate::palette::to_hex_opaque(sep.heading_colors[1].expect("h2 override merged")),
+        crate::palette::to_hex_opaque(sys.heading_colors[1].expect("h2 override merged")),
         "#123456"
     );
     assert_eq!(
-        sep.heading_fonts[1].as_ref().map(|f| f.as_str()),
+        sys.heading_fonts[1].as_ref().map(|f| f.as_str()),
         Some("\"Georgia\", serif")
     );
-    // A level the user narrowed nothing for stays unset (sepia states no bare
+    // A level the user narrowed nothing for stays unset (system states no bare
     // heading colour either).
-    assert!(sep.heading_colors[0].is_none());
-    assert!(sep.heading_colors[4].is_none());
+    assert!(sys.heading_colors[0].is_none());
+    assert!(sys.heading_colors[4].is_none());
 }
 
 /// A level a theme fills with nonsense must FALL BACK, never reject the theme —

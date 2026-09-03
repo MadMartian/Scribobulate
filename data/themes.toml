@@ -112,20 +112,24 @@ table_cell_radius    = 0
 
 # ── Sepia ──────────────────────────────────────────────────────────────────────
 # A book-like reading theme: a serif body face on a warm off-white page, with
-# soft-brown text. Body contrast is 7.51:1 — WCAG AAA.
+# near-black body text and a true-black heading ink. Body contrast is
+# 13.62:1 — WCAG AAA (heading contrast: 17.49:1).
 [themes.sepia]
 name       = "Sepia"
 symbol     = "📖"
-background = "#f4ecd8"
-foreground = "#5b4636"
+background = "#faf9f5"
+foreground = "#2a2a2a"
+heading_color = "#141414"
 accent_color = "#7a4b2a"   # the link colour and blockquote bar derive from this
 
 # Always terminate a font stack with a generic family. An unknown family falls
 # back to fontconfig's SANS default, not to serif — a stack without a generic
-# terminator silently lands on sans and defeats the theme. (Neither Charter nor
-# Georgia ships on a stock Linux box; the Liberation/Noto entries are what
-# actually resolve there.)
-font_family   = 'Charter, Georgia, "Liberation Serif", "Noto Serif", serif'
+# terminator silently lands on sans and defeats the theme. Tiempos is a paid
+# Klim Type Foundry face (not on a stock Linux/Windows/macOS box, confirmed
+# absent from this box's fontconfig list) — the remaining entries are the
+# already-verified fallback chain that resolves on a stock box; none of Charter,
+# Georgia or Tiempos ships there.
+font_family   = 'Tiempos, Charter, Georgia, "Liberation Serif", "Noto Serif", serif'
 syntect_theme = "Solarized (light)"
 
 # Warm replacements for the three highlight literals: the system yellows are a
@@ -557,8 +561,8 @@ disclosure_preview_fg     = "#00aaaa"   # ANSI 6 cyan for the collapsed body pre
 #     drawn from the ink's own sand/amber family, so every coloured thing on the page
 #     reads as one voice against a grey ground.
 #
-# Body contrast is 7.07:1 — WCAG AAA, and within a whisker of Sepia's 7.51:1, which
-# is the point: the same reading comfort with the lights off.
+# Body contrast is 7.07:1 — WCAG AAA, the same reading comfort with the lights off
+# that Sepia gives in daylight.
 [themes.bedtime]
 name       = "Bedtime"
 symbol     = "🛌"

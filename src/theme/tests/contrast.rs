@@ -122,7 +122,8 @@ fn sepia_body_contrast_is_wcag_aaa() {
     assert!(c >= 7.0, "sepia body contrast {c:.2} should be AAA");
 }
 
-/// TDD 18.3 — Sepia is book-like: warm page, serif face, soft-brown text.
+/// TDD 18.3 — Sepia is book-like: warm page, serif face, body text in black or a
+/// soft brown (the rubric names both; Sepia currently picks near-black).
 #[test]
 fn sepia_supplies_a_warm_page_and_a_serif_stack() {
     let t = Themes::builtin().resolve("sepia");
@@ -131,9 +132,10 @@ fn sepia_supplies_a_warm_page_and_a_serif_stack() {
     // Off-white and yellowish: bright, and warmer than it is blue.
     assert!(crate::palette::luminance(bg) > 0.6);
     assert!(bg.red() > bg.blue());
-    // Soft brown body text: dark, and warmer than it is blue.
+    // Near-black body text: dark, and neutral or warmer than it is blue —
+    // "black" is one of the two inks TDD 18.3 names.
     assert!(crate::palette::luminance(fg) < 0.2);
-    assert!(fg.red() > fg.blue());
+    assert!(fg.red() >= fg.blue());
     assert!(t.font_family.as_deref().unwrap().ends_with("serif"));
     // Derived keys stay unset so they follow background/foreground/accent.
     assert!(t.link_color.is_none());

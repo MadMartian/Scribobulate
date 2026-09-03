@@ -204,7 +204,7 @@ fn a_user_file_overrides_one_key_of_a_shipped_theme() {
     assert_eq!(t.name, "Sepia");
     assert_eq!(
         crate::palette::to_hex_opaque(t.foreground.unwrap()),
-        "#5b4636"
+        "#2a2a2a"
     );
     assert_eq!(t.syntect_theme.as_deref(), Some("Solarized (light)"));
 }

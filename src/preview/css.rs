@@ -627,14 +627,14 @@ mod tests {
         // `background-color` on the `> text` node: the widget node paints first and
         // TextView paints `text` OVER it, so a widget-node-only background is
         // overpainted by any theme that sets `text` opaque (Breeze-Dark does).
-        assert!(c.contains("textview.scrib-preview > text { background-color: #f4ecd8; }"));
+        assert!(c.contains("textview.scrib-preview > text { background-color: #faf9f5; }"));
         // `color` on the WIDGET node: `> text` is ignored for body text (two
         // independent GTK paths both read the widget node), and the caret follows it.
         let page = c
             .lines()
             .find(|l| l.starts_with("textview.scrib-preview {"))
             .expect("a reading theme must emit a widget-node rule");
-        assert!(page.contains("color: #5b4636;"));
+        assert!(page.contains("color: #2a2a2a;"));
         assert!(page.contains("font-family:"));
     }
 
