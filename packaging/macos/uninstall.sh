@@ -3,8 +3,9 @@
 # Undoes packaging/macos/install.sh.
 #
 # WHAT IT REMOVES is exactly what that script created, and nothing else:
-#   the `scribobulate` symlink in Homebrew's bin/ (the thing on PATH), and the
-#   Scribobulate.app the symlink resolves into.
+#   the `scribobulate` symlink in Homebrew's bin/ (the thing on PATH), the manual-page
+#   symlinks in Homebrew's share/man/man{1,5}/, and the Scribobulate.app they all
+#   resolve into.
 #
 # WHAT IT DELIBERATELY LEAVES: a copy dragged to /Applications from the .dmg. That is the
 # redistributable route (dmg.sh), installed by the user rather than by this script, and a
@@ -39,9 +40,33 @@ if command -v brew >/dev/null 2>&1; then
     else
         echo ":: No symlink at $LINK"
     fi
+
+    # The manual-page links install.sh created, under the same prefix.
+    #
+    # `[ -L ]` FIRST AND ALONE decides these, and the ordering is load-bearing rather than
+    # stylistic: these point INTO the .app, so once the bundle is gone they are dangling,
+    # and `[ -e ]` follows the link and is FALSE for a dangling one. An uninstall run after
+    # the .app was already removed -- the ordinary case, since this script removes it below
+    # and a re-run then finds it missing -- would report "nothing to remove" and leave the
+    # links behind forever. `[ -L ]` is true for a link whether or not its target exists.
+    MAN_DIR="$(brew --prefix)/share/man"
+    for section in 1 5; do
+        man_link="$MAN_DIR/man$section/scribobulate.$section.gz"
+        if [ -L "$man_link" ]; then
+            echo ":: Removing $man_link -> $(readlink "$man_link")"
+            rm -f "$man_link"
+        elif [ -e "$man_link" ]; then
+            # install.sh only ever creates a symlink here; a real file came from elsewhere
+            # (a future Homebrew formula, say) and is not ours to delete.
+            echo "warning: $man_link exists and is not a symlink; leaving it alone" >&2
+        else
+            echo ":: No symlink at $man_link"
+        fi
+    done
 else
     echo "warning: 'brew' not found, so the PATH symlink was not looked for." >&2
-    echo "  install.sh places it at \$(brew --prefix)/bin/scribobulate." >&2
+    echo "  install.sh places it at \$(brew --prefix)/bin/scribobulate, and the manual" >&2
+    echo "  pages at \$(brew --prefix)/share/man/man{1,5}/scribobulate.{1,5}.gz." >&2
 fi
 
 if [ -d "$APP" ]; then

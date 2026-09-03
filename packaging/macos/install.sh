@@ -49,10 +49,50 @@ echo ":: Linking $LINK -> $TARGET"
 mkdir -p "$BIN_DIR"
 ln -sf "$TARGET" "$LINK"
 
+# --- Manual pages ---------------------------------------------------------------
+#
+# THE DIRECTORY WAS MEASURED, not assumed. `manpath` on a stock Mac reports Homebrew's
+# prefix (`/opt/homebrew/share/man` here) among the searched directories, and reports NO
+# per-user one -- `~/.local/share/man`, where the Linux install.sh puts these, is an XDG
+# convention that macOS's man does not search. So the pages go under the same Homebrew
+# prefix already justified for the executable above: writable without sudo, and already
+# searched. Check it on any host in doubt with `manpath`.
+#
+# SYMLINKS INTO THE BUNDLE, for the same reason the executable is one: bundle.sh already
+# staged the substituted, compressed pages into Contents/Resources/man, and a copy here
+# would be a second original to drift. It inherits the same dangling-link failure mode as
+# the CLI symlink when the .app is deleted -- uninstall.sh tests with `[ -L ]`, which is
+# true for a dangling link where `[ -e ]` is false.
+MAN_DIR="$(brew --prefix)/share/man"
+for section in 1 5; do
+    man_src="$APP/Contents/Resources/man/man$section/scribobulate.$section.gz"
+    man_link="$MAN_DIR/man$section/scribobulate.$section.gz"
+    [ -f "$man_src" ] || { echo "error: bundle.sh did not stage $man_src" >&2; exit 1; }
+    echo ":: Linking $man_link -> $man_src"
+    mkdir -p "$MAN_DIR/man$section"
+    ln -sf "$man_src" "$man_link"
+done
+
+# REPORTED, not assumed to have worked. A link in a directory man does not search is
+# indistinguishable from a successful install until someone runs `man scribobulate` and
+# gets nothing -- the same failure the PATH check below exists to pre-empt.
+if command -v manpath >/dev/null 2>&1; then
+    case ":$(manpath 2>/dev/null):" in
+        *":$MAN_DIR:"*) ;;
+        *)
+            echo
+            echo "NOTE: $MAN_DIR is not in your 'manpath' output, so 'man scribobulate'"
+            echo "may not find the pages. Read them directly with:"
+            echo "  man $APP/Contents/Resources/man/man1/scribobulate.1.gz"
+            ;;
+    esac
+fi
+
 echo
 echo "Installed."
 echo "  app : $APP"
 echo "  cli : $LINK"
+echo "  man : $MAN_DIR/man{1,5}/scribobulate.{1,5}.gz"
 case ":$PATH:" in
     *":$BIN_DIR:"*)
         echo
