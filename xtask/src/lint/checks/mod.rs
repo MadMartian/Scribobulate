@@ -36,6 +36,7 @@ pub fn run_all(tree: &Tree) -> bool {
         architecture::parser_dispatch_exhaustive(tree),
         manpage::documented_vocabulary(tree),
         manpage::about_dialog_parity(tree),
+        register::duplicate_entry_numbers(tree),
     ];
     verdicts.into_iter().all(|ok| ok)
 }

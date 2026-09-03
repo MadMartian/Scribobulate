@@ -314,6 +314,19 @@ Before any change is considered valid, run these steps in order:
    because a BOM removes the hazard instead of dodging it, MEASURED on a real Windows
    host. It replaces an unwritten rule ("non-ASCII in comments only, never in a literal")
    whose enforcement depended on which side of a quote mark a character sat on.
+   One check is over **ENTRY-NUMBER UNIQUENESS** in the two documents that number their
+   entries and are cited by those numbers — `sdd/TDD.md`'s rubrics and
+   `tests/MANUAL-TEST.md`'s items (check 18). A duplicate is worse than a dangler and that
+   is the whole argument for gating it: a citation to a number that does not exist
+   announces itself, while a citation to a number naming TWO entries resolves to something
+   plausible and every party believes the reference is sound. `sdd/TDD.md` carried two
+   `### 7.21` headings — cited for different things from two documents and from `src/` —
+   and nothing in the toolchain could see it: not a link, so the path check does not
+   resolve it; not a `ScrAP-N`, so the register checks do not either; and no compiler or
+   test reads a Markdown heading. It was found by eye, twice, by two readers who each had
+   to be believed on their own. It checks the IDENTIFIER, never the filing: whether an item
+   is filed under the right rubric is a review question, since the two documents number in
+   their own sequences and a number is an identity rather than a claim.
    The three citation rules: no `sdd/ISSUES.md` entry may be cited from outside that
    file (SDD principle 6 — issue IDs are ephemeral, so every such pointer dangles
    when the fix lands, and *lies quietly* if IDs are ever compacted); every

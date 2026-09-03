@@ -8,7 +8,7 @@
 | 4 | Editing & saving | 4.1 – 4.9 |
 | 5 | Reconciliation (conflict handling) | 5.1 – 5.4 |
 | 6 | Resource footprint (viability gate) | 6.1 – 6.5 |
-| 7 | Window & layout | 7.0b – 7.21 |
+| 7 | Window & layout | 7.0b – 7.22 |
 | 8 | Single-instance lifecycle | 8.1 – 8.7 |
 | 9 | Menu bar, toolbar, and actions | 9.1 – 9.36 |
 | 10 | Markdown formatting commands | 10.1 – 10.20 |
@@ -972,7 +972,7 @@
 
 ---
 
-### 7.21 A freshly opened document puts the working position at its beginning
+### 7.22 A freshly opened document puts the working position at its beginning
 - **Given** a document is opened, restored from the previous session, or reloaded from disk
 - **When** it is first shown in the editor — by the view-mode action, the toolbar button, or session restore
 - **Then** the caret sits at the beginning of the document, and the footer's line/column indicator reads the first line

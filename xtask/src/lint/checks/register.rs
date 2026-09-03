@@ -1,5 +1,9 @@
-//! The register-integrity checks: 9, 10, 11 and 13. All four are about
-//! `sdd/ANTI-PATTERNS.md` keeping the promises the rest of the tree cites it on.
+//! The numbered-entry integrity checks: 9, 10, 11, 13 and 18.
+//!
+//! The first four are about `sdd/ANTI-PATTERNS.md` keeping the promises the rest of the
+//! tree cites it on. Check 18 is the same class over the two documents that number their
+//! entries the same way and are cited the same way -- `sdd/TDD.md`'s rubrics and
+//! `tests/MANUAL-TEST.md`'s items.
 
 use super::{fail, header, pass};
 use crate::lint::patterns as rx;
@@ -359,4 +363,133 @@ fn entry_sizes(text: &str) -> BTreeMap<String, u64> {
         }
     }
     sizes
+}
+
+// ── Check 18: one number, one entry ───────────────────────────────────────────
+
+const TDD: &str = "sdd/TDD.md";
+const PLAN: &str = "tests/MANUAL-TEST.md";
+
+/// Check 18 — no rubric number and no manual-test item number is used twice.
+///
+/// WHY A DUPLICATE IS WORSE THAN A DANGLER, which is what makes this worth a gate. A
+/// citation to a number that does not exist announces itself: the reader looks, finds
+/// nothing, and knows the pointer is broken. A citation to a number that names TWO
+/// entries resolves — to something plausible, half the time to the wrong one — and every
+/// party involved believes the reference is sound. `sdd/TDD.md` carried two `### 7.21`
+/// headings, "Every install route delivers the same payload" and "A freshly opened
+/// document puts the working position at its beginning", cited for different things from
+/// two documents and from `src/`. Nothing could see it: it is not a link, so check 6 does
+/// not resolve it; it is not a `ScrAP-N`, so checks 2, 3 and 9 do not either; and no
+/// compiler or test reads a Markdown heading. It was found twice, by eye, by two
+/// different readers who each had to be believed on their own.
+///
+/// **THE SCOPE IS THE IDENTIFIER, NOT THE FILING.** This proves each number names one
+/// entry. It says nothing about whether an entry is filed under the right number — an
+/// item whose `(TDD N.N)` trace points at a rubric about something else passes here, and
+/// correctly so: the two documents number their entries in their own sequences (63 of the
+/// manual plan's item numbers have no same-numbered rubric, most of them suffixed
+/// variants), so a number is an identity rather than a claim about a rubric. Whether a
+/// check is filed under the right rubric is a review question, and one no textual gate
+/// can answer.
+pub fn duplicate_entry_numbers(tree: &Tree) -> bool {
+    header("18", "a rubric or manual-test item number used twice");
+    let mut findings = Vec::new();
+    for (path, kind) in [(TDD, EntryKind::Rubric), (PLAN, EntryKind::Item)] {
+        let Some(text) = tree.text(path) else {
+            return fail(
+                &format!("{path} is missing from the scan set"),
+                &[],
+                &["Refusing to compare an entry set that was not read."],
+            );
+        };
+        let numbered = numbered_entries(text, kind);
+        if numbered.is_empty() {
+            // The heading shapes are stable, so an empty set means the extractor stopped
+            // matching rather than that the document lost its entries -- and an empty set
+            // has no duplicates in it, which is a PASS reported over nothing.
+            return fail(
+                &format!("no numbered entries were extracted from {path}"),
+                &[],
+                &[
+                    "Its entry heading shape has changed and this check now reads an empty",
+                    "set, in which nothing can be duplicated. Fix the extractor in",
+                    "xtask/src/lint/checks/register.rs before trusting a PASS.",
+                ],
+            );
+        }
+        findings.extend(duplicate_numbers(&numbered).into_iter().map(|(id, lines)| {
+            let at = lines
+                .iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{path}: {id} is used {} times — lines {at}", lines.len())
+        }));
+    }
+
+    if findings.is_empty() {
+        return pass();
+    }
+    fail(
+        "one number names more than one entry",
+        &findings,
+        &[
+            "A frozen ID that resolves to two entries is worse than one that resolves to",
+            "none: every citation to it looks correct and half of them are wrong.",
+            "Renumber the LATER entry and repoint the citations that name it — a bare",
+            "grep for the number finds them in sdd/, tests/ and src/ alike.",
+        ],
+    )
+}
+
+/// Which document's numbering shape to read.
+#[derive(Clone, Copy)]
+pub enum EntryKind {
+    /// `sdd/TDD.md`: `### 7.21 Some title`.
+    Rubric,
+    /// `tests/MANUAL-TEST.md`: `- [ ] **7.21** Some check`.
+    Item,
+}
+
+/// Every numbered entry in `text`, as `(1-based line, number)`, in file order.
+///
+/// The number is taken up to its first space, so a suffixed identifier keeps its suffix
+/// and stays distinct: `2.2` and `2.2a` are two entries, and so are `2.2` and the
+/// middle-dot `2.2·a11y` this project also uses. Collapsing those to their numeric stem
+/// would report duplicates that are not duplicates, and a gate that cries wolf on correct
+/// text is a gate someone deletes.
+pub fn numbered_entries(text: &str, kind: EntryKind) -> Vec<(usize, String)> {
+    text.lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let rest = match kind {
+                EntryKind::Rubric => line.strip_prefix("### ")?,
+                EntryKind::Item => line.strip_prefix("- [ ] **")?,
+            };
+            let number = match kind {
+                EntryKind::Rubric => rest.split(' ').next()?,
+                EntryKind::Item => rest.split("**").next()?,
+            };
+            // A numbered entry starts with a digit and carries a dot. Prose headings
+            // ("### Key naming") and unnumbered checklist items match neither.
+            let numbered = number.starts_with(|c: char| c.is_ascii_digit())
+                && number.contains('.')
+                && !number.is_empty();
+            numbered.then(|| (index + 1, number.to_string()))
+        })
+        .collect()
+}
+
+/// The numbers used more than once, each with every line that uses it.
+pub fn duplicate_numbers(entries: &[(usize, String)]) -> Vec<(String, Vec<usize>)> {
+    let mut by_number: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (line, number) in entries {
+        by_number.entry(number.as_str()).or_default().push(*line);
+    }
+    by_number
+        .into_iter()
+        .filter(|(_, lines)| lines.len() > 1)
+        .map(|(number, lines)| (number.to_string(), lines))
+        .collect()
 }

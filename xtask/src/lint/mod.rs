@@ -15,7 +15,8 @@
 //! `#[gtk::test]` attribute has neither returned nor been prescribed in prose); document
 //! paths, that every file this tree points at still exists; the application ID, which
 //! several non-Rust packaging files restate and none derives; the citation FORM itself;
-//! the registers' own integrity (number immutability, TOC/body agreement, growth); path
+//! the registers' own integrity (number immutability, TOC/body agreement, growth, and that
+//! no rubric or manual-test item number names two entries); path
 //! legality, that no tracked path is one Windows refuses to check out; and the
 //! VOCABULARIES the shipped manuals restate -- the theme keys, the config settings and the
 //! About dialog's attribution -- none of which any build can see, and all of which a
@@ -49,6 +50,9 @@ mod corpus;
 // and it carries a self-exclusion these cases do not need.
 #[cfg(test)]
 mod corpus_manpage;
+// The entry-numbering corpus, check 18's.
+#[cfg(test)]
+mod corpus_numbering;
 mod patterns;
 pub mod vocab;
 
@@ -80,6 +84,10 @@ const REQUIRED: &[&str] = &[
     "src/app/appactions.rs",
     "packaging/man/scribobulate.1",
     "packaging/man/scribobulate.5",
+    // Check 18 reads these for duplicate entry numbers. Absent, it would find no
+    // duplicates in nothing and report a pass.
+    "sdd/TDD.md",
+    "tests/MANUAL-TEST.md",
 ];
 
 /// The one path this gate excludes from its own text checks: the corpus module quotes the

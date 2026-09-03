@@ -627,7 +627,7 @@ pub(crate) fn load_into_editor(buf: &sourceview::Buffer, text: &str) {
     buf.begin_irreversible_action();
     buf.set_text(&text);
     buf.end_irreversible_action();
-    // Put the caret at the START of the load baseline (TDD 7.21).
+    // Put the caret at the START of the load baseline (TDD 7.22).
     //
     // `gtk_text_buffer_set_text` deletes then inserts, and the insert mark ends up
     // at the END of the inserted text — so without this line every freshly loaded
@@ -696,7 +696,7 @@ mod gtk_integration_tests {
         );
     }
 
-    /// **TDD 7.21: a freshly loaded document puts the caret at its START.**
+    /// **TDD 7.22: a freshly loaded document puts the caret at its START.**
     ///
     /// `gtk_text_buffer_set_text` deletes then inserts, and the insert mark ends up
     /// at the END of the inserted text — so before the `place_cursor` in
