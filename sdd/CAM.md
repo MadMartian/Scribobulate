@@ -159,6 +159,31 @@ toolbar buttons are plain buttons, so there is no active state to keep in sync.
 Adding caret-aware active state would be a feature decision, not a completeness
 cell, and is not required by this matrix.
 
+### Uncommon commands — outside this matrix by design
+
+A command that is genuinely peripheral — infrequent, not part of the primary
+editing/reading loop — does not enter the Action CAM at all: it owes no toolbar
+button, no context-menu entry, no formatting-overlay presence. This is a
+**category**, not a per-command deviation from the matrix above, so it is
+recorded here as a definition rather than in [Granted CAM
+exceptions](#granted-cam-exceptions) (which records departures *from* a
+category a command IS in). It is built as an ad-hoc menu item outside the
+`FILE_CMDS`/`EDIT_CMDS`/`FORMAT_CMDS`/`VIEW_CMDS` tables — a table row
+auto-generates a toolbar button — but still driven by ONE `GAction`, so the
+single-`GAction` and consistent-sensitivity rows still hold, and an
+accelerator (if it has one) still flows through `INLINE_ACCEL_CMDS` so it
+reaches the menu hint and the Keyboard Shortcuts window like any other.
+
+Current members:
+
+| Command | Why uncommon |
+|---|---|
+| `win.export` (PDF/HTML) | peripheral to this app's primary audience (developers reviewing agent-written prose); `File ▸ Export` submenu only |
+| `win.save-all` | **operator, 2026-09-02** — its toolbar button sat confusingly adjacent to Save/Save As; demoted to a menu item + its existing accelerator |
+
+A command reclassified here keeps its accelerator and menu item; it loses only
+the toolbar-section obligation the Action CAM would otherwise impose.
+
 ## Document Rendering CAM — markup / rendering features
 
 A feature that introduces or changes how document markup is rendered in the

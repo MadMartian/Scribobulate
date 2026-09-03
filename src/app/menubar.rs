@@ -494,6 +494,15 @@ fn build_format_menu() -> (Menu, Menu) {
 /// (which would also generate an unwanted toolbar button).
 fn build_file_menu() -> Menu {
     let file_menu = build_command_menu(&FILE_CMDS);
+    // Save All — an "Uncommon command" (CAM.md), in its own section right after
+    // the primary Save/Save As group. Built ad-hoc rather than as a `FILE_CMDS`
+    // row for the same reason Export is: a row auto-generates a toolbar button,
+    // and this one sat confusingly close to Save/Save As there (operator,
+    // 2026-09-02). One `win.save-all` action drives this item and the
+    // accelerator (`INLINE_ACCEL_CMDS`), so they cannot drift.
+    let save_all_section = Menu::new();
+    save_all_section.append_item(&item("Save All", "win.save-all"));
+    file_menu.insert_section(1, None, &save_all_section);
     // File ▸ Export ▸ { PDF, HTML }. Built ad-hoc rather than as a `FILE_CMDS` row for
     // the same reason Rename is: a row auto-generates a toolbar button, and Export has
     // none. That is a decision, not an omission — the file toolbar's button section is

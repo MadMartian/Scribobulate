@@ -670,7 +670,7 @@
 
 ### 4.12 Save All writes every tab that needs saving
 - **Given** a window with several tabs, of which more than one is dirty (or clean over a deleted backing file)
-- **When** the user invokes Save All (File ▸ Save All, the toolbar control, or its accelerator)
+- **When** the user invokes Save All (File ▸ Save All or its accelerator — no toolbar control; an "Uncommon command", CAM.md)
 - **Then** every such tab is written: titled tabs use the same content-gated Save as a single Save (including the overwrite prompt when the file changed on disk), and each untitled dirty tab gets a Save As chooser in turn
 - **And** Save All is enabled whenever **any** tab in the window needs writing — not only when the *active* tab is dirty — and disabled when every tab is clean with its backing file present
 - **And** a write started for one tab always lands on that tab even if the user switches tabs mid-batch (4.11), and a cancelled Save As / overwrite for one tab does not prevent the rest of the batch from continuing
@@ -902,13 +902,13 @@
 ### 7.12 A tab's right-click context menu offers per-tab commands
 - **Given** any tab in the strip
 - **When** the user right-clicks it
-- **Then** a context menu appears with Close Tab, Close Other Tabs, and Move to New Window, each acting on THAT tab specifically (not necessarily the active one) — Close Other Tabs is disabled when it is the window's only tab, and Move to New Window is disabled under the same single-tab condition View ▸ Move Tab to New Window already uses (TDD 15.4)
+- **Then** a context menu appears with Save, Save As, Close Tab, Close Other Tabs, Move to New Window, Copy Full Path, Reload, and Rename, each acting on THAT tab specifically (not necessarily the active one) — Close Other Tabs is disabled when it is the window's only tab, and Move to New Window is disabled under the same single-tab condition View ▸ Move Tab to New Window already uses (TDD 15.4)
 
 ### 7.13 The tab context menu is keyboard-navigable
 - **Given** a tab's right-click context menu is open, each row showing one letter underlined
 - **When** the user presses that bare letter (no modifier)
-- **Then** the corresponding command runs on that tab — `c` = Close Tab, `o` = Close Other Tabs, `m` = Move to New Window — with `c` and `m` matching the access letters of File ▸ Close Tab and View ▸ Move Tab to New Window (the same command, same key, across surfaces)
-- **And** a disabled row (Close Other Tabs on the window's only tab) ignores its access key
+- **Then** the corresponding command runs on that tab — `s` = Save, `a` = Save As, `c` = Close Tab, `o` = Close Other Tabs, `m` = Move to New Window, `f` = Copy Full Path, `r` = Reload, `n` = Rename — with each letter matching the access letter of the same command's File-menu (or View-menu, for Move to New Window) surface where one exists
+- **And** a disabled row (Close Other Tabs on the window's only tab; Save on a clean tab with its backing file present) ignores its access key
 
 ### 7.14 Close Other Tabs prompts for dirty tabs sequentially
 - **Given** a window with several tabs, more than one of the OTHER tabs (not the right-clicked one) dirty
@@ -1972,12 +1972,16 @@
 - **Then** tab B becomes the active tab **and** tab B's content reloads from disk, while tab A's content is unchanged
 - **And When** the reader right-clicks tab B and chooses **Copy Full Path**
 - **Then** tab B becomes active **and** the clipboard holds **tab B's** path, not tab A's
-- These commands are window-scoped actions that always target the *active* tab, so the menu must focus the clicked tab **before** driving them. Without this, a right-click on a background tab silently acts on a different document — and Reload prompts on a dirty buffer, so focusing first is also what lets the reader see the document the prompt is about
+- **And When**, with tab B dirty, the reader right-clicks it and chooses **Save**
+- **Then** tab B becomes active **and** tab B's content is written to disk, while tab A is untouched; choosing **Save As** on tab B likewise focuses it first, so the chooser's suggested name/location and the write both concern tab B
+- These commands are window-scoped actions that always target the *active* tab, so the menu must focus the clicked tab **before** driving them. Without this, a right-click on a background tab silently acts on a different document — and Reload/Save prompt on a dirty buffer, so focusing first is also what lets the reader see the document the prompt is about
 
 ### 15.20 The tab context menu's sensitivity reflects the clicked tab, not the active one
 - **Given** a right-clicked tab with no backing file (untitled), while the *currently active* tab does have one
 - **Then** both Copy Full Path and Reload appear **insensitive** in that menu
-- The gate is derived from the clicked tab's own `has_path()`, never from the action's `is_enabled()` — that would report the **active** tab's file-backed state on a menu opened over a different tab. (Contrast the Move-to-New-Window item, which *correctly* reads `is_enabled()`, because its precondition — more than one tab — is genuinely window-scoped and identical for every tab. The distinction is per-tab vs window-scoped, not a house style.)
+- **And given** a right-clicked tab that is clean with its backing file present, while the *currently active* tab is dirty
+- **Then** Save appears **insensitive** in that menu (Save As stays sensitive regardless — it carries no dirty/backing gate on any surface)
+- The gate is derived from the clicked tab's own `has_path()` / dirty state, never from the action's `is_enabled()` — that would report the **active** tab's state on a menu opened over a different tab. (Contrast the Move-to-New-Window item, which *correctly* reads `is_enabled()`, because its precondition — more than one tab — is genuinely window-scoped and identical for every tab. The distinction is per-tab vs window-scoped, not a house style.)
 
 ### 15.21 Tabs present as tabs, and the active one stands out
 - **Given** a window with two or more tabs, under any desktop GTK theme, light or dark

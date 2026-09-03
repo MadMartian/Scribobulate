@@ -49,6 +49,8 @@ pub(crate) fn wire_tab_close_and_menu(window: &ApplicationWindow, tab_view: &Tab
 /// the variant cannot be added without deciding its text; `ALL` is what the guard walks.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TabMenuItem {
+    Save,
+    SaveAs,
     Close,
     CloseOthers,
     MoveToNewWindow,
@@ -59,7 +61,9 @@ pub(crate) enum TabMenuItem {
 
 impl TabMenuItem {
     /// Every item this menu ships, in the order it presents them.
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 8] = [
+        Self::Save,
+        Self::SaveAs,
         Self::Close,
         Self::CloseOthers,
         Self::MoveToNewWindow,
@@ -71,16 +75,22 @@ impl TabMenuItem {
     /// Whether a separator follows this item, so the menu's grouping is data on the
     /// enumeration rather than an `append` buried between two call sites.
     pub(crate) fn separator_after(self) -> bool {
-        matches!(self, Self::CloseOthers | Self::MoveToNewWindow)
+        matches!(
+            self,
+            Self::SaveAs | Self::CloseOthers | Self::MoveToNewWindow
+        )
     }
 
     /// The `_`-marked label: the button's text and its access key, one string.
     ///
-    /// "Close Tab", "Move to New Window" and "Reload" reuse their menu-bar marks so the
-    /// letters match; "Copy Full Path" uses `F` to match the `win.copy-path`
-    /// accelerator; `C`/`O`/`M`/`F`/`R` being taken is why Rename's is `n`.
+    /// "Save", "Save As…", "Close Tab", "Move to New Window" and "Reload" reuse their
+    /// menu-bar marks so the letters match; "Copy Full Path" uses `F` to match the
+    /// `win.copy-path` accelerator; `S`/`A`/`C`/`O`/`M`/`F`/`R` being taken is why
+    /// Rename's is `n`.
     pub(crate) fn label(self) -> &'static str {
         match self {
+            Self::Save => "_Save",
+            Self::SaveAs => "Save _As…",
             Self::Close => "_Close Tab",
             Self::CloseOthers => "Close _Other Tabs",
             Self::MoveToNewWindow => "_Move to New Window",
@@ -156,6 +166,42 @@ fn show_tab_context_menu(
     for item in TabMenuItem::ALL {
         let btn = make_btn(item);
         match item {
+            // Save / Save As are window-scoped actions (`win.save` / `win.save-as`)
+            // that always act on the ACTIVE tab — same two requirements as
+            // Copy Full Path / Reload / Rename below: read sensitivity from the
+            // CLICKED tab's own state, and `focus_page` it before driving the
+            // action so a right-click on an inactive tab saves THAT tab.
+            TabMenuItem::Save => {
+                btn.set_sensitive(save_enabled(tab.is_dirty(), tab.backing_missing.get()));
+                btn.connect_clicked(glib::clone!(
+                    #[weak(rename_to = po)]
+                    popover,
+                    #[weak(rename_to = w)]
+                    window,
+                    #[strong]
+                    tab,
+                    move |_| {
+                        dismiss_context_popover(&po);
+                        save_for_tab(&w, &tab);
+                    }
+                ));
+            }
+            TabMenuItem::SaveAs => {
+                // win.save-as carries no dirty/backing gate — it is always
+                // reachable for the active tab, so this button is too.
+                btn.connect_clicked(glib::clone!(
+                    #[weak(rename_to = po)]
+                    popover,
+                    #[weak(rename_to = w)]
+                    window,
+                    #[strong]
+                    tab,
+                    move |_| {
+                        dismiss_context_popover(&po);
+                        save_as_for_tab(&w, &tab);
+                    }
+                ));
+            }
             TabMenuItem::Close => {
                 btn.connect_clicked(glib::clone!(
                     #[weak(rename_to = po)]
@@ -291,6 +337,32 @@ fn show_tab_context_menu(
     popover.add_controller(key_controller);
     popover.connect_closed(|p| p.unparent());
     popover.popup();
+}
+
+/// Drive `win.save` for `tab` — same focus-first requirement as
+/// [`copy_full_path_for_tab`] below: `win.save` always acts on the active tab,
+/// so make `tab` active first.
+fn save_for_tab(window: &ApplicationWindow, tab: &Rc<TabState>) {
+    let Some(chrome) = winstate::chrome(window) else {
+        return;
+    };
+    chrome.tabs.focus_page(&tab.content_box);
+    if let Some(action) = simple_action(window, "save") {
+        action.activate(None);
+    }
+}
+
+/// Drive `win.save-as` for `tab` — same focus-first requirement as
+/// [`save_for_tab`]. Focusing first also means the Save As dialog's suggested
+/// name/location is drawn from the document the user actually clicked.
+fn save_as_for_tab(window: &ApplicationWindow, tab: &Rc<TabState>) {
+    let Some(chrome) = winstate::chrome(window) else {
+        return;
+    };
+    chrome.tabs.focus_page(&tab.content_box);
+    if let Some(action) = simple_action(window, "save-as") {
+        action.activate(None);
+    }
 }
 
 /// Drive `win.copy-path` for `tab`, which need not be the window's currently
@@ -485,5 +557,66 @@ mod gtk_integration_tests {
         );
 
         window.destroy();
+    }
+
+    /// Same rubric, for Save: writing an INACTIVE tab must save THAT tab's
+    /// content, not the active tab's. `win.save` always acts on the active
+    /// tab, so `save_for_tab` must focus the clicked tab first (TDD 15.19).
+    ///
+    /// Mutation-checked the same way as the reload/copy-path tests above.
+    #[gtktest::test]
+    fn save_for_tab_acts_on_the_clicked_tab_not_the_active_one() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let a_path = dir.path().join("a.md");
+            let b_path = dir.path().join("b.md");
+            std::fs::write(&a_path, "a0\n").unwrap();
+            std::fs::write(&b_path, "b0\n").unwrap();
+
+            let app = gtk::Application::new(
+                Some("com.extollit.scribobulate.integrationtest.tabcontextmenu.save"),
+                gtk::gio::ApplicationFlags::NON_UNIQUE,
+            );
+            app.register(gtk::gio::Cancellable::NONE)
+                .expect("register (emits startup) before building any window");
+
+            let window = crate::window::new_window(&app, "IT", "a0\n", Some(&a_path));
+            let tab_a = state(&window).expect("state registered after new_window");
+            let tab_b_id =
+                crate::window::create_tab_in_window(&window, "b0\n", Some(&b_path), false, false)
+                    .expect("create_tab_in_window returns the new tab's id");
+            let tab_b = winstate::tab_by_id(tab_b_id).expect("tab B registered");
+
+            // Dirty tab B only, then switch back to A — B is the INACTIVE tab
+            // this test simulates a right-click-Save on.
+            tab_b.editor_buf.set_text("b1\n");
+            let chrome = winstate::chrome(&window).expect("chrome registered");
+            chrome.tabs.focus_page(&tab_a.content_box);
+            assert_eq!(
+                state(&window).map(|s| s.id),
+                Some(tab_a.id),
+                "sanity: tab A is active before the simulated right-click"
+            );
+
+            save_for_tab(&window, &tab_b);
+            assert!(
+                crate::docio::settle(|| !tab_b.is_dirty()),
+                "the save must land: it writes off the main thread now"
+            );
+
+            assert_eq!(
+                state(&window).map(|s| s.id),
+                Some(tab_b.id),
+                "save_for_tab must focus the CLICKED tab (B), not leave A active"
+            );
+            assert_eq!(std::fs::read_to_string(&b_path).unwrap(), "b1\n");
+            assert_eq!(
+                std::fs::read_to_string(&a_path).unwrap(),
+                "a0\n",
+                "tab A's file must be untouched by a save driven for tab B"
+            );
+
+            window.destroy();
+        });
     }
 }
