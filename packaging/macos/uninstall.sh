@@ -84,12 +84,25 @@ else
     echo "  pages at \$(brew --prefix)/share/man/man{1,5}/scribobulate.{1,5}.gz." >&2
 fi
 
+# DO THE UNREGISTRATION, DO NOT HAND THE USER A COMMAND FOR IT. This script knows
+# exactly which bundle paths it installed, which is the one thing a general-purpose
+# instruction cannot know, and `lsregister -u` accepts a path whose directory is already
+# gone (MEASURED: 20 registrations for deleted paths, all cleared this way). So the stale
+# entry never outlives the uninstall and there is nothing left to advise about.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+
 for app in "$ANCHOR" "$BUILT"; do
     if [ -d "$app" ]; then
         echo ":: Removing $app"
         rm -rf "$app"
     else
         echo ":: No bundle at $app"
+    fi
+    # Unconditionally, not only when the directory was there: a registration outliving
+    # its bundle is exactly the case this exists for, and a previous run that removed the
+    # bundle without unregistering it leaves one behind.
+    if [ -x "$LSREGISTER" ]; then
+        "$LSREGISTER" -u "$app" 2>/dev/null || true
     fi
 done
 
@@ -102,7 +115,12 @@ if [ -d "$DRAGGED" ]; then
 fi
 
 echo
-echo "Removed the developer install."
-echo "Launch Services can keep a stale entry for a bundle that no longer exists; it"
-echo "clears on its own rescan, or immediately with:"
-echo "  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -kill -r -domain local -domain user"
+echo "Removed the developer install, and unregistered both bundle paths from Launch"
+echo "Services, so no stale Dock or 'Open With' entry survives this run."
+echo
+echo "If you still see one for a copy installed some other way, unregister it BY PATH:"
+echo "  $LSREGISTER -u '/path/to/Scribobulate.app'"
+echo "That works even when the path is already deleted. Do not reach for"
+echo "'lsregister -kill': the option was REMOVED (MEASURED on macOS 26 / Darwin 25.0.5,"
+echo "which answers \"the -kill option has been removed because it was dangerous and no"
+echo "longer useful\" and changes nothing), and this message used to recommend it."
