@@ -258,9 +258,13 @@ is what the anchor bought; it is simply still installed.)
 
 Launch Services may go on offering a bundle that is gone, because `bundle.sh` registers
 every build with it (`lsregister -f`) so the Dock and Finder take the icon up without a
-cache delay. `uninstall.sh` now unregisters the paths it installed rather than telling
-you to do it, so its own runs leave nothing stale. For a copy installed some other way,
-unregister it **by path**:
+cache delay. `uninstall.sh` now unregisters the paths it installed rather than telling you
+to do it, and it **verifies that by reading the database back** rather than trusting the
+exit status — `lsregister -u` returns non-zero for a path it holds no registration for,
+which is the ordinary case, so the status answers a different question than the one being
+asked. When a path is still registered afterwards, or `lsregister` is not where it is
+expected, the run says which paths were not cleared instead of claiming they were. For a
+copy installed some other way, unregister it **by path**:
 
 ```bash
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u '/path/to/Scribobulate.app'
