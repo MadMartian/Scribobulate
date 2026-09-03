@@ -6,6 +6,7 @@
 //! addition and no reader can tell a stale one from a current one.
 
 pub mod architecture;
+pub mod manpage;
 pub mod references;
 pub mod register;
 
@@ -33,6 +34,8 @@ pub fn run_all(tree: &Tree) -> bool {
         register::body_without_toc_row(tree),
         architecture::powershell_encoding(tree),
         architecture::parser_dispatch_exhaustive(tree),
+        manpage::documented_vocabulary(tree),
+        manpage::about_dialog_parity(tree),
     ];
     verdicts.into_iter().all(|ok| ok)
 }

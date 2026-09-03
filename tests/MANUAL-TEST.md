@@ -1764,18 +1764,21 @@ env HOME=/tmp/scribtest XDG_DATA_HOME=/tmp/scribtest/.local/share \
     XDG_CONFIG_HOME=/tmp/scribtest/.config packaging/linux/install.sh --no-build
 ```
 
-**All six payload files must be present**, because `payload.sh` is shared with the two
+**Every payload file must be present**, because `payload.sh` is shared with the two
 package builders and a file missing here is a file missing from the `.deb` and `.rpm`
 too — `bin/scribobulate`, `share/applications/scribobulate.desktop`,
 `share/icons/hicolor/scalable/apps/<app-id>.svg`, `share/scribobulate/themes.toml`,
-`share/man/man1/scribobulate.1.gz`, and
+`share/scribobulate/sprites/`, `share/man/man1/scribobulate.1.gz`,
+`share/man/man5/scribobulate.5.gz`, and
 `share/doc/scribobulate/THIRD-PARTY-LICENSES.md`. The last is an attribution
 obligation, not documentation: the syntax grammars are statically linked into the
 binary and their licences require the notice to travel with it, so an install missing
 it is a licence violation rather than a cosmetic gap. Confirm `Exec=`/`TryExec=` in the
 installed desktop entry are the **absolute** binary path, not the bare command.
 
-Then `packaging/linux/uninstall.sh` and confirm all six are gone. A generated
+Open both manual pages from the installed tree (`man scribobulate` and `man 5 scribobulate`) and confirm each renders with a version and a date in its footer — an unsubstituted `@VERSION@` means the staging step's placeholder substitution silently missed one.
+
+Then `packaging/linux/uninstall.sh` and confirm every one of them is gone. A generated
 `applications/mimeinfo.cache` legitimately remains — it is the desktop database's, not
 ours. (TDD 7.21)
 

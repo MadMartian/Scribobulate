@@ -957,7 +957,7 @@
 ### 7.21 Every install route delivers the same payload, attribution included
 - **Given** any of the three Linux install routes — the `.deb`, the `.rpm`, or the from-source install into `~/.local`
 - **When** the install completes
-- **Then** all six payload files are present: the binary, the desktop entry, the application icon, the reading-themes file, the man page, and `THIRD-PARTY-LICENSES.md`
+- **Then** every file the payload defines is present: the binary, the desktop entry, the application icon, the reading-themes file, the sprites those themes name, **both** manual pages (`scribobulate.1` and `scribobulate.5`), and `THIRD-PARTY-LICENSES.md` — stated as a list rather than a count, because a count is the one fact about a payload guaranteed to be wrong by the next addition, and this one already was
 - **And** `THIRD-PARTY-LICENSES.md` is not optional documentation — the syntax-highlighting grammars are statically linked into the binary under licences that require their notices to accompany a binary distribution, so an install lacking it is a licence violation rather than a cosmetic gap
 - **And** the rpm marks that file as a licence, so `--excludedocs` cannot drop it
 - **And** the routes cannot diverge on *what* an install consists of: the payload is defined once and every route reads that definition
