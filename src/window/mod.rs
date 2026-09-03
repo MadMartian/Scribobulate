@@ -141,6 +141,7 @@ mod toast;
 mod toolbar;
 pub(crate) mod undo;
 mod viewactions;
+mod wheelcoalesce;
 
 use chrome::*;
 use copylink::*;

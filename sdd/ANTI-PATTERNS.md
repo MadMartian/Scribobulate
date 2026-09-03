@@ -9,7 +9,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 2. General engineering discipline that survives deleting every Scribobulate noun? → route it to `general-engineering-principles`, cited `GEP-N`; leave a one-line `**Routed**` tombstone here. No ScrAP number is needed for provenance.
 3. Neither — Scribobulate internals, or a non-gtk4-rs dependency (Pango, GtkSourceView, pulldown-cmark, librsvg, syntect, serde/toml, the toolchain)? → it stays here, **in ≤ 6 lines**: Symptom · Root cause · Resolution · Lesson · Scribobulate · See. Extend an existing entry rather than minting a sibling for the same root cause. Route a Pango lesson on whose API *contract* it is about, and raise it before routing.
 
-**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 341**+ — check this table and announce the range you claim; never derive it from the highest heading below.
+**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 342**+ — check this table and announce the range you claim; never derive it from the highest heading below.
 
 **Growth** is gated in bytes (check 11). The ratchet only tightens; consolidate in the change that trips it.
 
@@ -353,6 +353,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 | 338 | A settle wait pointed at a value the code records SYNCHRONOUSLY ahead of the work it waits for — it observes a constant, reports converged on the first turns, and leaves fixed drains doing the real waiting | A |
 | 339 | An edit ABOVE the viewport scrolls the reader off their line, by a constant quantum per compensating pass rather than by anything height-shaped | A |
 | 340 | Splicing a region whose rendered content was written by an event ABOVE that region | C |
+| 341 | More than one adjustment write per frame on a pre-4.10.1 `GtkListView` (a fast wheel scroll up) snaps the list to its end | A |
 
 ---
 
@@ -1911,3 +1912,7 @@ Severity: High
 **Lesson**: a splice's precondition is not "I know the region" but "every character in the region is produced by an event inside it". Before adding a region-scoped fast path, ask which event WROTE the content — a construct whose rendering is emitted by an ancestor event is not spliceable at any region granularity.
 **Scribobulate**: `renderer::DisclosureExtent::spliceable` (set in `renderer::start::record_disclosure_extent`), refused in `preview::splice::splice`; pinned by `preview::build`'s `an_unspaced_disclosure_is_not_spliceable_and_a_spaced_one_is`, which carries its own positive control.
 **See**: ScrAP-339 (the reader-position half of the same splice).
+
+## 341. More than one adjustment write per frame on a pre-4.10.1 `GtkListView` (a fast wheel scroll up) snaps the list to its end
+**Scribobulate**: `window::wheelcoalesce` takes the wheel from every sidebar list scroller in the capture phase and applies the accumulated travel once per frame-clock tick, so the toolkit never reads a row-height tree its own previous write left collapsed; installed in `window::sidebar::SidebarPane::new` so a pane added later inherits it, and `reveal_selected_row` drops the pending travel so a programmatic reveal is not a frame's second write. Inert on GTK >= 4.10.1, which fixed it upstream (GNOME/gtk#2971). Reproducible in plain GTK by `probes/listview-scroll-snap.c`.
+**See**: gtk4-rs skill → list/factory views; kin GTK4Rs/AP-114 (`list.scroll-to-item` as the 4.6-safe reveal), ScrAP-157 (the other pre-4.12 `GtkListView` scroll trap).

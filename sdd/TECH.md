@@ -194,7 +194,8 @@ Every module below runs on the GTK main thread; see [Concurrency model](#concurr
 | `window/scrollsync.rs` | Owns split-pane scroll synchronisation, coalesced to once per frame. |
 | `window/livepreview.rs` | Owns the debounce that re-renders the preview from editor edits in split mode. |
 | `window/zoom.rs` | Owns the preview zoom ladder and its application to the window, and — for every in-place preview re-render — `RenderShape`, the declaration of whether the render changes the buffer's *content* or only its scale. That is what decides which reading-position anchor is valid: an exact buffer line when the content is unchanged, the source-derived `DocPosition` when lines appear or vanish. |
-| `window/sidebar.rs` | Owns `SidebarPane`, the shared chrome of a sidebar section. |
+| `window/sidebar.rs` | Owns `SidebarPane`, the shared chrome of a sidebar section — including installing `wheelcoalesce` on its scroller, so a pane added later cannot ship without it. |
+| `window/wheelcoalesce.rs` | Owns the wheel input of a scroller that holds a virtualized list: it takes the scroll event in the capture phase, accumulates the travel, and applies it once per frame. A pre-4.10.1 `GtkListView` resolves the second adjustment write of a frame against a row-height tree its own first write left collapsed, and snaps to the end of the list (ScrAP-341); one write per frame removes that precondition. Inert on a GTK that fixed it. |
 | `window/outline_nav.rs` | Owns the outline sidebar's data side: rebuilding the heading tree and navigating from it. |
 | `window/annotations_nav.rs` | Owns the annotations viewer's data side, and the one mode-aware annotation navigator the viewer's rows and the Next/Previous Annotation commands both route through — so a view mode cannot be served by one and not the other. |
 | `winstate/` | Owns the typed per-window and per-tab state registry, and the pure decision cores that read it. |

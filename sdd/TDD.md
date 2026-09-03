@@ -1779,6 +1779,13 @@
 - **And** the header carries a close (×) button that hides the sidebar (sharing the same `win.outline` toggle as the toolbar button / View menu / F9)
 
 
+### 12.23 Fast wheel-scrolling the outline never jumps the list
+- **Given** a document with enough headings that the outline list scrolls over many screens (this file is the reference case), positioned somewhere below the top
+- **When** the reader scrolls the outline list upward with the mouse wheel **quickly** — fast enough to deliver more than one scroll event per displayed frame
+- **Then** the list travels smoothly upward by the same distance per click as a slow scroll, and never jumps — in particular it never snaps back to the end of the list, at any point in the gesture
+- **And** the same holds for the annotations list, which is the same kind of pane
+- **And** slow scrolling, scrolling downward, dragging the scrollbar, and clicking a row to navigate are all unchanged
+
 ### 12.22 The outline includes headings inside collapsed disclosures
 - **Given** a document with headings inside a collapsed disclosure block
 - **When** the outline is shown

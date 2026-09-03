@@ -64,6 +64,8 @@ cc probes/iter-diagnostics.c -o /tmp/iter-diagnostics \
    $(pkg-config --cflags --libs gtk4)
 cc probes/binding-shape.c -o /tmp/binding-shape \
    $(pkg-config --cflags --libs gtk4)
+cc probes/listview-scroll-snap.c -o /tmp/listview-scroll-snap \
+   $(pkg-config --cflags --libs gtk4)
 
 clang -ObjC -O1 -g -Wno-deprecated-declarations -o /tmp/native-chooser-rss \
    probes/native-chooser-rss.m $(pkg-config --cflags --libs gtk4) -framework AppKit
@@ -838,3 +840,40 @@ verdict without needing either.
 
 **Do not de-duplicate the two ObjC rigs' boilerplate.** `accessory-view-dealloc.m` rests its
 conclusion on the two probes sharing no code path — the duplication is load-bearing.
+
+## `listview-scroll-snap.c`
+
+**Question:** what does it take to make a `GtkListView` jump to the END of its list
+during a fast upward wheel scroll — the tree model, the non-uniform row heights, or
+the widget itself?
+
+**Answer: the widget itself, on any GTK older than 4.10.1** (GNOME/gtk#2971). Measured
+on 4.6.9 / X11 / cairo, 540 rows, `page_size` 800:
+
+- A plain `GtkStringList` with uniform rows snaps. The `GtkTreeListModel` and the
+  per-level font sizes the application happens to use are both innocent (`flat` mode
+  reproduces; `varied` and `tree` add nothing).
+- `PROBE_AUTO=86` removes the input stack entirely — a `g_timeout` writing the
+  adjustment every 8 ms — and it still snaps, to `upper - page_size`, about every 23
+  writes. So it is the WRITE RATE, not the wheel: `kinetic_scrolling=FALSE` changes
+  nothing, and the same 60 steps 100 ms apart never snap.
+- Upward only. `PROBE_START=8000` still lands at the end, so the destination is the
+  list's end rather than anything derived from where the gesture began.
+- `PROBE_SELECT=100` changes nothing: not selection- or focus-driven.
+- `PROBE_COUNT=1` reports 205 realized rows — `GTK_LIST_VIEW_MAX_LIST_ITEMS` 200 plus
+  extras — which is the recycling that the defect needs.
+
+**`PROBE_WRAP_BOX=1` is a trap, kept deliberately.** Wrapping the list in a `GtkBox` so
+the `GtkScrolledWindow` interposes a `GtkViewport` makes the snap vanish — and makes the
+list stop working: the viewport never drives the list's own scrollable adjustment
+(`own_value` stays 0), so past ~row 205 the pane renders BLANK and the smooth scroll is a
+scroll over nothing. It reads as a clean fix in an adjustment trace, which is exactly why
+it is in here rather than in the application.
+
+```sh
+/tmp/listview-scroll-snap flat 540        # then wheel up fast over the list
+PROBE_AUTO=86 /tmp/listview-scroll-snap flat 540    # no input needed
+```
+
+Every line of output is `V value upper page` (value-changed) or `C …` (changed); a
+value equal to `upper - page` mid-gesture is the defect.

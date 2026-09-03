@@ -88,6 +88,12 @@ impl SidebarPane {
         close.set_action_name(Some(close_action));
         header.append(&close);
 
+        // Every sidebar pane holds a virtualized GtkListView, so every one of them is
+        // exposed to the pre-4.10.1 list-scroll defect. Installed HERE rather than at
+        // each pane's own construction so a pane added later inherits the fix instead
+        // of having to remember it (see `wheelcoalesce`).
+        super::wheelcoalesce::install(&scroller);
+
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.set_vexpand(true);
         root.append(&header);
@@ -153,6 +159,11 @@ fn reveal_selected_row_attempt(scroller: &gtk::ScrolledWindow, attempt: u8) {
     let Some(list_view) = list_view_of(scroller) else {
         return;
     };
+    // Drop any wheel travel the reader has accumulated but not yet been given: this
+    // scroll supersedes it, and letting it land afterwards would be a second
+    // adjustment write in the same frame — the one condition `wheelcoalesce` exists to
+    // prevent.
+    super::wheelcoalesce::cancel_pending(scroller);
     let Some(sel) = list_view
         .model()
         .and_then(|m| m.downcast::<gtk::SingleSelection>().ok())
