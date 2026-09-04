@@ -1,9 +1,10 @@
 # Scribobulate
 
 A multi-platform native Markdown viewer and editor for **Linux**, **macOS**, and **Windows** —
-for the documents AI agents generate: rendering full-fidelity Markdown on the CPU
-with effectively zero GPU memory (leaving room for those hungry Ollama models), and live-reloading files the instant an agent
-changes them on disk.
+for the documents AI agents generate. **Comment on what an agent wrote, right inside the
+Markdown**, so the next agent reads your objection where you made it. Renders full-fidelity
+Markdown on the CPU with effectively zero GPU memory (leaving room for those hungry Ollama
+models), and live-reloads files the instant an agent changes them on disk.
 
 <picture>
   <source srcset="assets/splash.webp" type="image/webp">
@@ -21,6 +22,21 @@ changes them on disk.
 > work (a clean change reloads silently with a brief notice). Unsaved edits also
 > survive the application dying: they are snapshotted as you type and offered back
 > on the next launch.
+
+## Annotate the document, in the document
+
+Reviewing what an agent wrote used to mean copying a paragraph into a chat window and
+explaining where it came from. Here you select the claim, leave a comment, and the comment
+is saved *in* the Markdown as portable markup — so the next agent reads your objection
+exactly where you made it, and answers it in place. No sidecar file, no database, no second
+tool: the review travels with the document, through Git, into the HTML and PDF you export.
+
+- Margin markers to open, edit, or remove a comment
+- Annotations sidebar listing every comment in the document (F8)
+- Walk the comments from the keyboard (Ctrl+Alt+N / Ctrl+Alt+P)
+
+I have not found another Markdown editor that does this, and it is the feature I reach for
+most when working with an agent.
 
 ## What it does
 
@@ -50,16 +66,20 @@ with AI should be a pleasant place for the human to sit, so the reading themes
 (Sepia, Bedtime, Synthwave, Terminal, Candy) and the theming system behind them got
 real attention, and the theme you choose travels into the HTML and PDF you export.
 
-The third reason is annotations. Reviewing what an agent wrote used to mean copying
-a paragraph into a chat window and explaining where it came from. Now I select the
-claim, leave a comment on it, and the comment is saved in the Markdown itself, so
-the next agent reads my objection exactly where I made it and answers it in place.
+The third reason is the one at the top of this page: I wanted to argue with an agent's
+prose in the margin of the file it wrote, not in a chat window that has no idea which
+paragraph I mean.
 
 ## Features
 
 *(Shortcuts below are shown in Linux/Windows form. On macOS, Ctrl becomes ⌘ —
 see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
 
+- **Annotate in the file** — comments saved *in* the Markdown, as described above:
+  margin markers to open, edit, or remove one; an annotations sidebar (F8) listing
+  every comment, sharing the sidebar's height with the outline on a divider you drag
+  where you want it; Ctrl+Alt+N / Ctrl+Alt+P to walk them from the keyboard without
+  hunting for markers.
 - **Light on your machine** — native rendering on the CPU, not a browser engine.
   Leaves GPU memory free for the models and tools you actually care about.
 - **Live reload** — when an agent (or anything else) rewrites an open file, the
@@ -89,14 +109,6 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
   - Format toolbar and shortcuts for bold, italic, headings, lists, quotes,
     code, task lists, and more
   - Lists and quotes continue as you type; fenced code blocks close themselves
-- **Annotate in the file** — select a claim, leave a comment, and it is saved
-  *in* the Markdown as portable markup the author (or the next agent) can read
-  inline. No side channel, no extra tool.
-  - Margin markers to open, edit, or remove a comment
-  - Annotations sidebar lists every comment in the document (F8), sharing the
-    sidebar's height with the outline on a divider you drag where you want it
-  - Walk the comments from the keyboard, without hunting for margin markers
-    (Ctrl+Alt+N / Ctrl+Alt+P)
 - **Take the document with you** — File ▸ Export writes what you are reading as
   a standalone **HTML** file to share or a paginated **PDF** to keep. Images
   travel inside the file, so it still works after you send it; your annotations
