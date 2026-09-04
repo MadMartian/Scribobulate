@@ -33,10 +33,12 @@ described from a different vantage point.
 | D | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
 | F | Mac | Upstream | A GTK4/Quartz autorelease-pool crash SIGABRTs the macOS integration suite in roughly one full run in four, at a varying site | Medium |
 | G | Any | Test | Two wall-clock growth-ratio guards (tab normalisation, annotation extraction) go red on a loaded machine — the ratio is scheduler noise on a small baseline, not an exponent | Low |
+| Q | Any | Test | A complexity guard asserts a growth RATIO to be machine-independent and it is not — `tab_normalisation_over_a_single_enormous_line_grows_linearly` goes red on a loaded host, and its failure text accuses an already-fixed regression by name | Low |
 | H | Mac | Production | macOS only, INTERMITTENT: the preview's hover cursor sometimes does not take over body text or a link, showing the default arrow; the drawn affordances that repaint on hover are always correct | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | J | Any | Upstream | A paragraph that mixes fonts (any inline-code span) can lay out a few pixels wider than the wrap width it was given, summoning the preview's Automatic horizontal scrollbar and intermittently blanking the pane until a resize | Closed |
 | M | Windows | Production | On a machine with no Visual C++ runtime the app installs and then fails to start; the installer's bootstrapper for it has landed but has never been verified against that condition | Medium |
+| N | Any | Production | A document embedding a large SVG stalls the main thread for a fifth of a second on EVERY preview render — the decode is synchronous and uncached, so a zoom step, a disclosure toggle and each debounced keystroke in split mode all pay it again | Medium |
 
 ## A. Tables are selection islands
 
@@ -715,3 +717,48 @@ floor) rather than in its absence.
 verification remains.
 
 ---
+
+## N. A large SVG re-decodes on every render, on the main thread
+
+**Severity**: Medium. Not a correctness defect and nothing is lost, but it is a visible
+stall on an ordinary document, and it multiplies with exactly the interactions that
+re-render (zoom, disclosure toggle, typing in split mode).
+
+**MEASURED** on the Linux reference host (`probes/svg-rasterise-rs`, librsvg 2.52.5 /
+gdk-pixbuf 2.42.8), against `sdd/system-overview.svg` — this project's own architecture
+diagram, 1000×1112:
+
+| Operation | Cost |
+|---|---|
+| `Pixbuf::file_info` (the header probe) | 0.7 ms |
+| `Pixbuf::from_file` (natural size) | 239 ms |
+| `Pixbuf::from_file_at_scale` at 3× | 227-294 ms |
+
+A raster image of comparable dimensions costs a fraction of a millisecond to probe and a
+few milliseconds to decode. The cost is librsvg parsing and rendering the document, and it
+is paid **per render**, on the GTK main thread, because the local-image path has no cache
+of any kind — `renderer::start::load_texture` decodes afresh every time the walk reaches
+the image tag.
+
+The macOS seat measured the same file at roughly half these figures on Homebrew GTK 4.22.4
+(`from_file` 103 ms, `at_scale` at 3× 111 ms), so the cost is real on both platforms and
+Linux is the worse of the two. Run-to-run spread on one host is wide enough that the 3×
+render and the natural-size decode cannot be reliably separated.
+
+**This is pre-existing and was not introduced by the zoom re-render.** The natural-size
+decode already cost this; asking for a 3× raster measures about the same, which is the
+counter-intuitive part and worth knowing before anyone assumes the zoom work caused it.
+What the zoom work did was make renders more frequent and give the cost a second reason to
+be noticed.
+
+**Two remedies, and they compose.** A process-wide cache keyed on the source path, its
+mtime and the quantised target width would make every render after the first free — the
+zoom ladder has about six distinct steps, so the working set is small, and `imagecache`
+(remote textures) and `sprite`'s `RESAMPLED` map are both this shape already. Decoding off
+the main thread is the larger fix and the loader permits it: the SVG loader declares
+`GDK_PIXBUF_FORMAT_THREADSAFE`. The cache is the cheap half and should be measured first.
+
+⚠ **Do not reach for the header probe as a cheap guard.** `Pixbuf::file_info` on an SVG
+parses the whole document and merely skips the render (researcher-measured at 27 ms on a
+6000-element file, against 0.078 ms for a raster header sniff), so it is not the free
+question its raster behaviour suggests.

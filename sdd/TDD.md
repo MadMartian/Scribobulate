@@ -303,6 +303,7 @@
 - **Then** the image is scaled down to fit the pane width (aspect ratio preserved) and renders fully — it does **not** blank out or force a horizontal scrollbar
 - **And** the image re-fits when the pane width changes (window resize, split toggle)
 - **And** an image narrower than the pane keeps its natural size, left-aligned — it is **not** stretched to fill the column
+- **And** this fit is decided **at 100% zoom**, and is then scaled by the zoom level (13.11) — so above 100% an image that had been fitted to the pane grows past it and the preview offers a horizontal scrollbar for it. Everything above describes the default view, which is where the no-scrollbar guarantee holds; a reader who has deliberately zoomed in has asked for the larger image and gets the scrollbar with it
 
 ### 2.23 Rich image embeds — raw-HTML `<picture>` and `<img>`
 - **Given** a document with a raw-HTML `<picture>` element (ordered `<source srcset=…>` candidates followed by an `<img src=…>` fallback), or a bare `<img src=…>` element
@@ -1789,6 +1790,17 @@
 - **Given** the user changed the zoom level while in preview mode
 - **When** they switch to edit (or split) mode
 - **Then** the editor pane is immediately navigable — the mouse wheel, PageUp/PageDown, and the caret all scroll it normally (the reading position carries over and the scroll range is never left frozen/collapsed)
+
+### 13.11 Images scale with the zoom level
+- **Given** a document containing an image — a Markdown `![](…)`, or a raw-HTML `<picture>`/`<img>` (2.23) — rendered in preview or split mode
+- **When** the user changes the zoom level
+- **Then** the image's on-screen size scales with the zoom factor, alongside the text around it (at 200% it is twice its 100% size), with its aspect ratio preserved at every step on the ladder
+- **And** this holds for an image that was **already too wide for the pane at 100%** — the case the report came from. Its fit to the column is decided at 100% and that fitted size is what scales, so zooming in enlarges it past the column and the preview scrolls horizontally to reach the rest. An image already at the pane's width is exactly the one a reader most needs the zoom control to act on, so leaving it fixed would answer the complaint in name only
+- **And** at 100% and below, nothing changes: every image still fits the pane per 2.21 and no horizontal scrollbar appears in the default view
+- **And** the pane keeps drawing throughout — stepping the whole ladder and resizing the window at maximum zoom never leaves the preview blank or empty (the anchored-child width churn of ScrAP-23, which an over-wide image is the shape of)
+- **And** a **vector** source (SVG) held on disk is re-rasterised at the scaled size rather than upscaled from its natural-size raster, so text drawn inside the image stays sharp at every zoom step — the reader's remedy for small diagram text is the zoom control, and it has to work on the diagram, not only on the prose around it. A **remote** vector image keeps its natural-size decode and softens as it grows: the remote cache is keyed by URL and holds decoded textures, so re-rendering per zoom step would turn each step into a fresh network fetch, which is a worse defect than a soft image on a path the reader has to opt into
+- **And** zooming in never makes an image disappear or shrink. Where the scaled size would cost more to rasterise than `limits::MAX_VECTOR_RASTER_PIXELS` allows, the image is still **drawn at the size zoom asked for** and only its raster is bounded — so it goes soft rather than small, and the reader who zoomed in is never answered with less than they had. (Distinct from §14's `MAX_IMAGE_PIXELS`, which refuses a hostile *input* outright; this one bounds an allocation the application chooses on the reader's behalf.)
+- **And** the broken-image placeholder (2.5) scales on the same terms, so a document of blocked images does not stop responding to zoom
 
 ### 12.11 The outline panel has a labelled header
 - **Given** the outline sidebar is shown

@@ -245,7 +245,7 @@ impl Renderer {
                     self.doc_dir.as_deref(),
                     self.allow_unsafe_images,
                 );
-                let texture = load_texture(&resolution);
+                let loaded = load_texture(&resolution, self.zoom);
                 // Decide what stands in for the image. If it loaded, the picture is
                 // shown; otherwise a broken-image placeholder carries a reason in its
                 // tooltip (blocked by policy / not found / failed to decode). Either way
@@ -253,10 +253,10 @@ impl Renderer {
                 // visual signal, so an unresolvable image never silently collapses to a
                 // bare alt string (the "Show Unsafe Images left only alt text" report).
                 let placeholder_tooltip =
-                    image_placeholder_tooltip(&resolution, texture.is_some(), dest_url.as_ref());
-                self.suppress_image_alt = texture.is_some() || placeholder_tooltip.is_some();
-                if let Some(tex) = texture {
-                    self.anchor_image(&tex);
+                    image_placeholder_tooltip(&resolution, loaded.is_some(), dest_url.as_ref());
+                self.suppress_image_alt = loaded.is_some() || placeholder_tooltip.is_some();
+                if let Some(image) = loaded {
+                    self.anchor_image(&image);
                 } else if let Some(tooltip) = placeholder_tooltip {
                     self.anchor_broken(&tooltip);
                 }
@@ -700,8 +700,8 @@ impl Renderer {
         }
         for src in candidates {
             let resolution = resolve_image(src, self.doc_dir.as_deref(), self.allow_unsafe_images);
-            if let Some(tex) = load_texture(&resolution) {
-                self.anchor_image(&tex);
+            if let Some(image) = load_texture(&resolution, self.zoom) {
+                self.anchor_image(&image);
                 return;
             }
         }
@@ -722,7 +722,7 @@ impl Renderer {
 
     /// Anchor a loaded texture as a `GtkPicture` (with the selection-tint overlay)
     /// in the buffer — the shared build for a Markdown image and a `<picture>`.
-    fn anchor_image(&mut self, tex: &gtk::gdk::Texture) {
+    fn anchor_image(&mut self, image: &LoadedImage) {
         self.block_sep();
         let mut iter = self.tip();
         let anchor = self.buf.create_child_anchor(&mut iter);
@@ -732,25 +732,29 @@ impl Renderer {
         // the picture blanks (the rest of the doc renders). A definite size_request
         // (w AND h) lifts the minimum off 0 so it paints.
         //
-        // Display policy (`max-width: 100%`): the image is shown at min(natural, pane)
-        // — scaled down to fit a narrow pane, never upscaled past its own resolution.
-        // The NATURAL size is registered in `image_bounded`;
+        // Display policy (`max-width: 100%`): the image is shown at min(zoomed, pane)
+        // — scaled down to fit a narrow pane, never upscaled past the size zoom asks
+        // for. The ZOOMED size is registered in `image_bounded`;
         // `CodePreviewView::size_allocate` clamps it to the live column each width
         // change (aspect preserved), so a too-wide image fits instead of forcing an
         // over-wide line → GTK4Rs/AP-22/23 blank. The initial `set_size_request` is only a
         // first-frame SEED: it must be nonzero (GTK4Rs/AP-58) but not absurdly over-wide, or
         // the pre-allocate frame flashes the GTK4Rs/AP-22/23 transient; size_allocate then
         // scales it up (to the pane) or down (to fit) as needed.
-        let (nat_w, nat_h) = (tex.width().max(1), tex.height().max(1));
+        //
+        // The zoom term is applied HERE, once, rather than in the allocation path: a
+        // zoom step re-renders the whole preview (`window/zoom.rs`), so a render-time
+        // value is always current, and `size_allocate` is the last place this project
+        // wants a second consumer of anything (ScrAP-22/ScrAP-29). TDD 13.11.
+        let extent = super::image::zoomed_extent(image.intrinsic.w, image.intrinsic.h, self.zoom);
         const INIT_SEED_W: i32 = 640;
-        let seed_w = nat_w.min(INIT_SEED_W);
-        let seed_h = (i64::from(nat_h) * i64::from(seed_w) / i64::from(nat_w)).max(1) as i32;
-        let pic = gtk::Picture::for_paintable(tex);
+        let seed = super::image::fit_within(extent, extent.w.min(INIT_SEED_W));
+        let pic = gtk::Picture::for_paintable(&image.texture);
         pic.set_halign(gtk::Align::Start);
-        pic.set_size_request(seed_w, seed_h);
+        pic.set_size_request(seed.w, seed.h);
         pic.set_can_shrink(true);
         self.image_bounded
-            .push((pic.clone().upcast(), nat_w, nat_h));
+            .push((pic.clone().upcast(), extent.w, extent.h));
         // Wrap in an overlay so a selection tint can be drawn OVER the image when it
         // falls inside the buffer selection — the GtkTextView highlights surrounding
         // text but never an anchored widget. The tint is a click-through box (toggled
@@ -782,7 +786,11 @@ impl Renderer {
         let mut iter = self.tip();
         let anchor = self.buf.create_child_anchor(&mut iter);
         let icon = gtk::Image::from_icon_name(crate::icons::Icon::ImageMissing.name());
-        icon.set_pixel_size(32);
+        // A design-time metric at zoom 1.0, scaled explicitly like every other pixel
+        // metric — otherwise a document of blocked images is the one document whose
+        // zoom control does nothing at all (TDD 13.11).
+        const BROKEN_IMAGE_PX: i32 = 32;
+        icon.set_pixel_size(crate::theme::px(BROKEN_IMAGE_PX, self.zoom).max(1));
         icon.set_halign(gtk::Align::Start);
         // TDD 18.20: reachable by the generated theme sheet (`preview/css.rs`), where
         // it was previously invisible to mechanism C — no class meant no theme could
@@ -814,7 +822,7 @@ impl Renderer {
 /// nothing at all on macOS (ScrAP-292). The bytes then go through
 /// `Texture::from_bytes`, which reaches the same loader chain `from_file` would
 /// have, so decoding is unchanged.
-pub(super) fn load_texture(resolution: &ImageResolution) -> Option<gtk::gdk::Texture> {
+pub(super) fn load_texture(resolution: &ImageResolution, zoom: f64) -> Option<LoadedImage> {
     match resolution {
         ImageResolution::Local(path) => {
             // The same bound as the remote arm, by the one probe a PATH admits.
@@ -824,8 +832,9 @@ pub(super) fn load_texture(resolution: &ImageResolution) -> Option<gtk::gdk::Tex
             // re-opening a file already read and validated reintroduces a
             // check-then-use seam — does not apply here, because nothing has read this
             // file yet: `Texture::from_file` below opens it for the first time.
-            if let Some((_, w, h)) = gtk::gdk_pixbuf::Pixbuf::file_info(path) {
-                if !crate::limits::image_pixels_within_cap(w, h) {
+            let info = gtk::gdk_pixbuf::Pixbuf::file_info(path);
+            if let Some((_, w, h)) = &info {
+                if !crate::limits::image_pixels_within_cap(*w, *h) {
                     log::warn!(
                         "image {} decodes to {w}×{h} pixels (cap {}) — not loaded",
                         path.display(),
@@ -834,17 +843,123 @@ pub(super) fn load_texture(resolution: &ImageResolution) -> Option<gtk::gdk::Tex
                     return None;
                 }
             }
+            // A VECTOR source is re-rendered at the zoomed size instead of being
+            // enlarged from its natural-size raster. The same header probe already
+            // taken above answers both halves of the question — is it scalable, and
+            // what is its size at zoom 1.0 — so this costs no extra read.
+            if let Some((format, w, h)) = &info {
+                if format.is_scalable() {
+                    let intrinsic = super::image::Extent {
+                        w: (*w).max(1),
+                        h: (*h).max(1),
+                    };
+                    if let Some(texture) = rasterize_vector(path, intrinsic, zoom) {
+                        return Some(LoadedImage { texture, intrinsic });
+                    }
+                }
+            }
             let file = gtk::gio::File::for_path(path);
             match gtk::gdk::Texture::from_file(&file) {
-                Ok(texture) => Some(texture),
+                Ok(texture) => Some(LoadedImage::at_natural_size(texture)),
                 Err(err) => {
                     log::warn!("image not loaded: {} ({err})", path.display());
                     None
                 }
             }
         }
-        ImageResolution::Remote(uri) => load_remote_texture(uri),
+        ImageResolution::Remote(uri) => load_remote_texture(uri).map(LoadedImage::at_natural_size),
         ImageResolution::Refused | ImageResolution::Missing => None,
+    }
+}
+
+/// A loaded image, plus the size it occupies **at zoom 1.0**.
+///
+/// The second member exists because those two facts stopped being the same one. For a
+/// raster source the texture's own dimensions are the design-time size, as they always
+/// were; for a vector source re-rendered for zoom the texture is already `zoom×` larger,
+/// so reading the size back off it and scaling again would compound the factor — a
+/// 3× render laid out at 9×. The renderer needs the size at zoom 1.0 and the loader is
+/// the only party that still knows it.
+pub(super) struct LoadedImage {
+    pub(super) texture: gtk::gdk::Texture,
+    pub(super) intrinsic: super::image::Extent,
+}
+
+impl LoadedImage {
+    /// For every source whose texture IS its design-time size — i.e. everything except a
+    /// re-rendered vector.
+    fn at_natural_size(texture: gtk::gdk::Texture) -> Self {
+        let intrinsic = super::image::Extent {
+            w: texture.width().max(1),
+            h: texture.height().max(1),
+        };
+        Self { texture, intrinsic }
+    }
+}
+
+/// Rasterise a vector image at `zoom`, or `None` to fall back to the ordinary path.
+///
+/// **MEASURED, not assumed** (`probes/svg-rasterise-rs`, librsvg 2.52.5 / gdk-pixbuf
+/// 2.42.8): `gdk_pixbuf_new_from_file_at_scale` hands the requested size to librsvg's
+/// pixbuf loader, which RE-RENDERS the document at it rather than resampling a
+/// natural-size raster — the anti-aliased fringe of a 3× render measures 4.7‰ of its
+/// pixels against 19.2‰ for a bilinear upscale of the same drawing, which is the ~3×
+/// ratio a stretched 1px edge predicts.
+///
+/// **Why `Texture::from_file` cannot do this.** GTK 4.6 decodes only PNG/JPEG/TIFF
+/// itself and falls through to `gdk_pixbuf_new_from_stream` for everything else, which
+/// passes the loader a **no-op size callback** — so a scalable source is asked for its
+/// natural size and the caller is given no way to say otherwise (researcher-sourced,
+/// gdk-pixbuf-io.c). The size has to be an input to the decode, and this is the entry
+/// point that takes one.
+///
+/// And a correctly-sized texture is the only route to a sharp result at this floor: GSK
+/// 4.6 sets no cairo filter at all on a texture node, so an enlargement gets cairo's
+/// default `FILTER_GOOD` (bilinear quality) whatever the renderer, and
+/// `gtk_snapshot_append_scaled_texture` does not exist until 4.10 (cf. `sprite.rs`,
+/// which pre-resamples for the same reason).
+///
+/// **The target size is where the pixel bound has to be applied for a vector source,
+/// and this is a NEW exposure the re-render introduces.** A `viewBox="0 0 24 24"`
+/// document probes as 576 pixels and passes any cap trivially, then gets asked for a
+/// raster nine times larger than the layout — natural size bounds nothing here.
+/// [`super::image::cap_raster`] is therefore applied to the TARGET, before the decode.
+///
+/// One axis is passed and the other left `-1`: with `preserve_aspect_ratio` the loader
+/// derives the second itself, which removes any chance of this function's own rounding
+/// deciding which axis binds. That is the whole reason — passing both axes is NOT a
+/// letterbox hazard here, measured identically on three hosts by three seats; the
+/// letterboxing librsvg really does perform belongs to `preserve_aspect_ratio = false`,
+/// which this never passes.
+///
+/// Returns `None` at zoom 1.0 — there is nothing to gain from a second decode at the
+/// size `Texture::from_file` produces anyway — and on any loader failure, so an SVG the
+/// scaled loader cannot handle still renders by the ordinary route rather than becoming
+/// a broken-image placeholder. **A host with no SVG loader at all is that same path**:
+/// `from_file` then fails too and the reader gets the usual placeholder, exactly as it
+/// would have before this existed.
+fn rasterize_vector(
+    path: &std::path::Path,
+    intrinsic: super::image::Extent,
+    zoom: f64,
+) -> Option<gtk::gdk::Texture> {
+    let zoomed = super::image::zoomed_extent(intrinsic.w, intrinsic.h, zoom);
+    if zoomed == intrinsic {
+        return None;
+    }
+    let target = super::image::cap_raster(zoomed);
+    match gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(path, target.w, -1, true) {
+        Ok(pixbuf) => Some(gtk::gdk::Texture::for_pixbuf(&pixbuf)),
+        Err(err) => {
+            // Not a user-visible failure: the caller falls back to the natural-size
+            // decode, so the image still appears — just not re-rendered for zoom.
+            log::debug!(
+                "vector image {} not re-rendered at {}px wide ({err}) — using its natural size",
+                path.display(),
+                target.w
+            );
+            None
+        }
     }
 }
 
@@ -862,6 +977,15 @@ pub(super) fn load_texture(resolution: &ImageResolution) -> Option<gtk::gdk::Tex
 /// below for every remote image in the document, freezing the UI each time.
 /// `imagecache::get_or_fetch` calls this closure only on an outright cache miss;
 /// a hit or a live cached failure returns with no network access at all.
+///
+/// **A remote VECTOR image is deliberately NOT re-rendered for zoom**, though a local one
+/// is ([`rasterize_vector`]), so it softens as it grows where a local SVG stays sharp.
+/// The asymmetry is the cache's doing rather than an oversight: it is keyed by URL and
+/// stores decoded textures, so making the target size part of the key turns every zoom
+/// step into a cache miss — and a miss here is a synchronous network fetch on the main
+/// thread. Trading a soft image for a per-zoom-step network round trip, on a path the
+/// reader has to opt into via "Show Unsafe Images", is the worse bargain. Revisit only
+/// with a size-aware cache that still fetches once (TDD 13.11).
 fn load_remote_texture(uri: &str) -> Option<gtk::gdk::Texture> {
     crate::imagecache::get_or_fetch(uri, || {
         let bytes = match crate::imagefetch::fetch_image_bytes(uri) {

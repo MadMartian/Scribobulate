@@ -207,6 +207,11 @@ exclude tests/fixtures/encoding/
 # must depend on the commit, not on what the developer happened to build — and it changes
 # no scan set on a clean checkout, where the directory does not exist.
 exclude probes/binding-shape-rs/target/
+# The second nested probe crate, same rule and same reason. A per-crate line rather than
+# a `probes/*/target/` pattern because these are literal path PREFIXES, not globs — a
+# pattern language would be a second thing to get right in a file whose whole value is
+# that it says exactly what it means.
+exclude probes/svg-rasterise-rs/target/
 # The gate's own build tree, for the same reason: `xtask/target/` does not begin with
 # `target/` either, and `cargo` puts a workspace member's artefacts in the shared root
 # `target/` only while it IS a member — a stray build with `--manifest-path` does not.

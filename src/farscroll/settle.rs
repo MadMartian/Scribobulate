@@ -304,13 +304,32 @@ mod gtk_integration_tests {
     /// has `upper == page_size`, so every write to it clamps back to zero and emits
     /// nothing — which would make the disarm test's own precondition unsatisfiable while
     /// looking like a defect in the code under test.
+    ///
+    /// **And the view is hosted in a `ScrolledWindow`, which is not decoration — it is
+    /// what BOUNDS `page_size`.** A bare `GtkTextView` in a `GtkWindow` is eventually
+    /// allocated its full natural height, so `page_size` grows until it equals `upper`,
+    /// the range collapses to zero, and `gtk_adjustment_sanitize_value`'s
+    /// `CLAMP (value, lower, upper - page_size)` becomes `CLAMP (v, 0, 0)` — every write
+    /// silently becomes 0. The wait below is then satisfied only TRANSIENTLY: it samples a
+    /// mid-layout `page_size` that has not finished growing.
+    ///
+    /// **MEASURED, and it cost an investigation.** On macOS the collapse lands inside the
+    /// settle's own window: bare gave 3 pass / 17 fail against 20 pass / 0 fail hosted,
+    /// interleaved under matched load. On Linux the bare geometry is stable from t=0
+    /// (alloc 400×2322, `page_size` 2322 against `upper` 7218) so it never failed here,
+    /// which is why a fixture defect looked like a platform defect for as long as it did —
+    /// and a single stale `page_size` sample, reported as "no clamp available to explain
+    /// it", sent three of us hunting a competing writer inside GTK that did not exist.
+    /// The scroller also makes the fixture match how the product actually hosts this view
+    /// (`preview::render`), which is the reason it should have been here from the start.
     fn presented_view() -> (gtk::TextView, gtk::Window, Rc<Cell<bool>>) {
         let view = gtk::TextView::new();
         let body: String = (0..400).map(|i| format!("line {i}\n")).collect();
         view.buffer().set_text(&body);
+        let scroller = gtk::ScrolledWindow::builder().child(&view).build();
         let window = gtk::Window::new();
         window.set_default_size(400, 300);
-        window.set_child(Some(&view));
+        window.set_child(Some(&scroller));
         window.present();
         until(
             Clock::Idle,
@@ -487,6 +506,86 @@ mod gtk_integration_tests {
             let ran = Rc::clone(&ran);
             move || ran.get()
         });
+        window.destroy();
+    }
+
+    /// **The fixture keeps a real scrollable range, and keeps it DURABLY.**
+    ///
+    /// A regression guard for the defect that made every other test in this module
+    /// unsound on one platform, and it is written as its own test because the failure it
+    /// catches is invisible from inside the others: they fail on a *precondition* and
+    /// read as defects in the code under test. The fixture used to put a bare
+    /// `GtkTextView` in a `GtkWindow`, which is eventually allocated its full natural
+    /// height — `page_size` grows to equal `upper`, the range collapses to zero, and
+    /// `gtk_adjustment_sanitize_value`'s `CLAMP (value, lower, upper - page_size)`
+    /// silently turns every write into 0.
+    ///
+    /// **The word that matters is DURABLY.** `presented_view` already waits for
+    /// `upper > page_size`, and that wait passed — on a transient mid-layout sample that
+    /// later resolved away. So this asserts the range twice: once where the wait leaves
+    /// it, and again after the loop has been given room to finish laying out. A guard
+    /// that only checked the first would have passed on the broken fixture, which is
+    /// exactly what the fixture's own wait did.
+    ///
+    /// MEASURED, macOS 15 / GTK 4.22.4 / Quartz, interleaved and order-balanced at
+    /// matched load, 20 trials per arm. **This guard**: 0/20 on the bare arrangement,
+    /// 20/20 hosted, failing with `upper 5614, page 5614, view height 5614`. **The settle
+    /// test it protects**: 1/20 bare, 20/20 hosted.
+    ///
+    /// Read those two rows together, because the difference is the argument for this test
+    /// existing at all: the guard is **deterministic** where the behaviour it protects is
+    /// **flaky**. A defect that shows up in one run in twenty is one a seat can dismiss as
+    /// noise — and nearly did. Pinning the *precondition* rather than the behaviour turns
+    /// the same defect into a result that cannot be argued with.
+    ///
+    /// ⚠ **MUTATION-TESTED, AND THIS GUARD IS INERT ON LINUX — it is live only where the
+    /// defect is.** Reverting the fixture to the bare arrangement and re-running it here
+    /// PASSES: measured `upper` 7218, `page_size` 2322, view height 2322, so a real range
+    /// of 4896 survives and there is nothing to catch. On Quartz the same arrangement is
+    /// allocated its full layout height and the range is permanently zero.
+    ///
+    /// **It is NOT the virtual screen clipping the window**, which is the obvious
+    /// explanation and was proposed as one. Tested at Xvfb screen heights of 1024, 7000
+    /// and 20000 px against a 7218 px document: the view is allocated **2322 px in all
+    /// three**, unchanged. So X11 is not truncating a window that would otherwise grow —
+    /// the view simply requests a natural height reflecting the layout validated so far,
+    /// and never asks for the whole document. That difference is what makes the bare
+    /// arrangement survivable here and fatal there, and it means the fixture defect is
+    /// genuinely platform-shaped rather than latent-everywhere-and-masked.
+    ///
+    /// Recorded rather than left to be rediscovered, because a guard that cannot fail on
+    /// the canonical platform is indistinguishable from one that is working, and the next
+    /// person to "simplify" this will run it on Linux and see green either way. This is
+    /// ScrAP-157's shape pointed the other way — there a Linux-era guard was inert on
+    /// macOS; here a macOS-found guard is inert on Linux.
+    #[gtktest::test]
+    fn the_fixture_has_a_scrollable_range_that_survives_layout() {
+        let (view, window, _valid) = presented_view();
+        let range_of = |view: &gtk::TextView| {
+            let a = view
+                .vadjustment()
+                .expect("the view has a vertical adjustment");
+            (a.upper(), a.page_size())
+        };
+        let (upper, page) = range_of(&view);
+        assert!(
+            upper > page && page > 0.0,
+            "the fixture must start with somewhere to scroll: upper {upper}, page {page}"
+        );
+        // Let the loop run well past the point the fixture's own wait was satisfied. The
+        // broken arrangement passed that wait and collapsed afterwards, so a guard that
+        // stopped there would have certified it. `|| false` pumps the whole deadline
+        // deliberately — there is no convergence to wait for here, the point is to give
+        // layout room to finish and then look again.
+        crate::testpump::until_or_for(Clock::Frame, Duration::from_millis(200), || false);
+        let (upper, page) = range_of(&view);
+        assert!(
+            upper > page && page > 0.0,
+            "the range collapsed after layout settled — a write to this adjustment now \
+             clamps to 0 and every settle test in this module is testing an arrangement \
+             the application never builds: upper {upper}, page {page}, view height {}",
+            view.height()
+        );
         window.destroy();
     }
 

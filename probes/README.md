@@ -84,8 +84,9 @@ cc probes/textbuffer-selection-leak.c   -o /tmp/textbuffer-selection-leak   $(pk
 cc probes/textview-primary-overwrite.c  -o /tmp/textview-primary-overwrite  $(pkg-config --cflags --libs gtk4)
 cc probes/textview-selection-clipboard.c -o /tmp/textview-selection-clipboard $(pkg-config --cflags --libs gtk4)
 
-# the Rust one builds and runs itself
+# the Rust ones build and run themselves
 cargo run --manifest-path probes/binding-shape-rs/Cargo.toml
+cargo run --manifest-path probes/svg-rasterise-rs/Cargo.toml
 ```
 
 A `GLib-WARNING **: poll(2) failed due to: Resource temporarily unavailable` on
@@ -877,3 +878,66 @@ PROBE_AUTO=86 /tmp/listview-scroll-snap flat 540    # no input needed
 
 Every line of output is `V value upper page` (value-changed) or `C …` (changed); a
 value equal to `upper - page` mid-gesture is the defect.
+
+---
+
+## `svg-rasterise-rs/`
+
+**Question:** the preview's zoom must enlarge a document image, and an SVG blown up
+from its natural-size raster goes soft exactly where it matters — the text drawn inside
+a diagram, which is what the reader zoomed in to read. `GdkTexture::from_file` offers no
+size control, so the candidate route is gdk-pixbuf's scaled loaders. But **"the loader
+accepted a size" and "the loader re-rendered at that size" are indistinguishable from
+the outside**, and only the second is worth building on. Which is it?
+
+**Answer: it re-renders — through both the file and the bytes route.** MEASURED
+2026-09-03 on the Linux reference host, gdk-pixbuf 2.42.8 / librsvg 2.52.5 / GTK 4.6.9.
+
+The discriminator is the **anti-aliased fringe**. A vector re-render at 3× draws a ~1px
+soft edge along each shape's perimeter; a bilinear upscale of a 1× raster stretches that
+same fringe to ~3px, so it carries roughly three times as many intermediate-luminance
+pixels for the same drawing. Counting them decides it without anyone looking at anything.
+
+| Route | Result at 3× | Fringe |
+|---|---|---|
+| `Pixbuf::from_file_at_scale` | 600×300 | **4.7‰** |
+| `Pixbuf::from_file` + `scale_simple(Bilinear)` (the control) | 600×300 | 19.2‰ |
+| `PixbufLoader::set_size` + `write` (the in-memory/remote shape) | 600×300 | **4.7‰** |
+
+Three further facts the same run establishes, each of which the design depends on:
+
+- **`PixbufFormat::is_scalable()` discriminates.** `svg` answers `true`, `png` answers
+  `false`, so `Pixbuf::file_info` — already called on this path for the pixel cap —
+  answers "may I re-render this?" with no extra read.
+- **A viewBox-only SVG has a natural size anyway.** With `width`/`height` deleted and
+  only `viewBox="0 0 200 100"` left, both `file_info` and `Texture::from_file` still
+  report 200×100, so "the size at zoom 1.0" is well defined for the shape most
+  hand-authored diagrams have.
+- **`Texture::from_file` gives the natural size and nothing else** — 200×100 in both
+  cases — which is precisely why the scaled loader is needed rather than a texture the
+  widget is simply asked to draw larger.
+
+**What it costs, which is the other reason to keep this rig.** Timing the same call on
+`sdd/system-overview.svg` (1000×1112) measures `file_info` under a millisecond,
+`from_file` at 230-239 ms, and `from_file_at_scale` at 3× at **227-294 ms** — the two
+decodes cost about the same, and both are expensive because librsvg parses and renders the
+whole document. The macOS seat measures roughly half those figures on Homebrew GTK 4.22.4. The application decodes per render with no cache, which is
+recorded in the debt register.
+
+**The letterbox hazard is `preserve_aspect_ratio = FALSE`, and only that.** Never pass it
+hoping to stretch: librsvg still honours the document's own `preserveAspectRatio`, so it
+paints the art inside the canvas you asked for and hands back transparent padding.
+
+⚠ Passing BOTH axes with `preserve_aspect_ratio` TRUE is **not** a hazard, contrary to what
+this file first said. The loader fits inside the box and returns the aspect-correct size —
+a square request against a 4:1 document comes back 512×128, not padded. Measured
+identically on three hosts (Linux/librsvg 2.52.5, macOS/Homebrew GTK 4.22.4,
+Windows/gvsbuild GTK 4.22.4) by three seats. The application still passes one axis and
+`-1`, for the smaller and true reason: no rounding of ours then decides which axis binds.
+
+**What it does not answer.** The probe measures *this host's* image stack. The SVG
+pixbuf loader is a separate package on Linux (`librsvg2-common`) and comes from a
+different build on Homebrew and gvsbuild, so its presence is a per-platform question for
+the seats, not something this rig can settle. The application treats a missing or failing
+loader as a fall-back to the natural-size decode, never as a broken image, so the worst
+case there is a soft enlargement rather than an absent one.

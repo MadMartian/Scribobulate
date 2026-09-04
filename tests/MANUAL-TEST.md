@@ -201,12 +201,26 @@ xdotool mouseup 1
 # Type:
 xdotool windowactivate --sync $WID type "text"
 
-# Key/chord — NEVER --window-target a key send (a popover/menu grab silently
-# swallows it); use the untargeted form so it reaches whatever holds the grab:
+# Key/chord — NEVER --window-target a key send; use the untargeted form:
 xdotool key ctrl+s
 ```
 Re-focus (`windowactivate --sync`) at the start of every input call — focus is
 not durable across separate shell invocations.
+
+⚠ **The `--window` ban is not only about popovers, and reading it that way is how you
+walk into it.** A grab holder swallowing the event is the *obvious* case; MEASURED
+2026-09-04, a targeted `xdotool key --window <id> ctrl+plus` sent six times to an
+ordinary toplevel with **no menu or popover open at all** delivered nothing — the
+application never zoomed. Re-sent untargeted after `windowactivate --sync`, the same six
+chords landed immediately.
+**What makes this expensive is the shape of the failure, not the lost keystrokes**: the
+run continued, the measurement completed, and it produced a *plausible number* — a
+footprint reading that appeared to show the feature under test costing almost nothing,
+because the feature had never been switched on. A no-op that yields a clean-looking
+result is worse than an error, and it was caught only because the number was suspiciously
+good. **After driving input, confirm the app actually changed state** — a pixel
+measurement, a screenshot, an action state — before trusting anything measured
+downstream of it.
 
 ### 1.6 Cleanup
 
@@ -214,6 +228,15 @@ not durable across separate shell invocations.
 kill <PID>          # never pkill by name — may kill the user's own instance
 ps -p <PID>          # confirm gone
 ```
+⚠ **Kill your own helper processes by NAME or PID, never by job spec.** Each agent shell
+invocation is a separate non-interactive shell, so `%1`/`%2` refer to a job table that did
+not survive from the invocation that started them: the `kill` silently no-ops and the
+helpers accumulate. MEASURED 2026-09-03 — a load generator (`yes > /dev/null &`) used to
+match load across an A/B run leaked **18 processes**, pegged the machine, and read from
+outside as the seat having hung. `pkill -x yes` cleared it. This is the mirror of the rule
+above: kill the app by PID because a name matches too much, and kill your own helpers by
+name because a job spec matches nothing.
+
 Never `pkill -f <pattern>`: it matches full command lines including the invoking
 shell's own argv, so a multi-line call whose later lines mention the pattern kills
 itself (GTK4-Rs skill, "self-kill hazard"). In a shared single-instance session with
@@ -562,6 +585,7 @@ fixture, and keep it checked in.
 - `image-test.md` — inline image rendering (small + wide)
 - `logo.png` — small (220px) local image asset referenced by `image-test.md`
 - `wide.png` — 1600px-wide image for the fit-to-viewport check (2.21)
+- `diagram.svg` — 240px VECTOR image with text in it, for the zoom-scaling and sharpness check (13.11). Deliberately small: it must be able to grow several ladder steps before it meets the pane clamp, or the check cannot tell "does not scale" from "scaled and then clamped"
 - `themes.md` — every surface a reading theme must reach, in one document (§18)
 - `checkbox-test.md` — task-list checkboxes (checked/unchecked) beside a plain list, for the drawn-gutter marker and the interactive toggle
 - `doc-links.md` — one link per §19 case: in-folder siblings (incl. two spellings of one path), `#fragment` links that hit and miss, a `..` traversal, a symlink escaping the folder, a `~/` path, a non-Markdown target, an explicit `file://`, a missing target, and https/mailto controls. (The colon-in-filename case, §19.7a, has no fixture here — a colon-named file is invalid on Windows and would break checkout (ScrAP-164); it is unit-tested cross-platform in `links::scheme_of`.)
@@ -657,7 +681,7 @@ gtk4-rs skill's dev-loop doc on why geometry/rendering bugs leave no warning.
 - [ ] **2.4b** Open `checkbox-test.md` (or `lists.md`) in Preview or Split → click a task checkbox, **including near its LEFT edge**: it toggles `[ ]`↔`[x]`, the tab goes dirty ("Unsaved changes"), a second click reverts, and **Ctrl+Z** undoes exactly the toggle with the caret unmoved. Hovering a checkbox shows a pointer cursor + accent border; bullets/numbers are NOT interactive. (Regression guard for the GtkPaned wide-handle edge-click fix, GTK4Rs/AP-93 — reproduces on bare Xvfb.)
 - [ ] **2.5** Open `image-test.md` → image loads relative to doc dir, not CWD; alt text hidden when image shown
 - [ ] **2.5c** **A filename with a space survives the round trip** (TDD 2.5). Put an image named `A file.svg` beside a document. In **Edit** mode use **Format ▸ Insert Image… (Ctrl+Alt+I) ▸ Browse** and pick it → the URL field must read `A%20file.svg`, **encoded** — a raw space there is the defect, and it is silent until you look at the preview. Insert, switch to Preview → the image **renders**; a broken-image placeholder means the write and read halves disagree. Then hand-type `![x](A file.svg)` → it stays **literal text**, which is correct (a raw space ends a Markdown destination) and is deliberate, not a second bug to file. Finally re-open **Edit Image** on the inserted one → the URL field shows the encoded form unchanged, and re-inserting does not double-encode it (`A%2520file.svg` is the failure)
-- [ ] **2.21** In `image-test.md`, toggle Split (Alt+2) or narrow the pane below the image width → the 1600px `wide.png` scales down to fit the pane (no blank, no h-scrollbar) and re-fits on resize; the 220px `logo.png` stays 220px, left-aligned (not stretched)
+- [ ] **2.21** In `image-test.md`, toggle Split (Alt+2) or narrow the pane below the image width → the 1600px `wide.png` scales down to fit the pane (no blank, no h-scrollbar) and re-fits on resize; the 220px `logo.png` stays 220px, left-aligned (not stretched). The no-scrollbar guarantee is about the **default view**: check it at 100%, where it must hold absolutely. Above 100% the fit is scaled rather than re-applied (13.11), so a horizontal scrollbar there is correct behaviour and is checked by 13.11a
 - [ ] **2.12** Link inside a blockquote → opens in browser (not inert styled text)
 - [ ] **2.6** Click an external link in body text → opens in system browser, preview pane doesn't navigate away. **With the browser ALREADY RUNNING and Scribobulate focused**, its window must **raise to the front** — a tab opening silently *behind* Scribobulate is a FAIL (tokenless launch, GTK4Rs/AP-99) and is indistinguishable from "the link did nothing"
 - [ ] **1.11** **A copy puts plain text on the clipboard, not a rich buffer.** In the editor, select a few lines of a document that has *visible syntax highlighting* (a fenced code block is easiest), copy, then paste into a **plain-text** editor outside Scribobulate → you get the Markdown source. Paste it back into a Scribobulate document → it inserts as ordinary text and **one** Ctrl+Z removes the whole paste. Now cut a selection → the text is removed AND on the clipboard, and **one** Ctrl+Z restores the document exactly as it was (a cut that needs two undos is a FAIL — the deletion has escaped its undo group). Then the negative control that matters: open `tests/fixtures/crlf-doc.md`, select all, copy, paste into a new document → the `\r\n` endings must survive **byte for byte**. Pre-change this was the corruption route (ScrAP-312). *Linux/X11 only*: select text in the editor without copying, then **middle-click** in another application → your selection pastes there; now click once in Scribobulate to clear the selection and middle-click in that other application again → it pastes whatever it held before, NOT an empty string (Scribobulate must release PRIMARY, not claim it for nothing). Repeat the middle-click paste *into* Scribobulate from another app → it inserts as plain text. (TDD 1.11)
@@ -912,6 +936,8 @@ gtk4-rs skill's dev-loop doc on why geometry/rendering bugs leave no warning.
 - [ ] **13.6** Set non-default zoom, quit, relaunch → zoom restored
 - [ ] **13.7** Scroll partway, change zoom → viewport stays at ~same relative position, not top; **repeated fast** zoom steps (and a zoom right after scrolling) hold position too — no cumulative upward drift (ScrAP-65)
 - [ ] **13.10** Change zoom in preview, then switch to edit/split → the editor scrolls normally (mouse wheel + PageUp/PageDown + caret nav), never input-frozen (ScrAP-65)
+- [ ] **13.11** **Images scale with zoom, and a vector one stays sharp** (TDD 13.11; **Document Rendering CAM row 13**). Open `image-test.md` in Preview. At 100% measure `diagram.svg` on screen (it renders at its natural 240×120). Ctrl++ four times to 200% → it is **480×240**, i.e. it grew with the prose around it rather than sitting still; `logo.png` doubles too, and so does the **broken-image placeholder** the traversal line renders. Ctrl+0 → back to 240×120. ⚠️ **Read the TEXT inside the diagram, not its outline** — the whole report behind this was that a diagram's *lettering* stayed unreadable however far the reader zoomed, and an image that scales while going soft has only half-fixed it: at 200% the three lines of text inside `diagram.svg` must be crisply drawn, not a blurred enlargement of the 100% render. The mechanism is a re-render through librsvg at the zoomed size (`probes/svg-rasterise-rs` measures that the loader really does re-render rather than resample), so the discriminating comparison is the on-screen 200% capture against the 100% capture scaled up 2× in an image editor — the app's must be visibly sharper. A raster image (`logo.png`, `wide.png`) is expected to soften as it grows; that is a raster, and there is nothing to re-render.
+- [ ] **13.11a** **A zoomed image grows past the column, and the pane survives it** (TDD 13.11 / 2.21). Same document. At **100%** `wide.png` is fitted to the pane and there is **no horizontal scrollbar** — that is the guarantee, and it is checked here first because everything after it depends on the default view being unchanged. Now zoom to **300%**: `wide.png` is drawn about three times the fitted width, the preview offers a **horizontal scrollbar**, and scrolling right reaches the rest of it. That scrollbar is the designed cost of the feature, and it is the reason a reader can finally enlarge a diagram that filled the pane to begin with. ⚠️ **This deliberately creates an anchored child wider than the content column, which is ScrAP-23's shape, so the thing to watch is the PANE and not the image.** Step the whole ladder one notch at a time rather than jumping to the end, then resize the window through several widths at 300% (both narrower and wider, including narrower than the image) — at no point may the preview go empty, and it must never go empty *and stay* empty until a resize, which is the signature failure. Read the console for `Gtk-CRITICAL` and for `snapshot … without a current allocation`. MEASURED clean under Xvfb on GTK 4.6.9 across nine ladder steps and an eight-width sweep; Xvfb has no compositor or window manager, so the macOS and Windows seats owe this check on their own GTK before it is trusted
 
 ### §14 Show Unsafe Images
 - [ ] **14.1** Open `remote-image.md` with toggle OFF (default) → broken-image placeholder, no alt text shown
@@ -1815,6 +1841,74 @@ that token literally.
 **1. Session prerequisites.** A real, unlocked desktop session — there is no
 headless equivalent of Xvfb here, so every item runs against the live machine.
 
+**A DENIED CAPTURE AND A LOCKED SCREEN LOOK IDENTICAL, AND THE REMEDIES ARE OPPOSITE.**
+`screencapture -x` failing with `could not create image from display`, and System Events
+refusing every call — including a bare `count of processes` — mean **two specific TCC
+privacy grants are missing**: Screen Recording and Automation. A locked or sleeping screen
+produces the same two failures.
+
+⚠ **Being local to the machine does not imply either grant, and neither does being able to
+launch a window.** An earlier version of this section blamed SSH, and that was wrong: a
+shell whose SSH connection terminates on the Mac itself has working window-server access —
+`lsappinfo list` enumerates every running app, and an application launched from it
+registers as `Foreground` with a real window. GUI reach and the TCC grants are independent,
+which is exactly why the two failures coexist with a perfectly healthy application and read
+as a broken one. Prove GUI reach first (a nonzero `lsappinfo` count), then treat the
+capture failure and the Automation refusal as two separate missing grants.
+
+Separate them **before** concluding anything about the
+app:
+
+```sh
+ioreg -n Root -d1 | grep -c CGSSessionScreenIsLocked   # 1 = locked, 0 = not locked
+osascript -e 'return 1+1'                              # 2 = osascript itself is fine
+lsappinfo list | grep -A2 scribobulate                 # Foreground + a real window = the app is healthy
+```
+
+A `0` from the first with a `2` from the second means the session is unlocked and the
+scripting bridge works, so what you are looking at is a **missing TCC grant** — not the
+screen, and not the app.
+
+⚠ **READ THE System Events ERROR CODE, because one of the two is ambiguous and it is the
+one you meet first.** Both appear for the same denial, and they were observed changing
+from one to the other within a single session:
+
+| Code | Means | Do |
+|---|---|---|
+| `-1743` *"Not authorized to send Apple events"* | The Automation grant is absent or refused. Unambiguous. | Stop. It needs the console; nothing you run here will change it |
+| `-1712` *"AppleEvent timed out"* | **Inconclusive.** This is also what a pending or unanswered authorisation prompt produces | Re-run once before concluding anything |
+
+`-1712` reads as a wedged System Events, which sends you to `killall "System Events"` and
+wastes the trip.
+
+⚠ **AND CHECK THE AGE OF THE PROCESS THAT OWNS YOUR SHELL BEFORE REPORTING A GRANT AS
+FAILED.** TCC decisions are cached for the lifetime of the *responsible* process, so a grant
+made after that process started has no effect on it until it is restarted. A seat running
+under a long-lived `tmux` server will see the identical denial after the operator has
+correctly granted the permission, and will wrongly conclude the grant did not work. MEASURED
+2026-09-04: a grant appeared to fail against a `tmux` server that had been running for two
+days. Walk the ancestry (`ps -o ppid=,lstart=,command= -p <pid>`, up the chain) and compare
+its start time against when the grant was made; if the owning process predates the grant,
+the session must be restarted before any retry means anything. Check too that the grant
+landed on the binary that owns the shell rather than on a client-side terminal application
+on another machine. Do not treat a timeout as a denial until you have seen it twice or seen
+`-1743`. `caffeinate -u` will not fix it and neither will unlocking; the
+grant has to be given on the console to the process that owns the session (the terminal,
+or `sshd` for an SSH one). **Until it is, every driven item in this section is
+UNVERIFIABLE and is reported as `unverified`** — never skipped, never inferred from the
+unit tests, and never recorded as a pass. MEASURED 2026-09-03: a seat lost a whole
+checklist pass to this, and it was `lsappinfo` showing the app `Foreground` with a real
+window that established the app was healthy and the session was not.
+
+**Check for a stale primary BEFORE launching, not after.** A previously installed
+`scribobulate` earlier on PATH becomes the single-instance primary, so a launch of your
+build forwards its argument to it and exits — which looks exactly like an instant crash,
+and the PATH warning is printed by the instance that *wins*, so the seat that needs it
+never sees it. `pgrep -x scribobulate` before you start, and `which -a scribobulate`.
+⚠ **`pgrep -x`, never `pgrep -f`** — `-f` matches the whole command line of every process
+including the shell running the `pgrep` itself, so it returns that shell and every later
+window lookup finds nothing (§1.2 carries the same warning for the same reason).
+
 **Install `cliclick` first (Homebrew) — it is a requirement, not a preference.**
 Raw `osascript`/System Events does post real clicks, but it has **no
 move-without-click primitive**, so calibration would degrade into
@@ -1859,13 +1953,22 @@ Then two countermeasures, which are **continuous, not one-time setup**:
   success and changes nothing. The reassert-frontmost rule above is stated for clicks;
   it applies identically here, for the same reason and with a worse failure mode, since
   there is no cursor to photograph. Assert frontmost on the target pid first.
-- **Then READ THE GEOMETRY BACK and confirm it actually changed before trusting any
-  measurement taken against it.** This is the check that catches both faults above, and
-  it is not optional bookkeeping: an action that reports success and does nothing leaves
-  the window at its old size, so a sweep "across window areas" silently measures one
-  area several times — and invariance is usually the very thing such a sweep is trying
-  to establish. The window also has a **minimum width** it will not go below, so a
-  requested size is not an achieved size even when everything is bound correctly.
+- ⚠ **RESIZE BY DRAGGING A CORNER, NOT BY WRITING GEOMETRY — and confirm it in PIXELS,
+  never by reading the geometry back.** MEASURED 2026-09-04 on GTK 4.22.4/Quartz:
+  AppleScript `set size of window 1` did not resize the window in **8 of 8** attempts with
+  frontmost correctly asserted on the pid each time. `cliclick` on the bottom-right corner
+  (`dd:` / `m:` / `m:` / `du:`) resizes reliably, and AX then reports the new size
+  truthfully.
+  **The read-back this paragraph used to prescribe is itself unreliable, which is the
+  worse half of the finding.** On several of those attempts AX returned the size that had
+  been *requested* — 1720×752 read back while the pixels showed 1322 — and on others it
+  honestly returned the old one. So the documented confirmation would have certified a
+  sweep that never resized anything: an action that silently does nothing, verified by a
+  check that silently agrees with it. Take the measurement off a **screenshot**.
+  A window also has a **minimum width** it will not go below (~1322 pt on the reference
+  Mac), so a requested size is not an achieved size even when everything is bound
+  correctly. Where the target width is unreachable, say so and reason about what the check
+  still covers rather than reporting the sweep as performed.
 - **Screenshot** — `screencapture -R<x>,<y>,<w>,<h>` for a window crop, `-C` to draw
   the cursor in. The image is in **pixels**; positions and clicks are in **points**.
   Every coordinate derived from a screenshot must be divided by the display's scale

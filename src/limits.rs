@@ -146,6 +146,37 @@ pub(crate) const MAX_REMOTE_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 /// needs raising.
 pub(crate) const MAX_IMAGE_PIXELS: i64 = 8192 * 8192;
 
+/// The largest raster the renderer will produce when it re-rasterises a VECTOR image
+/// for zoom, in pixels.
+///
+/// **A different question from [`MAX_IMAGE_PIXELS`], which is why it is a different
+/// number.** That cap refuses a hostile *input*; this one bounds an allocation the
+/// application chooses to make on the user's behalf. An SVG rasterised at 3× costs nine
+/// times the pixels of the same file at 1× — `sdd/system-overview.svg` (1000×1112) reaches
+/// 10.0 M pixels ≈ 40 MB of ARGB32 at the top of the ladder, against a whole-application
+/// baseline TECH.md measures at ~80 MiB for a document. Half the application's footprint
+/// for one diagram is not a trade worth making silently.
+///
+/// **6 M pixels.** Chosen against the same yardstick as the image cache's own 32 MiB
+/// budget, and one step below it: a single image may not cost more than the entire
+/// remote-image cache is allowed to hold. It bounds SHARPNESS, never layout — an image
+/// whose zoomed size exceeds this is still *drawn* at the size zoom asks for, from a
+/// raster capped here, so the reader sees a slightly soft diagram rather than a small one
+/// (TDD 13.11). At this budget the reference diagram re-rasterises at ~2.4× before the cap
+/// binds, which is far past the point where the text inside it becomes readable.
+///
+/// **What it actually costs is ~3× the arithmetic**, and the figure is measured rather
+/// than derived. 6 M pixels is 24 MB of ARGB32 and the obvious estimate stops there; a
+/// process holding `sdd/system-overview.svg` grows **+74 MB** across the ladder to 300%.
+/// The control says that is the re-render and not zoom in general: the same document with
+/// a *raster* image of identical natural size grows +9 MB over the same steps. The gap is
+/// the pixbuf and the texture copied from it both being live, plus the scaled surface GSK
+/// caches. RSS is bounded rather than leaked — repeated ladder sweeps settle back below
+/// the peak — and none of it is VRAM, since the Cairo renderer this project forces holds
+/// no GPU memory (TDD §6). Re-measure rather than re-reason if this needs changing, and
+/// measure RSS on a real document rather than multiplying pixels by four.
+pub(crate) const MAX_VECTOR_RASTER_PIXELS: i64 = 6 * 1024 * 1024;
+
 /// Is an image of `width`×`height` within [`MAX_IMAGE_PIXELS`]?
 ///
 /// The arithmetic, separated from the two GTK probes that supply the dimensions, so the

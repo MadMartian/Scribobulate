@@ -47,7 +47,7 @@ pub(crate) mod disclosure;
 mod emit;
 mod end;
 mod events;
-mod image;
+pub(crate) mod image;
 mod normalize;
 pub(crate) mod picture;
 pub(crate) mod rawhtml;

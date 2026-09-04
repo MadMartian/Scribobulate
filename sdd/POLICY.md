@@ -1180,15 +1180,36 @@ landed; the rules for adding to it are here.
   ceiling of the binding, not of effort — gtk4-rs #819 records it, and no ecosystem
   binding has cleared it except Qt, whose meta-object system solves it structurally
   rather than by types.
-  **One of those rejections has since been partly overturned, and the way it fell is
-  the reusable part.** ScrAP-13's "no principled *authoritative now* signal exists" is
-  now false for one subset — `GtkTextView` line-height validation — because the toolkit
-  schedules its own deferred work at a *published priority*, so a source below that
-  priority is a precise "it has finished" event (`farscroll::after_line_heights_validated`).
-  Adjustment settling in general remains rejected; only this subset moved. The general
-  lesson for a future assessment: before recording a runtime invariant as unreachable,
-  check whether the toolkit's own deferred work sits at a priority you can order against
-  — the main loop is an observable the type system is not.
+  **One of those rejections was partly overturned, and has since been partly re-instated.
+  The way it fell BOTH times is the reusable part.** ScrAP-13's "no principled
+  *authoritative now* signal exists" was recorded as false for one subset — `GtkTextView`
+  line-height validation — because the toolkit schedules its own deferred work at a
+  *published priority*, so a source below that priority runs only after the validation
+  idle has drained (`farscroll::after_line_heights_validated`). **That much still holds and
+  is measured**: a priority-200 source installed first, racing a self-rearming
+  priority-125 validation idle, was preempted in 0 of 200 trials.
+  ⚠ **What does NOT hold is the inference that used to be attached to it.** "The
+  validation idle has drained" is not "line-height validation has finished", on any
+  backend, for two reasons: validation also runs SYNCHRONOUSLY outside those idles
+  (`gtk_text_layout_validate_yrange` is called from `gtk_text_view_allocate_children`
+  inside `size_allocate`, from `flush_scroll`, and from `validate_onscreen`), and
+  `size_allocate` is frame-clock paced, so draining today's idles says nothing about a
+  validation a future layout pass will perform. So the oracle is precise about the
+  **idle**, never about **finality** — and code that read it as finality was reading a
+  guarantee it does not carry.
+  Adjustment settling in general remains rejected, and is now corroborated rather than
+  merely asserted: the compensating write comes from `changed_handler`, a `::changed`
+  signal handler at no priority at all, so there is nothing to order against.
+  The general lesson, and it survived being wrong once: before recording a runtime
+  invariant as unreachable, check whether the toolkit's own deferred work sits at a
+  priority you can order against — the main loop is an observable the type system is not.
+  **And then check what the ordering entitles you to conclude**, because a sound
+  ordering claim with an unsound inference bolted to it reads exactly like a sound one.
+  ⚠ **No defect in this tree is known to arise from that gap**, and the investigation that
+  exposed it turned out to be chasing something else entirely (a test fixture whose
+  adjustment range collapsed). It is recorded because the claim as written was inaccurate,
+  not because anything is currently broken by it — so do not go hardening code against it
+  without a reproduction.
 
 ## Change accountability matrices (CAM)
 
@@ -1454,9 +1475,15 @@ reports only "test exited abnormally".
 **macOS CANNOT carry it, and this is settled rather than pending.** Its suite emits
 `gdk_surface_thaw_updates: assertion 'surface->update_freeze_count > 0' failed` — nine
 occurrences across eight tests, every one opening or dismissing a popover or annotation
-card. The cause is upstream in GDK's macOS backend (one freeze per surface *construction*,
-one thaw per *map*, and `gdk_macos_surface_hide` never freezes, so the second map thaws at
-zero), it is present from 4.22.4 through `main`, and `gdk_surface_freeze_updates` /
+card. The cause is upstream in GDK's macOS backend — **and the mechanism first recorded here was
+wrong, so do not reason from the old one.** It is not "one freeze per construction, one
+thaw per map, and `hide` never freezes": `gdk_macos_surface_hide` calls
+`_gdk_macos_surface_cancel_frame`, which **thaws** (source-verified). The real shape is a
+race — `_gdk_macos_surface_frame_presented` clears `awaiting_frame` unconditionally but
+thaws only `if (GDK_SURFACE_IS_MAPPED)`, while hide clears the mapped state through a
+DEFERRED idle, and the other thaw path early-returns on `!awaiting_frame`, so the freeze
+leaks unrecoverably. It is present from 4.22.4 through `main`, and
+`gdk_surface_freeze_updates` /
 `thaw_updates` are private and absent from the `gdk4` bindings, so **no application-side
 fix exists**.
 
