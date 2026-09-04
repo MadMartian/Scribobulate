@@ -23,7 +23,20 @@ models), and live-reloads files the instant an agent changes them on disk.
 > survive the application dying: they are snapshotted as you type and offered back
 > on the next launch.
 
-## Annotate the document, in the document
+## What it does
+
+Scribobulate is built for working alongside AI agents that rewrite Markdown
+continuously: it watches the open file and re-renders automatically the moment an
+agent changes it, so the plans, notes, and reports your agents produce are always
+shown up to date. It displays your Markdown the way you expect — headings,
+tables, syntax-highlighted code, task lists, and images — in a fast native GTK
+window, with an optional editing pane and live preview. When a file changes
+underneath unsaved edits, Scribobulate asks you what to do instead of silently
+discarding your work — and if the application itself dies, your unsaved work is
+waiting for you when you reopen it. And when the agent's prose needs an argument
+rather than an edit, you comment on it in place.
+
+### Annotate the document, in the document
 
 Reviewing what an agent wrote used to mean copying a paragraph into a chat window and
 explaining where it came from. Here you select the claim, leave a comment, and the comment
@@ -37,18 +50,6 @@ tool: the review travels with the document, through Git, into the HTML and PDF y
 
 I have not found another Markdown editor that does this, and it is the feature I reach for
 most when working with an agent.
-
-## What it does
-
-Scribobulate is built for working alongside AI agents that rewrite Markdown
-continuously: it watches the open file and re-renders automatically the moment an
-agent changes it, so the plans, notes, and reports your agents produce are always
-shown up to date. It displays your Markdown the way you expect — headings,
-tables, syntax-highlighted code, task lists, and images — in a fast native GTK
-window, with an optional editing pane and live preview. When a file changes
-underneath unsaved edits, Scribobulate asks you what to do instead of silently
-discarding your work — and if the application itself dies, your unsaved work is
-waiting for you when you reopen it.
 
 > *One thing we're both very proud of is using Scribobulate to improve Scribobulate!*
 > -- *MadMartian*
