@@ -201,12 +201,26 @@ xdotool mouseup 1
 # Type:
 xdotool windowactivate --sync $WID type "text"
 
-# Key/chord — NEVER --window-target a key send (a popover/menu grab silently
-# swallows it); use the untargeted form so it reaches whatever holds the grab:
+# Key/chord — NEVER --window-target a key send; use the untargeted form:
 xdotool key ctrl+s
 ```
 Re-focus (`windowactivate --sync`) at the start of every input call — focus is
 not durable across separate shell invocations.
+
+⚠ **The `--window` ban is not only about popovers, and reading it that way is how you
+walk into it.** A grab holder swallowing the event is the *obvious* case; MEASURED
+2026-09-04, a targeted `xdotool key --window <id> ctrl+plus` sent six times to an
+ordinary toplevel with **no menu or popover open at all** delivered nothing — the
+application never zoomed. Re-sent untargeted after `windowactivate --sync`, the same six
+chords landed immediately.
+**What makes this expensive is the shape of the failure, not the lost keystrokes**: the
+run continued, the measurement completed, and it produced a *plausible number* — a
+footprint reading that appeared to show the feature under test costing almost nothing,
+because the feature had never been switched on. A no-op that yields a clean-looking
+result is worse than an error, and it was caught only because the number was suspiciously
+good. **After driving input, confirm the app actually changed state** — a pixel
+measurement, a screenshot, an action state — before trusting anything measured
+downstream of it.
 
 ### 1.6 Cleanup
 
@@ -214,6 +228,15 @@ not durable across separate shell invocations.
 kill <PID>          # never pkill by name — may kill the user's own instance
 ps -p <PID>          # confirm gone
 ```
+⚠ **Kill your own helper processes by NAME or PID, never by job spec.** Each agent shell
+invocation is a separate non-interactive shell, so `%1`/`%2` refer to a job table that did
+not survive from the invocation that started them: the `kill` silently no-ops and the
+helpers accumulate. MEASURED 2026-09-03 — a load generator (`yes > /dev/null &`) used to
+match load across an A/B run leaked **18 processes**, pegged the machine, and read from
+outside as the seat having hung. `pkill -x yes` cleared it. This is the mirror of the rule
+above: kill the app by PID because a name matches too much, and kill your own helpers by
+name because a job spec matches nothing.
+
 Never `pkill -f <pattern>`: it matches full command lines including the invoking
 shell's own argv, so a multi-line call whose later lines mention the pattern kills
 itself (GTK4-Rs skill, "self-kill hazard"). In a shared single-instance session with
@@ -1818,6 +1841,74 @@ that token literally.
 **1. Session prerequisites.** A real, unlocked desktop session — there is no
 headless equivalent of Xvfb here, so every item runs against the live machine.
 
+**A DENIED CAPTURE AND A LOCKED SCREEN LOOK IDENTICAL, AND THE REMEDIES ARE OPPOSITE.**
+`screencapture -x` failing with `could not create image from display`, and System Events
+refusing every call — including a bare `count of processes` — mean **two specific TCC
+privacy grants are missing**: Screen Recording and Automation. A locked or sleeping screen
+produces the same two failures.
+
+⚠ **Being local to the machine does not imply either grant, and neither does being able to
+launch a window.** An earlier version of this section blamed SSH, and that was wrong: a
+shell whose SSH connection terminates on the Mac itself has working window-server access —
+`lsappinfo list` enumerates every running app, and an application launched from it
+registers as `Foreground` with a real window. GUI reach and the TCC grants are independent,
+which is exactly why the two failures coexist with a perfectly healthy application and read
+as a broken one. Prove GUI reach first (a nonzero `lsappinfo` count), then treat the
+capture failure and the Automation refusal as two separate missing grants.
+
+Separate them **before** concluding anything about the
+app:
+
+```sh
+ioreg -n Root -d1 | grep -c CGSSessionScreenIsLocked   # 1 = locked, 0 = not locked
+osascript -e 'return 1+1'                              # 2 = osascript itself is fine
+lsappinfo list | grep -A2 scribobulate                 # Foreground + a real window = the app is healthy
+```
+
+A `0` from the first with a `2` from the second means the session is unlocked and the
+scripting bridge works, so what you are looking at is a **missing TCC grant** — not the
+screen, and not the app.
+
+⚠ **READ THE System Events ERROR CODE, because one of the two is ambiguous and it is the
+one you meet first.** Both appear for the same denial, and they were observed changing
+from one to the other within a single session:
+
+| Code | Means | Do |
+|---|---|---|
+| `-1743` *"Not authorized to send Apple events"* | The Automation grant is absent or refused. Unambiguous. | Stop. It needs the console; nothing you run here will change it |
+| `-1712` *"AppleEvent timed out"* | **Inconclusive.** This is also what a pending or unanswered authorisation prompt produces | Re-run once before concluding anything |
+
+`-1712` reads as a wedged System Events, which sends you to `killall "System Events"` and
+wastes the trip.
+
+⚠ **AND CHECK THE AGE OF THE PROCESS THAT OWNS YOUR SHELL BEFORE REPORTING A GRANT AS
+FAILED.** TCC decisions are cached for the lifetime of the *responsible* process, so a grant
+made after that process started has no effect on it until it is restarted. A seat running
+under a long-lived `tmux` server will see the identical denial after the operator has
+correctly granted the permission, and will wrongly conclude the grant did not work. MEASURED
+2026-09-04: a grant appeared to fail against a `tmux` server that had been running for two
+days. Walk the ancestry (`ps -o ppid=,lstart=,command= -p <pid>`, up the chain) and compare
+its start time against when the grant was made; if the owning process predates the grant,
+the session must be restarted before any retry means anything. Check too that the grant
+landed on the binary that owns the shell rather than on a client-side terminal application
+on another machine. Do not treat a timeout as a denial until you have seen it twice or seen
+`-1743`. `caffeinate -u` will not fix it and neither will unlocking; the
+grant has to be given on the console to the process that owns the session (the terminal,
+or `sshd` for an SSH one). **Until it is, every driven item in this section is
+UNVERIFIABLE and is reported as `unverified`** — never skipped, never inferred from the
+unit tests, and never recorded as a pass. MEASURED 2026-09-03: a seat lost a whole
+checklist pass to this, and it was `lsappinfo` showing the app `Foreground` with a real
+window that established the app was healthy and the session was not.
+
+**Check for a stale primary BEFORE launching, not after.** A previously installed
+`scribobulate` earlier on PATH becomes the single-instance primary, so a launch of your
+build forwards its argument to it and exits — which looks exactly like an instant crash,
+and the PATH warning is printed by the instance that *wins*, so the seat that needs it
+never sees it. `pgrep -x scribobulate` before you start, and `which -a scribobulate`.
+⚠ **`pgrep -x`, never `pgrep -f`** — `-f` matches the whole command line of every process
+including the shell running the `pgrep` itself, so it returns that shell and every later
+window lookup finds nothing (§1.2 carries the same warning for the same reason).
+
 **Install `cliclick` first (Homebrew) — it is a requirement, not a preference.**
 Raw `osascript`/System Events does post real clicks, but it has **no
 move-without-click primitive**, so calibration would degrade into
@@ -1862,13 +1953,22 @@ Then two countermeasures, which are **continuous, not one-time setup**:
   success and changes nothing. The reassert-frontmost rule above is stated for clicks;
   it applies identically here, for the same reason and with a worse failure mode, since
   there is no cursor to photograph. Assert frontmost on the target pid first.
-- **Then READ THE GEOMETRY BACK and confirm it actually changed before trusting any
-  measurement taken against it.** This is the check that catches both faults above, and
-  it is not optional bookkeeping: an action that reports success and does nothing leaves
-  the window at its old size, so a sweep "across window areas" silently measures one
-  area several times — and invariance is usually the very thing such a sweep is trying
-  to establish. The window also has a **minimum width** it will not go below, so a
-  requested size is not an achieved size even when everything is bound correctly.
+- ⚠ **RESIZE BY DRAGGING A CORNER, NOT BY WRITING GEOMETRY — and confirm it in PIXELS,
+  never by reading the geometry back.** MEASURED 2026-09-04 on GTK 4.22.4/Quartz:
+  AppleScript `set size of window 1` did not resize the window in **8 of 8** attempts with
+  frontmost correctly asserted on the pid each time. `cliclick` on the bottom-right corner
+  (`dd:` / `m:` / `m:` / `du:`) resizes reliably, and AX then reports the new size
+  truthfully.
+  **The read-back this paragraph used to prescribe is itself unreliable, which is the
+  worse half of the finding.** On several of those attempts AX returned the size that had
+  been *requested* — 1720×752 read back while the pixels showed 1322 — and on others it
+  honestly returned the old one. So the documented confirmation would have certified a
+  sweep that never resized anything: an action that silently does nothing, verified by a
+  check that silently agrees with it. Take the measurement off a **screenshot**.
+  A window also has a **minimum width** it will not go below (~1322 pt on the reference
+  Mac), so a requested size is not an achieved size even when everything is bound
+  correctly. Where the target width is unreachable, say so and reason about what the check
+  still covers rather than reporting the sweep as performed.
 - **Screenshot** — `screencapture -R<x>,<y>,<w>,<h>` for a window crop, `-C` to draw
   the cursor in. The image is in **pixels**; positions and clicks are in **points**.
   Every coordinate derived from a screenshot must be divided by the display's scale
