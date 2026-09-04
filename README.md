@@ -109,7 +109,9 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
   - Reading themes: **Sepia**, **Bedtime**, **Synthwave**, **Terminal**,
     **Candy**, or match your desktop (**System**) — and you can adjust one, or
     write your own, in `themes.toml` (`man 5 scribobulate`)
-  - Zoom the preview from 50% to 300% — remembered across sessions
+  - Zoom the preview from 50% to 300% — remembered across sessions. **Images zoom
+    too**, and a diagram in SVG is re-drawn at the new size rather than blown up,
+    so the small print inside it stays sharp instead of turning to mush
   - Arrange the split any way you like (left/right or top/bottom)
 - **Tabs and windows that stay out of the way**
   - Several documents per window; drag tabs to reorder, between windows, or

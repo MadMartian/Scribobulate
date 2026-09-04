@@ -1,0 +1,15 @@
+# Its own workspace on purpose: this is a PROBE, not a member of the application.
+# Keeping it out of the parent workspace is what stops it being built, linted or
+# gated with the app -- it asserts properties of librsvg's gdk-pixbuf loader, which
+# belong to the host's image stack rather than to this project, so it is expected to
+# answer differently on a different machine and that must not read as a regression.
+[workspace]
+
+[package]
+name = "svg-rasterise-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+gtk4 = { version = "0.10", features = ["v4_6"] }

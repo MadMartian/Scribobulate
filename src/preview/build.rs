@@ -1038,7 +1038,7 @@ pub(super) fn install_content(view: &CodePreviewView, install: ViewInstall, zoom
     // take.
     view.set_disclosure_bands(disclosure_bands);
     view.set_width_bounded(width_bounded);
-    view.set_image_bounded(image_bounded);
+    view.set_image_bounded(image_bounded, zoom);
     view.set_tables(tables);
     install_annotations(view, list_markers, zoom);
 }

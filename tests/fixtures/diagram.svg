@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 120" width="240" height="120" role="img" aria-label="Zoom fixture: a labelled box, small enough to grow with zoom without meeting the pane clamp.">
+  <rect width="240" height="120" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="14" y="46" font-family="sans-serif" font-size="13" fill="#111111">Small text inside a vector</text>
+  <text x="14" y="72" font-family="sans-serif" font-size="13" fill="#111111">image. Zoom must make this</text>
+  <text x="14" y="98" font-family="sans-serif" font-size="13" fill="#111111">bigger AND keep it sharp.</text>
+</svg>

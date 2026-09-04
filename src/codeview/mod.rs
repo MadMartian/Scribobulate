@@ -169,6 +169,9 @@ mod imp {
         /// alongside them so the drawn marker x (`px(depth*28)`) tracks the `li-{depth}`
         /// content margin at any zoom (the content margin scales; the marker must too).
         pub(crate) gutter_zoom: Cell<f64>,
+        /// The zoom this render's images were registered at — the second half of the
+        /// image fit, since a fit decided at zoom 1.0 has to be scaled back up by it.
+        pub(crate) image_zoom: Cell<f64>,
         /// Widget-coordinate hit-boxes recorded on each paint: `(rect, annotation
         /// indices on that line)`, so a click can map to the marker's annotations
         /// without re-measuring layout off the paint path.
@@ -337,6 +340,7 @@ mod imp {
                 markers: RefCell::new(Vec::new()),
                 list_markers: RefCell::new(Vec::new()),
                 gutter_zoom: Cell::new(1.0),
+                image_zoom: Cell::new(1.0),
                 code_block_rects: RefCell::new(Vec::new()),
                 hovered_code_block: Cell::new(None),
                 pointer_on_copy_button: Cell::new(None),
@@ -440,18 +444,33 @@ mod imp {
                 for t in self.tables.borrow().iter() {
                     t.set_bound_width(bound);
                 }
-                // Images CLAMP to the viewport (not fill): keep natural size when it
-                // fits, shrink to `bound` when too wide, height following by aspect
-                // ratio so it never forces an over-wide line → GTK4Rs/AP-22/23 blank.
+                // Images FIT the viewport at zoom 1.0 (they never stretch to fill it),
+                // and that fit is then scaled by the zoom the render was laid out at —
+                // so a diagram already clamped at 100% still answers the zoom control,
+                // which a plain clamp cannot do. The arithmetic is
+                // `renderer::image::fit_scaled`; this path supplies the live column and
+                // the zoom, and decides nothing.
+                //
+                // ⚠️ Above 100% this deliberately allows a child WIDER than the content
+                // column — the shape GTK4Rs/AP-22/23 warns about. It is measured rather
+                // than assumed (see `fit_scaled`), and the default view is untouched:
+                // at zoom <= 1.0 the old clamp is exactly what runs.
                 for (w, max_w, max_h) in self.image_bounded.borrow().iter() {
                     if *max_w <= 0 {
                         continue;
                     }
-                    let tw = (*max_w).min(bound).max(1);
-                    let th = (i64::from(*max_h) * i64::from(tw) / i64::from(*max_w)).max(1) as i32;
-                    if w.width_request() != tw || w.height_request() != th {
-                        w.set_width_request(tw);
-                        w.set_height_request(th);
+                    let registered = crate::renderer::image::Extent {
+                        w: *max_w,
+                        h: *max_h,
+                    };
+                    let fitted = crate::renderer::image::fit_scaled(
+                        registered,
+                        self.image_zoom.get(),
+                        bound,
+                    );
+                    if w.width_request() != fitted.w || w.height_request() != fitted.h {
+                        w.set_width_request(fitted.w);
+                        w.set_height_request(fitted.h);
                     }
                 }
             }
@@ -891,12 +910,15 @@ impl CodePreviewView {
     }
 
     /// Register this render's anchored images — each `(picture, max_w, max_h)` is the
-    /// image's natural size. `size_allocate` clamps each to the live content column
-    /// (`w = min(max_w, content)`, height by aspect), so a too-wide image fits the
-    /// viewport instead of blanking. CLAMP semantics, unlike `set_width_bounded`.
-    pub(crate) fn set_image_bounded(&self, items: Vec<(gtk::Widget, i32, i32)>) {
+    /// image's size AT `zoom`, as `renderer::image::zoomed_extent` computed it.
+    /// `size_allocate` fits each to the live content column at zoom 1.0 and scales that
+    /// fit by `zoom` (`renderer::image::fit_scaled`), so a too-wide image fits the
+    /// viewport at the default zoom and still grows when the reader zooms in. FIT
+    /// semantics, unlike `set_width_bounded`'s stretch-to-fill.
+    pub(crate) fn set_image_bounded(&self, items: Vec<(gtk::Widget, i32, i32)>, zoom: f64) {
         use gtk::subclass::prelude::*;
         let imp = self.imp();
+        imp.image_zoom.set(zoom);
         imp.image_bounded.replace(items);
         imp.last_content_width.set(-1); // force a re-apply on the next allocation
         self.queue_allocate();
