@@ -9,7 +9,7 @@
 # Usage:
 #   scripts/gen-splash.sh capture     # stage 1: render every per-frame shot
 #   scripts/gen-splash.sh composite   # stage 2: composite every keyframe
-#   scripts/gen-splash.sh <frameID>   # capture + composite ONE frame (A|B|C|D)
+#   scripts/gen-splash.sh <frameID>   # capture + composite ONE frame (A|B|C|D|E)
 #   scripts/gen-splash.sh encode      # stage 3+4: tween + encode webp/gif
 #   scripts/gen-splash.sh all         # the whole pipeline (default)
 #
@@ -81,17 +81,29 @@ trap cleanup_spawned EXIT
 export GTK_THEME="${GTK_THEME:-Adwaita:dark}"
 
 # ── Per-frame declarative config ──────────────────────────────────────────────
-# SHOT_SPEC entries:  id | fixture.md | theme | view_mode | unsafe | outline
+# SHOT_SPEC entries:  id | fixture.md | theme | view_mode | unsafe | outline | annot | card
 #   theme:     system | sepia | synthwave | terminal
 #   view_mode: preview | edit | split
-#   outline:   on | off   (win.outline defaults ON; "off" sends a focused F9)
+#   outline:   on | off   (the outline sidebar section)
+#   annot:     on | off   (the annotations sidebar section)
+#   card:      on | off   (open the first annotation's card and composite it in)
+# Both sidebar sections are set through the session file's [windows.chrome]
+# table, which is what the app itself writes — NOT by synthesising an F9/F8
+# keystroke. A keystroke has to win a race against first-frame layout and leaves
+# the shot silently wrong when it doesn't; the restored state is true before the
+# window is ever mapped.
 declare -A SHOT_SPEC=(
-  [a_syn]="hero.md|synthwave|preview|true|off"
-  [a_term]="hero.md|terminal|preview|true|off"
-  [b_outline]="outline-showcase.md|system|preview|true|on"
-  [c_arch]="architecture.md|terminal|preview|true|off"
-  [d_sepia]="editing.md|sepia|split|true|off"
+  [a_syn]="hero.md|synthwave|preview|true|off|off|off"
+  [a_term]="hero.md|terminal|preview|true|off|off|off"
+  [b_outline]="outline-showcase.md|system|preview|true|on|off|off"
+  [c_arch]="architecture.md|terminal|preview|true|off|off|off"
+  [d_sepia]="editing.md|sepia|split|true|off|off|off"
+  [e_annot]="annotated.md|system|preview|true|off|on|on"
 )
+
+# CARD_PAD: transparent margin added around the captured annotation card so its
+# synthetic drop shadow has somewhere to fall (px, in captured-window pixels).
+CARD_PAD=18
 
 # SHOT_CROP: OPTIONAL zoom. A shot listed here is cropped to "WxH+X+Y" (in the
 # captured 1100x740 window's own pixels) before scaling — a magnified detail card
@@ -108,8 +120,9 @@ declare -A FRAME_SHOTS=(
   [B]="b_outline"
   [C]="c_arch"
   [D]="d_sepia"
+  [E]="e_annot"
 )
-FRAME_ORDER=(A B C D)     # animation cycle order (loops back A after D)
+FRAME_ORDER=(A B C D E)   # animation cycle order (loops back A after E)
 
 # place_shots FRAME_ID — echo one "<shot> <x> <y> <scalePct>" line per placement.
 # Frame A overlaps two shots diagonally; every other frame centers its single
@@ -134,6 +147,10 @@ place_shots() {
     B) place_centered "$1" 172 -18 -14 ;;
     C) place_centered "$1" 113  10   6 ;;
     D) place_centered "$1" 170  16  18 ;;
+    # E is UNCROPPED on purpose: the frame's whole point is the sidebar on the
+    # left and the margin chips on the right, and any crop tight enough to
+    # enlarge the text drops one edge or the other.
+    E) place_centered "$1" 110 -10  12 ;;
     *) place_centered "$1" 92 0 0 ;;
   esac
 }
@@ -186,12 +203,18 @@ require_binary() {
   exit 1
 }
 
-write_session() {  # statedir theme path mode unsafe
-  local statedir="$1" theme="$2" path="$3" mode="$4" unsafe="$5"
+# Writes the CURRENT (v3) session shape: chrome is per-window, in its own table.
+# `outline_visible`/`annotations_visible` are booleans the app restores before the
+# window is mapped, so the sidebar is already in the wanted state at first paint.
+# The [windows.chrome] table must precede [[windows.tabs]] — TOML binds a table to
+# whatever array element is open, and `tabs` opens a nested one.
+write_session() {  # statedir theme path mode unsafe outline annot
+  local statedir="$1" theme="$2" path="$3" mode="$4" unsafe="$5" outline="$6" annot="$7"
+  local outline_b=false annot_b=false
+  [ "$outline" = "on" ] && outline_b=true
+  [ "$annot" = "on" ] && annot_b=true
   mkdir -p "$statedir/scribobulate"
   cat >"$statedir/scribobulate/session.toml" <<EOF
-show_toolbar = true
-show_statusbar = true
 preview_theme = "$theme"
 
 [[windows]]
@@ -199,6 +222,12 @@ width = $WIN_W
 height = $WIN_H
 zoom_level = 1.0
 active_tab = 0
+
+[windows.chrome]
+show_toolbar = true
+show_statusbar = true
+outline_visible = $outline_b
+annotations_visible = $annot_b
 
 [[windows.tabs]]
 path = "$path"
@@ -209,16 +238,66 @@ show_unsafe_images = $unsafe
 EOF
 }
 
+# overlay_card DISPLAY TOPLEVEL_WID SHOT_PNG — composite the open annotation card
+# into an already-captured window shot, at the position it actually occupies.
+#
+# A GTK4 popover is its own X toplevel, NOT a child of the window it points at, so
+# `xwd -id <toplevel>` cannot see it — and, measured here, neither can `xwd -root`
+# under bare Xvfb (the card's own X window exists and reports its geometry, but its
+# contents are not in the root capture). What DOES work is capturing the card's
+# window by id and pasting it where its geometry says it sits, which is also the only
+# route that keeps the rest of the shot exactly as the app drew it.
+#
+# The card is drawn on an ARGB surface, so everything outside its rounded body and
+# its arrow comes back as near-black rather than transparent; `-transparent black`
+# with a fuzz well under the card's own background (37,41,44) restores the shape
+# without eating any of it. The drop shadow is synthetic — a bare Xvfb has no
+# compositor to cast one — and is what makes the card read as being ABOVE the page
+# rather than pasted into it.
+overlay_card() {
+  local disp="$1" wid="$2" shot="$3"
+  local X Y WIDTH HEIGHT
+  eval "$(DISPLAY="$disp" xdotool getwindowgeometry --shell "$wid")"
+  local win_x="$X" win_y="$Y"
+  # The card is the one other window with real area: every remaining GTK helper
+  # surface is 1x1, and the toplevel is excluded by id.
+  local pop="" pw=0 ph=0 px=0 py=0 w
+  for w in $(DISPLAY="$disp" xdotool search --name "" 2>/dev/null || true); do
+    [ "$w" = "$wid" ] && continue
+    WIDTH=""; HEIGHT=""; X=""; Y=""
+    eval "$(DISPLAY="$disp" xdotool getwindowgeometry --shell "$w" 2>/dev/null)" || continue
+    [ -n "$WIDTH" ] && [ -n "$HEIGHT" ] || continue
+    [ "$((WIDTH*HEIGHT))" -lt 8000 ] && continue
+    [ "$WIDTH" -ge "$WIN_W" ] && continue
+    pop="$w"; pw="$WIDTH"; ph="$HEIGHT"; px="$X"; py="$Y"; break
+  done
+  # FATAL: the frame exists to show the card. Without it the shot is a plain
+  # annotated document that composites and encodes perfectly — the failure would
+  # only ever be noticed by someone looking at the published animation.
+  [ -n "$pop" ] || { echo "ERROR: annotation card never opened (no popover window found)" >&2; return 1; }
+  local raw; raw="$(mktemp /tmp/scrib-card.XXXXXX.png)"
+  DISPLAY="$disp" xwd -id "$pop" 2>/dev/null | magick xwd:- "$raw"
+  local pad="$CARD_PAD"
+  magick "$shot" \
+    \( "$raw" -fuzz 8% -transparent black -write mpr:card +delete \
+       -size "$((pw+2*pad))x$((ph+2*pad))" xc:none \
+       \( mpr:card -alpha extract -blur 0x6 -level 0%,55% \
+          -background black -alpha shape \) -geometry "+${pad}+$((pad+5))" -composite \
+       mpr:card -geometry "+${pad}+${pad}" -composite \) \
+    -geometry "+$((px-win_x-pad))+$((py-win_y-pad))" -composite "$shot"
+  rm -f "$raw"
+}
+
 # capture_shot <id> — render the app headless per SHOT_SPEC[id] -> $SHOTS/<id>.png.
 # Kills ONLY the PID it launched (never a name match — the operator's own
 # instance may be running in parallel).
 capture_shot() {
   local id="$1"
-  IFS='|' read -r fixture theme mode unsafe outline <<<"${SHOT_SPEC[$id]}"
+  IFS='|' read -r fixture theme mode unsafe outline annot card <<<"${SHOT_SPEC[$id]}"
   local path="$FIX/$fixture"
   [ -f "$path" ] || { echo "WARN: missing fixture $path (skipping $id)" >&2; return 0; }
   local statedir; statedir="$(mktemp -d /tmp/scrib-splash-state.XXXXXX)"
-  write_session "$statedir" "$theme" "$path" "$mode" "$unsafe"
+  write_session "$statedir" "$theme" "$path" "$mode" "$unsafe" "$outline" "$annot"
 
   # Let Xvfb PICK a free display (-displayfd) and report it — never hard-code a
   # number (a stale server on that number is the collision trap that renders the
@@ -264,17 +343,39 @@ capture_shot() {
   if [ -n "$wid" ]; then
     # Bare Xvfb has no WM to enforce the requested size, so GTK allocates the
     # content's NATURAL width. Force the size and let GTK re-layout.
-    DISPLAY="$DISP" xdotool windowsize "$wid" "$WIN_W" "$WIN_H"; sleep 1
-    if [ "$outline" = "off" ]; then
-      # Focus first: a focused XTEST key is "real" input GTK honours (a synthetic
-      # --window event is not). win.outline defaults ON, so one F9 hides it.
-      DISPLAY="$DISP" xdotool windowfocus "$wid"; sleep 0.3
-      DISPLAY="$DISP" xdotool key F9
-    fi
+    # Bare Xvfb has no WM to enforce the requested size, so GTK allocates the
+    # content's NATURAL width — which is wider than WIN_W for any shot with a
+    # sidebar. CONFIRM the resize rather than assuming it: a single blind
+    # windowsize can land while the window is still mapping and be undone by the
+    # app's own first allocation, and the failure is silent — the shot comes out
+    # at the natural size, is composited at the wrong scale, and (measured) the
+    # annotation chips never repaint into it. Retry until the geometry reads back
+    # as asked, then fail loudly rather than capture a wrong window.
+    local sized="" attempt=0
+    while [ -z "$sized" ] && [ $attempt -lt 10 ]; do
+      DISPLAY="$DISP" xdotool windowsize "$wid" "$WIN_W" "$WIN_H"; sleep 0.5
+      WIDTH=""; HEIGHT=""
+      eval "$(DISPLAY="$DISP" xdotool getwindowgeometry --shell "$wid" 2>/dev/null)" || true
+      [ "${WIDTH:-0}" = "$WIN_W" ] && [ "${HEIGHT:-0}" = "$WIN_H" ] && sized=yes
+      attempt=$((attempt+1))
+    done
+    [ -n "$sized" ] || { echo "ERROR: $id never resized to ${WIN_W}x${WIN_H} (stuck at ${WIDTH:-?}x${HEIGHT:-?})" >&2; return 1; }
     sleep "$SETTLE_SECS"
+    # Open the first annotation's card BEFORE the capture, by ACTION rather than by
+    # clicking its chip: `win.next-annotation` is the same code path the chip click
+    # ends in (`navigate_to_annotation` -> `open_marker_popover_at`), and a keyboard
+    # accelerator needs no chip coordinates — which are a function of the view width,
+    # the theme's margins and the zoom, and would have to be re-derived by hand every
+    # time any of the three moved.
+    if [ "$card" = "on" ]; then
+      DISPLAY="$DISP" xdotool windowfocus "$wid"; sleep 0.4
+      DISPLAY="$DISP" xdotool key ctrl+alt+n
+      sleep 1.5
+    fi
     # xwd reads the window directly, avoiding ImageMagick's flaky XShm under Xvfb.
     DISPLAY="$DISP" xwd -id "$wid" 2>/dev/null | magick xwd:- "$SHOTS/$id.png"
-    echo "captured $id.png ($theme/$mode, outline=$outline) on $DISP"
+    [ "$card" = "on" ] && overlay_card "$DISP" "$wid" "$SHOTS/$id.png"
+    echo "captured $id.png ($theme/$mode, outline=$outline, annot=$annot, card=$card) on $DISP"
   else
     # FATAL, not a warning: with no window there is no shot, and the composite stage
     # would go on to build a blank frame from it and encode that. Failing here names
@@ -470,7 +571,7 @@ case "${1:-all}" in
   capture)      stage_capture ;;
   composite)    stage_composite ;;
   encode)       encode ;;
-  A|B|C|D)      one_frame "$1" ;;
+  A|B|C|D|E)    one_frame "$1" ;;
   all)          stage_capture; stage_composite; encode ;;
   *) echo "usage: $0 {capture|composite|encode|A|B|C|D|all}" >&2; exit 2 ;;
 esac

@@ -8,7 +8,7 @@ models), and live-reloads files the instant an agent changes them on disk.
 
 <picture>
   <source srcset="assets/splash.webp" type="image/webp">
-  <img src="assets/splash.gif" alt="Introducing Scribobulate — a looping tour of reading themes, the outline, the live-render pipeline, and split editing">
+  <img src="assets/splash.gif" alt="Introducing Scribobulate — a looping tour of reading themes, the outline, the live-render pipeline, split editing, and in-document annotations">
 </picture>
 
 ![Scribobulate](data/icons/scalable/apps/com.extollit.scribobulate.svg "Scribobulate")
