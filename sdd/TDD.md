@@ -8,7 +8,7 @@
 | 4 | Editing & saving | 4.1 – 4.9 |
 | 5 | Reconciliation (conflict handling) | 5.1 – 5.4 |
 | 6 | Resource footprint (viability gate) | 6.1 – 6.5 |
-| 7 | Window & layout | 7.0b – 7.22 |
+| 7 | Window & layout | 7.0b – 7.23 |
 | 8 | Single-instance lifecycle | 8.1 – 8.7 |
 | 9 | Menu bar, toolbar, and actions | 9.1 – 9.36 |
 | 10 | Markdown formatting commands | 10.1 – 10.20 |
@@ -977,6 +977,17 @@
 - **When** it is first shown in the editor — by the view-mode action, the toolbar button, or session restore
 - **Then** the caret sits at the beginning of the document, and the footer's line/column indicator reads the first line
 - **And** the outline sidebar highlights the document's first section, not its last
+
+### 7.23 An install leaves exactly one Scribobulate, and says so when it cannot
+- **Given** a machine that may already carry a Scribobulate — a copy installed from the `.dmg`, a distro package, or residue from another platform's install route
+- **When** the developer install runs
+- **Then** it never silently produces a second copy that competes with the first
+- **And** on macOS it refuses before building, naming what it found and how to remove it, because two bundles sharing one identifier let the Dock and the terminal launch different copies with nothing to signal the divergence
+- **And** on Linux it warns and proceeds, because a distro package alongside a user-local build is an ordinary supported arrangement
+- **And** it reports what it found and never deletes a copy another route installed
+- **And** what it puts on PATH is the artefact it just built, never one it merely found
+- **And** nothing it installs resolves into the build directory, so emptying that directory cannot silently break the install
+- **And** a dangling link is reported as a hazard rather than treated as absent
 
 ## 8. Single-instance lifecycle
 

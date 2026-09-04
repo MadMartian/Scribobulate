@@ -111,6 +111,85 @@ case ":$PATH:" in
     *) echo "  NOTE: $BIN_DIR is not on your PATH; the launcher still works (absolute Exec)," \
             "but the '$PKG' command in a terminal will not until you add it." ;;
 esac
+
+# --- What else on PATH answers to `scribobulate` ----------------------------------
+#
+# WARNS, NEVER REFUSES, and that is a deliberate divergence from the macOS script's
+# equivalent check (packaging/macos/install.sh, "Gate 2"), which exits non-zero. The
+# asymmetry is in the platforms, not in the rigour: on macOS a second copy is always a
+# mistake, because both bundles register the same CFBundleIdentifier and the Dock and
+# the terminal can then launch different ones. On Linux a distro package in /usr/bin
+# alongside a user-local build in ~/.local/bin is an ORDINARY, SUPPORTED arrangement --
+# build-deb.sh and build-rpm.sh beside this script exist to produce exactly that package.
+# Refusing would reject a configuration this project ships the tooling to create.
+#
+# AT THE END, not before the build, for the same reason: a warning that cannot stop
+# anything gains nothing by arriving early, and one printed ahead of `cargo build
+# --release` is scrolled away by the build it precedes. The macOS gate runs first
+# precisely because it CAN stop the build and save the minutes.
+#
+# WHAT RUNS IS THE FIRST *EXECUTABLE* HIT, NOT THE FIRST HIT, and the distinction is the
+# whole reason this exists. A dangling symlink is not executable, so the shell SKIPS it
+# and keeps walking PATH rather than failing -- it is invisible to an existence test
+# while still being what makes resolution land somewhere unexpected. That exact shape,
+# a dangling link ahead of a stale real binary, silently ran a four-month-old build on
+# the macOS seat's machine. So the check tests `-x` to decide the winner, and reports
+# dangling entries separately rather than counting them as contenders.
+hits=""
+runs=""
+dangling=""
+while IFS= read -r hit; do
+    case "$hits" in *"$hit"$'\n'*) continue ;; esac
+    hits="$hits$hit"$'\n'
+    if [ -x "$hit" ] && [ ! -d "$hit" ]; then
+        [ -n "$runs" ] || runs="$hit"
+    elif [ -L "$hit" ] && [ ! -e "$hit" ]; then
+        dangling="$dangling$hit"$'\n'
+    fi
+done < <(
+    IFS=:
+    for dir in $PATH; do
+        [ -n "$dir" ] || dir="."
+        if [ -e "$dir/$PKG" ] || [ -L "$dir/$PKG" ]; then
+            printf '%s\n' "$dir/$PKG"
+        fi
+    done
+)
+
+others="$(printf '%s' "$hits" | grep -vxF -- "$BIN_PATH" || true)"
+if [ -n "$others" ] || [ -n "$dangling" ]; then
+    echo
+    if [ -n "$runs" ] && [ "$runs" != "$BIN_PATH" ]; then
+        echo "  WARNING: typing '$PKG' does not run what was just installed."
+        echo "      runs      : $runs"
+        echo "      installed : $BIN_PATH"
+        echo "  Nothing here removes the other copy -- a system package alongside this"
+        echo "  user-local build is a normal setup. But until $BIN_DIR comes earlier in"
+        echo "  PATH, the terminal command is the other one. The launcher is unaffected;"
+        echo "  its Exec is an absolute path."
+    elif [ -n "$others" ]; then
+        echo "  NOTE: another '$PKG' is on PATH, after $BIN_DIR:"
+        # `%s\n`, not `%s`: $others comes from a command substitution, which strips the
+        # trailing newline, and `read` returns false on a final unterminated line -- the
+        # loop body would never run and the heading would list nothing. The other lists
+        # here are built with an explicit trailing $'\n' and do not need it.
+        printf '%s\n' "$others" | while IFS= read -r p; do
+            [ -n "$p" ] && echo "      $p"
+        done
+        echo "  The one just installed wins today because it comes first, which is PATH"
+        echo "  order rather than a decision. Two copies drift silently: whichever you"
+        echo "  stop updating goes on working."
+    fi
+    if [ -n "$dangling" ]; then
+        echo "  DANGLING symlink(s) named '$PKG' on PATH:"
+        printf '%s' "$dangling" | while IFS= read -r p; do
+            [ -n "$p" ] && echo "      $p -> $(readlink "$p" 2>/dev/null)"
+        done
+        echo "  The shell skips these silently rather than failing, so they do not stop"
+        echo "  anything -- they just move resolution further down PATH. Remove them."
+    fi
+fi
+
 echo
 echo "Double-click a .md file in Dolphin to open it in Scribobulate."
 echo "(If Dolphin still shows the old app, log out/in or restart it to reload the MIME cache.)"

@@ -9,7 +9,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 2. General engineering discipline that survives deleting every Scribobulate noun? → route it to `general-engineering-principles`, cited `GEP-N`; leave a one-line `**Routed**` tombstone here. No ScrAP number is needed for provenance.
 3. Neither — Scribobulate internals, or a non-gtk4-rs dependency (Pango, GtkSourceView, pulldown-cmark, librsvg, syntect, serde/toml, the toolchain)? → it stays here, **in ≤ 6 lines**: Symptom · Root cause · Resolution · Lesson · Scribobulate · See. Extend an existing entry rather than minting a sibling for the same root cause. Route a Pango lesson on whose API *contract* it is about, and raise it before routing.
 
-**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 342**+ — check this table and announce the range you claim; never derive it from the highest heading below.
+**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 343**+ — check this table and announce the range you claim; never derive it from the highest heading below.
 
 **Growth** is gated in bytes (check 11). The ratchet only tightens; consolidate in the change that trips it.
 
@@ -354,6 +354,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 | 339 | An edit ABOVE the viewport scrolls the reader off their line, by a constant quantum per compensating pass rather than by anything height-shaped | A |
 | 340 | Splicing a region whose rendered content was written by an event ABOVE that region | C |
 | 341 | More than one adjustment write per frame on a pre-4.10.1 `GtkListView` (a fast wheel scroll up) snaps the list to its end | A |
+| 342 | An installer anchoring its PATH and manual-page links inside the build directory — and the dangling PATH entry that is SKIPPED rather than failed | B |
 
 ---
 
@@ -1916,3 +1917,8 @@ Severity: High
 ## 341. More than one adjustment write per frame on a pre-4.10.1 `GtkListView` (a fast wheel scroll up) snaps the list to its end
 **Scribobulate**: `window::wheelcoalesce` takes the wheel from every sidebar list scroller in the capture phase and applies the accumulated travel once per frame-clock tick, so the toolkit never reads a row-height tree its own previous write left collapsed; installed in `window::sidebar::SidebarPane::new` so a pane added later inherits it, and `reveal_selected_row` drops the pending travel so a programmatic reveal is not a frame's second write. Inert on GTK >= 4.10.1, which fixed it upstream (GNOME/gtk#2971). Reproducible in plain GTK by `probes/listview-scroll-snap.c`.
 **See**: gtk4-rs skill → list/factory views; kin GTK4Rs/AP-114 (`list.scroll-to-item` as the 4.6-safe reveal), ScrAP-157 (the other pre-4.12 `GtkListView` scroll trap).
+
+## 342. An installer anchoring its PATH and manual-page links inside the build directory — and the dangling PATH entry that is SKIPPED rather than failed
+**Routed**: GEP-71 (the anchor and the silent skip), GEP-72 (the two gate-predicate traps), GEP-73 (bundle identity is not location), GEP-74 (a remedy that no-ops); grafts onto GEP-52 (a false FAILURE on the ordinary case), GEP-1 (mutation-test the gate) and GEP-19 (the implementer falsifies the prescription) — the lessons live in the `general-engineering-principles` skill.
+**Scribobulate**: `packaging/macos/install.sh` copies the bundle out of `target/` to `~/Applications` and deletes the build copy once the anchor's signature re-verifies, behind two gates that run BEFORE the release build — one for a second bundle carrying the `CFBundleIdentifier` read from `Info.plist.in` (direct test of the two fixed locations, `mdfind` only widening it), one walking PATH with `[ -e ] || [ -L ]` and classifying by PATH order. `packaging/macos/uninstall.sh` unregisters the paths it installed and verifies that by reading the Launch Services database back, never by the `-u` exit status. `packaging/linux/install.sh` runs the PATH scan too but WARNS and never refuses, because a distro package beside a user-local build is supported here; it names the first *executable* hit, since a dangling link is not the winner it appears to be.
+**See**: TDD 7.23 and manual-test items 7.23 / 7.23m; kin ScrAP-249 (packaging obligations), ScrAP-320 (the unresolvable pointer).

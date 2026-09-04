@@ -189,13 +189,23 @@ Homebrew's `bin/`, so it needs no `sudo`):
 ```bash
 ./install.sh
 scribobulate path/to/document.md
-./uninstall.sh        # removes the symlink and the built .app
+./uninstall.sh        # removes the app, the symlink and the manual pages
 ```
+
+It installs the app to `~/Applications`, points the `scribobulate` command and the
+manual pages at it, and then removes the build copy — so `cargo clean` cannot
+quietly break your install, and the machine is left holding exactly one copy.
+
+**It refuses to run while another copy is already installed**, which normally means
+one dragged to `/Applications` from a `.dmg`. Both carry the same bundle identifier,
+so macOS would let the Dock and the terminal launch different copies with nothing to
+tell you they had diverged. Remove that copy, or skip the developer install and use
+it instead.
 
 `./install.sh` dispatches to `packaging/macos/install.sh`; running that directly
 is equivalent. Use `bundle.sh` above when you want the `.app` and nothing on your
-PATH. **A copy you dragged to `/Applications` from a `.dmg` is a separate thing**
-and `./uninstall.sh` deliberately does not delete it — it reports it instead.
+PATH. `./uninstall.sh` removes what it installed, and **reports — never deletes —**
+a copy in `/Applications` that it did not put there.
 
 Not a self-contained redistributable — the built app still links these
 Homebrew libraries at runtime. More: [`packaging/macos/README.md`](packaging/macos/README.md).
