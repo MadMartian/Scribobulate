@@ -16,9 +16,10 @@
 /// per-render climb leaves: ScrAP-351's fixture-scale leak is ~1.05 MB per
 /// render, which over a ten-sample window leaves ~9.4 MB of residual — two
 /// orders of magnitude above the bound rather than beside it, so no host's churn
-/// sits near the decision. `total_bytes` sits above the largest one-time
-/// allocation measured anywhere (~12.6 MB, on the CI runner's software GL path)
-/// and far below what any climb totals.
+/// sits near the decision. `total_bytes` sits above the largest one-time step
+/// ever measured (~12.6 MB on the Linux CI runner, before `measuring()` stopped
+/// the kernel's huge-page collapse from producing it) and far below what any
+/// climb totals.
 ///
 /// Measured clean traces, worst of the six gates in each run — the playback gate
 /// on every host, being the only one with a live frame clock:
@@ -26,15 +27,17 @@
 /// | host | total growth | largest rise | residual |
 /// |------|--------------|--------------|----------|
 /// | Linux development host, 4 runs | 1.04 MB | 0.70-0.77 MB | 0.27 MB |
-/// | Linux CI runner | 12.98 MB | 12.08 MB | **0.86 MB** |
+/// | Linux CI runner, huge-page collapse armed | 12.98 MB | 12.08 MB | **0.86 MB** |
+/// | Linux CI runner, collapse disabled | −0.38 MB | 0.38 MB | −0.77 MB |
 /// | macOS CI runner | 0.31 MB | 0.31 MB | 0 |
 /// | Windows CI runner | 0.26 MB | 0.53 MB | −0.28 MB |
 ///
-/// **The CI runner's row is the one that decides the bound**, and it is the
-/// trace this predicate exists for: a ~12 MB allocation nobody has attributed —
-/// it appears on no development host, at a different sample each run, and that
-/// runner is the only one of the four on a software GL path — which the
-/// half-mean this replaced reported as an 8.65 MB climb. Its 0.86 MB of residual is the worst
+/// **The armed CI row is the one that decided the bound**, and it is the trace
+/// this predicate exists for: a ~12 MB one-time step, at a different sample each
+/// run, which the half-mean this replaced reported as an 8.65 MB climb. It was
+/// never an allocation — `khugepaged` filling heap pages the process already
+/// owned (see `measuring()`) — but a step the program did not make is exactly
+/// the shape the predicate must pass. Its 0.86 MB of residual is the worst
 /// clean reading anywhere, and it sits 2.3x under the bound while the smallest
 /// leak the gate must catch — ScrAP-351's ~1.05 MB per render over a ten-sample
 /// window — sits 4.5x over it. Windows shows the bound must tolerate a NEGATIVE
@@ -48,8 +51,7 @@ pub(crate) const GROWTH_BOUNDS: super::growth::Bounds = super::growth::Bounds {
 
 /// The bounds must keep bracketing the magnitudes they were derived from: the
 /// residual bound far below what ScrAP-351's fixture-scale leak leaves over a
-/// ten-sample window, the ceiling above the largest one-time allocation
-/// measured. A compile-time assertion rather than a test, because an edit that
+/// ten-sample window, the ceiling above the largest one-time step measured. A compile-time assertion rather than a test, because an edit that
 /// inverts either one has made the gate decorative and should not build.
 const _: () = assert!(GROWTH_BOUNDS.residual_bytes < 9 * 1024 * 1024);
 const _: () = assert!(GROWTH_BOUNDS.total_bytes > 12_600_000);
@@ -103,12 +105,41 @@ static MEASUREMENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 ///
 /// Poisoning is ignored: a failing assertion inside one series must not turn every
 /// later one into a second, misleading failure.
+///
+/// **On Linux it also stops the kernel collapsing this process's memory into huge
+/// pages**, because that moves the reading with no allocation at all. Under
+/// `transparent_hugepage=always` (the GitHub Linux runner; development hosts
+/// default to `madvise`), `khugepaged` scans in the background and collapses any
+/// 2 MB-aligned stretch of heap with even one resident page into a whole huge
+/// page, filling the untouched remainder. Measured on the runner mid-series:
+/// VmRSS +12.3 MB in one sample, the heap's `AnonHugePages` 0 → 16 MB, malloc's
+/// in-use bytes +16 — a step at a different sample each run, owned by no code in
+/// this process. `PR_SET_THP_DISABLE` removes the process from `khugepaged`'s
+/// scan, so what remains in the series is growth the program made (GEP-95).
 #[cfg(all(test, feature = "memory-gates"))]
 #[must_use = "the instrument is only claimed while the guard is alive"]
 pub(crate) fn measuring() -> MeasurementGuard {
+    #[cfg(target_os = "linux")]
+    disable_huge_page_collapse();
     MeasurementGuard {
         _lock: MEASUREMENT.lock().unwrap_or_else(|e| e.into_inner()),
     }
+}
+
+/// Idempotent and process-wide; a refusal is fatal rather than ignored, because
+/// a series measured with the collapse still armed is the one that looks like a
+/// leak on one host only.
+#[cfg(all(test, feature = "memory-gates", target_os = "linux"))]
+fn disable_huge_page_collapse() {
+    // SAFETY: PR_SET_THP_DISABLE takes one integer flag and no pointers; the
+    // trailing arguments are required to be zero.
+    let rc = unsafe { libc::prctl(libc::PR_SET_THP_DISABLE, 1, 0, 0, 0) };
+    assert_eq!(
+        rc,
+        0,
+        "PR_SET_THP_DISABLE refused: {}",
+        std::io::Error::last_os_error()
+    );
 }
 
 #[cfg(all(test, feature = "memory-gates"))]

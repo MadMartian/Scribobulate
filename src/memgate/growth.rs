@@ -10,7 +10,8 @@
 //! mean(first half)`, which cannot tell the two apart at all: one allocation
 //! retained for the rest of the run raises the second-half mean exactly as a
 //! per-render leak does, and by an amount that depends on WHERE in the run it
-//! landed. Measured on the Linux CI runner, one ~12.6 MB allocation reported an
+//! landed. Measured on the Linux CI runner, one ~12.6 MB step (the kernel
+//! collapsing heap into huge pages, not an allocation) reported an
 //! 8,650,512-byte delta arriving at sample 20 of 69 and 2,165,459 bytes arriving
 //! at sample 5 — pass or fail decided by the allocation's timing rather than the
 //! program's growth. The leak this class exists for (ScrAP-351) is ~12 MB *per
@@ -223,7 +224,8 @@ mod tests {
     }
 
     /// And that holds for a step far larger than the residual bound, which is
-    /// the case the CI runner produced: ~12.6 MB against a 2 MB tolerance.
+    /// the case the CI runner produced (~12.6 MB of huge-page collapse) against a
+    /// 2 MB tolerance.
     #[test]
     fn a_single_step_larger_than_the_residual_bound_still_passes() {
         for at in 0..10 {
