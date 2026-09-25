@@ -256,8 +256,8 @@ impl BackingLoss {
     /// can do rather than being one string shared for the look of it.
     pub(crate) fn prompt(self) -> &'static str {
         match self {
-            Self::Deleted => "File deleted on disk. This window has the only copy.",
-            Self::Truncated => "File was truncated. This window has the only copy.",
+            Self::Deleted => "File deleted on disk. This window has the only known copy.",
+            Self::Truncated => "File was truncated. This window has the only known copy.",
         }
     }
 }
