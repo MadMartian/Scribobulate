@@ -40,7 +40,6 @@ described from a different vantage point.
 | D | Any | Production | A large document leaves the process spinning a CPU core at ~100% while idle — a GTK/Pango relayout pass that re-shapes text every main-loop iteration and never converges | High |
 | G | Linux | Test | A one-time ~12.6 MB allocation appears in step 5b's footprint samples on the GitHub Linux runner and on no development host, at a different sample each run. **Unattributed** — the runner logs `libEGL warning: DRI3 error: Could not get DRI3 device`, so a lazily created buffer in its software GL stack is a suspicion and nothing more. The growth gate tolerates one allocation by design (TDD 6.11), so this is not currently red; what is unknown is whether the sampler is measuring something the application does not own | Low |
 | I | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
-| M | Windows | Production | On a machine with no Visual C++ runtime the app installs and then fails to start; the installer's bootstrapper for it has landed but has never been verified against that condition | Medium |
 | W | Mac | Production | Observed ONCE: after a compound find-bar run the Escape key stopped closing the find bar and then never worked again in that process — permanent, not transient, with the bar visibly open and the application otherwise responsive. Not reproduced in three isolated legs nor in a faithful replay of the whole compound sequence. The handler has since been hardened so that it declines the key when the bar did not actually close, which BOUNDS this rather than fixes it: the diagnosed cause is still unknown | High |
 | Y | Any | Test | A PDF blockquote-panel tiling assertion fails in the display-free suite intermittently under pipeline load, and passes every time it is run directly. **No root cause is recorded, and six suspicions have been falsified** — a sprite-key collision, cross-thread mutation of the sprite cache, line wrapping, concurrency during the render, cross-thread sprite decoding, and any non-tile red ink; the body carries each one's measurement. Two captures agree the anomalies sit INSIDE a band, which the fill cannot produce. The test now prints every red row's pixel count on failure, which is the one thing both captures lacked | Medium |
 
@@ -401,71 +400,6 @@ scrolling. It is invisible at every other width.
   from GTK.
 - Revisit if the clamp above stops being a symptom gate — if a way appears to distinguish a
   hanging space from a clipped glyph, the clamp becomes safe and this reopens.
-
-## M. The Windows installer's Visual C++ runtime bootstrapper is unverified
-
-**Severity**: Medium (a first-run failure on a clean machine, and the last thing the
-installer does is launch the app — so it reads as "it would not install")
-
-`scribobulate.exe` and the staged GTK tree import `VCRUNTIME140.dll` (plus
-`VCRUNTIME140_1.dll`, via `cairo-2.dll`). Windows does not ship it; the
-`api-ms-win-crt-*` imports beside it are the UCRT, which it does. The installer neither
-installs it nor checks for it, so on a machine that has never had a Visual C++
-redistributable the app cannot start. `scribobulate.iss`'s `[Run]` section launches the
-app post-install, so the failure is the last thing the user sees.
-
-**MEASURED** by the Windows seat (`dumpbin /DEPENDENTS`, VS2022 14.44.35207): 33 staged
-modules import `VCRUNTIME140.dll`; zero CRT DLLs are staged; the gvsbuild prefix has none
-to stage. **A standing gap, never a regression** — `git log` on `scribobulate.iss` shows
-one commit in its whole history, and `git log -S vcruntime -- packaging/windows/stage.ps1`
-is empty, so this line has never shipped it.
-
-⛔ **Do NOT fix this by staging `vcruntime140.dll` into `stage.ps1`.** That is the obvious
-move and it is the one the remedy below explicitly reversed: copying the DLLs in makes the
-project a redistributor of Microsoft's Distributable Code, whose terms require an
-end-user click-through that no file vendored into this repository can present. The licence
-problem arrives with the DLLs.
-
-**THE REMEDY IS NOW IN THIS TREE**, landed by the `ci` merge: `scribobulate.iss` carries a
-`PrepareToInstall` `[Code]` block that runs Microsoft's own `vc_redist.x64.exe` when a
-registry probe finds the runtime absent or below the embedded redist's version, its
-`dontcopy` source entry, and the redist discovery in `package.ps1`. Running Microsoft's
-installer is what satisfies the click-through, which is why that shape was chosen — the
-project never becomes a redistributor. The `stage.ps1` half of "Stop redistributing Microsoft's C runtime" (2026-08-14) is *removal* of an
-app-local copy, and it merged as such: nothing in the staged tree copies a CRT DLL.
-
-**A FIELD DISCRIMINATOR, so a future report can be placed without a clean image.** The
-bootstrapper is EMBEDDED, so it shows up in the artefact's size: a `ci`-line installer
-measures ~37.7 MB (39,509,846 bytes, measured by the Windows seat, 2026-08-30) against
-~15.7 MB for a master-line build with no bootstrapper. Cite the SIZE CLASS, never the
-constant — the same build shape already moved from 38,595,643 bytes at that change. That is
-also independent evidence the bootstrapper is WIRED rather than merely present in the
-`.iss`, which the `.iss` alone cannot show.
-
-**INDEPENDENTLY CONFIRMED FROM CI, which closes the weaker half.** The hosted Windows
-runner's artefact measures 39,146,361 B (run 33357529291), squarely the bootstrapper size
-class — so the artefact CI publishes demonstrably carries `vc_redist.x64.exe`, established
-from a machine that is not the Windows seat's own. That answers "does the shipped artefact
-contain the remedy at all" and leaves untouched the question below.
-
-**WHY THIS ENTRY IS STILL OPEN, and it is the part to read before closing it: the remedy
-has never been verified against the condition it exists for.** Every machine able to build
-this project already has the CRT, so a staged launch on a build box proves nothing either
-way. The observation that means something is a PAIR — runtime absent with the bootstrapper
-disabled must fail to start, and the bootstrapper must then make it start — and that needs
-a clean Windows image no seat currently has. An unverified remedy in the tree is not a
-smaller problem than one on a branch; it is the same problem wearing a green tick, which is
-why the severity is unchanged. Two live possibilities also remain open: the original report
-may have come from a `ci` build, in which case the fault is *in* the bootstrapper (a 32-bit
-Setup reading a redirected registry view, a declined elevation, a redist below the compiled
-floor) rather than in its absence.
-
-**The attribution half is discharged.** `THIRD-PARTY-LICENSES.md` is now generated from
-`notices/*.md` at build time, and `notices/20-msvc.md` covers the embedded
-`vc_redist.x64.exe`. That was the other obligation this entry was carrying; only the
-verification remains.
-
----
 
 ## CLSD-03. No screen reader on Windows or macOS can read the app's accessible names
 
