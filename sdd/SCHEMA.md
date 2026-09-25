@@ -502,6 +502,7 @@ are on.
 | `list_ordered_glyph` | `string` | — | A glyph drawn in place of the ordered numeral. ⚠️ This DISCARDS the ordinal — deliberate, and inert unless a theme asks for it. |
 | `list_task_glyph` | `string` | — | A glyph drawn in place of the unchecked task box. |
 | `list_task_checked_glyph` | `string` | — | A glyph drawn in place of the checked task box. Resolves independently of the unchecked one, so a theme may state either alone. |
+| `list_task_tick_glyph` | `string` | — | A glyph drawn INSIDE the checked task box in place of its checkmark; the box stays drawn. Yields to a state's own `list_task_*_glyph` or sprite, which replace the box. Setting it makes the HTML and PDF exports draw both task boxes themselves (TDD 18.63). |
 | `list_bullet_sprite` ⓷ | sprite path | — | A sprite drawn in place of the bullet dot. |
 | `list_ordered_sprite` | sprite path | — | A sprite drawn in place of the ordered numeral. |
 | `list_task_sprite` | sprite path | — | A sprite drawn in place of the unchecked task box. |

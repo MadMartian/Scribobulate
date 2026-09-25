@@ -74,7 +74,7 @@ pub(crate) fn checkbox_rect(
     let text_h = (h - gap).max(0.0);
     let text_cy = text_top + text_h / 2.0;
     let col_cx = content_margin - (step_f(m) / 2.0) * z;
-    let s = (13.0 * z).round().max(9.0);
+    let s = (crate::taskbox::DESIGN_SIDE as f32 * z).round().max(9.0);
     graphene::Rect::new(col_cx - s / 2.0, text_cy - s / 2.0, s, s)
 }
 
@@ -296,7 +296,7 @@ pub(crate) fn draw_list_marker(
             let lw = if paint.hover.is_some() {
                 (2.4 * z).max(1.8)
             } else {
-                (1.5 * z).max(1.0)
+                (crate::taskbox::DESIGN_STROKE as f32 * z).max(1.0)
             };
             let hp = (lw / 2.0 + 1.0).max(2.0);
             let bounds = graphene::Rect::new(bx - hp, by - hp, s + 2.0 * hp, s + 2.0 * hp);
@@ -309,21 +309,76 @@ pub(crate) fn draw_list_marker(
                 by as f64,
                 s as f64,
                 s as f64,
-                (3.0 * z).min(s / 3.0) as f64,
+                (crate::taskbox::DESIGN_RADIUS as f32 * z).min(s / 3.0) as f64,
             );
             let _ = cr.stroke();
+            // A themed tick replaces the checkmark INSIDE the box (TDD 18.63); the box
+            // above is unchanged, hover border included. It is drawn outside the Cairo
+            // node, as the marker glyph above is, so it takes the view's own zoomed font.
+            let themed_tick = checked.then_some(paint.glyphs.task_tick.as_ref()).flatten();
+            if let Some(tick) = themed_tick {
+                drop(cr);
+                if draw_tick_glyph(snapshot, view, tick, rect, fg) {
+                    return;
+                }
+                // An ink-less tick: fall through to the default checkmark below, on a
+                // fresh node, so the checked state is never drawn as an empty box.
+                let cr = snapshot.append_cairo(&bounds);
+                draw_checkmark(&cr, fg, bx, by, s, z);
+                return;
+            }
             if *checked {
-                // Keep the checkmark in the foreground colour (legible content ink)
-                // regardless of hover — only the box border adopts the accent.
-                set_source(&cr, fg);
-                cr.set_line_width((2.0 * z).max(1.2) as f64);
-                cr.set_line_cap(cairo::LineCap::Round);
-                cr.set_line_join(cairo::LineJoin::Round);
-                checkmark_path(&cr, bx as f64, by as f64, s as f64);
-                let _ = cr.stroke();
+                draw_checkmark(&cr, fg, bx, by, s, z);
             }
         }
     }
+}
+
+/// The default checkmark inside a `s`-square box at `(bx, by)`. Kept in the foreground
+/// colour (legible content ink) regardless of hover — only the box border adopts the
+/// accent.
+fn draw_checkmark(cr: &cairo::Context, fg: &gdk::RGBA, bx: f32, by: f32, s: f32, z: f32) {
+    set_source(cr, fg);
+    cr.set_line_width((2.0 * z).max(1.2) as f64);
+    cr.set_line_cap(cairo::LineCap::Round);
+    cr.set_line_join(cairo::LineJoin::Round);
+    checkmark_path(cr, bx as f64, by as f64, s as f64);
+    let _ = cr.stroke();
+}
+
+/// Draw a themed tick centred on its ink inside `rect`, scaled to fit it
+/// (`taskbox::tick_fit`). `false` — drawing nothing — for a glyph with no ink.
+fn draw_tick_glyph(
+    snapshot: &gtk::Snapshot,
+    view: &gtk::TextView,
+    tick: &crate::theme::MarkerGlyph,
+    rect: graphene::Rect,
+    fg: &gdk::RGBA,
+) -> bool {
+    let layout = view.create_pango_layout(Some(tick.as_plain()));
+    let (ink, _) = layout.pixel_extents();
+    let fit = crate::taskbox::tick_fit(
+        crate::taskbox::Ink {
+            x: f64::from(ink.x()),
+            y: f64::from(ink.y()),
+            w: f64::from(ink.width()),
+            h: f64::from(ink.height()),
+        },
+        crate::taskbox::Square {
+            x: f64::from(rect.x()),
+            y: f64::from(rect.y()),
+            side: f64::from(rect.width()),
+        },
+    );
+    let Some(fit) = fit else {
+        return false;
+    };
+    snapshot.save();
+    snapshot.translate(&graphene::Point::new(fit.x as f32, fit.y as f32));
+    snapshot.scale(fit.scale as f32, fit.scale as f32);
+    snapshot.append_layout(&layout, fg);
+    snapshot.restore();
+    true
 }
 
 /// Trace the checkmark inside a `size`-square box at `(x, y)`. Shared by the task
@@ -346,17 +401,8 @@ pub(super) fn set_source(cr: &cairo::Context, fg: &gdk::RGBA) {
     );
 }
 
-/// Trace a rounded-rectangle path (four quarter-circle corners) on `cr`.
-pub(super) fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
-    use std::f64::consts::{FRAC_PI_2, PI};
-    let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
-    cr.new_sub_path();
-    cr.arc(x + w - r, y + r, r, -FRAC_PI_2, 0.0);
-    cr.arc(x + w - r, y + h - r, r, 0.0, FRAC_PI_2);
-    cr.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
-    cr.arc(x + r, y + r, r, PI, 1.5 * PI);
-    cr.close_path();
-}
+/// The rounded-rectangle path, owned by `taskbox` since the PDF sink draws the same box.
+pub(super) use crate::taskbox::rounded_rect;
 
 #[cfg(test)]
 mod tests {

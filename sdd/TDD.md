@@ -3194,6 +3194,16 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **And** the card keeps its colour: unlike a chip, a card does not take the surface's — it is drawn on a backdrop the syntax palette is tuned for, and a card that changed colour with what is behind it would put third-party token colours on an untested fill
 - **Rationale:** the card is **self-drawn** (GTK4Rs/AP-21), so no tag tells it how far the text it covers was pushed in; drawn at the page's content column it is exactly the quote panel's own rectangle and erases it. The distinction the two decorations draw is the useful one: **a chip modulates its surface, a card occludes it** — so a chip owes the surface its colour (18.61) and a card owes it its geometry
 
+### 18.63 A theme can put its own tick inside the checked task box
+- **Given** a theme setting `list_task_tick_glyph`, and a document with checked and unchecked task items, at top level and nested
+- **When** it is rendered, and separately exported to HTML and PDF
+- **Then** the preview draws its usual task box for both states, in the task marker's ink and with its hover border, and the checked box holds the glyph in place of the checkmark, centred on the glyph's ink and scaled to fit the box at every zoom
+- **And** the HTML export draws both boxes itself instead of an `<input type="checkbox">`, with the glyph HTML-escaped inside the checked one, and the PDF export draws both boxes as pictures in the gutter instead of the `☐`/`☑` characters
+- **And** a task state whose own `list_task_glyph`/`list_task_checked_glyph` or sprite is stated keeps replacing that state's box outright; the tick applies only inside a drawn box
+- **And** a glyph with no ink (a space) falls back to the default checkmark, so the checked state is never an empty box
+- **And** omitted, every surface draws exactly what it drew before (TDD 18.2)
+- **Rationale:** a tick changes what the box holds, not the box, so it is a key of its own rather than another `list_task_checked_glyph`: that key replaces the box, which loses the box's ink, its hover border and its likeness to the unchecked state
+
 
 ## 19. Local document-link navigation
 

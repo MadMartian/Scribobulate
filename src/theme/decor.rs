@@ -465,6 +465,7 @@ static NO_GLYPHS: ListGlyphs = ListGlyphs {
     ordered: None,
     task: None,
     task_checked: None,
+    task_tick: None,
 };
 
 /// A `Sprites` that states nothing — the mirror of [`NO_GLYPHS`], for a caller asking
@@ -500,6 +501,34 @@ pub(crate) fn marker_sprite(
     sprites: &Sprites,
 ) -> Option<&SpriteRef> {
     marker_choice(kind, depth, &NO_GLYPHS, sprites).sprite
+}
+
+/// A task box that a SINK draws itself, because the theme states a tick for it (TDD
+/// 18.63): the empty box, or the box with the themed tick inside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TaskBox<'a> {
+    Empty,
+    Ticked(&'a MarkerGlyph),
+}
+
+/// Whether a task marker of `kind` is the drawn box carrying a themed tick — and so
+/// must be drawn as a box by a sink whose default task marker is something else (the
+/// HTML sink's `<input>`, the PDF sink's `☐`/`☑` characters). `None` for a non-task
+/// kind, for a theme stating no tick, and for a state whose own glyph replaces the box
+/// outright. A state's SPRITE outranks this too, and each sink checks that first, as it
+/// already does for the glyph.
+///
+/// BOTH states answer once a tick is stated, not only the checked one: a sink that drew
+/// the ticked box itself and left the empty one as its native control would put two
+/// different boxes side by side in one list. The preview needs no such rule, since its
+/// gutter always draws both.
+pub(crate) fn drawn_task_box(kind: MarkerKind, glyphs: &ListGlyphs) -> Option<TaskBox<'_>> {
+    let tick = glyphs.task_tick.as_ref()?;
+    match kind {
+        MarkerKind::Task if glyphs.task.is_none() => Some(TaskBox::Empty),
+        MarkerKind::TaskChecked if glyphs.task_checked.is_none() => Some(TaskBox::Ticked(tick)),
+        _ => None,
+    }
 }
 
 /// Just the GLYPH a marker of `kind` at `depth` reads. The mirror of

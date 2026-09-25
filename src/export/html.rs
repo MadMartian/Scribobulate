@@ -917,6 +917,21 @@ fn task_marker_html(t: &Theme, checked: bool, uris: &SpriteUris) -> Option<Strin
             ));
         }
     }
+    // A themed TICK makes this sink draw the box itself, for BOTH states (TDD 18.63): a
+    // glyph cannot be put inside an `<input>`, and a drawn ticked box beside a native
+    // empty one would be two different boxes in one list. Its shape is `task_box_css`.
+    if let Some(drawn) = crate::theme::drawn_task_box(kind, &t.list_glyphs) {
+        let tick = match drawn {
+            crate::theme::TaskBox::Empty => String::new(),
+            crate::theme::TaskBox::Ticked(g) => {
+                format!("<span class=\"tick\">{}</span>", g.escaped_for_html())
+            }
+        };
+        return Some(format!(
+            "<span class=\"task-marker boxed {}\">{tick}</span>",
+            task_marker_state_class(checked)
+        ));
+    }
     // ONE key, THREE grammars: this projection is the HTML one, and it is a different
     // escape from the Pango-markup one the PDF sink takes — a single `markup_escape_text`
     // is not sufficient once both sinks are involved, and what leaves this application is
@@ -1105,7 +1120,7 @@ fn blockquote_panel_css(t: &Theme, body_fg: &str, uris: &SpriteUris) -> String {
 /// checkbox. So before this key, a theme's `list_marker` coloured the preview's drawn
 /// checkbox and left the artefact's on the reader's default — visible only side by side.
 fn task_marker_css(t: &Theme, uris: &SpriteUris) -> String {
-    let mut css = String::new();
+    let mut css = task_box_css(t);
     if let Some(c) = t.list_task_color {
         let hex = to_hex_rgba(c);
         let _ = write!(
@@ -1159,6 +1174,32 @@ fn task_marker_css(t: &Theme, uris: &SpriteUris) -> String {
     }
     css.push_str(&rules);
     css
+}
+
+/// The drawn task box this sink emits once a theme states a tick (TDD 18.63). Empty
+/// otherwise, so a theme without the key keeps its `<input>` and a byte-identical sheet.
+///
+/// Its proportions are the preview's, from `taskbox`'s design constants, stated in `em`
+/// so the box tracks the item's text size as the preview's tracks zoom. The ink is
+/// `currentColor`, which `.task-marker`'s colour rule above sets where the theme states
+/// one — the same fallback to body ink the preview's box has.
+fn task_box_css(t: &Theme) -> String {
+    use crate::taskbox::{DESIGN_RADIUS, DESIGN_SIDE, DESIGN_STROKE, TICK_FILL};
+    if t.list_glyphs.task_tick.is_none() {
+        return String::new();
+    }
+    // The box's side in `em`: 13 px beside a 15 px body line in the preview.
+    const SIDE_EM: f64 = 0.85;
+    let stroke = SIDE_EM * DESIGN_STROKE / DESIGN_SIDE;
+    let radius = SIDE_EM * DESIGN_RADIUS / DESIGN_SIDE;
+    let tick = SIDE_EM * TICK_FILL;
+    format!(
+        ".task-marker.boxed {{ display: inline-flex; align-items: center; \
+         justify-content: center; box-sizing: border-box; width: {SIDE_EM}em; \
+         height: {SIDE_EM}em; border: {stroke:.3}em solid currentColor; \
+         border-radius: {radius:.3}em; vertical-align: -0.1em; }}\n\
+         .task-marker.boxed .tick {{ font-size: {tick:.3}em; line-height: 1; }}\n"
+    )
 }
 
 /// The class distinguishing a done task marker from an outstanding one.
@@ -2071,6 +2112,36 @@ mod html_sink_tests {
         assert!(!css.contains("::marker { content"), "{css}");
         assert!(super::task_marker_html(&theme, true, &super::SpriteUris::default()).is_none());
         assert!(super::task_marker_html(&theme, false, &super::SpriteUris::default()).is_none());
+    }
+
+    /// TDD 18.63 — a themed tick makes this sink draw BOTH task boxes itself, the done
+    /// one carrying the escaped tick, and states the box's shape in the sheet. Without the
+    /// key neither the spans nor the rule exist (the `<input>` control stands).
+    #[test]
+    fn a_themed_tick_draws_both_task_boxes_with_the_tick_in_the_done_one() {
+        let (palette, mut theme) = style();
+        let bare = super::stylesheet(&palette, &theme, &super::SpriteUris::default());
+        assert!(!bare.contains(".task-marker.boxed"), "{bare}");
+
+        let mut themes = crate::theme::Themes::builtin();
+        themes.merge_over_for_test("[themes.tick]\nlist_task_tick_glyph = \"<🍒>\"\n");
+        theme.list_glyphs = themes.resolve("tick").list_glyphs;
+        let uris = super::SpriteUris::default();
+        assert_eq!(
+            super::task_marker_html(&theme, true, &uris).as_deref(),
+            Some("<span class=\"task-marker boxed done\"><span class=\"tick\">&lt;🍒&gt;</span></span>")
+        );
+        assert_eq!(
+            super::task_marker_html(&theme, false, &uris).as_deref(),
+            Some("<span class=\"task-marker boxed todo\"></span>")
+        );
+        let css = super::stylesheet(&palette, &theme, &uris);
+        assert!(css.contains(".task-marker.boxed {"), "{css}");
+        assert!(
+            css.contains("border:") && css.contains("solid currentColor"),
+            "{css}"
+        );
+        assert!(css.contains(".task-marker.boxed .tick {"), "{css}");
     }
 
     /// TDD 18.24 / 25.3 — a themed glyph reaches the artefact, HTML-ESCAPED, in both of

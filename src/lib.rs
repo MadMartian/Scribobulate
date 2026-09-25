@@ -146,6 +146,8 @@ pub(crate) mod suite_registry;
 /// recovery decisions. The GTK/filesystem edges are in `window/swap*.rs`.
 pub(crate) mod swapfile;
 pub(crate) mod tags;
+/// The task checkbox as a drawn shape, shared by the preview gutter and the PDF sink.
+pub(crate) mod taskbox;
 pub(crate) mod tasklist;
 /// Test-only. Capture of the `log` facade, so a test can assert a refusal was
 /// *diagnosed* and not merely that the decoration is absent — the two are

@@ -376,6 +376,12 @@ list_bullet_glyph   = "🍬"  # depth 1 — the wrapped sweet, the theme's own s
 list_bullet_glyph_2 = "🍭"  # depth 2 — lollipop
 list_bullet_glyph_3 = "🍥"  # depth 3 and deeper — the pink-and-white swirl
 
+# The TICK in a done task's box is a cherry (TDD 18.63). Operator-directed. Only the
+# tick: the hot-pink box stays drawn, so a done and an outstanding item are still the
+# same control in two positions, hover border and all. It is a colour emoji like the
+# bullets above and takes no ink for the same reason.
+list_task_tick_glyph = "🍒"
+
 # A BAND behind h1/h2 (TDD 18.25) — only the top two, same restraint Synthwave uses:
 # banding every level turns a document into a stack of stripes. Both fills are
 # swatches already vetted elsewhere in this theme, so a band introduces no new hue:

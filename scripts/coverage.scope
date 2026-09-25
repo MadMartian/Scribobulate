@@ -186,6 +186,7 @@ src/swapfile/mod.rs
 src/swapfile/naming.rs
 src/swapfile/recovery.rs
 src/tags/spec.rs
+src/taskbox.rs
 src/tasklist.rs
 src/testlog.rs
 src/testsymlink.rs

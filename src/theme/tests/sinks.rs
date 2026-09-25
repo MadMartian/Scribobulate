@@ -357,6 +357,9 @@ fn decoration_digest(t: &Theme) -> String {
             );
         }
     }
+    // The tick inside the drawn checked box (TDD 18.63). It substitutes for no marker,
+    // so `marker_decor` above does not carry it; the gutter reads it directly.
+    let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{:?}|", t.list_glyphs.task_tick));
     // The rest of what `snapshot_layer` and the live highlight paths read: every
     // decoration the preview draws itself, with no tag and no CSS to carry it.
     //

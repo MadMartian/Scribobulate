@@ -5,7 +5,9 @@
 //! display-free — they only *happened* to live beside the paint code, which is the
 //! argument that kept the PDF sink hand-rolling its own copies of the same tables.
 
-use super::super::decor::{marker_choice, marker_glyph, marker_sprite, MarkerSubstitute};
+use super::super::decor::{
+    drawn_task_box, marker_choice, marker_glyph, marker_sprite, MarkerSubstitute, TaskBox,
+};
 use super::super::{ListGlyphs, MarkerKind, Sprites, Themes};
 use crate::renderer::ListMarkerKind;
 
@@ -71,6 +73,56 @@ fn one_task_state_may_be_stated_alone() {
         MarkerSubstitute::Glyph(_)
     ));
     assert_eq!(winner(&t, MarkerKind::Task, 1), MarkerSubstitute::Drawn);
+}
+
+/// TDD 18.63 — a stated tick leaves the preview's box DRAWN (it changes what is inside
+/// the box, not the box), and tells a sink that draws its own boxes to draw both states,
+/// the done one with the tick in it. A state's own glyph still replaces its box outright.
+#[test]
+fn a_tick_keeps_the_box_drawn_and_makes_both_states_a_sink_drawn_box() {
+    let t = themed("[themes.tick]\nlist_task_tick_glyph = \"🍒\"\n", "tick");
+    let g = &t.list_glyphs;
+    assert_eq!(
+        winner(&t, MarkerKind::TaskChecked, 1),
+        MarkerSubstitute::Drawn
+    );
+    assert_eq!(winner(&t, MarkerKind::Task, 1), MarkerSubstitute::Drawn);
+    assert_eq!(drawn_task_box(MarkerKind::Task, g), Some(TaskBox::Empty));
+    assert!(matches!(
+        drawn_task_box(MarkerKind::TaskChecked, g),
+        Some(TaskBox::Ticked(tick)) if tick.as_plain() == "🍒"
+    ));
+    assert_eq!(drawn_task_box(MarkerKind::Bullet, g), None);
+    assert_eq!(drawn_task_box(MarkerKind::Ordered, g), None);
+
+    let glyphed = themed(
+        "[themes.glyphed]\nlist_task_tick_glyph = \"🍒\"\nlist_task_checked_glyph = \"✔\"\n",
+        "glyphed",
+    );
+    assert_eq!(
+        drawn_task_box(MarkerKind::TaskChecked, &glyphed.list_glyphs),
+        None
+    );
+    assert_eq!(
+        drawn_task_box(MarkerKind::Task, &glyphed.list_glyphs),
+        Some(TaskBox::Empty)
+    );
+
+    let untouched = themed("[themes.plain]\nlist_task_glyph = \"t\"\n", "plain");
+    assert_eq!(
+        drawn_task_box(MarkerKind::TaskChecked, &untouched.list_glyphs),
+        None
+    );
+}
+
+/// The shipped Candy theme ticks its done tasks with a cherry.
+#[test]
+fn candy_ticks_its_task_boxes_with_a_cherry() {
+    let candy = Themes::builtin().resolve("candy");
+    assert_eq!(
+        candy.list_glyphs.task_tick.as_ref().map(|g| g.as_plain()),
+        Some("🍒")
+    );
 }
 
 /// TDD 18.26 — the bullet's glyph and sprite vary by nesting depth, and the tier a

@@ -134,6 +134,7 @@ mod span;
 mod suite_registry;
 mod swapfile;
 mod tags;
+mod taskbox;
 mod tasklist;
 // Gated `#[cfg(all(test, feature = "gtk-integration-tests"))]` in `lib.rs`; this root
 // is always built `--cfg test` under that same feature (it only exists to run

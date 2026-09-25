@@ -1679,6 +1679,34 @@ fn page_text(laid: &crate::export::pdf::Laid) -> String {
 /// it is drawn, and none said the text run loses its prefix — so deleting the
 /// suppression in `measure.rs` put a bullet *and* a picture on the page with the suite
 /// green.
+/// TDD 18.63 — a themed tick makes the PDF task box a drawn picture in the gutter, for
+/// both states, and removes the `☐`/`☑` characters from the item's text run.
+#[test]
+fn a_themed_tick_draws_the_task_boxes_as_pictures_instead_of_characters() {
+    let md = "- [ ] open item\n- [x] done item\n";
+    let d = doc::build(md, &RenderOptions::default());
+    let plain = lay_out(&d, &ctx(), PAGE_WIDTH_PT, PAGE_HEIGHT_PT, &theme());
+    assert!(plain.lines.iter().all(|l| !l.has_marker_for_test()));
+    assert!(page_text(&plain).contains('\u{2611}'));
+
+    let mut themes = crate::theme::Themes::builtin();
+    themes.merge_over_for_test("[themes.tick]\nlist_task_tick_glyph = \"X\"\n");
+    let mut t = theme();
+    t.list_glyphs = themes.resolve("tick").list_glyphs;
+    let laid = lay_out(&d, &ctx(), PAGE_WIDTH_PT, PAGE_HEIGHT_PT, &t);
+    let pictured = laid
+        .lines
+        .iter()
+        .filter(|l| l.has_marker_for_test())
+        .count();
+    assert_eq!(pictured, 2, "one drawn box per task item");
+    let text = page_text(&laid);
+    assert!(
+        !text.contains('\u{2610}') && !text.contains('\u{2611}'),
+        "the text run must lose its box character when the box is drawn: {text}"
+    );
+}
+
 #[test]
 fn a_list_marker_sprite_is_drawn_in_the_gutter_and_suppresses_the_text_marker() {
     const MARGIN: f64 = 54.0;

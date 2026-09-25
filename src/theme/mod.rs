@@ -55,8 +55,8 @@ mod value;
 mod tests;
 
 pub(crate) use decor::{
-    marker_choice, marker_glyph, marker_sprite, Band, BandPaint, Fill, MarkerChoice, MarkerKind,
-    MarkerSubstitute,
+    drawn_task_box, marker_choice, marker_glyph, marker_sprite, Band, BandPaint, Fill,
+    MarkerChoice, MarkerKind, MarkerSubstitute, TaskBox,
 };
 pub(crate) use keys::{heading_slot, BULLET_TIERS, HEADING_LEVELS};
 /// Re-exported for tests that build a translucent key by hand; production reaches

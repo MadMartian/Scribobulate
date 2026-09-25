@@ -48,10 +48,12 @@ pub(crate) fn lay_out(
     // `preview::build::Prepared` derives its palette the same way: the two cannot then
     // describe different themes. This sink's palette is always the PAPER one (TDD
     // 25.9), and the drawing pass is handed the same resolution of the same theme.
+    let paper = crate::palette::Palette::for_paper(theme);
     let mut b = Layouter {
         ctx,
         theme,
-        chips: crate::palette::Palette::for_paper(theme).code_chips,
+        task_boxes: TaskBoxRasters::for_theme(theme, paper.body_fg),
+        chips: paper.code_chips,
         width_pt,
         max_height_pt: height_pt,
         lines: Vec::new(),
@@ -95,9 +97,52 @@ struct ParagraphSpec {
     space_below: f64,
 }
 
+/// The two task boxes this sink draws itself once a theme states a tick (TDD 18.63),
+/// rasterised once per export rather than once per item. Both `None` for a theme stating
+/// no tick, which leaves the `☐`/`☑` text markers exactly as before.
+#[derive(Default)]
+struct TaskBoxRasters {
+    empty: Option<crate::sprite::Raster>,
+    ticked: Option<crate::sprite::Raster>,
+}
+
+impl TaskBoxRasters {
+    /// Inked as the text marker would have been: the task colour where the theme states
+    /// one (`marker_ink`), else the page's body ink — which is what an uncoloured `☐`
+    /// inherited.
+    fn for_theme(theme: &Theme, body_fg: gtk::gdk::RGBA) -> Self {
+        let Some(tick) = theme.list_glyphs.task_tick.as_ref() else {
+            return Self::default();
+        };
+        let ink = theme
+            .marker_ink(crate::theme::MarkerKind::TaskChecked, 1)
+            .unwrap_or(body_fg);
+        Self {
+            empty: crate::taskbox::raster(None, &ink),
+            ticked: crate::taskbox::raster(Some(tick.as_plain()), &ink),
+        }
+    }
+
+    /// The raster for a task item whose box this sink draws, per
+    /// `theme::drawn_task_box`; `None` for every other item.
+    fn for_item(
+        &self,
+        task: Option<bool>,
+        start: Option<u64>,
+        theme: &Theme,
+    ) -> Option<crate::sprite::Raster> {
+        let kind = crate::theme::MarkerKind::from_task_and_start(task, start);
+        match crate::theme::drawn_task_box(kind, &theme.list_glyphs)? {
+            crate::theme::TaskBox::Empty => self.empty.clone(),
+            crate::theme::TaskBox::Ticked(_) => self.ticked.clone(),
+        }
+    }
+}
+
 struct Layouter<'a> {
     ctx: &'a pango::Context,
     theme: &'a Theme,
+    task_boxes: TaskBoxRasters,
     /// The inline-code chip's fill per surface, resolved from the PAPER palette this
     /// export was prepared with — the same one the drawing pass inks from, handed in
     /// rather than re-derived so the two stages cannot answer differently.
@@ -749,7 +794,10 @@ impl Layouter<'_> {
             // shared one every sink reads and a second cache beside it is the drift this
             // project keeps paying for.
             let mut sprite = list_marker_sprite(item.task, start, list_depth, &self.theme.sprites)
-                .and_then(crate::sprite::surface);
+                .and_then(crate::sprite::surface)
+                // A themed TICK makes the task box a picture too: a box with a glyph
+                // inside it cannot be one text run either (TDD 18.63).
+                .or_else(|| self.task_boxes.for_item(item.task, start, self.theme));
             let marker = if sprite.is_some() {
                 String::new()
             } else {

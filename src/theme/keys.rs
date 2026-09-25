@@ -649,6 +649,7 @@ keys! {
     LIST_ORDERED_GLYPH     = "list_ordered_glyph"      : Glyph;
     LIST_TASK_GLYPH        = "list_task_glyph"         : Glyph;
     LIST_TASK_CHECKED_GLYPH = "list_task_checked_glyph" : Glyph;
+    LIST_TASK_TICK_GLYPH   = "list_task_tick_glyph"    : Glyph;
     LIST_BULLET_SPRITE     = "list_bullet_sprite"      : Sprite Depth;
     LIST_ORDERED_SPRITE    = "list_ordered_sprite"     : Sprite;
     LIST_TASK_SPRITE       = "list_task_sprite"        : Sprite;

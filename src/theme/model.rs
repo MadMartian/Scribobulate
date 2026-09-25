@@ -32,6 +32,11 @@ pub(crate) struct ListGlyphs {
     pub ordered: Option<MarkerGlyph>,
     pub task: Option<MarkerGlyph>,
     pub task_checked: Option<MarkerGlyph>,
+    /// What sits INSIDE the drawn checked box in place of its checkmark (TDD 18.63).
+    /// Unlike the four above it substitutes for no marker: the box stays drawn, keeps
+    /// its ink and its hover border, and only the tick changes. So it applies only where
+    /// neither task state's own glyph or sprite has already replaced the box.
+    pub task_tick: Option<MarkerGlyph>,
 }
 
 // ── the resolved theme ────────────────────────────────────────────────────────

@@ -190,6 +190,7 @@ impl Theme {
                 ordered: src.glyph(&keys::LIST_ORDERED_GLYPH),
                 task: src.glyph(&keys::LIST_TASK_GLYPH),
                 task_checked: src.glyph(&keys::LIST_TASK_CHECKED_GLYPH),
+                task_tick: src.glyph(&keys::LIST_TASK_TICK_GLYPH),
             },
             disclosure_glyphs: crate::theme::model::DisclosureGlyphs {
                 collapsed: src.glyph(&keys::DISCLOSURE_GLYPH),
