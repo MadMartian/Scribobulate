@@ -10,7 +10,7 @@ use super::*;
 use crate::widgets::tab::TabView;
 
 /// Build a brand-new window meant to host exactly one already-existing tab —
-/// Move Tab to New Window's destination, and the X11 desktop-drop
+/// Move Tab to New Window's destination, and the desktop-drop
 /// enhancement below — then immediately drop its throwaway blank starter tab
 /// so the caller's own tab becomes the window's only content. Reuses
 /// `new_window`'s full chrome/action/signal construction rather than

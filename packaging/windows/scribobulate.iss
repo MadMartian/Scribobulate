@@ -1,7 +1,9 @@
 ; Scribobulate — Windows installer (Inno Setup 6)
 ;
-; Per-user install by design: no elevation prompt, nothing written outside
-; HKCU and %LOCALAPPDATA%. A Markdown viewer does not need machine-wide
+; Per-user install by design: Setup itself asks for no elevation and writes
+; only to HKCU and %LOCALAPPDATA%. The one exception is the Visual C++ runtime,
+; installed machine-wide (behind a UAC prompt) on a machine that lacks it — see
+; below. A Markdown viewer does not need machine-wide
 ; installation, and requiring admin rights to install one is a friction cost
 ; with no matching benefit.
 ;

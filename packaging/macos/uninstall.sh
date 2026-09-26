@@ -13,8 +13,8 @@
 # exists to end — and nothing could have caught the divergence.
 #
 # WHAT IT REMOVES is exactly what that script created, and nothing else:
-#   the `scribobulate` symlink in Homebrew's bin/ (the thing on PATH), the manual-page
-#   symlinks in Homebrew's share/man/man{1,5}/, the anchored bundle those resolve into,
+#   the `scribobulate` symlink in the mode's bin/ (the thing on PATH), the manual-page
+#   symlinks in its share/man/man{1,5}/ (see mode.sh), the anchored bundle those resolve into,
 #   and any bundle left in the build directory. install.sh removes its own build copy on
 #   success, so that last one is normally already gone; it is swept here for the run that
 #   failed part-way and for a bare `bundle.sh` invocation, because Launch Services

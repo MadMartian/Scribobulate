@@ -75,8 +75,9 @@ of GPU memory it leaves alone is a megabyte your models get to use.
 
 The second reason is that I wanted it to look beautiful. A tool for humans working
 with AI should be a pleasant place for the human to sit, so the reading themes
-(Sepia, Bedtime, Synthwave, Terminal, Candy) and the theming system behind them got
-real attention, and the theme you choose travels into the HTML and PDF you export.
+(Sepia, Bedtime, Synthwave, Terminal, Candy, Pixel Quest) and the theming system behind them got
+real attention, and the theme you choose travels into the HTML you export (a PDF
+always prints in the plain light style, since paper has no dark mode).
 
 The third reason is the one at the top of this page: I wanted to argue with an agent's
 prose in the margin of the file it wrote, not in a chat window that has no idea which
@@ -120,7 +121,7 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
     it from the page without hiding it from you
   - Hover a code block for a copy button — one click puts the code on the
     clipboard, fences and all container markers left behind
-  - Clickable links with a hover preview of the destination
+  - Clickable links that show where they lead when you hover them
   - Follow a link to another Markdown file and it opens as a tab — read a
     whole document set without hunting files by hand
 - **Edit with a live preview**
@@ -131,7 +132,8 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
 - **Take the document with you** — File ▸ Export writes what you are reading as
   a standalone **HTML** file to share or a paginated **PDF** to keep. Images
   travel inside the file, so it still works after you send it; your annotations
-  come along, and the reading theme you chose is what the artefact looks like.
+  come along, and the HTML wears the reading theme you chose (the PDF always
+  prints in the plain light style).
 - **Find what you need**
   - Search the whole document, including table cells (Ctrl+F)
   - Replace in edit and split modes (Ctrl+H)
@@ -253,15 +255,13 @@ is equivalent. Use `bundle.sh` above when you want the `.app` and nothing on you
 PATH. `./uninstall.sh` removes what it installed, verifies each removal actually
 happened, and **reports — never deletes —** a copy it did not put there.
 
-Not a self-contained redistributable — the built app still links these
-Homebrew libraries at runtime. More: [`packaging/macos/README.md`](packaging/macos/README.md).
+More: [`packaging/macos/README.md`](packaging/macos/README.md).
 
 ### Windows
 
 Build from source. The GTK runtime comes from
-[gvsbuild](https://github.com/wingtk/gvsbuild) and takes about 14 minutes once
-per machine; after that `build.bat` sets the whole toolchain environment for
-you:
+[gvsbuild](https://github.com/wingtk/gvsbuild), built once per machine; after
+that `build.bat` sets the whole toolchain environment for you:
 
 ```powershell
 .\packaging\windows\build.bat release
@@ -275,8 +275,8 @@ instead of in `target\release`:
 .\packaging\windows\package.ps1     # -> build\installer\Scribobulate-<version>-x64-setup.exe
 ```
 
-It installs to `%LOCALAPPDATA%\Programs\Scribobulate` with no administrator
-password and writes nothing outside `HKCU`, carrying the GTK runtime inside it.
+It installs to `%LOCALAPPDATA%\Programs\Scribobulate`, carrying the GTK runtime
+inside it.
 Scribobulate and those GTK libraries import `VCRUNTIME140.dll`, which Windows
 does not include — the UCRT that *is* part of Windows 10 and later is a
 different runtime — so the installer also carries Microsoft's own

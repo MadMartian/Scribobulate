@@ -1118,6 +1118,11 @@
 - **Then** the tab strip is drawn on every frame — never blank — and no `Trying to snapshot … without a current allocation` warning names the tab strip
 - **And** a relabel that leaves a tab's text unchanged does not lay the strip out again; one that changes it (a filename, the unsaved-changes marker, a deleted-file badge) has the strip laid out before it is next drawn
 
+### 7.27 Dragging a tab onto the desktop opens a new window (Windows)
+- **Given** a Windows desktop
+- **When** the user drags a tab off its window's strip and releases it over empty desktop space
+- **Then** a new window opens containing that tab (same outcome as 7.10 on X11 and 7.16 on macOS)
+
 ## 8. Single-instance lifecycle
 
 > One process, many windows. Launching the app repeatedly must not spawn
