@@ -161,6 +161,9 @@ pub(super) fn register_editor_actions(window: &ApplicationWindow, heading_btn: &
         let select_all_action = select_all_action.clone();
         let sync = move |w: &gtk::ApplicationWindow| {
             select_all_action.set_enabled(!crate::window::focus_in_text_entry(w));
+            // Undo/Redo stand down on the same predicate; their state also depends on the
+            // editor's history, so they are recomputed whole rather than set here.
+            crate::window::update_undo_redo_state(w);
         };
         sync(window);
         window.connect_notify_local(Some("focus-widget"), move |w, _| {
@@ -670,6 +673,66 @@ mod gtk_integration_tests {
             "select-all must stand down while the editor annotation card's entry holds focus"
         );
 
+        window.destroy();
+    }
+
+    /// Undo/Redo stand down while the annotation comment field holds focus, so Ctrl+Z
+    /// undoes the COMMENT being typed rather than the document — and come back when focus
+    /// returns to the editor. The document must HAVE undo history first: on a fresh
+    /// document `win.undo` is already disabled, and the check passes with the standdown
+    /// deleted (which is how the defect got past a first live check).
+    #[gtktest::test]
+    fn undo_stands_down_in_the_comment_field_when_the_document_has_history() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.editoractions.undo"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let window = crate::window::new_window(&app, "IT", "# Heading\n\nbody text", None);
+        window.present();
+        pump_until(|| window.is_mapped(), "toplevel to map");
+        let st = state(&window).expect("state registered after new_window");
+        change_action_state(&window, "view-mode", &"edit".to_variant());
+        let undo_enabled = || {
+            simple_action(&window, "undo")
+                .expect("win.undo registered")
+                .is_enabled()
+        };
+
+        st.editor.grab_focus();
+        pump_until(
+            || focus_is_within(&window, &st.editor),
+            "editor to take focus",
+        );
+        let buf = &st.editor_buf;
+        buf.insert(&mut buf.end_iter(), " more");
+        pump_until(undo_enabled, "an edit to give the document undo history");
+
+        buf.select_range(&buf.start_iter(), &buf.iter_at_offset(9));
+        update_annotate_action_state(&window);
+        simple_action(&window, "annotate")
+            .expect("win.annotate registered")
+            .activate(None);
+        pump_until(
+            || focus_is_in_annotation_card(&window),
+            "the annotation card's field to take focus",
+        );
+        assert!(
+            !undo_enabled(),
+            "undo must stand down while the comment field holds focus — enabled, Ctrl+Z \
+             undoes the document instead of the comment"
+        );
+
+        st.editor.grab_focus();
+        pump_until(
+            || focus_is_within(&window, &st.editor),
+            "editor to reclaim focus",
+        );
+        assert!(
+            undo_enabled(),
+            "undo must come back once focus returns to the editor"
+        );
         window.destroy();
     }
 

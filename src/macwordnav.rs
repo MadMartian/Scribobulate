@@ -497,13 +497,19 @@ mod gtk_tests {
 
     #[gtktest::test]
     fn the_annotation_comment_entry_is_wired_at_construction() {
-        let entry = crate::widgets::comment_entry::CommentEntry::new("", |_| {}).entry;
+        let field = crate::widgets::comment_entry::CommentEntry::new("", |_| {}).field;
+        let capture_keys = controllers(&field)
+            .into_iter()
+            .filter(|c| {
+                c.is::<gtk::EventControllerKey>()
+                    && c.propagation_phase() == gtk::PropagationPhase::Capture
+            })
+            .count();
         assert_eq!(
-            capture_key_controllers(&entry),
-            1,
-            "CommentEntry::new must wire word navigation, like every other commit route \
-             it owns — a surface that gets it from its CALLER is a surface the next \
-             caller forgets"
+            capture_keys, 2,
+            "CommentEntry::new must wire word navigation (beside its own Enter-commits \
+             controller), like every other commit route it owns — a surface that gets it \
+             from its CALLER is a surface the next caller forgets"
         );
     }
 

@@ -95,6 +95,38 @@ pub(crate) fn named_search_entry(accessible_name: &str) -> gtk::SearchEntry {
     entry
 }
 
+/// The application's wrapping, multi-row text field, for text too long to read on one
+/// row: accessibly named, clipboard-safe, and word-navigable on macOS.
+///
+/// A `sourceview::View` rather than a bare `gtk::TextView` because the two follow-ups a
+/// text view owes already exist for that type and are the editor's own:
+/// [`crate::clipboard::wire_editor_clipboards`] (plain-text copy/cut, published eagerly
+/// so macOS gets no pasteboard promise — GTK4Rs/AP-339 — and plain-text middle-click
+/// paste) and [`crate::macwordnav::wire_word_navigation`]. A second, `TextView`-typed
+/// copy of either would be a second implementation of one contract.
+///
+/// Word wrap, never `WordChar`: that mode aborts the process under a screen reader on
+/// GTK 4.6 (GTK4Rs/AP-136). The editor pane wraps the same way.
+pub(crate) fn named_text_area(accessible_name: &str, initial: &str) -> sourceview::View {
+    let view = sourceview::View::new();
+    view.buffer().set_text(initial);
+    view.set_wrap_mode(gtk::WrapMode::Word);
+    view.set_accepts_tab(false);
+    view.set_hexpand(true);
+    view.set_vexpand(true);
+    // A text field, not a code pane: the prose face, and the entry frame's inset.
+    view.remove_css_class("monospace");
+    view.set_left_margin(6);
+    view.set_right_margin(6);
+    view.set_top_margin(4);
+    view.set_bottom_margin(4);
+    crate::a11y::name_field(&view, accessible_name);
+    crate::clipboard::wire_editor_clipboards(&view);
+    #[cfg(target_os = "macos")]
+    crate::macwordnav::wire_word_navigation(&view);
+    view
+}
+
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod tests {
     use super::*;

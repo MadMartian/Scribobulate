@@ -113,7 +113,12 @@ fn focus_site(view: &CodePreviewView) -> FocusSite {
         is_the_pane: &focus == pane,
         inside_the_pane: &focus == pane || focus.is_ancestor(pane),
         shares_the_pane_surface: focus.native() == view.native(),
-        editable: focus.is::<gtk::Editable>(),
+        // A text VIEW the reader types into (the annotation comment field) owns its keys
+        // exactly as an entry does; the pane itself is never editable.
+        editable: focus.is::<gtk::Editable>()
+            || focus
+                .downcast_ref::<gtk::TextView>()
+                .is_some_and(|tv| tv.is_editable()),
     }
 }
 

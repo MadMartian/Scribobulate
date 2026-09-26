@@ -487,8 +487,8 @@ pub(crate) fn wire_annotation_overlay(
         }
     });
     card.style_as_card();
-    let entry = card.entry.clone();
-    bar.append(&card.entry);
+    let entry = card.field.clone();
+    bar.append(&card.area);
     bar.append(&card.save);
 
     // Raise the comment-entry card over the CURRENT preview selection: capture the
@@ -537,11 +537,11 @@ pub(crate) fn wire_annotation_overlay(
                     })
                 };
                 pop.popdown();
-                entry.set_text("");
+                crate::widgets::comment_entry::set_comment_text(&entry, "");
                 entry_open.set(true);
                 bar.set_visible(true);
                 position_card_on_cell(&v, &ov, bar.upcast_ref(), &label, a, b);
-                entry.grab_focus();
+                crate::widgets::comment_entry::focus_at_end(&entry);
                 return;
             }
             let Some((a, b)) = buffer_sel else {
@@ -590,7 +590,7 @@ pub(crate) fn wire_annotation_overlay(
                     crate::annotate::merged_comment_for(&source, target.resolve(&source)?)
                 })
                 .unwrap_or_default();
-            entry.set_text(&existing);
+            crate::widgets::comment_entry::set_comment_text(&entry, &existing);
             entry_open.set(true);
             // Show the card BEFORE positioning it. `position_card` centers the card on the
             // selection midpoint via `bar.preferred_size()`, but `gtk_widget_measure`
@@ -603,16 +603,10 @@ pub(crate) fn wire_annotation_overlay(
             // showing), so position_card succeeds; show regardless of its return.
             bar.set_visible(true);
             position_card(&v, &ov, bar.upcast_ref());
-            entry.grab_focus();
-            // Caret to the END, and AFTER `grab_focus` — order is load-bearing. A focused
-            // `GtkText` selects all its text on focus-in (`gtk-entry-select-on-focus`,
-            // default TRUE — gtktext.c:3310-3317), which would silently undo a caret set
-            // before the grab. With the KKK pre-population that is not cosmetic: the merged
-            // comment would open fully selected, so the user's first keystroke would replace
-            // it and the existing comment would be destroyed after all — KKK's data loss
-            // walking back in through the door the fix opened. Caret-at-end makes typing
-            // APPEND: the user is amending, not starting over.
-            entry.set_position(-1);
+            // Caret to the END, unselected: with the pre-population above, a field that
+            // opened with the merged comment selected would lose it to the first
+            // keystroke — the data loss walking back in through the door the fix opened.
+            crate::widgets::comment_entry::focus_at_end(&entry);
         }
     });
     view.set_annotate_trigger(show_entry.clone());
@@ -1018,7 +1012,7 @@ mod jjj_tests {
     }
 
     /// Raise the card over a preview selection and return `(pane, view, entry)`.
-    fn open_card(win: &gtk::Window) -> (gtk::Widget, CodePreviewView, gtk::Entry) {
+    fn open_card(win: &gtk::Window) -> (gtk::Widget, CodePreviewView, sourceview::View) {
         let pane = crate::preview::render(MD, None, 1.0, false, &crate::fold::FoldState::default());
         let view = view_of(pane.clone());
         win.set_default_size(700, 400);
@@ -1048,10 +1042,10 @@ mod jjj_tests {
         (pane, view, entry)
     }
 
-    fn pump_find_entry(pane: &gtk::Widget) -> Option<gtk::Entry> {
+    fn pump_find_entry(pane: &gtk::Widget) -> Option<sourceview::View> {
         let ctx = glib::MainContext::default();
         for _ in 0..200 {
-            if let Some(e) = find_descendant::<gtk::Entry>(pane) {
+            if let Some(e) = find_descendant::<sourceview::View>(pane) {
                 if WidgetExt::is_visible(&e) {
                     return Some(e);
                 }
@@ -1083,9 +1077,10 @@ mod jjj_tests {
         let win = gtk::Window::new();
         let (_pane, _view, entry) = open_card(&win);
 
-        entry.set_text("a comment I do not want to lose");
-        // Exactly what Ctrl+A and Shift+Home both do to the entry.
-        entry.select_region(0, -1);
+        crate::widgets::comment_entry::set_comment_text(&entry, "a comment I do not want to lose");
+        // Exactly what Ctrl+A and Shift+Home both do to the field.
+        let fbuf = entry.buffer();
+        fbuf.select_range(&fbuf.start_iter(), &fbuf.end_iter());
         // The dismissal runs through `schedule`'s ~40 ms debounce, so give it every
         // chance: this asserts a NON-event, and a bound too short would manufacture the
         // pass. `PAST_DISMISS_DEBOUNCE` is an order of magnitude past that debounce.
@@ -1098,7 +1093,7 @@ mod jjj_tests {
              eating our own entry's selections"
         );
         assert_eq!(
-            entry.text(),
+            crate::widgets::comment_entry::comment_text(&entry),
             "a comment I do not want to lose",
             "and the typed comment must survive"
         );
@@ -1113,7 +1108,7 @@ mod jjj_tests {
     fn a_preview_selection_change_still_dismisses_the_card() {
         let win = gtk::Window::new();
         let (_pane, view, entry) = open_card(&win);
-        entry.set_text("draft");
+        crate::widgets::comment_entry::set_comment_text(&entry, "draft");
 
         // The user re-selects in the DOCUMENT, not the card.
         let buf = view.buffer();

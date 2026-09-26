@@ -2679,10 +2679,10 @@
 - **When** the Annotate card is raised
 - **Then** the comment entry is empty — the pre-population never invents a comment where none is at risk
 
-### 17.43 Enter commits on every annotation comment entry
-- **Given** any annotation comment entry — the editor Create card, the preview Create card, or the marker-chip Edit popover
+### 17.43 Enter commits on every annotation comment field
+- **Given** any annotation comment field — the editor Create card, the preview Create card, or the marker-chip Edit popover
 - **When** the reader presses Enter
-- **Then** the comment is committed, identically to clicking Save. All three surfaces route through one shared entry so the two commit paths cannot diverge — a test that only clicks Save passes while Enter is inert
+- **Then** the comment is committed, identically to clicking Save. All three surfaces route through one shared field so the two commit paths cannot diverge — a test that only clicks Save passes while Enter is inert
 
 ### 17.44 A multi-block annotation over an existing annotation lands cleanly, never silently
 - **Given** a document `First para.\n\nThe earth is {==flat==}{>>cite<<} today.` with a preview (or editor) selection that spans **more than one block** AND whose end falls **part-way through** the existing `{==flat==}` highlight
@@ -2766,6 +2766,22 @@
 - **Then** preview and split scroll to it and open its comment card (split additionally placing the editor caret on it), and pure-edit moves the editor caret to the annotation's source position — each mode presenting it exactly as it presents an activated annotations-viewer row, because there is one navigator and not one per surface
 - **And** in pure edit the caret lands on the right character past multi-byte text (as §20.14 requires of the viewer)
 - **And** a document with no annotations at all does nothing, quietly: the command stays enabled, because a greyed-out Next Annotation is indistinguishable from a broken one
+
+### 17.56 A comment is typed into a wrapping field, and stays one line
+- **Given** any annotation comment field — the editor Create card, the preview Create card, or the card's Edit
+- **When** the reader types a comment longer than the field is wide
+- **Then** the text wraps onto the next row and the caret stays in view; the field is a fixed few rows tall and scrolls beyond that, so it never grows the card while the reader types
+- **And** Enter commits (17.43) and never inserts a line break, except while an input method is composing, where Enter confirms the composition as usual
+- **And** a line break that arrives by paste is committed as a single space, because the comment is stored inline in the document and a line break there would end a table row or split a list item
+- **And** the Create cards show their "Add a comment…" hint (17.17) over the empty field only
+- **And** Select All and Undo/Redo act on the field while it has focus, never on the document — including when the document has undo history of its own, where an Undo that reached the document would revert the reader's last edit, possibly a whole annotation
+
+### 17.57 Edit replaces the comment in place
+- **Given** an open annotation card showing a comment
+- **When** the reader clicks **Edit**
+- **Then** the comment text is replaced, in the same place, by the comment field pre-filled with it, with Save and Cancel beneath; the comment is never shown twice, as fixed text and as a field below it
+- **And** the caret rests at the end of the comment with nothing selected
+- **And** the card does not change size or close as the page switches, however long the comment
 
 ## 18. Preview reading themes
 

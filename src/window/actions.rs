@@ -151,10 +151,17 @@ pub(crate) const ANNOTATION_CARD_CLASS: &str = "annotation-entry";
 /// (the editor/preview panes) is a different GObject type entirely, so this predicate
 /// naturally leaves `win.select-all` enabled there — document-wide select-all is the
 /// correct behavior in those panes, only entries need the standdown.
+///
+/// The one text VIEW that is a field rather than a pane — the annotation comment field,
+/// which wraps and so cannot be a `GtkEntry` — is recognised by the class every comment
+/// field carries (`widgets::comment_entry::COMMENT_FIELD_CLASS`). It owns its own
+/// select-all, copy and undo bindings exactly as an entry does.
 pub(crate) fn focus_in_text_entry(window: &ApplicationWindow) -> bool {
     let mut w = GtkWindowExt::focus(window);
     while let Some(cur) = w {
-        if cur.is::<gtk::Text>() {
+        if cur.is::<gtk::Text>()
+            || cur.has_css_class(crate::widgets::comment_entry::COMMENT_FIELD_CLASS)
+        {
             return true;
         }
         w = cur.parent();
@@ -576,12 +583,21 @@ pub(crate) fn update_save_action_state(window: &ApplicationWindow) {
 /// `notify::can-undo` / `notify::can-redo` (every edit) and every view-mode change —
 /// so the toolbar, menu bar, and context menu stay in sync (POLICY: single source of
 /// truth).
+///
+/// Both stand down while a text field holds focus ([`focus_in_text_entry`]), exactly as
+/// `win.select-all` does and for the same reason: the window accelerator beats the
+/// field's own Ctrl+Z / Ctrl+Shift+Z, so an enabled `win.undo` undid the DOCUMENT —
+/// reverting the reader's last edit, possibly a whole annotation — while they were
+/// correcting a typo in a comment. Disabled, the shortcut fails and the key reaches the
+/// field's own undo. It looked fine on a fresh document, where `can_undo` is false and
+/// the action was already disabled; that is the case a quick check reaches first.
 pub(crate) fn update_undo_redo_state(window: &ApplicationWindow) {
     let (can_undo, can_redo) = state(window)
         .map(|st| (st.editor_buf.can_undo(), st.editor_buf.can_redo()))
         .unwrap_or((false, false));
-    set_action_enabled(window, "undo", can_undo);
-    set_action_enabled(window, "redo", can_redo);
+    let in_field = focus_in_text_entry(window);
+    set_action_enabled(window, "undo", can_undo && !in_field);
+    set_action_enabled(window, "redo", can_redo && !in_field);
 }
 /// Replace the editor buffer's content as a load baseline, NOT an undoable edit.
 /// Wrapping `set_text` in an irreversible action keeps the load off the undo stack

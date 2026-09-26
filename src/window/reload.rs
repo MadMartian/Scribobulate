@@ -1141,9 +1141,11 @@ mod gtk_integration_tests {
         window.destroy();
     }
 
-    /// First `gtk::Entry` in `w`'s widget subtree (depth-first), or `None`.
-    fn find_entry(w: &gtk::Widget) -> Option<gtk::Entry> {
-        if let Ok(e) = w.clone().downcast::<gtk::Entry>() {
+    /// The first comment field (`sourceview::View`) in `w`'s widget subtree
+    /// (depth-first), or `None`. The preview pane itself is a plain `GtkTextView`
+    /// subclass, so it never matches.
+    fn find_entry(w: &gtk::Widget) -> Option<sourceview::View> {
+        if let Ok(e) = w.clone().downcast::<sourceview::View>() {
             return Some(e);
         }
         let mut child = w.first_child();
@@ -1185,7 +1187,7 @@ mod gtk_integration_tests {
                 .parent()
                 .expect("the preview scroller is wrapped in its pane overlay");
             let entry = find_entry(&overlay).expect(
-                "the preview annotation comment-card GtkEntry is built during the first render",
+                "the preview annotation comment-card field is built during the first render",
             );
             entry.downgrade()
             // sw / overlay / entry dropped here — the test must hold NO strong ref to the
@@ -1284,8 +1286,8 @@ mod gtk_integration_tests {
             assert!(view.trigger_annotate(), "annotate trigger fired");
             // Reuse the module-level depth-first entry finder to reach the card's GtkEntry.
             let entry = find_entry(&overlay).expect("card entry");
-            entry.set_text(comment);
-            entry.emit_by_name::<()>("activate", &[]);
+            crate::widgets::comment_entry::set_comment_text(&entry, comment);
+            crate::widgets::comment_entry::press_key(&entry, gtk::gdk::Key::Return);
             let before = st.editor_text();
             settle("the annotation to reach the editor text", || {
                 state(window).unwrap().editor_text() != before

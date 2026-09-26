@@ -98,8 +98,8 @@ pub(crate) fn wire_editor_annotate_card(
         }
     });
     card.style_as_card();
-    let entry = card.entry.clone();
-    bar.append(&card.entry);
+    let entry = card.field.clone();
+    bar.append(&card.area);
     bar.append(&card.save);
     overlay.add_overlay(&bar);
     // Clip the card to the overlay and keep it OUT of the overlay's size measurement — it
@@ -150,23 +150,16 @@ pub(crate) fn wire_editor_annotate_card(
                     crate::annotate::merged_comment_for(&source, target.resolve(&source)?)
                 })
                 .unwrap_or_default();
-            entry.set_text(&existing);
+            crate::widgets::comment_entry::set_comment_text(&entry, &existing);
             entry_open.set(true);
             // Show BEFORE positioning — `position_card` measures the card, and a hidden
             // widget measures 0 (GTK4Rs/AP-85); a stale margin also inflates the re-measure
             // (GTK4Rs/AP-87), both handled inside `position_card`.
             bar.set_visible(true);
             position_card(&editor, &overlay, bar.upcast_ref());
-            entry.grab_focus();
-            // Caret to the END, and AFTER `grab_focus` — order is load-bearing. A focused
-            // `GtkText` selects all its text on focus-in (`gtk-entry-select-on-focus`,
-            // default TRUE — gtktext.c:3310-3317), which would silently undo a caret set
-            // before the grab. With the pre-population above that is not cosmetic: the
-            // merged comment would open fully selected, so the user's first keystroke would
-            // replace it and the existing comment would be destroyed after all — the data
-            // loss walking back in through the door the pre-population opened. Caret-at-end
-            // makes typing APPEND: the user is amending, not starting over.
-            entry.set_position(-1);
+            // Caret to the END, unselected: the merged comment is being AMENDED, and a
+            // field that opened with it selected would lose it to the first keystroke.
+            crate::widgets::comment_entry::focus_at_end(&entry);
         }
     });
 
@@ -215,7 +208,7 @@ mod gtk_integration_tests {
 
     /// Build a wired editor card over `source`, select `[a, b)` chars, raise it, and return
     /// the card's entry — the widget the user is about to type into.
-    fn raise_card_over(source: &str, a: i32, b: i32) -> gtk::Entry {
+    fn raise_card_over(source: &str, a: i32, b: i32) -> sourceview::View {
         let editor = sourceview::View::new();
         let buf = editor.buffer();
         buf.set_text(source);
@@ -231,9 +224,25 @@ mod gtk_integration_tests {
         let bar = overlay
             .last_child()
             .expect("the card bar is an overlay child");
+        card_field(&bar)
+    }
+
+    /// The comment field inside a card bar: the bar's first child is the field's area,
+    /// which holds its scroller, which holds the field.
+    fn card_field(bar: &gtk::Widget) -> sourceview::View {
         bar.first_child()
-            .and_downcast::<gtk::Entry>()
-            .expect("the card's first child is the comment entry")
+            .and_downcast::<gtk::Overlay>()
+            .expect("the card's first child is the comment field's area")
+            .child()
+            .and_downcast::<gtk::ScrolledWindow>()
+            .expect("the area holds the field's scroller")
+            .child()
+            .and_downcast::<sourceview::View>()
+            .expect("the scroller holds the comment field")
+    }
+
+    fn text(field: &sourceview::View) -> String {
+        crate::saferizer::BufferText::of(&field.buffer()).into_string()
     }
 
     /// **The data loss, at the surface that caused it.** Raising the card over a selection
@@ -246,7 +255,7 @@ mod gtk_integration_tests {
     fn the_card_opens_prepopulated_with_the_comment_it_would_destroy() {
         let entry = raise_card_over("the earth is {==flat==}{>>citation needed<<}", 16, 20);
         assert_eq!(
-            entry.text(),
+            text(&entry),
             "citation needed",
             "the card must open showing the comment its commit is about to overwrite"
         );
@@ -258,7 +267,7 @@ mod gtk_integration_tests {
     fn the_card_shows_every_comment_a_multi_overlap_would_destroy() {
         let src = "{==alpha==}{>>note A<<} middle {==omega==}{>>note B<<}";
         let entry = raise_card_over(src, 4, (src.chars().count() - 4) as i32);
-        assert_eq!(entry.text(), "note A | note B");
+        assert_eq!(text(&entry), "note A | note B");
     }
 
     /// A selection that overlaps nothing opens an EMPTY card — the pre-population must not
@@ -266,7 +275,7 @@ mod gtk_integration_tests {
     #[gtktest::test]
     fn the_card_opens_empty_when_nothing_would_be_destroyed() {
         let entry = raise_card_over("the earth is flat and round", 13, 17);
-        assert_eq!(entry.text(), "", "nothing is merged, so nothing is offered");
+        assert_eq!(text(&entry), "", "nothing is merged, so nothing is offered");
     }
 
     /// Raise the card inside a **mapped** toplevel and return the window and its entry.
@@ -279,7 +288,7 @@ mod gtk_integration_tests {
     /// delivering real keystrokes, not for intra-hierarchy focus, so this guard bites under
     /// a plain `xvfb-run -a` (POLICY's canonical test command) with no WM running —
     /// measured both ways, not assumed.
-    fn raise_card_over_mapped(source: &str, a: i32, b: i32) -> (gtk::Window, gtk::Entry) {
+    fn raise_card_over_mapped(source: &str, a: i32, b: i32) -> (gtk::Window, sourceview::View) {
         let editor = sourceview::View::new();
         let buf = editor.buffer();
         buf.set_text(source);
@@ -316,11 +325,7 @@ mod gtk_integration_tests {
         let bar = overlay
             .last_child()
             .expect("the card bar is an overlay child");
-        let entry = bar
-            .first_child()
-            .and_downcast::<gtk::Entry>()
-            .expect("the card's first child is the comment entry");
-        (win, entry)
+        (win, card_field(&bar))
     }
 
     /// **The trap the pre-population opens, guarded.** The merged comment must open
@@ -337,13 +342,14 @@ mod gtk_integration_tests {
     fn the_prepopulated_comment_opens_unselected_with_the_caret_at_the_end() {
         let (win, entry) =
             raise_card_over_mapped("the earth is {==flat==}{>>citation needed<<}", 16, 20);
-        assert_eq!(entry.text(), "citation needed");
+        assert_eq!(text(&entry), "citation needed");
+        let buf = entry.buffer();
         assert!(
-            entry.selection_bounds().is_none(),
+            !buf.has_selection(),
             "the merged comment must not open SELECTED — the first keystroke would erase it"
         );
         assert_eq!(
-            entry.position(),
+            buf.iter_at_mark(&buf.get_insert()).offset(),
             "citation needed".chars().count() as i32,
             "caret at end → typing appends to the merged comment rather than replacing it"
         );

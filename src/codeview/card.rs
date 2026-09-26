@@ -1102,8 +1102,8 @@ mod gtk_integration_tests {
         // assertions and pump conditions written that way cannot fail and cannot wait.
         // (Both were, first time round; this test found them.)
         let stack = find_descendant::<gtk::Stack>(&card).expect("the row hosts a GtkStack");
-        let entry = find_descendant::<gtk::Entry>(&card).expect("the edit page is prebuilt");
-        let original = entry.text().to_string();
+        let entry = find_descendant::<sourceview::View>(&card).expect("the edit page is prebuilt");
+        let original = crate::widgets::comment_entry::comment_text(&entry);
 
         find_button(&card, "Edit")
             .expect("the card offers Edit")
@@ -1113,7 +1113,10 @@ mod gtk_integration_tests {
         settle("Edit to put the card on the edit page", || {
             stack.visible_child_name().as_deref() == Some("edit")
         });
-        entry.set_text("a draft the user thinks better of");
+        crate::widgets::comment_entry::set_comment_text(
+            &entry,
+            "a draft the user thinks better of",
+        );
 
         find_button(&card, "Cancel")
             .expect("the edit page offers Cancel")
@@ -1134,7 +1137,7 @@ mod gtk_integration_tests {
              asked to leave"
         );
         assert_eq!(
-            entry.text().as_str(),
+            crate::widgets::comment_entry::comment_text(&entry),
             original,
             "the abandoned draft must not survive — a Cancel that keeps the text is a \
              postponement, and the next Edit would open on words the user discarded"

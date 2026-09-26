@@ -213,17 +213,23 @@ fn build_annotation_row(
     // with the claim quote and so a future focus-order change can't reintroduce it. The
     // claim quote above is non-selectable too; the comment text lives verbatim in the
     // source document if a user wants to copy it.
-    row.append(&comment_label);
 
     let Some(sink) = sink else {
+        row.append(&comment_label);
         return row.upcast();
     };
-    append_edit_remove_controls(m, &row, card, sink);
+    append_edit_remove_controls(m, &row, &comment_label, card, sink);
     row.upcast()
 }
 
-/// Append the Edit / Remove controls to a popover `row` and wire their mutation
-/// handlers to `sink`. Split out of [`build_annotation_row`] (F-DRY-002) so the
+/// Append the comment, with its Edit / Remove controls, to a popover `row` and wire their
+/// mutation handlers to `sink`.
+///
+/// **Edit happens IN PLACE.** The read page is the comment text with Edit / Remove under
+/// it; the edit page is the comment field, pre-filled, in the same spot, with Save /
+/// Cancel under it. The comment is on one page or the other, never both — an Edit that
+/// left the fixed text showing and added a field beneath it showed the same comment twice
+/// and moved the thing being edited away from where the reader was looking. Split out of [`build_annotation_row`] (F-DRY-002) so the
 /// read-only layout above stays free of the nested GTK closure-capture ceremony the
 /// buttons need — each `move` closure (and each deferred `idle_add_local_once`)
 /// requires its own `sink`/range clone; the re-renders are deferred off the active
@@ -246,14 +252,11 @@ fn build_annotation_row(
 fn append_edit_remove_controls(
     m: &MarkerData,
     row: &gtk::Box,
+    comment_label: &gtk::Label,
     card: &AnnotationCard,
     sink: AnnotationSink,
 ) {
     let btns = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    // `vhomogeneous` (below) sizes BOTH pages to the taller edit page's height, so this
-    // shorter read page would otherwise stretch its buttons to fill it — center them at
-    // their natural size instead.
-    btns.set_valign(gtk::Align::Center);
     let edit = gtk::Button::with_label("Edit");
     let remove = gtk::Button::with_label("Remove");
     remove.add_css_class("destructive-action");
@@ -303,13 +306,20 @@ fn append_edit_remove_controls(
     ebtns.append(&ce.save);
     ebtns.append(&cancel);
     let edit_page = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    edit_page.append(&ce.entry);
+    edit_page.append(&ce.area);
     edit_page.append(&ebtns);
+
+    // `vhomogeneous` (below) sizes BOTH pages to the taller of the two, so the read page
+    // keeps its comment and buttons together at the top rather than stretching them apart.
+    let read_page = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    read_page.set_valign(gtk::Align::Start);
+    read_page.append(comment_label);
+    read_page.append(&btns);
 
     let stack = gtk::Stack::new();
     stack.set_hhomogeneous(true);
     stack.set_vhomogeneous(true);
-    stack.add_named(&btns, Some("read"));
+    stack.add_named(&read_page, Some("read"));
     stack.add_named(&edit_page, Some("edit"));
     stack.set_visible_child_name("read");
     row.append(&stack);
@@ -347,7 +357,7 @@ fn append_edit_remove_controls(
     }
     {
         let stack = stack.clone();
-        let entry = ce.entry.clone();
+        let entry = ce.field.clone();
         edit.connect_clicked(move |_| {
             // Defer off the active press gesture (GTK4Rs/AP-30): flipping the stack still mutates
             // this button's own ancestor mid-click. Focus the entry so typing (and the
@@ -356,7 +366,7 @@ fn append_edit_remove_controls(
             let entry = entry.clone();
             glib::idle_add_local_once(move || {
                 stack.set_visible_child_name("edit");
-                let _ = entry.grab_focus();
+                crate::widgets::comment_entry::focus_at_end(&entry);
             });
         });
     }
@@ -373,7 +383,7 @@ fn append_edit_remove_controls(
         // draft does not survive to greet the user the next time they press Edit — that is
         // what makes this an abort rather than a postponement.
         let stack = stack.clone();
-        let entry = ce.entry.clone();
+        let entry = ce.field.clone();
         let original = m.comment.clone();
         cancel.connect_clicked(move |_| {
             // Deferred for the same reason the Edit handler defers (GTK4Rs/AP-30): flipping the
@@ -383,7 +393,7 @@ fn append_edit_remove_controls(
             let entry = entry.clone();
             let original = original.clone();
             glib::idle_add_local_once(move || {
-                entry.set_text(&original);
+                crate::widgets::comment_entry::set_comment_text(&entry, &original);
                 stack.set_visible_child_name("read");
             });
         });
@@ -1505,12 +1515,12 @@ mod a11y_integration_tests {
         let edit = find_button(&popover, "Edit").expect("the popover offers an Edit button");
         edit.emit_clicked();
 
-        let entry = find_descendant::<gtk::Entry>(&popover)
-            .expect("clicking Edit swaps the comment label for an entry");
-        entry.set_text("amended via Enter");
+        let entry = find_descendant::<sourceview::View>(&popover)
+            .expect("clicking Edit swaps the comment label for a field");
+        crate::widgets::comment_entry::set_comment_text(&entry, "amended via Enter");
 
         // The route under test. NOT `save.emit_clicked()` — that passed all along.
-        entry.emit_activate();
+        crate::widgets::comment_entry::press_key(&entry, gtk::gdk::Key::Return);
 
         // The sink is deferred to an idle (GTK4Rs/AP-30: never re-render inside the gesture).
         // Enter in the Edit popover's entry must commit the annotation — it did nothing
