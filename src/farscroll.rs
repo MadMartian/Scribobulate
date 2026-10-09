@@ -649,6 +649,7 @@ mod gtk_integration_tests {
     /// ever re-issued it.
     #[gtktest::test]
     fn ctrl_end_reaches_the_bottom_of_a_document_still_being_laid_out() {
+        let _motion = crate::testmotion::AnimatedScrolls::pin();
         let (_buffer, view, scroller, window) = cold_editor();
         let adjustment = scroller.vadjustment();
         assert!(
@@ -688,6 +689,7 @@ mod gtk_integration_tests {
     /// (measured 30 000 → 23 107 of a target 0) and stays there.
     #[gtktest::test]
     fn ctrl_home_reaches_the_top_of_a_document_still_being_laid_out() {
+        let _motion = crate::testmotion::AnimatedScrolls::pin();
         let (_buffer, view, scroller, window) = cold_editor();
         let adjustment = scroller.vadjustment();
         pump_until("a scrollable range to exist", || {
@@ -715,6 +717,7 @@ mod gtk_integration_tests {
     /// document sent Go To Line 30 000 to line 177 and left it there.
     #[gtktest::test]
     fn a_far_navigation_reaches_its_target_on_a_document_still_being_laid_out() {
+        let _motion = crate::testmotion::AnimatedScrolls::pin();
         let (buffer, view, scroller, window) = cold_editor();
         let adjustment = scroller.vadjustment();
         assert!(
@@ -751,6 +754,7 @@ mod gtk_integration_tests {
     /// the surface-shaped gap GEP-10 records.
     #[gtktest::test]
     fn ctrl_end_reaches_the_bottom_of_the_preview_pane_too() {
+        let _motion = crate::testmotion::AnimatedScrolls::pin();
         let view = crate::codeview::CodePreviewView::new();
         let body: String = (0..LINES)
             .map(|i| format!("Line {i} — {}\n", "lorem ipsum dolor sit amet ".repeat(4)))
@@ -804,6 +808,7 @@ mod gtk_integration_tests {
     /// showing GTK alone does not survive it.
     #[gtktest::test]
     fn a_queued_scroll_survives_a_write_into_its_own_view() {
+        let _motion = crate::testmotion::AnimatedScrolls::pin();
         let (_buffer, view, scroller, window) = cold_editor();
         let adjustment = scroller.vadjustment();
 
@@ -843,6 +848,7 @@ mod gtk_integration_tests {
     /// through GTK's internal ones.
     #[gtktest::test]
     fn gtk_own_pending_scroll_is_destroyed_by_a_write_to_its_view() {
+        let _motion = crate::testmotion::AnimatedScrolls::pin();
         /// Big enough that the end is far off screen (so arriving is a real event),
         /// small enough to lay out fully in the settle below.
         const SMALL: usize = 4_000;
@@ -904,10 +910,34 @@ mod gtk_integration_tests {
 
         // Same again, with one adjustment write landing while the scroll is pending.
         let (view, scroller, window) = build();
+        let adjustment = scroller.vadjustment();
+        let start = adjustment.value();
         view.emit_move_cursor(gtk::MovementStep::BufferEnds, 1, false);
-        for _ in 0..30 {
-            glib::MainContext::default().iteration(false);
+        // Write at the scroll's FIRST visible step, not after a fixed number of turns. A
+        // turn count is not a duration (GTK4Rs/AP-261): on the Windows runner 30 turns
+        // outlasted the ~200 ms animation, the scroll had arrived, and the write merely
+        // moved a finished scroll away — the assertion below passed with nothing
+        // destroyed. Real time has to pass for the frame clock to tick.
+        let ctx = glib::MainContext::default();
+        let t0 = std::time::Instant::now();
+        while adjustment.value() == start && t0.elapsed() < std::time::Duration::from_secs(2) {
+            ctx.iteration(false);
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
+        // The write must land while the scroll is under way: moved, not arrived. Under
+        // reduced motion (GTK >= 4.24) the first step IS the arrival, because the scroll
+        // jumps. The pin above prevents that; this says so if it ever fails to.
+        let (before_write, bottom_before_write) = (
+            adjustment.value(),
+            adjustment.upper() - adjustment.page_size(),
+        );
+        assert!(
+            before_write > start && before_write < bottom_before_write - 1.0,
+            "precondition: the scroll must be in flight when the write lands — moved off \
+             {start:.0} and short of {bottom_before_write:.0} — but it reads \
+             {before_write:.0}, so it did not animate and this run cannot evidence what a \
+             write does to one"
+        );
         crate::saferizer::scrollpos::jump(&scroller.vadjustment(), 250.0);
         let arrived_after_write = settle(&scroller.vadjustment());
         let (value, bottom) = (
@@ -951,6 +981,8 @@ mod gtk_integration_tests {
     /// 559 414 of 560 014, top line 19 979). Both resting places are legitimate; the
     /// only illegitimate one is the caret's line, which is where the gate-less re-issue
     /// lands under either setting (measured: top line 14 979 and 15 000).
+    /// That is why this test, alone in this module, does not pin reduced motion off
+    /// ([`crate::testmotion`]): it does not depend on GTK's scroll animating.
     #[gtktest::test]
     fn a_superseded_buffer_ends_scroll_is_abandoned() {
         let (buffer, view, scroller, window) = cold_editor();

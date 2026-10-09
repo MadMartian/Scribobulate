@@ -156,6 +156,10 @@ pub(crate) mod tasklist;
 /// pixel-identical in this project's inert-by-default vocabulary (ScrAP-324).
 #[cfg(test)]
 pub(crate) mod testlog;
+/// Test-only. Pins GTK's reduced-motion setting off for a test whose subject is a scroll
+/// animation, so it exercises the animated path on every platform (GTK4Rs/AP-357).
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) mod testmotion;
 /// Test-only. The one shared main-loop pump for every `gtk-integration-tests` body —
 /// see the module's own rustdoc for why ~24 hand-rolled copies across 19 files needed
 /// replacing (M31). Gated on the GTK-suite feature, not bare `#[cfg(test)]`: every

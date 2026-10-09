@@ -116,6 +116,7 @@ mod gtk_integration_tests {
     /// `GtkTextView` scroll.
     #[gtktest::test]
     fn a_plain_write_truncates_a_scroll_animation() {
+        let _motion = crate::testmotion::AnimatedScrolls::pin();
         let view = gtk::TextView::new();
         let body: String = (0..400).map(|i| format!("line {i}\n")).collect();
         view.buffer().set_text(&body);
@@ -148,6 +149,14 @@ mod gtk_integration_tests {
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
         let mid_flight = adjustment.value();
+        // Under reduced motion (GTK >= 4.24) the scroll is a jump and has already finished
+        // here, so the write below would supersede nothing and the test would pass on any
+        // `jump`. The pin prevents that; this says so if it ever fails to.
+        assert!(
+            mid_flight < bottom - 1.0,
+            "precondition: the scroll must still be in flight, but it had already arrived \
+             ({mid_flight:.0} of {bottom:.0}) — it did not animate"
+        );
 
         // ...then write a position. The animation must be dead, not merely nudged:
         // its target was `bottom`, so if it were still running it would keep going.

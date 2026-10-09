@@ -144,6 +144,8 @@ mod tasklist;
 // declaration, or a body reaching `testpump` drops out of this main-thread run with
 // nothing failing (`cargo xtask lint-references` check 4).
 mod testpump;
+// Same gate and the same reason as `testpump` above.
+mod testmotion;
 // Test-only in `lib.rs` (`#[cfg(test)]`); this root is always built `--cfg test`, so
 // it needs no gate here — but it does need the declaration, or the suite build breaks
 // the moment a symlink test in it reaches the shared helper.
