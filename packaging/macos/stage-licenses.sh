@@ -57,9 +57,12 @@ printf 'formula\tspdx_declared\tdetermination\tstaged_files\n' > "$MANIFEST"
 
 declare -a SEEN=()
 count=0
+# Listed through rpath.sh, which fails closed, never `< <(find …)`, which loses the exit
+# status of whatever produced the list.
+objs="$(bundle_machos "$APP/Contents/Frameworks")" \
+    || { echo "error: could not list the Mach-O files in $APP/Contents/Frameworks" >&2; exit 1; }
 while IFS= read -r obj; do
-    rc=0; is_macho "$obj" || rc=$?
-    case "$rc" in 0) ;; 1) continue ;; *) echo "error: could not tell whether $obj is Mach-O" >&2; exit 1 ;; esac
+    [ -n "$obj" ] || continue
     name="$(basename "$obj")"
     if ! formula="$(formula_of "$name")"; then
         echo "error: no Homebrew formula maps to staged binary '$name'." >&2
@@ -98,6 +101,7 @@ print("NOT-IN-SBOM")' "$root/sbom.spdx.json" "$formula" 2>/dev/null || echo "NO-
 
     printf '%s\t%s\tNOT-GATE-ENFORCED\t%s\n' "$formula" "$spdx" "$staged" >> "$MANIFEST"
     count=$((count + 1))
-done < <(find "$APP/Contents/Frameworks" -type f)
+done <<< "$objs"
 
+[ "$count" -gt 0 ] || { echo "error: no licence texts staged; nothing in Frameworks was attributed" >&2; exit 1; }
 echo "   staged licence texts for $count formulae"

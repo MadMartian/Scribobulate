@@ -69,19 +69,20 @@ audit_bundle() {
     # because the case harness redirects stderr.
     local app="$1"
     local manifest="$app/Contents/Resources/licenses/MANIFEST.tsv"
-    local problems=0 shipped="" name formula rc
+    local problems=0 shipped="" name formula objs
     if [ ! -f "$manifest" ]; then
         echo "   NO MANIFEST at $manifest"
         return 1
     fi
 
+    # Listed through rpath.sh, which fails closed, never `< <(find …)`, which loses the
+    # exit status of whatever produced the list.
+    if ! objs="$(bundle_machos "$app/Contents/Frameworks" 2>/dev/null)"; then
+        echo "   UNREADABLE   could not list the Mach-O files in $app/Contents/Frameworks"
+        return 1
+    fi
     while IFS= read -r obj; do
-        rc=0; is_macho "$obj" || rc=$?
-        case "$rc" in
-            0) ;;
-            1) continue ;;
-            *) echo "   UNREADABLE   could not tell whether $obj is Mach-O"; problems=$((problems + 1)); continue ;;
-        esac
+        [ -n "$obj" ] || continue
         name="$(basename "$obj")"
         if formula="$(formula_of "$name")"; then
             case " $shipped " in *" $formula "*) ;; *) shipped="$shipped $formula" ;; esac
@@ -89,7 +90,7 @@ audit_bundle() {
             echo "   UNMAPPABLE   $name has no Homebrew formula"
             problems=$((problems + 1))
         fi
-    done < <(find "$app/Contents/Frameworks" -type f 2>/dev/null)
+    done <<< "$objs"
 
     # Condition 1 — every shipped formula has a row.
     for formula in $shipped; do
@@ -218,6 +219,10 @@ set -e
 rows=$(($(wc -l < "$APP/Contents/Resources/licenses/MANIFEST.tsv" 2>/dev/null || echo 1) - 1))
 if [ "$problems" -ne 0 ]; then
     echo "   FAIL — $problems problem(s) across $rows row(s)" >&2
+    exit 1
+fi
+if [ "$rows" -le 0 ]; then
+    echo "   FAIL — the manifest has no rows; nothing is attributed" >&2
     exit 1
 fi
 echo "   PASS — $rows formulae attributed, every row carrying real licence text"

@@ -1302,7 +1302,7 @@ fn reveal_and_resume(
     // they were already on (F-AP-B-104). The preview leads, as for any hit.
     super::panescroll::preview_to_offset(st, view, summary_off);
     let text = text.to_string();
-    super::foldreveal::reveal_folds(window, &[key], move |window| {
+    super::foldreveal::reveal_folds(window, &[key], move |window, _tab| {
         select_preview_hit_at_or_after(window, resume_off, &text);
     });
 }

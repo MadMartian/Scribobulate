@@ -673,11 +673,20 @@ fn a_selection_across_any_blank_line_is_a_point_comment() {
             "one paragraph is still a highlight, {between:?}"
         );
     }
-    let item = "- one\n  \n  two";
-    assert!(matches!(
-        editor_selection_target(item, 2, item.chars().count() as i32),
-        Some(SelectionTarget::Point(_))
-    ));
+    // A list item's blank line, and a quote's (a line of only its `>` markers).
+    for src in [
+        "- one\n  \n  two",
+        "> one\n>\n> two",
+        "> one\r\n> \r\n> two",
+    ] {
+        assert!(
+            matches!(
+                editor_selection_target(src, 2, src.chars().count() as i32),
+                Some(SelectionTarget::Point(_))
+            ),
+            "{src:?}"
+        );
+    }
 }
 
 // ── table-cell annotation validation: cell copymap + capture_selection composition ──

@@ -24,9 +24,11 @@
 //! once; where it does not (raw HTML, block structure the lexer does not model) the
 //! repetition continues for a few rounds.
 //!
-//! **If even that does not settle**, nothing is masked: the reading is the file's own
-//! parse, so its block structure is exactly what other tools read and no fence is made
-//! or hidden. Each comment that parse would let close past a closer it hides in code
+//! **If even that does not settle**, the reading is the file's own parse, so its block
+//! structure is what other tools read and no fence is made or hidden. The one
+//! exception is a fence pasted into a comment and never closed, which would make the
+//! rest of the file code: that comment alone is masked ([`unsettled`]). Each comment
+//! that parse would let close past a closer it hides in code
 //! is read, with the code it runs into, as code ([`sealed`]). That reading can mistake
 //! prose for code, but never lets a comment close on a closer that is not its own, so
 //! it can never swallow prose.
@@ -35,7 +37,7 @@
 //! construct may not cross: extraction refuses a construct across one, creating an
 //! annotation turns a selection across one into a point comment
 //! ([`holds_block_break`]), and landing reads a line holding nothing else as blank
-//! ([`is_line_space`]).
+//! ([`is_blank_line_char`]).
 
 use super::mutate::{COMMENT_CLOSE, COMMENT_OPEN};
 use std::borrow::Cow;
@@ -55,8 +57,9 @@ const UNSETTLED_MEMORY: usize = 8;
 
 /// The file as other Markdown tools read it. See the module docs.
 pub(super) struct AsWritten<'a> {
-    /// `source` with the body of every comment outside code masked, or `source` itself
-    /// when no mask settled: the same bytes at the same offsets otherwise.
+    /// `source` with the body of every comment outside code masked, or, when no mask
+    /// settled, `source` with only [`unsettled`]'s bodies masked: the same bytes at the
+    /// same offsets otherwise.
     pub(super) text: Cow<'a, str>,
     /// Where the Markdown body starts: just past the front matter, 0 without any. Every
     /// parse of [`Self::text`] reads `text[body_from..]`, as the renderer does.
@@ -164,11 +167,11 @@ fn settle(source: &str, from: usize, mut mask: Vec<Range<usize>>, rounds: usize)
         }
         tried.push(std::mem::replace(&mut mask, next));
     }
-    let code = sealed(source, from, parse_code(source, from).all);
+    let (text, code) = unsettled(source, from);
     let written = AsWritten {
-        text: Cow::Borrowed(source),
+        text,
         body_from: from,
-        code,
+        code: sealed(source, from, code),
     };
     Reading {
         written,
@@ -218,6 +221,39 @@ fn remember(seen: &mut std::collections::VecDeque<u64>, key: u64) -> bool {
     }
     seen.push_back(key);
     true
+}
+
+/// The text and code the fallback reads: the file's own, except for each comment body
+/// that holds the start of a code block running to the end of the file — a fence the
+/// annotator pasted and never closed. Read as written, that fence makes the rest of the
+/// file code, so every later annotation vanishes. So that body is masked, which leaves
+/// no code block in it ([`masked`]), and the file is parsed again.
+///
+/// Masking that body makes no code that was not code already, but for inline code in
+/// the paragraph the body now joins: the block it removes ran to the end of the file,
+/// so every line after the body was code, and the masked body holds no block markup.
+/// [`sealed`] then reads whatever code results. A block that opens in a body and closes
+/// before the end of the file is left as it is: masking its opening fence would turn
+/// its closing fence into an opening one.
+fn unsettled(source: &str, from: usize) -> (Cow<'_, str>, Vec<Range<usize>>) {
+    let mut bodies: Vec<Range<usize>> = Vec::new();
+    let mut parsed = parse_code(source, from);
+    // Each round masks one more body, so this ends.
+    while let Some(body) = parsed
+        .blocks
+        .last()
+        .filter(|block| block.end == source.len())
+        .and_then(|block| {
+            outside_code(source, from, &parsed.all)
+                .into_iter()
+                .find(|body| body.contains(&block.start))
+        })
+        .filter(|body| !bodies.contains(body))
+    {
+        bodies.push(body);
+        parsed = parse_code(&masked(source, &bodies), from);
+    }
+    (masked(source, &bodies), parsed.all)
 }
 
 /// `code`, plus the opener through the end of that code of every comment outside it
@@ -274,18 +310,28 @@ fn is_markdown_whitespace(b: u8) -> bool {
     matches!(b, b'\t'..=b'\r' | b' ')
 }
 
-/// `source` with each of `bodies` masked. Only bytes the parser does not read as
-/// whitespace are overwritten, so every line keeps its indentation and a blank line
-/// stays blank. Other block markup in a multi-line body (a list marker, a fence) is
-/// masked like any text: the body is the annotator's prose, not the document's.
+/// `source` with each of `bodies` masked, so that no code can begin in one. Every byte
+/// the parser does not read as whitespace is overwritten, and so is the indentation
+/// that starts each later line of a body: block markup in a multi-line body (a list
+/// marker, a fence, the four columns that open an indented code block after a heading)
+/// is masked like any text, since the body is the annotator's prose, not the
+/// document's. Line ends and the whitespace within a line are kept, so every line stays
+/// a line (a masked body never holds a blank one: it does not cross a block break).
 fn masked<'a>(source: &'a str, bodies: &[Range<usize>]) -> Cow<'a, str> {
     if bodies.is_empty() {
         return Cow::Borrowed(source);
     }
     let mut bytes = source.as_bytes().to_vec();
     for body in bodies {
+        // Whether the bytes so far on this line of the body are its indentation.
+        let mut leading = false;
         for b in &mut bytes[body.clone()] {
-            if !is_markdown_whitespace(*b) {
+            if *b == b'\n' {
+                leading = true;
+            } else if !is_markdown_whitespace(*b) {
+                leading = false;
+                *b = FILLER;
+            } else if leading && *b != b'\r' {
                 *b = FILLER;
             }
         }
@@ -362,8 +408,8 @@ pub(super) fn crosses_block(breaks: &[Range<usize>], range: &Range<usize>) -> bo
 /// `\{>>` still opens a comment. Whitespace-only lines end the block a span or comment
 /// may run in, and so do the code blocks found by the raw parse — except one that opens
 /// inside a comment's body: that is a sample the annotator pasted, the comment's text,
-/// and masking the body leaves no fence. Trusted as a stop, an unclosed one hid the
-/// rest of the file from the lexer.
+/// and masking the body leaves no code block there ([`masked`]). Trusted as a stop,
+/// an unclosed one hid the rest of the file from the lexer.
 ///
 /// This is CommonMark's code-span rule plus CriticMarkup's comment, read in one pass,
 /// in O(n log n): the run and closer positions are indexed, so no search rescans text.
@@ -457,11 +503,12 @@ pub(super) fn merged(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
     out
 }
 
-/// Every whitespace-only line in `text`, as the span from the line break before it
-/// through its own: a span of the text crosses a block break exactly when it contains
-/// one of these whole. A line of spaces and tabs ([`is_line_space`]) ends a paragraph
-/// just as an empty one does, in either line ending, so `\n\n`, `\n \t\n` and CRLF's
-/// `\n\r\n` all count.
+/// Every blank line in `text` ([`is_blank_line_char`]), as the span from the line break
+/// before it through its own: a span of the text crosses a block break exactly when it
+/// contains one of these whole. A line of spaces and tabs ends a paragraph just as an
+/// empty one does, in either line ending, so `\n\n`, `\n \t\n` and CRLF's `\n\r\n` all
+/// count; so does a line of nothing but a quote's `>` markers, a blank line inside the
+/// quote (`> a\n>\n> b` is two paragraphs).
 ///
 /// Only `\n` and `\r\n` end a line here: a document never holds a lone `\r`
 /// (`crate::lineendings`).
@@ -470,7 +517,7 @@ pub(super) fn blank_lines(text: &str) -> impl Iterator<Item = Range<usize>> + '_
     text.match_indices('\n').filter_map(move |(p, _)| {
         let gap = b[p + 1..]
             .iter()
-            .take_while(|&&c| is_line_space(char::from(c)))
+            .take_while(|&&c| is_blank_line_char(char::from(c)))
             .count();
         let q = p + 1 + gap;
         let eol = match b.get(q..) {
@@ -493,8 +540,20 @@ pub(crate) fn holds_block_break(text: &str) -> bool {
 /// then `is_at_eol`). A form feed or vertical tab is not among them, though pulldown
 /// counts both as whitespace elsewhere: MEASURED on pulldown-cmark 0.13.4, `"a\n\x0c\nb"`
 /// is one paragraph.
-pub(super) fn is_line_space(c: char) -> bool {
+fn is_line_space(c: char) -> bool {
     matches!(c, ' ' | '\t')
+}
+
+/// What a blank line may hold besides its line end: line space ([`is_line_space`]) and a
+/// block quote's `>` markers. The one rule for a blank line, which landing reads too.
+///
+/// Inside a quote, a line of only markers is the quote's blank line; outside one, a `>`
+/// opens a quote, which ends the paragraph before it just the same. The one place
+/// pulldown disagrees is a `>` indented four columns or more past its container, which
+/// is paragraph text: counting that line blank only ever refuses a construct, or turns a
+/// selection into a point comment, so it errs the safe way.
+pub(super) fn is_blank_line_char(c: char) -> bool {
+    c == '>' || is_line_space(c)
 }
 
 /// Whether byte `i` lies inside one of `code` (ascending, non-overlapping).
@@ -655,13 +714,15 @@ mod tests {
         assert!(!swallows(&src, &r.written.code), "{:?}", r.written.code);
     }
 
-    /// Masking keeps every byte the parser reads as whitespace, so a whitespace-only
-    /// line in a body stays blank and the paragraphs either side stay apart.
+    /// Masking keeps line ends and the whitespace within a line, so a whitespace-only
+    /// line next to a body stays blank and the paragraphs either side stay apart.
     /// Overwriting the space joined them, which paired the backticks either side, which
-    /// unmasked the comment, which split them again: the mask flipped every round.
+    /// unmasked the comment, which split them again: the mask flipped every round. The
+    /// indentation that starts a later line of a body is masked (see
+    /// `an_indented_line_in_a_comment_after_a_heading_is_not_code`).
     #[test]
-    fn masking_keeps_blank_lines_and_indentation() {
-        assert_eq!(masked("{>>a `\n\t b<<}", &one(3..10)), "{>>x x\n\t x<<}");
+    fn masking_keeps_blank_lines_and_line_ends() {
+        assert_eq!(masked("{>>a `\n\t b<<}", &one(3..10)), "{>>x x\nxxx<<}");
         assert_eq!(
             masked("{>>a\x0b\x0c`\r\n<<}", &one(3..9)),
             "{>>x\x0b\x0cx\r\n<<}",
@@ -681,6 +742,29 @@ mod tests {
         assert!(extract(src).annotations.is_empty(), "nor is it a comment");
     }
 
+    /// An indented code block may follow a heading or a rule directly, so a body line
+    /// indented four columns after a comment opened on one was code to the parse, which
+    /// hid the comment's closer, and extraction paired the opener with the next
+    /// comment's closer instead, swallowing the prose between. Masking the indentation
+    /// leaves no code there, so the comment closes on its own closer. Mutation check:
+    /// keep a body line's indentation in `masked` and the comments read
+    /// `["a\n    b<<}\nmore {>>c"]`.
+    #[test]
+    fn an_indented_line_in_a_comment_after_a_heading_is_not_code() {
+        for (src, first) in [
+            ("# {>>a\n    b<<}\nmore {>>c<<}", "a\n    b"),
+            ("***\n{>>a\n    b<<}\nmore {>>c<<}", "a\n    b"),
+            ("# {>>a\r\n\t b<<}\r\nmore {>>c<<}", "a\r\n\t b"),
+            ("# {>>a\n    <<}\nmore {>>c<<}", "a\n    "),
+        ] {
+            assert_eq!(comments(src), [first, "c"], "{src:?}");
+            let r = reading(src, SETTLE_ROUNDS);
+            assert_eq!(r.outcome, Outcome::Settled, "{src:?}");
+            assert!(!swallows(src, &r.written.code), "{src:?}");
+            assert!(r.written.code.is_empty(), "{src:?}: {:?}", r.written.code);
+        }
+    }
+
     #[test]
     fn a_whitespace_only_line_is_a_block_break() {
         let breaks = |s: &str| blank_lines(s).collect::<Vec<_>>();
@@ -691,6 +775,8 @@ mod tests {
         assert_eq!(breaks("- one\n  \n  two"), one(5..9));
         assert!(breaks("a\nb\n").is_empty());
         assert!(breaks("a\n\x0c\nb").is_empty(), "a form feed is text");
+        assert_eq!(breaks("> a\n>\n> b"), one(3..6), "a quote's blank line");
+        assert_eq!(breaks("> a\r\n> \r\n> b"), one(4..9));
     }
 
     /// The block break is the parser's own paragraph break, line by line, in both line
@@ -707,12 +793,22 @@ mod tests {
                 })
                 .count()
         };
-        for line in ["", " ", "\t", " \t ", "\x0b", "\x0c", " \x0c", "x", " x"] {
+        let lines = [
+            "", " ", "\t", " \t ", "\x0b", "\x0c", " \x0c", "x", " x", ">", "> ", " >\t", ">>",
+            "> >", "   >",
+        ];
+        for line in lines {
             for eol in ["\n", "\r\n"] {
-                let src = format!("a{eol}{line}{eol}b");
-                assert_eq!(holds_block_break(&src), paragraphs(&src) == 2, "{src:?}");
+                for quote in ["", "> ", "> > "] {
+                    let src = format!("{quote}a{eol}{quote}{line}{eol}{quote}b");
+                    let want = paragraphs(&src) == 2;
+                    assert_eq!(holds_block_break(&src), want, "{src:?}");
+                }
             }
         }
+        // The one disagreement, on the safe side: a `>` four columns in is text.
+        assert_eq!(paragraphs("a\n    >\nb"), 1);
+        assert!(holds_block_break("a\n    >\nb"));
     }
 
     /// A comment opening inside a real code span is that code's text, both to the
@@ -742,15 +838,29 @@ mod tests {
         );
     }
 
-    /// Over random runs of backticks, comments, escapes, words and line breaks, no
-    /// comment ever holds a closer (that is what swallowing is). Within one line that
-    /// cannot be a fence, the lexer's mask is confirmed within the rounds allowed;
-    /// across lines, block structure can leave no mask to confirm (see
-    /// `a_mask_that_makes_a_fence_has_no_settled_reading`), and then the reading is the
-    /// file's own parse, sealed.
+    /// Over random runs of backticks, comments, escapes, words, line breaks, headings,
+    /// indentation and pasted fences, no comment ever holds a closer (that is what
+    /// swallowing is). Within one line that cannot be a fence, the lexer's mask is
+    /// confirmed within the rounds allowed; across lines, block structure can leave no
+    /// mask to confirm (see `a_mask_that_makes_a_fence_has_no_settled_reading`), and
+    /// then the reading is the file's own parse, sealed, masked only where a fence runs
+    /// to the end of the file.
     #[test]
     fn no_mix_of_backticks_and_comments_swallows_prose() {
-        const TOKENS: [&str; 9] = ["{>>", "<<}", "`", "``", " ", "a", "\\", "{>>`<<}", "\n"];
+        const TOKENS: [&str; 12] = [
+            "{>>",
+            "<<}",
+            "`",
+            "``",
+            " ",
+            "a",
+            "\\",
+            "{>>`<<}",
+            "\n",
+            "# ",
+            "    ",
+            "{>>try:\n```\n<<}",
+        ];
         let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
         let mut next = || {
             seed ^= seed << 13;
@@ -773,9 +883,10 @@ mod tests {
                 if !src.contains('\n') && !fence {
                     assert_eq!(r.outcome, Outcome::Settled, "{src:?}");
                 }
-                if r.outcome == Outcome::Unsettled {
-                    assert_eq!(r.written.text, src, "{src:?}");
-                    assert!(!swallows(&src, &r.written.code), "{src:?}");
+                assert!(!swallows(&src, &r.written.code), "{src:?}");
+                if r.outcome == Outcome::Unsettled && r.written.text != src {
+                    let to_end = raw.blocks.last().is_some_and(|b| b.end == src.len());
+                    assert!(to_end, "{src:?}: masked with no fence to the end");
                 }
             }
         }
@@ -821,6 +932,51 @@ mod tests {
         let d = src.find("d<<}").unwrap();
         let sealed = src.find("{>>c").unwrap()..src.find("e`").unwrap();
         assert_eq!(for_highlight(src, d..d + 1), Landing::Highlight(sealed));
+    }
+
+    /// A fence pasted into a comment and never closed runs to the end of the file in
+    /// the file's own parse, so the fallback read every later annotation as code: `note`
+    /// vanished, and a highlight on `Later` was widened to the end of the file. Masking
+    /// that one body leaves the rest of the file prose. Mutation check: mask nothing in
+    /// `unsettled` and `note` is lost again.
+    #[test]
+    fn an_unclosed_fence_pasted_into_a_comment_does_not_make_the_fallback_code() {
+        let src = "Use the ` key {>>try:\n```\nfoo()\n<<} and `x`.\n\nLater {>>note<<} here.\n";
+        assert_eq!(reading(src, SETTLE_ROUNDS).outcome, Outcome::Unsettled);
+        assert_eq!(
+            parse_code(src, 0).blocks.last().map(|b| b.end),
+            Some(src.len()),
+            "precondition: the file's own parse is code to its end"
+        );
+        let written = as_written(src);
+        assert!(!swallows(src, &written.code), "{:?}", written.code);
+        assert!(
+            comments(src).contains(&"note".to_string()),
+            "{:?}",
+            comments(src)
+        );
+        let later = src.find("Later").unwrap();
+        assert_eq!(
+            for_highlight(src, later..later + 5),
+            Landing::Highlight(later..later + 5)
+        );
+    }
+
+    /// A comment whose closer the fallback's parse hides in a fenced block is read as
+    /// code through that block's end. Landing tested only the asked-for range against
+    /// the blocks, then widened it over that code, so a highlight on `note` wrapped the
+    /// paragraph, the fence and the line after it. Mutation check: drop the second block
+    /// test in `for_highlight` and it lands as that highlight again.
+    #[test]
+    fn a_highlight_widened_over_a_sealed_comment_does_not_wrap_a_fence() {
+        let src = FENCE_FLIP.to_string() + "\nx {>>note\n```\n<<}\n```\nmore <<} y\n";
+        assert_eq!(reading(&src, SETTLE_ROUNDS).outcome, Outcome::Unsettled);
+        let note = src.find("note").unwrap();
+        let after_fence = src.rfind("more").unwrap();
+        match for_highlight(&src, note..note + 4) {
+            Landing::Point(slot) => assert_eq!(slot.at, after_fence),
+            other => panic!("{other:?}"),
+        }
     }
 
     /// The repetition stops as soon as it returns to a mask it already tried, rather

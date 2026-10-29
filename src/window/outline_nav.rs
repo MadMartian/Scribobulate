@@ -358,13 +358,14 @@ fn scroll_preview_to_heading_revealing(
     doc_index: usize,
 ) {
     let hidden_by = super::panescroll::preview_to_heading(st, doc_index);
-    super::foldreveal::reveal_folds(window, &hidden_by, move |window| {
+    super::foldreveal::reveal_folds(window, &hidden_by, move |_window, st| {
         // The re-render rebuilt the preview's buffer, so the heading's offset is a
         // NEW one; re-reading it through the same accessor is what makes this
-        // correct rather than re-using the offset from before the expansion.
-        if let Some(st) = state(window) {
-            super::panescroll::preview_to_heading(&st, doc_index);
-        }
+        // correct rather than re-using the offset from before the expansion. `st` is
+        // the tab the activation was for: `doc_index` indexes that document's
+        // headings and no other (`reveal_folds` drops the follow-up after a tab
+        // switch).
+        super::panescroll::preview_to_heading(st, doc_index);
     });
 }
 
@@ -1321,6 +1322,75 @@ mod disclosure_reveal_tests {
         window.destroy();
     }
 
+    /// **A tab switch before the reveal's idle leaves both documents alone.**
+    ///
+    /// The reveal is deferred to an idle, and a tab switch can be dispatched first.
+    /// The follow-up scroll used to resolve "the active tab" when the idle ran, so the
+    /// tab switched TO was scrolled to its own heading at the first document's index,
+    /// a place its reader never asked for. Tab B's second heading sits far down, so
+    /// that wrong scroll moves B's preview off the top. The control at the end runs
+    /// the same reveal without the switch, so the test cannot pass on a reveal that
+    /// no longer does anything. Mutation: dropping the tab check in `reveal_folds`
+    /// fails here.
+    #[gtktest::test]
+    fn a_tab_switch_before_the_reveal_runs_drops_it() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.foldrevealtab");
+        let window = new_window(&app, "IT-FOLDTAB", MD, None);
+        crate::testpump::until(crate::testpump::Clock::Idle, "the first render", || {
+            !preview_text(&window).is_empty()
+        });
+        let tab_a = state(&window).expect("tab A");
+
+        let mut md_b = String::from("# B0\n\n");
+        for i in 0..300 {
+            md_b.push_str(&format!("prose line {i}\n\n"));
+        }
+        md_b.push_str("# B1\n");
+
+        // The activation, then the switch, in one turn: the reveal's idle has not run.
+        scroll_preview_to_heading_revealing(&window, &tab_a, 1);
+        let tab_b_id =
+            crate::window::create_tab_in_window(&window, &md_b, None, false, false).expect("tab B");
+        assert_eq!(
+            state(&window).map(|s| s.id),
+            Some(tab_b_id),
+            "precondition: B is active before the reveal's idle runs"
+        );
+        let sw_b = crate::window::get_preview_sw(&window).expect("B's preview scroller");
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Idle,
+            std::time::Duration::from_millis(500),
+        );
+        assert!(
+            sw_b.vadjustment().upper() > sw_b.vadjustment().page_size() * 2.0,
+            "precondition: B's preview is long enough for a wrong heading scroll to show"
+        );
+        assert_eq!(
+            sw_b.vadjustment().value(),
+            0.0,
+            "B's preview was scrolled by an outline activation made in tab A"
+        );
+
+        // Back on A, the same reveal still opens the block.
+        let chrome = crate::winstate::chrome(&window).expect("chrome");
+        chrome.tabs.focus_page(&tab_a.content_box);
+        crate::testpump::until(crate::testpump::Clock::Idle, "A to be active", || {
+            state(&window).map(|s| s.id) == Some(tab_a.id)
+        });
+        assert!(
+            !preview_text(&window).contains("Hidden"),
+            "the dropped reveal left A's block as the reader saw it"
+        );
+        scroll_preview_to_heading_revealing(&window, &tab_a, 1);
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "the reveal on the still-active tab to open the block",
+            || preview_text(&window).contains("Hidden"),
+        );
+
+        window.destroy();
+    }
+
     /// **The reading position survives a disclosure toggle.**
     ///
     /// A toggle re-renders, and the re-render used to restore by buffer LINE — a
@@ -1381,7 +1451,7 @@ mod disclosure_reveal_tests {
         super::foldreveal::reveal_folds(
             &window,
             &[crate::fold::FoldKey::from_source_offset(0)],
-            |_| {},
+            |_, _| {},
         );
         crate::testpump::until(
             crate::testpump::Clock::Idle,

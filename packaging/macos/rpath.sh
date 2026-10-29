@@ -89,11 +89,19 @@ load_deps() {
     printf '%s\n' "$out"
 }
 
-# The install ID of Mach-O $1, or nothing for an executable, which has none.
+# The install ID of Mach-O $1, or nothing for an executable or loadable bundle, which has
+# none. Whether it SHOULD have one is read from its load commands (LC_ID_DYLIB), so an
+# empty `otool -D` answer about a dylib is the misread it is, not "no ID".
 install_id() {
-    local out
+    local lcs out
+    lcs="$(load_commands "$1")" || return 2
     out="$(otool_all -D "$1")" || return 2
-    printf '%s\n' "$out" | tr -d '\t' | awk 'NF && !seen[$0]++'
+    out="$(printf '%s\n' "$out" | tr -d '\t' | awk 'NF && !seen[$0]++')"
+    if [ -z "$out" ] && grep -q 'cmd LC_ID_DYLIB' <<< "$lcs"; then
+        echo "rpath.sh: otool -D gave no install ID for $1, whose load commands carry one" >&2
+        return 2
+    fi
+    [ -z "$out" ] || printf '%s\n' "$out"
 }
 
 # $1 as an absolute path with `.` and `..` folded, without touching the filesystem.

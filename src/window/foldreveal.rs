@@ -41,8 +41,18 @@ pub(crate) fn defer_with_window(
 }
 
 /// Expand every fold in `chain`, re-render the preview, and then run `after` against
-/// the window — with the new render in place, so `after` may read buffer offsets
-/// that only exist once the block is open.
+/// the window and the tab — with the new render in place, so `after` may read buffer
+/// offsets that only exist once the block is open.
+///
+/// **Bound to the tab that is active NOW.** The deferred work resolves nothing by
+/// "the active tab" when it runs. A tab switch can be dispatched before the idle
+/// (input outranks `DEFAULT_IDLE`, and a still-validating preview starves it for as
+/// long as its validation runs, GTK4Rs/T-5), and an index or offset meant for this
+/// document would then land in the other one. So the tab is captured here, the fold
+/// expansion waits in the idle with the re-render, and if another tab is active by
+/// then the whole reveal is dropped: nothing expanded, nothing re-rendered, `after`
+/// not run. The navigation was overtaken, and the tab it was for is left exactly as
+/// the reader saw it, its fold model still agreeing with its render.
 ///
 /// An empty `chain` means nothing is hidden: `after` runs immediately, with no
 /// re-render. That is not an optimisation but the common case — the great majority
@@ -63,51 +73,60 @@ pub(crate) fn defer_with_window(
 pub(crate) fn reveal_folds(
     window: &ApplicationWindow,
     chain: &[FoldKey],
-    after: impl FnOnce(&ApplicationWindow) + 'static,
+    after: impl FnOnce(&ApplicationWindow, &Rc<TabState>) + 'static,
 ) {
+    let Some(st) = state(window) else { return };
     if chain.is_empty() {
-        after(window);
+        after(window, &st);
         return;
     }
-    let Some(st) = state(window) else { return };
-    {
-        // `set_collapsed(.., false)`, never `toggle`. This function's NAME is the
-        // postcondition — every key in `chain` is expanded when it returns — and a
-        // toggle only delivers that while every key really is collapsed, an invariant
-        // held by the caller's caller and enforced by nothing. Hand it an already
-        // expanded block and a toggle CLOSES one the reader asked to see, which is the
-        // exact inversion of what a reveal is for.
-        //
-        // The document's own `<details open>` is what the fold model needs to answer
-        // that, so the spans are scanned here. Taken as a chain rather than one key at
-        // a time because a disclosure nested inside a collapsed one renders nothing —
-        // opening the outer block alone would only reveal the inner block's summary
-        // line, and the caller would have to re-render once per level of nesting to
-        // discover that (`renderer::CollapsedSite`).
-        //
-        // **The CLEANED text, in the same coordinate space the keys are in.** This read
-        // the raw source, and a `FoldKey` is an offset into the text the RENDERER
-        // walked — CriticMarkup extracted. On a document with an annotation above a
-        // disclosure the two disagree, the lookup below found no span, and the
-        // diverged-key fallback flipped the fold instead of expanding it (F-SEC-209).
-        let md = st.previewed_cleaned(st.view_mode.get());
-        let spans = crate::renderer::disclosure::scan_document(
-            &md,
-            crate::renderer::frontmatter::Show::AsDisclosure,
-        );
-        // The DECISION is `FoldState`'s and is unit-tested there; this file owns only
-        // the wiring around it and the diagnostic for what it reports back.
-        let diverged = st.folds.borrow_mut().expand_chain(&spans, chain);
-        for key in diverged {
-            log::error!(
-                "window::foldreveal: key {key:?} names no disclosure in the current \
-                 source; nothing was expanded for it"
-            );
-        }
-    }
-    let mode = st.view_mode.get();
+    let tab_id = st.id;
+    let chain = chain.to_vec();
     defer_with_window(window, move |window| {
+        let Some(st) = state(window).filter(|st| st.id == tab_id) else {
+            return;
+        };
+        expand_chain(&st, &chain);
+        let mode = st.view_mode.get();
         crate::window::rerender_preview_in_place(window, mode, RenderShape::ChangedContent);
-        after(window);
+        after(window, &st);
     });
+}
+
+/// Expand every fold in `chain` in `st`'s fold model, logging any key that names no
+/// disclosure in the source.
+fn expand_chain(st: &TabState, chain: &[FoldKey]) {
+    // `set_collapsed(.., false)`, never `toggle`. This function's NAME is the
+    // postcondition — every key in `chain` is expanded when it returns — and a
+    // toggle only delivers that while every key really is collapsed, an invariant
+    // held by the caller's caller and enforced by nothing. Hand it an already
+    // expanded block and a toggle CLOSES one the reader asked to see, which is the
+    // exact inversion of what a reveal is for.
+    //
+    // The document's own `<details open>` is what the fold model needs to answer
+    // that, so the spans are scanned here. Taken as a chain rather than one key at
+    // a time because a disclosure nested inside a collapsed one renders nothing —
+    // opening the outer block alone would only reveal the inner block's summary
+    // line, and the caller would have to re-render once per level of nesting to
+    // discover that (`renderer::CollapsedSite`).
+    //
+    // **The CLEANED text, in the same coordinate space the keys are in.** This read
+    // the raw source, and a `FoldKey` is an offset into the text the RENDERER
+    // walked — CriticMarkup extracted. On a document with an annotation above a
+    // disclosure the two disagree, the lookup below found no span, and the
+    // diverged-key fallback flipped the fold instead of expanding it (F-SEC-209).
+    let md = st.previewed_cleaned(st.view_mode.get());
+    let spans = crate::renderer::disclosure::scan_document(
+        &md,
+        crate::renderer::frontmatter::Show::AsDisclosure,
+    );
+    // The DECISION is `FoldState`'s and is unit-tested there; this file owns only
+    // the wiring around it and the diagnostic for what it reports back.
+    let diverged = st.folds.borrow_mut().expand_chain(&spans, chain);
+    for key in diverged {
+        log::error!(
+            "window::foldreveal: key {key:?} names no disclosure in the current \
+             source; nothing was expanded for it"
+        );
+    }
 }

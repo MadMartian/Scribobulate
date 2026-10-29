@@ -237,6 +237,55 @@ pub(crate) fn intersecting_highlights(
         .collect()
 }
 
+/// What a highlight over the cleaned selection `sel_cs..sel_ce` does with the highlights
+/// it intersects ([`intersecting_highlights`]).
+enum Merge<'a> {
+    /// It intersects none: a highlight over the selection alone.
+    Nothing,
+    /// It replaces `with` by one highlight over the cleaned `union` of their content and
+    /// the selection.
+    Union {
+        with: Vec<&'a super::Annotation>,
+        union: Range<CleanedByteOffset>,
+    },
+    /// The union holds a block break, which extraction would refuse (a line that held
+    /// only an annotation is blank once the annotation is cleaned away): the selection
+    /// is written as a point comment at its end instead, merging nothing. The rule is
+    /// the one the resolvers apply to the selection (`annotate::holds_block_break`),
+    /// applied here to the text actually written.
+    Crosses,
+}
+
+/// THE merge decision, shared by [`insert_or_extend_highlight`] and
+/// [`merged_comment_for`] so the card never shows comments the mutation keeps.
+fn merge(
+    ext: &super::scan::Extraction,
+    sel_cs: CleanedByteOffset,
+    sel_ce: CleanedByteOffset,
+) -> Merge<'_> {
+    let with = intersecting_highlights(&ext.annotations, sel_cs, sel_ce);
+    // N1-phase-2: the union ends are `CleanedByteOffset`, so they cannot be crossed with
+    // an ORIGINAL-space offset: the min/max chains only type-check within one space.
+    let start = with
+        .iter()
+        .map(|a| a.cleaned_content.start)
+        .fold(sel_cs, std::cmp::min);
+    let end = with
+        .iter()
+        .map(|a| a.cleaned_content.end)
+        .fold(sel_ce, std::cmp::max);
+    if with.is_empty() {
+        Merge::Nothing
+    } else if super::holds_block_break(&ext.cleaned[start.raw()..end.raw()]) {
+        Merge::Crosses
+    } else {
+        Merge::Union {
+            with,
+            union: start..end,
+        }
+    }
+}
+
 /// The existing comments a new annotation over `range` (original-source bytes) would
 /// merge, joined in **source order** with [`COMMENT_JOIN`]; `None` when it would merge
 /// nothing.
@@ -260,7 +309,10 @@ pub(crate) fn merged_comment_for(source: &str, range: Range<usize>) -> Option<St
     // merge, so it cannot be crossed with an original offset (the recurring bug class).
     let sel_cs = super::original_to_cleaned(&ext.shifts, OriginalByteOffset::new(range.start));
     let sel_ce = super::original_to_cleaned(&ext.shifts, OriginalByteOffset::new(range.end));
-    let joined = intersecting_highlights(&ext.annotations, sel_cs, sel_ce)
+    let Merge::Union { with, .. } = merge(&ext, sel_cs, sel_ce) else {
+        return None;
+    };
+    let joined = with
         .iter()
         .filter_map(|a| a.comment.as_deref())
         .map(str::trim)
@@ -285,8 +337,11 @@ pub(crate) fn merged_comment_for(source: &str, range: Range<usize>) -> Option<St
 ///
 /// The intersecting annotations' own comments are replaced by `comment` — which is why
 /// the caller must show the user what is about to be overwritten first. Ask
-/// [`merged_comment_for`] for exactly that text; it shares [`intersecting_highlights`]
-/// with this function, so the two cannot disagree about what will be merged.
+/// [`merged_comment_for`] for exactly that text; it shares the merge decision
+/// ([`Merge`]) with this function, so the two cannot disagree about what will be merged.
+///
+/// A union that would hold a block break merges nothing: the selection is written as a
+/// point comment at its end instead (see [`Merge::Crosses`]).
 pub(crate) fn insert_or_extend_highlight(
     source: &str,
     range: Range<usize>,
@@ -296,28 +351,12 @@ pub(crate) fn insert_or_extend_highlight(
     let sel_cs = super::original_to_cleaned(&ext.shifts, OriginalByteOffset::new(range.start));
     let sel_ce = super::original_to_cleaned(&ext.shifts, OriginalByteOffset::new(range.end));
 
-    let intersecting = intersecting_highlights(&ext.annotations, sel_cs, sel_ce);
-    if intersecting.is_empty() {
-        return insert_highlight_comment(source, range, comment);
-    }
-
+    let (intersecting, u_cs, u_ce) = match merge(&ext, sel_cs, sel_ce) {
+        Merge::Nothing => return insert_highlight_comment(source, range, comment),
+        Merge::Crosses => return point_comment_after(source, range.end, comment),
+        Merge::Union { with, union } => (with, union.start, union.end),
+    };
     // Union of the selection and every intersecting highlight, in CLEANED space.
-    // N1-phase-2: `u_cs`/`u_ce` are `CleanedByteOffset`, so they cannot be crossed
-    // with the ORIGINAL-space `orig_lo`/`orig_hi` below — the min/max chains only
-    // type-check within one space, which is exactly the invariant this arithmetic
-    // must hold.
-    let u_cs = intersecting
-        .iter()
-        .map(|a| a.cleaned_content.start)
-        .chain(std::iter::once(sel_cs))
-        .min()
-        .unwrap();
-    let u_ce = intersecting
-        .iter()
-        .map(|a| a.cleaned_content.end)
-        .chain(std::iter::once(sel_ce))
-        .max()
-        .unwrap();
     let union_text = &ext.cleaned[u_cs.raw()..u_ce.raw()];
 
     // Original region to replace: cover every intersecting construct (delimiters
@@ -352,6 +391,16 @@ pub(crate) fn insert_or_extend_highlight(
     out.push_str(COMMENT_CLOSE);
     out.push_str(&source[orig_hi.raw()..]);
     out
+}
+
+/// A point comment for a selection ending at `at`, landed as the window lands one
+/// (`landing::for_point`, then out of any construct it falls in).
+fn point_comment_after(source: &str, at: usize, comment: &str) -> String {
+    let mut slot = super::landing::for_point(source, at);
+    if slot.is_bare() {
+        slot.at = point_comment_anchor(source, slot.at);
+    }
+    insert_point_comment(source, &slot, comment)
 }
 
 /// The merge-preview: which existing comments a selection destroys, and how
@@ -615,6 +664,35 @@ mod tests {
             insert_or_extend_highlight(src, 5..30, "merged"),
             "a {==one and two==}{>>merged<<} b"
         );
+    }
+
+    /// A line holding only an annotation is blank once cleaned, so a merge wrapping the
+    /// cleaned union wrote a highlight across a blank line, which extraction refuses: it
+    /// rendered as literal markup, and the comments it replaced were gone. The selection
+    /// holds no blank line, so only the union says so; the result is a point comment at
+    /// the selection's end, merging nothing, and the card offers nothing to merge.
+    /// Mutation check: drop the `Merge::Crosses` arm in `merge` and the card offers `c`
+    /// to merge, and the file becomes `a {==x\n\nb==}{>>new<<}`.
+    #[test]
+    fn a_merge_whose_union_holds_a_blank_line_is_a_point_comment() {
+        for eol in ["\n", "\r\n"] {
+            let src = format!("a {{==x==}}{{>>c<<}}{eol}{{>>p<<}}{eol}b");
+            let range = src.find('x').unwrap()..src.len();
+            assert!(
+                !crate::annotate::holds_block_break(&src[range.clone()]),
+                "precondition: the selection holds no blank line, {eol:?}"
+            );
+            assert_eq!(merged_comment_for(&src, range.clone()), None, "{eol:?}");
+            let out = insert_or_extend_highlight(&src, range, "new");
+            assert_eq!(out, format!("{src}{{>>new<<}}"), "{eol:?}");
+            let ext = crate::annotate::extract(&out);
+            let kept: Vec<_> = ext
+                .annotations
+                .iter()
+                .filter_map(|a| a.comment.as_deref())
+                .collect();
+            assert_eq!(kept, ["c", "p", "new"], "{eol:?}");
+        }
     }
 
     #[test]

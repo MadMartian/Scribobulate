@@ -637,6 +637,10 @@ pub(super) fn restore_editor_place(st: &TabState, place: EditorPlace) {
         })
         .unwrap_or_else(|| buf.end_iter());
     buf.place_cursor(&caret);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a reading-position restore: the editor's own place re-applied over its rebuilt buffer preserves where the reader was and must not lead (Reading-Position Preservation CAM)"
+    )]
     restore_preview_scroll_to_line_fresh(&st.split.editor_scroller(), place.top_line);
 }
 

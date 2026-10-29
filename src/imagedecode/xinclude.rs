@@ -707,29 +707,94 @@ fn data_uri_payload(rest: &[u8]) -> Result<Vec<Payload>, Reason> {
         .position(|&b| b == b',')
         .ok_or(Reason::Undecodable)?;
     let body = &rest[comma + 1..];
-    let base64_body = || {
-        // The scan admits all the whitespace `base64_decode` skips, so a CSS-escaped
-        // form feed cannot end the payload early.
-        let len = body
-            .iter()
-            .take_while(|b| {
-                b.is_ascii_alphanumeric()
-                    || b.is_ascii_whitespace()
-                    || matches!(b, b'+' | b'/' | b'=' | b'%')
-            })
-            .count();
-        base64_decode(&percent_decode(&body[..len]))
+    let base64_body = || base64_reading(body);
+    let mut readings = first_cut_readings(rest, comma, body, base64_body)?;
+    // The cut above is the first comma of the NORMALISED text, and an escape can make
+    // one (`\2c`, or `&#92;2c`, which the XML parser turns into `\2c`) where the
+    // decoder, which ends the header at the first LITERAL comma, sees none. The decoder
+    // may then end the header at any later comma, and read a base64 body there if what
+    // precedes it ends in its base64 rule. So every such later comma gets a base64
+    // reading too. A percent reading at a later comma needs nothing extra: the percent
+    // reading of the first cut already covers every byte after it.
+    for (at, _) in rest
+        .iter()
+        .enumerate()
+        .skip(comma + 1)
+        .filter(|&(_, &b)| b == b',')
+    {
+        if ends_in_base64_rule(&rest[..at]) {
+            readings.extend(base64_reading(&rest[at + 1..]).map(Payload::Base64));
+        }
+    }
+    Ok(readings)
+}
+
+/// The base64 body that starts `body`, decoded. The scan admits all the whitespace
+/// `base64_decode` skips, so a CSS-escaped form feed cannot end the payload early.
+fn base64_reading(body: &[u8]) -> Option<Vec<u8>> {
+    let len = body
+        .iter()
+        .take_while(|b| {
+            b.is_ascii_alphanumeric()
+                || b.is_ascii_whitespace()
+                || matches!(b, b'+' | b'/' | b'=' | b'%')
+        })
+        .count();
+    base64_decode(&percent_decode(&body[..len]))
+}
+
+/// The decoder's base64 rule (see [`decoder_reads_base64`]) tested on the END of
+/// `header` only, in constant time, so every comma of a long text can be asked. The
+/// text is normalised, so tabs and newlines are already gone.
+fn ends_in_base64_rule(header: &[u8]) -> bool {
+    let h = header.trim_ascii_end();
+    let Some(cut) = h.len().checked_sub(b"base64".len()) else {
+        return false;
     };
+    if !h[cut..].eq_ignore_ascii_case(b"base64") {
+        return false;
+    }
+    let before = &h[..cut];
+    let spaces = before.iter().rev().take_while(|&&b| b == b' ').count();
+    before[..before.len() - spaces].ends_with(b";")
+}
+
+/// How much of `body`'s start a percent reading may skip: its run of base64 characters
+/// containing no `%`, less the last [`STRADDLE`] bytes. See the base64 arm of
+/// [`first_cut_readings`] for why that run is inert.
+fn inert_prefix(body: &[u8]) -> usize {
+    /// Longer than any word the checks search for, so one straddling the cut is kept.
+    const STRADDLE: usize = 16;
+    let run = body
+        .iter()
+        .take_while(|b| {
+            b.is_ascii_alphanumeric() || b.is_ascii_whitespace() || matches!(b, b'+' | b'/' | b'=')
+        })
+        .count();
+    run.saturating_sub(STRADDLE)
+}
+
+/// The readings at the first comma, by what its header says.
+fn first_cut_readings(
+    rest: &[u8],
+    comma: usize,
+    body: &[u8],
+    base64_body: impl Fn() -> Option<Vec<u8>>,
+) -> Result<Vec<Payload>, Reason> {
     Ok(match header_encoding(&rest[..comma]) {
         // The percent reading too, even here. The header this sees has already had the
         // screen's own normalisation applied (CSS escapes undone everywhere, references
         // expanded even in CDATA), which a decoder applies only in some contexts, so a
         // header that reads as base64 HERE can be percent to the decoder (`;\62 ase64`
-        // in a plain attribute). For an honest base64 body the extra reading is inert:
-        // base64 text holds no `:` or `<`, so it can spell neither the namespace nor
-        // markup.
+        // in a plain attribute). Its leading run of base64 characters with no `%` is
+        // skipped, all but its last few bytes: percent-decoding leaves that run as it is,
+        // and text with no `<`, `:` or `.` can hold no markup and no namespace URL, so
+        // reading it twice only doubled what an honest base64 raster costs the budget
+        // (enough to refuse an honest page near the cap). The bytes kept let a word that
+        // straddles the run's end still be found. A base64 run can spell `xinclude` by
+        // chance and be refused for it: astronomically unlikely, and the safe direction.
         HeaderEncoding::Base64 => vec![
-            Payload::Percent(percent_decode(body)),
+            Payload::Percent(percent_decode(&body[inert_prefix(body)..])),
             Payload::Base64(base64_body().ok_or(Reason::Undecodable)?),
         ],
         HeaderEncoding::Percent => vec![Payload::Percent(percent_decode(body))],
@@ -743,7 +808,9 @@ fn data_uri_payload(rest: &[u8]) -> Result<Vec<Payload>, Reason> {
 
 /// How a `data:` header says its payload is encoded.
 ///
-/// **Base64 only on the decoder's own rule, applied to the header as written.** WHATWG's
+/// **Base64 only on the decoder's own rule, applied to the header before any
+/// percent-decoding** (it is the screen's normalised text, so CSS escapes and references are
+/// already undone; [`data_uri_payload`] covers what that changes). WHATWG's
 /// `data:` processor (librsvg decodes with the `data-url` crate, which implements it)
 /// never percent-decodes the media type: after the URL parser drops tabs and newlines
 /// and the trailing whitespace is stripped, the header must end in `;`, any spaces, and
@@ -783,16 +850,7 @@ fn decoder_reads_base64(header: &[u8]) -> bool {
         .copied()
         .filter(|b| !matches!(b, b'\t' | b'\n' | b'\r'))
         .collect();
-    let h = kept.trim_ascii_end();
-    let Some(cut) = h.len().checked_sub(b"base64".len()) else {
-        return false;
-    };
-    if !h[cut..].eq_ignore_ascii_case(b"base64") {
-        return false;
-    }
-    let before = &h[..cut];
-    let spaces = before.iter().rev().take_while(|&&b| b == b' ').count();
-    before[..before.len() - spaces].ends_with(b";")
+    ends_in_base64_rule(&kept)
 }
 
 enum HeaderEncoding {

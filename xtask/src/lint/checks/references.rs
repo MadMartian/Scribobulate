@@ -531,11 +531,8 @@ pub fn scrsec_citations_resolve(tree: &Tree) -> bool {
             "{CVE_REGISTER}: ScrSEC-{number} has an entry but no Contents row"
         ));
     }
-    for number in listed.difference(&defined) {
-        findings.push(format!(
-            "{CVE_REGISTER}: ScrSEC-{number} has a Contents row but no entry"
-        ));
-    }
+    // A Contents row with no entry needs no arm of its own: the row's link text is a
+    // `ScrSEC-N` citation, so the citation loop above already reports it as naming nothing.
     if findings.is_empty() {
         return pass();
     }

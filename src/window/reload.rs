@@ -510,6 +510,10 @@ pub(crate) fn apply_external_reload(window: &ApplicationWindow, content: &str) {
             // on reload. The parameter is now `&ScrolledWindow`, so that mistake no
             // longer builds (POLICY § Typed GTK seams, the encapsulation rung).
             if let Some(sw) = st.split.preview_scroller() {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "a reading-position restore: a reload re-applies the reader's place on the rebuilt preview and must not lead (Reading-Position Preservation CAM)"
+                )]
                 restore_preview_scroll_to_line_fresh(&sw, top_line);
             }
             rewire_copy_action(window);

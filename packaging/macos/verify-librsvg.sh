@@ -127,6 +127,7 @@ self_test() {
     }
     stub otool-crashes otool 'exit 1'
     stub otool-headers-only otool 'eval "last=\${$#}"; echo "$last:"'
+    stub otool-no-id otool 'eval "last=\${$#}"; case "$3" in -D) echo "$last:" ;; *) exec /usr/bin/otool "$@" ;; esac'
     stub file-crashes file 'exit 1'
     stub file-silent file 'exit 0'
     printf 'text\n' > "$tmp/not-macho"
@@ -134,11 +135,20 @@ self_test() {
     reader "" 0 rpaths_of /bin/ls
     reader "" 0 is_macho /bin/ls
     reader "" 1 is_macho "$tmp/not-macho"
+    reader "" 0 install_id /usr/lib/libgmalloc.dylib
+    reader "" 0 install_id /bin/ls          # an executable has no ID, and that is an answer
+    if [ "$(install_id /usr/lib/libgmalloc.dylib)" = /usr/lib/libgmalloc.dylib ]; then
+        echo "   ok    install_id reads a dylib's ID"
+    else
+        echo "   FAILED install_id did not read /usr/lib/libgmalloc.dylib's ID"; failures=$((failures + 1))
+    fi
     reader "$tmp/otool-crashes" 2 load_deps /bin/ls
     reader "$tmp/otool-crashes" 2 rpaths_of /bin/ls
     reader "$tmp/otool-crashes" 2 install_id /bin/ls
     reader "$tmp/otool-headers-only" 2 load_deps /bin/ls
     reader "$tmp/otool-headers-only" 2 rpaths_of /bin/ls
+    reader "$tmp/otool-no-id" 2 install_id /usr/lib/libgmalloc.dylib
+    reader "$tmp/otool-no-id" 0 install_id /bin/ls
     reader "$tmp/file-crashes" 2 is_macho /bin/ls
     reader "$tmp/file-silent" 2 is_macho /bin/ls
 

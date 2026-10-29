@@ -117,10 +117,10 @@ fn eol_near(source: &str, at: usize) -> &'static str {
     }
 }
 
-/// Whether `line` holds nothing but a quote's `>` markers and what a blank line may
-/// hold (`written::is_line_space`, the one rule extraction's block break uses too).
+/// Whether `line` is blank (`written::is_blank_line_char`, the one rule extraction's
+/// block break uses too), its line end aside.
 fn is_blank(line: &str) -> bool {
-    line.trim_matches(|c| c == '>' || c == '\r' || c == '\n' || super::written::is_line_space(c))
+    line.trim_matches(|c| c == '\r' || c == '\n' || super::written::is_blank_line_char(c))
         .is_empty()
 }
 
@@ -222,15 +222,16 @@ fn after_block(source: &str, block: &Block) -> Slot {
 
 /// Where a highlight over `range` lands. A highlight touching a block it must not
 /// enter becomes a comment after that block; one touching math or a code span widens to
-/// cover it.
+/// cover it, and becomes a comment after a block if the widened range touches one.
 pub(crate) fn for_highlight(source: &str, range: Range<usize>) -> Landing {
     let v = scan(source);
-    if let Some(block) = v
-        .blocks
-        .iter()
-        .rev()
-        .find(|b| range.start < b.lines.end && b.lines.start < range.end.max(range.start + 1))
-    {
+    let touched = |range: &Range<usize>| {
+        v.blocks
+            .iter()
+            .rev()
+            .find(|b| range.start < b.lines.end && b.lines.start < range.end.max(range.start + 1))
+    };
+    if let Some(block) = touched(&range) {
         return Landing::Point(after_block(source, block));
     }
     let mut range = range;
@@ -239,6 +240,11 @@ pub(crate) fn for_highlight(source: &str, range: Range<usize>) -> Landing {
             range.start = range.start.min(m.start);
             range.end = range.end.max(m.end);
         }
+    }
+    // What it widened over may reach a block: a comment the fallback reads as code runs
+    // on through the code block that hides its closer.
+    if let Some(block) = touched(&range) {
+        return Landing::Point(after_block(source, block));
     }
     Landing::Highlight(range)
 }

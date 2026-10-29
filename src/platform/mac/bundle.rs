@@ -17,10 +17,19 @@
 
 use std::path::{Path, PathBuf};
 
-/// Where the loader cache is written at startup. Regenerated every launch rather than
-/// cached, because it encodes the bundle's ABSOLUTE path and the bundle can be moved
-/// between launches — a stale one would name a directory that is no longer there.
-const LOADER_CACHE_NAME: &str = "scribobulate-loaders.cache";
+/// The loader cache written at startup is `<temp dir>/<this><pid>-<n>.cache`. Regenerated
+/// every launch rather than cached, because it encodes the bundle's ABSOLUTE path and the
+/// bundle can be moved between launches — a stale one would name a directory that is no
+/// longer there.
+///
+/// **One file per process, never a shared name.** A fixed name is rewritten by every
+/// launch of every copy of the bundle, so the cache gdk-pixbuf reads at its first image
+/// need not be the one [`carries_verified_librsvg`] checked at startup: another copy,
+/// launched in between, puts its own loader paths there.
+const LOADER_CACHE_PREFIX: &str = "scribobulate-loaders-";
+
+/// The loader cache [`configure_paths`] wrote for this process, if it wrote one.
+static INSTALLED_CACHE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// The bundle root (`…/Scribobulate.app/Contents`) if this executable is running from
 /// inside one.
@@ -72,18 +81,41 @@ const STAGED_SVG_LOADER: &str = "Frameworks/libpixbufloader_svg.so";
 /// at the bundle's cache only when writing that cache succeeds. When it does not,
 /// gdk-pixbuf falls back to the cache it was compiled against, Homebrew's, whose SVG
 /// loader binds Homebrew's librsvg, and the loader loaded here proves nothing about it.
-/// So the module file gdk-pixbuf will read (`GDK_PIXBUF_MODULE_FILE`, the one setting
-/// that overrides the compiled default) must exist, and every SVG module it names must
-/// be the staged loader.
+/// So the module file checked is the one this process wrote, still the one
+/// `GDK_PIXBUF_MODULE_FILE` (the setting that overrides the compiled default) names, and
+/// every SVG module in it must be the staged loader. An inherited value is never trusted:
+/// a module file this process did not write is not one it can vouch for.
 ///
 /// Fails closed: no module file, one naming any other SVG loader, a loader that will not
 /// load, or no librsvg image after it did, is `false`, and the screen stays up.
 pub(crate) fn carries_verified_librsvg() -> bool {
     contents_dir().is_some_and(|contents| {
-        let module_file = std::env::var_os("GDK_PIXBUF_MODULE_FILE").map(PathBuf::from);
-        svg_modules_are_staged(module_file.as_deref(), &contents.join(STAGED_SVG_LOADER))
-            && loader_binds_staged_librsvg(&contents, load_and_keep, loaded_images)
+        let env = std::env::var_os("GDK_PIXBUF_MODULE_FILE");
+        let module_file = module_file_in_use(INSTALLED_CACHE.get(), env.as_deref());
+        verified(&contents, module_file, load_and_keep, loaded_images)
     })
+}
+
+/// The whole decision over the bundle at `contents`, with the module file gdk-pixbuf
+/// reads, the loader load and dyld's image list given rather than discovered.
+fn verified(
+    contents: &Path,
+    module_file: Option<&Path>,
+    load: impl FnOnce(&Path) -> bool,
+    images: impl FnOnce() -> Vec<PathBuf>,
+) -> bool {
+    svg_modules_are_staged(module_file, &contents.join(STAGED_SVG_LOADER))
+        && loader_binds_staged_librsvg(contents, load, images)
+}
+
+/// The cache this process `installed`, if `env` (`GDK_PIXBUF_MODULE_FILE`) still names it.
+fn module_file_in_use<'a>(
+    installed: Option<&'a PathBuf>,
+    env: Option<&std::ffi::OsStr>,
+) -> Option<&'a Path> {
+    installed
+        .filter(|ours| env == Some(ours.as_os_str()))
+        .map(PathBuf::as_path)
 }
 
 /// Whether gdk-pixbuf, reading `module_file`, would load SVG through `staged_loader` and
@@ -338,21 +370,80 @@ pub(crate) fn configure_paths() {
     // absolute paths inside it are only knowable once the bundle is somewhere. A failure
     // leaves gdk-pixbuf on its compiled-in cache, and [`carries_verified_librsvg`] then
     // keeps the image screen up.
+    let temp = std::env::temp_dir();
+    sweep_dead_caches(&temp);
     if let Some(cache) = install_loader_cache(
         &resources.join("loaders.cache"),
         &contents.join("Frameworks"),
-        &std::env::temp_dir().join(LOADER_CACHE_NAME),
+        &temp,
     ) {
-        std::env::set_var("GDK_PIXBUF_MODULE_FILE", cache);
+        std::env::set_var("GDK_PIXBUF_MODULE_FILE", &cache);
+        let _ = INSTALLED_CACHE.set(cache);
     }
 }
 
-/// Write the staged cache `template`, absolutized against `loaders_dir`, to `target`.
-/// `Some(target)` only when it was written.
-fn install_loader_cache(template: &Path, loaders_dir: &Path, target: &Path) -> Option<PathBuf> {
-    let template = std::fs::read_to_string(template).ok()?;
-    std::fs::write(target, absolutize_loader_cache(&template, loaders_dir)).ok()?;
-    Some(target.to_path_buf())
+/// Write the staged cache `template`, absolutized against `loaders_dir`, to a file of
+/// this process's own in `dir`, and return its path; `None` when nothing was written.
+///
+/// Created exclusively (`O_EXCL`, mode 0600), so no other process's file is ever
+/// overwritten or reused, and nothing else holds this one: the content read back is the
+/// content written. That is also why it needs no write-then-rename: nobody but this
+/// process reads it, and only after this returns. A name left by an earlier process
+/// that had this pid is skipped for the next suffix.
+fn install_loader_cache(template: &Path, loaders_dir: &Path, dir: &Path) -> Option<PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let text = absolutize_loader_cache(&std::fs::read_to_string(template).ok()?, loaders_dir);
+    let pid = std::process::id();
+    for n in 0..16 {
+        let target = dir.join(format!("{LOADER_CACHE_PREFIX}{pid}-{n}.cache"));
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&target)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        };
+        if file.write_all(text.as_bytes()).is_err() {
+            let _ = std::fs::remove_file(&target);
+            return None;
+        }
+        return Some(target);
+    }
+    None
+}
+
+/// Delete the loader caches in `dir` left by processes that have exited, so one file per
+/// launch does not accumulate. A file whose pid is alive, or that is not ours, is left.
+fn sweep_dead_caches(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix(LOADER_CACHE_PREFIX))
+            .and_then(|rest| rest.split_once('-'))
+            .and_then(|(pid, _)| pid.parse::<libc::pid_t>().ok())
+        else {
+            continue;
+        };
+        if !process_is_alive(pid) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Whether `pid` names a live process. Only `ESRCH` is "dead": `EPERM` means it exists.
+fn process_is_alive(pid: libc::pid_t) -> bool {
+    // SAFETY: signal 0 sends nothing; it only checks that the process exists.
+    pid > 0
+        && (unsafe { libc::kill(pid, 0) } == 0
+            || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH))
 }
 
 /// Put the bundle's GtkSourceView validators ahead of the compile-time prefix.
@@ -404,8 +495,8 @@ pub(crate) fn configure_language_path() {
 mod tests {
     use super::{
         absolutize_loader_cache, contents_for_exe, install_loader_cache, load_and_keep,
-        loaded_images, loader_binds_staged_librsvg, module_basename,
-        only_the_staged_librsvg_is_loaded, svg_modules_are_staged,
+        loaded_images, loader_binds_staged_librsvg, module_basename, module_file_in_use,
+        only_the_staged_librsvg_is_loaded, svg_modules_are_staged, sweep_dead_caches, verified,
     };
     use std::path::Path;
     use std::path::PathBuf;
@@ -578,28 +669,91 @@ mod tests {
         (contents, template)
     }
 
-    /// When the bundle's cache cannot be written, gdk-pixbuf reads its compiled-in one and
-    /// may load another SVG loader, so the screen must stay up. Mutation: dropping the
-    /// module-file check from `carries_verified_librsvg` lets the staged loader, which
-    /// gdk-pixbuf never opens, stand the screen down.
+    /// The whole decision, over a staged bundle whose loader loads and binds the staged
+    /// librsvg: only the module file decides. Mutation: dropping the module-file conjunct
+    /// from `verified` passes the first two cases.
     #[test]
     fn the_screen_stays_up_unless_the_bundles_cache_is_the_one_gdk_pixbuf_reads() {
         let dir = tempfile::tempdir().unwrap();
         let (contents, template) = staged_cache(dir.path());
         let frameworks = contents.join("Frameworks");
-        let loader = frameworks.join("libpixbufloader_svg.so");
+        let staged = frameworks.join("librsvg-2.2.dylib");
+        std::fs::write(&staged, b"").unwrap();
+        let decide = |module_file: Option<&Path>| {
+            verified(&contents, module_file, |_| true, || vec![staged.clone()])
+        };
 
-        // The write fails: nothing to point GDK_PIXBUF_MODULE_FILE at.
-        let unwritable = dir.path().join("no-such-dir/scribobulate-loaders.cache");
+        // The write fails: no cache, so gdk-pixbuf reads its compiled-in one.
+        let unwritable = dir.path().join("no-such-dir");
         let installed = install_loader_cache(&template, &frameworks, &unwritable);
         assert_eq!(installed, None, "a failed write must not report a cache");
-        assert!(!svg_modules_are_staged(installed.as_deref(), &loader));
+        assert!(!decide(None), "no module file of ours");
+        // A module file naming another SVG loader.
+        let foreign = dir.path().join("foreign.cache");
+        std::fs::write(&foreign, std::fs::read_to_string(&template).unwrap()).unwrap();
+        assert!(
+            !decide(Some(&foreign)),
+            "a cache with a bare, unrewritten loader name"
+        );
 
-        // The write succeeds: the cache names the staged loader by absolute path.
-        let target = dir.path().join("scribobulate-loaders.cache");
-        let installed = install_loader_cache(&template, &frameworks, &target);
-        assert_eq!(installed.as_deref(), Some(target.as_path()));
-        assert!(svg_modules_are_staged(installed.as_deref(), &loader));
+        // ANTI-VACUITY: the cache this process wrote stands the screen down.
+        let installed = install_loader_cache(&template, &frameworks, dir.path())
+            .expect("a writable directory takes the cache");
+        assert!(decide(Some(&installed)));
+    }
+
+    /// The check reads the cache this process wrote, and only while the environment still
+    /// points gdk-pixbuf at it. Mutation: trusting the inherited variable passes the
+    /// second case.
+    #[test]
+    fn only_the_cache_this_process_wrote_and_still_names_is_checked() {
+        let ours = PathBuf::from("/T/scribobulate-loaders-1-0.cache");
+        let theirs = std::ffi::OsStr::new("/T/somebody-elses.cache");
+        assert_eq!(module_file_in_use(None, Some(ours.as_os_str())), None);
+        assert_eq!(module_file_in_use(Some(&ours), Some(theirs)), None);
+        assert_eq!(module_file_in_use(Some(&ours), None), None);
+        assert_eq!(
+            module_file_in_use(Some(&ours), Some(ours.as_os_str())),
+            Some(ours.as_path())
+        );
+    }
+
+    /// Two launches never share a cache file, and neither overwrites the other's.
+    /// Mutation: a fixed name makes the second install return the first's path.
+    #[test]
+    fn every_install_gets_a_file_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let (contents, template) = staged_cache(dir.path());
+        let frameworks = contents.join("Frameworks");
+        let first = install_loader_cache(&template, &frameworks, dir.path()).unwrap();
+        std::fs::write(&first, b"left alone").unwrap();
+        let second = install_loader_cache(&template, &frameworks, dir.path()).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read(&first).unwrap(), b"left alone");
+    }
+
+    /// A dead process's cache is swept; a live one's, and anything not ours, is kept.
+    #[test]
+    fn only_the_caches_of_exited_processes_are_swept() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        let dead_file = dir
+            .path()
+            .join(format!("scribobulate-loaders-{dead}-0.cache"));
+        let live_file = dir.path().join(format!(
+            "scribobulate-loaders-{}-0.cache",
+            std::process::id()
+        ));
+        let other = dir.path().join("scribobulate-loaders.cache");
+        for f in [&dead_file, &live_file, &other] {
+            std::fs::write(f, b"").unwrap();
+        }
+        sweep_dead_caches(dir.path());
+        assert!(!dead_file.exists(), "an exited process's cache");
+        assert!(live_file.exists(), "this process's cache");
+        assert!(other.exists(), "a name that is not a per-process cache");
     }
 
     /// Every module claiming SVG must be the staged loader, named absolutely. Mutation:

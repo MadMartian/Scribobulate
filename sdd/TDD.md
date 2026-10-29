@@ -2700,7 +2700,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the other pane tracks to the corresponding position without drift introduced by the removed CriticMarkup (an un-annotated document syncs exactly as before)
 
 ### 17.12 Malformed or block-crossing CriticMarkup is shown literally, never lost
-- **Given** a document with an unclosed CriticMarkup construct, or one whose close crosses a blank line (an empty line, or one holding only spaces or tabs, in either line ending)
+- **Given** a document with an unclosed CriticMarkup construct, or one whose close crosses a blank line (an empty line, or one holding only spaces, tabs or a block quote's `>` markers, in either line ending)
 - **When** it is shown in the preview
 - **Then** the text is rendered literally (delimiters visible) rather than being swallowed or treated as an annotation
 - **And** annotating a selection that crosses such a line, from the editor or the preview, writes a comment at the selection's end rather than a highlight that would then show literally
@@ -2988,6 +2988,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **And** nothing in the file is replaced: the comment is only ever inserted, never written over a blank line or the end of a block, and removing it returns the file to what it was
 - **And** a highlight that touches math (`$…$`, `$$…$$`) covers the whole formula rather than splitting it
 - **And** a new annotation is never written inside an existing one's comment
+- **And** a selection that would merge with an existing highlight across a blank line is written as a comment at its end, and merges nothing
 - **And** annotations everywhere else — headings, lists, quotes, footnotes, inline formatting — are unchanged
 - **Rationale** Scribobulate strips annotations before it reads the Markdown, so none of this shows in its own preview; every other tool — GitHub, a static-site generator, another editor — reads the markup as text. Inside a paragraph that is harmless. Ahead of an opening fence, after a closing one, inside front matter or directly after an HTML block it changes the document's structure: the code becomes a paragraph and the rest of the file becomes code, or the metadata becomes text
 

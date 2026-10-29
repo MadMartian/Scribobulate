@@ -212,7 +212,8 @@ reads names no SVG loader but the staged one.
   `%3Bbase64`, `;base64%20`, `;base%364` and a CSS form feed (`;\c base64`) were base64 to the
   screen alone; a base64 scan empties a percent body at its first `&` or `<`, and with a single
   URI nothing read it as percent. A CSS escape in a plain attribute (`;\62 ase64`) did the same
-  through the screen's own normalisation. Closed: base64 is decided on the raw header by the
+  through the screen's own normalisation. Closed: base64 is decided on the header before any
+  percent-decoding, by the
   decoder's rule, any header that could spell `base64` through an encoding gets both readings,
   and a base64 verdict keeps the percent reading too. ("Read a data: header raw, as the decoder
   does…", 2026-10-29)
@@ -230,6 +231,22 @@ reads names no SVG loader but the staged one.
   content is screened once per load. A cap-sized page now costs about 0.1–0.5 s per load in a
   release build, down from 0.25–3 s. ("Charge every UTF-16 reading of the XInclude screen and screen
   one content once per load", 2026-10-29)
+- **Round 12.** The screen ended a `data:` header at the first comma of its normalised text, where
+  an escape can produce one (`\2c`, or `&#92;2c`, which the XML parser turns into `\2c`) that the
+  decoder, ending the header at the first LITERAL comma, does not see. Under a plain `href`,
+  `;a=\2c;base64` was base64 to the decoder and a percent `;base64,…` to the screen. Closed: every
+  later comma whose preceding text ends in the decoder's base64 rule gets a base64 reading too.
+  ("Read a base64 body at every comma the decoder could end the header on…", 2026-10-29)
+- **Round 12, over-refusal (not a leak).** The percent reading kept under a base64 verdict
+  re-read a whole base64 raster, so an honest page over about 15 MiB carrying one cost more than
+  the budget and was refused. Closed: that reading skips the body's leading base64 run, which
+  percent-decoding leaves unchanged and which can hold no markup, keeping its last few bytes.
+  ("Stop screening an honest base64 raster twice…", 2026-10-29)
+- **Round 11, macOS bundle.** The stand-down checked a fixed-name loader cache in the shared temp
+  directory that any other launch of any bundle copy could rewrite between the check and
+  gdk-pixbuf's read. Closed: each launch writes its own (exclusive create, named by process), and
+  the check reads the path this process wrote, never the inherited environment value. ("Check the
+  loader cache this process wrote…", 2026-10-29)
 
 **The pattern behind every parsing leak** (the stand-down leaks are the other class, above): each
 bypass was a place where the screen parsed a `data:` URI
@@ -298,8 +315,11 @@ librsvg from what dyld loaded") TDD and MANUAL-TEST 26.1 carry the check that a 
   Closed: every reference is folded against the bundle (or the OS root) before it is judged, and
   paths are split without globbing. ("Keep the XInclude screen up unless gdk-pixbuf reads the
   bundle's loader cache, and resolve every bundle reference before judging it")
-- **Open**: an install-ID read passes on an empty `otool -D` answer, so that one reader does not
-  yet fail closed. Being fixed on the `mac` seat.
+- **Round 11.** The install-ID read returned success on an empty `otool -D` answer, so a tool that
+  answered nothing about a library's install ID read as "no ID" and the bundle passed unread.
+  Closed: it fails closed when the object's load commands carry an install ID; the librsvg gate's
+  self-test holds this with a stub `otool`. ("Check the loader cache this process wrote, in a file
+  of its own, and fail closed on a missing install ID", 2026-10-29)
 
 **To close for good**: nothing upstream. This entry stays Patched while the bundle copies
 third-party libraries; it is the record of why those gates must not be removed.

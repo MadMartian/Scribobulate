@@ -350,9 +350,12 @@ impl RaiseOwed {
     }
 }
 
-/// Show the action card when a raise is owed, or reposition it when it is already up.
+/// Show the action card when a raise is owed. A card already up is left up: the
+/// caller has just re-pinned it over the selection (`point_at_selection`,
+/// `point_at_cell_selection`), and that re-pin is what moves it, so there is nothing
+/// to add here for it.
 fn raise(pop: &FloatingCard, may_raise: bool) {
-    if may_raise || pop.is_visible() {
+    if may_raise {
         pop.popup();
     }
 }
@@ -860,7 +863,12 @@ pub(crate) fn wire_annotation_overlay(
                 };
                 if entry_open.get() && !superseded {
                     // Noise. Return outright — falling through would also re-evaluate the
-                    // action popover and pop it up ON TOP of the still-open card.
+                    // action popover and pop it up ON TOP of the still-open card. The
+                    // debt is settled all the same: the selection is still the one the
+                    // card was opened over, so nothing new was selected, and a debt left
+                    // standing here would be paid by the next catch-up, which would pop
+                    // the card up over a selection the reader closed the entry on.
+                    raise_owed.pay();
                     return;
                 }
                 if entry_open.get() {
@@ -1061,8 +1069,8 @@ pub(crate) fn wire_annotation_overlay(
         // so an unmapped one (a background tab, or a preview the view mode hides) skips
         // the work and catches up once when it is mapped again. A minimized window, or one
         // on another virtual desktop, is NOT unmapped: GTK 4.6.9 on X11 under KWin leaves
-        // its widgets mapped (measured; the X window itself is unmapped), so such a window
-        // still does the work. The catch-up is not optional: a claim made elsewhere may
+        // its widgets mapped (measured; the X window itself is unmapped, GTK4Rs/AP-371), so
+        // such a window still does the work. The catch-up is not optional: a claim made elsewhere may
         // have cleared this view's cell selection while it was hidden (GTK4Rs/AP-120). It
         // owes no raise, so it re-inks and takes the card down for a selection that went,
         // and never pops the card back up over one the reader left (`RaiseOwed`).

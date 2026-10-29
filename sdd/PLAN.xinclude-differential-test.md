@@ -131,13 +131,15 @@ behaviour is built.
 - **Layers the grammar must compose** (each one a past leak or a rule in the screen's table):
   XML character references (decimal, hex, either case, leading zeros); percent-encoding, single
   and repeated, either hex case; `data:` headers with `;base64` spelled every way the decoder
-  accepts (`%3Bbase64`, spaces, case, extra parameters); CSS escapes (`data\3a`); tabs and
+  accepts (spaces after the `;`, case, extra parameters before it); CSS escapes (`data\3a`); tabs and
   newlines the URL parser drops; carriers `<image href>`, `xlink:href`, `<use>`, CSS `url()` in a
   `style` attribute and a `<style>` element; gzip; UTF-16 both byte orders, with and without BOM;
   the XInclude namespace under any prefix or as the default namespace. Header spellings the
   decoder REJECTS as base64 must be in the grammar too (`%3Bbase64`, `;base64%20`, a CSS form
   feed), each with a percent-hostile body: the Round 11 leak was a header only the screen read
-  as base64, which a grammar of accepted spellings cannot produce. Nest up to the screen's
+  as base64, which a grammar of accepted spellings cannot produce. Vary the DELIMITERS as well as
+  the words: an escape that produces a `,`, `;` or `:` (`\2c`, `&#92;2c`) moved the header boundary
+  in Round 12. Nest up to the screen's
   depth limit, and one past it (which must refuse regardless).
 - **Byte mutation stage**: mutate known-hostile seeds one byte or one layer at a time, and judge
   each survivor by the same oracle. Cheap, and it reaches shapes the grammar does not name. **Seed

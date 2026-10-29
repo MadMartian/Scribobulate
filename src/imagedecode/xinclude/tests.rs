@@ -958,3 +958,26 @@ fn cap_sized_runs_of_declarations_are_screened_in_bounded_time() {
         );
     }
 }
+
+/// The decoder ends the header at the first LITERAL comma, and the screen used to cut
+/// at the first comma of its normalised text, where an escape (`\2c`, or `&#92;2c`,
+/// which the XML parser turns into `\2c`) can produce one earlier. The decoder then
+/// reads `…;base64` and a base64 body; the screen read a short header and percent text.
+#[test]
+fn a_comma_produced_by_an_escape_does_not_move_the_header_boundary() {
+    let hostile = base64(ATTACK.as_bytes());
+    let benign = base64(BENIGN.as_bytes());
+    for header in [
+        "image/svg+xml;a=\\2c;base64",
+        "image/svg+xml;a=\\2C ;base64",
+        "image/svg+xml;a=&#92;2c;base64",
+    ] {
+        let wrap = |b64: &str| format!(r#"<svg><image href="data:{header},{b64}"/></svg>"#);
+        assert_eq!(
+            refused(wrap(&hostile)),
+            Some(Reason::XInclude),
+            "hostile under {header:?}"
+        );
+        assert_eq!(refused(wrap(&benign)), None, "benign under {header:?}");
+    }
+}

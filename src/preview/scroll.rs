@@ -598,6 +598,10 @@ mod gtk_integration_tests {
         sw.set_child(Some(&view));
 
         let target = 30_000;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture: this test is about the seam itself, not a navigation through it"
+        )]
         restore_preview_scroll_to_line_fresh(&sw, target);
 
         let buffer = view.buffer();
@@ -643,6 +647,10 @@ mod gtk_integration_tests {
         }
 
         let target = 2_000;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture: this test is about the seam itself, not a navigation through it"
+        )]
         restore_preview_scroll_to_line_fresh(&sw, target);
 
         // Pump until the viewport reaches the target (tolerance == the assert's).
@@ -820,6 +828,10 @@ mod gtk_integration_tests {
         let sw = ScrolledWindow::new();
         sw.set_child(Some(&view));
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture: this test is about the seam itself, not a navigation through it"
+        )]
         restore_preview_scroll_to_line_fresh(&sw, 0);
         assert!(
             view.buffer().mark("scrib-scroll-restore").is_none(),
@@ -864,6 +876,10 @@ mod gtk_integration_tests {
         }
 
         // Schedule the progressive far-restore — installs the persistent mark on A.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture: this test is about the seam itself, not a navigation through it"
+        )]
         restore_preview_scroll_to_line_fresh(&sw, 2_000);
         let mark_a = view
             .buffer()
