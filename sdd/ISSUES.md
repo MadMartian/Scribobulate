@@ -53,7 +53,7 @@ described from a different vantage point.
 | A | Windows, Mac | Production | No screen reader on Windows or macOS can read the app's accessible names: our GTK builds leave GTK's AccessKit accessibility backend off, so neither platform gets a tree to carry them. Linux/AT-SPI reads them | Medium |
 | B | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | D | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
-| F | Linux | Test | `window::sidebarfilter::gtk_integration_tests::closing_the_filter_returns_the_focus_to_the_highlighted_row` intermittently finds the list at its top instead of scrolled to the highlighted row (2 failures on CI, the second on 2026-10-29 reading "value 0, upper 0, page 0"; passed on retry, and about 160 of 160 loaded runs locally) | Low |
+| F | Linux, Mac | Test | `window::sidebarfilter::gtk_integration_tests::closing_the_filter_returns_the_focus_to_the_highlighted_row` intermittently finds the list at its top instead of scrolled to the highlighted row (3 failures on CI: Linux twice, the second on 2026-10-29, and macOS once on 2026-10-29, both 2026-10-29 failures reading "value 0, upper 0, page 0"; passed on retry, and about 160 of 160 loaded runs locally) | Low |
 | G | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | Q | Windows, Linux | Upstream | A crafted SVG can corrupt memory: Windows and Linux decode SVG through a librsvg with a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuse any SVG that may use XInclude before librsvg sees it until they carry the fix. The macOS bundle carries 2.63.2, and its build fails below that | High |
 | R | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
@@ -310,6 +310,11 @@ and a close with animations off skipping the hand-back. Not established: the mec
 - The assertion's message now carries the list's scroll value, upper and page size. If
   it recurs, read them first: they say whether the reveal ran, ran against a stale size,
   or was undone afterwards. Change no product code before that.
+
+**Recurred** (2026-10-29, GitHub CI run 40960989179, macOS leg, GTK 4.24.1, at
+`src/window/sidebarfilter.rs:1156`): "value 0, upper 0, page 0", the same reading as the
+second Linux failure. `upper 0` and `page 0` say the list had never been allocated when the
+assertion read it, so the reveal had nothing to scroll; this is no longer Linux-only.
 
 ## G. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 
