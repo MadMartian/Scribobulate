@@ -424,20 +424,19 @@ impl Win {
     /// (`x11decode::wm_check_alive`). Never called under the grab: the error trap syncs.
     fn wm_running(&self, atoms: &Atoms) -> bool {
         let on_root = self.read_longs(self.root, atoms.wm_check, XA_WINDOW);
-        let Some(&child) = on_root.as_deref().and_then(<[_]>::first) else {
-            return false;
-        };
-        if child == 0 {
-            return false;
-        }
-        // The window a crashed window manager named no longer exists, and reading off
-        // it raises BadWindow, which GDK treats as fatal unless trapped.
-        let display: *mut gdk::ffi::GdkDisplay = self.gdk_display.to_glib_none().0;
-        // SAFETY: a live GdkX11Display; the trap is pushed and popped around one read.
-        unsafe { gdk_x11_display_error_trap_push(display) };
-        let on_child = self.read_longs(child as XWindow, atoms.wm_check, XA_WINDOW);
-        // SAFETY: as above; pops the trap pushed just before.
-        unsafe { gdk_x11_display_error_trap_pop_ignored(display) };
+        // Every decision is the decoder's; this only skips the read where it names no
+        // window to read.
+        let on_child = x11decode::wm_check_child(on_root.as_deref()).and_then(|child| {
+            // The window a crashed window manager named no longer exists, and reading
+            // off it raises BadWindow, which GDK treats as fatal unless trapped.
+            let display: *mut gdk::ffi::GdkDisplay = self.gdk_display.to_glib_none().0;
+            // SAFETY: a live GdkX11Display; the trap is pushed and popped around one read.
+            unsafe { gdk_x11_display_error_trap_push(display) };
+            let on_child = self.read_longs(child as XWindow, atoms.wm_check, XA_WINDOW);
+            // SAFETY: as above; pops the trap pushed just before.
+            unsafe { gdk_x11_display_error_trap_pop_ignored(display) };
+            on_child
+        });
         x11decode::wm_check_alive(on_root.as_deref(), on_child.as_deref())
     }
 

@@ -23,7 +23,7 @@
 //! | UCS-4 or EBCDIC, which libxml2 detects from the first four bytes | those signatures refuse |
 //! | any other declared encoding (UTF-7, ISO-2022, …) that can spell ASCII without ASCII bytes | an `encoding=` outside the ASCII-compatible allow-list refuses |
 //! | gzip (`.svgz`), which librsvg inflates itself | inflated and screened in full |
-//! | a nested document in a `data:` URI (`<image>`, `<use>`, CSS `url()`), base64 or percent-encoded | decoded and screened recursively ; one whose header has no `,` to end it refuses |
+//! | a nested document in a `data:` URI (`<image>`, `<use>`, CSS `url()`), base64 or percent-encoded | decoded and screened recursively; a `data:` no `,` follows before the next is no URL, and its text is screened with the one before it |
 //! | CSS escapes (`data\3a`) and the URL parser dropping tabs and newlines | both are undone before the search |
 //! | case | every search ignores ASCII case |
 //!
@@ -329,6 +329,51 @@ fn expand_css_escapes(text: &[u8]) -> Vec<u8> {
 }
 
 fn inspect_text(text: &[u8], depth: usize, budget: &mut usize) -> Result<(), Reason> {
+    check_patterns(text)?;
+    let starts = delimited_starts(text, data_uri_starts(text));
+    for (i, &at) in starts.iter().enumerate() {
+        let end = starts.get(i + 1).copied().unwrap_or(text.len());
+        match data_uri_payload(&text[at + DATA_SCHEME.len()..end])? {
+            Payload::Base64(decoded) => inspect_at(&decoded, depth + 1, budget)?,
+            Payload::Percent(decoded) => inspect_every_decoding(decoded, depth, budget)?,
+        }
+    }
+    if let [first, _, ..] = starts[..] {
+        screen_spliced(&text[first + DATA_SCHEME.len()..], budget)?;
+    }
+    Ok(())
+}
+
+/// Inspect a percent-encoded payload at every level of decoding it has, not just the
+/// first. A URI written literally inside an encoded document is the cut's own segment,
+/// but a real decoder reaches it through the outer layer first, so its payload is
+/// decoded once more than the segment decodes it — a double-encoded gzip or SVG would
+/// otherwise reach the screen still encoded. Each level that differs from the last is
+/// inspected in full (gzip, UTF-16, nested URIs); one still changing after
+/// [`MAX_DEPTH`] levels is refused, as nesting that deep is anyway.
+fn inspect_every_decoding(
+    mut level: Vec<u8>,
+    depth: usize,
+    budget: &mut usize,
+) -> Result<(), Reason> {
+    inspect_at(&level, depth + 1, budget)?;
+    for _ in 0..MAX_DEPTH {
+        let next = percent_decode(&level);
+        if next == level {
+            return Ok(());
+        }
+        inspect_at(&next, depth + 1, budget)?;
+        level = next;
+    }
+    if percent_decode(&level) == level {
+        Ok(())
+    } else {
+        Err(Reason::TooDeep)
+    }
+}
+
+/// The rules that read the text as it stands, with no layer decoded.
+fn check_patterns(text: &[u8]) -> Result<(), Reason> {
     if find_ci(text, b"xinclude", 0).is_some() {
         return Err(Reason::XInclude);
     }
@@ -336,30 +381,97 @@ fn inspect_text(text: &[u8], depth: usize, budget: &mut usize) -> Result<(), Rea
         return Err(Reason::EntityDeclaration);
     }
     check_doctypes(text)?;
-    check_encodings(text)?;
-    let starts = data_uri_starts(text);
-    for (i, &at) in starts.iter().enumerate() {
-        let end = starts.get(i + 1).copied().unwrap_or(text.len());
-        let payload = data_uri_payload(&text[at + DATA_SCHEME.len()..end])?;
-        inspect_at(&payload, depth + 1, budget)?;
+    check_encodings(text)
+}
+
+/// The cut at each `data:` is a guess at where one URI ends and the next begins, and a
+/// wrong guess must not hide anything. A literal `data:` can sit inside a
+/// percent-encoded document — an attribute value, or a nested URI written unencoded —
+/// and then the cut splits ONE real payload in two: what follows the cut up to its
+/// first comma is screened as nobody's text (a "header"), and a URI written literally
+/// inside an encoded one is decoded once by its segment where a real decoder, decoding
+/// the outer layer first, decodes it twice.
+///
+/// So the text after the first URI's comma is also read whole, the way a decoder reads
+/// the one URI it may all belong to: every real payload is a contiguous run of it (a
+/// payload ends before a later byte, never mid-escape, since a comma is never part of
+/// one). It is percent-decoded and re-normalised round after round until nothing more
+/// decodes, and every round is screened by the flat rules. Each round is charged to the
+/// budget, so a chain of `%25` cannot spin it. Nested gzip and base64 layers are left
+/// to the per-segment recursion, which decodes them.
+fn screen_spliced(after_scheme: &[u8], budget: &mut usize) -> Result<(), Reason> {
+    let comma = after_scheme
+        .iter()
+        .position(|&b| b == b',')
+        .ok_or(Reason::Undecodable)?;
+    let mut layer = after_scheme[comma + 1..].to_vec();
+    loop {
+        let decoded = percent_decode(&layer);
+        if decoded == layer {
+            return Ok(());
+        }
+        *budget = budget.checked_sub(decoded.len()).ok_or(Reason::TooLarge)?;
+        let body = decoded.strip_prefix(UTF8_BOM).unwrap_or(&decoded);
+        layer = normalise(body.iter().map(|&b| char::from(b)));
+        check_patterns(&layer)?;
+        if decoded.contains(&0) {
+            for offset in [0, 1] {
+                let tail = decoded.get(offset..).unwrap_or_default();
+                for big_endian in [false, true] {
+                    check_patterns(&normalise(utf16_chars(tail, big_endian)))?;
+                }
+            }
+        }
     }
-    Ok(())
+}
+
+/// The `starts` that a comma follows before the next one, the only ones that can begin
+/// a `data:` URL in this text: a reader takes the header to the FIRST comma, and with
+/// none there is no URL (WHATWG's `data:` URL processor fails, and librsvg's `data-url`
+/// with it). Every other start is dropped, and its text joins the segment before it.
+///
+/// Dropping one hides nothing. If a comma follows it further on, past later starts, its
+/// header runs to that comma and its payload is the payload of the last start before
+/// that comma, which is kept and screened alike: that header ends in that start's
+/// header, so `;base64` reads the same in both, because `;base64` holds no `:` to straddle
+/// the `data:` between. If a comma never follows, it is no URL. And a `data:` written
+/// inside an encoded payload, its comma encoded (`data:x;base64%2C…`), is part of the
+/// segment before it, decoded with that payload, where its comma is literal and it is a
+/// start once more.
+///
+/// So prose such as `<title>Source data: World Bank</title>` is screened as text whether
+/// or not a comma happens to come later in the file.
+fn delimited_starts(text: &[u8], starts: Vec<usize>) -> Vec<usize> {
+    let ends = starts.iter().skip(1).copied().chain([text.len()]);
+    starts
+        .iter()
+        .zip(ends)
+        .filter(|&(&at, end)| text[at + DATA_SCHEME.len()..end].contains(&b','))
+        .map(|(&at, _)| at)
+        .collect()
 }
 
 /// Where each `data:` that could begin a URL starts. One preceded by a scheme
 /// character is the tail of a longer word (`metadata:`), which no URL parser reads as
 /// the `data` scheme, since a scheme is the whole run of scheme characters before `:`.
+/// One whose `d` or `da` completes a `%XX` escape (`%da`, `%5da`) is not there at all
+/// once the escape is decoded.
 fn data_uri_starts(text: &[u8]) -> Vec<usize> {
     let is_scheme_char = |b: &u8| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.');
+    let escaped = |at: usize| {
+        let before = |n: usize| at.checked_sub(n).and_then(|i| text.get(i)).copied();
+        before(1) == Some(b'%')
+            || (before(2) == Some(b'%') && before(1).is_some_and(|b| b.is_ascii_hexdigit()))
+    };
     let mut starts = Vec::new();
     let mut from = 0;
     while let Some(at) = find_ci(text, DATA_SCHEME, from) {
         from = at + 1;
-        if !at
+        let in_word = at
             .checked_sub(1)
             .and_then(|before| text.get(before))
-            .is_some_and(is_scheme_char)
-        {
+            .is_some_and(is_scheme_char);
+        if !in_word && !escaped(at) {
             starts.push(at);
         }
     }
@@ -456,13 +568,14 @@ fn trim_start(bytes: &[u8]) -> &[u8] {
 }
 
 /// The decoded payload of the `data:` URI whose text follows `data:` in `rest`, which
-/// runs to the next possible `data:` URI or the end of the text. Fails closed: with no
-/// `,` to end the header the URI cannot be delimited, so it is refused rather than
-/// passed unscreened. The extent is over-approximated — a percent-encoded payload is
+/// runs to the next `data:` URI or the end of the text. Fails closed: with no `,` to end
+/// the header the URI cannot be delimited, so it is refused rather than passed
+/// unscreened ([`delimited_starts`] hands it only starts a comma follows, so this guards
+/// a future caller). The extent is over-approximated — a percent-encoded payload is
 /// taken to run to the end of `rest`, past any quote, since the quote may belong to the
 /// nested document rather than close the attribute — and screening more text than the
 /// URI holds can only refuse more.
-fn data_uri_payload(rest: &[u8]) -> Result<Vec<u8>, Reason> {
+fn data_uri_payload(rest: &[u8]) -> Result<Payload, Reason> {
     let comma = rest
         .iter()
         .position(|&b| b == b',')
@@ -481,9 +594,17 @@ fn data_uri_payload(rest: &[u8]) -> Result<Vec<u8>, Reason> {
             })
             .count();
         let decoded = percent_decode(&body[..len]);
-        return base64_decode(&decoded).ok_or(Reason::Undecodable);
+        return base64_decode(&decoded)
+            .map(Payload::Base64)
+            .ok_or(Reason::Undecodable);
     }
-    Ok(percent_decode(body))
+    Ok(Payload::Percent(percent_decode(body)))
+}
+
+/// A `data:` payload, decoded once, and how it was encoded.
+enum Payload {
+    Base64(Vec<u8>),
+    Percent(Vec<u8>),
 }
 
 fn trim_end(bytes: &[u8]) -> &[u8] {
@@ -827,9 +948,35 @@ mod tests {
         );
         assert_eq!(
             refused(r#"<svg><text>data: none</text></svg>"#),
-            Some(Reason::Undecodable),
-            "no comma ends the header, so the URI cannot be delimited"
+            None,
+            "no comma ends a header, so there is no URI, only prose"
         );
+    }
+
+    /// R9-GTK2-06: prose holding `data:` is decided by what it says, not by whether a
+    /// comma happens to come later in the file; and a URI whose comma is encoded inside
+    /// an encoded payload is still decoded and screened, with that payload.
+    ///
+    /// Mutations, each failing here: refusing a start no comma follows (the first two
+    /// asserts); dropping such a start without its text joining the segment before it
+    /// (the encoded-comma asserts).
+    #[test]
+    fn prose_holding_data_is_decided_without_regard_to_a_later_comma() {
+        let prose = "<svg><title>Source data: World Bank</title><path d='M0 0 L1 1'/>";
+        assert_eq!(refused(format!("{prose}</svg>")), None);
+        assert_eq!(refused(format!("{prose}<desc>a, b</desc></svg>")), None);
+        let after_an_icon = format!(
+            r#"<svg><image href="data:image/svg+xml,%3Csvg/%3E"/>{}</svg>"#,
+            "<title>Source data: World Bank</title>"
+        );
+        assert_eq!(refused(after_an_icon), None);
+        let hostile = base64(ATTACK.as_bytes());
+        for comma in ["%2C", "%252C"] {
+            let encoded = format!(
+                r#"<svg><image href="data:image/svg+xml,%3Csvg%3E%3Cimage href='data:image/svg+xml;base64{comma}{hostile}'/%3E%3C/svg%3E"/></svg>"#
+            );
+            assert_eq!(refused(&encoded), Some(Reason::XInclude), "{comma}");
+        }
     }
 
     #[test]
@@ -845,6 +992,65 @@ mod tests {
     #[test]
     fn sibling_percent_encoded_uris_neither_nest_nor_compound() {
         let icon = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E";
+        let images: String = (0..=2 * MAX_DEPTH)
+            .map(|_| format!(r#"<image href="{icon}"/>"#))
+            .collect();
+        assert_eq!(refused(format!("<svg>{images}</svg>")), None);
+    }
+
+    /// R9-TST1-01: a literal `data:` inside a percent-encoded document must not split
+    /// one real payload so that its bytes go unscreened.
+    #[test]
+    fn a_literal_data_scheme_inside_an_encoded_document_hides_nothing() {
+        // The cut after `a='` makes `xmlns:xi=…%58Include…` a "header" up to `b=','`.
+        let header_hidden = r#"<svg><image href="data:image/svg+xml,%3Csvg a='data:' xmlns:xi='http://www.w3.org/2001/%58Include' b=','%3E%3Cxi:include href='data:text/plain,x'/%3E%3C/svg%3E"/></svg>"#;
+        assert_eq!(refused(header_hidden), Some(Reason::XInclude));
+        // A URI written literally inside an encoded one is decoded twice by a real
+        // decoder: once with the outer layer, once as itself.
+        let twice = r#"<svg><image href="data:image/svg+xml,%3Csvg%3E%3Cimage href='data:image/svg+xml,%253Csvg xmlns:a=%2522http://www.w3.org/2001/%2558Include%2522/%253E'/%3E%3C/svg%3E"/></svg>"#;
+        assert_eq!(refused(twice), Some(Reason::XInclude));
+        // An SVG nested in an encoded SVG and encoded again, its `:`, `,` and `'` left
+        // literal, so the inner `data:` follows a quote and is a start of its own (one
+        // after `%27` is read as the tail of a word and not cut at all): a real decoder
+        // decodes its payload twice. As text, and as gzip.
+        let enc = |b: &[u8]| -> String {
+            b.iter()
+                .map(|&c| {
+                    if c.is_ascii_alphanumeric() || matches!(c, b':' | b',' | b'/' | b'.' | b'\'') {
+                        char::from(c).to_string()
+                    } else {
+                        format!("%{c:02X}")
+                    }
+                })
+                .collect()
+        };
+        // Padded so deflate really compresses it: a short document is stored, and its
+        // text would then be screened in the clear without the gzip layer ever opening.
+        let padded = format!("{ATTACK}<!-- {} -->", "pad ".repeat(500));
+        let packed = gzip(padded.as_bytes());
+        assert!(
+            find_ci(&packed, b"xinclude", 0).is_none(),
+            "precondition: the namespace is not readable in the compressed bytes"
+        );
+        for (what, inner) in [("text", ATTACK.as_bytes().to_vec()), ("gzip", packed)] {
+            let middle = format!(
+                "<svg><image href='data:image/svg+xml,{}'/></svg>",
+                enc(&inner)
+            );
+            let outer = format!(
+                r#"<svg><image href="data:image/svg+xml,{}"/></svg>"#,
+                enc(middle.as_bytes())
+            );
+            assert!(refused(&outer).is_some(), "double-encoded {what}");
+        }
+        // `%da` decodes to one byte, so this `data:` never existed and is not a start.
+        // Redundant today: the whole-tail pass refuses this with or without that rule
+        // (mutation-checked: dropping the flat pass fails here, dropping only the rule
+        // does not), which keeps the cut honest rather than being the only guard.
+        let escaped_start = r#"<svg><image href="data:image/svg+xml,%3Csvg x='%data:' y='%5data:' xmlns:a='http://www.w3.org/2001/%58Include'/%3E"/></svg>"#;
+        assert_eq!(refused(escaped_start), Some(Reason::XInclude));
+        // Many honest siblings, some with literal `<` and `,`, still pass.
+        let icon = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0,0,8,8'/>";
         let images: String = (0..=2 * MAX_DEPTH)
             .map(|_| format!(r#"<image href="{icon}"/>"#))
             .collect();

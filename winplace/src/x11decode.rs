@@ -108,6 +108,9 @@ pub(crate) fn merged_states(mut current: Vec<c_ulong>, extra: &[c_ulong]) -> Vec
 /// the root window and then off the window it names. EWMH has the window manager set the
 /// same property on that child, pointing at itself: the root's copy outlives a window
 /// manager that crashed, the child does not.
+///
+/// `on_child` is read off [`wm_check_child`]'s window, and is `None` when there is none
+/// to read.
 pub(crate) fn wm_check_alive(on_root: Option<&[c_long]>, on_child: Option<&[c_long]>) -> bool {
     match (
         on_root.and_then(<[_]>::first),
@@ -116,6 +119,16 @@ pub(crate) fn wm_check_alive(on_root: Option<&[c_long]>, on_child: Option<&[c_lo
         (Some(&root), Some(&child)) => root != 0 && root == child,
         _ => false,
     }
+}
+
+/// The window the root's `_NET_SUPPORTING_WM_CHECK` names, which the reader then reads
+/// the same property off; `None` when the root names none (absent, empty or zero), so
+/// nothing is read and [`wm_check_alive`] answers `false`.
+pub(crate) fn wm_check_child(on_root: Option<&[c_long]>) -> Option<c_long> {
+    on_root
+        .and_then(<[_]>::first)
+        .copied()
+        .filter(|&child| child != 0)
 }
 
 /// Whether `place` has anything the X11 half writes; a place with none is shown with a
@@ -135,11 +148,24 @@ pub(crate) fn has_x11_parts(place: &Place) -> bool {
 /// `dbus-launch` synchronously and with no bound. GIO looks for the bus in
 /// `DBUS_SESSION_BUS_ADDRESS`, then at `$XDG_RUNTIME_DIR/bus`, and only then
 /// autolaunches; `address` and `runtime_bus_exists` are the first two.
+///
+/// A set `address` is the only one GIO tries, so it alone decides. It is a `;`-separated
+/// list GIO tries in order, and `autolaunch:` is itself one of its transports: an
+/// address listing it anywhere can reach the autolaunch (an entry before it that fails
+/// falls through to it), so it counts as unreachable.
 pub(crate) fn session_bus_without_autolaunch(
     address: Option<&std::ffi::OsStr>,
     runtime_bus_exists: bool,
 ) -> bool {
-    address.is_some_and(|a| !a.is_empty()) || runtime_bus_exists
+    const AUTOLAUNCH: &str = "autolaunch";
+    match address.filter(|a| !a.is_empty()) {
+        Some(address) => !address.to_string_lossy().split(';').any(|entry| {
+            entry
+                .split_once(':')
+                .is_some_and(|(transport, _)| transport.trim() == AUTOLAUNCH)
+        }),
+        None => runtime_bus_exists,
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +351,16 @@ mod tests {
         assert!(!wm_check_alive(Some(&[]), Some(&[77])));
     }
 
+    /// The reader reads the child only where this names one, so these are the cases in
+    /// which production reads nothing and the check answers "not running".
+    #[test]
+    fn the_check_window_to_read_is_the_one_the_root_names() {
+        assert_eq!(wm_check_child(Some(&[77, 5])), Some(77));
+        assert_eq!(wm_check_child(Some(&[0])), None);
+        assert_eq!(wm_check_child(Some(&[])), None);
+        assert_eq!(wm_check_child(None), None);
+    }
+
     #[test]
     fn a_place_with_only_a_size_and_states_has_no_x11_parts() {
         let plain = Place {
@@ -390,5 +426,23 @@ mod tests {
         assert!(session_bus_without_autolaunch(None, true));
         assert!(!session_bus_without_autolaunch(Some(OsStr::new("")), false));
         assert!(!session_bus_without_autolaunch(None, false));
+        // `autolaunch:` is an address too, and GIO runs `dbus-launch` for it; a set
+        // address is the only one tried, so a runtime bus does not rescue it.
+        for autolaunching in [
+            "autolaunch:",
+            "autolaunch:scope=*user",
+            "unix:path=/run/user/1/bus;autolaunch:",
+        ] {
+            assert!(
+                !session_bus_without_autolaunch(Some(OsStr::new(autolaunching)), true),
+                "{autolaunching}"
+            );
+        }
+        assert!(session_bus_without_autolaunch(
+            Some(OsStr::new(
+                "unix:path=/tmp/autolaunch;tcp:host=localhost,port=1"
+            )),
+            false
+        ));
     }
 }

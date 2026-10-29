@@ -361,7 +361,9 @@ struct WindowShare<'a, W, D> {
 /// pushed in one flush expire together, so a second would hide the first for its whole
 /// life. A single document keeps its own wording (named when it is not in front),
 /// several are counted together ("Blocked 7 images in 2 documents"), and the theme's
-/// images join the same sentence ("Blocked image x.svg and theme image rule.png").
+/// images join the same sentence ("Blocked image x.svg and theme image rule.png"), a
+/// background document then named beside its own images ("Blocked image x.svg in
+/// doc.md and theme image rule.png").
 pub(crate) fn xinclude_blocked_notices<W: PartialEq + Clone, D: PartialEq>(
     refusals: &[PlacedRefusal<W, D>],
 ) -> Vec<(W, String)> {
@@ -407,13 +409,21 @@ pub(crate) fn xinclude_blocked_notices<W: PartialEq + Clone, D: PartialEq>(
                 )
             }
         };
-        let what = match (documents, theme_images(&share.theme)) {
+        let notice = match (documents, theme_images(&share.theme)) {
             (None, None) => continue,
-            (Some(documents), None) => documents,
-            (None, Some(theme)) => theme,
-            (Some(documents), Some(theme)) => format!("{documents} and {theme}"),
+            (Some(documents), None) => blocked_notice(named, &documents),
+            (None, Some(theme)) => blocked_notice(None, &theme),
+            // The document's name goes beside its own images, never in front of the
+            // sentence, which would claim the theme's image for that document too.
+            (Some(documents), Some(theme)) => {
+                let documents = match named {
+                    Some(name) => format!("{documents} in {name}"),
+                    None => documents,
+                };
+                blocked_notice(None, &format!("{documents} and {theme}"))
+            }
         };
-        notices.push((share.window.clone(), blocked_notice(named, &what)));
+        notices.push((share.window.clone(), notice));
     }
     notices
 }
@@ -740,6 +750,19 @@ mod tests {
                 .1
                 .starts_with("Blocked 2 images in 2 documents and 2 theme images: "),
             "{background:?}"
+        );
+        // A background document beside the theme: its name sits by its own images, so
+        // the theme's image is not attributed to it.
+        let beside = xinclude_blocked_notices(&[
+            placed(1, 13, Some("doc.md"), "/d/a.svg"),
+            themed(1, "sprite /t/rule.png"),
+        ]);
+        assert_eq!(beside.len(), 1, "{beside:?}");
+        assert!(
+            beside[0]
+                .1
+                .starts_with("Blocked image a.svg in doc.md and theme image rule.png: "),
+            "{beside:?}"
         );
         let two =
             xinclude_blocked_notices(&[themed(1, "sprite /t/a.svg"), themed(1, "sprite /t/b.svg")]);

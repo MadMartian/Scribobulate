@@ -9,11 +9,13 @@
 #
 # TWO CONDITIONS, and neither implies the other:
 #
-#   1. STATIC. Every Mach-O in the bundle, walked with `otool -L`, resolves only under
-#      @rpath / @executable_path / @loader_path / /usr/lib / /System/Library. The last
-#      two are the OS itself, present on every Mac by definition. Install IDs are checked
-#      as well as load commands: an absolute ID left behind still launches, so a launch
-#      test alone reports success on a half-done rewrite.
+#   1. STATIC. Every Mach-O in the bundle, walked with `otool -L`, references only
+#      /usr/lib and /System/Library (the OS itself, present on every Mac by definition),
+#      `@rpath/<name>` with <name> staged in Frameworks/, or an `@loader_path/…` /
+#      `@executable_path/…` path that RESOLVES to an existing file inside the bundle.
+#      Install IDs are checked as well as load commands: an absolute ID left behind still
+#      launches, so a launch test alone reports success on a half-done rewrite. And no
+#      LC_RPATH may point outside the bundle (packaging/macos/rpath.sh's header).
 #
 #   2. DYNAMIC. The binary starts with the Homebrew prefix made unreadable. This is what
 #      the static check cannot see -- a library found through some path the walk did not
@@ -39,59 +41,76 @@ APP="${1:?usage: verify-selfcontained.sh <path-to-.app>}"
 BIN="$APP/Contents/MacOS/scribobulate"
 [ -x "$BIN" ] || { echo "error: no executable at $BIN" >&2; exit 1; }
 
-# A path that is allowed to appear in a load command or an install ID.
-is_internal() {
-    case "$1" in
-        @rpath/*|@executable_path/*|@loader_path/*) return 0 ;;
-        /usr/lib/*|/System/Library/*)               return 0 ;;
-        *)                                          return 1 ;;
+# Why reference $3 of object $2 does NOT resolve inside bundle $1, or nothing when it does.
+#
+# AN INTERNAL-LOOKING REFERENCE IS NOT AN INTERNAL ONE, in either spelling.
+# `@rpath/libfoo.dylib` reads as internal whether or not libfoo was ever staged -- MEASURED,
+# and it took the sandboxed launch in condition 2 to catch it (libwebp needing
+# @rpath/libsharpyuv.0.dylib, which the closure had not followed) -- so it is resolved
+# against Frameworks/. `@loader_path/…` and `@executable_path/…` are resolved with the same
+# resolver as the rpath check, so `@loader_path/../../../libfoo.dylib`, which names a file
+# beside the .app, is the external reference it is and not a pass on its prefix.
+reference_problem() {
+    local app="$1" obj="$2" ref="$3" loc
+    case "$ref" in
+        /usr/lib/*|/System/Library/*) return 0 ;;     # the OS itself, on every Mac
+        @rpath/*)
+            [ -e "$app/Contents/Frameworks/${ref#@rpath/}" ] || echo "is not in Frameworks/"
+            return 0 ;;
+        @loader_path/*|@executable_path/*)
+            loc="$(bundle_location "$app" "$obj" "$ref")"
+            if ! inside_bundle "$app" "$loc"; then
+                echo "resolves outside the bundle, to ${loc:-<unresolvable>}"
+            elif [ ! -e "$loc" ]; then
+                echo "resolves to $loc, which does not exist"
+            fi
+            return 0 ;;
+        *) echo "is outside the bundle" ;;
     esac
 }
 
 echo ":: Condition 1 — no library resolved from outside the bundle"
 findings=0
 checked=0
+# Read through rpath.sh, which FAILS CLOSED: a tool that crashed or answered nothing stops
+# the gate here instead of reading as a bundle with nothing in it (its header has the two
+# ways that happened).
+exe_rpath_control "$APP" || { echo "   FAIL — the positive control failed; nothing below could be trusted" >&2; exit 1; }
+objs="$(bundle_machos "$APP")" || { echo "   FAIL — could not list the bundle's Mach-O files" >&2; exit 1; }
 while IFS= read -r obj; do
-    file "$obj" | grep -q 'Mach-O' || continue
+    [ -n "$obj" ] || continue
     checked=$((checked + 1))
+    name="$(basename "$obj")"
     # The install ID, which is the half a launch test cannot see.
-    id="$(otool -D "$obj" | tail -n +2 | tr -d '\t')"
-    if [ -n "$id" ] && ! is_internal "$id"; then
-        echo "   EXTERNAL ID   $(basename "$obj"): $id"
-        findings=$((findings + 1))
+    id="$(install_id "$obj")" || { echo "   FAIL — could not read $name" >&2; exit 1; }
+    if [ -n "$id" ]; then
+        why="$(reference_problem "$APP" "$obj" "$id")"
+        if [ -n "$why" ]; then
+            echo "   EXTERNAL ID    $name: $id $why"
+            findings=$((findings + 1))
+        fi
     fi
+    deps="$(load_deps "$obj")" || { echo "   FAIL — could not read $name" >&2; exit 1; }
     while IFS= read -r dep; do
         [ -n "$dep" ] || continue
-        if ! is_internal "$dep"; then
-            echo "   EXTERNAL LOAD $(basename "$obj"): $dep"
+        why="$(reference_problem "$APP" "$obj" "$dep")"
+        if [ -n "$why" ]; then
+            echo "   EXTERNAL LOAD  $name: $dep $why"
             findings=$((findings + 1))
-            continue
         fi
-        # AN INTERNAL-LOOKING REFERENCE IS NOT AN INTERNAL ONE. `@rpath/libfoo.dylib`
-        # reads as internal whether or not libfoo was ever staged, so without this the
-        # static condition passes a bundle that cannot load -- MEASURED, and it took the
-        # sandboxed launch in condition 2 to catch it (libwebp needing
-        # @rpath/libsharpyuv.0.dylib, which the closure had not followed). Resolving the
-        # name against Frameworks/ is what makes condition 1 able to see that class.
-        case "$dep" in
-            @rpath/*)
-                if [ ! -e "$APP/Contents/Frameworks/${dep#@rpath/}" ]; then
-                    echo "   DANGLING      $(basename "$obj"): $dep is not in Frameworks/"
-                    findings=$((findings + 1))
-                fi
-                ;;
-        esac
-    done < <(otool -L "$obj" | tail -n +2 | awk '{print $1}')
+    done <<< "$deps"
     # An rpath outside the bundle is searched BEFORE the executable's, so a file there
     # replaces a staged library even though every load command above reads as internal.
+    rps="$(rpaths_of "$obj")" || { echo "   FAIL — could not read $name" >&2; exit 1; }
     while IFS= read -r rp; do
         [ -n "$rp" ] || continue
         if ! rpath_is_internal "$APP" "$obj" "$rp"; then
-            echo "   ESCAPING RPATH $(basename "$obj"): $rp"
+            echo "   ESCAPING RPATH $name: $rp"
             findings=$((findings + 1))
         fi
-    done < <(rpaths_of "$obj")
-done < <(find "$APP" -type f)
+    done <<< "$rps"
+done <<< "$objs"
+[ "$checked" -gt 0 ] || { echo "   FAIL — no Mach-O files found; nothing was checked" >&2; exit 1; }
 
 if [ "$findings" -ne 0 ]; then
     echo "   FAIL — $findings external reference(s) across $checked Mach-O files" >&2

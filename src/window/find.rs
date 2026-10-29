@@ -956,16 +956,16 @@ fn clear_preview_view_highlights(view: &CodePreviewView) {
 /// last wheel scroll otherwise leaves the editor leading, and the sync scrolls the
 /// match straight back out of view (ScrAP-361).
 fn scroll_to_preview_hit(st: &TabState, view: &CodePreviewView, hit: &PreviewHit) {
-    super::panescroll::lead(st, ScrollDriver::Preview);
+    use super::panescroll::{preview_to_cell, preview_to_offset};
     match hit {
-        PreviewHit::Body { start, .. } => view.scroll_to_buffer_offset(*start),
+        PreviewHit::Body { start, .. } => preview_to_offset(st, view, *start),
         PreviewHit::Cell {
             anchor_off, label, ..
-        } => view.scroll_to_cell_offset(*anchor_off, label),
+        } => preview_to_cell(st, view, *anchor_off, label),
         // The block's summary line is the nearest thing to the match that exists in
         // this render. Scrolling there first means the reader watches the block they
         // are about to be taken into, rather than the expansion happening off-screen.
-        PreviewHit::Hidden { summary_off, .. } => view.scroll_to_buffer_offset(*summary_off),
+        PreviewHit::Hidden { summary_off, .. } => preview_to_offset(st, view, *summary_off),
     }
 }
 
@@ -1179,7 +1179,7 @@ fn preview_find_step(
     let Some((summary_off, resume_off, key)) = reveal else {
         return;
     };
-    reveal_and_resume(window, view, summary_off, resume_off, key, text);
+    reveal_and_resume(window, &st, view, summary_off, resume_off, key, text);
 }
 
 /// After a collapsed block has been expanded for find, land on the first match at or
@@ -1235,7 +1235,7 @@ fn select_preview_hit_at_or_after(window: &ApplicationWindow, min_off: i32, text
     let Some((summary_off, resume_off, key)) = reveal.ok().flatten() else {
         return;
     };
-    reveal_and_resume(window, &view, summary_off, resume_off, key, text);
+    reveal_and_resume(window, &st, &view, summary_off, resume_off, key, text);
 }
 
 /// Mark `hits[idx]` (0-based) as the current match — highlights, scroll, cursor and
@@ -1290,6 +1290,7 @@ fn land_on_hit(
 /// arriving somewhere it never travelled.
 fn reveal_and_resume(
     window: &ApplicationWindow,
+    st: &TabState,
     view: &CodePreviewView,
     summary_off: i32,
     resume_off: i32,
@@ -1299,10 +1300,7 @@ fn reveal_and_resume(
     // Scroll to the LINE, resume from past its LABEL — two offsets because they answer
     // two questions. The reader is shown the block; the search starts below the text
     // they were already on (F-AP-B-104). The preview leads, as for any hit.
-    if let Some(st) = state(window) {
-        super::panescroll::lead(&st, ScrollDriver::Preview);
-    }
-    view.scroll_to_buffer_offset(summary_off);
+    super::panescroll::preview_to_offset(st, view, summary_off);
     let text = text.to_string();
     super::foldreveal::reveal_folds(window, &[key], move |window| {
         select_preview_hit_at_or_after(window, resume_off, &text);

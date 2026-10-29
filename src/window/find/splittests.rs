@@ -319,8 +319,8 @@ fn reopening_the_bar_in_split_describes_the_pane_now_searched() {
 /// back before scrolling, or the next sync frame puts the editor's position back and
 /// scrolls the match away (ScrAP-361).
 ///
-/// Mutation check: dropping the `panescroll::lead` call from `scroll_to_preview_hit`
-/// fails the driver assertion here.
+/// Mutation check: dropping the `lead` call from `panescroll::preview_to_offset`, the route
+/// `scroll_to_preview_hit` takes for a body hit, fails the driver assertion here.
 #[gtktest::test]
 fn find_in_the_preview_takes_the_lead_from_a_wheeled_editor() {
     let win = split_window("preview_lead");

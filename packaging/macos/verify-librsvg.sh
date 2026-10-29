@@ -141,7 +141,11 @@ if [ -d "$SUBJECT" ]; then
     # stand in for the copy whose version is read below (rpath.sh's header has the
     # measurement). Checked first, because a passing version would otherwise vouch for a
     # file the app may never load.
-    escaping="$(escaping_rpaths "$SUBJECT")"
+    exe_rpath_control "$SUBJECT" || { echo "error: positive control failed (fails closed)" >&2; exit 1; }
+    escaping="$(escaping_rpaths "$SUBJECT")" || {
+        echo "error: could not read the bundle's rpaths, so which librsvg loads is unknown (fails closed)" >&2
+        exit 1
+    }
     if [ -n "$escaping" ]; then
         echo "error: rpaths that leave the bundle, so a library outside it can replace a staged one:" >&2
         printf '%s\n' "$escaping" | awk -F'\t' '{n=split($1, p, "/"); print "       " p[n] " -> " $2}' >&2

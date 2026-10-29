@@ -99,6 +99,10 @@ echo ":: Bundling the GTK runtime"
 FRAMEWORKS="$APP/Contents/Frameworks"
 mkdir -p "$FRAMEWORKS"
 
+# Load-command reading and path resolution, shared with the gates that check the result.
+# shellcheck source=rpath.sh
+. "$REPO_ROOT/packaging/macos/rpath.sh"
+
 # Every dependency of $1 that this bundle must carry, as an ABSOLUTE SOURCE PATH.
 #
 # `@rpath/` DEPENDENCIES ARE NOT OPTIONAL TO HANDLE, and skipping them is the trap this
@@ -110,26 +114,33 @@ mkdir -p "$FRAMEWORKS"
 # reference whether or not the file behind it was ever staged. MEASURED here -- the first
 # version of this script shipped exactly that bundle, condition 1 of
 # verify-selfcontained.sh passed it, and only the sandboxed launch caught it.
+#
+# Returns 2 when the object cannot be read, so the caller stops rather than staging a
+# closure it never finished walking.
 resolve_deps() {
-    local obj="$1" real dir rpath dep cand
+    local obj="$1" real dir deps dep rpaths rpath base cand
     real="$(/usr/bin/readlink -f "$obj")"
     dir="$(dirname "$real")"
-    otool -L "$obj" | tail -n +2 | awk '{print $1}' | while IFS= read -r dep; do
+    deps="$(load_deps "$obj")" || return 2
+    rpaths="$(rpaths_of "$obj")" || return 2
+    while IFS= read -r dep; do
         case "$dep" in
             /usr/lib/*|/System/Library/*) continue ;;                 # the OS itself
             /opt/homebrew/*|/usr/local/*) printf '%s\n' "$dep" ;;
-            @loader_path/*)               printf '%s\n' "$dir/${dep#@loader_path/}" ;;
+            @loader_path/*)               expand_path "$dir" "" "$dep" ;;
             @rpath/*)
                 # Resolve against this object's own LC_RPATH entries, with
                 # @loader_path taken relative to where the object really lives.
-                otool -l "$obj" | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}' \
-                | while IFS= read -r rpath; do
-                    cand="${rpath//@loader_path/$dir}/${dep#@rpath/}"
-                    [ -e "$cand" ] && printf '%s\n' "$cand" && break
-                done
+                while IFS= read -r rpath; do
+                    [ -n "$rpath" ] || continue
+                    base="$(expand_path "$dir" "" "$rpath")"
+                    [ -n "$base" ] || continue
+                    cand="$base/${dep#@rpath/}"
+                    if [ -e "$cand" ]; then printf '%s\n' "$cand"; break; fi
+                done <<< "$rpaths"
                 ;;
         esac
-    done
+    done <<< "$deps"
 }
 
 # --- gdk-pixbuf loaders, staged BEFORE the closure is walked --------------------
@@ -188,6 +199,8 @@ while IFS= read -r staged_loader; do
 done < <(find "$PIXBUF_DST" -type f 2>/dev/null || true)
 while [ ${#QUEUE[@]} -gt 0 ]; do
     current="${QUEUE[0]}"; QUEUE=("${QUEUE[@]:1}")
+    deps="$(resolve_deps "$current")" \
+        || { echo "error: could not read the dependencies of $current" >&2; exit 1; }
     while IFS= read -r dep; do
         [ -n "$dep" ] || continue
         name="$(basename "$dep")"
@@ -205,9 +218,13 @@ while [ ${#QUEUE[@]} -gt 0 ]; do
             # subtree from the closure. That is precisely how libsharpyuv went missing.
             QUEUE+=("$src")
         fi
-    done < <(resolve_deps "$current")
+    done <<< "$deps"
 done
 echo "   staged ${#STAGED[@]} libraries into Contents/Frameworks"
+
+# Every Mach-O this script put in the bundle, named once: each pass below that rewrites
+# load commands walks this list, so none of them can miss an object another one covers.
+declare -a BUNDLE_OBJS=("$APP/Contents/MacOS/scribobulate" "${STAGED[@]}" ${LOADER_OBJS[@]+"${LOADER_OBJS[@]}"})
 
 # `install_name_tool` warns "changes being made to the file will invalidate the code
 # signature" on EVERY call. It is benign HERE and only here, because signing happens after
@@ -243,8 +260,9 @@ done
 # own lib directory. `@rpath/…` is left alone -- already the form we want, and the
 # executable's single LC_RPATH is what resolves it.
 needs_rewrite() {
-    otool -L "$1" | tail -n +2 | awk '{print $1}' \
-        | grep -E '^(/opt/homebrew|/usr/local|@loader_path)/' || true
+    local deps
+    deps="$(load_deps "$1")" || return 2
+    printf '%s\n' "$deps" | grep -E '^(/opt/homebrew|/usr/local|@loader_path)/' || true
 }
 
 # WHERE a dependency ends up decides the form it is rewritten to, and getting this wrong
@@ -263,11 +281,12 @@ rewrite_target() {
     fi
 }
 
-for obj in "$APP/Contents/MacOS/scribobulate" "${STAGED[@]}" ${LOADER_OBJS[@]+"${LOADER_OBJS[@]}"}; do
+for obj in "${BUNDLE_OBJS[@]}"; do
+    deps="$(needs_rewrite "$obj")" || { echo "error: could not read $obj" >&2; exit 1; }
     while IFS= read -r dep; do
         [ -n "$dep" ] || continue
         retool -change "$dep" "$(rewrite_target "$dep")" "$obj"
-    done < <(needs_rewrite "$obj")
+    done <<< "$deps"
 done
 
 # A loader's own ID is absolute as Homebrew ships it, which condition 1 rejects and which
@@ -281,9 +300,9 @@ done
 # The one absolute assumption, in one place.
 # Conditional rather than `|| true`: adding an rpath that is already present is an error,
 # and blanket-ignoring the result would also swallow a genuine failure to add it.
-if ! otool -l "$APP/Contents/MacOS/scribobulate" \
-     | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}' \
-     | grep -qx '@executable_path/../Frameworks'; then
+exe_rpaths="$(rpaths_of "$APP/Contents/MacOS/scribobulate")" \
+    || { echo "error: could not read the executable's rpaths" >&2; exit 1; }
+if ! grep -qx '@executable_path/../Frameworks' <<< "$exe_rpaths"; then
     retool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/scribobulate"
 fi
 
@@ -291,15 +310,20 @@ fi
 # the SVG loader, an absolute Cellar path on libjpeg) came along with the copies, and dyld
 # searches a library's own rpaths before the executable's, so a file beside the .app could
 # stand in for a staged library. The reasoning and the measurement are rpath.sh's header;
-# verify-librsvg.sh below fails the build if one survives. Deleted one at a time, because
-# `-delete_rpath` removes a single entry and a path can be listed twice.
-# shellcheck source=rpath.sh
-. "$REPO_ROOT/packaging/macos/rpath.sh"
-for obj in "$APP/Contents/MacOS/scribobulate" "${STAGED[@]}" ${LOADER_OBJS[@]+"${LOADER_OBJS[@]}"}; do
-    while IFS= read -r rp; do
-        [ -n "$rp" ] || continue
-        rpath_is_internal "$APP" "$obj" "$rp" || retool -delete_rpath "$rp" "$obj"
-    done < <(rpaths_of "$obj")
+# the gates at the end fail the build if one survives. Re-read after every deletion,
+# because `-delete_rpath` removes a single entry and a path can be listed twice, while
+# rpaths_of reports each path once.
+for obj in "${BUNDLE_OBJS[@]}"; do
+    while :; do
+        rps="$(rpaths_of "$obj")" || { echo "error: could not read the rpaths of $obj" >&2; exit 1; }
+        escaping=""
+        while IFS= read -r rp; do
+            [ -n "$rp" ] || continue
+            rpath_is_internal "$APP" "$obj" "$rp" || { escaping="$rp"; break; }
+        done <<< "$rps"
+        [ -n "$escaping" ] || break
+        retool -delete_rpath "$escaping" "$obj"
+    done
 done
 
 # --- Runtime data that fails LATE and SILENTLY ---------------------------------
@@ -457,7 +481,19 @@ fi
 # before: loading a staged copy whose signature install_name_tool invalidated gets the
 # reader SIGKILLed. The app's XInclude screen stands down inside a bundle on the strength
 # of this check, so it fails the build rather than warning.
+#
+# The gate's own self-test first: the floor comparator and the rpath resolver it relies on
+# are proven able to tell a good answer from a bad one before either is trusted with this
+# bundle.
+"$REPO_ROOT/packaging/macos/verify-librsvg.sh" --self-test >/dev/null \
+    || { echo "error: verify-librsvg.sh --self-test failed; its verdict cannot be trusted" >&2; exit 1; }
 "$REPO_ROOT/packaging/macos/verify-librsvg.sh" "$APP"
+
+# Self-containment (TDD 26.1, 26.2): every reference, load command, install ID and rpath
+# resolves inside the bundle, and it launches with the Homebrew prefix unreadable. Run on
+# every build, because a bundle that still links Homebrew launches perfectly on the machine
+# that built it, which is the only machine that ever runs this script.
+"$REPO_ROOT/packaging/macos/verify-selfcontained.sh" "$APP"
 
 # Refresh Launch Services so the Dock/Finder pick up the icon immediately rather
 # than after an unpredictable cache delay.

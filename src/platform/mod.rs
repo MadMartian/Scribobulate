@@ -55,28 +55,46 @@ fn platform_surface_to_screen(surface: &gtk::gdk::Surface, x: i32, y: i32) -> Op
     None
 }
 
-// ── whether another application holds the front (tests only) ─────────────────────
+// ── which process holds the front (tests only) ────────────────────────────────────
 
-/// Whether another application is frontmost, so no window of this process can become
-/// the active one. For a GTK test that needs an active window: only this is a reason
-/// to skip, and a window that fails to activate for any other reason is a failure.
+/// The pid of the frontmost application, for a GTK test that needs an active window and
+/// must tell another application holding the front (a reason to skip) from its own window
+/// failing to activate (a failure).
 ///
 /// Only macOS answers, because only there was it seen (the suite running behind the
-/// developer's other work). Elsewhere `false`: on the WM-less Xvfb gate a mapped window
-/// is active at once (GTK4Rs/AP-119), so no other application can be in front.
+/// developer's other work). Elsewhere `None`: on the WM-less Xvfb gate a mapped window is
+/// active at once (GTK4Rs/AP-119), so no other application can be in front, and a test
+/// reading `None` treats an inactive window as the failure it is there.
 #[cfg(all(test, feature = "gtk-integration-tests"))]
-pub(crate) fn another_application_is_frontmost() -> bool {
-    platform_another_application_is_frontmost()
+pub(crate) fn frontmost_pid() -> Option<i32> {
+    platform_frontmost_pid()
+}
+
+/// Whether `pid` launched this process, directly or through its own children: the
+/// terminal a test suite was started from, which a window that activates takes the
+/// front from.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) fn is_ancestor_process(pid: i32) -> bool {
+    platform_is_ancestor_process(pid)
 }
 
 #[cfg(all(test, feature = "gtk-integration-tests", target_os = "macos"))]
-fn platform_another_application_is_frontmost() -> bool {
+fn platform_frontmost_pid() -> Option<i32> {
     mac::frontmost::frontmost_pid()
-        .is_some_and(|pid| u32::try_from(pid).ok() != Some(std::process::id()))
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests", target_os = "macos"))]
+fn platform_is_ancestor_process(pid: i32) -> bool {
+    mac::frontmost::is_ancestor(pid)
 }
 
 #[cfg(all(test, feature = "gtk-integration-tests", not(target_os = "macos")))]
-fn platform_another_application_is_frontmost() -> bool {
+fn platform_frontmost_pid() -> Option<i32> {
+    None
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests", not(target_os = "macos")))]
+fn platform_is_ancestor_process(_pid: i32) -> bool {
     false
 }
 

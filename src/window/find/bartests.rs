@@ -12,7 +12,7 @@
 //! largest in the tree.
 
 use super::super::testkit::test_app;
-use super::testkit::{readout, search};
+use super::testkit::{readout, readout_after_quiet, search, type_query};
 use crate::winstate::state;
 use gtk::prelude::*;
 use gtk::ApplicationWindow;
@@ -139,10 +139,9 @@ fn a_regular_expression_reaches_both_panes() {
         set_mode(&win, mode);
         search(&win, "note");
         set_option(&win, "find-regex", true);
-        let st = state(&win).expect("a tab");
-        st.chrome().find_entry.set_text(r"note\w*");
+        type_query(&win, r"note\w*");
         let wildcard = count(&win);
-        st.chrome().find_entry.set_text("notebook|NOTE");
+        type_query(&win, "notebook|NOTE");
         let alternation = count(&win);
         counts.push((wildcard, alternation));
         set_option(&win, "find-regex", false);
@@ -186,7 +185,7 @@ fn a_malformed_pattern_is_reported_rather_than_counted_as_zero() {
         search(&win, "note");
         set_option(&win, "find-regex", true);
         let st = state(&win).expect("a tab");
-        st.chrome().find_entry.set_text("(unclosed");
+        type_query(&win, "(unclosed");
         assert_eq!(
             readout(&win),
             "Invalid pattern",
@@ -204,7 +203,7 @@ fn a_malformed_pattern_is_reported_rather_than_counted_as_zero() {
         // What the Next chevron, Enter in the field and Edit ▸ Find Next all call.
         super::find_step(&win, &st.search_context, super::SearchDir::Forward);
         assert_eq!(
-            readout(&win),
+            readout_after_quiet(&win),
             "Invalid pattern",
             "{mode}: Next must do nothing while the pattern does not compile"
         );
@@ -215,7 +214,7 @@ fn a_malformed_pattern_is_reported_rather_than_counted_as_zero() {
         );
 
         // Finishing the pattern recovers in place — no closing and reopening the bar.
-        st.chrome().find_entry.set_text("(unclosed)?note");
+        type_query(&win, "(unclosed)?note");
         assert_eq!(
             count(&win),
             Some(ALL),
@@ -379,7 +378,7 @@ fn search_in_selection_confines_the_editor_search_and_its_replacements() {
     // The passage still covers the same text even though the replacements changed its
     // length — the marks moved with it. Searching the new word finds both, and only
     // both.
-    st.chrome().find_entry.set_text("TOKEN");
+    type_query(&win, "TOKEN");
     assert_eq!(
         count(&win),
         Some(2),
@@ -721,7 +720,7 @@ fn the_boundary_refresh_recounts_for_whichever_pane_is_visible() {
     search(&win, "note");
     set_option(&win, "find-regex", true);
     let st = state(&win).expect("a tab");
-    st.chrome().find_entry.set_text("^note");
+    type_query(&win, "^note");
     let in_editor = count(&win).expect("the editor counts the anchored pattern");
 
     set_mode(&win, "preview");
@@ -882,7 +881,7 @@ fn each_field_offers_that_tabs_own_recent_entries() {
 
     // Commit three terms, the middle one twice.
     for term in ["note", "Note", "note"] {
-        st.chrome().find_entry.set_text(term);
+        type_query(&win, term);
         let _ = count(&win);
         super::super::findbar::record_committed_query(&st);
     }
@@ -895,7 +894,7 @@ fn each_field_offers_that_tabs_own_recent_entries() {
     assert!(find_btn.is_sensitive(), "…and the control is now usable");
 
     // Choosing an entry fills the field AND searches for it.
-    st.chrome().find_entry.set_text("");
+    type_query(&win, "");
     let _ = count(&win);
     crate::window::actions::simple_action(&win, super::super::findbar::PICK_HISTORY)
         .expect("the pick action is registered")
@@ -1050,7 +1049,7 @@ fn a_closed_find_bar_paints_no_match_highlight() {
         .find_entry
         .emit_by_name::<()>("stop-search", &[]);
     set_option(&win, "find-match-case", true);
-    readout(&win);
+    readout_after_quiet(&win);
     assert!(
         !st.search_context.is_highlight(),
         "a match option toggled from the menu must not light the document with the bar closed"
@@ -1076,7 +1075,7 @@ fn a_closed_find_bar_paints_no_match_highlight() {
     );
     st.editor_buf
         .insert(&mut st.editor_buf.iter_at_offset(4), "target ");
-    readout(&win);
+    readout_after_quiet(&win);
     assert!(
         highlighted_offsets(&st).is_empty(),
         "an edit inside the passage must not repaint it while the bar is closed"

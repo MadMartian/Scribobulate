@@ -14,9 +14,13 @@
 //! the client area in logical pixels, so the frame a normal window of this style has at
 //! this DPI is taken off, and the remainder divided by the scale GDK applies to the
 //! surface. That scale is measured — the client area's physical width over the
-//! surface's logical width — because `gdk_surface_get_scale_factor` is an integer, the
-//! ceiling of the real scale wherever GDK scales fractionally, and `gdk_surface_get_scale`
-//! is newer than the GTK floor.
+//! surface's logical width — rather than assumed, because `gdk_surface_get_scale` is
+//! newer than the GTK floor. On GDK-Win32 4.22.4 the measurement always equals
+//! `gdk_surface_get_scale_factor`: GDK scales a Win32 surface by `dpi / 96` in INTEGER
+//! division (`gdkdisplay-win32.c:1241-1288`, `gdksurface-win32.c:2682-2702`), so 125%
+//! and 150% are scale 1 and 200% is the first scale 2. That is also why a minimized
+//! window, whose client area is empty, falls back to the scale factor and never to
+//! `GetDpiForWindow / 96`, which would shrink the size at a fractional scale.
 //!
 //! **Restoring maximized goes through the OS too.** `gtk_window_maximize` latches
 //! `is_set_maximized` for good (GTK 4.22.4 `gtkwindow.c:5649`/`5692`; nothing clears it),

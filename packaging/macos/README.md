@@ -130,7 +130,7 @@ The bundle carries its own GTK runtime: **43 libraries in `Contents/Frameworks`*
 the **13 gdk-pixbuf loader modules** flat beside them, the Adwaita and hicolor icon
 themes, and the GSettings schemas under `Contents/Resources/share`. It needs no Homebrew
 on the machine that runs it. `packaging/macos/verify-selfcontained.sh` is the gate on that
-claim and is run as part of every bundle build.
+claim, and `bundle.sh` runs it on every build, after signing.
 
 **"49 dylibs" counts load PATHS, not files.** The closure is 43 files reached by 49
 distinct paths — eight basenames arrive through two Homebrew aliases each
@@ -165,7 +165,11 @@ the copies: the SVG loader's `@loader_path/../../..` named the directory holding
 so a `librsvg-2.2.dylib` placed beside the bundle was loaded instead of the staged one
 (measured with `DYLD_PRINT_LIBRARIES`). `bundle.sh` deletes every such rpath, and
 `verify-librsvg.sh` (given a `.app`) and condition 1 of `verify-selfcontained.sh` fail a
-bundle that still has one. The resolver is `packaging/macos/rpath.sh`.
+bundle that still has one. The resolver is `packaging/macos/rpath.sh`, and every reader in
+it fails closed: a tool that fails or prints nothing fails the bundle. The app checks the
+same thing at run time, from dyld's own list of loaded images: its screen stands down only
+when the librsvg the SVG loader bound is the staged file
+(`platform::mac::bundle::carries_verified_librsvg`).
 
 If the build stops there, run `brew upgrade librsvg` and build again. The gate runs on
 its own as well: `verify-librsvg.sh <.app | librsvg-2.2.dylib>`, and `--self-test`.

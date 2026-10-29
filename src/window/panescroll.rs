@@ -16,8 +16,18 @@
 //! - [`preview_to_fragment`] is the only route for scrolling the preview to a heading
 //!   named by a link fragment. The raw `preview::scroll_preview_to_fragment` is banned
 //!   in `clippy.toml`; this module's call carries the sanctioned `#[expect]`.
+//! - [`preview_to_cell`] is the only route for scrolling the preview to a table cell.
+//!   The raw `CodePreviewView::scroll_to_cell_offset` is banned in `clippy.toml`; this
+//!   module's call carries the sanctioned `#[expect]`.
+//! - [`preview_to_offset`] is the route for a navigation that scrolls the preview to a
+//!   buffer offset (Find's hits, the reveal of a change). The raw
+//!   `CodePreviewView::scroll_to_buffer_offset` is NOT banned, and deliberately: most of
+//!   its callers are not navigations at all — the preview's own coalesced scroll inside
+//!   the view, the heading and fragment seams, the reading-position restores, and a link
+//!   click in the preview, which the click itself has already made lead — so a ban would
+//!   be almost all exceptions (POLICY § Typed GTK seams).
 //! - [`lead`] is for a navigation whose scroll goes through another seam (the preview's
-//!   heading, line and match scrolls), which takes the pane and has no mark.
+//!   heading and line scrolls), which takes the pane and has no mark.
 //!
 //! Outside split mode the lead has no effect: only the split sync reads it.
 //!
@@ -50,6 +60,29 @@ pub(crate) fn preview_to_fragment(st: &TabState, fragment: &str) -> bool {
         reason = "the sanctioned route: the preview was made to lead the split sync on the line above (ScrAP-361)"
     )]
     crate::preview::scroll_preview_to_fragment(&sw, fragment)
+}
+
+/// Scroll the preview `view` to buffer `offset`, with the preview leading the split sync
+/// (ScrAP-361).
+pub(crate) fn preview_to_offset(st: &TabState, view: &CodePreviewView, offset: i32) {
+    lead(st, ScrollDriver::Preview);
+    view.scroll_to_buffer_offset(offset);
+}
+
+/// Scroll the preview `view` to the row of the table cell `label` anchored at
+/// `anchor_off`, with the preview leading the split sync (ScrAP-361).
+pub(crate) fn preview_to_cell(
+    st: &TabState,
+    view: &CodePreviewView,
+    anchor_off: i32,
+    label: &gtk::Label,
+) {
+    lead(st, ScrollDriver::Preview);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the sanctioned route: the preview was made to lead the split sync on the line above (ScrAP-361)"
+    )]
+    view.scroll_to_cell_offset(anchor_off, label);
 }
 
 /// How [`editor_to_mark`] places the mark: the same four arguments as
@@ -151,8 +184,7 @@ pub(crate) fn preview_reveal(st: &TabState, pos: DocPosition, before: Option<(i3
     if !reveal_needed(before, line) {
         return;
     }
-    lead(st, ScrollDriver::Preview);
-    view.scroll_to_buffer_offset(buf_char);
+    preview_to_offset(st, &view, buf_char);
 }
 
 /// Whether [`preview_reveal`] must scroll to bring preview `line` into view, given the

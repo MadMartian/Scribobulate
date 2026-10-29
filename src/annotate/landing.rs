@@ -30,9 +30,12 @@
 //! parallel path says why). The renderer's parse cannot answer the question: it reads
 //! the text with CriticMarkup already stripped, without front matter, and without
 //! math, which the preview shows as plain text. This scan reads the raw file with the
-//! extensions other tools commonly enable, because those tools are who it protects —
-//! the same set `annotate::scan` reads code through (`NormalizedMd::parse_as_written`),
-//! so the two never disagree about what is code.
+//! extensions other tools commonly enable, because those tools are who it protects. It
+//! parses the same text `annotate::scan` reads code through — `scan::as_written`, the
+//! file with every comment body outside code masked, parsed with
+//! `NormalizedMd::parse_as_written` — so the two never disagree about what is code: a
+//! stray backtick in an existing comment makes no code span here that extraction would
+//! not see.
 
 use pulldown_cmark::{Event, Tag};
 use std::ops::Range;
@@ -133,7 +136,8 @@ fn scan(source: &str) -> Verbatim {
     // Through the inline-tab pre-pass like every other parse site (ScrAP-75): it is
     // length-preserving and leaves leading tabs alone, so every offset and every code
     // block's indent read here are the file's own.
-    let body = crate::renderer::NormalizedMd::new(&source[body_from..]);
+    let written = super::scan::as_written(source);
+    let body = crate::renderer::NormalizedMd::new(&written[body_from..]);
     for (ev, r) in body.parse_as_written().into_offset_iter() {
         let r = r.start + body_from..r.end + body_from;
         let kind = match ev {
@@ -410,6 +414,35 @@ mod tests {
     /// one annotation, which is the property the write path exists to keep.
     ///
     /// Mutation: drop `Event::Code` from `scan`'s whole-span arm and every case fails.
+    /// R9-AP1-02: an existing comment's stray backtick makes no code span here, because
+    /// landing parses the same masked text extraction does. Parsing the raw file, the
+    /// backtick paired with the one before `code`, "then" sat in that bogus span, and
+    /// the highlight widened into the old comment and wrote `{==` inside it.
+    #[test]
+    fn a_stray_backtick_in_an_existing_comment_makes_no_code_span() {
+        let md = "Text {>>odd ` tick<<} then `code` here.\n";
+        let out = annotate(md, "then");
+        assert_eq!(
+            out,
+            "Text {>>odd ` tick<<} {==then==}{>>c<<} `code` here.\n"
+        );
+        assert_eq!(
+            crate::annotate::extract(&out).annotations.len(),
+            2,
+            "{out:?}"
+        );
+        let out = apply_point(md, md.find("then").unwrap());
+        assert_eq!(
+            crate::annotate::extract(&out).annotations.len(),
+            2,
+            "{out:?}"
+        );
+        assert!(
+            out.contains("{>>odd ` tick<<}"),
+            "the old comment is intact: {out:?}"
+        );
+    }
+
     #[test]
     fn a_code_span_is_never_split() {
         let md = "Run `cargo test` now.\n";

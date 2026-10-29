@@ -18,12 +18,17 @@ fn dismiss_context_popover(po: &gtk::Popover) {
 /// The scaffold every right-click menu shares (the document, tab and toolbar menus): a
 /// plain arrowless `GtkPopover` — the convention here, because `GtkPopoverMenu` grows a
 /// spurious scrollbar on GTK 4.6 (ScrAP-9) — and one Capture/Local shortcut controller
-/// serving bare-letter access keys (GTK4Rs/T-1). A menu builds its rows, adding their
-/// shortcuts to [`keys`](Self::keys), then [`open`](Self::open)s it, which owns the parts
-/// the copies once disagreed on: the scrolling body and the deferred release.
+/// serving bare-letter access keys (GTK4Rs/T-1). A menu builds its rows, registering each
+/// row's access key through [`add_access_key`](Self::add_access_key), then
+/// [`open`](Self::open)s it, which owns the parts the copies once disagreed on: the
+/// scrolling body and the deferred release.
 pub(crate) struct ContextMenu {
     pub(crate) popover: gtk::Popover,
-    pub(crate) keys: gtk::ShortcutController,
+    /// Private: every row's access key is registered through
+    /// [`add_access_key`](Self::add_access_key), the one place that both reads the `_`
+    /// marker and installs the shortcut. Three menus each spelled that pair out, and one
+    /// of them once lost an access key silently when its label lost its marker.
+    keys: gtk::ShortcutController,
 }
 
 impl ContextMenu {
@@ -34,6 +39,34 @@ impl ContextMenu {
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         keys.set_scope(gtk::ShortcutScope::Local);
         Self { popover, keys }
+    }
+
+    /// Register `row`'s bare-letter access key from its `_`-marked label `marked`, live
+    /// while `gate()` holds, and return the label's markup with that key underlined (a
+    /// plain popover never shows mnemonics, GTK4Rs/T-1), for the caller to install.
+    ///
+    /// A label with no usable marker still gets its markup, and is logged: a row that
+    /// reaches this has been declared to carry an access key, so losing it would
+    /// otherwise show neither a warning nor a failing test. A row meant to have no key
+    /// (the Change Case page's Back) does not come here.
+    pub(crate) fn add_access_key(
+        &self,
+        row: &impl IsA<gtk::Widget>,
+        marked: &str,
+        gate: impl Fn() -> bool + 'static,
+    ) -> String {
+        let (key, markup) = crate::app::access_markup(marked);
+        match key.and_then(|key| crate::app::access_shortcut(row, key, gate)) {
+            Some(shortcut) => self.keys.add_shortcut(shortcut),
+            None => log::warn!("context menu row {marked:?} has no usable access key"),
+        }
+        markup
+    }
+
+    /// Bind a key that is not a row's access key (the Change Case page's Left arrow) on
+    /// the same Capture/Local controller.
+    pub(crate) fn add_shortcut(&self, shortcut: gtk::Shortcut) {
+        self.keys.add_shortcut(shortcut);
     }
 
     /// Show `body` as the menu, pointing at `(x, y)` in `parent`'s coordinates.
@@ -157,17 +190,16 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
             found
         };
 
-        // Each context-menu row: [label]  [dim accel hint].  `marked` is a
-        // `_`-marked label; `access_markup` renders it as Pango markup with the
-        // access char underlined — a plain popover never gets mnemonics-visible, so
-        // we draw the underline ourselves rather than via use-underline
-        // (GTK4Rs/T-1).  Text-only matches the menu bar (icons ignored —
-        // GTK4Rs/AP-11); GtkPopoverMenu has a spurious scrollbar on 4.6, so this stays plain
-        // GtkPopover + GtkButton (ScrAP-9), and Change Case is a GtkStack page rather
-        // than a nested popover surface (GTK4Rs/AP-69).
-        let make_text_btn = |marked: &str, accel: &str| -> gtk::Button {
+        // Each context-menu row: [label]  [dim accel hint], returned with its name
+        // label for the caller to fill — a row with an access key gets its markup from
+        // `ContextMenu::add_access_key`, which underlines the key itself because a plain
+        // popover never gets mnemonics-visible (GTK4Rs/T-1).  Text-only matches the
+        // menu bar (icons ignored — GTK4Rs/AP-11); GtkPopoverMenu has a spurious
+        // scrollbar on 4.6, so this stays plain GtkPopover + GtkButton (ScrAP-9), and
+        // Change Case is a GtkStack page rather than a nested popover surface
+        // (GTK4Rs/AP-69).
+        let make_text_btn = |accel: &str| -> (gtk::Button, Label) {
             let name_lbl = Label::new(None);
-            name_lbl.set_markup(&crate::app::access_markup(marked).1);
             name_lbl.set_halign(gtk::Align::Start);
             name_lbl.set_hexpand(true);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -184,7 +216,7 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
             btn.set_child(Some(&row));
             btn.add_css_class("flat");
             btn.set_halign(gtk::Align::Fill);
-            btn
+            (btn, name_lbl)
         };
 
         // Parented to the window's CONTENT, not the window: the release is deferred out of
@@ -203,7 +235,6 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
         };
         let menu = ContextMenu::new();
         let popover = menu.popover.clone();
-        let key_controller = menu.keys.clone();
 
         // Single-surface two-page GtkStack (flat menu + Change Case submenu) and the
         // menu's Capture/Local ShortcutController delivering bare-letter access keys —
@@ -213,23 +244,18 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
         stack.set_vhomogeneous(false);
         stack.set_interpolate_size(true);
         stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
-        // Register a button's bare-letter access key, live only while `page` shows
-        // (so `u` is Undo on "main" yet UPPER CASE on "change-case").
-        let add_key = {
-            let ctrl = key_controller.clone();
-            let stack = stack.clone();
-            move |btn: &gtk::Button, marked: &str, page: &'static str| {
-                if let Some(ch) = crate::app::access_markup(marked).0 {
-                    let sw = stack.downgrade();
-                    let gate = move || {
-                        sw.upgrade()
-                            .is_some_and(|s| s.visible_child_name().as_deref() == Some(page))
-                    };
-                    if let Some(sc) = crate::app::access_shortcut(btn, ch, gate) {
-                        ctrl.add_shortcut(sc);
-                    }
-                }
-            }
+        // A row whose bare-letter access key is live only while `page` shows (so `u` is
+        // Undo on "main" yet UPPER CASE on "change-case"). The gate holds the stack
+        // weakly: the stack owns the row, which owns the shortcut's gate.
+        let keyed_btn = |marked: &str, accel: &str, page: &'static str| -> gtk::Button {
+            let (btn, name_lbl) = make_text_btn(accel);
+            let sw = stack.downgrade();
+            let gate = move || {
+                sw.upgrade()
+                    .is_some_and(|s| s.visible_child_name().as_deref() == Some(page))
+            };
+            name_lbl.set_markup(&menu.add_access_key(&btn, marked, gate));
+            btn
         };
 
         // Window for action-state lookups; sensitivity then mirrors the menu bar
@@ -254,7 +280,7 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
             .map(|cmd| {
                 // Same accel-hint derivation the toolbar tooltips use (SSOT).
                 let hint = crate::app::accel_hint(cmd.accel).unwrap_or_default();
-                make_text_btn(&crate::app::mnem(cmd.label), &hint)
+                keyed_btn(&crate::app::mnem(cmd.label), &hint, "main")
             })
             .collect();
 
@@ -321,11 +347,6 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
             }
         }
 
-        // Register each edit row's bare-letter access key (live on the "main" page).
-        for (i, cmd) in EDIT_CMDS.iter().enumerate() {
-            add_key(&edit_btns[i], &crate::app::mnem(cmd.label), "main");
-        }
-
         // ── "main" page: EDIT_CMDS rows with section separators, then the editor
         //    section (Insert Emoji + the Change Case submenu row). ──
         let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -345,7 +366,7 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
         let annotate_hint = crate::app::inline_accel("win.annotate")
             .and_then(crate::app::accel_hint)
             .unwrap_or_default();
-        let annotate_btn = make_text_btn(&annotate_marked, &annotate_hint);
+        let annotate_btn = keyed_btn(&annotate_marked, &annotate_hint, "main");
         annotate_btn.set_action_name(Some("win.annotate"));
         annotate_btn.connect_clicked(glib::clone!(
             #[weak(rename_to = po)]
@@ -355,10 +376,9 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
             }
         ));
         main_box.append(&annotate_btn);
-        add_key(&annotate_btn, &annotate_marked, "main");
 
         let emoji_marked = crate::app::mnem("Insert Emoji");
-        let emoji_btn = make_text_btn(&emoji_marked, "");
+        let emoji_btn = keyed_btn(&emoji_marked, "", "main");
         // Bind to the action by NAME so GTK manages BOTH activation and the enabled
         // state from the single `win.insert-emoji` source of truth (POLICY). The
         // extra clicked handler only closes the popover.
@@ -371,29 +391,32 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
             }
         ));
         main_box.append(&emoji_btn);
-        add_key(&emoji_btn, &emoji_marked, "main");
 
         // Change Case is a real submenu (a second stack page) so its four variants
         // keep the SAME access keys as the menu bar's Change Case submenu (U/l/T/c) —
         // GTK4Rs/AP-69. This row slides to that page (it never dismisses).
         let change_case_marked = format!("{} ▸", crate::app::mnem("Change Case"));
-        let change_case_btn = make_text_btn(&change_case_marked, "");
-        {
-            let stack = stack.clone();
-            change_case_btn.connect_clicked(move |_| {
-                stack.set_visible_child_name("change-case");
-            });
-        }
+        let change_case_btn = keyed_btn(&change_case_marked, "", "main");
+        // Weak, as every other capture of the stack here: the stack owns this row, so a
+        // strong clone is the cycle `stack → page → row → closure → stack`, and the whole
+        // menu body outlived every right-click (GTK4Rs/AP-63).
+        change_case_btn.connect_clicked(glib::clone!(
+            #[weak]
+            stack,
+            move |_| stack.set_visible_child_name("change-case")
+        ));
         main_box.append(&change_case_btn);
-        add_key(&change_case_btn, &change_case_marked, "main");
 
         // ── "change-case" page: a Back row + the four case variants. ──
         let case_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let back_btn = make_text_btn("◀ Back", "");
-        {
-            let stack = stack.clone();
-            back_btn.connect_clicked(move |_| stack.set_visible_child_name("main"));
-        }
+        // No access key: the Left arrow is Back's keyboard route.
+        let (back_btn, back_lbl) = make_text_btn("");
+        back_lbl.set_text("◀ Back");
+        back_btn.connect_clicked(glib::clone!(
+            #[weak]
+            stack,
+            move |_| stack.set_visible_child_name("main")
+        ));
         case_box.append(&back_btn);
         case_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
@@ -409,7 +432,7 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
             (crate::app::mnem("Title Case"), "title"),
             (crate::app::mnem("tOGGLE cASE"), "toggle"),
         ] {
-            let btn = make_text_btn(&marked, "");
+            let btn = keyed_btn(&marked, "", "change-case");
             btn.set_sensitive(case_enabled);
             let v_str = variant.to_string();
             btn.connect_clicked(glib::clone!(
@@ -423,7 +446,6 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
                 }
             ));
             case_box.append(&btn);
-            add_key(&btn, &marked, "change-case");
         }
 
         // Left arrow returns from the submenu to the main page (Back's keyboard peer).
@@ -440,7 +462,7 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
             });
             if let Some(left) = gtk::gdk::Key::from_name("Left") {
                 let trigger = gtk::KeyvalTrigger::new(left, gtk::gdk::ModifierType::empty());
-                key_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
+                menu.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
             }
         }
 
@@ -463,6 +485,61 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
         });
     });
     view.add_controller(right_click);
+}
+
+/// **Closing a window with one of its right-click menus open releases the menu** — the
+/// STATE guard all three menus (document, tab, toolbar) run, so none of them is safe only
+/// by the grace of a sweep no test asserts.
+///
+/// The release is deferred out of `closed` (see `release_after_close`), so on a window
+/// close it runs after the window is gone; the menu must therefore hang off a widget
+/// whose own teardown unparents it. Parented to the window itself, it was left behind:
+/// GTK warned "Finalizing GtkApplicationWindow, but it still has children left:
+/// GtkPopover" (MEASURED on Windows 3 of 3, and on Linux). The toolbar and tab menus
+/// are released by their hosts' `dispose` sweeps (`ToolbarWrapBox`, `TabBar`), so
+/// narrowing either sweep brings that leak back — on Windows visibly, on Linux only
+/// here.
+///
+/// The structural assertion comes first because, with the menu on the window, the
+/// window's finalize leaves the menu's parent pointer dangling, so the after-state
+/// cannot be read safely. `menu` and `win` are taken by value and dropped here, and the
+/// caller must hold no other strong reference to the window or the menu's host: one
+/// would keep the host alive past the close and fail this for the wrong reason.
+///
+/// NOT asserted: that the popover object is freed. MEASURED on the document menu, it is
+/// unparented and still alive after the window and its content are both finalized; what
+/// holds it is not established (a popover unparented while still open, GTK4Rs/AP-123?).
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) fn assert_closing_the_window_releases(
+    win: impl IsA<gtk::Window>,
+    menu: gtk::Popover,
+    what: &str,
+) {
+    use crate::testpump::{drain_for, until, until_or_for, Clock, TOOLTIP_HOVER_DRAIN};
+    let menu = {
+        until(Clock::Frame, "the menu to map", || menu.is_mapped());
+        assert!(
+            menu.parent().is_some_and(|p| !p.is::<gtk::Window>()),
+            "{what} is parented to the window, whose teardown never unparents a \
+             set_parent child"
+        );
+        menu.downgrade()
+    };
+    // Let the tooltip timeout the menu's map-time enter armed fire while its surface
+    // exists (GTK4Rs/AP-117): this guard is about the unparent, not that.
+    drain_for(Clock::Frame, TOOLTIP_HOVER_DRAIN);
+    win.as_ref().destroy();
+    drop(win);
+    let released = || menu.upgrade().and_then(|m| m.parent()).is_none();
+    until_or_for(
+        Clock::Frame,
+        TOOLTIP_HOVER_DRAIN + std::time::Duration::from_secs(2),
+        released,
+    );
+    assert!(
+        released(),
+        "{what} is still parented after its window was torn down"
+    );
 }
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
@@ -513,68 +590,104 @@ mod gtk_integration_tests {
         popover.unparent();
     }
 
-    /// **Closing the window with the document menu open releases the menu.** The release
-    /// is deferred out of `closed` (see `release_after_close`), so it runs after the
-    /// window is gone; the menu must therefore hang off a widget whose own teardown
-    /// unparents it. Parented to the window itself, it was left behind: GTK warned
-    /// "Finalizing GtkApplicationWindow, but it still has children left: GtkPopover"
-    /// (MEASURED on Windows 3 of 3, and here). The structural assertion comes first
-    /// because, with the menu on the window, the window's finalize leaves the menu's
-    /// parent pointer dangling, so the after-state cannot be read safely.
+    /// A presented window over `md` whose preview has laid out, under a state home of
+    /// its own, and the preview the document menu opens on.
+    fn document_window(id: &str, md: &str) -> (ApplicationWindow, CodePreviewView) {
+        let app = crate::window::testkit::test_app(&format!(
+            "com.extollit.scribobulate.integrationtest.{id}"
+        ));
+        let win = crate::window::new_window(&app, "IT-docmenu", md, None);
+        win.present();
+        let view = crate::window::zoom::get_preview_view(&win).expect("a preview");
+        until(Clock::Frame, "the preview to lay out", || view.height() > 0);
+        (win, view)
+    }
+
+    /// Right-click `view` through its own secondary-button gesture, as a pointer press
+    /// would, and return the document menu once it has mapped.
+    fn open_document_menu(win: &ApplicationWindow, view: &CodePreviewView) -> gtk::Popover {
+        let press = view
+            .observe_controllers()
+            .into_iter()
+            .filter_map(|c| c.ok().and_downcast::<GestureClick>())
+            .find(|g| g.button() == 3)
+            .expect("the preview carries the right-click gesture");
+        press.emit_by_name::<()>("pressed", &[&1i32, &20.0f64, &20.0f64]);
+        until_for(
+            Clock::Frame,
+            Duration::from_secs(5),
+            "the document menu to open",
+            || find_popover(win.upcast_ref()).is_some(),
+        );
+        let menu = find_popover(win.upcast_ref()).expect("the menu is open");
+        until(Clock::Frame, "the menu to map", || menu.is_mapped());
+        menu
+    }
+
+    /// **Closing the window with the document menu open releases the menu.** See
+    /// [`assert_closing_the_window_releases`], which all three menus share.
     ///
-    /// NOT asserted: that the popover object is freed. MEASURED here, it is unparented
-    /// and still alive after the window and its content are both finalized; what holds
-    /// it is not established (a popover unparented while still open, GTK4Rs/AP-123?).
-    ///
-    /// Mutation check: parenting the menu to the window again fails the first assertion.
+    /// Mutation check: parenting the menu to the window again fails the helper's first
+    /// assertion.
     #[gtktest::test]
     fn closing_the_window_with_the_document_menu_open_releases_the_menu() {
         let dir = tempfile::tempdir().unwrap();
         crate::session::with_state_home_for_test(dir.path(), || {
-            let app = crate::window::testkit::test_app(
-                "com.extollit.scribobulate.integrationtest.docmenuclose",
-            );
-            let win = crate::window::new_window(&app, "IT-docmenu", "# H\n\ntext\n", None);
-            win.present();
-            let view = crate::window::zoom::get_preview_view(&win).expect("a preview");
-            until(Clock::Frame, "the preview to lay out", || view.height() > 0);
-            let press = view
-                .observe_controllers()
-                .into_iter()
-                .filter_map(|c| c.ok().and_downcast::<GestureClick>())
-                .find(|g| g.button() == 3)
-                .expect("the preview carries the right-click gesture");
-            press.emit_by_name::<()>("pressed", &[&1i32, &20.0f64, &20.0f64]);
+            let (win, view) = document_window("docmenuclose", "# H\n\ntext\n");
+            let menu = open_document_menu(&win, &view);
+            drop(view);
+            assert_closing_the_window_releases(win, menu, "the document menu");
+        });
+    }
+
+    /// **Closing the document menu frees its body.** The menu is built afresh on every
+    /// right-click, so anything that keeps one body alive keeps one per right-click. The
+    /// Change Case and Back rows once captured the `GtkStack` that owns them strongly
+    /// (`stack → page → row → closure → stack`), so the stack, both pages and every row
+    /// outlived the menu (GTK4Rs/AP-63, GTK4Rs/AP-140's shape). The test holds only a weak
+    /// reference to the stack, so nothing but such a cycle can keep it alive.
+    ///
+    /// Mutation check: restoring a strong `stack.clone()` capture in either row's
+    /// `clicked` handler fails the final assertion.
+    #[gtktest::test]
+    fn closing_the_document_menu_frees_its_body() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let (win, view) = document_window("docmenufree", "# H\n\ntext\n");
+            let (menu, stack) = {
+                let menu = open_document_menu(&win, &view);
+                let stack = menu
+                    .child()
+                    .and_downcast::<gtk::ScrolledWindow>()
+                    .and_then(|s| s.child())
+                    .and_downcast::<gtk::Viewport>()
+                    .and_then(|v| v.child())
+                    .and_downcast::<gtk::Stack>()
+                    .expect("the menu body is a stack in a scroller's viewport");
+                assert!(
+                    stack.child_by_name("change-case").is_some(),
+                    "precondition: this is the document menu, with its Change Case page"
+                );
+                (menu.downgrade(), stack.downgrade())
+            };
+            // The release waits out GTK's tooltip delay (GTK4Rs/AP-117), so the menu's
+            // own map-time enter is let fire first.
+            drain_for(Clock::Frame, TOOLTIP_HOVER_DRAIN);
+            menu.upgrade().expect("the menu is still open").popdown();
             until_for(
                 Clock::Frame,
-                Duration::from_secs(5),
-                "the document menu to open",
-                || find_popover(win.upcast_ref()).is_some(),
-            );
-            // Only a weak reference survives this block: a strong one held by the test
-            // would keep the menu alive whatever the window's teardown does.
-            let menu = {
-                let menu = find_popover(win.upcast_ref()).expect("the menu is open");
-                until(Clock::Frame, "the menu to map", || menu.is_mapped());
-                assert!(
-                    menu.parent().is_some_and(|p| !p.is::<gtk::Window>()),
-                    "the document menu is parented to the window, whose teardown never \
-                     unparents a set_parent child"
-                );
-                menu.downgrade()
-            };
-            drain_for(Clock::Frame, TOOLTIP_HOVER_DRAIN);
-
-            win.destroy();
-            drop(win);
-            drain_for(
-                Clock::Frame,
-                TOOLTIP_HOVER_DRAIN + Duration::from_millis(400),
+                TOOLTIP_HOVER_DRAIN + Duration::from_secs(2),
+                "the closed menu to be released",
+                || menu.upgrade().and_then(|m| m.parent()).is_none(),
             );
             assert!(
-                menu.upgrade().and_then(|m| m.parent()).is_none(),
-                "the document menu is still parented after its window was torn down"
+                until_or_for(Clock::Frame, Duration::from_secs(2), || stack
+                    .upgrade()
+                    .is_none()),
+                "the document menu's body outlived the menu: something it owns holds it"
             );
+            drop(view);
+            win.destroy();
         });
     }
 
@@ -661,36 +774,41 @@ mod gtk_integration_tests {
         // monitor and its scroller has the rest to scroll to. MEASURED on GTK 4.6.9/X11,
         // where a popover is NOT presented at its natural height once its minimum is
         // smaller: a 1156 px menu opened 879 px tall over a 1024 px screen and scrolled.
-        if menu.is_visible() {
-            let scroller = body
-                .downcast_ref::<gtk::ScrolledWindow>()
-                .expect("the menu body is its scroller");
-            let adj = scroller.vadjustment();
-            until(Clock::Frame, "the menu's scroller to be allocated", || {
-                adj.page_size() > 0.0
-            });
-            // Range alone is not scrolling: a scroller that may not scroll still reports
-            // the clipped rows as range. The scrollbar is how the reader reaches them.
-            assert!(
-                adj.upper() > adj.page_size() && scroller.vscrollbar().is_child_visible(),
-                "the menu offers no way to the rows the screen cannot fit (upper {}, page \
+        // Asserted, never branched on: when this GTK does not self-dismiss (4.6, the Linux
+        // gate) nothing above has checked the menu is still open, and a menu that closed
+        // for any other reason would skip every assertion below and pass.
+        assert!(
+            menu.is_visible(),
+            "the context menu closed though this GTK keeps a too-tall popover open"
+        );
+        let scroller = body
+            .downcast_ref::<gtk::ScrolledWindow>()
+            .expect("the menu body is its scroller");
+        let adj = scroller.vadjustment();
+        until(Clock::Frame, "the menu's scroller to be allocated", || {
+            adj.page_size() > 0.0
+        });
+        // Range alone is not scrolling: a scroller that may not scroll still reports
+        // the clipped rows as range. The scrollbar is how the reader reaches them.
+        assert!(
+            adj.upper() > adj.page_size() && scroller.vscrollbar().is_child_visible(),
+            "the menu offers no way to the rows the screen cannot fit (upper {}, page \
                  {}, scrollbar shown: {})",
-                adj.upper(),
-                adj.page_size(),
-                scroller.vscrollbar().is_child_visible()
-            );
-            let monitor = menu
-                .native()
-                .and_then(|n| n.surface())
-                .and_then(|surface| menu.display().monitor_at_surface(&surface))
-                .expect("the open menu is on a monitor");
-            assert!(
-                menu.height() <= monitor.geometry().height(),
-                "the menu ({} px) is taller than its monitor ({} px): its bottom is clipped",
-                menu.height(),
-                monitor.geometry().height()
-            );
-        }
+            adj.upper(),
+            adj.page_size(),
+            scroller.vscrollbar().is_child_visible()
+        );
+        let monitor = menu
+            .native()
+            .and_then(|n| n.surface())
+            .and_then(|surface| menu.display().monitor_at_surface(&surface))
+            .expect("the open menu is on a monitor");
+        assert!(
+            menu.height() <= monitor.geometry().height(),
+            "the menu ({} px) is taller than its monitor ({} px): its bottom is clipped",
+            menu.height(),
+            monitor.geometry().height()
+        );
         close(&menu);
         window.destroy();
     }

@@ -163,22 +163,26 @@ fn a_press_in_body_text_clears_the_cells_and_leaves_the_body_to_gtk() {
 /// Only an active window gives a widget focus, so the test skips when another
 /// application holds the front (seen on macOS while the suite ran in the background):
 /// the precondition could never hold. A reader's press activates the window before
-/// the press handler runs, so the product has no such gap. A window that fails to
-/// activate with no other application in front is a failure, not a skip: that is a
-/// regression in activation, and on the Xvfb gate the only way to get there.
+/// the press handler runs, so the product has no such gap. Which inactive windows may
+/// skip is [`inactive_window_skip`]'s decision; every other one is a failure.
 #[gtktest::test]
 fn a_press_away_from_a_focused_cell_takes_its_focus() {
+    let before = crate::platform::frontmost_pid();
     let (win, view, cells) = table_window();
     if !until_or_for(Clock::Frame, Duration::from_secs(2), || win.is_active()) {
-        assert!(
-            crate::platform::another_application_is_frontmost(),
-            "the test window never became the active window, and no other application \
-             holds the front"
-        );
+        let after = crate::platform::frontmost_pid();
+        let me = i32::try_from(std::process::id()).expect("a pid fits in pid_t");
+        let Some(why) =
+            inactive_window_skip(before, after, me, crate::platform::is_ancestor_process)
+        else {
+            panic!(
+                "the test window never became the active window (front before present: \
+                 {before:?}, after the wait: {after:?}, this process: {me})"
+            );
+        };
         crate::testsymlink::skipped(
             "TDD 17.63",
-            "the test window never became the active window because another application \
-             holds the front, so no cell can take focus",
+            &format!("the test window never became the active window because {why}, so no cell can take focus"),
         );
         destroy_after_tooltip_delay(&win, || ());
         return;
@@ -211,6 +215,72 @@ fn a_press_away_from_a_focused_cell_takes_its_focus() {
         );
     }
     destroy_after_tooltip_delay(&win, || ());
+}
+
+/// Why a test window that never became active may be skipped rather than failed, from
+/// the frontmost application sampled before it was presented and after the wait, or
+/// `None` when it must fail.
+///
+/// "Another application is in front" is ALSO what a failed activation leaves: the
+/// application that held the front before simply keeps it. So that alone is not enough.
+/// It skips when the front went to some other process during the wait (the developer
+/// switched away), or when an application that did NOT launch this process held the
+/// front throughout (the suite running behind other work, where macOS declines to hand
+/// the front over). It fails when this process holds the front with its window still
+/// inactive, when nothing answers (every platform but macOS), and when the application
+/// that kept the front is the one that launched the suite: taking the front from the
+/// terminal it was started from is exactly what an activating window does.
+fn inactive_window_skip(
+    before: Option<i32>,
+    after: Option<i32>,
+    me: i32,
+    launched_us: impl Fn(i32) -> bool,
+) -> Option<&'static str> {
+    let after = after.filter(|&pid| pid != me)?;
+    match before {
+        Some(before) if before == after && launched_us(before) => None,
+        Some(before) if before == after => {
+            Some("an application that did not launch it held the front throughout")
+        }
+        _ => Some("another application took the front during the wait"),
+    }
+}
+
+/// Mutation: drop the `launched_us` arm and the terminal case skips; drop the
+/// `before == after` arms and a failed activation behind an unrelated application reads
+/// as the developer switching away (still a skip, but for the wrong stated reason).
+#[gtktest::test]
+fn only_an_application_that_kept_or_took_the_front_excuses_an_inactive_window() {
+    const ME: i32 = 100;
+    const TERMINAL: i32 = 50;
+    const OTHER: i32 = 70;
+    let launched = |pid| pid == TERMINAL;
+    let skip = |before, after| inactive_window_skip(before, after, ME, launched);
+    // Fails: nothing answers, this process is in front, or the launcher never let go.
+    assert_eq!(skip(None, None), None);
+    assert_eq!(skip(Some(TERMINAL), Some(ME)), None);
+    assert_eq!(skip(Some(TERMINAL), Some(TERMINAL)), None);
+    // Skips: an unrelated application kept the front, or another one took it.
+    assert!(skip(Some(OTHER), Some(OTHER)).is_some_and(|w| w.contains("throughout")));
+    assert!(skip(Some(TERMINAL), Some(OTHER)).is_some_and(|w| w.contains("took")));
+    assert!(skip(Some(ME), Some(OTHER)).is_some_and(|w| w.contains("took")));
+    assert!(skip(None, Some(OTHER)).is_some_and(|w| w.contains("took")));
+}
+
+/// The launcher arm above is only as good as the ancestry it asks about: an
+/// `is_ancestor_process` that always answered `false` would turn every terminal case
+/// into a skip. macOS only, the one platform that answers.
+#[cfg(target_os = "macos")]
+#[gtktest::test]
+fn the_process_that_launched_the_suite_reads_as_its_ancestor() {
+    let parent = i32::try_from(std::os::unix::process::parent_id()).expect("a pid fits");
+    let me = i32::try_from(std::process::id()).expect("a pid fits");
+    assert!(crate::platform::is_ancestor_process(parent), "the parent");
+    assert!(
+        crate::platform::is_ancestor_process(1),
+        "launchd, every process's root"
+    );
+    assert!(!crate::platform::is_ancestor_process(me), "not itself");
 }
 
 /// **The cell-press rule is delivered by a capture-phase legacy controller on the view

@@ -228,7 +228,6 @@ fn position_card_on_cell(
     let Some((vx, vy)) = label.translate_coordinates(view, f64::from(lx), f64::from(ly)) else {
         return false;
     };
-    let height = view.height();
     // Same on-viewport gate the popovers use, through the same constructor — this card is
     // an in-surface GtkOverlay child rather than a popover, so it is not exposed to GTK4Rs/AP-26
     // itself, but "is there a visible anchor here?" is one question and deserves one
@@ -237,6 +236,34 @@ fn position_card_on_cell(
     if ViewportRect::at(Viewport::of(view), vx as i32, vy as i32, lh).is_none() {
         return false;
     }
+    place_entry_card(view.upcast_ref(), overlay, bar, (vx, vy), lh);
+    true
+}
+
+/// Place the entry `bar` (a GtkOverlay child) for an anchor at `at` in `view`'s widget
+/// coordinates, one line of `line_h` tall, by its start/top margins in **overlay-local**
+/// coordinates. The tail both placements share, once each has its anchor and has passed
+/// the on-viewport gate.
+///
+/// The margins are zeroed BEFORE measuring: GTK FOLDS a widget's own margins INTO its
+/// `measure()`/`preferred_size()` result, so measuring the bar while it still carries the
+/// PREVIOUS placement's margins double-counts them (natural height comes back as
+/// content plus the old margin_top), and the next placement compounds the error — the
+/// card drifts, and near the bottom the inflated height pins it to the top
+/// (GTK4Rs/AP-87). The measure is
+/// a fresh one — fine in the event phase this runs in, never from allocate.
+///
+/// View-widget coords → overlay-local by translation: the overlay wraps the
+/// ScrolledWindow whose viewport fills it, so the origins nominally coincide, but
+/// translate rather than assume (0,0)==(0,0) (researcher: gtkoverlaylayout copies the
+/// child rect verbatim in overlay-local space; don't hard-code the identity).
+fn place_entry_card(
+    view: &gtk::Widget,
+    overlay: &gtk::Overlay,
+    bar: &gtk::Widget,
+    (vx, vy): (f64, f64),
+    line_h: i32,
+) {
     let (ox, oy) = view
         .translate_coordinates(overlay, vx, vy)
         .map(|p| (p.0 as i32, p.1 as i32))
@@ -247,15 +274,14 @@ fn position_card_on_cell(
     let (x, y) = bar_placement(
         ox,
         oy,
-        lh,
+        line_h,
         nat.width(),
         nat.height(),
         overlay.width().max(1),
-        height,
+        view.height(),
     );
     bar.set_margin_start(x);
     bar.set_margin_top(y);
-    true
 }
 
 /// Point `pop`'s arrow at the horizontal midpoint of the preview selection — the same
@@ -328,7 +354,6 @@ pub(crate) fn position_card(
     let r1 = view.iter_location(&end);
     let (x0, y0) = view.buffer_to_window_coords(gtk::TextWindowType::Widget, r0.x(), r0.y());
     let (x1, _y1) = view.buffer_to_window_coords(gtk::TextWindowType::Widget, r1.x(), r1.y());
-    let height = view.height();
     let line_h = r0.height().max(1);
     // See `position_card_on_cell`: one on-viewport question, one gate. The constructed
     // rect is discarded — `bar_placement` owns this card's clamping.
@@ -339,37 +364,13 @@ pub(crate) fn position_card(
     // `point_at_selection` gives the action popover — so `bar_placement` (which centers on
     // it) drops the entry card exactly where the popover's body sat, not at a corner.
     let mx = (x0 + x1) / 2;
-    // View-widget coords → overlay-local. The overlay wraps the ScrolledWindow whose
-    // viewport fills it, so the origins nominally coincide — but translate rather than
-    // assume (0,0)==(0,0) (researcher: gtkoverlaylayout copies the child rect verbatim
-    // in overlay-local space; don't hard-code the identity).
-    let (ox, oy) = view
-        .translate_coordinates(overlay, f64::from(mx), f64::from(y0))
-        .map(|p| (p.0 as i32, p.1 as i32))
-        .unwrap_or((mx, y0));
-    // We position the bar via its start/top margins — but GTK FOLDS a widget's own
-    // margins INTO its `measure()`/`preferred_size()` result, so measuring the bar
-    // while it still carries the PREVIOUS placement's margins double-counts them
-    // (natural height comes back as content + old margin_top), and the next placement
-    // compounds the error — the card drifts, and near the bottom the inflated height
-    // pins it to the top. Zero the margins BEFORE measuring so the size reflects only
-    // the card's content, then set the freshly-computed margins (AP: margin-inflated
-    // re-measure). `preferred_size` is a fresh measure — fine here in the event phase,
-    // never from allocate.
-    bar.set_margin_start(0);
-    bar.set_margin_top(0);
-    let (_, nat) = bar.preferred_size();
-    let (x, y) = bar_placement(
-        ox,
-        oy,
+    place_entry_card(
+        view.upcast_ref(),
+        overlay,
+        bar,
+        (f64::from(mx), f64::from(y0)),
         line_h,
-        nat.width(),
-        nat.height(),
-        overlay.width().max(1),
-        height,
     );
-    bar.set_margin_start(x);
-    bar.set_margin_top(y);
     true
 }
 

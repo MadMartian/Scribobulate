@@ -303,33 +303,50 @@ impl DelimIndex {
 ///
 /// Every other Markdown tool reads `` `{>>x<<}` `` and a fenced sample of CriticMarkup
 /// as code, so CriticMarkup inside code is literal text: it renders as written and is
-/// never an annotation (TDD 17.61). Found by parsing the source as written, the file
-/// other tools read, with the same extensions `annotate::landing` decides where an
-/// annotation may go by, so the two never disagree about what is code.
-///
-/// A comment's body is the annotator's prose, not the document's Markdown, so a
-/// backtick in it must not pair with one in the text around it — pulldown does not
-/// know CriticMarkup and would pair them, hiding the real closer inside a "code span"
-/// and letting the comment close on a later one, swallowing the prose between. So
-/// the bodies of comments that open outside code are masked and the source parsed
-/// again. A comment opening inside code is that code's text and is left as it is.
+/// never an annotation (TDD 17.61). Found by parsing [`as_written`] — the text
+/// `annotate::landing` also parses — so extraction and landing never disagree about
+/// what is code.
 ///
 /// Skipped when the source holds no opener at all, so a document without CriticMarkup
-/// pays for no second parse.
+/// pays for no parse.
 fn code_ranges(source: &str) -> Vec<Range<usize>> {
     if !PAIRS.iter().any(|(open, _)| source.contains(open)) {
         return Vec::new();
     }
-    let code = parsed_code_ranges(source);
-    match mask_comment_bodies(source, &code) {
-        Some(masked) => parsed_code_ranges(&masked),
-        None => code,
-    }
+    parsed_code_ranges(&as_written(source))
 }
 
-/// `source` with the body of every comment that opens outside `code` overwritten by
-/// filler of the same byte length (newlines kept, so block structure is unchanged),
-/// or `None` when no such body holds anything that could open code.
+/// The most rounds [`as_written`] takes to settle which comments lie outside code.
+const MASK_ROUNDS: usize = 8;
+
+/// `source` as other Markdown tools read it, for deciding what is code: the same bytes
+/// at the same offsets, with the body of every comment that lies outside code
+/// overwritten by filler. The ONE text both extraction ([`code_ranges`]) and landing
+/// (`annotate::landing`) parse, so they cannot disagree about where code is.
+///
+/// A comment's body is the annotator's prose, not the document's Markdown, so a
+/// backtick in it must not pair with one in the text around it — pulldown does not
+/// know CriticMarkup and would pair them, hiding a real closer inside a "code span" and
+/// letting a construct close on a later one, swallowing the prose between. Whether a
+/// comment lies outside code depends on the code, which depends on which comments are
+/// masked, so it is settled by repetition: mask the comments whose opener is outside
+/// the code of the text as last masked, parse again, until the set stops changing. A
+/// single pass decided from the unmasked text left a comment that an earlier comment's
+/// stray backtick had swallowed into a "code span" unmasked, and it then swallowed the
+/// next one in turn. A comment opening inside real code is that code's text and stays.
+pub(super) fn as_written(source: &str) -> std::borrow::Cow<'_, str> {
+    let mut masked: Option<String> = None;
+    for _ in 0..MASK_ROUNDS {
+        let code = parsed_code_ranges(masked.as_deref().unwrap_or(source));
+        let next = mask_comment_bodies(source, &code);
+        if next == masked {
+            break;
+        }
+        masked = next;
+    }
+    masked.map_or(std::borrow::Cow::Borrowed(source), std::borrow::Cow::Owned)
+}
+
 fn mask_comment_bodies(source: &str, code: &[Range<usize>]) -> Option<String> {
     const FILLER: u8 = b'x';
     let could_open_code = |body: &[u8]| body.iter().any(|b| matches!(b, b'`' | b'~' | b'\n'));
@@ -751,6 +768,18 @@ mod tests {
         // A fence opener in a multi-line comment opens no block either.
         let e = extract("Text {>>see\n```\nhere<<} and {>>more<<}.\n");
         assert_eq!(e.annotations.len(), 2);
+    }
+
+    /// R9-AP1-01: which comments lie outside code is settled to a fixpoint, not decided
+    /// once from the unmasked text. Unmasked, comment 1's stray backtick pairs with
+    /// comment 2's, so comment 2's opener sits "in code" and a single pass never masked
+    /// it; its own backtick then paired with `e`'s and it closed on `f`'s closer.
+    #[test]
+    fn stray_backticks_in_several_comments_swallow_no_prose() {
+        let e = extract("{>>a ` b<<} {>>c ` d<<} `e` {>>f<<}");
+        let comments: Vec<_> = e.annotations.iter().map(|a| a.comment.as_deref()).collect();
+        assert_eq!(comments, [Some("a ` b"), Some("c ` d"), Some("f")]);
+        assert!(e.cleaned.contains("`e`"), "{:?}", e.cleaned);
     }
 
     #[test]

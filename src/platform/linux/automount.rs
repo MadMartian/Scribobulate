@@ -75,8 +75,7 @@ impl Kept {
     /// Bring [`Kept::points`] up to date: read the table when nothing is kept or the
     /// kernel says it changed, else keep what was read.
     fn refresh(&mut self) {
-        let changed = self.file.as_ref().is_none_or(mounts_changed);
-        self.update(changed, || {
+        self.refresh_with(mounts_changed, || {
             let mut file = File::open(MOUNT_TABLE)?;
             let mut table = Vec::new();
             file.read_to_end(&mut table)?;
@@ -84,6 +83,18 @@ impl Kept {
             file.rewind()?;
             Ok((file, table))
         });
+    }
+
+    /// [`Kept::refresh`] over how to ask the kept file whether the table changed: asked
+    /// only when a file is kept, and with none kept (never read, or unreadable last
+    /// time) the table is read regardless.
+    fn refresh_with(
+        &mut self,
+        changed: impl FnOnce(&File) -> bool,
+        read: impl FnOnce() -> std::io::Result<(File, Vec<u8>)>,
+    ) {
+        let changed = self.file.as_ref().is_none_or(changed);
+        self.update(changed, read);
     }
 
     /// [`Kept::refresh`]'s decision, over whether the table changed and how to read it.
@@ -241,6 +252,125 @@ mod tests {
             return;
         };
         assert!(!mounts_changed(&table));
+    }
+
+    /// `refresh` asks the kept file whether the table changed, and only a kept file: with
+    /// none it reads without asking, and with one it reads exactly when told of a change.
+    ///
+    /// Mutations, each failing here: never asking (`changed` taken as `false`); always
+    /// re-reading; asking with no file kept.
+    #[test]
+    fn refresh_reads_when_nothing_is_kept_or_the_kept_file_reports_a_change() {
+        let file = || std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
+        let mut kept = Kept::new();
+        kept.refresh_with(
+            |_| panic!("with no file kept there is nothing to ask"),
+            || Ok((file(), TABLE.to_vec())),
+        );
+        assert!(kept.points.iter().any(|p| p == Path::new("/net")));
+        kept.refresh_with(|_| false, || panic!("an unchanged table is not read again"));
+        let mut read = false;
+        kept.refresh_with(
+            |_| true,
+            || {
+                read = true;
+                Ok((file(), Vec::new()))
+            },
+        );
+        assert!(read, "a reported change reads the table again");
+        assert!(kept.points.is_empty());
+    }
+
+    /// The real kernel's positive control: in a private mount namespace, a mount made
+    /// after the table was opened is reported once, and the next question is quiet. A
+    /// `mounts_changed` that never answers `true` fails here, where the cache would
+    /// otherwise miss an `autofs` map mounted after start-up and answer "no automount".
+    ///
+    /// A forked child, because the namespace is entered with `unshare`, which a
+    /// multi-threaded process cannot do and which must not touch the test process. The
+    /// child only makes system calls on buffers built before the fork: allocating in a
+    /// forked child of a multi-threaded process can deadlock on a `malloc` lock.
+    #[test]
+    fn a_mount_after_the_table_is_opened_is_reported_once() {
+        use std::ffi::CString;
+        use std::os::fd::FromRawFd;
+        use std::os::unix::ffi::OsStrExt;
+        // A host may refuse the namespace outright, or (Ubuntu 24.04's AppArmor
+        // `apparmor_restrict_unprivileged_userns`) grant it without the capabilities
+        // to map a user or mount in it; either way the kernel cannot be asked here.
+        const NAMESPACE_REFUSED: i32 = 77;
+        const NO_CHANGE_SEEN: i32 = 1;
+        const CHANGE_STAYED: i32 = 2;
+        const SETUP_FAILED: i32 = 3;
+        let dir = tempfile::tempdir().unwrap();
+        let target = CString::new(dir.path().as_os_str().as_bytes()).unwrap();
+        let table = CString::new(super::MOUNT_TABLE).unwrap();
+        let uid_map_path = CString::new("/proc/self/uid_map").unwrap();
+        // SAFETY: `getuid` cannot fail.
+        let uid_map = format!("0 {} 1", unsafe { libc::getuid() });
+        let tmpfs = CString::new("tmpfs").unwrap();
+        // SAFETY: the child calls only system calls, on the buffers built above, and
+        // leaves with `_exit`; the parent reaps it.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork failed");
+        if child == 0 {
+            unsafe {
+                if libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) != 0 {
+                    libc::_exit(NAMESPACE_REFUSED);
+                }
+                // Map this user to root in the namespace, so the temporary directory,
+                // owned by this user, is one its capabilities reach.
+                let map = libc::open(uid_map_path.as_ptr(), libc::O_WRONLY);
+                let written = libc::write(map, uid_map.as_ptr().cast(), uid_map.len());
+                libc::close(map);
+                let fd = libc::open(table.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+                if written < 0 {
+                    libc::_exit(NAMESPACE_REFUSED);
+                }
+                if fd < 0 {
+                    libc::_exit(SETUP_FAILED);
+                }
+                let opened = std::fs::File::from_raw_fd(fd);
+                if mounts_changed(&opened) {
+                    libc::_exit(SETUP_FAILED);
+                }
+                let mounted = libc::mount(
+                    tmpfs.as_ptr(),
+                    target.as_ptr(),
+                    tmpfs.as_ptr(),
+                    0,
+                    std::ptr::null(),
+                );
+                if mounted != 0 {
+                    libc::_exit(if *libc::__errno_location() == libc::EPERM {
+                        NAMESPACE_REFUSED
+                    } else {
+                        SETUP_FAILED
+                    });
+                }
+                if !mounts_changed(&opened) {
+                    libc::_exit(NO_CHANGE_SEEN);
+                }
+                if mounts_changed(&opened) {
+                    libc::_exit(CHANGE_STAYED);
+                }
+                libc::_exit(0);
+            }
+        }
+        let mut status = 0;
+        // SAFETY: reaping the child forked above.
+        unsafe { libc::waitpid(child, &mut status, 0) };
+        assert!(libc::WIFEXITED(status), "child died: {status}");
+        match libc::WEXITSTATUS(status) {
+            0 => {}
+            NAMESPACE_REFUSED => crate::testsymlink::skipped(
+                "TDD 2.7 mount-table change detection",
+                "this host refuses an unprivileged user namespace, or a mount in one",
+            ),
+            NO_CHANGE_SEEN => panic!("a mount after the table was opened was not reported"),
+            CHANGE_STAYED => panic!("a reported change was reported again"),
+            other => panic!("the namespace could not be set up (exit {other})"),
+        }
     }
 
     #[test]

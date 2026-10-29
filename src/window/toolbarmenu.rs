@@ -20,7 +20,7 @@
 //! is anchored to.
 
 use super::*;
-use crate::app::{access_markup, access_shortcut, mnem, toolbar_toggles, ToolbarToggle};
+use crate::app::{mnem, toolbar_toggles, ToolbarToggle};
 use crate::widgets::wrapbox::ToolbarWrapBox;
 
 /// Attach the right-click menu to the window's button toolbar.
@@ -53,20 +53,16 @@ pub(super) fn open_toolbar_menu(toolbar: &ToolbarWrapBox, x: f64, y: f64) -> gtk
             body.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         }
         previous_group = Some(toggle.group);
-        let (row, access_key) = toggle_row(&toggle);
-        if let Some(shortcut) = access_key.and_then(|key| access_shortcut(&row, key, || true)) {
-            menu.keys.add_shortcut(shortcut);
-        }
-        body.append(&row);
+        body.append(&toggle_row(&menu, &toggle));
     }
     menu.open(toolbar, (x, y), &body, |_| {})
 }
 
 /// One row: a check button bound to the toggle's action, its label carrying the menu
-/// bar's access key underlined, and that key.
-fn toggle_row(toggle: &ToolbarToggle) -> (gtk::CheckButton, Option<char>) {
-    let (access_key, markup) = access_markup(&mnem(&toggle.label));
+/// bar's access key underlined, and that key registered on `menu`.
+fn toggle_row(menu: &super::contextmenu::ContextMenu, toggle: &ToolbarToggle) -> gtk::CheckButton {
     let row = gtk::CheckButton::with_label(&toggle.label);
+    let markup = menu.add_access_key(&row, &mnem(&toggle.label), || true);
     row.set_action_name(Some(&toggle.detailed_action()));
     // GTK 4.6 has no `CheckButton::set_child` (4.8), and a plain popover never makes
     // mnemonics visible (GTK4Rs/T-1), so the underline is drawn on the button's own
@@ -75,7 +71,7 @@ fn toggle_row(toggle: &ToolbarToggle) -> (gtk::CheckButton, Option<char>) {
     if let Some(label) = row.last_child().and_downcast::<gtk::Label>() {
         label.set_markup(&markup);
     }
-    (row, access_key)
+    row
 }
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
@@ -301,7 +297,7 @@ mod gtk_integration_tests {
             );
 
             // The menu bar's View ▸ Toolbar letter for Zoom.
-            let key = access_markup(&mnem("Zoom"))
+            let key = crate::app::access_markup(&mnem("Zoom"))
                 .0
                 .expect("Zoom has an access key");
             assert!(press_access_key(&popover, key), "the access key is bound");
@@ -380,29 +376,34 @@ mod gtk_integration_tests {
         });
     }
 
-    /// A teardown smoke test: closing the window with the menu open raises nothing.
+    /// Closing the window with the menu open releases the menu, and raises nothing.
     ///
-    /// It asserts nothing itself; its only way to fail is a critical (fatal under the
-    /// suite) or a crash. On GDK-Win32 the open popover's `closed` fires inside the
-    /// window's unrealize of it, which is where an unparent in `closed` unrealized it a
-    /// second time, so there it is a reproduction. On X11 that emission comes later and
-    /// the fault cannot be staged; the STATE guard that fails everywhere is
+    /// The STATE half is the guard the three menus share
+    /// ([`assert_closing_the_window_releases`](super::super::contextmenu::assert_closing_the_window_releases)):
+    /// this menu is released only because `ToolbarWrapBox::dispose` unparents every child,
+    /// and narrowing that sweep fails it on every platform. The teardown half fails only
+    /// by a critical (fatal under the suite) or a crash: on GDK-Win32 the open popover's
+    /// `closed` fires inside the window's unrealize of it, which is where an unparent in
+    /// `closed` unrealized it a second time, so there it is a reproduction. On X11 that
+    /// emission comes later and the fault cannot be staged; the STATE guard for it is
     /// `the_closed_menu_is_unparented_after_its_close_not_during_it`.
+    ///
+    /// Mutation check: emptying `ToolbarWrapBox::dispose` fails the release assertion.
     #[gtktest::test]
-    fn closing_the_window_with_the_menu_open_raises_no_critical() {
+    fn closing_the_window_with_the_menu_open_releases_the_menu() {
         with_fresh_session(|| {
             let app = test_app("com.extollit.scribobulate.integrationtest.toolbarmenudestroy");
             let win = new_window(&app, "IT-toolbarmenu-destroy", "# H\n\ntext", None);
             win.present();
-            let (_, popover) = open(&win);
-            // Let the tooltip timeout the popover's map-time enter armed fire while its
-            // surface exists (GTK4Rs/AP-117) — this test is about the unrealize, not that.
-            settle(crate::testpump::TOOLTIP_HOVER_DRAIN.as_millis() as u64);
-            assert!(popover.is_mapped(), "precondition: the menu is still open");
-            win.destroy();
-            drop(popover);
-            drop(win);
-            settle(crate::widgets::TOOLTIP_HOVER_DRAIN.as_millis() as u64 + 200);
+            let popover = {
+                let (_, popover) = open(&win);
+                popover
+            };
+            super::super::contextmenu::assert_closing_the_window_releases(
+                win,
+                popover,
+                "the toolbar menu",
+            );
         });
     }
 
@@ -432,7 +433,13 @@ mod gtk_integration_tests {
                 .find(|g| g.button() == gtk::gdk::BUTTON_SECONDARY)
                 .expect("a secondary-button click gesture is on the toolbar");
             secondary.emit_by_name::<()>("pressed", &[&1i32, &10.0f64, &10.0f64]);
-            settle(200);
+            // The press builds the menu synchronously, so this returns at once; it is a
+            // bound, not a settle, should that ever become deferred.
+            crate::testpump::until(
+                crate::testpump::Clock::Frame,
+                "the press to open a menu on the toolbar",
+                || menu_on_toolbar().is_some(),
+            );
             let popover = menu_on_toolbar().expect("the press opened no menu on the toolbar");
             assert!(
                 popover.is_visible(),

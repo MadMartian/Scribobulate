@@ -63,22 +63,21 @@ pub(super) fn until_readout(win: &ApplicationWindow, expected: &str, what: &str)
     );
 }
 
-/// The readout's text once the search it describes has actually happened.
+/// The readout's text once the search it describes has finished scanning.
 ///
-/// **Two waits, for two different delays, and neither is optional.**
-/// `GtkSearchEntry` does not emit `search-changed` on the keystroke — it debounces,
-/// so a readout read immediately after `set_text` is the PREVIOUS query's answer and
-/// every assertion below would be measuring the wrong search. Then the editor's engine
-/// answers its `-1` sentinel until it has swept the buffer, which is a second wait with
-/// its own end condition. The preview's path has neither delay and simply passes
-/// through both.
+/// **It does not wait for the search to START.** `GtkSearchEntry` debounces
+/// `search-changed`, so a readout read straight after a raw `set_text` is the PREVIOUS
+/// query's answer — and that answer is not `…`, so the wait below passes at once and
+/// the caller measures the wrong search. That wait belongs to whoever typed: put text in
+/// the field with [`type_query`] or [`search`], which return once the search has run.
+/// This then waits only for the editor's engine, which answers its `-1` sentinel (`…`)
+/// until it has swept the buffer; the preview's path has no such delay and passes
+/// straight through.
+///
+/// It once also drained a fixed 400 ms "past the debounce", which was pure delay for
+/// every caller that had already waited on the search, and a race for every caller that
+/// had not.
 pub(super) fn readout(win: &ApplicationWindow) -> String {
-    // Past `GtkSearchEntry`'s own debounce. Generous: this is a wait for a fixed
-    // toolkit delay, not a poll for a condition, so there is nothing to test for.
-    crate::testpump::drain_for(
-        crate::testpump::Clock::Idle,
-        std::time::Duration::from_millis(400),
-    );
     let st = state(win).expect("the window has an active tab");
     let label = st.chrome().match_count_label.clone();
     crate::testpump::until(
@@ -87,4 +86,16 @@ pub(super) fn readout(win: &ApplicationWindow) -> String {
         || label.text() != "…",
     );
     label.text().to_string()
+}
+
+/// [`readout`] after giving the main loop a fixed span to run, for an ABSENCE assertion:
+/// "this step changed nothing", "the bar stayed dark". An absence has no observable to
+/// wait for, so a deferred effect is given the span to appear in before the caller
+/// checks it did not. Never use this to wait for a search: that is [`type_query`].
+pub(super) fn readout_after_quiet(win: &ApplicationWindow) -> String {
+    crate::testpump::drain_for(
+        crate::testpump::Clock::Idle,
+        std::time::Duration::from_millis(400),
+    );
+    readout(win)
 }

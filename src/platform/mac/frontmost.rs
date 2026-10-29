@@ -59,3 +59,39 @@ pub(crate) fn frontmost_pid() -> Option<i32> {
         pid
     }
 }
+
+/// Whether `pid` is this process's parent, or the parent's parent, and so on up to
+/// `launchd`. Bounded, so a cycle in a racing process table cannot hang a test.
+pub(crate) fn is_ancestor(pid: i32) -> bool {
+    let Ok(mut current) = i32::try_from(std::os::unix::process::parent_id()) else {
+        return false;
+    };
+    for _ in 0..64 {
+        if current == pid {
+            return true;
+        }
+        if current <= 1 {
+            return false;
+        }
+        match parent_of(current) {
+            Some(parent) => current = parent,
+            None => return false,
+        }
+    }
+    false
+}
+
+/// The parent pid of `pid`, from `proc_pidinfo(PROC_PIDTBSDINFO)`, or `None` when the
+/// process is gone or not ours to read.
+fn parent_of(pid: i32) -> Option<i32> {
+    // SAFETY: `proc_bsdinfo` is plain data, so all-zero is a valid value to overwrite.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
+    // SAFETY: `info` is a writable `proc_bsdinfo` of exactly `size` bytes, the buffer
+    // PROC_PIDTBSDINFO fills; the call writes no more than `size`.
+    let written =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
+    (written == size)
+        .then(|| i32::try_from(info.pbi_ppid).ok())
+        .flatten()
+}

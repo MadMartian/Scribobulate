@@ -26,7 +26,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 KAMD=/usr/lib/x86_64-linux-gnu/libexec/kactivitymanagerd
 
 if [[ "${1:-}" != "--inner" ]]; then
-    for tool in Xvfb kwin_x11 xprop xwininfo dbus-run-session qdbus; do
+    for tool in Xvfb kwin_x11 xprop xwininfo xdotool xrandr wmctrl gdbus dbus-run-session qdbus; do
         command -v "$tool" >/dev/null || { echo "winplace-rig: missing $tool" >&2; exit 2; }
     done
     [[ -x "$KAMD" ]] || { echo "winplace-rig: missing $KAMD" >&2; exit 2; }
@@ -104,12 +104,13 @@ check_not() {
 
 # run_case <name> <place toml> [<hook>]: show the probe, inspect its window, print the
 # capture. <hook>, if given, is run with the window id while the probe still holds the
-# window, after its capture.
+# window, after its capture. HOLD, if set, is how many seconds the probe holds the
+# window after its capture (3 by default); a hook that acts on the window needs longer.
 run_case() {
-    local name=$1 place=$2 hook=${3:-}
+    local name=$1 place=$2 hook=${3:-} hold=${HOLD:-3}
     echo "case: $name"
     printf '%s\n' "$place" >"$SCRATCH/place.toml"
-    "$PROBE" "$SCRATCH/place.toml" --hold 3 >"$SCRATCH/capture.toml" 2>"$SCRATCH/probe.err" &
+    "$PROBE" "$SCRATCH/place.toml" --hold "$hold" >"$SCRATCH/capture.toml" 2>"$SCRATCH/probe.err" &
     local pid=$!
     local wid=""
     for _ in $(seq 60); do
@@ -161,14 +162,26 @@ check "capture size" "$CAPTURE" "width = 640"
 # Shaded is requested only once the window is managed: given as an initial state, GTK
 # remembered a 93x36 default size and the window came back tiny once unshaded (x11.rs's
 # header). So its size is checked on screen after unshading.
+# Polled, not slept: unshaded only once the probe has printed its capture, which must
+# see the window shaded, and the size read once the window manager has unshaded it and
+# the size has stopped changing. The case holds the window long enough for every poll
+# to run out.
 UNSHADED=""
+shaded() { xprop -id "$1" _NET_WM_STATE 2>/dev/null | grep -q _NET_WM_STATE_SHADED; }
 unshade() { # <wid>
-    sleep 1
+    for _ in $(seq 50); do [[ -s "$SCRATCH/capture.toml" ]] && break; sleep 0.1; done
     wmctrl -i -r "$1" -b remove,shaded
-    sleep 0.5
-    UNSHADED=$(xwininfo -id "$1" 2>&1 | grep -E 'Width|Height' | tr -s ' ' | tr '\n' ' ')
+    for _ in $(seq 50); do shaded "$1" || break; sleep 0.1; done
+    local size last=""
+    for _ in $(seq 20); do
+        size=$(xwininfo -id "$1" 2>&1 | grep -E 'Width|Height' | tr -s ' ' | tr '\n' ' ')
+        [[ -n "$last" && "$size" == "$last" ]] && break
+        last=$size
+        sleep 0.1
+    done
+    UNSHADED=$size
 }
-run_case "all desktops, kept below, shaded, all activities" "$(cat <<EOF
+HOLD=10 run_case "all desktops, kept below, shaded, all activities" "$(cat <<EOF
 width = 500
 height = 300
 all_desktops = true
@@ -324,6 +337,19 @@ else
     check "window 2 saved where it was at quit" "$SAVED" "width = 900 height = 600 maximized = false fullscreen = false monitor = \"$MONITOR\" x = 250 y = 150 desktop = 0"
 fi
 
+# ── A window manager that is alive but not answering: the warning's positive control ─
+# Stopped, KWin still names a live check window, so present waits out its bound and
+# warns. This shows the probe's stderr carries the warning that the next case requires
+# to be absent.
+echo "case: a window manager that does not manage the window is waited for, then warned of"
+kill -STOP "$KWIN_PID"
+printf 'width = 600\nheight = 400\ndesktop = 1\n' >"$SCRATCH/place.toml"
+STATUS=0
+"$PROBE" "$SCRATCH/place.toml" >"$SCRATCH/capture.toml" 2>"$SCRATCH/probe.err" || STATUS=$?
+kill -CONT "$KWIN_PID"
+check "the probe exits cleanly" "status $STATUS" "status 0"
+check "present warned that it was not managed" "$(cat "$SCRATCH/probe.err")" "did not manage the window"
+
 # ── A window manager that died: last, since it ends KWin ──────────────────────────
 # Killed outright, KWin leaves _NET_SUPPORTING_WM_CHECK on the root naming a window that
 # is gone. Trusting the root alone, present waits out its whole bound for a manager that
@@ -334,8 +360,13 @@ wait "$KWIN_PID" 2>/dev/null || true
 STALE=$(xprop -root _NET_SUPPORTING_WM_CHECK 2>&1)
 echo "  root: $STALE"
 printf 'width = 600\nheight = 400\ndesktop = 1\n' >"$SCRATCH/place.toml"
-"$PROBE" "$SCRATCH/place.toml" >/dev/null 2>"$SCRATCH/probe.err" || true
+STATUS=0
+"$PROBE" "$SCRATCH/place.toml" >"$SCRATCH/capture.toml" 2>"$SCRATCH/probe.err" || STATUS=$?
 check "the root still names the dead manager's window" "$STALE" "window id"
+# The absence below means something only if the probe got past present: it exits 0 and
+# prints its capture only after present has returned.
+check "the probe exits cleanly" "status $STATUS" "status 0"
+check "present returned and the probe captured" "$(cat "$SCRATCH/capture.toml")" "width = 600"
 check_not "present did not wait for it" "$(cat "$SCRATCH/probe.err")" "did not manage the window"
 
 echo

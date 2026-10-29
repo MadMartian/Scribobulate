@@ -48,17 +48,88 @@ fn contents_dir() -> Option<PathBuf> {
 /// bundle is delivered.
 const STAGED_LIBRSVG: &str = "Frameworks/librsvg-2.2.dylib";
 
-/// Whether this process runs from a bundle that carries its own librsvg — the one the
-/// bundle's gate verified, so the XInclude screen may stand down. Outside a bundle
-/// (`cargo run`, `./target/release/scribobulate`, a test binary) the SVG loader resolves
-/// Homebrew's librsvg, whose version nothing checks, and this is `false`.
+/// The gdk-pixbuf SVG loader `bundle.sh` stages, relative to `Contents`: the module the
+/// loader cache names for SVG, and the one object that links librsvg.
+const STAGED_SVG_LOADER: &str = "Frameworks/libpixbufloader_svg.so";
+
+/// Whether this process runs from a bundle whose SVG loader is bound to the bundle's own
+/// librsvg, the copy the bundle's gate verified, so the XInclude screen may stand down.
+/// Outside a bundle (`cargo run`, `./target/release/scribobulate`, a test binary) the SVG
+/// loader resolves Homebrew's librsvg, whose version nothing checks, and this is `false`.
+///
+/// **Decided from what dyld loaded, not from which file is present.** The staged copy
+/// being in `Frameworks/` does not make it the one in use: dyld resolves the loader's
+/// `@rpath/librsvg-2.2.dylib` through the loader's own rpaths before the executable's,
+/// and a bundle once carried a Homebrew rpath naming the directory that holds the `.app`.
+/// A librsvg placed there was loaded instead of the staged one (measured;
+/// `packaging/macos/rpath.sh`'s header). So the loader is loaded here, at the path
+/// gdk-pixbuf will load it from, and every librsvg image in the process must then be the
+/// staged file. The handle is kept: gdk-pixbuf loads the same module for the first SVG
+/// anyway, and dyld hands it back the same image, already bound.
+///
+/// Fails closed: a loader that will not load, or no librsvg image after it did, is
+/// `false`, and the screen stays up.
 pub(crate) fn carries_verified_librsvg() -> bool {
-    contents_dir().is_some_and(|contents| librsvg_staged_in(&contents))
+    contents_dir().is_some_and(|contents| loader_binds_staged_librsvg(&contents))
 }
 
-/// [`carries_verified_librsvg`]'s decision over a `Contents` given rather than found.
-fn librsvg_staged_in(contents: &Path) -> bool {
-    contents.join(STAGED_LIBRSVG).is_file()
+fn loader_binds_staged_librsvg(contents: &Path) -> bool {
+    let Ok(staged) = std::fs::canonicalize(contents.join(STAGED_LIBRSVG)) else {
+        return false;
+    };
+    if !load_and_keep(&contents.join(STAGED_SVG_LOADER)) {
+        return false;
+    }
+    only_the_staged_librsvg_is_loaded(&loaded_images(), &staged)
+}
+
+/// `dlopen` `path` and leak the handle. `false` when it does not load.
+fn load_and_keep(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `path` is NUL-terminated and outlives the call. The module is a gdk-pixbuf
+    // loader with no initialisers of its own, which gdk-pixbuf would `dlopen` in this
+    // process for the first SVG regardless.
+    !unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) }.is_null()
+}
+
+// dyld's image list, declared by hand: `libc` deprecates its bindings in favour of the
+// `mach2` crate, which this one pair of stable libSystem symbols does not justify taking.
+unsafe extern "C" {
+    fn _dyld_image_count() -> u32;
+    fn _dyld_get_image_name(image_index: u32) -> *const std::ffi::c_char;
+}
+
+/// The path of every image dyld has loaded into this process.
+fn loaded_images() -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: plain reads of dyld's image list. An index past an image unloaded meanwhile
+    // yields NULL, which is skipped; a non-NULL name is a NUL-terminated string dyld owns.
+    unsafe {
+        (0.._dyld_image_count())
+            .filter_map(|i| {
+                let name = _dyld_get_image_name(i);
+                (!name.is_null()).then(|| {
+                    let bytes = std::ffi::CStr::from_ptr(name).to_bytes();
+                    PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
+                })
+            })
+            .collect()
+    }
+}
+
+/// Whether `images` holds a librsvg and every librsvg in it is `staged` (canonical).
+/// Two copies loaded, the staged one and another, is `false`: the loader is bound to one
+/// of them, and nothing here says which.
+fn only_the_staged_librsvg_is_loaded(images: &[PathBuf], staged: &Path) -> bool {
+    let mut librsvgs = images
+        .iter()
+        .filter(|p| p.file_name().is_some_and(|n| n == "librsvg-2.2.dylib"))
+        .peekable();
+    librsvgs.peek().is_some()
+        && librsvgs.all(|p| std::fs::canonicalize(p).is_ok_and(|p| p == staged))
 }
 
 /// [`contents_dir`]'s decision, over an executable path given rather than discovered — the
@@ -234,8 +305,12 @@ pub(crate) fn configure_language_path() {
 
 #[cfg(test)]
 mod tests {
-    use super::{absolutize_loader_cache, contents_for_exe, librsvg_staged_in, module_basename};
+    use super::{
+        absolutize_loader_cache, contents_for_exe, loader_binds_staged_librsvg, module_basename,
+        only_the_staged_librsvg_is_loaded,
+    };
     use std::path::Path;
+    use std::path::PathBuf;
 
     /// A `Scribobulate.app/Contents/MacOS/scribobulate` under `root`, returning the
     /// executable's path and the `Contents` its detection must report.
@@ -303,21 +378,50 @@ mod tests {
         assert_eq!(contents_for_exe(&exe), None);
     }
 
-    /// The screen stands down only for a bundle whose staged librsvg is there: a bundle
-    /// staged without one is screened like a binary outside any bundle.
+    /// The screen stands down only when the librsvg loaded is the staged one: a bundle
+    /// with no librsvg, or whose loader will not load, is screened like a binary outside
+    /// any bundle.
     #[test]
     fn only_a_bundle_carrying_its_librsvg_counts_as_verified() {
         let dir = tempfile::tempdir().unwrap();
         let (_, contents) = staged_bundle(dir.path());
-        assert!(!librsvg_staged_in(&contents));
+        assert!(!loader_binds_staged_librsvg(&contents), "no librsvg staged");
         let frameworks = contents.join("Frameworks");
         std::fs::create_dir_all(&frameworks).unwrap();
         std::fs::write(frameworks.join("librsvg-2.2.dylib"), b"").unwrap();
-        assert!(librsvg_staged_in(&contents));
+        std::fs::write(frameworks.join("libpixbufloader_svg.so"), b"not a Mach-O").unwrap();
+        assert!(
+            !loader_binds_staged_librsvg(&contents),
+            "a staged librsvg whose loader does not load is not proof of anything"
+        );
         assert!(
             !super::carries_verified_librsvg(),
             "a test binary runs outside any bundle"
         );
+    }
+
+    /// The decision over dyld's image list: the staged copy alone passes; a librsvg from
+    /// anywhere else, alone or beside the staged one, or none at all, fails. Mutation:
+    /// keying on presence (`staged.is_file()`) passes the sibling case.
+    #[test]
+    fn only_the_staged_librsvg_being_loaded_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("S.app/Contents");
+        std::fs::create_dir_all(app.join("Frameworks")).unwrap();
+        std::fs::create_dir_all(app.join("MacOS")).unwrap();
+        let sibling = dir.path().join("librsvg-2.2.dylib");
+        std::fs::write(app.join("Frameworks/librsvg-2.2.dylib"), b"").unwrap();
+        std::fs::write(&sibling, b"").unwrap();
+        let staged = std::fs::canonicalize(app.join("Frameworks/librsvg-2.2.dylib")).unwrap();
+        let other = PathBuf::from("/usr/lib/libSystem.B.dylib");
+        // Spelled the way dyld reports an @rpath resolution, not canonical.
+        let via_rpath = app.join("MacOS/../Frameworks/librsvg-2.2.dylib");
+
+        let ok = only_the_staged_librsvg_is_loaded;
+        assert!(ok(&[other.clone(), via_rpath.clone()], &staged));
+        assert!(!ok(&[other.clone(), sibling.clone()], &staged));
+        assert!(!ok(&[via_rpath, sibling], &staged));
+        assert!(!ok(&[other], &staged));
     }
 
     #[test]
