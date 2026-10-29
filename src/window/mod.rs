@@ -165,7 +165,7 @@ pub(crate) mod toolbarchrome;
 mod toolbarmenu;
 pub(crate) mod undo;
 mod viewactions;
-mod wheelcoalesce;
+pub(crate) mod wheelcoalesce;
 mod zoomwheel;
 
 use chrome::*;

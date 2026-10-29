@@ -3066,6 +3066,13 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **When** the reader selects preview text and the Annotate pop-up shows, then clicks Annotate and the comment entry opens
 - **Then** both cards are the same colour, the desktop's, as are the formatting bar and a comment card: the reading theme colours the document, not the cards floating over it (18.7)
 
+### 17.66 The wheel over an annotation's text reaches the card's list
+- **Given** a comment card whose rows overflow it, so the rows scroll, and the pointer over one row's annotated text or comment
+- **When** the reader turns the mouse wheel, or scrolls with a touchpad
+- **Then** text that can still scroll the way the wheel turns scrolls, and text at that end — or short enough to have nothing to scroll — moves the list of rows instead, by the same step the list takes with the pointer between rows
+- **And** turning back scrolls that text again before the list; a touchpad gesture that has started moving the list keeps moving it until the gesture ends, even as another row's text slides under the pointer
+- **And** where the toolkit already hands the wheel from inner text to the list itself (GTK 4.20.1 and later, so the macOS and Windows builds), its own behaviour is what the reader gets
+
 ## 18. Preview reading themes
 
 The preview pane's purpose is reading. A *reading theme* restyles everything the

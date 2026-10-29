@@ -60,7 +60,6 @@ described from a different vantage point.
 | S | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
 | T | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | W | Windows | Production | Restoring a window's size at a fractional Windows display scale (125%, 150%) has never been run, so whether a window comes back at its saved size there is unknown | Low |
-| Y | Any | Production | In an annotation card's list of rows, the mouse wheel over a row's highlighted-text or comment box scrolls that box (or nothing), never the list, so a long list cannot be wheel-scrolled from over its rows | Low |
 
 ## Closed issues
 
@@ -481,23 +480,6 @@ to GDK's integer scale, which is the one case where the two could differ if that
 - Run MANUAL-TEST 15.10f at 125% and at 150% on Windows, with one window maximized and minimized
   at quit. Delete this entry if both pass; otherwise the failing case becomes the fix's test.
 - Accept the limitation until a user at a fractional scale reports a size change.
-
-## Y. The mouse wheel over an annotation card's row scrolls the row's box, never the list
-
-**Severity**: Low (seen while fixing review findings; the list still scrolls by its scrollbar,
-by keyboard, or with the pointer between rows).
-
-In the code view's annotation card (`src/codeview/card.rs`, `src/codeview/cardscroll.rs`) each
-row holds a scrollable box for its highlighted text and one for its comment. A wheel event over
-either box is taken by that inner scroller, even when it has nothing left to scroll, so it never
-reaches the scroller that holds the rows. With the pointer over rows, which is most of the card,
-the list does not move.
-
-**Mitigation options**:
-- Hand the wheel to the outer list when the inner box is already at the end it is being scrolled
-  towards (or cannot scroll at all): the usual nested-scroll rule.
-- Give the inner boxes no scrolling of their own and let them grow to their content, so the list
-  is the only scroller.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

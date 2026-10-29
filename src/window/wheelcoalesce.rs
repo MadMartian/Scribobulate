@@ -62,6 +62,22 @@ pub(crate) fn wheel_step(page_size: f64, wayland_smooth: bool) -> f64 {
     }
 }
 
+/// The step GTK 4.6 would scroll `scroller` by for the event `controller` is handling
+/// now ([`wheel_step`]). Outside an event (a test emitting the signal) nothing is
+/// smooth, so the page-derived step. From 4.8 GTK scales a smooth event by the event's
+/// unit instead, so callers are for runtimes that still take this step.
+pub(crate) fn event_step(
+    scroller: &gtk::ScrolledWindow,
+    controller: &gtk::EventControllerScroll,
+) -> f64 {
+    let wayland_smooth = is_wayland(scroller)
+        && controller
+            .current_event()
+            .and_then(|event| event.downcast::<gdk::ScrollEvent>().ok())
+            .is_some_and(|event| event.direction() == gdk::ScrollDirection::Smooth);
+    wheel_step(scroller.vadjustment().page_size(), wayland_smooth)
+}
+
 /// Whether the running GTK still has the #2971 defect — i.e. is older than 4.10.1.
 ///
 /// Asked of the RUNTIME, not the build: the crate's `v4_6` feature floor says what we
@@ -145,12 +161,7 @@ pub(crate) fn install(scroller: &gtk::ScrolledWindow) {
             {
                 return glib::Propagation::Proceed; // GTK's axis swap — not ours to take
             }
-            let wayland_smooth = is_wayland(&scroller)
-                && controller
-                    .current_event()
-                    .and_then(|event| event.downcast::<gdk::ScrollEvent>().ok())
-                    .is_some_and(|event| event.direction() == gdk::ScrollDirection::Smooth);
-            let step = wheel_step(scroller.vadjustment().page_size(), wayland_smooth);
+            let step = event_step(&scroller, controller);
             pending.delta.set(pending.delta.get() + dy * step);
             arm(&scroller, &pending);
             glib::Propagation::Stop

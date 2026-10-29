@@ -192,6 +192,7 @@ fn build_annotation_row(
     m: &MarkerData,
     card: &AnnotationCard,
     sink: Option<AnnotationSink>,
+    wheel: &cardscroll::RowWheel,
 ) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
     if let Some(claim) = &m.claim {
@@ -200,7 +201,11 @@ fn build_annotation_row(
         cl.set_xalign(0.0);
         cl.set_wrap(true);
         cl.set_max_width_chars(34);
-        row.append(&cardscroll::bounded_text(&cl, cardscroll::CLAIM_MAX_LINES));
+        row.append(&cardscroll::bounded_text(
+            &cl,
+            cardscroll::CLAIM_MAX_LINES,
+            wheel,
+        ));
     }
     let comment_label = gtk::Label::new(Some(&m.comment));
     comment_label.set_xalign(0.0);
@@ -215,7 +220,7 @@ fn build_annotation_row(
     // claim quote above is non-selectable too; the comment text lives verbatim in the
     // source document if a user wants to copy it.
 
-    let comment = cardscroll::bounded_text(&comment_label, cardscroll::COMMENT_MAX_LINES);
+    let comment = cardscroll::bounded_text(&comment_label, cardscroll::COMMENT_MAX_LINES, wheel);
     let Some(sink) = sink else {
         row.append(&comment);
         return row.upcast();
@@ -1098,14 +1103,17 @@ impl CodePreviewView {
         // The rows scroll as one when they outgrow the pane; the close button stays
         // outside that scroller so it is always on the card (see `cardscroll`).
         let rows = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        // One wheel transaction for the whole card, so a wheel over any row's text
+        // reaches the rows when that text cannot use it (see `cardscroll::RowWheel`).
+        let wheel = cardscroll::RowWheel::default();
         for (n, &idx) in idxs.iter().enumerate() {
             let Some(m) = markers.get(idx) else { continue };
             if n > 0 {
                 rows.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
             }
-            rows.append(&build_annotation_row(m, &card, sink.clone()));
+            rows.append(&build_annotation_row(m, &card, sink.clone(), &wheel));
         }
-        vbox.append(&cardscroll::fit_to_pane(&rows));
+        vbox.append(&cardscroll::fit_to_pane(&rows, &wheel));
         crate::widgets::floating_card::FloatingCardExt::set_child(&card, Some(&vbox));
 
         // Bug B: keep the pane from jerking (and the popover from missing) on a marker
