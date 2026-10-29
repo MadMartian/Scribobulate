@@ -1354,9 +1354,12 @@ pub(super) fn wire_spliced_disclosure_toggles(
 /// pane is intact and the fallback merely shows the toggle) or after the region was
 /// already deleted (the fallback is the repair).
 fn connect_disclosure_toggle(view: &CodePreviewView, toggle: &gtk::ToggleButton) {
-    toggle.connect_toggled(glib::clone!(
+    let sync = crate::widgets::disclosure::ActiveSync::new(toggle);
+    let handler = toggle.connect_toggled(glib::clone!(
         #[weak]
         view,
+        #[strong]
+        sync,
         move |toggle| {
             let Some(window) = view
                 .root()
@@ -1368,6 +1371,17 @@ fn connect_disclosure_toggle(view: &CodePreviewView, toggle: &gtk::ToggleButton)
                 return;
             };
             let mode = st.view_mode.get();
+            // GTK has already flipped `active`; a dropped idle puts it back, because
+            // the fold model and the indicator it would disagree with stay as they are.
+            let restore = {
+                let toggle = toggle.downgrade();
+                let sync = sync.clone();
+                move || {
+                    if let Some(toggle) = toggle.upgrade() {
+                        sync.restore(&toggle);
+                    }
+                }
+            };
             // **Resolved at the click, against the text the pane is showing NOW** —
             // `previewed_cleaned` is the one accessor that owns which text that is
             // (the live editor buffer in split mode, the stored source otherwise), and
@@ -1390,44 +1404,57 @@ fn connect_disclosure_toggle(view: &CodePreviewView, toggle: &gtk::ToggleButton)
                      document as it now stands; re-rendering the pane so the next \
                      click acts"
                 );
-                crate::window::defer_with_tab(&window, &st, move |window, _| {
-                    crate::window::rerender_preview_in_place(
-                        window,
-                        mode,
-                        crate::window::RenderShape::SameContent,
-                    );
-                });
+                crate::window::defer_with_tab(
+                    &window,
+                    &st,
+                    |window, _, mode| {
+                        crate::window::rerender_preview_in_place(
+                            window,
+                            mode,
+                            crate::window::RenderShape::SameContent,
+                        );
+                    },
+                    restore,
+                );
                 return;
             };
-            // Through the shared deferral, bound to THIS tab at THIS text: `key` was
-            // resolved against the text the pane shows now, and a tab switch or an edit
-            // dispatched before the idle would otherwise have it toggled and spliced
-            // into a document it does not index. The fold toggle waits in the idle with
+            // Through the shared deferral, bound to THIS tab at THIS text in THIS mode:
+            // `key` was resolved against the text the pane shows now, and a tab switch,
+            // an edit or a mode switch dispatched before the idle would otherwise have it
+            // toggled and spliced into a document it does not index. The fold toggle waits in the idle with
             // the splice for the same reason `reveal_folds`' expansion does — a dropped
             // deferral must leave the fold model agreeing with the render on screen,
             // which a toggle applied here and a splice dropped there would not.
-            crate::window::defer_with_tab(&window, &st, move |window, st| {
-                st.folds.borrow_mut().toggle(key);
-                // Anything but a landed splice falls back to a full re-render — which
-                // for `RegionLost` is not a nicety but the repair: the region has
-                // already been deleted from the live buffer.
-                if crate::window::splice_disclosure_in_place(window, mode, key).spliced() {
-                    // The splice's own boundary notification. It does NOT go through
-                    // `rerender_preview_in_place` — that is the whole point of splicing —
-                    // so it owes the notification separately, and this is the route the
-                    // macOS seat caught missing it: the passage stayed ticked over a count
-                    // nothing had recomputed, looking correct only because a `GtkTextTag`
-                    // range moves with an insertion on its own while a held offset does
-                    // not.
-                    crate::window::refresh_preview_find_highlight(window);
-                    return;
-                }
-                crate::window::rerender_preview_in_place(
-                    window,
-                    mode,
-                    crate::window::RenderShape::ChangedContent,
-                );
-            });
+            let landed = sync.clone();
+            crate::window::defer_with_tab(
+                &window,
+                &st,
+                move |window, st, mode| {
+                    st.folds.borrow_mut().toggle(key);
+                    landed.landed();
+                    // Anything but a landed splice falls back to a full re-render — which
+                    // for `RegionLost` is not a nicety but the repair: the region has
+                    // already been deleted from the live buffer.
+                    if crate::window::splice_disclosure_in_place(window, mode, key).spliced() {
+                        // The splice's own boundary notification. It does NOT go through
+                        // `rerender_preview_in_place` — that is the whole point of splicing —
+                        // so it owes the notification separately, and this is the route the
+                        // macOS seat caught missing it: the passage stayed ticked over a count
+                        // nothing had recomputed, looking correct only because a `GtkTextTag`
+                        // range moves with an insertion on its own while a held offset does
+                        // not.
+                        crate::window::refresh_preview_find_highlight(window);
+                        return;
+                    }
+                    crate::window::rerender_preview_in_place(
+                        window,
+                        mode,
+                        crate::window::RenderShape::ChangedContent,
+                    );
+                },
+                restore,
+            );
         }
     ));
+    sync.armed(handler);
 }

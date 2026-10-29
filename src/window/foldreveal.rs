@@ -11,16 +11,15 @@
 use super::*;
 use crate::fold::FoldKey;
 
-/// Run `f` on the next main-loop idle against the window and the tab `st` — or not at
-/// all, if by then the window has gone, another tab is active, or `st`'s text has
-/// changed.
+/// Run `f` on the next main-loop idle against the window, the tab `st` and its view
+/// mode — or, if by then the window has gone, another tab is active, or `st`'s text or
+/// view mode has changed, run `on_drop` instead. Exactly one of the two runs.
 ///
 /// **This is the only deferral the fold paths have, and the binding is why.** Every
 /// caller arms it with a reference into ONE document as it stood at that instant — a
-/// fold key resolved against its text, a heading index into its render, a resume
-/// offset into its buffer — and all of them are held across the idle (Document-Reference
-/// CAM). Two things can be dispatched before the idle and make that reference name the
-/// wrong place:
+/// fold key, a heading index into its render, a resume offset into its buffer — and all
+/// of them are held across the idle (Document-Reference CAM). Three things can be
+/// dispatched before the idle and make that reference name the wrong place:
 ///
 /// - **a tab switch** (class B): input outranks `DEFAULT_IDLE`, and a still-validating
 ///   preview starves the idle for as long as its validation runs (GTK4Rs/T-5). The idle
@@ -28,15 +27,29 @@ use crate::fold::FoldKey;
 ///   place its reader never chose;
 /// - **a change to the same tab's text** (classes A and B): an edit in split mode, an
 ///   external reload. `TabState::text_generation` moves on every change to the editor
-///   buffer — a reload writes the buffer too — so a reference whose generation is no
-///   longer current was resolved against text that is gone.
+///   buffer — a reload writes the buffer too — so a stamp whose generation is no longer
+///   current was armed against text that is gone;
+/// - **a view-mode switch**: it rebuilds the preview and changes which text
+///   `previewed_cleaned` answers with, without moving the generation. `f` is handed the
+///   STAMPED mode, and the stamp matches only while that mode is still the tab's, so
+///   every body renders and reads in the mode its reference was resolved in — one rule
+///   for every caller, rather than some capturing the mode and some re-reading it.
+///
+/// **What the stamp proves, and what it does not.** It proves the editor text and the
+/// view mode did not change between ARMING and RUNNING. It does not prove the reference
+/// was resolved against that text: in split mode a caller that resolved it from the
+/// PREVIEW render (the outline's heading index and fold chain, find's resume offset)
+/// read a render that trails the editor by the live-preview debounce, so a reference
+/// armed inside that window was already behind the editor when it was stamped. That lag
+/// is the caller's, it predates the deferral, and it is not closed here.
 ///
 /// Either way the work is DROPPED, not re-aimed: the caller resolved its reference at
 /// the event, from what the reader was looking at, and nothing here can re-derive what
 /// they meant. Each caller defers the state change itself (the fold expansion, the fold
 /// toggle) into `f`, so a dropped deferral leaves the fold model agreeing with the
-/// render the reader still sees. The disclosure toggle used to bind nothing but the
-/// window, and after a tab switch spliced one document's fold key into the other.
+/// render the reader still sees. What the gesture changed before it was armed — a
+/// toggle button's `active`, which GTK flips before emitting `toggled` — is the
+/// caller's to put back, and `on_drop` is where it does.
 ///
 /// **The window capture is WEAK.** POLICY's "widget-owned closures capture weakly" rule
 /// (GTK4Rs/AP-63): these deferrals are armed from inside a widget's own signal handler,
@@ -51,30 +64,36 @@ use crate::fold::FoldKey;
 pub(crate) fn defer_with_tab(
     window: &ApplicationWindow,
     st: &TabState,
-    f: impl FnOnce(&ApplicationWindow, &Rc<TabState>) + 'static,
+    f: impl FnOnce(&ApplicationWindow, &Rc<TabState>, ViewMode) + 'static,
+    on_drop: impl FnOnce() + 'static,
 ) {
     let win = window.downgrade();
     let stamp = TabStamp::of(st);
     glib::idle_add_local_once(move || {
-        let Some(window) = win.upgrade() else { return };
-        let Some(st) = state(&window) else { return };
-        if !stamp.still_describes(&st) {
+        let current = win
+            .upgrade()
+            .and_then(|window| state(&window).map(|st| (window, st)))
+            .filter(|(_, st)| stamp.still_describes(st));
+        let Some((window, st)) = current else {
             log::debug!(
-                "window::foldreveal: tab {} changed or lost focus before its deferred \
-                 fold work ran; dropped",
+                "window::foldreveal: tab {} changed, lost focus or changed view mode \
+                 before its deferred fold work ran; dropped",
                 stamp.tab
             );
+            on_drop();
             return;
-        }
-        f(&window, &st);
+        };
+        f(&window, &st, stamp.mode);
     });
 }
 
-/// Which document, at which revision, a deferral was armed against.
+/// Which document, at which revision and in which view mode, a deferral was armed
+/// against.
 #[derive(Clone, Copy)]
 struct TabStamp {
     tab: crate::winstate::TabId,
     generation: u64,
+    mode: ViewMode,
 }
 
 impl TabStamp {
@@ -82,12 +101,16 @@ impl TabStamp {
         Self {
             tab: st.id,
             generation: st.text_generation.get(),
+            mode: st.view_mode.get(),
         }
     }
 
-    /// `active` is the same tab, and its text has not changed since the stamp.
+    /// `active` is the same tab, in the same view mode, and its text has not changed
+    /// since the stamp.
     fn still_describes(self, active: &TabState) -> bool {
-        active.id == self.tab && active.text_generation.get() == self.generation
+        active.id == self.tab
+            && active.text_generation.get() == self.generation
+            && active.view_mode.get() == self.mode
     }
 }
 
@@ -95,12 +118,14 @@ impl TabStamp {
 /// the window and the tab — with the new render in place, so `after` may read buffer
 /// offsets that only exist once the block is open.
 ///
-/// **Bound to the tab that is active NOW, at its text as it stands NOW**
-/// ([`defer_with_tab`]). The chain, the heading index and the resume offset `after`
-/// carries were all resolved against this document's current text, so the fold
+/// **Bound to the tab that is active NOW, at its editor text and view mode as they
+/// stand NOW** ([`defer_with_tab`]). The chain, the heading index and the resume offset
+/// `after` carries were resolved by the caller from this document — in split mode from
+/// its preview render, which can trail the editor by the live-preview debounce, a lag
+/// the stamp does not see ([`defer_with_tab`] says what it does prove). The fold
 /// expansion waits in the idle with the re-render, and if another tab is active by
-/// then, or this one's text has changed, the whole reveal is dropped: nothing
-/// expanded, nothing re-rendered, `after` not run. The navigation was overtaken, and
+/// then, or this one's text or view mode has changed, the whole reveal is dropped:
+/// nothing expanded, nothing re-rendered, `after` not run. The navigation was overtaken, and
 /// the tab it was for is left exactly as the reader saw it, its fold model still
 /// agreeing with its render.
 ///
@@ -131,17 +156,22 @@ pub(crate) fn reveal_folds(
         return;
     }
     let chain = chain.to_vec();
-    defer_with_tab(window, &st, move |window, st| {
-        expand_chain(st, &chain);
-        let mode = st.view_mode.get();
-        crate::window::rerender_preview_in_place(window, mode, RenderShape::ChangedContent);
-        after(window, st);
-    });
+    defer_with_tab(
+        window,
+        &st,
+        move |window, st, mode| {
+            expand_chain(st, mode, &chain);
+            crate::window::rerender_preview_in_place(window, mode, RenderShape::ChangedContent);
+            after(window, st);
+        },
+        // Nothing to put back: a reveal changes nothing before its idle.
+        || {},
+    );
 }
 
 /// Expand every fold in `chain` in `st`'s fold model, logging any key that names no
 /// disclosure in the source.
-fn expand_chain(st: &TabState, chain: &[FoldKey]) {
+fn expand_chain(st: &TabState, mode: ViewMode, chain: &[FoldKey]) {
     // `set_collapsed(.., false)`, never `toggle`. This function's NAME is the
     // postcondition — every key in `chain` is expanded when it returns — and a
     // toggle only delivers that while every key really is collapsed, an invariant
@@ -161,7 +191,7 @@ fn expand_chain(st: &TabState, chain: &[FoldKey]) {
     // walked — CriticMarkup extracted. On a document with an annotation above a
     // disclosure the two disagree, the lookup below found no span, and the
     // diverged-key fallback flipped the fold instead of expanding it (F-SEC-209).
-    let md = st.previewed_cleaned(st.view_mode.get());
+    let md = st.previewed_cleaned(mode);
     let spans = crate::renderer::disclosure::scan_document(
         &md,
         crate::renderer::frontmatter::Show::AsDisclosure,
@@ -292,8 +322,11 @@ mod gtk_integration_tests {
     /// already been toggled at the click, disagreeing with A's untouched render. B
     /// holds a block at the same offset, so a key applied there opens it. The control
     /// at the end clicks again on A, so the test cannot pass on a toggle that no longer
-    /// does anything. Mutation: binding the toggle's idle to the window alone fails on
-    /// B; toggling the fold model at the click fails on A's model.
+    /// does anything. GTK flips `active` before `toggled`, and a switch rebuilds none
+    /// of A's controls, so the dropped click must also put A's `active` back or the
+    /// control disagrees with the fold model it shows. Mutation: binding the toggle's
+    /// idle to the window alone fails on B; toggling the fold model at the click fails
+    /// on A's model; a no-op restore on the drop fails on A's `active`.
     #[gtktest::test]
     fn a_tab_switch_before_a_disclosure_toggle_runs_drops_it() {
         let app = test_app("com.extollit.scribobulate.integrationtest.foldtoggletab");
@@ -307,7 +340,8 @@ mod gtk_integration_tests {
         let toggle = first_control(&tab_a);
 
         // The click, then the switch, in one turn: the toggle's idle has not run.
-        toggle.set_active(!toggle.is_active());
+        let shown = toggle.is_active();
+        toggle.set_active(!shown);
         let tab_b_id =
             crate::window::create_tab_in_window(&window, &md_b, None, false, false).expect("tab B");
         assert_eq!(
@@ -334,6 +368,11 @@ mod gtk_integration_tests {
             tab_a.folds.borrow().is_collapsed(key_of(&md_a), false),
             "the dropped toggle left A's fold model agreeing with A's render"
         );
+        assert_eq!(
+            toggle.is_active(),
+            shown,
+            "the dropped click left A's control `active` against the fold model it shows"
+        );
 
         // Back on A, a click on the control acts.
         let chrome = crate::winstate::chrome(&window).expect("chrome");
@@ -346,12 +385,76 @@ mod gtk_integration_tests {
             "the dropped toggle left A's block as the reader saw it"
         );
         let toggle = first_control(&tab_a);
+        assert_eq!(
+            toggle.is_active(),
+            shown,
+            "precondition: the control back on A still shows the collapsed block"
+        );
         toggle.set_active(!toggle.is_active());
         until(
             Clock::Idle,
             "the click on the active tab to open the block",
             || preview_text(&window).contains("SecretA"),
         );
+
+        window.destroy();
+    }
+
+    /// **A view-mode switch between scheduling a reveal and its idle drops the reveal.**
+    ///
+    /// The switch rebuilds the preview and changes which text `previewed_cleaned`
+    /// answers with, but moves no editor text, so a stamp of tab and generation alone
+    /// let the reveal run against a pane its references were not resolved in. The
+    /// control re-arms in the new mode, so the test cannot pass on a reveal that no
+    /// longer does anything. Mutation: dropping the mode half of
+    /// `TabStamp::still_describes` fails here.
+    #[gtktest::test]
+    fn a_view_mode_switch_before_the_reveal_runs_drops_it() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.foldrevealmode");
+        let md = doc("Mode", "ModeSecret");
+        let window = crate::window::new_window(&app, "IT-FOLDMODE", &md, None);
+        until(Clock::Idle, "the first render", || {
+            preview_text(&window).contains("Mode")
+        });
+        let st = state(&window).expect("state");
+        let generation = st.text_generation.get();
+        let mode = st.view_mode.get();
+
+        let ran = Rc::new(Cell::new(false));
+        reveal_folds(&window, &[key_of(&md)], {
+            let ran = ran.clone();
+            move |_, _| ran.set(true)
+        });
+        change_action_state(&window, "view-mode", &"split".to_variant());
+        assert_ne!(
+            st.view_mode.get(),
+            mode,
+            "precondition: the switch took before the reveal's idle"
+        );
+        assert_eq!(
+            st.text_generation.get(),
+            generation,
+            "precondition: the switch moved no text, so only the mode can drop the reveal"
+        );
+        drain_for(Clock::Idle, Duration::from_millis(500));
+
+        assert!(
+            !ran.get(),
+            "the follow-up of a reveal armed in one view mode ran in another"
+        );
+        assert!(
+            st.folds.borrow().is_collapsed(key_of(&md), false),
+            "the dropped reveal left the fold model agreeing with the render"
+        );
+
+        // Armed in the mode now on screen, the same reveal opens the block.
+        reveal_folds(&window, &[key_of(&md)], {
+            let ran = ran.clone();
+            move |_, _| ran.set(true)
+        });
+        until(Clock::Idle, "a reveal armed in the current mode", || {
+            ran.get() && preview_text(&window).contains("ModeSecret")
+        });
 
         window.destroy();
     }

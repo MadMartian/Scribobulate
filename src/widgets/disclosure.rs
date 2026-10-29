@@ -130,7 +130,9 @@ pub(crate) fn build(expanded: bool, zoom: f64, summary: &str) -> gtk::ToggleButt
 /// handler splices the document — so a refresh that also wrote `active` would be a
 /// re-entrant toggle, and the one call site that needs this is running *inside* the
 /// consequences of a toggle. `active` is already correct there: it is what the user's
-/// click set, and the fold state was derived from it.
+/// click set, and the fold state was derived from it. A click whose deferred toggle was
+/// DROPPED never reaches here, and [`ActiveSync::restore`] puts its `active` back to
+/// what the control shows, so the invariant holds on that route too.
 ///
 /// # Why this exists, and why its absence used to be correct
 ///
@@ -160,6 +162,66 @@ pub(crate) fn set_expanded(toggle: &gtk::ToggleButton, expanded: bool, zoom: f64
     // ACCESSIBLE_STATE_EXPANDED updated on every toggle), so this maps cleanly onto a
     // role GTK already has rather than inventing one.
     toggle.update_state(&[gtk::accessible::State::Expanded(Some(expanded))]);
+}
+
+/// What a control's `toggled` handler shares with the deferred toggle it arms: its own
+/// handler id, and the state the control SHOWS (the indicator, the accessible state, and
+/// the fold model behind them).
+///
+/// **Why `active` can disagree with what is shown.** GTK flips a `GtkToggleButton`'s
+/// `active` BEFORE it emits `toggled`, and the handler only arms an idle
+/// (`window::defer_with_tab`). When that idle is dropped — a tab switch, an edit, a
+/// reload, a mode switch got in first — the fold model and the indicator were never
+/// touched, and `active` alone says the block is in the other state. A reveal-style
+/// "the next render rebuilds the control" does not cover it: a tab switch rebuilds
+/// nothing, so on return the control is the same widget, still flipped.
+///
+/// `shown` is tracked rather than re-derived from the fold model because the model
+/// answers only with the block's `open` attribute, which the control does not carry;
+/// it starts at the `active` the control was built with (which [`build`] derives from
+/// the model) and flips exactly when a deferred toggle lands, which is when the model
+/// flips. Two clicks dropped together therefore restore to the state before the FIRST,
+/// which re-reading `active` at each click would get wrong.
+pub(crate) struct ActiveSync {
+    handler: std::cell::RefCell<Option<gtk::glib::SignalHandlerId>>,
+    shown: std::cell::Cell<bool>,
+}
+
+impl ActiveSync {
+    /// For a control about to be connected, showing what it was built with.
+    pub(crate) fn new(toggle: &gtk::ToggleButton) -> std::rc::Rc<Self> {
+        std::rc::Rc::new(Self {
+            handler: std::cell::RefCell::new(None),
+            shown: std::cell::Cell::new(toggle.is_active()),
+        })
+    }
+
+    /// Record the `toggled` handler [`Self::restore`] must block.
+    pub(crate) fn armed(&self, handler: gtk::glib::SignalHandlerId) {
+        *self.handler.borrow_mut() = Some(handler);
+    }
+
+    /// A deferred toggle landed: the fold model flipped, and so has what is shown.
+    pub(crate) fn landed(&self) {
+        self.shown.set(!self.shown.get());
+    }
+
+    /// A deferred toggle was dropped: put `active` back to what the control shows,
+    /// with `toggled` BLOCKED — the handler would otherwise read the restore as a click
+    /// and arm a toggle of its own.
+    pub(crate) fn restore(&self, toggle: &gtk::ToggleButton) {
+        let shown = self.shown.get();
+        if toggle.is_active() == shown {
+            return;
+        }
+        let handler = self.handler.borrow();
+        let Some(handler) = handler.as_ref() else {
+            return;
+        };
+        toggle.block_signal(handler);
+        toggle.set_active(shown);
+        toggle.unblock_signal(handler);
+    }
 }
 
 /// The control's indicator: a themed sprite, else a themed glyph, else the stock icon.
