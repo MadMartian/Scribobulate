@@ -1370,6 +1370,16 @@ mod disclosure_reveal_tests {
             0.0,
             "B's preview was scrolled by an outline activation made in tab A"
         );
+        // The half of the contract the deferral exists for: the dropped reveal expanded
+        // nothing in A's fold model either, so the model still agrees with the render
+        // A's reader saw. Mutation: expanding the chain before the idle fails here.
+        let key = crate::fold::FoldKey::from_source_offset(
+            MD.find("<details>").expect("the fixture's disclosure"),
+        );
+        assert!(
+            tab_a.folds.borrow().is_collapsed(key, false),
+            "the dropped reveal left A's block collapsed in A's fold model"
+        );
 
         // Back on A, the same reveal still opens the block.
         let chrome = crate::winstate::chrome(&window).expect("chrome");

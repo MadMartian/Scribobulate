@@ -1390,7 +1390,7 @@ fn connect_disclosure_toggle(view: &CodePreviewView, toggle: &gtk::ToggleButton)
                      document as it now stands; re-rendering the pane so the next \
                      click acts"
                 );
-                crate::window::defer_with_window(&window, move |window| {
+                crate::window::defer_with_tab(&window, &st, move |window, _| {
                     crate::window::rerender_preview_in_place(
                         window,
                         mode,
@@ -1399,12 +1399,15 @@ fn connect_disclosure_toggle(view: &CodePreviewView, toggle: &gtk::ToggleButton)
                 });
                 return;
             };
-            st.folds.borrow_mut().toggle(key);
-            // Through the shared deferral, which holds the window WEAKLY — a strong
-            // capture here kept the whole window tree alive for as long as the idle was
-            // pending (POLICY "widget-owned closures capture weakly", GTK4Rs/AP-63), and its
-            // sibling in `foldreveal` had always done it correctly.
-            crate::window::defer_with_window(&window, move |window| {
+            // Through the shared deferral, bound to THIS tab at THIS text: `key` was
+            // resolved against the text the pane shows now, and a tab switch or an edit
+            // dispatched before the idle would otherwise have it toggled and spliced
+            // into a document it does not index. The fold toggle waits in the idle with
+            // the splice for the same reason `reveal_folds`' expansion does — a dropped
+            // deferral must leave the fold model agreeing with the render on screen,
+            // which a toggle applied here and a splice dropped there would not.
+            crate::window::defer_with_tab(&window, &st, move |window, st| {
+                st.folds.borrow_mut().toggle(key);
                 // Anything but a landed splice falls back to a full re-render — which
                 // for `RegionLost` is not a nicety but the repair: the region has
                 // already been deleted from the live buffer.

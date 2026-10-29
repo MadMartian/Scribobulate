@@ -50,15 +50,19 @@ is_macho() {
     case "$out" in *Mach-O*) return 0 ;; *) return 1 ;; esac
 }
 
-# Every Mach-O under bundle $1, one per line.
+# Every Mach-O under directory $1, one per line. NONE AT ALL IS A FAILURE (2), decided
+# here once rather than by each caller: every directory this packaging walks holds the
+# binaries it ships, so an empty answer is a misread or a broken bundle, never a clean one.
 bundle_machos() {
-    local f rc list
+    local f rc list out=""
     list="$(find "$1" -type f)" || { echo "rpath.sh: find failed under $1" >&2; return 2; }
     [ -n "$list" ] || { echo "rpath.sh: no files under $1" >&2; return 2; }
     while IFS= read -r f; do
         rc=0; is_macho "$f" || rc=$?
-        case "$rc" in 0) printf '%s\n' "$f" ;; 1) ;; *) return 2 ;; esac
+        case "$rc" in 0) out="$out$f"$'\n' ;; 1) ;; *) return 2 ;; esac
     done <<< "$list"
+    [ -n "$out" ] || { echo "rpath.sh: no Mach-O files under $1" >&2; return 2; }
+    printf '%s' "$out"
 }
 
 # `otool -l` of Mach-O $1, refused unless it lists at least one load command.
@@ -234,4 +238,15 @@ exe_rpath_control() {
         echo "rpath.sh: the executable does not report @executable_path/../Frameworks, so this read of the bundle cannot be trusted" >&2
         return 2
     }
+}
+
+# --- self-test support --------------------------------------------------------------
+#
+# A stand-in for tool $2, in directory $1, running shell body $3. A self-test puts $1
+# first on PATH to make a tool crash or answer nothing, the cases a fail-closed reader
+# exists for and a real tool will not produce on demand.
+stub_tool() {
+    mkdir -p "$1"
+    printf '#!/bin/sh\n%s\n' "$3" > "$1/$2"
+    chmod +x "$1/$2"
 }

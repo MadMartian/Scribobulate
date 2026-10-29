@@ -71,6 +71,7 @@ const SCAN_BUDGET: usize = 4 * crate::limits::MAX_LOCAL_IMAGE_BYTES as usize;
 const SPLICE_BUDGET: usize = SCAN_BUDGET;
 
 const GZIP_MAGIC: &[u8] = &[0x1f, 0x8b];
+const FORM_FEED: u8 = 0x0C;
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
 /// The first four bytes by which libxml2 recognises a UCS-4 or EBCDIC document — the
@@ -243,10 +244,7 @@ fn inspect_layer(
             inspect_at(tail, depth + 1, budget)
         };
     }
-    if bytes
-        .get(..4)
-        .is_some_and(|head| UNREADABLE_SIGNATURES.iter().any(|sig| head == sig))
-    {
+    if starts_by_signature(bytes) {
         return Err(Reason::Encoding);
     }
     let body = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
@@ -311,14 +309,15 @@ fn utf16_chars(bytes: &[u8], big_endian: bool) -> impl Iterator<Item = char> + '
 
 /// Reduce text to what a parser would see, for searching: ASCII kept, everything else
 /// [`NON_ASCII`]; XML character and predefined-entity references expanded; CSS escapes
-/// expanded; tabs and newlines dropped, as a URL parser drops them.
+/// expanded; tabs, newlines and form feeds dropped, as a URL parser drops the first two
+/// and CSS reads the third as a newline (dropping more can only find more).
 fn normalise(chars: impl Iterator<Item = char>) -> Vec<u8> {
     let ascii: Vec<u8> = chars
         .map(|c| if c.is_ascii() { c as u8 } else { NON_ASCII })
         .collect();
     let mut text = expand_xml_references(&ascii);
     text = expand_css_escapes(&text);
-    text.retain(|b| !matches!(b, b'\t' | b'\n' | b'\r'));
+    text.retain(|&b| !matches!(b, b'\t' | b'\n' | b'\r' | FORM_FEED));
     text
 }
 
@@ -381,8 +380,10 @@ fn char_reference(rest: &[u8]) -> Option<(u8, usize)> {
     }
 }
 
-/// CSS escapes: `\` + up to six hex digits (+ one optional space), or `\` + any other
-/// character, which stands for itself.
+/// CSS escapes as CSS Syntax 3 reads them: `\` + up to six hex digits, then one
+/// whitespace eaten (space, tab, line feed, carriage return, form feed, or CR LF);
+/// `\` + a newline or form feed (an escaped newline in a string) stands for nothing; `\`
+/// + any other character stands for itself.
 fn expand_css_escapes(text: &[u8]) -> Vec<u8> {
     const MAX_HEX: usize = 6;
     let mut out = Vec::with_capacity(text.len());
@@ -400,15 +401,24 @@ fn expand_css_escapes(text: &[u8]) -> Vec<u8> {
             .take_while(|b| b.is_ascii_hexdigit())
             .count();
         if hex == 0 {
-            out.push(rest[0]);
-            i += 2;
+            match rest {
+                [b'\r', b'\n', ..] => i += 3,
+                [b'\n' | b'\r' | FORM_FEED, ..] => i += 2,
+                [other, ..] => {
+                    out.push(*other);
+                    i += 2;
+                }
+                [] => unreachable!("a `\\` that ends the text is pushed above"),
+            }
             continue;
         }
         let digits = std::str::from_utf8(&rest[..hex]).unwrap_or("0");
         out.push(u32::from_str_radix(digits, 16).map_or(NON_ASCII, code_point_byte));
         i += 1 + hex;
-        if text.get(i) == Some(&b' ') {
-            i += 1;
+        match &text[i..] {
+            [b'\r', b'\n', ..] => i += 2,
+            [b' ' | b'\t' | b'\n' | b'\r' | FORM_FEED, ..] => i += 1,
+            _ => {}
         }
     }
     out
@@ -421,10 +431,14 @@ fn inspect_text(
     splice: Splice,
 ) -> Result<(), Reason> {
     check_patterns(text, budget)?;
+    if let Some(joined) = without_joining_markup(text) {
+        budget.charge(joined.len())?;
+        inspect_text(&joined, depth, budget, splice)?;
+    }
     let starts = delimited_starts(text, data_uri_starts(text));
     for (i, &at) in starts.iter().enumerate() {
         let end = starts.get(i + 1).copied().unwrap_or(text.len());
-        for reading in data_uri_payload(&text[at + DATA_SCHEME.len()..end])? {
+        for reading in data_uri_payload(&text[at + DATA_SCHEME.len()..end], budget)? {
             match reading {
                 Payload::Base64(decoded) => inspect_at(&decoded, depth + 1, budget)?,
                 Payload::Percent(decoded) => inspect_every_decoding(decoded, depth, budget)?,
@@ -435,6 +449,48 @@ fn inspect_text(
         screen_spliced(&text[first + DATA_SCHEME.len()..], depth, budget)?;
     }
     Ok(())
+}
+
+/// The text as an element's character data reaches the decoder: the XML parser drops
+/// comments and processing instructions and unwraps CDATA sections, so the text on
+/// either side of one is a single run (`url(data:…;base64,AAAA<!---->BBBB)` is one
+/// URI to librsvg's stylesheet). `None` unless some such markup has text on both sides
+/// that is not a tag's edge (a non-space byte before it other than `>`, after it other
+/// than `<`), so an honest page, whose comments and declarations sit between tags, is
+/// not read twice. Every piece is dropped when one joins, unterminated ones to the end,
+/// and expanded references can turn literal text into markup here: both only make the
+/// extra reading refuse more. Each piece is passed over once, so this is linear.
+fn without_joining_markup(text: &[u8]) -> Option<Vec<u8>> {
+    const PIECES: &[(&[u8], &[u8])] = &[
+        (b"<!--", b"-->"),
+        (b"<?", b"?>"),
+        (b"<![CDATA[", b""),
+        (b"]]>", b""),
+    ];
+    let mut out = Vec::with_capacity(text.len());
+    let mut last_text: Option<u8> = None;
+    let mut joins = false;
+    let mut i = 0;
+    while i < text.len() {
+        let piece = PIECES.iter().find(|(open, _)| text[i..].starts_with(open));
+        let Some(&(open, close)) = piece else {
+            if !text[i].is_ascii_whitespace() {
+                last_text = Some(text[i]);
+            }
+            out.push(text[i]);
+            i += 1;
+            continue;
+        };
+        let end = if close.is_empty() {
+            i + open.len()
+        } else {
+            find_ci(text, close, i + open.len()).map_or(text.len(), |at| at + close.len())
+        };
+        let next = text[end..].iter().find(|b| !b.is_ascii_whitespace());
+        joins |= last_text.is_some_and(|b| b != b'>') && next.is_some_and(|&b| b != b'<');
+        i = end;
+    }
+    joins.then_some(out)
 }
 
 /// What a real decoder makes of one decoded `data:` payload on the way to the next: the
@@ -701,7 +757,7 @@ fn trim_start(bytes: &[u8]) -> &[u8] {
 /// taken to run to the end of `rest`, past any quote, since the quote may belong to the
 /// nested document rather than close the attribute — and screening more text than the
 /// URI holds can only refuse more.
-fn data_uri_payload(rest: &[u8]) -> Result<Vec<Payload>, Reason> {
+fn data_uri_payload(rest: &[u8], budget: &mut Budget) -> Result<Vec<Payload>, Reason> {
     let comma = rest
         .iter()
         .position(|&b| b == b',')
@@ -713,20 +769,48 @@ fn data_uri_payload(rest: &[u8]) -> Result<Vec<Payload>, Reason> {
     // one (`\2c`, or `&#92;2c`, which the XML parser turns into `\2c`) where the
     // decoder, which ends the header at the first LITERAL comma, sees none. The decoder
     // may then end the header at any later comma, and read a base64 body there if what
-    // precedes it ends in its base64 rule. So every such later comma gets a base64
-    // reading too. A percent reading at a later comma needs nothing extra: the percent
-    // reading of the first cut already covers every byte after it.
+    // precedes it ends in its base64 rule. That rule asks for a `;`, which this
+    // normalised text may hold where the decoder's does not, and lack where the
+    // decoder's holds one (an `&amp;` the decoder's context leaves unexpanded ends in
+    // `;`). So every later comma that `base64` precedes, however it is introduced, gets
+    // a base64 reading too. The percent reading of the first cut holds every byte after a later
+    // comma, so as TEXT it is screened already, but not as a payload that STARTS there:
+    // gzip and the unreadable encodings are recognised by their first bytes, and behind
+    // the bytes before the comma neither is seen. So a later comma whose percent-decoded
+    // payload begins with one gets a percent reading of its own. Only its first bytes are
+    // decoded to ask, so asking every comma stays linear, and a reading is charged before
+    // it is built, so a text of many such commas refuses rather than grow quadratically.
     for (at, _) in rest
         .iter()
         .enumerate()
         .skip(comma + 1)
         .filter(|&(_, &b)| b == b',')
     {
-        if ends_in_base64_rule(&rest[..at]) {
-            readings.extend(base64_reading(&rest[at + 1..]).map(Payload::Base64));
+        let tail = &rest[at + 1..];
+        if ends_in_base64_word(&rest[..at]) {
+            readings.extend(base64_reading(tail).map(Payload::Base64));
+        }
+        if starts_by_signature(&percent_decode(
+            &tail[..tail.len().min(SIGNATURE_RAW_BYTES)],
+        )) {
+            budget.charge(tail.len())?;
+            readings.push(Payload::Percent(percent_decode(tail)));
         }
     }
     Ok(readings)
+}
+
+/// The most raw bytes the longest start signature ([`UNREADABLE_SIGNATURES`]) can take
+/// to write percent-encoded: three per byte.
+const SIGNATURE_RAW_BYTES: usize = 3 * 4;
+
+/// Whether `bytes` begins with what [`inspect_layer`] recognises by a document's first
+/// bytes alone: gzip, or an encoding this screen does not decode.
+fn starts_by_signature(bytes: &[u8]) -> bool {
+    bytes.starts_with(GZIP_MAGIC)
+        || bytes
+            .get(..4)
+            .is_some_and(|head| UNREADABLE_SIGNATURES.iter().any(|sig| head == sig))
 }
 
 /// The base64 body that starts `body`, decoded. The scan admits all the whitespace
@@ -741,6 +825,15 @@ fn base64_reading(body: &[u8]) -> Option<Vec<u8>> {
         })
         .count();
     base64_decode(&percent_decode(&body[..len]))
+}
+
+/// Whether `prefix`, trailing whitespace trimmed, ends in `base64` in any case: a
+/// superset of the decoder's rule ([`ends_in_base64_rule`]), in constant time.
+fn ends_in_base64_word(prefix: &[u8]) -> bool {
+    let h = prefix.trim_ascii_end();
+    h.len()
+        .checked_sub(b"base64".len())
+        .is_some_and(|cut| h[cut..].eq_ignore_ascii_case(b"base64"))
 }
 
 /// The decoder's base64 rule (see [`decoder_reads_base64`]) tested on the END of
@@ -765,6 +858,10 @@ fn ends_in_base64_rule(header: &[u8]) -> bool {
 fn inert_prefix(body: &[u8]) -> usize {
     /// Longer than any word the checks search for, so one straddling the cut is kept.
     const STRADDLE: usize = 16;
+    #[cfg(test)]
+    if NO_INERT_PREFIX.with(std::cell::Cell::get) {
+        return 0;
+    }
     let run = body
         .iter()
         .take_while(|b| {
@@ -832,13 +929,18 @@ fn first_cut_readings(
 fn header_encoding(header: &[u8]) -> HeaderEncoding {
     if decoder_reads_base64(header) {
         HeaderEncoding::Base64
-    } else if find_ci(header, b"base", 0).is_some()
-        || header.iter().any(|b| matches!(b, b'%' | b'\\' | b'&'))
-    {
+    } else if spells_base(header) || header.iter().any(|b| matches!(b, b'%' | b'\\' | b'&')) {
         HeaderEncoding::Either
     } else {
         HeaderEncoding::Percent
     }
+}
+
+/// Whether `header` holds `base` once every control byte and space is removed, so no
+/// whitespace a decoder might drop (a form feed in CSS, say) can split the word.
+fn spells_base(header: &[u8]) -> bool {
+    let kept: Vec<u8> = header.iter().copied().filter(|&b| b > b' ').collect();
+    find_ci(&kept, b"base", 0).is_some()
 }
 
 /// The WHATWG `data:` rule for a base64 body, on the header exactly as the decoder
@@ -944,6 +1046,12 @@ fn find_ci(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
         hay[i].to_ascii_lowercase() == first
             && hay[i..i + needle.len()].eq_ignore_ascii_case(needle)
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Lets a test measure what an honest raster would cost without [`inert_prefix`].
+    static NO_INERT_PREFIX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]

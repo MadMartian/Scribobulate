@@ -122,9 +122,7 @@ self_test() {
             echo "   FAILED $*${stubs:+ (${stubs##*/})} (expected $want, got $rc)"; failures=$((failures + 1))
         fi
     }
-    stub() {  # $1 = case dir, $2 = tool, $3 = body
-        mkdir -p "$tmp/$1"; printf '#!/bin/sh\n%s\n' "$3" > "$tmp/$1/$2"; chmod +x "$tmp/$1/$2"
-    }
+    stub() { stub_tool "$tmp/$1" "$2" "$3"; }  # $1 = case dir, $2 = tool, $3 = body
     stub otool-crashes otool 'exit 1'
     stub otool-headers-only otool 'eval "last=\${$#}"; echo "$last:"'
     stub otool-no-id otool 'eval "last=\${$#}"; case "$3" in -D) echo "$last:" ;; *) exec /usr/bin/otool "$@" ;; esac'
@@ -135,6 +133,8 @@ self_test() {
     reader "" 0 rpaths_of /bin/ls
     reader "" 0 is_macho /bin/ls
     reader "" 1 is_macho "$tmp/not-macho"
+    mkdir -p "$tmp/no-machos"; printf 'text\n' > "$tmp/no-machos/readme"
+    reader "" 2 bundle_machos "$tmp/no-machos"    # files, none Mach-O: never a clean answer
     reader "" 0 install_id /usr/lib/libgmalloc.dylib
     reader "" 0 install_id /bin/ls          # an executable has no ID, and that is an answer
     if [ "$(install_id /usr/lib/libgmalloc.dylib)" = /usr/lib/libgmalloc.dylib ]; then

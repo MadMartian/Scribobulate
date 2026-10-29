@@ -30,15 +30,79 @@
 # plain launch, and the reason TDD 26.3 makes the control's own falsifiability a rubric.
 #
 # Usage: packaging/macos/verify-selfcontained.sh <path-to-.app>
+#        packaging/macos/verify-selfcontained.sh --self-test
 set -euo pipefail
 
-APP="${1:?usage: verify-selfcontained.sh <path-to-.app>}"
-[ -d "$APP" ] || { echo "error: no bundle at $APP" >&2; exit 1; }
+APP="${1:?usage: verify-selfcontained.sh <path-to-.app> | --self-test}"
 [ "$(uname -s)" = "Darwin" ] || { echo "error: macOS only" >&2; exit 1; }
 
 # shellcheck source=rpath.sh
 . "$(dirname "${BASH_SOURCE[0]}")/rpath.sh"
 
+# The findings for Mach-O $2 of bundle $1, one line each; returns 2 when any reader fails,
+# so a file that could not be read is never a file with nothing wrong with it.
+object_findings() {
+    local app="$1" obj="$2" name id why deps dep esc rp
+    name="$(basename "$obj")"
+    # The install ID, which is the half a launch test cannot see.
+    id="$(install_id "$obj")" || return 2
+    if [ -n "$id" ]; then
+        why="$(reference_problem "$app" "$obj" "$id")"
+        [ -z "$why" ] || echo "   EXTERNAL ID    $name: $id $why"
+    fi
+    deps="$(load_deps "$obj")" || return 2
+    while IFS= read -r dep; do
+        [ -n "$dep" ] || continue
+        why="$(reference_problem "$app" "$obj" "$dep")"
+        [ -z "$why" ] || echo "   EXTERNAL LOAD  $name: $dep $why"
+    done <<< "$deps"
+    # An rpath outside the bundle is searched BEFORE the executable's, so a file there
+    # replaces a staged library even though every load command above reads as internal.
+    esc="$(object_escaping_rpaths "$app" "$obj")" || return 2
+    while IFS= read -r rp; do
+        [ -n "$rp" ] || continue
+        echo "   ESCAPING RPATH $name: $rp"
+    done <<< "$esc"
+}
+
+# The fail-closed arms of object_findings, against stand-in tools: a reader that fails
+# must fail the object, not report it clean. ANTI-VACUITY first: real tools on an OS dylib
+# read cleanly and find nothing; a Homebrew dylib, where present, is found external.
+self_test() {
+    local tmp failures=0 rc out
+    tmp="$(mktemp -d)"
+    finds() {  # $1 = stub dir ("" = real tools), $2 = expected (clean|found|unreadable), $3 = obj
+        rc=0; out="$( [ -z "$1" ] || PATH="$1:$PATH"; object_findings "$tmp/S.app" "$3" 2>/dev/null )" || rc=$?
+        local got=clean
+        [ "$rc" -eq 0 ] || got=unreadable
+        [ "$rc" -ne 0 ] || [ -z "$out" ] || got=found
+        if [ "$got" = "$2" ]; then
+            echo "   ok    $3 is $2${1:+ (${1##*/})}"
+        else
+            echo "   FAILED $3${1:+ (${1##*/})} (expected $2, got $got)"; failures=$((failures + 1))
+        fi
+    }
+    stub_tool "$tmp/otool-crashes" otool 'exit 1'
+    stub_tool "$tmp/otool-no-id" otool 'eval "last=\${$#}"; case "$3" in -D) echo "$last:" ;; *) exec /usr/bin/otool "$@" ;; esac'
+    stub_tool "$tmp/otool-no-deps" otool 'eval "last=\${$#}"; case "$3" in -L) echo "$last:" ;; *) exec /usr/bin/otool "$@" ;; esac'
+    mkdir -p "$tmp/S.app/Contents/MacOS" "$tmp/S.app/Contents/Frameworks"
+    local os=/usr/lib/libgmalloc.dylib brew=/opt/homebrew/lib/libglib-2.0.0.dylib
+    finds "" clean "$os"
+    if [ -e "$brew" ]; then finds "" found "$brew"; else echo "   SKIPPED found case: no $brew"; fi
+    finds "$tmp/otool-crashes" unreadable "$os"
+    finds "$tmp/otool-no-id" unreadable "$os"
+    finds "$tmp/otool-no-deps" unreadable "$os"
+    rm -rf "$tmp"
+    [ "$failures" -eq 0 ] || { echo ":: self-test FAILED ($failures)"; return 1; }
+    echo ":: self-test passed"
+}
+
+if [ "$APP" = "--self-test" ]; then
+    self_test
+    exit $?
+fi
+
+[ -d "$APP" ] || { echo "error: no bundle at $APP" >&2; exit 1; }
 BIN="$APP/Contents/MacOS/scribobulate"
 [ -x "$BIN" ] || { echo "error: no executable at $BIN" >&2; exit 1; }
 
@@ -47,41 +111,16 @@ findings=0
 checked=0
 # Read through rpath.sh, which FAILS CLOSED: a tool that crashed or answered nothing stops
 # the gate here instead of reading as a bundle with nothing in it (its header has the two
-# ways that happened).
+# ways that happened). bundle_machos also refuses a bundle with no Mach-O files at all.
 exe_rpath_control "$APP" || { echo "   FAIL — the positive control failed; nothing below could be trusted" >&2; exit 1; }
 objs="$(bundle_machos "$APP")" || { echo "   FAIL — could not list the bundle's Mach-O files" >&2; exit 1; }
 while IFS= read -r obj; do
     [ -n "$obj" ] || continue
     checked=$((checked + 1))
-    name="$(basename "$obj")"
-    # The install ID, which is the half a launch test cannot see.
-    id="$(install_id "$obj")" || { echo "   FAIL — could not read $name" >&2; exit 1; }
-    if [ -n "$id" ]; then
-        why="$(reference_problem "$APP" "$obj" "$id")"
-        if [ -n "$why" ]; then
-            echo "   EXTERNAL ID    $name: $id $why"
-            findings=$((findings + 1))
-        fi
-    fi
-    deps="$(load_deps "$obj")" || { echo "   FAIL — could not read $name" >&2; exit 1; }
-    while IFS= read -r dep; do
-        [ -n "$dep" ] || continue
-        why="$(reference_problem "$APP" "$obj" "$dep")"
-        if [ -n "$why" ]; then
-            echo "   EXTERNAL LOAD  $name: $dep $why"
-            findings=$((findings + 1))
-        fi
-    done <<< "$deps"
-    # An rpath outside the bundle is searched BEFORE the executable's, so a file there
-    # replaces a staged library even though every load command above reads as internal.
-    esc="$(object_escaping_rpaths "$APP" "$obj")" || { echo "   FAIL — could not read $name" >&2; exit 1; }
-    while IFS= read -r rp; do
-        [ -n "$rp" ] || continue
-        echo "   ESCAPING RPATH $name: $rp"
-        findings=$((findings + 1))
-    done <<< "$esc"
+    found="$(object_findings "$APP" "$obj")" \
+        || { echo "   FAIL — could not read $(basename "$obj")" >&2; exit 1; }
+    [ -z "$found" ] || { printf '%s\n' "$found"; findings=$((findings + $(grep -c . <<< "$found"))); }
 done <<< "$objs"
-[ "$checked" -gt 0 ] || { echo "   FAIL — no Mach-O files found; nothing was checked" >&2; exit 1; }
 
 if [ "$findings" -ne 0 ]; then
     echo "   FAIL — $findings external reference(s) across $checked Mach-O files" >&2

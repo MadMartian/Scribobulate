@@ -2460,12 +2460,12 @@ mod gtk_integration_tests {
                     else {
                         panic!("{md:?}: a verbatim block is never wrapped");
                     };
-                    crate::annotate::insert_point_comment(md, &slot, &comment)
+                    crate::annotate::insert_landed_point(md, slot, &comment)
                 }
                 Some(crate::codeview::CreateAnnotation::Point { target, comment }) => {
                     let at = target.resolve(md).expect("the anchor is in the source").end;
                     let slot = crate::annotate::landing::for_point(md, at);
-                    crate::annotate::insert_point_comment(md, &slot, &comment)
+                    crate::annotate::insert_landed_point(md, slot, &comment)
                 }
                 None => panic!("{md:?}: a selection in the block captures"),
             };

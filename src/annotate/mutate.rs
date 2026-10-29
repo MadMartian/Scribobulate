@@ -108,14 +108,10 @@ pub(crate) fn point_comment_anchor(source: &str, at: usize) -> usize {
 
 /// Insert a point comment at `slot` in `source`: `slot.before`, `{>>comment<<}`,
 /// `slot.after`. A bare slot is the cross-block fallback (anchored at the selection
-/// END), and callers apply [`point_comment_anchor`] to it first, so the splice never
-/// lands inside an existing construct; a framed slot puts the comment on a line of its
+/// END), and its one caller, [`insert_landed_point`], applies [`point_comment_anchor`]
+/// to it first, so the splice never lands inside an existing construct; a framed slot puts the comment on a line of its
 /// own after a block it must not enter (TDD 17.59).
-pub(crate) fn insert_point_comment(
-    source: &str,
-    slot: &super::landing::Slot,
-    comment: &str,
-) -> String {
+fn insert_point_comment(source: &str, slot: &super::landing::Slot, comment: &str) -> String {
     // Total for the same reason as `insert_highlight_comment` above (P-6).
     let at = slot.at;
     let (Some(before), Some(after)) = (source.get(..at), source.get(at..)) else {
@@ -214,11 +210,11 @@ pub(crate) const COMMENT_JOIN: &str = " | ";
 /// The Highlight annotations whose content intersects the **cleaned-space** selection
 /// `sel_cs..sel_ce`.
 ///
-/// This is THE definition of "overlapping". It is shared by
-/// [`insert_or_extend_highlight`], which merges these annotations and drops their comments,
-/// and by [`merged_comment_for`], which pre-populates the comment card from them — so the
-/// entry showing the user what is about to be merged and the mutation doing the merging can
-/// never disagree. A second predicate written to match this one would be free to drift, and
+/// This is THE definition of "overlapping", and it opens the one merge decision
+/// ([`merge`]) shared by [`insert_or_extend_highlight`], which merges these annotations and
+/// drops their comments, and by [`merged_comment_for`], which pre-populates the comment
+/// card from them — so the entry showing the user what is about to be merged and the
+/// mutation doing the merging can never disagree. A second predicate written to match this one would be free to drift, and
 /// the disagreement would be silent and document-dependent.
 ///
 /// Half-open intersection: touching at an endpoint does not overlap.
@@ -242,22 +238,29 @@ pub(crate) fn intersecting_highlights(
 enum Merge<'a> {
     /// It intersects none: a highlight over the selection alone.
     Nothing,
-    /// It replaces `with` by one highlight over the cleaned `union` of their content and
-    /// the selection.
+    /// It replaces the ORIGINAL `region` by one highlight over the cleaned `union` of
+    /// the intersecting highlights' content and the selection. `absorbed` is every
+    /// construct the region holds, in source order: the intersecting highlights and any
+    /// point comment between them, whose comments the merged comment must carry.
     Union {
-        with: Vec<&'a super::Annotation>,
+        absorbed: Vec<&'a super::Annotation>,
         union: Range<CleanedByteOffset>,
+        region: Range<OriginalByteOffset>,
     },
-    /// The union holds a block break, which extraction would refuse (a line that held
-    /// only an annotation is blank once the annotation is cleaned away): the selection
-    /// is written as a point comment at its end instead, merging nothing. The rule is
-    /// the one the resolvers apply to the selection (`annotate::holds_block_break`),
-    /// applied here to the text actually written.
-    Crosses,
+    /// The union cannot be written as one highlight without losing something, so the
+    /// selection is written as a point comment at its end instead, merging nothing. It
+    /// holds a block break, which extraction would refuse (a line that held only an
+    /// annotation is blank once the annotation is cleaned away; the rule is the one the
+    /// resolvers apply to the selection, `annotate::holds_block_break`, applied here to
+    /// the text actually written). Or the region to replace holds a suggested edit, or
+    /// cuts into a construct it does not merge: the cleaned union keeps only the visible
+    /// text of those, so writing it over them would drop their markup.
+    Point,
 }
 
 /// THE merge decision, shared by [`insert_or_extend_highlight`] and
-/// [`merged_comment_for`] so the card never shows comments the mutation keeps.
+/// [`merged_comment_for`] so the card never shows comments the mutation keeps, and the
+/// mutation never drops a comment the card did not show.
 fn merge(
     ext: &super::scan::Extraction,
     sel_cs: CleanedByteOffset,
@@ -275,13 +278,59 @@ fn merge(
         .map(|a| a.cleaned_content.end)
         .fold(sel_ce, std::cmp::max);
     if with.is_empty() {
-        Merge::Nothing
-    } else if super::holds_block_break(&ext.cleaned[start.raw()..end.raw()]) {
-        Merge::Crosses
-    } else {
-        Merge::Union {
-            with,
-            union: start..end,
+        return Merge::Nothing;
+    }
+    if super::holds_block_break(&ext.cleaned[start.raw()..end.raw()]) {
+        return Merge::Point;
+    }
+    // The ORIGINAL region to replace: every intersecting construct, delimiters
+    // included, and the selection's plain-text extent beyond them. A cleaned offset
+    // where markup was cleaned away stands for both sides of that markup, so the start
+    // maps past it and the end maps before it: the region never takes in a construct
+    // that only touches the union.
+    let lo = with.iter().map(|a| a.src_span.start).fold(
+        super::cleaned_to_original(&ext.shifts, start),
+        std::cmp::min,
+    );
+    let hi = with
+        .iter()
+        .map(|a| a.src_span.end)
+        .fold(cleaned_to_original_before(&ext.shifts, end), std::cmp::max);
+    let mut absorbed = Vec::with_capacity(with.len());
+    for a in ext
+        .annotations
+        .iter()
+        .filter(|a| a.src_span.start < hi && lo < a.src_span.end)
+    {
+        let carried = with.iter().any(|w| std::ptr::eq(*w, a))
+            || (a.kind == super::AnnKind::Comment
+                && lo <= a.src_span.start
+                && a.src_span.end <= hi);
+        if !carried {
+            return Merge::Point;
+        }
+        absorbed.push(a);
+    }
+    Merge::Union {
+        absorbed,
+        union: start..end,
+        region: lo..hi,
+    }
+}
+
+/// [`super::cleaned_to_original`] biased to the END of the text before `cleaned_off`:
+/// where markup was cleaned away at `cleaned_off`, the original offset BEFORE that
+/// markup, not after it. Every other offset maps identically.
+fn cleaned_to_original_before(
+    shifts: &[(usize, usize)],
+    cleaned_off: CleanedByteOffset,
+) -> OriginalByteOffset {
+    let c = cleaned_off.raw();
+    match shifts.partition_point(|&(seg, _)| seg < c) {
+        0 => OriginalByteOffset::new(c),
+        i => {
+            let (seg, orig) = shifts[i - 1];
+            OriginalByteOffset::new(orig + (c - seg))
         }
     }
 }
@@ -290,14 +339,13 @@ fn merge(
 /// merge, joined in **source order** with [`COMMENT_JOIN`]; `None` when it would merge
 /// nothing.
 ///
-/// `insert_or_extend_highlight` replaces every intersecting construct —
-/// including its `{>>comment<<}` — with the union carrying the NEW comment, so those
-/// comments are destroyed. The mutation is right to do so (extend, don't nest); the defect
-/// was that the user never saw it coming. Pre-populating the card with exactly what is
-/// about to be overwritten turns a silent destructive merge into an explicit edit: the user
-/// sees the prior text, edits or prunes it, and what they see is what is written back.
-///
-/// `extract` yields annotations in document order, so the join is in source order.
+/// `insert_or_extend_highlight` replaces every construct the union region holds —
+/// intersecting highlights with their `{>>comment<<}`, and point comments between them —
+/// with the union carrying the NEW comment, so those comments are destroyed. The mutation
+/// is right to do so (extend, don't nest); the defect was that the user never saw it
+/// coming. Pre-populating the card with exactly what is about to be overwritten turns a
+/// silent destructive merge into an explicit edit: the user sees the prior text, edits or
+/// prunes it, and what they see is what is written back.
 pub(crate) fn merged_comment_for(source: &str, range: Range<usize>) -> Option<String> {
     // Asked of the range the highlight will actually be written over: one that lands
     // as a comment after a block merges nothing (TDD 17.59).
@@ -309,10 +357,10 @@ pub(crate) fn merged_comment_for(source: &str, range: Range<usize>) -> Option<St
     // merge, so it cannot be crossed with an original offset (the recurring bug class).
     let sel_cs = super::original_to_cleaned(&ext.shifts, OriginalByteOffset::new(range.start));
     let sel_ce = super::original_to_cleaned(&ext.shifts, OriginalByteOffset::new(range.end));
-    let Merge::Union { with, .. } = merge(&ext, sel_cs, sel_ce) else {
+    let Merge::Union { absorbed, .. } = merge(&ext, sel_cs, sel_ce) else {
         return None;
     };
-    let joined = with
+    let joined = absorbed
         .iter()
         .filter_map(|a| a.comment.as_deref())
         .map(str::trim)
@@ -330,18 +378,14 @@ pub(crate) fn merged_comment_for(source: &str, range: Range<usize>) -> Option<St
 /// nests). `range` is original-source byte offsets.
 ///
 /// The union is computed in *cleaned* (delimiter-free) space — where highlighted
-/// text is contiguous — then mapped back to the original region to replace. Any
-/// annotation fully enclosed by that region is subsumed into the union (its own
-/// comment is dropped); the common case (a selection overlapping ONE highlight) is
-/// exact.
+/// text is contiguous — then mapped back to the original region to replace. A point
+/// comment that region holds is subsumed into the union; any other construct it holds
+/// or cuts into makes the merge a point comment instead (see [`Merge::Point`]).
 ///
-/// The intersecting annotations' own comments are replaced by `comment` — which is why
-/// the caller must show the user what is about to be overwritten first. Ask
+/// The absorbed annotations' own comments are replaced by `comment` — which is why the
+/// caller must show the user what is about to be overwritten first. Ask
 /// [`merged_comment_for`] for exactly that text; it shares the merge decision
 /// ([`Merge`]) with this function, so the two cannot disagree about what will be merged.
-///
-/// A union that would hold a block break merges nothing: the selection is written as a
-/// point comment at its end instead (see [`Merge::Crosses`]).
 pub(crate) fn insert_or_extend_highlight(
     source: &str,
     range: Range<usize>,
@@ -351,52 +395,40 @@ pub(crate) fn insert_or_extend_highlight(
     let sel_cs = super::original_to_cleaned(&ext.shifts, OriginalByteOffset::new(range.start));
     let sel_ce = super::original_to_cleaned(&ext.shifts, OriginalByteOffset::new(range.end));
 
-    let (intersecting, u_cs, u_ce) = match merge(&ext, sel_cs, sel_ce) {
+    let (union, region) = match merge(&ext, sel_cs, sel_ce) {
         Merge::Nothing => return insert_highlight_comment(source, range, comment),
-        Merge::Crosses => return point_comment_after(source, range.end, comment),
-        Merge::Union { with, union } => (with, union.start, union.end),
+        Merge::Point => {
+            let slot = super::landing::for_point(source, range.end);
+            return insert_landed_point(source, slot, comment);
+        }
+        Merge::Union { union, region, .. } => (union, region),
     };
-    // Union of the selection and every intersecting highlight, in CLEANED space.
-    let union_text = &ext.cleaned[u_cs.raw()..u_ce.raw()];
-
-    // Original region to replace: cover every intersecting construct (delimiters
-    // included) AND the selection's plain-text extent beyond them. All in ORIGINAL
-    // space — `cleaned_to_original` maps the two cleaned union ends across.
-    let orig_lo = intersecting
-        .iter()
-        .map(|a| a.src_span.start)
-        .chain(std::iter::once(super::cleaned_to_original(
-            &ext.shifts,
-            u_cs,
-        )))
-        .min()
-        .unwrap();
-    let orig_hi = intersecting
-        .iter()
-        .map(|a| a.src_span.end)
-        .chain(std::iter::once(super::cleaned_to_original(
-            &ext.shifts,
-            u_ce,
-        )))
-        .max()
-        .unwrap();
+    let union_text = &ext.cleaned[union.start.raw()..union.end.raw()];
 
     let mut out = String::with_capacity(source.len() + comment.len() + 12);
-    out.push_str(&source[..orig_lo.raw()]);
+    out.push_str(&source[..region.start.raw()]);
     out.push_str(HL_OPEN);
     out.push_str(union_text);
     out.push_str(HL_CLOSE);
     out.push_str(COMMENT_OPEN);
     out.push_str(&sanitize_comment(comment));
     out.push_str(COMMENT_CLOSE);
-    out.push_str(&source[orig_hi.raw()..]);
+    out.push_str(&source[region.end.raw()..]);
     out
 }
 
-/// A point comment for a selection ending at `at`, landed as the window lands one
-/// (`landing::for_point`, then out of any construct it falls in).
-fn point_comment_after(source: &str, at: usize, comment: &str) -> String {
-    let mut slot = super::landing::for_point(source, at);
+/// Write a point comment at a landed `slot` (`landing::for_point`, or the point arm of
+/// `landing::for_highlight`). This is the one choke point every point comment passes
+/// through. A bare slot is anchored at a selection END, which can map INSIDE an existing
+/// construct, and splicing there silently corrupts it and swallows the comment, so a
+/// bare slot is snapped outside any construct first ([`point_comment_anchor`]). A slot
+/// framed onto its own line after a block sits at a line start, which no construct
+/// straddles.
+pub(crate) fn insert_landed_point(
+    source: &str,
+    mut slot: super::landing::Slot,
+    comment: &str,
+) -> String {
     if slot.is_bare() {
         slot.at = point_comment_anchor(source, slot.at);
     }
@@ -671,8 +703,8 @@ mod tests {
     /// rendered as literal markup, and the comments it replaced were gone. The selection
     /// holds no blank line, so only the union says so; the result is a point comment at
     /// the selection's end, merging nothing, and the card offers nothing to merge.
-    /// Mutation check: drop the `Merge::Crosses` arm in `merge` and the card offers `c`
-    /// to merge, and the file becomes `a {==x\n\nb==}{>>new<<}`.
+    /// Mutation check: drop the block-break `Merge::Point` return in `merge` and the card offers
+    /// `c | p` to merge, and the file becomes `a {==x\n\nb==}{>>new<<}`.
     #[test]
     fn a_merge_whose_union_holds_a_blank_line_is_a_point_comment() {
         for eol in ["\n", "\r\n"] {
@@ -693,6 +725,60 @@ mod tests {
                 .collect();
             assert_eq!(kept, ["c", "p", "new"], "{eol:?}");
         }
+    }
+
+    /// Every comment in source order, as extraction reads them back.
+    fn comments_of(src: &str) -> Vec<String> {
+        crate::annotate::extract(src)
+            .annotations
+            .iter()
+            .filter_map(|a| a.comment.clone())
+            .collect()
+    }
+
+    /// A point comment between the highlight and the selection's end lies inside the
+    /// region the union replaces, so the merge must carry its comment: the card offers
+    /// it and an unedited commit keeps it (TDD 17.41). Mutation check: absorb only the
+    /// intersecting highlights in `merge` and the card offers `c` alone, and the commit
+    /// loses `p`.
+    #[test]
+    fn a_merge_carries_the_point_comment_it_encloses() {
+        let src = "a {==x==}{>>c<<} {>>p<<} b";
+        let range = src.find('x').unwrap()..src.len();
+        let shown = merged_comment_for(src, range.clone());
+        assert_eq!(shown.as_deref(), Some("c | p"));
+        let out = insert_or_extend_highlight(src, range, &shown.unwrap());
+        assert_eq!(out, "a {==x  b==}{>>c | p<<}");
+        assert_eq!(comments_of(&out), ["c | p"]);
+    }
+
+    /// The cleaned union keeps only a suggested edit's visible text, so writing it over
+    /// a substitution would drop `old` and the markup. Such a merge is a point comment at
+    /// the selection's end, and the card offers nothing to merge. Mutation check: absorb
+    /// every construct in the region in `merge` and the file becomes
+    /// `a {==x new b==}{>>N<<}`.
+    #[test]
+    fn a_merge_that_would_enclose_a_suggested_edit_is_a_point_comment() {
+        let src = "a {==x==}{>>c<<} {~~old~>new~~} b";
+        let range = src.find('x').unwrap()..src.len();
+        assert_eq!(merged_comment_for(src, range.clone()), None);
+        let out = insert_or_extend_highlight(src, range, "N");
+        assert_eq!(out, format!("{src}{{>>N<<}}"));
+        assert_eq!(comments_of(&out), ["c", "N"]);
+    }
+
+    /// A selection ending where a neighbouring highlight's content begins only touches
+    /// it, so the union region must end before that highlight's opening delimiter, not
+    /// after it. Mutation check: map the union's end with `cleaned_to_original` in
+    /// `merge`, and the merge is refused as a point comment; with that and the refusal
+    /// both removed, the file becomes `{==x ==}{>>N<<}y==}{>>cy<<}`.
+    #[test]
+    fn a_merge_never_cuts_into_a_construct_it_only_touches() {
+        let src = "{==x==} {==y==}{>>cy<<}";
+        let range = src.find('x').unwrap()..src.find("{==y").unwrap();
+        let out = insert_or_extend_highlight(src, range, "N");
+        assert_eq!(out, "{==x ==}{>>N<<}{==y==}{>>cy<<}");
+        assert_eq!(comments_of(&out), ["N", "cy"]);
     }
 
     #[test]

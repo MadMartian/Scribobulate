@@ -569,7 +569,7 @@ fn two_para_with_highlight() -> (CopyTree, Vec<(usize, usize)>, String, String) 
 /// into the middle of the construct (`{==fl{>>comment<<}at==}`), which re-extracts as
 /// the comment being swallowed into the claim text — no new annotation, source
 /// corrupted. The `point_comment_anchor` snap (the choke-point fix in
-/// `apply_annotation_edit`) must land the comment cleanly AFTER the whole construct.
+/// `annotate::insert_landed_point`) must land the comment cleanly AFTER the whole construct.
 #[test]
 fn multiblock_over_existing_annotation_point_lands_outside_the_construct() {
     let (tree, shifts, cleaned, original) = two_para_with_highlight();
@@ -592,15 +592,16 @@ fn multiblock_over_existing_annotation_point_lands_outside_the_construct() {
         hl.src_span
     );
     // The fix: snap outside, then splice.
-    let safe = crate::annotate::point_comment_anchor(&original, at);
+    let safe = crate::annotate::mutate::point_comment_anchor(&original, at);
     assert_eq!(
         safe,
         hl.src_span.end.raw(),
         "the anchor snaps to the construct end"
     );
-    let out = crate::annotate::insert_point_comment(
+    // Through the choke point every point comment takes, from the RAW anchor.
+    let out = crate::annotate::insert_landed_point(
         &original,
-        &crate::annotate::Slot::bare(safe),
+        crate::annotate::Slot::bare(at),
         "my comment",
     );
 

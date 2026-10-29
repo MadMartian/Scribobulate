@@ -2864,9 +2864,10 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the entry shows `note A | note B` — every intersecting comment, ` | `-joined, in source order
 - **And When** it is committed without editing
 - **Then** the single merged annotation carries `note A | note B`: both comments survive, and the joined text re-extracts as ONE comment with the ` | ` intact
+- **And** this holds for every comment the merge would replace, a standalone comment lying inside the merged span included (e.g. `{==x==}{>>c<<} {>>p<<} more`, selected from `x` to the end, shows and keeps `c | p`)
 
 ### 17.42 A card that merges nothing offers nothing
-- **Given** a selection over unannotated text, or one crossing a blank line (which becomes a point comment)
+- **Given** a selection over unannotated text, or one that crosses a blank line, or whose merge would cross one or swallow a suggested edit (each becomes a point comment)
 - **When** the Annotate card is raised
 - **Then** the comment entry is empty — the pre-population never invents a comment where none is at risk
 

@@ -29,7 +29,38 @@
 # Usage: packaging/macos/stage-licenses.sh <path-to-.app>
 set -euo pipefail
 
-APP="${1:?usage: stage-licenses.sh <path-to-.app>}"
+APP="${1:?usage: stage-licenses.sh <path-to-.app> | --self-test}"
+
+# The fail-closed arms, run against throwaway bundles by invoking this script on them: a
+# Frameworks/ holding no Mach-O, and a `file` that crashes, must each refuse to produce a
+# manifest. ANTI-VACUITY first: a bundle holding one Homebrew dylib stages.
+if [ "$APP" = "--self-test" ]; then
+    # shellcheck source=rpath.sh
+    . "$(dirname "${BASH_SOURCE[0]}")/rpath.sh"
+    tmp="$(mktemp -d)"; failures=0
+    mkb() {  # $1 = case; a bundle with libglib in Frameworks/
+        mkdir -p "$tmp/$1/Contents/Frameworks" "$tmp/$1/Contents/Resources"
+        cp /opt/homebrew/lib/libglib-2.0.0.dylib "$tmp/$1/Contents/Frameworks/"
+    }
+    stages() {  # $1 = case, $2 = expected (ok|fail), $3 = stub dir (optional)
+        rc=0; ( [ -z "${3:-}" ] || PATH="$3:$PATH"; bash "${BASH_SOURCE[0]}" "$tmp/$1" >/dev/null 2>&1 ) || rc=$?
+        if { [ "$2" = ok ] && [ "$rc" -eq 0 ]; } || { [ "$2" = fail ] && [ "$rc" -ne 0 ]; }; then
+            echo "   ok    $1"
+        else
+            echo "   FAILED $1 (expected $2, got $rc)"; failures=$((failures + 1))
+        fi
+    }
+    mkb agreeing;  stages agreeing ok
+    mkb no-machos; rm -f "$tmp/no-machos/Contents/Frameworks/"*.dylib
+    printf 'text\n' > "$tmp/no-machos/Contents/Frameworks/readme"
+    stages no-machos fail
+    stub_tool "$tmp/file-crashes" file 'exit 1'
+    mkb file-unreadable; stages file-unreadable fail "$tmp/file-crashes"
+    rm -rf "$tmp"
+    [ "$failures" -eq 0 ] || { echo ":: self-test FAILED ($failures)"; exit 1; }
+    echo ":: self-test passed"; exit 0
+fi
+
 [ -d "$APP/Contents/Frameworks" ] || { echo "error: no Frameworks in $APP" >&2; exit 1; }
 
 DEST="$APP/Contents/Resources/licenses"
@@ -103,5 +134,4 @@ print("NOT-IN-SBOM")' "$root/sbom.spdx.json" "$formula" 2>/dev/null || echo "NO-
     count=$((count + 1))
 done <<< "$objs"
 
-[ "$count" -gt 0 ] || { echo "error: no licence texts staged; nothing in Frameworks was attributed" >&2; exit 1; }
 echo "   staged licence texts for $count formulae"

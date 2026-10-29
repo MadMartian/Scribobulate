@@ -243,7 +243,10 @@ pub(crate) struct TabState {
     /// It cannot see a monitor that attaches and then never fires (GTK4Rs/AP-275).
     pub(crate) live_reload_off: Cell<bool>,
     /// Bumped on every change to the editor buffer, so a word count computed off the
-    /// main thread can tell whether it still describes the buffer (TDD 16.11).
+    /// main thread can tell whether it still describes the buffer (TDD 16.11), and a
+    /// deferred fold toggle or reveal whether the text it was resolved against is
+    /// still the text (`window::defer_with_tab`). A reload writes the buffer, so it
+    /// moves this too.
     pub(crate) text_generation: Cell<u64>,
     /// The last word count and line-ending classification computed for this document,
     /// with the generation it describes. A background tab keeps a stale one until it

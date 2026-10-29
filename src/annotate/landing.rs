@@ -224,7 +224,11 @@ fn after_block(source: &str, block: &Block) -> Slot {
 /// enter becomes a comment after that block; one touching math or a code span widens to
 /// cover it, and becomes a comment after a block if the widened range touches one.
 pub(crate) fn for_highlight(source: &str, range: Range<usize>) -> Landing {
-    let v = scan(source);
+    highlight_in(source, &scan(source), range)
+}
+
+/// [`for_highlight`] over what `scan` read.
+fn highlight_in(source: &str, v: &Verbatim, range: Range<usize>) -> Landing {
     let touched = |range: &Range<usize>| {
         v.blocks
             .iter()
@@ -318,7 +322,7 @@ mod tests {
     fn apply(md: &str, landing: Landing) -> String {
         match landing {
             Landing::Highlight(r) => crate::annotate::insert_or_extend_highlight(md, r, "c"),
-            Landing::Point(slot) => crate::annotate::insert_point_comment(md, &slot, "c"),
+            Landing::Point(slot) => crate::annotate::insert_landed_point(md, slot, "c"),
         }
     }
 
@@ -561,6 +565,32 @@ mod tests {
         let out = apply_point(md, 6);
         assert_eq!(out, "para\r\n{>>c<<}\r\n\r\npara2\r\n");
         assert_eq!(remove_point(&out), md);
+    }
+
+    /// A comment the fallback reads as code runs on through the code that hides its
+    /// closer, and that can be a fenced block. Landing tested only the asked-for range
+    /// against the blocks, then widened it over that code, so a highlight on `note`
+    /// wrapped the paragraph, the fence and the line after it. The fallback now masks a
+    /// comment a block opens in, so no document is known to reach this; the reading is
+    /// built by hand. Mutation check: drop the second block test in `highlight_in` and
+    /// it lands as that highlight again.
+    #[test]
+    fn a_highlight_widened_onto_a_block_lands_after_it() {
+        let src = "x {>>note\n```\n<<}\n```\nmore <<} y\n";
+        let fence = src.find("```").unwrap();
+        let after_fence = src.find("more").unwrap();
+        let v = Verbatim {
+            blocks: vec![Block {
+                kind: Kind::Code,
+                lines: fence..after_fence,
+            }],
+            whole: std::iter::once(src.find("{>>").unwrap()..after_fence).collect(),
+        };
+        let note = src.find("note").unwrap();
+        match highlight_in(src, &v, note..note + 4) {
+            Landing::Point(slot) => assert_eq!(slot.at, after_fence),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

@@ -449,6 +449,12 @@ done
 # The bundle now carries a GTK runtime it did not build, so the notices travel with it.
 # Staged and gated in separate scripts, both runnable standalone: a gate that can only be
 # invoked by its own producer cannot be pointed at a subject known to be bad.
+# Each gate's self-test before its verdict is trusted: its fail-closed arms are proven to
+# refuse a bundle they cannot read.
+for gate in stage-licenses verify-licenses verify-selfcontained; do
+    "$REPO_ROOT/packaging/macos/$gate.sh" --self-test >/dev/null \
+        || { echo "error: $gate.sh --self-test failed; its verdict cannot be trusted" >&2; exit 1; }
+done
 "$REPO_ROOT/packaging/macos/stage-licenses.sh" "$APP"
 "$REPO_ROOT/packaging/macos/verify-licenses.sh" "$APP" >/dev/null
 

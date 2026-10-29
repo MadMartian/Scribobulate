@@ -26,10 +26,12 @@ pub(crate) mod mutate;
 pub(crate) mod scan;
 mod written;
 
-pub(crate) use landing::{Landing, Slot};
+pub(crate) use landing::Landing;
+#[cfg(test)]
+pub(crate) use landing::Slot;
 pub(crate) use mutate::{
-    edit_comment, insert_or_extend_highlight, insert_point_comment, merged_comment_for,
-    point_comment_anchor, remove_annotation,
+    edit_comment, insert_landed_point, insert_or_extend_highlight, merged_comment_for,
+    remove_annotation,
 };
 pub(crate) use scan::{cleaned_to_original, extract, original_to_cleaned, AnnKind, Annotation};
 pub(crate) use written::holds_block_break;

@@ -687,8 +687,7 @@ pub(crate) fn wire_annotation_overlay(
             // prior text, edits or prunes it, and what they see is what is written back.
             //
             // Resolved through the SAME `selection_target` the commit uses, and the same
-            // intersection predicate the mutation uses (`merged_comment_for` →
-            // `intersecting_highlights`), so the card can never show one set of comments
+            // merge decision the mutation uses (`merged_comment_for`), so the card can never show one set of comments
             // while the commit destroys another.
             let existing = crate::window::host_window(&v)
                 .and_then(|w| crate::window::document_source(&w))

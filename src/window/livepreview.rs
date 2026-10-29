@@ -228,6 +228,10 @@ mod gtk_integration_tests {
             crate::renderer::frontmatter::Show::AsDisclosure,
         )[0]
         .fold_key();
+        // The toggle lands in the idle that splices it (`window::defer_with_tab`).
+        crate::testpump::until(crate::testpump::Clock::Idle, "the toggle's idle", || {
+            !st.folds.borrow().is_collapsed(moved_key, false)
+        });
         let folds = st.folds.borrow();
         assert!(
             !folds.is_collapsed(moved_key, false),
@@ -272,6 +276,12 @@ mod gtk_integration_tests {
         let mut at = st.editor_buf.start_iter();
         st.editor_buf.insert(&mut at, &"pad ".repeat(30));
         toggle.set_active(!toggle.is_active());
+        // Past the re-render the unresolvable click schedules, so a toggle deferred to
+        // an idle would have had its chance to land.
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Idle,
+            std::time::Duration::from_millis(300),
+        );
 
         assert_eq!(
             *st.folds.borrow(),
@@ -360,6 +370,12 @@ mod gtk_integration_tests {
             let toggle = control(&st).unwrap_or_else(|| panic!("{name}: a control"));
             let before = st.folds.borrow().clone();
             toggle.set_active(!toggle.is_active());
+            // The toggle lands in the idle that splices it (`window::defer_with_tab`).
+            crate::testpump::until_or_for(
+                crate::testpump::Clock::Idle,
+                std::time::Duration::from_secs(5),
+                || *st.folds.borrow() != before,
+            );
             assert_ne!(
                 *st.folds.borrow(),
                 before,
@@ -399,6 +415,9 @@ mod gtk_integration_tests {
         rerender_split_preview_driven_by_editor(&window, &text);
         let toggle = control(&st).expect("the render emitted a control");
         toggle.set_active(!toggle.is_active());
+        crate::testpump::until(crate::testpump::Clock::Idle, "the toggle's idle", || {
+            *st.folds.borrow() != FoldState::default()
+        });
         let collapsed = st.folds.borrow().clone();
         assert_ne!(
             collapsed,

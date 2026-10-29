@@ -879,6 +879,36 @@ mod tests {
         );
     }
 
+    /// Reading which comments lie outside code costs a bounded number of parses,
+    /// whatever the number of comments. A comment pasting a fence that cannot close (it
+    /// has an info string) makes the rest of the file code in the fallback, which
+    /// masked one such comment per full parse: once no mask settles, `k` of them cost
+    /// `k` parses, and a 1 MiB file hung the window on open. Counted in parses rather
+    /// than timed, since the count is what regressed. Mutation check: let the fallback
+    /// mask one body per parse with no cap and the count grows with `k`.
+    #[test]
+    fn reading_code_past_unclosable_fences_in_comments_takes_bounded_parses() {
+        use crate::annotate::written::PARSES;
+        let doc = |k: usize| {
+            "````{>>`<<} a\n\nAfter {>>c ` d<<} `e`.\n\n".to_string()
+                + &"p {>>see\n```py\n<<} q\n\n".repeat(k)
+        };
+        let read = |src: &str| {
+            PARSES.set(0);
+            let pasted = extract(src)
+                .annotations
+                .into_iter()
+                .filter(|a| a.comment.as_deref() == Some("see\n```py\n"))
+                .count();
+            (PARSES.get(), pasted)
+        };
+        let (few, few_pasted) = read(&doc(20));
+        let (many, many_pasted) = read(&doc(200));
+        assert_eq!(few_pasted, 20, "every pasted fence stays a comment");
+        assert_eq!(many_pasted, 200, "every pasted fence stays a comment");
+        assert_eq!(many, few, "200 comments and 20 took different parse counts");
+    }
+
     /// The delimiter index must be a faithful re-implementation of the scans it
     /// replaced, including the boundary the old `contains("\\n\\n")` got right by
     /// construction: a span whose content merely ENDS with a newline does not

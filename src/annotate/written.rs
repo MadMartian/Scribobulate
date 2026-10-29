@@ -26,8 +26,10 @@
 //!
 //! **If even that does not settle**, the reading is the file's own parse, so its block
 //! structure is what other tools read and no fence is made or hidden. The one
-//! exception is a fence pasted into a comment and never closed, which would make the
-//! rest of the file code: that comment alone is masked ([`unsettled`]). Each comment
+//! exception is a fence pasted into a comment and never closed, which runs on past
+//! the comment (to the end of the file, its container's end or the document's own next
+//! fence): that comment alone is masked, and past a few of them every later comment
+//! pasting a fence is masked in one step ([`unsettled`]). Each comment
 //! that parse would let close past a closer it hides in code
 //! is read, with the code it runs into, as code ([`sealed`]). That reading can mistake
 //! prose for code, but never lets a comment close on a closer that is not its own, so
@@ -50,6 +52,15 @@ const FILLER: u8 = b'x';
 /// How many parses [`settle`] spends checking the mask before it falls back to the
 /// file's own parse. The lexer's mask is normally confirmed by the first.
 const SETTLE_ROUNDS: usize = 4;
+
+/// How many bodies [`unsettled`] masks one parse at a time before it masks the rest
+/// in one step. An unclosed fence pasted into a comment is rare, so honest documents
+/// stay within it.
+const UNSETTLED_ROUNDS: usize = 4;
+
+/// How many parses [`mask_and_parse`] spends filling the indentation of only the bodies
+/// a code block starts in before it fills every body's.
+const FILL_ROUNDS: usize = 2;
 
 /// How many recent documents [`first_time_unsettled`] remembers, so a document that
 /// keeps taking the fallback is reported once and not on every render.
@@ -145,8 +156,8 @@ fn settle(source: &str, from: usize, mut mask: Vec<Range<usize>>, rounds: usize)
     let mut parses = 0;
     while parses < rounds {
         parses += 1;
-        let text = masked(source, &mask);
-        let code = parse_code(&text, from).all;
+        let (text, parsed) = mask_and_parse(source, from, &mask);
+        let code = parsed.all;
         let next = outside_code(source, from, &code);
         if next == mask {
             let written = AsWritten {
@@ -224,36 +235,99 @@ fn remember(seen: &mut std::collections::VecDeque<u64>, key: u64) -> bool {
 }
 
 /// The text and code the fallback reads: the file's own, except for each comment body
-/// that holds the start of a code block running to the end of the file — a fence the
-/// annotator pasted and never closed. Read as written, that fence makes the rest of the
-/// file code, so every later annotation vanishes. So that body is masked, which leaves
-/// no code block in it ([`masked`]), and the file is parsed again.
+/// in which a code block starts that ends outside it — a fence the annotator pasted
+/// and never closed. Read as written, that fence runs on past the comment: to the end
+/// of the file, to the end of the quote or list item it is in, or to the document's
+/// own next fence, which then opens a block where the page has none. Every annotation
+/// in that code vanishes. So that body is masked, which leaves no code block in it
+/// ([`mask_and_parse`]), and the file is parsed again. The fence's end outside the body
+/// is document text, so once the body is prose it reads as the page reads it.
 ///
-/// Masking that body makes no code that was not code already, but for inline code in
-/// the paragraph the body now joins: the block it removes ran to the end of the file,
-/// so every line after the body was code, and the masked body holds no block markup.
-/// [`sealed`] then reads whatever code results. A block that opens in a body and closes
-/// before the end of the file is left as it is: masking its opening fence would turn
-/// its closing fence into an opening one.
+/// A block that opens in a body and closes in it is left as it is: its closing fence
+/// is the annotator's too, and it hides no closer.
+///
+/// Each body is found by a parse of the whole file, so a run of comments that each
+/// paste a fence that cannot close (one with an info string) cost one parse per comment
+/// and hung the window on a large file. So after [`UNSETTLED_ROUNDS`] bodies the rest
+/// are masked in one step ([`fence_bodies_after`]). [`sealed`] then reads whatever
+/// code results, so no reading of it swallows prose.
 fn unsettled(source: &str, from: usize) -> (Cow<'_, str>, Vec<Range<usize>>) {
     let mut bodies: Vec<Range<usize>> = Vec::new();
+    let mut text = Cow::Borrowed(source);
     let mut parsed = parse_code(source, from);
-    // Each round masks one more body, so this ends.
-    while let Some(body) = parsed
-        .blocks
-        .last()
-        .filter(|block| block.end == source.len())
-        .and_then(|block| {
-            outside_code(source, from, &parsed.all)
-                .into_iter()
-                .find(|body| body.contains(&block.start))
-        })
-        .filter(|body| !bodies.contains(body))
-    {
+    // Each round masks at least one more body, and the last masks the rest at once.
+    for round in 0..=UNSETTLED_ROUNDS {
+        let open = outside_code(source, from, &parsed.all);
+        let Some((block, body)) =
+            escaping_block(source, &parsed.blocks, &open).filter(|(_, b)| !bodies.contains(b))
+        else {
+            break;
+        };
         bodies.push(body);
-        parsed = parse_code(&masked(source, &bodies), from);
+        if round == UNSETTLED_ROUNDS {
+            let mut rest = fence_bodies_after(source, from, &parsed.all, &block);
+            rest.retain(|body| !bodies.contains(body));
+            bodies.extend(rest);
+        }
+        (text, parsed) = mask_and_parse(source, from, &bodies);
     }
-    (masked(source, &bodies), parsed.all)
+    (text, parsed.all)
+}
+
+/// The first of `blocks` that starts inside one of `bodies` (both ascending) and ends
+/// past it, with that body.
+fn escaping_block(
+    source: &str,
+    blocks: &[Range<usize>],
+    bodies: &[Range<usize>],
+) -> Option<(Range<usize>, Range<usize>)> {
+    blocks.iter().find_map(|block| {
+        let body = &bodies[opened_in(source, bodies, block.start)?];
+        (block.end > body.end).then(|| (block.clone(), body.clone()))
+    })
+}
+
+/// Which of `bodies` (ascending) a code block starting at `at` opens in: the one
+/// holding `at`, or the indentation before it on its line, since pulldown starts an
+/// indented code block after its indentation (`# {>>a\n    <<}` opens one on the
+/// closer).
+fn opened_in(source: &str, bodies: &[Range<usize>], at: usize) -> Option<usize> {
+    let line = source[..at].rfind('\n').map_or(0, |n| n + 1);
+    let i = bodies.partition_point(|body| body.end < at);
+    let body = bodies.get(i)?;
+    (body.start <= at && (at < body.end || body.start <= line)).then_some(i)
+}
+
+/// The one of `ranges` (ascending, non-overlapping) that holds byte `p`.
+fn containing(ranges: &[Range<usize>], p: usize) -> Option<&Range<usize>> {
+    ranges
+        .get(ranges.partition_point(|r| r.end <= p))
+        .filter(|r| r.start <= p)
+}
+
+/// Every body after `block`'s start, outside the rest of `code`, that holds a line a
+/// fence could open, with comments paired as if `block` were prose, as the page reads
+/// it once the body `block` opens in is masked.
+fn fence_bodies_after(
+    source: &str,
+    from: usize,
+    code: &[Range<usize>],
+    block: &Range<usize>,
+) -> Vec<Range<usize>> {
+    let before: Vec<Range<usize>> = code.iter().filter(|r| *r != block).cloned().collect();
+    outside_code(source, from, &before)
+        .into_iter()
+        .filter(|body| body.start > block.start && holds_fence(source, body))
+        .collect()
+}
+
+/// Whether a line of `body` other than its first could open a fence: after the
+/// indentation and quote markers, three backticks or tildes.
+fn holds_fence(source: &str, body: &Range<usize>) -> bool {
+    source[body.clone()].split('\n').skip(1).any(|line| {
+        let rest = line.trim_start_matches([' ', '\t', '>']);
+        rest.starts_with("```") || rest.starts_with("~~~")
+    })
 }
 
 /// `code`, plus the opener through the end of that code of every comment outside it
@@ -310,24 +384,63 @@ fn is_markdown_whitespace(b: u8) -> bool {
     matches!(b, b'\t'..=b'\r' | b' ')
 }
 
-/// `source` with each of `bodies` masked, so that no code can begin in one. Every byte
-/// the parser does not read as whitespace is overwritten, and so is the indentation
-/// that starts each later line of a body: block markup in a multi-line body (a list
-/// marker, a fence, the four columns that open an indented code block after a heading)
-/// is masked like any text, since the body is the annotator's prose, not the
-/// document's. Line ends and the whitespace within a line are kept, so every line stays
-/// a line (a masked body never holds a blank one: it does not cross a block break).
-fn masked<'a>(source: &'a str, bodies: &[Range<usize>]) -> Cow<'a, str> {
+/// `source` with each of `bodies` masked, and its parse, such that no code begins in a
+/// body: a body is the annotator's prose, not the document's.
+///
+/// [`masked`] overwrites all block markup in a body but the indentation that starts
+/// each later line, which is also what keeps that line in the list item or quote the
+/// comment opened in: filled, a line after a heading in a list item fell out of it,
+/// which ended the list, and a later item paragraph became an indented code block. So
+/// the indentation is kept, and filled only in a body that a code block starts in (the
+/// four columns that open an indented code block after a heading or a rule), then the
+/// text is parsed again. After [`FILL_ROUNDS`] parses every body's is filled, which
+/// leaves no code able to start in any, so this costs at most that many parses more.
+fn mask_and_parse<'a>(
+    source: &'a str,
+    from: usize,
+    bodies: &[Range<usize>],
+) -> (Cow<'a, str>, ParsedCode) {
+    let mut sorted = bodies.to_vec();
+    sorted.sort_by_key(|body| body.start);
+    let mut filled = vec![false; sorted.len()];
+    let mut parses = 0;
+    loop {
+        let text = masked(source, &sorted, &filled);
+        let parsed = parse_code(&text, from);
+        parses += 1;
+        let mut fill = false;
+        for block in &parsed.blocks {
+            if let Some(i) = opened_in(&text, &sorted, block.start).filter(|&i| !filled[i]) {
+                filled[i] = true;
+                fill = true;
+            }
+        }
+        if !fill {
+            return (text, parsed);
+        }
+        if parses == FILL_ROUNDS {
+            filled.fill(true);
+        }
+    }
+}
+
+/// `source` with each of `bodies` (ascending) masked: every byte the parser does not
+/// read as whitespace is overwritten, so a list marker or a fence in a multi-line body
+/// is masked like any text; where `filled` says so, the indentation that starts each
+/// later line of the body is too. Line ends and the whitespace within a line are kept,
+/// so every line stays a line (a masked body never holds a blank one: it does not
+/// cross a block break). See [`mask_and_parse`].
+fn masked<'a>(source: &'a str, bodies: &[Range<usize>], filled: &[bool]) -> Cow<'a, str> {
     if bodies.is_empty() {
         return Cow::Borrowed(source);
     }
     let mut bytes = source.as_bytes().to_vec();
-    for body in bodies {
+    for (body, &fill) in bodies.iter().zip(filled) {
         // Whether the bytes so far on this line of the body are its indentation.
         let mut leading = false;
         for b in &mut bytes[body.clone()] {
             if *b == b'\n' {
-                leading = true;
+                leading = fill;
             } else if !is_markdown_whitespace(*b) {
                 leading = false;
                 *b = FILLER;
@@ -558,8 +671,7 @@ pub(super) fn is_blank_line_char(c: char) -> bool {
 
 /// Whether byte `i` lies inside one of `code` (ascending, non-overlapping).
 pub(super) fn in_code(code: &[Range<usize>], i: usize) -> bool {
-    let k = code.partition_point(|r| r.end <= i);
-    code.get(k).is_some_and(|r| r.start <= i)
+    containing(code, i).is_some()
 }
 
 /// What one parse of `text[from..]` reads as code, in `text`'s coordinates.
@@ -570,7 +682,15 @@ struct ParsedCode {
     blocks: Vec<Range<usize>>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times [`parse_code`] has run on this thread, so a test can bound it.
+    pub(super) static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn parse_code(text: &str, from: usize) -> ParsedCode {
+    #[cfg(test)]
+    PARSES.set(PARSES.get() + 1);
     // Through the normalising seam, like every parse site, so a tab-padded table is a
     // table here exactly as on the page. The pre-pass keeps every byte where it was,
     // so the ranges index `text` itself.
@@ -718,13 +838,15 @@ mod tests {
     /// line next to a body stays blank and the paragraphs either side stay apart.
     /// Overwriting the space joined them, which paired the backticks either side, which
     /// unmasked the comment, which split them again: the mask flipped every round. The
-    /// indentation that starts a later line of a body is masked (see
+    /// indentation that starts a later line of a body is masked only where asked (see
     /// `an_indented_line_in_a_comment_after_a_heading_is_not_code`).
     #[test]
     fn masking_keeps_blank_lines_and_line_ends() {
-        assert_eq!(masked("{>>a `\n\t b<<}", &one(3..10)), "{>>x x\nxxx<<}");
+        let src = "{>>a `\n\t b<<}";
+        assert_eq!(masked(src, &one(3..10), &[false]), "{>>x x\n\t x<<}");
+        assert_eq!(masked(src, &one(3..10), &[true]), "{>>x x\nxxx<<}");
         assert_eq!(
-            masked("{>>a\x0b\x0c`\r\n<<}", &one(3..9)),
+            masked("{>>a\x0b\x0c`\r\n<<}", &one(3..9), &[true]),
             "{>>x\x0b\x0cx\r\n<<}",
             "pulldown's whole whitespace set is kept"
         );
@@ -746,9 +868,12 @@ mod tests {
     /// indented four columns after a comment opened on one was code to the parse, which
     /// hid the comment's closer, and extraction paired the opener with the next
     /// comment's closer instead, swallowing the prose between. Masking the indentation
-    /// leaves no code there, so the comment closes on its own closer. Mutation check:
-    /// keep a body line's indentation in `masked` and the comments read
-    /// `["a\n    b<<}\nmore {>>c"]`.
+    /// leaves no code there, so the comment closes on its own closer. Masking it in
+    /// every body instead closed the list item of the last case after its heading, so
+    /// the item's later paragraph read as an indented code block and `c` vanished: it
+    /// is masked only where code starts. Mutation checks: never fill the indentation in
+    /// `mask_and_parse` and the comments read `["a\n    b<<}\nmore {>>c"]`; always fill
+    /// it and the last case loses `c`.
     #[test]
     fn an_indented_line_in_a_comment_after_a_heading_is_not_code() {
         for (src, first) in [
@@ -756,6 +881,7 @@ mod tests {
             ("***\n{>>a\n    b<<}\nmore {>>c<<}", "a\n    b"),
             ("# {>>a\r\n\t b<<}\r\nmore {>>c<<}", "a\r\n\t b"),
             ("# {>>a\n    <<}\nmore {>>c<<}", "a\n    "),
+            ("- # {>>a\n  b<<}\n\n    text {>>c<<}\n", "a\n  b"),
         ] {
             assert_eq!(comments(src), [first, "c"], "{src:?}");
             let r = reading(src, SETTLE_ROUNDS);
@@ -843,8 +969,8 @@ mod tests {
     /// swallowing is). Within one line that cannot be a fence, the lexer's mask is
     /// confirmed within the rounds allowed; across lines, block structure can leave no
     /// mask to confirm (see `a_mask_that_makes_a_fence_has_no_settled_reading`), and
-    /// then the reading is the file's own parse, sealed, masked only where a fence runs
-    /// to the end of the file.
+    /// then the reading is the file's own parse, sealed, masked only where a code block
+    /// escapes the comment it starts in.
     #[test]
     fn no_mix_of_backticks_and_comments_swallows_prose() {
         const TOKENS: [&str; 12] = [
@@ -885,8 +1011,9 @@ mod tests {
                 }
                 assert!(!swallows(&src, &r.written.code), "{src:?}");
                 if r.outcome == Outcome::Unsettled && r.written.text != src {
-                    let to_end = raw.blocks.last().is_some_and(|b| b.end == src.len());
-                    assert!(to_end, "{src:?}: masked with no fence to the end");
+                    let open = outside_code(&src, 0, &raw.all);
+                    let escapes = escaping_block(&src, &raw.blocks, &open).is_some();
+                    assert!(escapes, "{src:?}: masked with no block escaping a comment");
                 }
             }
         }
@@ -962,20 +1089,49 @@ mod tests {
         );
     }
 
-    /// A comment whose closer the fallback's parse hides in a fenced block is read as
-    /// code through that block's end. Landing tested only the asked-for range against
-    /// the blocks, then widened it over that code, so a highlight on `note` wrapped the
-    /// paragraph, the fence and the line after it. Mutation check: drop the second block
-    /// test in `for_highlight` and it lands as that highlight again.
+    /// A fence pasted into a comment and never closed pairs, in the file's own parse,
+    /// with the document's own next fence, or ends with the quote it is in: either way
+    /// the block it opens escapes the comment, and the fallback masked only a block
+    /// running to the end of the file. So everything up to the document's opening fence
+    /// was code and its closing fence opened a block to the end, or the comment's own
+    /// closer was hidden: annotations there were read as code. Mutation check: mask
+    /// only a block running to the end of the file in `unsettled` again.
     #[test]
-    fn a_highlight_widened_over_a_sealed_comment_does_not_wrap_a_fence() {
-        let src = FENCE_FLIP.to_string() + "\nx {>>note\n```\n<<}\n```\nmore <<} y\n";
-        assert_eq!(reading(&src, SETTLE_ROUNDS).outcome, Outcome::Unsettled);
-        let note = src.find("note").unwrap();
-        let after_fence = src.rfind("more").unwrap();
-        match for_highlight(&src, note..note + 4) {
-            Landing::Point(slot) => assert_eq!(slot.at, after_fence),
-            other => panic!("{other:?}"),
+    fn a_pasted_fence_closed_outside_its_comment_does_not_make_the_fallback_code() {
+        for (tail, want) in [
+            (
+                "\nUse {>>try:\n```\n<<} it, {>>note<<} here.\n\n```\ncode\n```\n\n\
+                 Later {>>z<<} end.\n",
+                &["try:\n```\n", "note", "z"][..],
+            ),
+            (
+                "\n> Use {>>try:\n> ```\n> <<} it.\n\nLater {>>z<<} end.\n",
+                &["try:\n> ```\n> ", "z"][..],
+            ),
+        ] {
+            let src = FENCE_FLIP.to_string() + tail;
+            assert_eq!(reading(&src, SETTLE_ROUNDS).outcome, Outcome::Unsettled);
+            let raw = parse_code(&src, 0);
+            let body = src.find("try").unwrap();
+            assert!(
+                raw.blocks
+                    .iter()
+                    .any(|b| b.start > body && b.end < src.len()),
+                "precondition: a block opens past the pasted fence and ends before the \
+                 end of the file: {:?}",
+                raw.blocks
+            );
+            let got = comments(&src);
+            for w in want {
+                assert!(got.contains(&w.to_string()), "{tail:?}: {got:?}");
+            }
+            assert!(!swallows(&src, &as_written(&src).code), "{tail:?}");
+            let later = src.find("end.").unwrap();
+            assert_eq!(
+                for_highlight(&src, later..later + 3),
+                Landing::Highlight(later..later + 3),
+                "{tail:?}"
+            );
         }
     }
 

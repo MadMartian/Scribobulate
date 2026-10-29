@@ -132,8 +132,11 @@ behaviour is built.
   XML character references (decimal, hex, either case, leading zeros); percent-encoding, single
   and repeated, either hex case; `data:` headers with `;base64` spelled every way the decoder
   accepts (spaces after the `;`, case, extra parameters before it); CSS escapes (`data\3a`); tabs and
-  newlines the URL parser drops; carriers `<image href>`, `xlink:href`, `<use>`, CSS `url()` in a
-  `style` attribute and a `<style>` element; gzip; UTF-16 both byte orders, with and without BOM;
+  newlines the URL parser drops, and any C0 whitespace (form feed, CR LF) after a CSS escape or an
+  escaped newline; carriers `<image href>`, `xlink:href`, `<use>`, CSS `url()` in a `style`
+  attribute, a `<style>` element (CDATA-wrapped too), an `<?xml-stylesheet href?>` pseudo-attribute,
+  and a `data:text/css` stylesheet; a payload split by a comment, a processing instruction or
+  `]]><![CDATA[` in element text; gzip; UTF-16 both byte orders, with and without BOM;
   the XInclude namespace under any prefix or as the default namespace. Header spellings the
   decoder REJECTS as base64 must be in the grammar too (`%3Bbase64`, `;base64%20`, a CSS form
   feed), each with a percent-hostile body: the Round 11 leak was a header only the screen read

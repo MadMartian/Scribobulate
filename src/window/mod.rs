@@ -87,7 +87,7 @@ pub(crate) use find::{
     RenderKey,
 };
 pub(crate) use findbar::refresh_preview_find_highlight;
-pub(crate) use foldreveal::defer_with_window;
+pub(crate) use foldreveal::defer_with_tab;
 pub(crate) use foldsplice::splice_disclosure_in_place;
 pub(crate) use imagerefusal::install as install_image_refusal_notice;
 pub(crate) use lifecycle::quit_all_windows;

@@ -981,3 +981,159 @@ fn a_comma_produced_by_an_escape_does_not_move_the_header_boundary() {
         assert_eq!(refused(wrap(&benign)), None, "benign under {header:?}");
     }
 }
+
+/// Every byte percent-encoded, so the payload holds no literal `data:` or comma.
+fn percent_all(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("%{b:02X}")).collect()
+}
+
+/// The same moved boundary with no `;base64`: the decoder's percent body starts at the
+/// literal comma, so it begins with gzip's or UCS-4's first bytes, while the screen's
+/// first-cut reading begins one comma earlier and recognised neither.
+#[test]
+fn a_comma_produced_by_an_escape_does_not_hide_a_payload_known_by_its_first_bytes() {
+    let mut ucs4 = vec![0, 0, 0, b'<'];
+    ucs4.extend_from_slice(&[0, 0, 0, b's']);
+    for header in ["image/svg+xml;a=\\2c", "image/svg+xml;a=&#92;2c"] {
+        let wrap = |body: &str| format!(r#"<svg><image href="data:{header},{body}"/></svg>"#);
+        assert_eq!(
+            refused(wrap(&percent_all(&gzip(ATTACK.as_bytes())))),
+            Some(Reason::XInclude),
+            "gzip under {header:?}"
+        );
+        assert_eq!(
+            refused(wrap(&percent_all(&gzip(BENIGN.as_bytes())))),
+            None,
+            "benign gzip under {header:?}"
+        );
+        assert_eq!(
+            refused(wrap(&percent_all(&ucs4))),
+            Some(Reason::Encoding),
+            "UCS-4 under {header:?}"
+        );
+    }
+}
+
+/// Each later comma that leads a signature gets a whole reading of its own, so a text
+/// of many of them must be refused by the budget, not screened in quadratic time.
+#[test]
+fn many_commas_leading_a_signature_are_bounded_by_the_budget() {
+    let cap = crate::limits::MAX_LOCAL_IMAGE_BYTES as usize;
+    let text = format!(
+        r#"<svg><image href="data:a\2c,{}"/></svg>"#,
+        ",%1F%8B".repeat(cap / 7)
+    );
+    let started = std::time::Instant::now();
+    assert!(refused(&text).is_some());
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
+
+/// A context that expands no references (an `<?xml-stylesheet?>` pseudo-attribute)
+/// leaves `&amp;` to the decoder, where it ends in the `;` its base64 rule asks for,
+/// while the screen's normalised `&base64` has none.
+#[test]
+fn a_later_comma_that_base64_precedes_is_read_as_base64_whatever_introduces_it() {
+    let wrap = |doc: &str| {
+        format!(
+            r#"<?xml-stylesheet href="data:text/css;a=\2c&amp;base64,{}"?><svg/>"#,
+            base64(doc.as_bytes())
+        )
+    };
+    assert_eq!(refused(wrap(ATTACK)), Some(Reason::XInclude));
+    assert_eq!(refused(wrap(BENIGN)), None);
+}
+
+/// CSS eats any one whitespace after a hex escape, form feed included, and an escaped
+/// newline or form feed stands for nothing; the screen kept the form feed, which split
+/// `base64` in a stylesheet read with no XML parse (a percent-encoded `data:text/css`).
+#[test]
+fn a_form_feed_after_a_css_escape_does_not_split_base64() {
+    for spelling in ["\\62\x0Case64", "bas\\\x0Ce64", "\\62\r\nase64"] {
+        let wrap = |doc: &str| {
+            let css = format!(
+                "a{{b:url(data:image/svg+xml;{spelling},{})}}",
+                base64(doc.as_bytes())
+            );
+            format!(
+                r#"<svg><image href="data:text/css,{}"/></svg>"#,
+                percent_all(css.as_bytes())
+            )
+        };
+        assert_eq!(
+            refused(wrap(ATTACK)),
+            Some(Reason::XInclude),
+            "hostile under {spelling:?}"
+        );
+        assert_eq!(refused(wrap(BENIGN)), None, "benign under {spelling:?}");
+    }
+}
+
+/// The XML parser hands a `<style>` element's text to the stylesheet with comments and
+/// processing instructions dropped and CDATA unwrapped, so markup between two halves
+/// of a payload joins them.
+#[test]
+fn markup_splitting_a_payload_in_element_text_hides_nothing() {
+    let splits = ["<!-- x -->", "<?p q?>", "]]><![CDATA["];
+    for split in splits {
+        let wrap = |doc: &str| {
+            let b64 = base64(doc.as_bytes());
+            // Past the benign twin's declarations, so its first half reads honestly.
+            let (head, tail) = b64.split_at(192);
+            format!(
+                "<svg><style><![CDATA[a{{b:url(data:image/svg+xml;base64,{head}{split}{tail})}}]]></style></svg>"
+            )
+        };
+        assert_eq!(
+            refused(wrap(ATTACK)),
+            Some(Reason::XInclude),
+            "base64 split by {split:?}"
+        );
+        assert_eq!(refused(wrap(BENIGN)), None, "benign split by {split:?}");
+    }
+    let word = percent_all(b"XInclude");
+    let inner = percent_all(
+        br#"<svg xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="x"/></svg>"#,
+    )
+    .replace(&word, &format!("{}<!---->{}", &word[..9], &word[9..]));
+    let page = format!("<svg><style>a{{b:url(data:image/svg+xml,{inner})}}</style></svg>");
+    assert_eq!(refused(page), Some(Reason::XInclude), "percent split");
+}
+
+/// An honest page's comments and declarations sit between tags, so it is read once.
+#[test]
+fn markup_between_tags_does_not_join_anything() {
+    assert!(without_joining_markup(BENIGN.as_bytes()).is_none());
+    assert!(
+        without_joining_markup(b"<svg><style><![CDATA[ .a{} ]]></style> <!-- c --> </svg>")
+            .is_none()
+    );
+    assert!(without_joining_markup(b"<s>ab<!-- c -->cd</s>").is_some());
+}
+
+/// An honest page near the cap holding one base64 raster is screened in full and passes.
+/// Without [`inert_prefix`] the percent reading kept under a base64 verdict re-reads the
+/// whole raster, and the same page exceeds the budget: that is the precondition, so the
+/// test cannot pass by the page being too small to matter.
+#[test]
+fn an_honest_raster_near_the_cap_is_not_refused_for_its_cost() {
+    let cap = crate::limits::MAX_LOCAL_IMAGE_BYTES as usize;
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    let raw: Vec<u8> = (0..(cap - 256) / 4 * 3)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state as u8
+        })
+        .collect();
+    let page = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/png;base64,{}"/></svg>"#,
+        base64(&raw)
+    );
+    assert!(page.len() <= cap);
+    NO_INERT_PREFIX.with(|off| off.set(true));
+    let without = refused(&page);
+    NO_INERT_PREFIX.with(|off| off.set(false));
+    assert_eq!(without, Some(Reason::TooLarge), "precondition");
+    assert_eq!(refused(&page), None);
+}

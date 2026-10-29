@@ -201,14 +201,16 @@ pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit)
                 crate::annotate::Landing::Highlight(range) => {
                     crate::annotate::insert_or_extend_highlight(&old, range, &comment)
                 }
-                crate::annotate::Landing::Point(slot) => insert_point(&old, slot, &comment),
+                crate::annotate::Landing::Point(slot) => {
+                    crate::annotate::insert_landed_point(&old, slot, &comment)
+                }
             }
         }
         AnnotationEdit::Create(CreateAnnotation::Point { target, comment }) => {
             let Some(at) = target.resolve(&old).map(|r| r.end) else {
                 return;
             };
-            insert_point(
+            crate::annotate::insert_landed_point(
                 &old,
                 crate::annotate::landing::for_point(&old, at),
                 &comment,
@@ -228,19 +230,6 @@ pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit)
         return;
     }
     splice_minimal(buf, &old, &new);
-}
-
-/// Write a point comment. A cross-block point comment anchors at the selection END,
-/// which can map INSIDE an existing construct — splicing there silently corrupts it and
-/// swallows the comment — so a bare one is snapped outside any construct first (both
-/// the preview sink and the editor card route through here, so the guard lives at this
-/// one choke point). One framed onto its own line after a block sits at a line start,
-/// which no construct straddles.
-fn insert_point(old: &str, mut slot: crate::annotate::Slot, comment: &str) -> String {
-    if slot.is_bare() {
-        slot.at = crate::annotate::point_comment_anchor(old, slot.at);
-    }
-    crate::annotate::insert_point_comment(old, &slot, comment)
 }
 
 /// Re-render the preview so a just-applied annotation (create / edit / remove)

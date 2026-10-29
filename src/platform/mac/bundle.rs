@@ -89,10 +89,31 @@ const STAGED_SVG_LOADER: &str = "Frameworks/libpixbufloader_svg.so";
 /// Fails closed: no module file, one naming any other SVG loader, a loader that will not
 /// load, or no librsvg image after it did, is `false`, and the screen stays up.
 pub(crate) fn carries_verified_librsvg() -> bool {
-    contents_dir().is_some_and(|contents| {
-        let env = std::env::var_os("GDK_PIXBUF_MODULE_FILE");
-        let module_file = module_file_in_use(INSTALLED_CACHE.get(), env.as_deref());
-        verified(&contents, module_file, load_and_keep, loaded_images)
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let env = std::env::var_os("GDK_PIXBUF_MODULE_FILE");
+    decide(
+        &exe,
+        INSTALLED_CACHE.get(),
+        env.as_deref(),
+        load_and_keep,
+        loaded_images,
+    )
+}
+
+/// [`carries_verified_librsvg`]'s whole composition, with everything it discovers given:
+/// the executable's path, the cache this process installed, `GDK_PIXBUF_MODULE_FILE`,
+/// the loader load and dyld's image list.
+fn decide(
+    exe: &Path,
+    installed: Option<&PathBuf>,
+    env: Option<&std::ffi::OsStr>,
+    load: impl FnOnce(&Path) -> bool,
+    images: impl FnOnce() -> Vec<PathBuf>,
+) -> bool {
+    contents_for_exe(exe).is_some_and(|contents| {
+        verified(&contents, module_file_in_use(installed, env), load, images)
     })
 }
 
@@ -494,7 +515,7 @@ pub(crate) fn configure_language_path() {
 #[cfg(test)]
 mod tests {
     use super::{
-        absolutize_loader_cache, contents_for_exe, install_loader_cache, load_and_keep,
+        absolutize_loader_cache, contents_for_exe, decide, install_loader_cache, load_and_keep,
         loaded_images, loader_binds_staged_librsvg, module_basename, module_file_in_use,
         only_the_staged_librsvg_is_loaded, svg_modules_are_staged, sweep_dead_caches, verified,
     };
@@ -754,6 +775,69 @@ mod tests {
         assert!(!dead_file.exists(), "an exited process's cache");
         assert!(live_file.exists(), "this process's cache");
         assert!(other.exists(), "a name that is not a per-process cache");
+    }
+
+    /// The whole composition over a staged bundle: each input that can withhold the
+    /// stand-down, broken alone, keeps the screen up. Mutation: dropping any one conjunct
+    /// (bundle detection, the installed-cache match, the module file, the load, the image
+    /// list) passes its case.
+    #[test]
+    fn every_conjunct_of_the_decision_can_keep_the_screen_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let (contents, template) = staged_cache(dir.path());
+        let frameworks = contents.join("Frameworks");
+        let exe = contents.join("MacOS/scribobulate");
+        let staged = frameworks.join("librsvg-2.2.dylib");
+        std::fs::write(&staged, b"").unwrap();
+        let cache = install_loader_cache(&template, &frameworks, dir.path()).unwrap();
+        let homebrew = PathBuf::from("/opt/homebrew/opt/librsvg/lib/librsvg-2.2.dylib");
+        let outside = dir.path().join("scribobulate");
+        std::fs::write(&outside, b"#!/bin/sh\n").unwrap();
+        let other_cache = dir.path().join("other.cache");
+        std::fs::copy(&cache, &other_cache).unwrap();
+        let env = |p: &Path| Some(p.as_os_str().to_owned());
+
+        let run = |exe: &Path,
+                   installed: Option<&PathBuf>,
+                   env: Option<std::ffi::OsString>,
+                   loads: bool,
+                   images: Vec<PathBuf>| {
+            decide(exe, installed, env.as_deref(), |_| loads, || images)
+        };
+        let ok = || vec![staged.clone()];
+
+        // ANTI-VACUITY: everything in order stands the screen down.
+        assert!(run(&exe, Some(&cache), env(&cache), true, ok()));
+        assert!(
+            !run(&outside, Some(&cache), env(&cache), true, ok()),
+            "outside any bundle"
+        );
+        assert!(
+            !run(&exe, None, env(&cache), true, ok()),
+            "no cache installed"
+        );
+        assert!(
+            !run(&exe, Some(&cache), env(&other_cache), true, ok()),
+            "GDK_PIXBUF_MODULE_FILE names a cache this process did not write"
+        );
+        assert!(
+            !run(&exe, Some(&cache), None, true, ok()),
+            "GDK_PIXBUF_MODULE_FILE unset"
+        );
+        std::fs::write(&cache, std::fs::read_to_string(&template).unwrap()).unwrap();
+        assert!(
+            !run(&exe, Some(&cache), env(&cache), true, ok()),
+            "the cache no longer names the staged loader"
+        );
+        let cache = install_loader_cache(&template, &frameworks, dir.path()).unwrap();
+        assert!(
+            !run(&exe, Some(&cache), env(&cache), false, ok()),
+            "the loader did not load"
+        );
+        assert!(
+            !run(&exe, Some(&cache), env(&cache), true, vec![homebrew]),
+            "the loader bound another librsvg"
+        );
     }
 
     /// Every module claiming SVG must be the staged loader, named absolutely. Mutation:

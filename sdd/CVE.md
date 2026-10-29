@@ -163,7 +163,7 @@ status notice. On macOS the screen stands down only when the process runs from a
 librsvg dyld actually loaded is the bundle's staged, verified one, and the loader cache gdk-pixbuf
 reads names no SVG loader but the staged one.
 
-**Leaks found and closed** (QA review rounds; all 2026-10-28):
+**Leaks found and closed** (QA review rounds; 2026-10-28 unless dated):
 - **Round 8.** A nested `data:` URI escaped the screen: a non-base64 payload was cut at the first
   quote, and a header with no comma within a bound was treated as "not a URI". Closed: a header
   that cannot be delimited refuses; a percent payload is screened past literal quotes; base64 scan
@@ -231,22 +231,47 @@ reads names no SVG loader but the staged one.
   content is screened once per load. A cap-sized page now costs about 0.1–0.5 s per load in a
   release build, down from 0.25–3 s. ("Charge every UTF-16 reading of the XInclude screen and screen
   one content once per load", 2026-10-29)
+- **Round 11, macOS bundle.** The stand-down checked a fixed-name loader cache in the shared temp
+  directory that any other launch of any bundle copy could rewrite between the check and
+  gdk-pixbuf's read. Closed (pending the macOS pipeline): each launch writes its own (exclusive
+  create, named by process), and the check reads the path this process wrote, never the inherited
+  environment value. ("Check the loader cache this process wrote…", 2026-10-29)
 - **Round 12.** The screen ended a `data:` header at the first comma of its normalised text, where
   an escape can produce one (`\2c`, or `&#92;2c`, which the XML parser turns into `\2c`) that the
   decoder, ending the header at the first LITERAL comma, does not see. Under a plain `href`,
   `;a=\2c;base64` was base64 to the decoder and a percent `;base64,…` to the screen. Closed: every
-  later comma whose preceding text ends in the decoder's base64 rule gets a base64 reading too.
+  later comma whose preceding text ends in `base64` gets a base64 reading too (in Round 12 only
+  those ending in the decoder's own rule; Round 13 widened it, below).
   ("Read a base64 body at every comma the decoder could end the header on…", 2026-10-29)
 - **Round 12, over-refusal (not a leak).** The percent reading kept under a base64 verdict
   re-read a whole base64 raster, so an honest page over about 15 MiB carrying one cost more than
   the budget and was refused. Closed: that reading skips the body's leading base64 run, which
   percent-decoding leaves unchanged and which can hold no markup, keeping its last few bytes.
   ("Stop screening an honest base64 raster twice…", 2026-10-29)
-- **Round 11, macOS bundle.** The stand-down checked a fixed-name loader cache in the shared temp
-  directory that any other launch of any bundle copy could rewrite between the check and
-  gdk-pixbuf's read. Closed: each launch writes its own (exclusive create, named by process), and
-  the check reads the path this process wrote, never the inherited environment value. ("Check the
-  loader cache this process wrote…", 2026-10-29)
+- **Round 13.** The same moved boundary with no `;base64`: the decoder's percent body began at
+  the literal comma with gzip's (or UCS-4's) first bytes, while the screen's one percent reading
+  began at the escape-made comma, so the bytes between hid the signature and the compressed
+  document was screened as text that spelled nothing. Closed: a later comma whose percent-decoded
+  payload begins with a signature known by its first bytes gets a percent reading of its own,
+  charged before it is built. ("Give a payload known by its first bytes a reading at every comma
+  the decoder could end the header on", 2026-10-29)
+- **Round 13, stylesheet contexts.** Three routes through text librsvg reads as CSS:
+  - A context that expands no references (an `<?xml-stylesheet?>` pseudo-attribute) leaves
+    `&amp;` to the decoder, where it ends in the `;` of its base64 rule, while the screen's
+    normalised `&base64` has none, so the later-comma reading asked the decoder's rule and missed.
+    Closed: any later comma that `base64` precedes gets a base64 reading.
+  - The screen undid a CSS hex escape eating only a following space, and kept an escaped form feed,
+    where CSS eats any one whitespace (form feed and CR LF included) and an escaped newline or form
+    feed stands for nothing. In a stylesheet read with no XML parse (a percent-encoded
+    `data:text/css`), a form feed split `base64` for the screen alone. Closed: escapes follow CSS
+    Syntax 3, normalising drops form feeds too, and `base` is sought with every space and control
+    byte removed.
+  - The XML parser drops comments and processing instructions from a `<style>` element's text and
+    unwraps CDATA, so markup between two halves of a payload joins them for the stylesheet; the
+    screen read the halves apart. Closed: text where such markup has text on both sides is also
+    read with all of it removed.
+  Reachability of each is unmeasured; every closure only refuses more. ("Read stylesheet text as
+  the decoder's CSS and XML parsers hand it over…", 2026-10-29)
 
 **The pattern behind every parsing leak** (the stand-down leaks are the other class, above): each
 bypass was a place where the screen parsed a `data:` URI
@@ -304,7 +329,7 @@ libraries from beside the .app"; "Gate every macOS bundle build, fail closed, an
 librsvg from what dyld loaded") TDD and MANUAL-TEST 26.1 carry the check that a librsvg beside the
 `.app` is not loaded, with its negative control.
 
-**Leaks found and closed** (QA review rounds, all 2026-10-28):
+**Leaks found and closed** (QA review rounds; 2026-10-28 unless dated):
 - **Round 9.** The self-contained gate never ran on an ordinary bundle build; the gates failed
   open when `otool` or `file` crashed or answered nothing; and `@loader_path` / `@executable_path`
   references were accepted on their prefix. Closed: every build runs every gate, a tool that
@@ -317,9 +342,9 @@ librsvg from what dyld loaded") TDD and MANUAL-TEST 26.1 carry the check that a 
   bundle's loader cache, and resolve every bundle reference before judging it")
 - **Round 11.** The install-ID read returned success on an empty `otool -D` answer, so a tool that
   answered nothing about a library's install ID read as "no ID" and the bundle passed unread.
-  Closed: it fails closed when the object's load commands carry an install ID; the librsvg gate's
-  self-test holds this with a stub `otool`. ("Check the loader cache this process wrote, in a file
-  of its own, and fail closed on a missing install ID", 2026-10-29)
+  Closed (pending the macOS pipeline): it fails closed when the object's load commands carry an
+  install ID; the librsvg gate's self-test holds this with a stub `otool`. ("Check the loader cache
+  this process wrote, in a file of its own, and fail closed on a missing install ID", 2026-10-29)
 
 **To close for good**: nothing upstream. This entry stays Patched while the bundle copies
 third-party libraries; it is the record of why those gates must not be removed.
