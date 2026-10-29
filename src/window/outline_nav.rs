@@ -20,10 +20,7 @@ pub(crate) fn refresh_outline(window: &ApplicationWindow) {
     // Cache what the hot paths read, so neither a caret move nor a viewport change has to
     // re-parse the document — see `TabState::heading_index`'s doc comment, and the
     // Hot-path CAM rows it anchors.
-    *st.heading_index.borrow_mut() = headings
-        .iter()
-        .map(crate::outline::HeadingRef::from)
-        .collect();
+    *st.heading_index.borrow_mut() = crate::outline::HeadingRef::index(&md, &headings);
     // The durable name of every heading this build shows, cached beside the offsets above
     // and for the same reason — it comes from this same parse, and the capture hook below
     // would otherwise have to re-parse the document just to name a row it is looking at.
@@ -742,9 +739,10 @@ fn preview_top_doc_index(window: &ApplicationWindow) -> Option<usize> {
 ///
 /// In edit/split mode the caret — not the viewport top — is the user's working
 /// position, so the outline highlights the heading the caret sits in.
-/// The editor buffer is the raw Markdown source, so the caret's char offset
-/// (`cursor-position`) is converted to a byte offset before the binary search into
-/// `extract_headings` src_offsets (byte offsets into the source string).
+/// The editor buffer is the raw Markdown source, and the cache carries each heading's
+/// character offset into it, so the caret's char offset (`cursor-position`) is searched
+/// directly — O(log headings) per caret move, with no copy of the buffer (Hot-path CAM
+/// row 3, cell B).
 ///
 /// Headings come from `TabState::heading_index` — `refresh_outline`'s cache of its own
 /// `extract_headings` result — rather than a fresh re-parse: re-parsing the whole document
@@ -753,22 +751,13 @@ fn preview_top_doc_index(window: &ApplicationWindow) -> Option<usize> {
 fn editor_cursor_doc_index(window: &ApplicationWindow) -> Option<usize> {
     let st = state(window)?;
     let char_off = st.editor_buf.property::<i32>("cursor-position").max(0) as usize;
-
-    // Convert char offset → byte offset in the UTF-8 source string.
-    let text = st.editor_text();
-    let byte_off = text
-        .char_indices()
-        .nth(char_off)
-        .map(|(b, _)| b)
-        .unwrap_or(text.len());
-
     let headings = st.heading_index.borrow();
     if headings.is_empty() {
         return None;
     }
 
-    // Largest heading src_offset ≤ byte_off = the caret's enclosing (or preceding) heading.
-    match headings.partition_point(|h| h.src_offset.raw() <= byte_off) {
+    // Largest heading offset ≤ the caret = the caret's enclosing (or preceding) heading.
+    match headings.partition_point(|h| h.src_char <= char_off) {
         0 => None, // caret is above the very first heading
         n => Some(n - 1),
     }

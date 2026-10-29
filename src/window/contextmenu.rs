@@ -15,6 +15,79 @@ fn dismiss_context_popover(po: &gtk::Popover) {
     let po = po.clone();
     gtk::glib::idle_add_local_once(move || po.popdown());
 }
+/// The scaffold every right-click menu shares (the document, tab and toolbar menus): a
+/// plain arrowless `GtkPopover` — the convention here, because `GtkPopoverMenu` grows a
+/// spurious scrollbar on GTK 4.6 (ScrAP-9) — and one Capture/Local shortcut controller
+/// serving bare-letter access keys (GTK4Rs/T-1). A menu builds its rows, adding their
+/// shortcuts to [`keys`](Self::keys), then [`open`](Self::open)s it, which owns the parts
+/// the copies once disagreed on: the scrolling body and the deferred release.
+pub(crate) struct ContextMenu {
+    pub(crate) popover: gtk::Popover,
+    pub(crate) keys: gtk::ShortcutController,
+}
+
+impl ContextMenu {
+    pub(crate) fn new() -> Self {
+        let popover = gtk::Popover::new();
+        popover.set_has_arrow(false);
+        let keys = gtk::ShortcutController::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.set_scope(gtk::ShortcutScope::Local);
+        Self { popover, keys }
+    }
+
+    /// Show `body` as the menu, pointing at `(x, y)` in `parent`'s coordinates.
+    /// `on_closed` is the menu's own close work; it runs before the deferred release.
+    pub(crate) fn open(
+        self,
+        parent: &impl IsA<gtk::Widget>,
+        (x, y): (f64, f64),
+        body: &impl IsA<gtk::Widget>,
+        on_closed: impl Fn(&gtk::Popover) + 'static,
+    ) -> gtk::Popover {
+        let Self { popover, keys } = self;
+        popover.set_parent(parent);
+        popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        install_menu_body(&popover, body);
+        popover.add_controller(keys);
+        popover.connect_closed(move |p| {
+            on_closed(p);
+            release_after_close(p);
+        });
+        popover.popup();
+        popover
+    }
+}
+
+/// Unparent a closed menu later, never inside its `closed` emission. Every right-click
+/// menu releases itself through this, installed by [`ContextMenu::open`] — module-private
+/// so a menu cannot hand-roll its own `closed` release and get it wrong again (the
+/// document and tab menus once unparented inside the emission).
+///
+/// `closed` is emitted from the popover's hide, and hiding the HOST hides the popover from
+/// inside GTK's own unmap of it: the host's unmap walks its children, the popover's unmap
+/// hides its surface, and on GDK-Win32 the surface's `mapped` notify fires synchronously
+/// inside that hide (`gdk_win32_surface_hide` → `gdk_surface_set_is_mapped`; the generic
+/// path queues it to an idle, which is why X11 never shows this), and the popover answers
+/// it with `gtk_widget_set_visible(FALSE)` → `closed`. Unparenting there unrealizes the
+/// popover — destroying the surface GDK is still hiding, and freeing the popover if the
+/// host held its only reference — in the middle of both. Closing the window while the menu
+/// is open is the same chain under `gtk_widget_unrealize`, which emits `unrealize` after
+/// the unmap without checking again, so the popover is unrealized twice. Unparenting
+/// after the emission has unwound avoids both (GTK4Rs/AP-30). The delay is the tooltip
+/// drain, because unrealizing a popover the pointer has just been over is its own fault
+/// (GTK4Rs/AP-117). Weak: a popover already gone with its window has nothing to release.
+fn release_after_close(popover: &gtk::Popover) {
+    let weak = popover.downgrade();
+    glib::timeout_add_local_once(crate::widgets::TOOLTIP_HOVER_DRAIN, move || {
+        if let Some(popover) = weak.upgrade() {
+            if !popover.is_visible() && popover.parent().is_some() {
+                popover.unparent();
+            }
+        }
+    });
+}
+
 /// Give `popover` its menu `body` inside a vertical scroller, so the menu's MINIMUM
 /// height no longer equals its full height.
 ///
@@ -26,8 +99,8 @@ fn dismiss_context_popover(po: &gtk::Popover) {
 /// on screen height and window position, not on the document. Inside the scroller the
 /// menu keeps its natural height wherever it fits (`propagate_natural_height`) and
 /// scrolls where it does not, which is what GTK's own `GtkPopoverMenu` does. Every
-/// right-click menu (this one and the tab menu) goes through here (TDD 9.39).
-pub(crate) fn install_menu_body(popover: &gtk::Popover, body: &impl IsA<gtk::Widget>) {
+/// right-click menu goes through here, from [`ContextMenu::open`] (TDD 9.39).
+fn install_menu_body(popover: &gtk::Popover, body: &impl IsA<gtk::Widget>) {
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroller.set_propagate_natural_height(true);
@@ -114,19 +187,32 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
             btn
         };
 
-        let popover = gtk::Popover::new();
-        popover.set_has_arrow(false);
+        // Parented to the window's CONTENT, not the window: the release is deferred out of
+        // `closed`, so on a window close it runs after the window is gone, and a
+        // `GtkWindow` does not unparent children it was handed by `set_parent` — the
+        // menu was left behind ("still has children left: GtkPopover") and leaked. The
+        // content container's own teardown unparents it, as the tab bar and toolbar do
+        // for theirs. Not the text view: a `set_parent` child of a text view never
+        // finishes its dispose (GTK4Rs/AP-80).
+        let Some(host) = view
+            .root()
+            .and_then(|r| r.downcast::<gtk::Window>().ok())
+            .and_then(|w| w.child())
+        else {
+            return;
+        };
+        let menu = ContextMenu::new();
+        let popover = menu.popover.clone();
+        let key_controller = menu.keys.clone();
 
-        // Single-surface two-page GtkStack (flat menu + Change Case submenu) and one
-        // Capture/Local ShortcutController delivering bare-letter access keys — the
-        // researcher-confirmed public recipe for a non-model popover (GTK4Rs/T-1/GTK4Rs/AP-69).
+        // Single-surface two-page GtkStack (flat menu + Change Case submenu) and the
+        // menu's Capture/Local ShortcutController delivering bare-letter access keys —
+        // the researcher-confirmed public recipe for a non-model popover
+        // (GTK4Rs/T-1/GTK4Rs/AP-69).
         let stack = gtk::Stack::new();
         stack.set_vhomogeneous(false);
         stack.set_interpolate_size(true);
         stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
-        let key_controller = gtk::ShortcutController::new();
-        key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
-        key_controller.set_scope(gtk::ShortcutScope::Local);
         // Register a button's bare-letter access key, live only while `page` shows
         // (so `u` is Undo on "main" yet UPPER CASE on "change-case").
         let add_key = {
@@ -361,27 +447,20 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
         stack.add_named(&main_box, Some("main"));
         stack.add_named(&case_box, Some("change-case"));
         stack.set_visible_child_name("main");
-        install_menu_body(&popover, &stack);
-        popover.add_controller(key_controller);
 
-        let Some(root) = view.root() else { return };
-        let (px, py) = view.translate_coordinates(&root, x, y).unwrap_or((x, y));
-        popover.set_parent(&root);
-        popover.set_pointing_to(Some(&gdk::Rectangle::new(px as i32, py as i32, 1, 1)));
+        let at = view.translate_coordinates(&host, x, y).unwrap_or((x, y));
         // Weak (never a strong clone): this closure is owned by the popover, which
         // lives in the window's widget tree — a strong capture would be the
         // uncollectable cycle GTK4Rs/AP-63 is about.
         let win_weak = win_ref.as_ref().map(|w| w.downgrade());
-        popover.connect_closed(move |p| {
+        menu.open(&host, at, &stack, move |_| {
             // Disarm the right-clicked link with the popover it belongs to, so the
             // pointer target cannot outlive the menu and leave the menu-bar and
             // toolbar surfaces enabled for a link nobody is pointing at.
             if let Some(w) = win_weak.as_ref().and_then(|w| w.upgrade()) {
                 set_context_link(&w, None);
             }
-            p.unparent();
         });
-        popover.popup();
     });
     view.add_controller(right_click);
 }
@@ -395,16 +474,14 @@ mod gtk_integration_tests {
     /// screen shorter than twice the menu puts the real context menu in.
     const TALLER_THAN_ANY_MONITOR: i32 = 20_000;
 
-    /// Wall-clock settle: a popover's surface is sized and its self-dismissal decided
-    /// on a frame-clock tick, which turns of the loop alone never advance
-    /// (GTK4Rs/AP-261).
-    fn pump_for(ms: u64) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
-        while std::time::Instant::now() < deadline {
-            while glib::MainContext::default().iteration(false) {}
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-    }
+    use crate::testpump::{drain_for, until, until_for, until_or_for, Clock, TOOLTIP_HOVER_DRAIN};
+    use std::time::Duration;
+
+    /// How long a popover is given to close itself. The self-dismissal runs on a
+    /// frame-clock tick after the surface is sized (GTK4Rs/AP-86), so it is WAITED for
+    /// up to this bound, never sampled at a fixed moment: a late tick under load would
+    /// otherwise read as "this GTK does not self-dismiss" and skip the effect half.
+    const SELF_DISMISS_BOUND: Duration = Duration::from_secs(2);
 
     fn popped_over(
         window: &gtk::Window,
@@ -416,19 +493,105 @@ mod gtk_integration_tests {
         install(&popover, &body);
         popover.set_parent(window);
         popover.popup();
-        pump_for(500);
+        until(Clock::Frame, "the popover to map", || popover.is_mapped());
         popover
     }
 
-    /// popdown-then-unparent (GTK4Rs/AP-123), with GTK's 500 ms tooltip hover timeout
-    /// let run out in between. The 20000 px popover covers the pointer, so GTK's
-    /// tooltip binds to the popover's surface and arms that timeout; on GTK 4.6, if it
-    /// fires after `unparent()` has destroyed the surface, it raises a
+    /// Whether `popover` closes itself within [`SELF_DISMISS_BOUND`].
+    fn closes_itself(popover: &gtk::Popover) -> bool {
+        until_or_for(Clock::Frame, SELF_DISMISS_BOUND, || !popover.is_visible())
+    }
+
+    /// popdown-then-unparent (GTK4Rs/AP-123), with GTK's tooltip hover timeout let run
+    /// out in between. The 20000 px popover covers the pointer, so GTK's tooltip binds to
+    /// the popover's surface and arms that timeout; on GTK 4.6, if it fires after
+    /// `unparent()` has destroyed the surface, it raises a
     /// `gdk_surface_get_device_position` critical, fatal under the suite.
     fn close(popover: &gtk::Popover) {
         popover.popdown();
-        pump_for(600);
+        drain_for(Clock::Frame, TOOLTIP_HOVER_DRAIN);
         popover.unparent();
+    }
+
+    /// **Closing the window with the document menu open releases the menu.** The release
+    /// is deferred out of `closed` (see `release_after_close`), so it runs after the
+    /// window is gone; the menu must therefore hang off a widget whose own teardown
+    /// unparents it. Parented to the window itself, it was left behind: GTK warned
+    /// "Finalizing GtkApplicationWindow, but it still has children left: GtkPopover"
+    /// (MEASURED on Windows 3 of 3, and here). The structural assertion comes first
+    /// because, with the menu on the window, the window's finalize leaves the menu's
+    /// parent pointer dangling, so the after-state cannot be read safely.
+    ///
+    /// NOT asserted: that the popover object is freed. MEASURED here, it is unparented
+    /// and still alive after the window and its content are both finalized; what holds
+    /// it is not established (a popover unparented while still open, GTK4Rs/AP-123?).
+    ///
+    /// Mutation check: parenting the menu to the window again fails the first assertion.
+    #[gtktest::test]
+    fn closing_the_window_with_the_document_menu_open_releases_the_menu() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let app = crate::window::testkit::test_app(
+                "com.extollit.scribobulate.integrationtest.docmenuclose",
+            );
+            let win = crate::window::new_window(&app, "IT-docmenu", "# H\n\ntext\n", None);
+            win.present();
+            let view = crate::window::zoom::get_preview_view(&win).expect("a preview");
+            until(Clock::Frame, "the preview to lay out", || view.height() > 0);
+            let press = view
+                .observe_controllers()
+                .into_iter()
+                .filter_map(|c| c.ok().and_downcast::<GestureClick>())
+                .find(|g| g.button() == 3)
+                .expect("the preview carries the right-click gesture");
+            press.emit_by_name::<()>("pressed", &[&1i32, &20.0f64, &20.0f64]);
+            until_for(
+                Clock::Frame,
+                Duration::from_secs(5),
+                "the document menu to open",
+                || find_popover(win.upcast_ref()).is_some(),
+            );
+            // Only a weak reference survives this block: a strong one held by the test
+            // would keep the menu alive whatever the window's teardown does.
+            let menu = {
+                let menu = find_popover(win.upcast_ref()).expect("the menu is open");
+                until(Clock::Frame, "the menu to map", || menu.is_mapped());
+                assert!(
+                    menu.parent().is_some_and(|p| !p.is::<gtk::Window>()),
+                    "the document menu is parented to the window, whose teardown never \
+                     unparents a set_parent child"
+                );
+                menu.downgrade()
+            };
+            drain_for(Clock::Frame, TOOLTIP_HOVER_DRAIN);
+
+            win.destroy();
+            drop(win);
+            drain_for(
+                Clock::Frame,
+                TOOLTIP_HOVER_DRAIN + Duration::from_millis(400),
+            );
+            assert!(
+                menu.upgrade().and_then(|m| m.parent()).is_none(),
+                "the document menu is still parented after its window was torn down"
+            );
+        });
+    }
+
+    /// The first `GtkPopover` anywhere under `root`.
+    fn find_popover(root: &gtk::Widget) -> Option<gtk::Popover> {
+        let mut stack = vec![root.clone()];
+        while let Some(w) = stack.pop() {
+            if let Ok(p) = w.clone().downcast::<gtk::Popover>() {
+                return Some(p);
+            }
+            let mut c = w.first_child();
+            while let Some(child) = c {
+                c = child.next_sibling();
+                stack.push(child);
+            }
+        }
+        None
     }
 
     /// The context menu must open wherever the reader right-clicks. On GTK ≥ 4.14 a
@@ -458,13 +621,17 @@ mod gtk_integration_tests {
         window.set_child(Some(&focus_target));
         window.present();
         focus_target.grab_focus();
-        pump_for(300);
-        assert!(window.is_mapped(), "no display: the window never mapped");
+        until_for(
+            Clock::Frame,
+            Duration::from_secs(10),
+            "no display: the window never mapped",
+            || window.is_mapped(),
+        );
 
         // The control: a bare popover whose minimum exceeds the screen. Its fate decides
         // whether this GTK and backend can express the defect at all.
         let bare = popped_over(&window, |p, b| p.set_child(Some(b)));
-        let self_dismisses = !bare.is_visible();
+        let self_dismisses = closes_itself(&bare);
         if !self_dismisses {
             println!(
                 "SKIPPED [9.39]: effect half — GTK {}.{}.{} on this backend keeps a popover \
@@ -479,7 +646,7 @@ mod gtk_integration_tests {
         let menu = popped_over(&window, install_menu_body);
         if self_dismisses {
             assert!(
-                menu.is_visible(),
+                !closes_itself(&menu),
                 "the context menu closed itself because the screen could not fit it"
             );
         }
@@ -490,6 +657,40 @@ mod gtk_integration_tests {
             "the menu body's minimum height ({min_h}) follows its content, so a screen \
              shorter than the menu dismisses it"
         );
+        // "Scrolling if it cannot be shown whole": the open menu is fitted to its
+        // monitor and its scroller has the rest to scroll to. MEASURED on GTK 4.6.9/X11,
+        // where a popover is NOT presented at its natural height once its minimum is
+        // smaller: a 1156 px menu opened 879 px tall over a 1024 px screen and scrolled.
+        if menu.is_visible() {
+            let scroller = body
+                .downcast_ref::<gtk::ScrolledWindow>()
+                .expect("the menu body is its scroller");
+            let adj = scroller.vadjustment();
+            until(Clock::Frame, "the menu's scroller to be allocated", || {
+                adj.page_size() > 0.0
+            });
+            // Range alone is not scrolling: a scroller that may not scroll still reports
+            // the clipped rows as range. The scrollbar is how the reader reaches them.
+            assert!(
+                adj.upper() > adj.page_size() && scroller.vscrollbar().is_child_visible(),
+                "the menu offers no way to the rows the screen cannot fit (upper {}, page \
+                 {}, scrollbar shown: {})",
+                adj.upper(),
+                adj.page_size(),
+                scroller.vscrollbar().is_child_visible()
+            );
+            let monitor = menu
+                .native()
+                .and_then(|n| n.surface())
+                .and_then(|surface| menu.display().monitor_at_surface(&surface))
+                .expect("the open menu is on a monitor");
+            assert!(
+                menu.height() <= monitor.geometry().height(),
+                "the menu ({} px) is taller than its monitor ({} px): its bottom is clipped",
+                menu.height(),
+                monitor.geometry().height()
+            );
+        }
         close(&menu);
         window.destroy();
     }

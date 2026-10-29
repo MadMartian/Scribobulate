@@ -6,8 +6,9 @@
 # XInclude redefines an XML entity, fixed in librsvg 2.63.2. Every SVG a document references
 # reaches librsvg through the gdk-pixbuf SVG loader, and that loader follows a `data:`
 # XInclude with no base URL. MEASURED on 2.62.3: a `data:` include drew into the pixbuf. The
-# application's own XInclude screen is compiled out on macOS because this bundle carries the
-# fix, so THIS GATE IS THE ONLY THING standing between a stale Homebrew keg and a delivered
+# application's own XInclude screen stands down when it runs from a bundle carrying a staged
+# librsvg (`platform::svg_decoder_is_delivered_fixed`), because this bundle carries the fix,
+# so THIS GATE IS THE ONLY THING standing between a stale Homebrew keg and a delivered
 # use-after-free.
 #
 # THE VERSION IS READ FROM THE STAGED DYLIB, by loading it and reading its exported
@@ -87,6 +88,26 @@ self_test() {
     check 2.62.3 fail
     check 1.99.99 fail
     check garbage fail
+    # The rpath gate's resolver. Lexical cases only, so nothing here depends on a bundle.
+    rp() {  # $1 = object, $2 = rpath, $3 = expected (in|out)
+        if rpath_is_internal /B/S.app "$1" "$2"; then rc=in; else rc=out; fi
+        if [ "$rc" = "$3" ]; then
+            echo "   ok    rpath $2 of ${1#/B/S.app/} is $3"
+        else
+            echo "   FAILED rpath $2 of ${1#/B/S.app/} (expected $3, got $rc)"; failures=$((failures + 1))
+        fi
+    }
+    local fw=/B/S.app/Contents/Frameworks/libpixbufloader_svg.so
+    # ANTI-VACUITY first: a resolver that refuses everything passes every "out" case.
+    rp /B/S.app/Contents/MacOS/scribobulate @executable_path/../Frameworks in
+    rp "$fw" @loader_path in
+    rp "$fw" @loader_path/../lib in
+    rp "$fw" @loader_path/../../.. out      # the measured hole: the .app's parent
+    rp "$fw" @loader_path/../.. in          # the .app directory itself: the boundary
+    rp "$fw" @loader_path/../../../S.app.evil/Contents out
+    rp "$fw" /opt/homebrew/Cellar/jpeg-turbo/3.2.0/lib out
+    rp "$fw" lib out                        # relative: the process's working directory
+    rp "$fw" @executable_path/../../.. out
     # The reader, end to end, against whatever librsvg Homebrew links. Proves it loads the
     # dylib and reads three numbers; deliberately NOT a floor check, because the
     # self-test must not depend on which librsvg this machine happens to have.
@@ -104,6 +125,9 @@ self_test() {
     echo ":: self-test passed"
 }
 
+# shellcheck source=rpath.sh
+. "$(dirname "${BASH_SOURCE[0]}")/rpath.sh"
+
 if [ "${1:-}" = "--self-test" ]; then
     self_test
     exit $?
@@ -112,6 +136,18 @@ fi
 SUBJECT="${1:?usage: verify-librsvg.sh <path-to-.app | path-to-librsvg-2.2.dylib> | --self-test}"
 if [ -d "$SUBJECT" ]; then
     DYLIB="$SUBJECT/Contents/Frameworks/librsvg-2.2.dylib"
+    # THE STAGED LIBRSVG IS ONLY THE ONE LOADED IF NO RPATH LEAVES THE BUNDLE. dyld tries a
+    # library's own rpaths before the executable's, so one pointing outside lets a file there
+    # stand in for the copy whose version is read below (rpath.sh's header has the
+    # measurement). Checked first, because a passing version would otherwise vouch for a
+    # file the app may never load.
+    escaping="$(escaping_rpaths "$SUBJECT")"
+    if [ -n "$escaping" ]; then
+        echo "error: rpaths that leave the bundle, so a library outside it can replace a staged one:" >&2
+        printf '%s\n' "$escaping" | awk -F'\t' '{n=split($1, p, "/"); print "       " p[n] " -> " $2}' >&2
+        exit 1
+    fi
+    echo "   no rpath leaves the bundle"
 else
     DYLIB="$SUBJECT"
 fi

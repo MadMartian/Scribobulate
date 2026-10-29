@@ -17,6 +17,8 @@ use crate::span::CleanedByteOffset;
 
 mod overlay;
 pub(crate) use overlay::{position_card, wire_annotation_overlay};
+/// The cell-press controller's event filter and coordinate transform, display-free.
+mod press;
 
 /// Capture a preview selection `[buf_a, buf_b)` as a target the comment card can act
 /// on **later** — the moment the reader clicks Annotate, not the moment they press Save.
@@ -257,18 +259,16 @@ fn char_to_byte(s: &str, char_off: usize) -> Option<usize> {
         .nth(char_off)
 }
 
-/// Gap in px between the Annotate entry card and the selection line it anchors to.
-const BAR_GAP: i32 = 2;
-
-/// Pure placement math for the Annotate entry card (unit-tested without a display). Given
-/// the popover anchor in overlay-local coords (`ax` = selection-midpoint x, `ay` =
-/// selection first-line top), its line height, the card's natural size (`bw`×`bh`), and
-/// the overlay's visible size (`ow`×`oh`), return the clamped top-left
-/// `(margin_start, margin_top)`. The card is CENTERED horizontally on `ax` and placed
-/// ABOVE `ay` — matching where the action popover's body sat, so the entry appears in the
-/// popover's place rather than jumping to a corner — falling back to BELOW when there is
-/// no room above, and clamped on both axes so it never sits half-off an edge (with
-/// `clip-overlay` set, GTK would otherwise clip it away).
+/// Where the Annotate entry card goes (unit-tested without a display). Given the anchor
+/// in overlay-local coords (`ax` = selection-midpoint x, `ay` = selection first-line top),
+/// its line height, the card's natural size (`bw`×`bh`), and the overlay's visible size
+/// (`ow`×`oh`), return the clamped top-left `(margin_start, margin_top)`.
+///
+/// It is [`floating_card::place`](crate::widgets::floating_card::place)'s rule, called
+/// rather than restated: the entry card replaces the Annotate card in the same spot, so
+/// the two must agree on the gap, the flip below when there is no room above, and the
+/// clamp inside the overlay (with `clip-overlay` set, GTK would clip a card off an edge).
+/// A second copy of that arithmetic had already drifted to a different gap.
 pub(crate) fn bar_placement(
     ax: i32,
     ay: i32,
@@ -278,12 +278,14 @@ pub(crate) fn bar_placement(
     ow: i32,
     oh: i32,
 ) -> (i32, i32) {
-    let x = (ax - bw / 2).clamp(0, (ow - bw).max(0)); // centered on the anchor
-    let mut y = ay - bh - BAR_GAP; // above the selection's first line
-    if y < 0 {
-        y = ay + line_h + BAR_GAP; // below it if there's no room above
-    }
-    y = y.clamp(0, (oh - bh).max(0));
+    use crate::widgets::floating_card::{place, Placement, Rect, Side};
+    let anchor = Rect {
+        x: ax,
+        y: ay,
+        w: 0,
+        h: line_h,
+    };
+    let Placement { x, y, .. } = place(anchor, bw, bh, ow, oh, Side::Top);
     (x, y)
 }
 
@@ -423,19 +425,22 @@ mod tests {
 
     #[test]
     fn entry_card_is_centered_above_the_anchor_when_there_is_room() {
-        // Anchor (midpoint x = 400) mid-viewport: the card centers on it (ax - bw/2) and
-        // sits its height + gap ABOVE the anchor y — matching the popover's body.
+        // Anchor (midpoint x = 400) mid-viewport: the card centers on it and sits wholly
+        // ABOVE the anchor line, as the Annotate card it replaces does.
         let (x, y) = bar_placement(400, 200, 18, 340, 40, 800, 600);
         assert_eq!(x, 400 - 340 / 2, "centered horizontally on the anchor");
-        assert_eq!(y, 200 - 40 - BAR_GAP, "placed above the selection line");
+        assert!(
+            (0..200 - 40).contains(&y),
+            "placed above the selection line: {y}"
+        );
     }
 
     #[test]
     fn entry_card_falls_back_below_when_there_is_no_room_above() {
         // Anchor near the very top: no room for the card above, so it goes BELOW the
-        // selection's first line (anchor y + line_h + gap).
+        // selection's first line.
         let (_x, y) = bar_placement(400, 10, 18, 340, 40, 800, 600);
-        assert_eq!(y, 10 + 18 + BAR_GAP);
+        assert!(y > 10 + 18, "below the selection line: {y}");
     }
 
     #[test]
@@ -449,6 +454,27 @@ mod tests {
         // Overlay narrower than the card (degenerate) clamps x to 0, never negative.
         let (x3, _y3) = bar_placement(400, 300, 18, 900, 40, 800, 600);
         assert_eq!(x3, 0);
+    }
+
+    /// The entry card replaces the Annotate card in its spot, so it sits exactly where a
+    /// `FloatingCard` pointing at the same line would: one gap, one flip, one clamp.
+    #[test]
+    fn entry_card_sits_where_a_floating_card_would() {
+        use crate::widgets::floating_card::{place, Rect, Side};
+        for (ax, ay) in [(400, 200), (400, 10), (900, 300), (5, 590), (400, 44)] {
+            let anchor = Rect {
+                x: ax,
+                y: ay,
+                w: 0,
+                h: 18,
+            };
+            let p = place(anchor, 340, 40, 800, 600, Side::Top);
+            assert_eq!(
+                bar_placement(ax, ay, 18, 340, 40, 800, 600),
+                (p.x, p.y),
+                "anchor ({ax}, {ay})"
+            );
+        }
     }
 
     #[test]

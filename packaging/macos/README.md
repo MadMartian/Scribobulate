@@ -151,11 +151,21 @@ defects before they were features:
 ### librsvg has a security floor
 
 The bundled librsvg must be **2.63.2 or newer** (CVE-2026-96889, a use-after-free reachable
-from any SVG through the pixbuf loader). The app's XInclude screen is compiled out on macOS
-because the bundle carries the fix, so `bundle.sh` enforces it: after signing,
+from any SVG through the pixbuf loader). The app's XInclude screen stands down when it runs
+from the bundle, because the bundle carries the fix, so `bundle.sh` enforces it (a binary run
+outside the bundle, such as `./target/release/scribobulate`, loads Homebrew's librsvg and is
+screened like Linux): after signing,
 `packaging/macos/verify-librsvg.sh` loads the **staged** dylib, reads its runtime version
 and fails the build below the floor. It reads the artefact, not Homebrew: `brew upgrade`
 leaves the old keg in the Cellar, and only the staged copy is delivered.
+
+The staged copy is only the one loaded if **no `LC_RPATH` in the bundle points outside it**.
+dyld tries a library's own rpaths before the executable's, and Homebrew's came along with
+the copies: the SVG loader's `@loader_path/../../..` named the directory holding the `.app`,
+so a `librsvg-2.2.dylib` placed beside the bundle was loaded instead of the staged one
+(measured with `DYLD_PRINT_LIBRARIES`). `bundle.sh` deletes every such rpath, and
+`verify-librsvg.sh` (given a `.app`) and condition 1 of `verify-selfcontained.sh` fail a
+bundle that still has one. The resolver is `packaging/macos/rpath.sh`.
 
 If the build stops there, run `brew upgrade librsvg` and build again. The gate runs on
 its own as well: `verify-librsvg.sh <.app | librsvg-2.2.dylib>`, and `--self-test`.

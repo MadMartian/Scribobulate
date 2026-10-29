@@ -1,25 +1,20 @@
 //! Height bounds for the annotation card, so a long annotation can never push the card's
-//! controls off the screen.
+//! controls out of reach.
 //!
-//! The card is a `GtkPopover`, and a popover is never taller than the monitor's work
-//! area: on GTK 4.6–4.13 a taller child is clipped, and on 4.14+ a child whose MINIMUM
-//! fits neither side of the anchor makes the popover close itself (GTK4Rs/AP-86). A long
-//! claim or comment used to be a bare wrapping `GtkLabel`, whose minimum height is its
-//! whole wrapped text, so a long enough annotation lost the bottom of the card — the
-//! Edit / Remove buttons — and left nothing to click.
+//! The card is a `FloatingCard`: an in-pane overlay child, clipped to the pane it floats
+//! over. A long claim or comment used to be a bare wrapping `GtkLabel`, whose minimum
+//! height is its whole wrapped text, so a long enough annotation lost the bottom of the
+//! card — the Edit / Remove buttons — past the pane's edge, and left nothing to click.
 //!
 //! Two bounds, at two levels, each answering a different case:
 //!
 //!  * [`bounded_text`] caps each claim and comment at a few lines and scrolls the rest, so
 //!    a row's buttons stay right under its text however long that text is. This is what
 //!    keeps the buttons in view without the reader scrolling for them.
-//!  * [`fit_to_screen`] wraps the whole list of rows in the scroller GTK4Rs/AP-86
-//!    prescribes (`GtkPopoverMenu`'s own wrapper), capped at a share of the monitor's
-//!    height. It only engages when many annotations share one line and their capped rows
-//!    still outgrow the screen. The wrapper alone keeps the card's MINIMUM small, which is
-//!    what stops 4.14+ closing it; it does not stop 4.6 sizing the card to its NATURAL
-//!    height and clipping it (measured: a 1030 px card on a 1024 px monitor), so the cap
-//!    bounds the natural height too.
+//!  * [`fit_to_pane`] wraps the whole list of rows in a scroller with a small minimum, so
+//!    when many annotations share one line and their capped rows still outgrow the pane,
+//!    the card — which `FloatingCard` never sizes taller than its host — scrolls its rows
+//!    rather than being clipped with later rows' buttons past the pane's edge.
 //!
 //! Lines, not pixels: the caps are measured from the label's own font, so they track
 //! the theme and the zoom rather than a hard-coded height.
@@ -44,31 +39,18 @@ pub(super) fn bounded_text(label: &gtk::Label, max_lines: i32) -> gtk::ScrolledW
     scroller
 }
 
-/// The share of its monitor's height, as `(numerator, denominator)`, the card's rows may
-/// take before they scroll. The rest is headroom for what the card draws around them —
-/// its close button, its padding and its arrow — so the whole card fits with room to
-/// spare wherever on the monitor its chip sits (a left-pointing popover slides
-/// vertically to stay on screen).
-const ROWS_MONITOR_SHARE: (i32, i32) = (3, 4);
-
-/// `body` inside the GTK4Rs/AP-86 fit wrapper: natural size where the screen has room,
-/// a vertical scroller where it does not. `near` is the widget the card is attached to;
-/// its monitor decides the cap. Unrealized (no monitor yet), the cap is left off and the
-/// wrapper still keeps the card's minimum small.
-pub(super) fn fit_to_screen(
-    body: &impl IsA<gtk::Widget>,
-    near: &impl IsA<gtk::Widget>,
-) -> gtk::ScrolledWindow {
+/// `body` inside a vertical scroller whose natural height is the body's and whose
+/// minimum is small: natural size where the pane has room, scrolling where the card is
+/// given less (GTK4Rs/AP-86's wrapper shape).
+pub(super) fn fit_to_pane(body: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroller.set_propagate_natural_width(true);
     scroller.set_propagate_natural_height(true);
-    if let Some(height) = monitor_height(near) {
-        scroller.set_max_content_height(rows_cap(height));
-    }
     // An explicit viewport so its vertical scroll policy can be NATURAL. The default
     // (MINIMUM) lays the rows out at their minimum height, and a capped text area's
-    // minimum is a sliver, so every comment shrank to a few lines once the rows scrolled.
+    // minimum is a sliver, so every comment shrank to a few lines once the rows scrolled
+    // (GTK4Rs/AP-358).
     let viewport = gtk::Viewport::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
     viewport.set_vscroll_policy(gtk::ScrollablePolicy::Natural);
     viewport.set_child(Some(body));
@@ -76,49 +58,10 @@ pub(super) fn fit_to_screen(
     scroller
 }
 
-/// The most height the rows may take on a monitor `monitor_height` pixels tall.
-fn rows_cap(monitor_height: i32) -> i32 {
-    let (numerator, denominator) = ROWS_MONITOR_SHARE;
-    (monitor_height.max(1) * numerator / denominator).max(1)
-}
-
-/// The height of the monitor `widget` is on, in logical pixels, if it is realized.
-fn monitor_height(widget: &impl IsA<gtk::Widget>) -> Option<i32> {
-    let surface = widget.native()?.surface()?;
-    let height = widget
-        .display()
-        .monitor_at_surface(&surface)?
-        .geometry()
-        .height();
-    (height > 0).then_some(height)
-}
-
 /// One line of `label`'s text, in pixels, in the font it will be drawn in.
 fn line_px(label: &gtk::Label) -> i32 {
     let (_, height) = label.create_pango_layout(Some("0")).pixel_size();
     height.max(1)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::rows_cap;
-
-    #[test]
-    fn the_rows_leave_headroom_on_any_monitor() {
-        for monitor in [600, 768, 1024, 1080, 1440, 2160] {
-            let cap = rows_cap(monitor);
-            assert!(
-                cap > 0 && cap < monitor,
-                "cap {cap} on a {monitor} px monitor"
-            );
-        }
-    }
-
-    #[test]
-    fn a_degenerate_monitor_still_yields_a_positive_cap() {
-        assert!(rows_cap(0) > 0);
-        assert!(rows_cap(-5) > 0);
-    }
 }
 
 /// Live-display tests for the card's height bounds. Run with `cargo test --features
@@ -194,9 +137,9 @@ mod gtk_integration_tests {
             .expect("scroller holds the CodePreviewView")
     }
 
-    /// A presented 700×900 window rendering `md`, with the card open on its first
-    /// annotation. Returns `(window, card)`; keep the window alive for the test.
-    fn open_card_on(md: &str) -> (gtk::Window, AnnotationCard) {
+    /// A presented 700-wide window `height` tall rendering `md`, with the card open on
+    /// its first annotation. Returns `(window, card)`; keep the window alive for the test.
+    fn open_card_on(md: &str, height: i32) -> (gtk::Window, AnnotationCard) {
         let pane = crate::preview::render(
             None,
             md,
@@ -208,7 +151,7 @@ mod gtk_integration_tests {
         let view = view_of(pane.clone());
         view.set_annotation_sink(std::rc::Rc::new(|_| {}));
         let win = gtk::Window::new();
-        win.set_default_size(700, 900);
+        win.set_default_size(700, height);
         win.set_child(Some(&pane));
         win.present();
         crate::testpump::until(crate::testpump::Clock::Frame, "the chip to paint", || {
@@ -225,8 +168,8 @@ mod gtk_integration_tests {
         (win, card().expect("the card is open"))
     }
 
-    /// The card's height and its monitor's, once its first Edit button is allocated.
-    fn card_and_monitor_heights(card: &AnnotationCard) -> (i32, i32) {
+    /// The card's height and its pane's, once its first Edit button is allocated.
+    fn card_and_pane_heights(card: &AnnotationCard) -> (i32, i32) {
         let edit = find_button(card, "Edit").expect("the card offers Edit");
         crate::testpump::until(
             crate::testpump::Clock::Frame,
@@ -243,21 +186,16 @@ mod gtk_integration_tests {
             bounds.y() + bounds.height(),
             card.height()
         );
-        let monitor = card
-            .native()
-            .and_then(|n| n.surface())
-            .and_then(|s| s.display().monitor_at_surface(&s))
-            .expect("the card is on a monitor");
-        (card.height(), monitor.geometry().height())
+        let pane = card.parent().expect("the card floats over its pane");
+        (card.height(), pane.height())
     }
 
     /// **A long annotation keeps its Edit / Remove buttons on the card** (TDD 17.60).
     ///
     /// Claim and comment together are thousands of pixels tall when wrapped at the card's
-    /// width — taller than any monitor — so without the bounds GTK clips the card at the
-    /// work area and the buttons, below the text, are allocated outside it (or, on GTK
-    /// 4.14+, the card closes itself). Asserted on allocations: the button must lie inside
-    /// the card, and the card inside the monitor.
+    /// width — taller than any pane — so without the bounds the pane clips the card and
+    /// the buttons, below the text, are allocated outside it. Asserted on allocations:
+    /// the button must lie inside the card, and the card inside its pane.
     #[gtktest::test]
     fn a_long_annotation_keeps_its_buttons_on_the_card() {
         // The claim is long enough to overflow the card but short enough that its chip
@@ -265,44 +203,80 @@ mod gtk_integration_tests {
         // the comment is drawn only on the card, so it can be as long as it likes.
         let claim = "word ".repeat(300);
         let comment = "word ".repeat(1500);
-        let (win, card) = open_card_on(&format!(
-            "Intro.\n\nThe {{=={claim}==}}{{>>{comment}<<}} ends.\n"
-        ));
-        let (card_h, monitor_h) = card_and_monitor_heights(&card);
+        let (win, card) = open_card_on(
+            &format!("Intro.\n\nThe {{=={claim}==}}{{>>{comment}<<}} ends.\n"),
+            900,
+        );
+        let (card_h, pane_h) = card_and_pane_heights(&card);
         assert!(
-            card_h <= monitor_h,
-            "the card ({card_h} px) is taller than its monitor ({monitor_h} px)"
+            card_h <= pane_h,
+            "the card ({card_h} px) is taller than its pane ({pane_h} px)"
         );
         crate::testpump::destroy_after_tooltip_delay(&win, || card.dismiss());
     }
 
-    /// **Many long annotations on one line still fit** (TDD 17.60).
+    /// **Many long annotations on one line still fit a short pane** (TDD 17.60).
     ///
     /// Annotations on one line share one card, one row each. Every row is capped, but
-    /// enough of them still add up to more than a monitor; the card's own cap must keep
-    /// it on screen, with headroom, rather than leave GTK 4.6 to clip it.
+    /// enough of them still add up to more than the pane; the card must scroll its rows
+    /// inside the pane rather than be clipped by it, which left the later rows' Edit and
+    /// Remove past the pane's edge with nothing to scroll. A short window, because the
+    /// defect needs the rows to outgrow the pane but not the monitor.
+    ///
+    /// Mutation check: sizing the card at its natural height in `size_within` fails the
+    /// pane assertion here.
     #[gtktest::test]
-    fn many_long_annotations_on_one_line_still_fit() {
+    fn many_long_annotations_on_one_line_still_fit_a_short_pane() {
         let comment = "word ".repeat(400);
         let line: String = (0..8)
             .map(|n| format!("{{==claim {n}==}}{{>>{comment}<<}} "))
             .collect();
-        let (win, card) = open_card_on(&format!("Intro.\n\n{line}\n"));
+        let (win, card) = open_card_on(&format!("Intro.\n\n{line}\n"), 420);
         let rows = count_buttons(&card, "Remove");
         assert!(
             rows >= 2,
             "precondition: the line's annotations share one card (found {rows} rows)"
         );
-        let (card_h, monitor_h) = card_and_monitor_heights(&card);
+        let (card_h, pane_h) = card_and_pane_heights(&card);
         let squeezed = squeezed_scrollers(&card);
         assert!(
             squeezed.is_empty(),
             "scrolling text areas shorter than their cap (height, cap): {squeezed:?}"
         );
         assert!(
-            card_h < monitor_h,
-            "the card ({card_h} px) does not fit its monitor ({monitor_h} px)"
+            card_h <= pane_h,
+            "the card ({card_h} px) does not fit its pane ({pane_h} px)"
+        );
+        let rows_scroller = rows_scroller(&card);
+        let vadj = rows_scroller.vadjustment();
+        assert!(
+            vadj.upper() > vadj.page_size(),
+            "the rows must scroll inside the capped card: upper {} page {}",
+            vadj.upper(),
+            vadj.page_size()
         );
         crate::testpump::destroy_after_tooltip_delay(&win, || card.dismiss());
+    }
+
+    /// The scroller [`fit_to_pane`] wraps the rows in: the one whose child is a viewport.
+    fn rows_scroller(card: &AnnotationCard) -> gtk::ScrolledWindow {
+        let mut stack = vec![card.clone().upcast::<gtk::Widget>()];
+        while let Some(w) = stack.pop() {
+            if let Ok(sw) = w.clone().downcast::<gtk::ScrolledWindow>() {
+                if sw
+                    .child()
+                    .and_downcast::<gtk::Viewport>()
+                    .is_some_and(|v| v.vscroll_policy() == gtk::ScrollablePolicy::Natural)
+                {
+                    return sw;
+                }
+            }
+            let mut c = w.first_child();
+            while let Some(child) = c {
+                c = child.next_sibling();
+                stack.push(child);
+            }
+        }
+        panic!("the card wraps its rows in fit_to_pane's scroller");
     }
 }

@@ -12,7 +12,11 @@
 //!
 //! `rcNormalPosition` is the OUTER rectangle in physical pixels. GTK's default size is
 //! the client area in logical pixels, so the frame a normal window of this style has at
-//! this DPI is taken off, and the remainder divided by the surface's scale.
+//! this DPI is taken off, and the remainder divided by the scale GDK applies to the
+//! surface. That scale is measured — the client area's physical width over the
+//! surface's logical width — because `gdk_surface_get_scale_factor` is an integer, the
+//! ceiling of the real scale wherever GDK scales fractionally, and `gdk_surface_get_scale`
+//! is newer than the GTK floor.
 //!
 //! **Restoring maximized goes through the OS too.** `gtk_window_maximize` latches
 //! `is_set_maximized` for good (GTK 4.22.4 `gtkwindow.c:5649`/`5692`; nothing clears it),
@@ -76,7 +80,9 @@ extern "system" {
     fn GetWindowPlacement(hwnd: *mut c_void, placement: *mut WindowPlacement) -> i32;
     fn GetWindowLongW(hwnd: *mut c_void, index: i32) -> i32;
     fn GetDpiForWindow(hwnd: *mut c_void) -> u32;
+    fn GetClientRect(hwnd: *mut c_void, rect: *mut Rect) -> i32;
     fn ShowWindow(hwnd: *mut c_void, cmd: i32) -> i32;
+    #[cfg(feature = "test-support")] // only `restore_natively`, a test helper, sends it
     fn SendMessageW(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize;
     fn AdjustWindowRectExForDpi(
         rect: *mut Rect,
@@ -155,6 +161,15 @@ pub(crate) fn normal_size(window: &gtk::Window) -> Option<(i32, i32)> {
     }
     let width = (outer.right - outer.left) - (frame.right - frame.left);
     let height = (outer.bottom - outer.top) - (frame.bottom - frame.top);
-    let scale = surface.scale_factor().max(1);
-    (width > 0 && height > 0).then(|| (width / scale, height / scale))
+    // The scale GDK applies to this surface, measured rather than taken from the integer
+    // `scale_factor()`, which is only its ceiling when GDK scales fractionally.
+    let mut client = Rect::default();
+    // SAFETY: `hwnd` is a live window and `client` outlives the call.
+    let client_width = if unsafe { GetClientRect(hwnd, &mut client) } != 0 {
+        client.right - client.left
+    } else {
+        0
+    };
+    let scale = crate::geom::device_scale(client_width, surface.width(), surface.scale_factor());
+    crate::geom::to_logical((width, height), scale)
 }

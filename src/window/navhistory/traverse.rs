@@ -89,7 +89,7 @@ pub(super) fn restore_place(tab: &Rc<TabState>, spot: Option<&NavSpot>) {
     crate::window::panescroll::lead(tab, crate::winstate::ScrollDriver::Preview);
     match spot {
         NavSpot::Heading(slug) => {
-            crate::preview::scroll_preview_to_fragment(&sw, slug);
+            crate::window::panescroll::preview_to_fragment(tab, slug);
         }
         NavSpot::Line(line) => crate::preview::restore_preview_scroll_to_line(&sw, *line),
     }
@@ -485,6 +485,28 @@ mod gtk_integration_tests {
         WidgetExt::activate_action(&window, "win.nav-forward", None).expect("activates");
         assert_eq!(view.reading_line(), line_of(&sw, "section-two"));
 
+        window.destroy();
+    }
+
+    /// A link into a split tab whose editor leads: the fragment scroll takes the lead,
+    /// or the next sync frame puts the editor's position back (ScrAP-361). The
+    /// precondition pins the editor leading, so the assertion is not met by default.
+    #[gtktest::test]
+    fn a_fragment_scroll_makes_the_preview_lead() {
+        let app = make_app("com.extollit.scribobulate.integrationtest.nav.fragmentlead");
+        let window = new_window(&app, "IT", LONG_TOC_DOC, None);
+        change_action_state(&window, "view-mode", &"split".to_variant());
+        let st = winstate::state(&window).expect("a tab");
+        st.scroll.driver.set(crate::winstate::ScrollDriver::Editor);
+
+        assert!(
+            crate::window::panescroll::preview_to_fragment(&st, "section-two"),
+            "the heading exists"
+        );
+        assert_eq!(
+            st.scroll.driver.get(),
+            crate::winstate::ScrollDriver::Preview
+        );
         window.destroy();
     }
 }

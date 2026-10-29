@@ -75,7 +75,7 @@ pub(crate) use screen::{
     RefusalTarget,
 };
 #[cfg(test)]
-pub(crate) use xinclude::ENFORCED as SCREENS_XINCLUDE;
+pub(crate) use xinclude::enforced as screens_xinclude;
 
 // `Refusal` and `AnimationSource`/`DecodedImage` are named at every current call site
 // only implicitly (`Err(refusal) => …`, `.map(|decoded| decoded.texture)`), so nothing

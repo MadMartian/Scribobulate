@@ -40,6 +40,9 @@ mod scope;
 /// Find in side-by-side mode follows the pane the reader is in (TDD 11.19).
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod splittests;
+/// The find bar's test helpers, one copy for `bartests` and `splittests`.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod testkit;
 
 use crate::widgets::table::cellattrs;
 pub(crate) use history::{row_label, FindHistory};
@@ -948,7 +951,12 @@ fn clear_preview_view_highlights(view: &CodePreviewView) {
 /// cell-precise two-step (`scroll_to_cell_offset`), so a match deep in a tall table
 /// — and every subsequent in-cell match — lands in view rather than stopping at the
 /// table top (GTK4Rs/AP-91).
-fn scroll_to_preview_hit(view: &CodePreviewView, hit: &PreviewHit) {
+///
+/// The preview is made to lead the split sync first: a Find run from the editor's
+/// last wheel scroll otherwise leaves the editor leading, and the sync scrolls the
+/// match straight back out of view (ScrAP-361).
+fn scroll_to_preview_hit(st: &TabState, view: &CodePreviewView, hit: &PreviewHit) {
+    super::panescroll::lead(st, ScrollDriver::Preview);
     match hit {
         PreviewHit::Body { start, .. } => view.scroll_to_buffer_offset(*start),
         PreviewHit::Cell {
@@ -1265,7 +1273,7 @@ fn land_on_hit(
     }
     let next = idx as i32 + 1;
     apply_preview_highlights(view, targets, hits, next as usize);
-    scroll_to_preview_hit(view, &hits[idx]);
+    scroll_to_preview_hit(st, view, &hits[idx]);
     st.find_cursor.set(FindCursor::Preview {
         ordinal: next,
         at: preview_hit_position(&hits[idx]),
@@ -1290,7 +1298,10 @@ fn reveal_and_resume(
 ) {
     // Scroll to the LINE, resume from past its LABEL — two offsets because they answer
     // two questions. The reader is shown the block; the search starts below the text
-    // they were already on (F-AP-B-104).
+    // they were already on (F-AP-B-104). The preview leads, as for any hit.
+    if let Some(st) = state(window) {
+        super::panescroll::lead(&st, ScrollDriver::Preview);
+    }
     view.scroll_to_buffer_offset(summary_off);
     let text = text.to_string();
     super::foldreveal::reveal_folds(window, &[key], move |window| {

@@ -68,11 +68,9 @@ pub(crate) fn splice_disclosure_in_place(
     let on_settled = if mode == ViewMode::Split {
         st.scroll.driver.set(ScrollDriver::Preview);
         let generation = super::scrollsync::hold_split_sync(&st);
-        let weak = window.downgrade();
+        let tab = st.id;
         crate::preview::OnSettled::new(move || {
-            if let Some(window) = weak.upgrade() {
-                super::scrollsync::release_split_sync(&window, generation);
-            }
+            super::scrollsync::release_split_sync(tab, generation);
         })
     } else {
         crate::preview::OnSettled::none()

@@ -792,10 +792,38 @@ mod gtk_integration_tests {
     /// first; the late step then pulled the focus into the box on the switch back. In the
     /// suite it surfaced as `the_outline_filter_follows_the_document` failing now and then.
     ///
+    /// The oracle is an absence, so the test first waits for the step to be SETTLED —
+    /// cancelled or run — rather than for a fixed span it might simply not have reached
+    /// yet. The sibling arm below runs the same command with no switch and sees the step
+    /// land, so the step does run in this fixture when nothing cancels it.
+    ///
     /// Mutation-checked: without the cancel in `sync_to_tab`, the assertion fails every run.
     #[gtktest::test]
     fn a_filter_focus_still_pending_at_a_tab_switch_is_dropped() {
-        let window = open("sidebarfilter.pendingfocus", DOC);
+        pending_filter_focus_after("sidebarfilter.pendingfocus", true);
+    }
+
+    /// The positive control for the test above: the same command with no tab switch puts
+    /// the focus in the box once its step settles. Mutation-checked: dropping the
+    /// `grab_focus` from the deferred step in `activate_filter` fails here.
+    #[gtktest::test]
+    fn a_filter_focus_with_no_tab_switch_lands_in_the_box() {
+        pending_filter_focus_after("sidebarfilter.pendingfocus.control", false);
+    }
+
+    /// Whether the filter bar still holds a queued focus step.
+    fn focus_step_queued(fb: &FilterBar) -> bool {
+        let id = fb.pending_focus.take();
+        let queued = id.is_some();
+        fb.pending_focus.set(id);
+        queued
+    }
+
+    /// Run the outline filter command from the editor, with or without a switch away and
+    /// back before its focus step runs, and assert where the focus is once the step has
+    /// settled: in the box with no switch, not in it with one.
+    fn pending_filter_focus_after(app_suffix: &str, switch_tabs: bool) {
+        let window = open(app_suffix, DOC);
         type_filter(&window, SidebarPaneKind::Outline, "base");
         let ch = chrome(&window);
         let first = state(&window).unwrap().id;
@@ -823,17 +851,28 @@ mod gtk_integration_tests {
             .lookup_action(SidebarPaneKind::Outline.filter_action())
             .expect("the filter command is registered")
             .activate(None);
-        select(second);
-        select(first);
-        drain_for(Clock::Frame, Duration::from_millis(200));
+        if switch_tabs {
+            select(second);
+            select(first);
+        }
+        until(Clock::Idle, "the filter's focus step to be settled", || {
+            !focus_step_queued(&ch.outline_filter)
+        });
         assert!(
             ch.outline_filter.bar.is_search_mode(),
             "the filter is still open"
         );
-        assert!(
-            !focus_within(&window, &ch.outline_filter.entry),
-            "a focus step queued before the switches landed after them"
-        );
+        if switch_tabs {
+            assert!(
+                !focus_within(&window, &ch.outline_filter.entry),
+                "a focus step queued before the switches landed after them"
+            );
+        } else {
+            assert!(
+                focus_within(&window, &ch.outline_filter.entry),
+                "with no switch, the filter command's focus step puts the focus in the box"
+            );
+        }
         window.destroy();
     }
 

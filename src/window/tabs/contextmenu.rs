@@ -117,19 +117,15 @@ fn show_tab_context_menu(
     x: f64,
     y: f64,
 ) {
-    let popover = gtk::Popover::new();
-    popover.set_has_arrow(false);
-    popover.set_parent(&tab_view.bar_widget());
-    popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+    let menu = crate::window::contextmenu::ContextMenu::new();
+    let popover = menu.popover.clone();
 
     // `marked` is a `_`-marked label; `access_markup` renders it with the access
     // char underlined (a plain popover never gets mnemonics-visible — GTK4Rs/T-1). "Close Tab" reuses the File-menu mark so its `C` matches; the other two
     // are context-only but keep the menu-bar letters (Close Other = O, Move = M).
     // Bare-letter access keys (single flat page, so an always-true gate) — the same
     // Capture/Local ShortcutController recipe as the pane context menu (GTK4Rs/T-1).
-    let key_controller = gtk::ShortcutController::new();
-    key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
-    key_controller.set_scope(gtk::ShortcutScope::Local);
+    let key_controller = menu.keys.clone();
 
     // Building the button and registering its access key are ONE call, taking the item
     // rather than a string. Two things follow, and both were live defects: the label is
@@ -139,15 +135,15 @@ fn show_tab_context_menu(
     let make_btn = {
         let ctrl = key_controller.clone();
         move |item: TabMenuItem| -> gtk::Button {
-            let marked = item.label();
+            let (access_key, markup) = crate::app::access_markup(item.label());
             let lbl = gtk::Label::new(None);
-            lbl.set_markup(&crate::app::access_markup(marked).1);
+            lbl.set_markup(&markup);
             lbl.set_halign(gtk::Align::Start);
             let btn = gtk::Button::new();
             btn.set_child(Some(&lbl));
             btn.add_css_class("flat");
             btn.set_halign(gtk::Align::Fill);
-            if let Some(ch) = crate::app::access_markup(marked).0 {
+            if let Some(ch) = access_key {
                 if let Some(sc) = crate::app::access_shortcut(&btn, ch, || true) {
                     ctrl.add_shortcut(sc);
                 }
@@ -358,10 +354,7 @@ fn show_tab_context_menu(
     }
 
     // Scrolls rather than self-dismissing where the screen cannot fit it (TDD 9.39).
-    crate::window::contextmenu::install_menu_body(&popover, &box_);
-    popover.add_controller(key_controller);
-    popover.connect_closed(|p| p.unparent());
-    popover.popup();
+    menu.open(&tab_view.bar_widget(), (x, y), &box_, |_| {});
 }
 
 /// Drive `win.save` for `tab` — same focus-first requirement as
@@ -716,7 +709,8 @@ mod gtk_integration_tests {
     /// TDD 9.39: the tab menu takes the same scrolling body as the document menu, so
     /// its minimum height stops being its full height and GTK ≥ 4.14 cannot close it
     /// on the frame it opens wherever the screen cannot fit it. The effect itself is
-    /// tested once, on `install_menu_body`; this pins the tab menu to it.
+    /// tested once, on `install_menu_body` (which `ContextMenu::open` installs); this
+    /// pins the tab menu to it.
     #[gtktest::test]
     fn the_tab_menu_scrolls_rather_than_closing_where_the_screen_cannot_fit_it() {
         let app = gtk::Application::new(
@@ -744,6 +738,59 @@ mod gtk_integration_tests {
              menu closes it the frame it opens"
         );
         popover.popdown();
+        window.destroy();
+    }
+
+    /// The tab menu is released after its `closed` emission has unwound, never inside
+    /// it: on GDK-Win32 `closed` can fire inside GTK's own unmap of the popover, where an
+    /// unparent unrealizes the surface GDK is still hiding (GTK4Rs/AP-30). A STATE guard,
+    /// as for the toolbar menu, because X11 queues that emission and cannot stage the
+    /// fault. The menu is presented and shown first, so the close is a real one.
+    ///
+    /// Mutation check: an `on_closed` of `|p| p.unparent()` fails the first assertion.
+    #[gtktest::test]
+    fn the_closed_tab_menu_is_unparented_after_its_close_not_during_it() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.tabcontextmenu.release"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let window = crate::window::new_window(&app, "IT", "# A", None);
+        window.present();
+        let tab = state(&window).expect("state registered after new_window");
+        let chrome = winstate::chrome(&window).expect("chrome registered");
+        show_tab_context_menu(&window, &chrome.tabs, &tab, 10.0, 10.0);
+        let bar = chrome.tabs.bar_widget();
+        let popover = std::iter::successors(bar.first_child(), |w| w.next_sibling())
+            .find_map(|w| w.downcast::<gtk::Popover>().ok())
+            .expect("the tab menu is parented to the tab bar");
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            crate::testpump::TOOLTIP_HOVER_DRAIN,
+        );
+        assert!(popover.is_visible(), "precondition: the menu is open");
+
+        let parented_in_closed = std::rc::Rc::new(std::cell::Cell::new(None));
+        popover.connect_closed({
+            let seen = std::rc::Rc::clone(&parented_in_closed);
+            // Connected after the menu's own handler, so it runs after it.
+            move |p| seen.set(Some(p.parent().is_some()))
+        });
+        popover.popdown();
+        assert_eq!(
+            parented_in_closed.get(),
+            Some(true),
+            "the tab menu's `closed` handler must not unparent it inside the emission"
+        );
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            crate::widgets::TOOLTIP_HOVER_DRAIN + std::time::Duration::from_millis(200),
+        );
+        assert!(
+            popover.parent().is_none(),
+            "the closed menu is released afterwards"
+        );
         window.destroy();
     }
 }

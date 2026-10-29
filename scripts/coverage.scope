@@ -140,6 +140,7 @@ src/platform/linux/process.rs
 src/platform/mod.rs
 src/platform/x11.rs
 src/preview/annotate.rs
+src/preview/annotate/press.rs
 src/preview/build.rs
 src/preview/cells.rs
 src/preview/css.rs

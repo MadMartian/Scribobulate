@@ -62,11 +62,10 @@ fn wire_cell_press_exclusivity(view: &CodePreviewView) {
     let press = gtk::EventControllerLegacy::new();
     press.set_propagation_phase(gtk::PropagationPhase::Capture);
     press.connect_event(|controller, event| {
-        let is_primary_press = event.event_type() == gtk::gdk::EventType::ButtonPress
-            && event
-                .downcast_ref::<gtk::gdk::ButtonEvent>()
-                .is_some_and(|b| b.button() == gtk::gdk::BUTTON_PRIMARY);
-        if !is_primary_press {
+        let button = event
+            .downcast_ref::<gtk::gdk::ButtonEvent>()
+            .map(|b| b.button());
+        if !super::press::is_primary_press(event.event_type(), button) {
             return glib::Propagation::Proceed;
         }
         let Some(view) = controller
@@ -87,12 +86,12 @@ fn wire_cell_press_exclusivity(view: &CodePreviewView) {
 /// coordinates; the widget's native and its surface transform turn them into the
 /// widget's own.
 fn event_point_in(widget: &impl IsA<gtk::Widget>, event: &gtk::gdk::Event) -> Option<(f64, f64)> {
-    let (sx, sy) = event.position()?;
+    let surface = event.position()?;
     let native = widget.as_ref().native()?;
-    let (tx, ty) = native.surface_transform();
+    let (nx, ny) = super::press::surface_to_native(surface, native.surface_transform());
     native
         .upcast_ref::<gtk::Widget>()
-        .translate_coordinates(widget, sx - tx, sy - ty)
+        .translate_coordinates(widget, nx, ny)
 }
 
 /// The primary press at `(x, y)` in `view`'s coordinates. See
@@ -233,7 +232,8 @@ fn position_card_on_cell(
     // Same on-viewport gate the popovers use, through the same constructor — this card is
     // an in-surface GtkOverlay child rather than a popover, so it is not exposed to GTK4Rs/AP-26
     // itself, but "is there a visible anchor here?" is one question and deserves one
-    // answer. The rect is discarded: `bar_placement` below owns this card's clamping.
+    // answer. The rect is discarded: `bar_placement` below places this card, by the
+    // floating card's own rule.
     if ViewportRect::at(Viewport::of(view), vx as i32, vy as i32, lh).is_none() {
         return false;
     }

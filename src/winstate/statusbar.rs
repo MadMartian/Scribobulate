@@ -290,30 +290,35 @@ fn unique_names<'a>(origins: &[&'a str]) -> Vec<&'a str> {
     unique.into_iter().map(origin_name).collect()
 }
 
-/// The notice for images the XInclude screen refused (TDD 2.23c): the image's name
-/// when there is one, a count when there are several, `None` when there are none.
-/// `document` names the document they were refused in, for a notice shown while that
-/// document is not the one in front of its window.
-pub(crate) fn xinclude_blocked_text(origins: &[&str], document: Option<&str>) -> Option<String> {
-    let text = match unique_names(origins).as_slice() {
+/// What a document's refused images are called in a blocked-image notice (TDD 2.23c):
+/// "image x.svg" when there is one, "N images" when there are several, `None` when
+/// there are none.
+fn document_images(origins: &[&str]) -> Option<String> {
+    Some(match unique_names(origins).as_slice() {
         [] => return None,
-        [one] => format!("Blocked image {one}: {XINCLUDE_REASON}"),
-        many => format!("Blocked {} images: {XINCLUDE_REASON}", many.len()),
-    };
-    Some(match document {
-        Some(document) => format!("{document}: {text}"),
-        None => text,
+        [one] => format!("image {one}"),
+        many => format!("{} images", many.len()),
     })
 }
 
-/// The notice for theme images (sprites) the XInclude screen refused — images no
+/// What the theme's refused images (sprites) are called in a notice — images no
 /// document shows, so the notice says they belong to the theme.
-fn xinclude_blocked_theme_text(origins: &[&str]) -> Option<String> {
+fn theme_images(origins: &[&str]) -> Option<String> {
     Some(match unique_names(origins).as_slice() {
         [] => return None,
-        [one] => format!("Blocked theme image {one}: {XINCLUDE_REASON}"),
-        many => format!("Blocked {} theme images: {XINCLUDE_REASON}", many.len()),
+        [one] => format!("theme image {one}"),
+        many => format!("{} theme images", many.len()),
     })
+}
+
+/// "Blocked <what>: <reason>", prefixed with the document's name when it is given — a
+/// document refusing images while it is not the one in front of its window.
+fn blocked_notice(document: Option<&str>, what: &str) -> String {
+    let text = format!("Blocked {what}: {XINCLUDE_REASON}");
+    match document {
+        Some(document) => format!("{document}: {text}"),
+        None => text,
+    }
 }
 
 /// Whose image was refused: a document's (`id` identifies it, and `background_name`
@@ -352,11 +357,11 @@ struct WindowShare<'a, W, D> {
 /// Coalesce refusals into blocked-image notices (TDD 2.23c), each paired with the
 /// window it is shown in, windows in the order their first refusal arrived.
 ///
-/// Per window: theme images get one notice of their own. A window's documents get ONE
-/// notice between them — a single document keeps its own wording (named when it is not
-/// in front), several are counted together ("Blocked 7 images in 2 documents"), because
-/// a window's footer shows only its latest notice and one per document would hide all
-/// but the last. The document notice comes after the theme's, so it is the one shown.
+/// Per window, ONE notice: a window's footer shows only its latest notice, and notices
+/// pushed in one flush expire together, so a second would hide the first for its whole
+/// life. A single document keeps its own wording (named when it is not in front),
+/// several are counted together ("Blocked 7 images in 2 documents"), and the theme's
+/// images join the same sentence ("Blocked image x.svg and theme image rule.png").
 pub(crate) fn xinclude_blocked_notices<W: PartialEq + Clone, D: PartialEq>(
     refusals: &[PlacedRefusal<W, D>],
 ) -> Vec<(W, String)> {
@@ -391,23 +396,24 @@ pub(crate) fn xinclude_blocked_notices<W: PartialEq + Clone, D: PartialEq>(
     }
     let mut notices = Vec::new();
     for share in shares {
-        if let Some(text) = xinclude_blocked_theme_text(&share.theme) {
-            notices.push((share.window.clone(), text));
-        }
-        let text = match share.documents.as_slice() {
-            [] => None,
-            [one] => xinclude_blocked_text(&one.origins, one.background_name),
+        let (named, documents) = match share.documents.as_slice() {
+            [] => (None, None),
+            [one] => (one.background_name, document_images(&one.origins)),
             several => {
                 let images: usize = several.iter().map(|d| unique_names(&d.origins).len()).sum();
-                Some(format!(
-                    "Blocked {images} images in {} documents: {XINCLUDE_REASON}",
-                    several.len()
-                ))
+                (
+                    None,
+                    Some(format!("{images} images in {} documents", several.len())),
+                )
             }
         };
-        if let Some(text) = text {
-            notices.push((share.window.clone(), text));
-        }
+        let what = match (documents, theme_images(&share.theme)) {
+            (None, None) => continue,
+            (Some(documents), None) => documents,
+            (None, Some(theme)) => theme,
+            (Some(documents), Some(theme)) => format!("{documents} and {theme}"),
+        };
+        notices.push((share.window.clone(), blocked_notice(named, &what)));
     }
     notices
 }
@@ -578,6 +584,12 @@ mod tests {
     /// TDD 2.23c — one notice names one image, and counts several.
     #[test]
     fn xinclude_blocked_text_names_one_image_and_counts_several() {
+        let xinclude_blocked_text = |origins: &[&str], document: Option<&str>| {
+            let placed: Vec<_> = origins.iter().map(|o| placed(1, 1, document, o)).collect();
+            xinclude_blocked_notices(&placed)
+                .pop()
+                .map(|(_, text)| text)
+        };
         assert_eq!(xinclude_blocked_text(&[], None), None);
         let one = xinclude_blocked_text(&["/docs/img/logo.svg"], None).expect("a notice");
         assert!(one.starts_with("Blocked image logo.svg: "), "{one}");
@@ -593,8 +605,13 @@ mod tests {
     /// TDD 2.23c — a notice about a document that is not in front names it.
     #[test]
     fn xinclude_blocked_text_names_a_background_document() {
-        let text =
-            xinclude_blocked_text(&["/a.svg", "/b.svg"], Some("xinclude.md")).expect("a notice");
+        let notices = xinclude_blocked_notices(&[
+            placed(1, 1, Some("xinclude.md"), "/a.svg"),
+            placed(1, 1, Some("xinclude.md"), "/b.svg"),
+        ]);
+        let [(_, text)] = notices.as_slice() else {
+            panic!("one notice: {notices:?}")
+        };
         assert!(
             text.starts_with("xinclude.md: Blocked 2 images: "),
             "{text}"
@@ -684,23 +701,45 @@ mod tests {
         assert!(xinclude_blocked_notices::<u8, u8>(&[]).is_empty());
     }
 
-    /// TDD 2.23c — theme images get their own notice, said to be the theme's, pushed
-    /// before the window's document notice so the document's is the one shown.
+    /// TDD 2.23c — theme images are said to be the theme's, and a window refusing both
+    /// a theme image and a document image in one flush gets ONE notice naming both: two
+    /// pushed together would expire together, the second hiding the first throughout.
     #[test]
     fn blocked_notices_report_theme_images_as_the_themes() {
+        let alone = xinclude_blocked_notices(&[themed(1, "sprite /themes/t/rule.png")]);
+        assert_eq!(alone.len(), 1, "{alone:?}");
+        assert!(
+            alone[0].1.starts_with("Blocked theme image rule.png: "),
+            "{alone:?}"
+        );
         let notices = xinclude_blocked_notices(&[
+            themed(1, "sprite /themes/t/rule.png"),
             placed(1, 10, None, "/r/front.svg"),
-            themed(1, "sprite /themes/t/rule.svg"),
+            placed(2, 20, None, "/o/other.svg"),
         ]);
         let texts: Vec<&str> = notices.iter().map(|(_, t)| t.as_str()).collect();
-        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert_eq!(texts.len(), 2, "one notice per window: {texts:?}");
+        assert_eq!(notices[0].0, 1);
         assert!(
-            texts[0].starts_with("Blocked theme image rule.svg: "),
+            texts[0].starts_with("Blocked image front.svg and theme image rule.png: "),
             "{texts:?}"
         );
         assert!(
-            texts[1].starts_with("Blocked image front.svg: "),
+            texts[1].starts_with("Blocked image other.svg: "),
             "{texts:?}"
+        );
+        let background = xinclude_blocked_notices(&[
+            placed(1, 11, Some("back.md"), "/b/a.svg"),
+            placed(1, 12, Some("other.md"), "/b/b.svg"),
+            themed(1, "sprite /t/x.png"),
+            themed(1, "sprite /t/y.png"),
+        ]);
+        assert_eq!(background.len(), 1, "{background:?}");
+        assert!(
+            background[0]
+                .1
+                .starts_with("Blocked 2 images in 2 documents and 2 theme images: "),
+            "{background:?}"
         );
         let two =
             xinclude_blocked_notices(&[themed(1, "sprite /t/a.svg"), themed(1, "sprite /t/b.svg")]);

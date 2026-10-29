@@ -287,6 +287,21 @@ if ! otool -l "$APP/Contents/MacOS/scribobulate" \
     retool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/scribobulate"
 fi
 
+# Every OTHER rpath that leaves the bundle goes. Homebrew's own (`@loader_path/../../..` on
+# the SVG loader, an absolute Cellar path on libjpeg) came along with the copies, and dyld
+# searches a library's own rpaths before the executable's, so a file beside the .app could
+# stand in for a staged library. The reasoning and the measurement are rpath.sh's header;
+# verify-librsvg.sh below fails the build if one survives. Deleted one at a time, because
+# `-delete_rpath` removes a single entry and a path can be listed twice.
+# shellcheck source=rpath.sh
+. "$REPO_ROOT/packaging/macos/rpath.sh"
+for obj in "$APP/Contents/MacOS/scribobulate" "${STAGED[@]}" ${LOADER_OBJS[@]+"${LOADER_OBJS[@]}"}; do
+    while IFS= read -r rp; do
+        [ -n "$rp" ] || continue
+        rpath_is_internal "$APP" "$obj" "$rp" || retool -delete_rpath "$rp" "$obj"
+    done < <(rpaths_of "$obj")
+done
+
 # --- Runtime data that fails LATE and SILENTLY ---------------------------------
 #
 # None of this is in any link graph, so nothing above stages it and no dyld error reports
@@ -440,8 +455,8 @@ fi
 
 # librsvg security floor (CVE-2026-96889), read from the STAGED dylib. AFTER signing, never
 # before: loading a staged copy whose signature install_name_tool invalidated gets the
-# reader SIGKILLed. The app's XInclude screen is compiled out on macOS on the strength of
-# this check, so it fails the build rather than warning.
+# reader SIGKILLed. The app's XInclude screen stands down inside a bundle on the strength
+# of this check, so it fails the build rather than warning.
 "$REPO_ROOT/packaging/macos/verify-librsvg.sh" "$APP"
 
 # Refresh Launch Services so the Dock/Finder pick up the icon immediately rather

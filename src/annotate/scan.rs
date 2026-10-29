@@ -304,7 +304,15 @@ impl DelimIndex {
 /// Every other Markdown tool reads `` `{>>x<<}` `` and a fenced sample of CriticMarkup
 /// as code, so CriticMarkup inside code is literal text: it renders as written and is
 /// never an annotation (TDD 17.61). Found by parsing the source as written, the file
-/// other tools read.
+/// other tools read, with the same extensions `annotate::landing` decides where an
+/// annotation may go by, so the two never disagree about what is code.
+///
+/// A comment's body is the annotator's prose, not the document's Markdown, so a
+/// backtick in it must not pair with one in the text around it — pulldown does not
+/// know CriticMarkup and would pair them, hiding the real closer inside a "code span"
+/// and letting the comment close on a later one, swallowing the prose between. So
+/// the bodies of comments that open outside code are masked and the source parsed
+/// again. A comment opening inside code is that code's text and is left as it is.
 ///
 /// Skipped when the source holds no opener at all, so a document without CriticMarkup
 /// pays for no second parse.
@@ -312,11 +320,53 @@ fn code_ranges(source: &str) -> Vec<Range<usize>> {
     if !PAIRS.iter().any(|(open, _)| source.contains(open)) {
         return Vec::new();
     }
+    let code = parsed_code_ranges(source);
+    match mask_comment_bodies(source, &code) {
+        Some(masked) => parsed_code_ranges(&masked),
+        None => code,
+    }
+}
+
+/// `source` with the body of every comment that opens outside `code` overwritten by
+/// filler of the same byte length (newlines kept, so block structure is unchanged),
+/// or `None` when no such body holds anything that could open code.
+fn mask_comment_bodies(source: &str, code: &[Range<usize>]) -> Option<String> {
+    const FILLER: u8 = b'x';
+    let could_open_code = |body: &[u8]| body.iter().any(|b| matches!(b, b'`' | b'~' | b'\n'));
+    let mut bytes = source.as_bytes().to_vec();
+    let mut masked_any = false;
+    let mut from = 0;
+    while let Some(found) = source.get(from..).and_then(|rest| rest.find(COMMENT_OPEN)) {
+        let open = from + found;
+        let body_start = open + COMMENT_OPEN.len();
+        from = body_start;
+        if in_code(code, open) {
+            continue;
+        }
+        let Some(len) = source[body_start..].find(COMMENT_CLOSE) else {
+            break;
+        };
+        let body = body_start..body_start + len;
+        from = body.end + COMMENT_CLOSE.len();
+        if source[body.clone()].contains("\n\n") || !could_open_code(&bytes[body.clone()]) {
+            continue;
+        }
+        for b in &mut bytes[body] {
+            if !matches!(*b, b'\n' | b'\r') {
+                *b = FILLER;
+            }
+        }
+        masked_any = true;
+    }
+    masked_any.then(|| String::from_utf8(bytes).ok()).flatten()
+}
+
+fn parsed_code_ranges(source: &str) -> Vec<Range<usize>> {
     // Through the normalising seam, like every parse site, so a tab-padded table is a
     // table here exactly as on the page. The pre-pass keeps every byte where it was,
     // so the ranges index `source` itself.
     crate::renderer::NormalizedMd::new(source)
-        .parse()
+        .parse_as_written()
         .into_offset_iter()
         .filter_map(|(ev, r)| {
             matches!(
@@ -690,6 +740,17 @@ mod tests {
         assert_eq!(e.cleaned, "see `a==}b` here end");
         assert_eq!(e.annotations.len(), 1);
         assert_eq!(e.annotations[0].comment.as_deref(), Some("note"));
+    }
+
+    #[test]
+    fn a_backtick_in_a_comment_does_not_pair_with_one_in_the_prose() {
+        let e = extract("See {>>don't type ` here<<} or `x`, and {>>later<<}.");
+        let comments: Vec<_> = e.annotations.iter().map(|a| a.comment.as_deref()).collect();
+        assert_eq!(comments, [Some("don't type ` here"), Some("later")]);
+        assert_eq!(e.cleaned, "See  or `x`, and .");
+        // A fence opener in a multi-line comment opens no block either.
+        let e = extract("Text {>>see\n```\nhere<<} and {>>more<<}.\n");
+        assert_eq!(e.annotations.len(), 2);
     }
 
     #[test]

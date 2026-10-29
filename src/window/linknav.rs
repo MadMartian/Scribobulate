@@ -7,7 +7,6 @@
 //! module doc for why that conflation was a root cause of bugs.
 
 use crate::links::{self, LinkResolution};
-use crate::preview::scroll_preview_to_fragment;
 use crate::winstate::{TabState, ERROR_NOTICE_TIME};
 use gtk::prelude::*;
 use gtk::ApplicationWindow;
@@ -125,13 +124,13 @@ fn open_doc_link_target(window: &ApplicationWindow, path: &Path, fragment: Optio
         // needed. A tab with no preview at all (Edit view mode) simply has
         // nothing to scroll — `preview_scroller()` returns `None` for it below.
         if let Some(fragment) = fragment {
-            if let Some(sw) = tab.split.preview_scroller() {
+            if tab.split.preview_scroller().is_some() {
                 // The arrival carries the heading (TDD 23.11), so Forward lands
                 // back on it rather than on wherever that tab happens to sit.
                 // Recorded against the window the tab is now in, which is `win`
                 // and not necessarily the one the link was clicked in.
                 record_fragment_arrival(&win, &tab, fragment);
-                scroll_preview_to_fragment(&sw, fragment);
+                super::panescroll::preview_to_fragment(&tab, fragment);
             }
         }
         return;
@@ -190,9 +189,9 @@ fn open_doc_link_target(window: &ApplicationWindow, path: &Path, fragment: Optio
         // is simply the point right after this call returns, not a mechanism
         // that needs to be built.
         if let (Some(fragment), Some(t)) = (fragment, new_tab) {
-            if let Some(sw) = t.split.preview_scroller() {
+            if t.split.preview_scroller().is_some() {
                 record_fragment_arrival(&window, &t, &fragment);
-                scroll_preview_to_fragment(&sw, &fragment);
+                super::panescroll::preview_to_fragment(&t, &fragment);
             }
         }
     });

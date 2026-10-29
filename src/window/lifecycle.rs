@@ -262,10 +262,13 @@ mod tests {
 
     /// A window restored into a place, for the place tests below: the shared
     /// construction every window takes, with a place as session restore passes one.
+    ///
+    /// The init's own size is deliberately one no place here uses, so a size the
+    /// tests read back can only have come from the place (`winplace::present`).
     fn window_in_place(app: &gtk::Application, place: winplace::Place) -> ApplicationWindow {
         let init = WindowInit {
-            width: place.width,
-            height: place.height,
+            width: 300,
+            height: 200,
             place: Some(place),
             ..WindowInit::default()
         };
@@ -502,6 +505,12 @@ mod tests {
 
     /// TDD 15.10c: a window that is maximized at quit is saved maximized, even when
     /// another window's full-screen Space is current then.
+    ///
+    /// Only macOS misreports the maximized window here, so only there does this
+    /// exercise the correction (`winplace/src/macos.rs`), and there it first checks that
+    /// GDK did misreport — otherwise it would pass with the correction deleted. On
+    /// every other platform GTK reads the window maximized itself and this is a no-op
+    /// guard that capture does not lose that.
     #[gtktest::test]
     fn a_maximized_window_is_saved_maximized_while_a_sibling_is_full_screen() {
         let dir = tempfile::tempdir().unwrap();
@@ -519,6 +528,14 @@ mod tests {
                 fullscreen.is_maximized(),
                 "capture does not make the full-screen sibling maximized"
             );
+            if cfg!(target_os = "macos") {
+                assert!(
+                    !maximized.is_maximized(),
+                    "positive control: GDK reads the zoomed window as not maximized while \
+                     the sibling's Space is current; if it no longer does, the correction \
+                     this test guards is not being exercised"
+                );
+            }
             assert!(
                 winplace::capture(&maximized).maximized,
                 "the maximized window is captured maximized (GTK reads is_maximized = {})",

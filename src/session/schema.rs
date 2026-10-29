@@ -108,6 +108,10 @@ pub(crate) struct WindowSession {
     /// window's ALLOCATION — a maximized window's full-screen size — rather than the
     /// size it returns to. A file written before this field has those two keys and no
     /// `place`; `migrate_pre_v7_size` carries them over.
+    ///
+    /// Read leniently ([`lenient_place`]): a table that does not read as a place costs
+    /// this window its place, not the session every window.
+    #[serde(deserialize_with = "lenient_place")]
     pub place: winplace::Place,
     /// THIS window's own toolbar/status-bar/outline visibility (v3 — the
     /// operator's per-window decision). A v2 file has no per-window `chrome`
@@ -133,6 +137,34 @@ impl Default for WindowSession {
             },
             chrome: ChromeSession::default(),
             tabs: vec![TabSession::default()],
+        }
+    }
+}
+
+/// A window's `place` table, or — when it does not read as a place, say a `desktop = -1`
+/// a hand edit left — the default place keeping whatever integer size the table holds,
+/// logged. Without this one bad key fails `WindowSession`, and with it the whole
+/// `Session` parse, so every window and tab would be lost for the sake of one window's
+/// position.
+fn lenient_place<'de, D: serde::Deserializer<'de>>(d: D) -> Result<winplace::Place, D::Error> {
+    use serde::Deserialize;
+    let value = toml::Value::deserialize(d)?;
+    match winplace::Place::deserialize(value.clone()) {
+        Ok(place) => Ok(place),
+        Err(e) => {
+            log::warn!("session: a window's place could not be read ({e}); it keeps only its size");
+            let default = WindowSession::default().place;
+            let size = |key: &str| {
+                value
+                    .get(key)
+                    .and_then(toml::Value::as_integer)
+                    .and_then(|v| i32::try_from(v).ok())
+            };
+            Ok(winplace::Place {
+                width: size("width").unwrap_or(default.width),
+                height: size("height").unwrap_or(default.height),
+                ..default
+            })
         }
     }
 }
@@ -436,8 +468,9 @@ pub(super) fn sample_session() -> Session {
             WindowSession {
                 zoom_level: 1.5,
                 active_tab: 1,
-                // Every field of a place set, so a part the session drops on the way
-                // through fails the round trip here.
+                // Every field of a place set (the booleans left `false` here are set in
+                // window 1), so a part the session drops on the way through fails the
+                // round trip.
                 place: winplace::Place {
                     width: 1111,
                     height: 222,
@@ -488,9 +521,14 @@ pub(super) fn sample_session() -> Session {
             WindowSession {
                 zoom_level: 1.0,
                 active_tab: 0,
+                // The booleans window 0 leaves `false` are `true` here, so between the
+                // two windows every field of a place is set.
                 place: winplace::Place {
                     width: 800,
                     height: 600,
+                    fullscreen: true,
+                    all_desktops: true,
+                    below: true,
                     ..winplace::Place::default()
                 },
                 // Deliberately the OPPOSITE of window 0's chrome on every
@@ -519,6 +557,28 @@ mod tests {
         let text = toml::to_string(&s).unwrap();
         let back: Session = toml::from_str(&text).unwrap();
         assert_eq!(s, back);
+    }
+
+    #[test]
+    fn a_place_that_does_not_read_costs_that_window_its_place_not_the_session() {
+        let mut s = sample_session();
+        s.windows[0].place.desktop = Some(1);
+        let text = toml::to_string(&s)
+            .unwrap()
+            .replacen("desktop = 1", "desktop = -1", 1);
+        let back = parse(&text);
+        assert_eq!(back.windows.len(), 2, "both windows survive");
+        assert_eq!(back.windows[0].tabs, s.windows[0].tabs);
+        assert_eq!(back.windows[1], s.windows[1]);
+        // The bad window keeps its size and nothing else of its place.
+        assert_eq!(
+            back.windows[0].place,
+            winplace::Place {
+                width: 1111,
+                height: 222,
+                ..WindowSession::default().place
+            }
+        );
     }
 
     #[test]

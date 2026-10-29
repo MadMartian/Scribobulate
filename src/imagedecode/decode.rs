@@ -513,7 +513,7 @@ mod tests {
     /// without it still decodes, so the refusal is the screen's and not the loader's.
     #[test]
     fn an_svg_using_xinclude_is_refused_by_every_entry_point() {
-        if !crate::imagedecode::xinclude::ENFORCED {
+        if !crate::imagedecode::xinclude::enforced() {
             println!("SKIPPED [2.23c]: this platform does not screen SVG XInclude");
             return;
         }

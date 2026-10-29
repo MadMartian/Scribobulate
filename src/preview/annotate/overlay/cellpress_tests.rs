@@ -163,14 +163,22 @@ fn a_press_in_body_text_clears_the_cells_and_leaves_the_body_to_gtk() {
 /// Only an active window gives a widget focus, so the test skips when another
 /// application holds the front (seen on macOS while the suite ran in the background):
 /// the precondition could never hold. A reader's press activates the window before
-/// the press handler runs, so the product has no such gap.
+/// the press handler runs, so the product has no such gap. A window that fails to
+/// activate with no other application in front is a failure, not a skip: that is a
+/// regression in activation, and on the Xvfb gate the only way to get there.
 #[gtktest::test]
 fn a_press_away_from_a_focused_cell_takes_its_focus() {
     let (win, view, cells) = table_window();
     if !until_or_for(Clock::Frame, Duration::from_secs(2), || win.is_active()) {
-        println!(
-            "SKIPPED [TDD 17.63]: the test window never became the active window \
-             (another application holds the front), so no cell can take focus"
+        assert!(
+            crate::platform::another_application_is_frontmost(),
+            "the test window never became the active window, and no other application \
+             holds the front"
+        );
+        crate::testsymlink::skipped(
+            "TDD 17.63",
+            "the test window never became the active window because another application \
+             holds the front, so no cell can take focus",
         );
         destroy_after_tooltip_delay(&win, || ());
         return;
@@ -202,6 +210,30 @@ fn a_press_away_from_a_focused_cell_takes_its_focus() {
             "moving focus off the cell must not select any cell's text ({what})"
         );
     }
+    destroy_after_tooltip_delay(&win, || ());
+}
+
+/// **The cell-press rule is delivered by a capture-phase legacy controller on the view
+/// (TDD 17.63, GTK4Rs/AP-363).** The tests above call the press handler directly,
+/// because gtk-rs cannot build the raw `gdk::Event` the controller is handed; its event
+/// filter and coordinate transform are unit-tested in `annotate::press`. This is the
+/// half neither reaches: that the controller is wired at all, and in the phase that
+/// sees a press before the cell does. Mutation: drop `wire_cell_press_exclusivity(view)`
+/// from `wire_annotation_overlay`, or set its phase to bubble, and this fails.
+#[gtktest::test]
+fn the_view_carries_the_capture_phase_cell_press_controller() {
+    let (win, view, _) = table_window();
+    let controllers = view.observe_controllers();
+    let capture_legacy = (0..controllers.n_items())
+        .filter_map(|i| controllers.item(i))
+        .filter_map(|c| c.downcast::<gtk::EventControllerLegacy>().ok())
+        .filter(|c| c.propagation_phase() == gtk::PropagationPhase::Capture)
+        .count();
+    assert_eq!(
+        capture_legacy, 1,
+        "the preview view carries exactly one capture-phase EventControllerLegacy, the \
+         cell-press rule's"
+    );
     destroy_after_tooltip_delay(&win, || ());
 }
 

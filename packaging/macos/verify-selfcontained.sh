@@ -33,6 +33,9 @@ APP="${1:?usage: verify-selfcontained.sh <path-to-.app>}"
 [ -d "$APP" ] || { echo "error: no bundle at $APP" >&2; exit 1; }
 [ "$(uname -s)" = "Darwin" ] || { echo "error: macOS only" >&2; exit 1; }
 
+# shellcheck source=rpath.sh
+. "$(dirname "${BASH_SOURCE[0]}")/rpath.sh"
+
 BIN="$APP/Contents/MacOS/scribobulate"
 [ -x "$BIN" ] || { echo "error: no executable at $BIN" >&2; exit 1; }
 
@@ -79,6 +82,15 @@ while IFS= read -r obj; do
                 ;;
         esac
     done < <(otool -L "$obj" | tail -n +2 | awk '{print $1}')
+    # An rpath outside the bundle is searched BEFORE the executable's, so a file there
+    # replaces a staged library even though every load command above reads as internal.
+    while IFS= read -r rp; do
+        [ -n "$rp" ] || continue
+        if ! rpath_is_internal "$APP" "$obj" "$rp"; then
+            echo "   ESCAPING RPATH $(basename "$obj"): $rp"
+            findings=$((findings + 1))
+        fi
+    done < <(rpaths_of "$obj")
 done < <(find "$APP" -type f)
 
 if [ "$findings" -ne 0 ]; then

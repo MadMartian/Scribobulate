@@ -191,10 +191,11 @@ pub(crate) fn wire_editor_format_overlay(editor: &sourceview::View) {
     // `pow(page_size, 2/3)`, e.g. 83.28 px), and the text view paints at the truncated
     // value. The next time the view is allocated, `gtk_text_view_set_vadjustment_values`
     // writes that truncated value back (416.40 → 416): a `value-changed` that moves
-    // nothing. Showing this overlay is what triggers that allocation (it is parented to
-    // the editor), so hiding on every `value-changed` closed the overlay in the same
-    // frame it opened: the first selection after a wheel scroll showed no overlay, and
-    // every later one did, until the next wheel scroll left a fraction again.
+    // nothing. When this overlay was a popover parented to the editor, showing it was
+    // that allocation, so hiding on every `value-changed` closed it in the frame it
+    // opened: the first selection after a wheel scroll showed no overlay. The floating
+    // card no longer re-allocates the editor, but anything that does while the card is
+    // up writes the same value back to this handler.
     if let Some(vadj) = editor.vadjustment() {
         let painted = std::cell::Cell::new(vadj.value());
         vadj.connect_value_changed(gtk::glib::clone!(
@@ -245,15 +246,17 @@ mod gtk_integration_tests {
     use crate::window::testkit::test_app_suffixed;
     use std::time::Duration;
 
-    /// A wheel scroll leaves the editor's vadjustment at a fraction. Showing the overlay
-    /// allocates the editor, and that allocation writes the truncated value back: a
-    /// `value-changed` that moves no text. The scroll-hide must not take it for a scroll,
+    /// A wheel scroll leaves the editor's vadjustment at a fraction, and the editor's next
+    /// allocation writes the truncated value back: a `value-changed` that moves no text. The scroll-hide must not take it for a scroll,
     /// or the first selection after a wheel scroll shows no overlay (the operator's
     /// report: split view, wheel, double-click a word, no overlay; a second try works).
     ///
     /// The fraction is planted with a plain adjustment write rather than a wheel event
     /// (`#[gtktest::test]` cannot synthesise one), and asserted still present just before
     /// the selection, so the test cannot pass on a value an earlier frame already snapped.
+    /// The allocation is planted as well, once the overlay is open, and on GTK 4.6 the
+    /// test asserts the write-back happened. Mutation check: hiding on every
+    /// `value-changed` (dropping the `moves_painted_text` early return) fails here.
     #[gtktest::test]
     fn the_first_selection_after_a_fractional_scroll_keeps_its_overlay() {
         for mode in ["split", "edit"] {
@@ -315,19 +318,31 @@ mod gtk_integration_tests {
             until(Clock::Frame, "the format overlay to open", || {
                 chrome.format_overlay.is_visible()
             });
+            // Plant the write-back: a fresh allocation of the editor, which is what writes
+            // the truncated value back. Opening the overlay used to be that allocation,
+            // when it was a popover parented to the editor; the floating card sits beside
+            // the editor's scroller in the pane's overlay and does not re-allocate the
+            // editor, so the test asks for the allocation itself. Anything else that
+            // re-allocates the editor while the card is up delivers the same write-back to
+            // the same handler.
+            st.editor.queue_resize();
             drain_for(Clock::Frame, Duration::from_millis(400));
             assert!(
                 chrome.format_overlay.is_visible(),
                 "[{mode}] the overlay closed on the first selection after a fractional scroll"
             );
-            // The write-back is what GTK 4.6 does when the overlay's opening re-lays-out
-            // the editor; GTK 4.22 (macOS and Windows CI) does not write it, so there the
-            // case this guards never arises and the half above is all that is checked.
             if vadj.value().fract() != 0.0 {
+                assert!(
+                    !crate::saferizer::viewport::truncated_writeback_measured(),
+                    "[{mode}] precondition: GTK 4.6 writes the truncated scroll value back on \
+                     the editor's allocation, and it still reads {}, so the guard was not \
+                     exercised",
+                    vadj.value()
+                );
                 crate::testsymlink::skipped(
                     "TDD 10.8 truncated write-back",
-                    "this GTK left the fractional scroll value in place when the overlay \
-                     opened, so the write-back the fix guards against did not happen",
+                    "this GTK left the fractional scroll value in place when the editor was \
+                     re-allocated, so the write-back the fix guards against did not happen",
                 );
             }
 

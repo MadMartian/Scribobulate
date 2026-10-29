@@ -250,18 +250,33 @@ pub(super) fn hold_split_sync(st: &TabState) -> u64 {
     generation
 }
 
-/// End the hold `generation`, if it is still the current one, and re-project once from
-/// whichever pane now drives — the preview the reader toggled in, unless they have
+/// End `tab`'s hold `generation`, if it is still the current one, and re-project once
+/// from whichever pane now drives — the preview the reader toggled in, unless they have
 /// since touched the editor (`mark_driver_on_input` still runs during a hold).
-pub(super) fn release_split_sync(window: &ApplicationWindow, generation: u64) {
-    let Some(st) = state(window) else { return };
+///
+/// The hold belongs to the TAB, not to a window: the restore that ends it settles on a
+/// wall clock, by which time the reader may have switched tabs or moved this one to
+/// another window. Resolving "the window's active tab" then released the wrong tab's
+/// hold, or none, and a hold nobody releases stops this tab's sync for good. So the
+/// hold is always released here; only the re-projection waits for the tab to be in
+/// front of the window that now hosts it (`project_scroll` reads the active tab), and
+/// otherwise the activation's own sync places it.
+pub(super) fn release_split_sync(tab: crate::winstate::TabId, generation: u64) {
+    let Some(st) = crate::winstate::tab_by_id(tab) else {
+        return;
+    };
     if st.scroll.held.get() != Some(generation) {
         return;
     }
     st.scroll.held.set(None);
     st.scroll.ed_last.set((-1.0, -1.0));
     st.scroll.pv_last.set((-1.0, -1.0));
-    queue_scroll_sync(window);
+    let Some(window) = super::tabs::window_of_content_box(&st.content_box) else {
+        return;
+    };
+    if state(&window).is_some_and(|front| front.id == tab) {
+        queue_scroll_sync(&window);
+    }
 }
 
 /// Char offset of the iter at the top of `view`'s viewport (GTK4Rs/AP-15: `visible_rect`
@@ -1002,5 +1017,52 @@ mod gtk_integration_tests {
         }
 
         assert_no_accumulation(&geometry, start, &seen, "preview↔edit");
+    }
+
+    /// TDD 2.26h — a disclosure toggle's sync hold belongs to the TAB it was taken on.
+    /// The restore that ends it settles on a wall clock, so a tab switch can land first;
+    /// the release must still end the toggled tab's hold, and must not end the hold of
+    /// the tab now in front, whose own generation counter can carry the same number.
+    #[gtktest::test]
+    fn a_toggle_hold_is_released_on_its_own_tab_after_a_tab_switch() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.splitholdtab"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE).expect("register");
+        let window = crate::window::new_window(&app, "IT", "# Toggled\n", None);
+        let toggled = state(&window).expect("a front tab");
+        let other_id =
+            crate::window::create_tab_in_window(&window, "# Other\n", None, false, false)
+                .expect("a second tab");
+        let other = crate::winstate::tab_by_id(other_id).expect("the second tab");
+
+        let toggled_hold = hold_split_sync(&toggled);
+        let other_hold = hold_split_sync(&other);
+        assert_eq!(
+            toggled_hold, other_hold,
+            "precondition: per-tab counters collide, the case a window-resolved release \
+             mistakes for its own"
+        );
+        // The reader switches tabs before the toggled tab's restore settles.
+        crate::winstate::set_active_tab(&window, other_id);
+        assert_eq!(
+            state(&window).map(|st| st.id),
+            Some(other_id),
+            "precondition"
+        );
+
+        release_split_sync(toggled.id, toggled_hold);
+        assert_eq!(
+            toggled.scroll.held.get(),
+            None,
+            "the toggled tab's hold outlived its release: its split sync stays off"
+        );
+        assert_eq!(
+            other.scroll.held.get(),
+            Some(other_hold),
+            "the tab in front lost a hold that was not the one released"
+        );
+        window.destroy();
     }
 }

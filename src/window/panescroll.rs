@@ -13,8 +13,11 @@
 //! - [`editor_to_mark`] is the only route for scrolling the editor to a mark. The raw
 //!   `farscroll::scroll_to_mark_when_ready` is banned in `clippy.toml`; this module's
 //!   call carries the sanctioned `#[expect]`.
+//! - [`preview_to_fragment`] is the only route for scrolling the preview to a heading
+//!   named by a link fragment. The raw `preview::scroll_preview_to_fragment` is banned
+//!   in `clippy.toml`; this module's call carries the sanctioned `#[expect]`.
 //! - [`lead`] is for a navigation whose scroll goes through another seam (the preview's
-//!   heading, fragment and line scrolls), which takes the pane and has no mark.
+//!   heading, line and match scrolls), which takes the pane and has no mark.
 //!
 //! Outside split mode the lead has no effect: only the split sync reads it.
 //!
@@ -33,6 +36,20 @@ use crate::winstate::{ScrollDriver, TabState};
 /// to issue on it sticks and the other pane follows it.
 pub(crate) fn lead(st: &TabState, pane: ScrollDriver) {
     st.scroll.driver.set(pane);
+}
+
+/// Scroll the preview to the heading `fragment` names, with the preview leading the
+/// split sync. `false` when the tab has no preview (Edit mode) or no such heading.
+pub(crate) fn preview_to_fragment(st: &TabState, fragment: &str) -> bool {
+    let Some(sw) = st.split.preview_scroller() else {
+        return false;
+    };
+    lead(st, ScrollDriver::Preview);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the sanctioned route: the preview was made to lead the split sync on the line above (ScrAP-361)"
+    )]
+    crate::preview::scroll_preview_to_fragment(&sw, fragment)
 }
 
 /// How [`editor_to_mark`] places the mark: the same four arguments as
@@ -131,9 +148,38 @@ pub(crate) fn preview_reveal(st: &TabState, pos: DocPosition, before: Option<(i3
         readingpos::reading_to_preview_char(&rd.source_map_inv, &rd.shifts, &rd.original_owned, pos)
     };
     let line = view.buffer().iter_at_offset(buf_char).line();
-    if before.is_some_and(|(top, bottom)| (top..=bottom).contains(&line)) {
+    if !reveal_needed(before, line) {
         return;
     }
     lead(st, ScrollDriver::Preview);
     view.scroll_to_buffer_offset(buf_char);
+}
+
+/// Whether [`preview_reveal`] must scroll to bring preview `line` into view, given the
+/// lines `before` that were on screen (inclusive at both ends). With no `before` the
+/// preview was not on screen, and a reveal is always due.
+fn reveal_needed(before: Option<(i32, i32)>, line: i32) -> bool {
+    !before.is_some_and(|(top, bottom)| (top..=bottom).contains(&line))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reveal_needed;
+
+    /// TDD 9.16: a change on either edge of the viewport is on screen and needs no
+    /// scroll; one line past either edge does; a preview that was not on screen always
+    /// does.
+    #[test]
+    fn a_reveal_is_needed_only_for_a_line_off_the_screen_before() {
+        let on = Some((10, 30));
+        assert!(!reveal_needed(on, 10), "the top line is on screen");
+        assert!(!reveal_needed(on, 20), "a middle line is on screen");
+        assert!(!reveal_needed(on, 30), "the bottom line is on screen");
+        assert!(reveal_needed(on, 9), "the line above the top is not");
+        assert!(reveal_needed(on, 31), "the line below the bottom is not");
+        assert!(
+            reveal_needed(None, 20),
+            "no preview on screen: always reveal"
+        );
+    }
 }

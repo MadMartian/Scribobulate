@@ -37,7 +37,7 @@ impl<'a> Screened<'a> {
 
 /// Screen `bytes` decoded on behalf of `origin`, logging and recording a refusal.
 pub(super) fn screen<'a>(bytes: &'a [u8], origin: &str) -> Option<Screened<'a>> {
-    if !xinclude::ENFORCED {
+    if !xinclude::enforced() {
         return Some(Screened(bytes));
     }
     match xinclude::inspect(bytes) {
@@ -67,7 +67,7 @@ pub(crate) fn screen_refuses(bytes: &[u8], origin: &str) -> bool {
 /// logged at debug only: every probe is followed by a decode through [`screen`],
 /// which reports it once.
 pub(super) fn screen_quietly(bytes: &[u8]) -> Option<Screened<'_>> {
-    if !xinclude::ENFORCED {
+    if !xinclude::enforced() {
         return Some(Screened(bytes));
     }
     match xinclude::inspect(bytes) {
@@ -221,9 +221,23 @@ mod tests {
     const XINCLUDE_SVG: &[u8] =
         br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xi="http://www.w3.org/2001/XInclude"/>"#;
 
+    /// A test binary runs outside any macOS bundle, so on every platform it loads a
+    /// decoder this project did not deliver and the screen is on (TDD 2.23c). This is
+    /// also what keeps the other 2.23c tests from skipping on macOS, where a
+    /// compile-time exemption once left a non-bundle run with no screen at all.
+    #[test]
+    fn a_process_outside_a_macos_bundle_is_screened() {
+        assert!(xinclude::enforced());
+        assert_eq!(
+            screen(XINCLUDE_SVG, "test:screen:outside-bundle.svg").map(Screened::bytes),
+            None
+        );
+        crate::imagedecode::forget_for_test("test:screen:outside-bundle.svg");
+    }
+
     #[test]
     fn a_refusal_is_remembered_by_origin_and_forgotten_when_the_content_passes() {
-        if !xinclude::ENFORCED {
+        if !xinclude::enforced() {
             println!("SKIPPED [2.23c]: this platform does not screen SVG XInclude");
             return;
         }
@@ -243,7 +257,7 @@ mod tests {
     /// content that later passes clears it so a relapse is reported again.
     #[test]
     fn each_document_is_told_about_refused_content_once() {
-        if !xinclude::ENFORCED {
+        if !xinclude::enforced() {
             println!("SKIPPED [2.23c]: this platform does not screen SVG XInclude");
             return;
         }
@@ -295,7 +309,7 @@ mod tests {
 
     #[test]
     fn a_header_probe_refuses_without_recording() {
-        if !xinclude::ENFORCED {
+        if !xinclude::enforced() {
             println!("SKIPPED [2.23c]: this platform does not screen SVG XInclude");
             return;
         }

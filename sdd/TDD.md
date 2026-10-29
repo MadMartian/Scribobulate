@@ -345,15 +345,15 @@
 - **And** an image over the pixel limit is refused before any memory is set aside for its pixels
 - **And** the file size limit can be changed in the configuration file
 
-### 2.23c An SVG that may use XInclude is refused, and the reader is told why (Linux and Windows)
-- **Given** a document referencing an SVG that uses XInclude — local or remote, plain or gzip-compressed, in any text encoding, with the XInclude namespace under any prefix or hidden behind character references, entities, or an SVG embedded inside it — on Linux or Windows, whose image decoder carries a published memory-corruption flaw triggered by XInclude
+### 2.23c An SVG that may use XInclude is refused, and the reader is told why (Linux, Windows, and macOS outside the app bundle)
+- **Given** a document referencing an SVG that uses XInclude — local or remote, plain or gzip-compressed, in any text encoding, with the XInclude namespace under any prefix or hidden behind character references, entities, or an SVG embedded inside it — on Linux, on Windows or on macOS outside the app bundle, whose image decoder carries a published memory-corruption flaw triggered by XInclude
 - **When** it is rendered, used as a theme sprite, or exported to PDF
 - **Then** the SVG is never handed to the image decoder: the broken-image placeholder shows in its place, as for any image that cannot be shown (2.23b), and its tooltip says it was blocked because SVGs that may use XInclude are refused while the decoder has a security flaw
 - **And** the status bar of the window holding that document says so once, naming the image — or counting them when several are refused together — rather than once per image or once per re-render; the notice follows the document, never simply the window in front
 - **And** when that document is not the one in front of its window, the notice names the document too (e.g. "xinclude.md: Blocked 5 images: …"); when several documents in one window refuse images at the same time (e.g. a session restore) they share one notice that counts them (e.g. "Blocked 7 images in 2 documents: …"); and a document closed before its notice is shown gets none
-- **And** a refused theme sprite, which no document shows, is reported in the window in front as the theme's (e.g. "Blocked theme image rule.svg: …"), once per image content however often the theme is reloaded; a PDF export only logs its refusals, since the exported document's preview has already reported them
-- **And** the refusal errs towards refusing: an SVG that only *might* reach XInclude (one that declares entities, or uses an encoding the check cannot read) is refused too, while an ordinary SVG — including one embedding raster images — still shows
-- **And** on macOS, which carries a fixed decoder, nothing is refused on this account
+- **And** a refused theme sprite, which no document shows, is reported in the window in front as the theme's (e.g. "Blocked theme image rule.svg: …"), once per image content however often the theme is reloaded, and in the same notice as that window's document images when both are refused at once (e.g. "Blocked image a.svg and theme image rule.png: …"), never as two notices, one hiding the other; a PDF export only logs its refusals, since the exported document's preview has already reported them
+- **And** the refusal errs towards refusing: an SVG that only *might* reach XInclude (one that declares entities, uses an encoding the check cannot read, or embeds a `data:` URI whose header it cannot delimit) is refused too, while an ordinary SVG — including one embedding raster images — still shows
+- **And** on macOS run from the app bundle, which carries a fixed decoder, nothing is refused on this account; the same binary run from outside the bundle (from the build directory, say) loads the system's decoder and refuses exactly as on Linux
 
 ### 2.25 A Markdown construct the renderer cannot render is visible, never silently dropped
 - **Given** a document containing constructs from parser extensions this build does not handle — math (`$E=mc^2$`, `$$…$$`), footnotes (`[^1]` and its definition), a definition list, and a wikilink
@@ -2437,6 +2437,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** that part of the place falls back to where a new window would go, every part that still exists is applied as usual, and the restore otherwise proceeds normally
 - **And** a window whose monitor is now smaller than it was opens with its title bar on that monitor, never off-screen
 - **And** a full screen window whose monitor is gone opens full screen on the monitor a new window would use
+- **And** a window whose monitor is gone opens at its saved size, but no wider than the widest and no taller than the tallest monitor still attached
 
 ### 15.10e Only session restore uses the place
 - **Given** the application is running
@@ -2989,10 +2990,10 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Rationale** Scribobulate strips annotations before it reads the Markdown, so none of this shows in its own preview; every other tool — GitHub, a static-site generator, another editor — reads the markup as text. Inside a paragraph that is harmless. Ahead of an opening fence, after a closing one, inside front matter or directly after an HTML block it changes the document's structure: the code becomes a paragraph and the rest of the file becomes code, or the metadata becomes text
 
 ### 17.60 A long annotation keeps its controls on the card
-- **Given** an annotation whose annotated text or comment is too long to fit on screen — or several such annotations on one line, which share one card
+- **Given** an annotation whose annotated text or comment is too long to fit in its pane — or several such annotations on one line, which share one card — in a window of any height
 - **When** its card opens
-- **Then** the whole card is on screen, and each annotation's Edit / Remove (or Save / Cancel while editing) sits directly under its own text, visible and clickable without scrolling past that text
-- **And** the long text scrolls inside the card rather than growing it; where several annotations share the card and still do not fit, their rows scroll together so every one stays reachable — the card never runs off the screen and never closes itself because of its size
+- **Then** the whole card is inside its pane, and each annotation's Edit / Remove (or Save / Cancel while editing) sits directly under its own text, visible and clickable without scrolling past that text
+- **And** the long text scrolls inside the card rather than growing it; where several annotations share the card and still do not fit, their rows scroll together so every one stays reachable — the card never runs past the pane's edge and never closes itself because of its size
 
 ### 17.61 CriticMarkup written as code shows as code
 - **Given** a document that writes CriticMarkup inside code — inline code such as `` `{>>…<<}` `` or "between the `` `{>>` `` and `` `<<}` `` markers", or a fenced or indented code block showing a sample annotation

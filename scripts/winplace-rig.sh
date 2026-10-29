@@ -67,7 +67,8 @@ for _ in $(seq 50); do xwininfo -root >/dev/null 2>&1 && break; sleep 0.1; done
 "$KAMD" >"$SCRATCH/kamd.log" 2>&1 &
 PIDS+=($!)
 kwin_x11 >"$SCRATCH/kwin.log" 2>&1 &
-PIDS+=($!)
+KWIN_PID=$!
+PIDS+=("$KWIN_PID")
 for _ in $(seq 100); do
     xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q 'window id' && break
     sleep 0.1
@@ -101,9 +102,11 @@ check_not() {
     if grep -qF -- "$3" <<<"$2"; then echo "  FAIL $1: did not want '$3' in: $2"; FAILS=$((FAILS + 1)); else echo "  ok   $1"; fi
 }
 
-# run_case <name> <place toml>: show the probe, inspect its window, print the capture.
+# run_case <name> <place toml> [<hook>]: show the probe, inspect its window, print the
+# capture. <hook>, if given, is run with the window id while the probe still holds the
+# window, after its capture.
 run_case() {
-    local name=$1 place=$2
+    local name=$1 place=$2 hook=${3:-}
     echo "case: $name"
     printf '%s\n' "$place" >"$SCRATCH/place.toml"
     "$PROBE" "$SCRATCH/place.toml" --hold 3 >"$SCRATCH/capture.toml" 2>"$SCRATCH/probe.err" &
@@ -124,6 +127,7 @@ run_case() {
     sleep 1
     PROPS=$(xprop -id "$wid" _NET_WM_DESKTOP _NET_WM_STATE _KDE_NET_WM_ACTIVITIES _NET_FRAME_EXTENTS 2>&1 || true)
     GEOM=$(xwininfo -id "$wid" 2>&1 | grep -E 'Absolute upper-left|Width|Height' | tr -s ' ' | tr '\n' ' ')
+    if [[ -n "$hook" ]]; then "$hook" "$wid"; fi
     wait "$pid" || true
     CAPTURE=$(cat "$SCRATCH/capture.toml")
     [[ -s "$SCRATCH/probe.err" ]] && sed 's/^/  stderr: /' "$SCRATCH/probe.err" | head -5
@@ -154,6 +158,16 @@ check "capture position x" "$CAPTURE" "x = 300"
 check "capture position y" "$CAPTURE" "y = 200"
 check "capture size" "$CAPTURE" "width = 640"
 
+# Shaded is requested only once the window is managed: given as an initial state, GTK
+# remembered a 93x36 default size and the window came back tiny once unshaded (x11.rs's
+# header). So its size is checked on screen after unshading.
+UNSHADED=""
+unshade() { # <wid>
+    sleep 1
+    wmctrl -i -r "$1" -b remove,shaded
+    sleep 0.5
+    UNSHADED=$(xwininfo -id "$1" 2>&1 | grep -E 'Width|Height' | tr -s ' ' | tr '\n' ' ')
+}
 run_case "all desktops, kept below, shaded, all activities" "$(cat <<EOF
 width = 500
 height = 300
@@ -162,13 +176,17 @@ below = true
 shaded = true
 activities = ["00000000-0000-0000-0000-000000000000"]
 EOF
-)"
+)" unshade
+echo "  unshaded: $UNSHADED"
 check "all desktops written" "$PROPS" "_NET_WM_DESKTOP(CARDINAL) = 4294967295"
 check "below written" "$PROPS" "_NET_WM_STATE_BELOW"
 check "shaded written" "$PROPS" "_NET_WM_STATE_SHADED"
 check "capture all desktops" "$CAPTURE" "all_desktops = true"
 check "capture shaded" "$CAPTURE" "shaded = true"
 check "capture below" "$CAPTURE" "below = true"
+# On screen, not in the capture: with shaded given as an initial state the capture
+# still read 500x300 while the unshaded window was 93x36 (MEASURED).
+check "unshaded at its size" "$UNSHADED" "Width: 500  Height: 300"
 
 run_case "no titlebar and frame, at a position" "$(cat <<EOF
 width = 700
@@ -305,6 +323,20 @@ else
     check "window 1 saved activity and above" "$SAVED" "activities = [\"$ACT2\"] shaded = false above = true"
     check "window 2 saved where it was at quit" "$SAVED" "width = 900 height = 600 maximized = false fullscreen = false monitor = \"$MONITOR\" x = 250 y = 150 desktop = 0"
 fi
+
+# ── A window manager that died: last, since it ends KWin ──────────────────────────
+# Killed outright, KWin leaves _NET_SUPPORTING_WM_CHECK on the root naming a window that
+# is gone. Trusting the root alone, present waits out its whole bound for a manager that
+# will never manage the window, and warns that it did not.
+echo "case: a window manager that died is not waited for"
+kill -9 "$KWIN_PID" 2>/dev/null || true
+wait "$KWIN_PID" 2>/dev/null || true
+STALE=$(xprop -root _NET_SUPPORTING_WM_CHECK 2>&1)
+echo "  root: $STALE"
+printf 'width = 600\nheight = 400\ndesktop = 1\n' >"$SCRATCH/place.toml"
+"$PROBE" "$SCRATCH/place.toml" >/dev/null 2>"$SCRATCH/probe.err" || true
+check "the root still names the dead manager's window" "$STALE" "window id"
+check_not "present did not wait for it" "$(cat "$SCRATCH/probe.err")" "did not manage the window"
 
 echo
 if [[ $FAILS -eq 0 ]]; then echo "winplace-rig: PASS"; else echo "winplace-rig: $FAILS FAILED"; exit 1; fi

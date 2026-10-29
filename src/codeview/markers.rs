@@ -1091,7 +1091,7 @@ impl CodePreviewView {
         vbox.set_margin_end(8);
         vbox.set_width_request(280);
         vbox.append(&card_close_button(&card));
-        // The rows scroll as one when they outgrow the screen; the close button stays
+        // The rows scroll as one when they outgrow the pane; the close button stays
         // outside that scroller so it is always on the card (see `cardscroll`).
         let rows = gtk::Box::new(gtk::Orientation::Vertical, 8);
         for (n, &idx) in idxs.iter().enumerate() {
@@ -1101,7 +1101,7 @@ impl CodePreviewView {
             }
             rows.append(&build_annotation_row(m, &card, sink.clone()));
         }
-        vbox.append(&cardscroll::fit_to_screen(&rows, self));
+        vbox.append(&cardscroll::fit_to_pane(&rows));
         crate::widgets::floating_card::FloatingCardExt::set_child(&card, Some(&vbox));
 
         // Bug B: keep the pane from jerking (and the popover from missing) on a marker

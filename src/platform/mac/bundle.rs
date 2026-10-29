@@ -43,6 +43,24 @@ fn contents_dir() -> Option<PathBuf> {
     contents_for_exe(&std::env::current_exe().ok()?)
 }
 
+/// The librsvg `packaging/macos/bundle.sh` stages, relative to `Contents`, and which
+/// `packaging/macos/verify-librsvg.sh` holds to the CVE-2026-96889 floor before the
+/// bundle is delivered.
+const STAGED_LIBRSVG: &str = "Frameworks/librsvg-2.2.dylib";
+
+/// Whether this process runs from a bundle that carries its own librsvg — the one the
+/// bundle's gate verified, so the XInclude screen may stand down. Outside a bundle
+/// (`cargo run`, `./target/release/scribobulate`, a test binary) the SVG loader resolves
+/// Homebrew's librsvg, whose version nothing checks, and this is `false`.
+pub(crate) fn carries_verified_librsvg() -> bool {
+    contents_dir().is_some_and(|contents| librsvg_staged_in(&contents))
+}
+
+/// [`carries_verified_librsvg`]'s decision over a `Contents` given rather than found.
+fn librsvg_staged_in(contents: &Path) -> bool {
+    contents.join(STAGED_LIBRSVG).is_file()
+}
+
 /// [`contents_dir`]'s decision, over an executable path given rather than discovered — the
 /// whole of it, so the launch path is the only thing the caller supplies and the only
 /// thing a test has to stand in for.
@@ -216,7 +234,7 @@ pub(crate) fn configure_language_path() {
 
 #[cfg(test)]
 mod tests {
-    use super::{absolutize_loader_cache, contents_for_exe, module_basename};
+    use super::{absolutize_loader_cache, contents_for_exe, librsvg_staged_in, module_basename};
     use std::path::Path;
 
     /// A `Scribobulate.app/Contents/MacOS/scribobulate` under `root`, returning the
@@ -283,6 +301,23 @@ mod tests {
         let exe = stray.join("scribobulate");
         std::fs::write(&exe, b"#!/bin/sh\n").unwrap();
         assert_eq!(contents_for_exe(&exe), None);
+    }
+
+    /// The screen stands down only for a bundle whose staged librsvg is there: a bundle
+    /// staged without one is screened like a binary outside any bundle.
+    #[test]
+    fn only_a_bundle_carrying_its_librsvg_counts_as_verified() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, contents) = staged_bundle(dir.path());
+        assert!(!librsvg_staged_in(&contents));
+        let frameworks = contents.join("Frameworks");
+        std::fs::create_dir_all(&frameworks).unwrap();
+        std::fs::write(frameworks.join("librsvg-2.2.dylib"), b"").unwrap();
+        assert!(librsvg_staged_in(&contents));
+        assert!(
+            !super::carries_verified_librsvg(),
+            "a test binary runs outside any bundle"
+        );
     }
 
     #[test]

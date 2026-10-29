@@ -55,6 +55,31 @@ fn platform_surface_to_screen(surface: &gtk::gdk::Surface, x: i32, y: i32) -> Op
     None
 }
 
+// ── whether another application holds the front (tests only) ─────────────────────
+
+/// Whether another application is frontmost, so no window of this process can become
+/// the active one. For a GTK test that needs an active window: only this is a reason
+/// to skip, and a window that fails to activate for any other reason is a failure.
+///
+/// Only macOS answers, because only there was it seen (the suite running behind the
+/// developer's other work). Elsewhere `false`: on the WM-less Xvfb gate a mapped window
+/// is active at once (GTK4Rs/AP-119), so no other application can be in front.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) fn another_application_is_frontmost() -> bool {
+    platform_another_application_is_frontmost()
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests", target_os = "macos"))]
+fn platform_another_application_is_frontmost() -> bool {
+    mac::frontmost::frontmost_pid()
+        .is_some_and(|pid| u32::try_from(pid).ok() != Some(std::process::id()))
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests", not(target_os = "macos")))]
+fn platform_another_application_is_frontmost() -> bool {
+    false
+}
+
 // ── the system "reduce animations" preference ───────────────────────────────────
 //
 // A second façade beside the per-platform modules above, living here rather than in
@@ -279,6 +304,31 @@ fn platform_set_huge_page_collapse_disabled(disabled: bool) {
     let _ = disabled;
 }
 
+// ── the SVG decoder this process loads ───────────────────────────────────────────────
+
+/// Whether the SVG decoder this process loads is one this project delivered with the
+/// XInclude flaw fixed (CVE-2026-96889), so the image screen may stand down
+/// (`imagedecode::xinclude::enforced`). Read once per process: what is loaded cannot
+/// change while it runs.
+///
+/// Only a macOS bundle answers `true`: it stages its own librsvg and its build gate
+/// holds that copy to the floor. Everywhere else, a macOS binary run outside its bundle
+/// included, the decoder is the system's or a package manager's, and this is `false`.
+pub(crate) fn svg_decoder_is_delivered_fixed() -> bool {
+    static FIXED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FIXED.get_or_init(platform_svg_decoder_is_delivered_fixed)
+}
+
+#[cfg(target_os = "macos")]
+fn platform_svg_decoder_is_delivered_fixed() -> bool {
+    mac::bundle::carries_verified_librsvg()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_svg_decoder_is_delivered_fixed() -> bool {
+    false
+}
+
 // ── directories that mount something when a name inside them is looked up ──────────
 
 /// Whether `dir` is an automounter's directory: one where looking up any name inside it
@@ -287,10 +337,27 @@ fn platform_set_huge_page_collapse_disabled(disabled: bool) {
 /// without looking anything up beneath it.
 ///
 /// `dir` must already exist and contain no unexamined symbolic link (the image gate's
-/// link walk only asks about the prefix it has already resolved), because the answer
-/// is read through `dir`'s own path.
+/// link walk only asks about the prefix it has already resolved).
 ///
-/// macOS and Linux answer. Elsewhere this is `false`, which is what the gate did before.
+/// **The one question, answered two ways.** Both platforms answer "can a lookup inside
+/// `dir` mount something?", each from the source that is right for its automounter:
+///
+/// | | Linux | macOS |
+/// |---|---|---|
+/// | read from | the mount table: an `autofs` mount AT `dir` | `statfs(dir)`: `dir` is ON an `autofs` filesystem |
+/// | a map's own directory (`/net`) | yes | yes |
+/// | a directory inside a map, not yet mounted | no — the walk is refused at the map's own directory before it gets there | yes, if it is still on the map's `autofs` (not measured) |
+/// | a direct map's point, already mounted | yes — `statfs` would report the filesystem on top | no, as `statfs` reports what is on top (not measured on macOS): the walk goes on into a mount that is already there, so the host it contacts is one already contacted |
+/// | the source cannot be read | the stock maps (`/net`, `/misc`) are assumed, so a hidden `/proc` cannot open `/net` | `dir` cannot be reached, so nor can a name inside it: the lookup this guards fails without contacting anything |
+///
+/// The last row is what keeps either answer from failing open. The two differ only where
+/// a lookup cannot reach a host not already reached, and macOS keeps `statfs` because it
+/// answers about the path the walk actually holds: the walk reaches the hosts map as
+/// `/net`, and `statfs` answered `autofs` for both `/net` and `/System/Volumes/Data/net`
+/// (MEASURED, `mac/automount.rs`), while a mount-table match on `f_mntonname` would have
+/// to equal whichever of the two spellings the table records.
+///
+/// Elsewhere this is `false`, which is what the gate did before.
 pub(crate) fn mounts_on_lookup(dir: &std::path::Path) -> bool {
     platform_mounts_on_lookup(dir)
 }
@@ -309,4 +376,19 @@ fn platform_mounts_on_lookup(dir: &std::path::Path) -> bool {
 fn platform_mounts_on_lookup(dir: &std::path::Path) -> bool {
     let _ = dir;
     false
+}
+
+#[cfg(test)]
+mod mounts_on_lookup_tests {
+    /// The rows of `mounts_on_lookup`'s contract that every platform answers alike, run
+    /// against each platform's own source: an ordinary directory and a missing one are
+    /// not directories whose lookups mount anything. The rows where the platforms
+    /// differ are each module's own tests.
+    #[test]
+    fn ordinary_and_unreachable_directories_mount_nothing_on_any_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        for path in [dir.path().to_path_buf(), dir.path().join("absent")] {
+            assert!(!super::mounts_on_lookup(&path), "{path:?}");
+        }
+    }
 }
