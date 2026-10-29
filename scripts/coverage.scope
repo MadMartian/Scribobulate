@@ -122,6 +122,7 @@ src/imagedecode/differential/safety.rs
 src/imagedecode/differential/seeds.rs
 src/imagedecode/probe.rs
 src/imagedecode/screen.rs
+src/imagedecode/svgencoding.rs
 src/imagedecode/xinclude.rs
 src/imagefetch.rs
 src/keynav.rs

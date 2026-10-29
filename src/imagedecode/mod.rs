@@ -25,8 +25,10 @@
 //! [`xinclude`]): the loader picks librsvg by content, and a librsvg with
 //! CVE-2026-96889 corrupts memory on an SVG that uses XInclude, so on every platform
 //! but macOS (whose bundle carries the fixed librsvg) such content is refused before
-//! a loader sees a byte. The loader calls here take a `screen::Screened`, which only
-//! the screen hands out (TDD 2.23c).
+//! a loader sees a byte. The loader calls here take a `svgencoding::LoaderInput`,
+//! which only a `screen::Screened` can become, and which only the screen hands out
+//! (TDD 2.23c). [`svgencoding`] is also where a UTF-16 or gzip SVG, which no sniff
+//! recognises, is handed to the SVG loader by name (TDD 2.23j).
 //!
 //! `clippy.toml`'s `disallowed-methods` bans SEVEN GTK/gdk-pixbuf entry points outside
 //! this module — `Texture::from_bytes`/`from_file`/`from_filename`,
@@ -63,6 +65,7 @@ pub(crate) mod decode_probe;
 mod differential;
 mod probe;
 mod screen;
+mod svgencoding;
 mod xinclude;
 
 pub(crate) use admission::read_local;

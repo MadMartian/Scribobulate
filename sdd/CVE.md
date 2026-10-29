@@ -144,7 +144,13 @@ that entity while libxml2 is still expanding it.
 librsvg for SVG by content, not by file name. Any SVG a document references is decoded — local
 files beside the document by default, remote ones with "Show Unsafe Images" on, theme sprites, PDF
 export. MEASURED on macOS: a `data:` `xi:include` renders through the loader, so the vulnerable
-path runs, with no base URL needed.
+path runs, with no base URL needed. A UTF-16 or gzip-compressed SVG reaches librsvg too, through
+a loader created for the SVG module by name (`src/imagedecode/svgencoding.rs`), because
+gdk-pixbuf's format sniff recognises neither encoding; until that route existed both were refused
+before any loader ran (measured on Linux and macOS), so the screen's UTF-16 and gzip readings guarded a route
+no image took. The gzip layer is inflated by us, to a bound, and the inflated text is screened
+again, so librsvg never inflates anything — on the macOS bundle too, where the screen stands down.
+("Show UTF-16 and gzip-compressed SVGs, and re-render small SVGs at zoom", 2026-10-29)
 
 | Platform | librsvg loaded (checked 2026-10-28) | Fixed upstream for us? |
 |---|---|---|

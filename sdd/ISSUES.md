@@ -59,7 +59,6 @@ described from a different vantage point.
 | R | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | S | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
 | T | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
-| U | Any | Production | A benign SVG written in UTF-16, or gzip-compressed (`.svgz`), never shows: the size probe in front of every decode cannot read its dimensions and refuses it | Medium |
 | W | Windows | Production | Restoring a window's size at a fractional Windows display scale (125%, 150%) has never been run, so whether a window comes back at its saved size there is unknown | Low |
 | X | Any | Production | A floating card (the Annotate bubble, the formatting bar, a comment card) stays put when the thing it points at moves without its pane re-laying out, so it can end up pointing at the wrong text | Low |
 | Y | Any | Production | In an annotation card's list of rows, the mouse wheel over a row's highlighted-text or comment box scrolls that box (or nothing), never the list, so a long list cannot be wheel-scrolled from over its rows | Low |
@@ -462,31 +461,6 @@ is not ruled out.
 **Fix**: upstream, a destroyed-surface guard in `windowDidResize:`. An app-side workaround
 (leaving full screen before closing) would add AppKit's exit animation to every close of a
 full-screen window, a visible cost for a log line; it has not been tried.
-
-## U. A benign UTF-16 or gzip-compressed SVG never shows
-
-**Severity**: Medium (a format the app claims to show is refused outright, with only a log line;
-an SVG exported in UTF-16 or saved as `.svgz` shows the broken-image placeholder).
-
-**Observed** (2026-10-28). Linux, GTK 4.6.9, release build at `mitigations`, private Xvfb: a
-40×40 green-square SVG shows; the same SVG as UTF-16LE with a BOM, and gzip-compressed as
-`.svgz`, each show the placeholder and log `image … not loaded: its dimensions could not be
-read, so the 67108864-pixel cap cannot be enforced and the decode is refused`
-(`imagedecode/decode.rs`). The `mac` seat saw the same on macOS (GTK 4.24.1) from the `.app`,
-where the XInclude screen stands down: the 2.23c fixtures `utf16.svg` and `compressed.svgz`
-reach the decoder and are refused here instead. On Linux and Windows those two fixtures are
-hostile and refused earlier by the screen, which is why 2.23c never showed it. Filed `Any`
-because the probe is shared code with no platform branch; Windows has not been driven.
-
-**Where**: `imagedecode/probe.rs`, `probe_vector_dimensions` → `probe_header`, which asks
-gdk-pixbuf's loader for the declared size (the `size-prepared` / `set_size(0, 0)` sentinel,
-GTK4Rs/AP-311) and gets none for these two encodings.
-
-**Not established**: whether gdk-pixbuf's SVG loader never emits `size-prepared` for UTF-16
-or gzip input before the sentinel stops it, or whether the format sniff fails first. The XInclude
-screen already decodes both (`xinclude.rs` inflates gzip and reads UTF-16), so the probe could
-learn the size from that decoded text — but measure which half fails before choosing.
-MANUAL-TEST 2.23c's "six squares from the bundle" on macOS cannot pass until this is fixed.
 
 ## W. A window's restored size at a fractional Windows display scale is unverified
 

@@ -385,6 +385,12 @@
 - **When** the decoder judges that sample
 - **Then** the run reports how many of them the decoder would not have acted on, and that count is not a failure
 
+### 2.23j An SVG saved as UTF-16 or compressed as `.svgz` shows like any other SVG
+- **Given** a document referencing an SVG that is UTF-16 text (with a byte-order mark, or an XML declaration) or gzip-compressed (`.svgz`), and that the XInclude screen of 2.23c does not refuse
+- **When** it is rendered, used as a theme sprite, or exported to PDF, on Linux, macOS or Windows
+- **Then** it shows exactly as the same picture saved as plain UTF-8 does: at its declared size, and re-rendered sharp at a zoomed size (13.11)
+- **And** its declared size is held to the same pixel limit as any image (2.23b), and a compressed one is refused if it expands past the image size limit or holds another compressed layer, without expanding it further
+
 ### 2.25 A Markdown construct the renderer cannot render is visible, never silently dropped
 - **Given** a document containing constructs from parser extensions this build does not handle — math (`$E=mc^2$`, `$$…$$`), footnotes (`[^1]` and its definition), a definition list, and a wikilink
 - **When** it is rendered, and when it is exported
