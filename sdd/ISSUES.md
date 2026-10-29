@@ -60,7 +60,6 @@ described from a different vantage point.
 | S | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
 | T | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | W | Windows | Production | Restoring a window's size at a fractional Windows display scale (125%, 150%) has never been run, so whether a window comes back at its saved size there is unknown | Low |
-| X | Any | Production | A floating card (the Annotate bubble, the formatting bar, a comment card) stays put when the thing it points at moves without its pane re-laying out, so it can end up pointing at the wrong text | Low |
 | Y | Any | Production | In an annotation card's list of rows, the mouse wheel over a row's highlighted-text or comment box scrolls that box (or nothing), never the list, so a long list cannot be wheel-scrolled from over its rows | Low |
 
 ## Closed issues
@@ -482,25 +481,6 @@ to GDK's integer scale, which is the one case where the two could differ if that
 - Run MANUAL-TEST 15.10f at 125% and at 150% on Windows, with one window maximized and minimized
   at quit. Delete this entry if both pass; otherwise the failing case becomes the fix's test.
 - Accept the limitation until a user at a fractional scale reports a size change.
-
-## X. A floating card does not follow an anchor that moves without its pane re-laying out
-
-**Severity**: Low (seen while fixing review findings, not reported by a user; the card is
-mispositioned until the next layout of its pane).
-
-A `FloatingCard` (`src/widgets/floating_card.rs`) is a child of its pane's `GtkOverlay` and is
-placed when that overlay lays out its children. When the anchor moves without the overlay laying
-out again (the anchor widget reallocates inside a scrolled child, say), nothing moves the card, so
-it keeps pointing where the anchor was.
-
-**Not established**: which anchor movements in the app reach this (a scroll, a reflow, a live
-reload), and whether any user-visible case exists today. Reproduce one before fixing.
-
-**Mitigation options**:
-- Re-place the card when its anchor's allocation changes (a size or allocation notification on
-  the anchor, or a frame tick while the card is shown), within the continuous-signal rules of
-  `sdd/CAM.md`.
-- Pop the card down when its anchor moves, as a popover does when its parent scrolls away.
 
 ## Y. The mouse wheel over an annotation card's row scrolls the row's box, never the list
 

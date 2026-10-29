@@ -2936,6 +2936,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** an open annotation card pointing at its margin chip
 - **When** the reader scrolls the preview while it is open
 - **Then** the card moves with its chip, staying beside the line it is about — it never stays where it was and ends up pointing at unrelated text
+- **And** the same holds when the document is rendered again under the card without any scrolling (the file changing on disk, the side-by-side view following an edit, a fold): the card stays open, keeps any comment being edited in it, and moves beside its own annotation's chip, even when another annotation now comes before it
 
 ### 17.48 An annotation card released by the viewport comes back with its chip
 - **Given** an open annotation card

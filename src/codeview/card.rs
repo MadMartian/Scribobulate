@@ -250,6 +250,12 @@ impl AnnotationCard {
         self.imp().idxs.borrow().as_slice() == idxs
     }
 
+    /// The marker indices currently listed, into the render they were adopted from — for
+    /// re-keying the card onto the next render (`codeview::cardfollow`).
+    pub(crate) fn shown(&self) -> Vec<usize> {
+        self.imp().idxs.borrow().clone()
+    }
+
     /// Adopt `idxs` as the content this card is showing, anchored to `anchor_src` — the
     /// `src_span.start` of the group's first annotation. Called by `open_marker_popover`
     /// after it has rebuilt the child; the actual presentation is a plain

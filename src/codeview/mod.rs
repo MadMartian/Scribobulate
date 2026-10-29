@@ -44,6 +44,7 @@ const ANCHORED_LINE_END_SLACK: i32 = 1;
 mod bandpaint;
 mod bands;
 mod card;
+mod cardfollow;
 mod cards;
 mod cardscroll;
 mod chips;
@@ -353,6 +354,10 @@ mod imp {
         /// Created once and reused for the view's life; torn down by `dispose` via
         /// `AnnotationCard::teardown`.
         pub(crate) marker_card: RefCell<Option<super::card::AnnotationCard>>,
+        /// The open card's re-point waiting for the paint after a render in place, and
+        /// the frame clock it waits on (`cardfollow`). At most one: a later render
+        /// replaces it, and `dispose` disconnects it.
+        pub(crate) card_follow_paint: RefCell<Option<(gdk::FrameClock, glib::SignalHandlerId)>>,
         /// One-shot guard: has the persistent marker popover been PRE-WARMED (first
         /// `set_parent`+`popup`/`popdown` done while the view sat at scroll 0)? The
         /// first-EVER `set_parent`+`popup` of a popover parented to this view forces
@@ -430,6 +435,7 @@ mod imp {
                 annotate_trigger: RefCell::new(None),
                 overlay_popover: RefCell::new(None),
                 marker_card: RefCell::new(None),
+                card_follow_paint: RefCell::new(None),
                 card_host: glib::WeakRef::new(),
                 marker_popover_warmed: Cell::new(false),
                 primary_sel_handler: RefCell::new(None),
@@ -458,6 +464,7 @@ mod imp {
             if let Some(card) = self.marker_card.borrow_mut().take() {
                 card.teardown();
             }
+            super::cardfollow::cancel_pending(&self.obj());
             // Drop our handler on the long-lived primary clipboard (table-cell annotation) so it
             // doesn't outlive the view and accumulate across renders (GTK4Rs/AP-28).
             if let Some((clip, id)) = self.primary_sel_handler.borrow_mut().take() {

@@ -545,6 +545,7 @@ The invalidation classes (matrix columns):
 | 15 | Find's captured **editor** scope — the "search in selection" passage (`src/window/find.rs`, `FindScope::Editor`) | a pair of `GtkTextMark`s in the editor buffer | ✓ | n/a | ✓ | n/a | **Marks, because the range must track edits made INSIDE it** — Replace All is exactly such an edit, and it changes the passage's length while the reader is still confined to it. Left gravity on the start and right on the end, so an insertion at either boundary lands inside rather than escaping. An `AnchoredSpan` is the wrong instrument here for two reasons: it re-finds by captured text, and the text is what changes; and a selection is unbounded in size, so anchoring by its text is unbounded in cost. Class B (a reload) collapses both marks onto offset 0, so the reload path RELEASES the scope explicitly rather than leaving a bound that silently stops bounding while the toggle says it does. Every resolution guards `mark.buffer() == buf` first (GTK4Rs/AP-89) |
 | 16 | Find's captured **preview** scope (`src/window/find.rs`, `FindScope::Preview`) | preview **buffer** char range + the render it was taken from | ✓ | ✓ | ✓ | ✓ | Keyed on the same `view_serial` + `generation` pair the hit cache uses, and checked on every access. Nothing tracks the range because nothing can: a re-render replaces the text wholesale. **Unresolvable ⇒ re-derive, never refuse** — the toggle turns itself off and the search covers the whole pane, because reinterpreting the range against the new render confines the search to whatever now happens to sit at those offsets, which is a confident answer about a passage the reader never chose (TDD 11.16). This is the arm the retired `fold_epoch` got wrong and `PreviewFindCache` got right, and the two differ in nothing else |
 | 14 | Outline selection and the scroll-spy's guard (`TabState::outline_selected`, `outline_spy_doc`) | heading title **path** | ✓ | n/a | ✓ | ✓ | Both are re-resolved into the current build's indexes at `refresh_outline`, exactly as the sibling `outline_collapsed` already was. Held as indexes, the first re-selected whichever heading had moved into that position and the second suppressed a genuine activation whenever two builds' rows happened to share one |
+| 17 | Open annotation comment card's anchor and the markers it lists (`src/codeview/card.rs`, re-keyed by `src/codeview/cardfollow.rs`) | source bytes (the first annotation's start) + marker-list **indices** | ✓ | ✓ | ✓ | ✓ | Re-keyed at every render of the view, at the one place a render installs its markers: each listed annotation is found in the new markers by its construct's text and neighbours, nearest where it was, and the card adopts the new indices and start, then re-points after the next paint. Any member not found dismisses the card (TDD 17.51). Before this the identity was re-read only on a scroll, so a render in place left both naming the previous render, and the card pointed at text that had moved in under it (TDD 17.47) |
 
 **Row 6's `◑` under content mutation is the one deliberate weakness in this matrix,
 and it is bounded rather than unnoticed.** A slug survives an edit (class A) by
@@ -568,6 +569,12 @@ only prior member is row 12, and it was re-read when these were written — it a
 re-finds by position and needs nothing. No other find state points into a document
 across time: the query is text, the options are booleans, and the hit list is rebuilt
 rather than held. Nothing was fixed under these rows.
+
+**Row 17 was added by the work on cards following their anchor.** The sweep it obliges:
+the other two cards over a pane, the Annotate pop-up and the editor's formatting bar, hold a
+rectangle and no document reference, and both close when their selection collapses, which
+a reload does (driven in both split and preview, release build, Xvfb, 2026-10-29). Row 4
+holds an index into the same marker list and was not re-read under this row.
 
 **Class A′ and row 8 were added by the disclosure fold-splice work, and the sweep it
 obliges is recorded here.** Rows 1, 2, 3 and 7 are keyed on SOURCE bytes and a splice

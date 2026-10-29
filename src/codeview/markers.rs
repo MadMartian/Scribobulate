@@ -528,7 +528,11 @@ impl CodePreviewView {
         // allocation). Nudge one more paint on idle — after the layout pass — so the chip
         // snaps from the table-top fallback to its exact row without needing a mouse-move.
         let has_cell_marker = markers.iter().any(|m| m.cell_widget.is_some());
+        // An open card holds this render's marker indices and identity; re-key it onto the
+        // new list, or dismiss it if its annotation is gone (`cardfollow`).
+        let card_plan = super::cardfollow::plan(self, &markers);
         self.imp().markers.replace(markers);
+        super::cardfollow::apply(self, card_plan);
         self.queue_draw();
         if has_cell_marker {
             gtk::glib::idle_add_local_once(glib::clone!(

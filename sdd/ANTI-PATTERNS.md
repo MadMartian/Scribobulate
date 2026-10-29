@@ -92,6 +92,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 | 361 | A command that scrolls the split pane the reader is NOT in — the scroll sync puts it straight back | C |
 | 362 | An emoji with a variation selector, or newer than Emoji 12, in a theme symbol — Windows draws a missing-glyph box | C |
 | 363 | A strong `TabState` capture in a widget the tab bar owns — the tab reaches the bar, so it is a cycle | C |
+| 364 | An open card that re-points only on scroll — a render in place moves its annotation under it | C |
 | 365 | A pasted fence that never closes re-pairs the document's own fences — each mask check then finds one comment more | C |
 
 ---
@@ -552,6 +553,13 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 **Resolution**: the rows capture the tab `#[weak]` and do nothing when it is gone; one shared window-close guard test now runs over the document, tab and toolbar menus.
 **Lesson**: in this tree, a closure on any widget inside a window's chrome must hold a `TabState` (or the window) weakly — ownership runs from the tab outward to the chrome, never back. The cycle shows only on the path nobody exercises by hand (closing a window with the menu open), so the guard test is what catches it.
 **Scribobulate**: `window::tabs::contextmenu::show_tab_context_menu`; test `closing_the_window_with_the_tab_menu_open_releases_the_menu`. Shape: GTK4Rs/AP-63, GTK4Rs/AP-140.
+
+## 364. An open card that re-points only on scroll — a render in place moves its annotation under it
+**Symptom**: in Side by Side with a comment card open, a live reload that inserted text above the annotation moved the chip about 150 px down while the card stayed put, pointing at other text. No input was involved, so nothing drew attention to it.
+**Root cause**: the card's rectangle was re-derived only on scroll, and its identity (start offset plus marker indices) was fixed at open. A render in place rebuilds the markers without scrolling, so after an edit above it both are stale, and the indices can name a different annotation. The register had guessed the anchor widget reallocated; it never moves, so re-placing on allocation would have fixed nothing.
+**Resolution**: every `set_markers` re-keys the open card onto its annotation in the new render by construct text and neighbours, then re-points it after the next paint; a card whose annotation is gone is dismissed.
+**Lesson**: anything that floats over the rendered document and holds a position or index into it must be re-derived at every render, not only at every scroll: reloads, side-by-side edits, folds and theme or zoom re-renders all rebuild the text in place.
+**Scribobulate**: `codeview::cardfollow`, called from `CodePreviewView::set_markers`; tests `the_card_follows_its_annotation_through_a_render_in_place`, `the_card_goes_away_when_a_render_drops_its_annotation`. CAM Document-Reference row 17. Deferral: GTK4Rs/AP-142. Diagnosis: GEP-15.
 
 ## 365. A pasted fence that never closes re-pairs the document's own fences — each mask check then finds one comment more
 **Symptom**: a comment holding a stray backtick rendered as literal text, with no marker and missing from the annotations list, but only when four or more fence-holding comments followed a document fence that followed one.
