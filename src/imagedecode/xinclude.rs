@@ -248,12 +248,7 @@ fn inspect_layer(
         return Err(Reason::Encoding);
     }
     let body = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
-    inspect_text(
-        &normalise(body.iter().map(|&b| char::from(b))),
-        depth,
-        budget,
-        splice,
-    )?;
+    inspect_chars(body.iter().map(|&b| char::from(b)), depth, budget, splice)?;
     // ASCII written as UTF-16 always has a zero byte beside it, so content with none
     // cannot spell anything when read that way. Each of these four readings is a full
     // pass of its own, so each is charged its code units before it runs: the budget
@@ -263,8 +258,7 @@ fn inspect_layer(
             let tail = bytes.get(offset..).unwrap_or_default();
             for big_endian in [false, true] {
                 budget.charge(tail.len() / 2)?;
-                let text = normalise(utf16_chars(tail, big_endian));
-                inspect_text(&text, depth, budget, splice)?;
+                inspect_chars(utf16_chars(tail, big_endian), depth, budget, splice)?;
             }
         }
     }
@@ -307,14 +301,37 @@ fn utf16_chars(bytes: &[u8], big_endian: bool) -> impl Iterator<Item = char> + '
     char::decode_utf16(units).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
 }
 
-/// Reduce text to what a parser would see, for searching: ASCII kept, everything else
-/// [`NON_ASCII`]; XML character and predefined-entity references expanded; CSS escapes
-/// expanded; tabs, newlines and form feeds dropped, as a URL parser drops the first two
-/// and CSS reads the third as a newline (dropping more can only find more).
-fn normalise(chars: impl Iterator<Item = char>) -> Vec<u8> {
-    let ascii: Vec<u8> = chars
+/// Read decoded characters as text: as they stand, and, where markup inside a
+/// `<style>` element splits its text, also as the stylesheet receives that text
+/// ([`without_joining_markup`]). The markup is found in the text as written, before any
+/// reference or escape is expanded, as the XML parser finds it; each reading is then
+/// normalised for searching.
+fn inspect_chars(
+    chars: impl Iterator<Item = char>,
+    depth: usize,
+    budget: &mut Budget,
+    splice: Splice,
+) -> Result<(), Reason> {
+    let ascii = to_ascii(chars);
+    if let Some(joined) = without_joining_markup(&ascii) {
+        budget.charge(joined.len())?;
+        inspect_text(&normalise(joined), depth, budget, splice)?;
+    }
+    inspect_text(&normalise(ascii), depth, budget, splice)
+}
+
+/// ASCII kept, everything else [`NON_ASCII`].
+fn to_ascii(chars: impl Iterator<Item = char>) -> Vec<u8> {
+    chars
         .map(|c| if c.is_ascii() { c as u8 } else { NON_ASCII })
-        .collect();
+        .collect()
+}
+
+/// Reduce text to what a parser would see, for searching: XML character and
+/// predefined-entity references expanded; CSS escapes expanded; tabs, newlines and form
+/// feeds dropped, as a URL parser drops the first two and CSS reads the third as a
+/// newline (dropping more can only find more).
+fn normalise(ascii: Vec<u8>) -> Vec<u8> {
     let mut text = expand_xml_references(&ascii);
     text = expand_css_escapes(&text);
     text.retain(|&b| !matches!(b, b'\t' | b'\n' | b'\r' | FORM_FEED));
@@ -430,11 +447,9 @@ fn inspect_text(
     budget: &mut Budget,
     splice: Splice,
 ) -> Result<(), Reason> {
+    #[cfg(test)]
+    READINGS.with(|n| n.set(n.get() + 1));
     check_patterns(text, budget)?;
-    if let Some(joined) = without_joining_markup(text) {
-        budget.charge(joined.len())?;
-        inspect_text(&joined, depth, budget, splice)?;
-    }
     let starts = delimited_starts(text, data_uri_starts(text));
     for (i, &at) in starts.iter().enumerate() {
         let end = starts.get(i + 1).copied().unwrap_or(text.len());
@@ -451,46 +466,171 @@ fn inspect_text(
     Ok(())
 }
 
-/// The text as an element's character data reaches the decoder: the XML parser drops
-/// comments and processing instructions and unwraps CDATA sections, so the text on
-/// either side of one is a single run (`url(data:…;base64,AAAA<!---->BBBB)` is one
-/// URI to librsvg's stylesheet). `None` unless some such markup has text on both sides
-/// that is not a tag's edge (a non-space byte before it other than `>`, after it other
-/// than `<`), so an honest page, whose comments and declarations sit between tags, is
-/// not read twice. Every piece is dropped when one joins, unterminated ones to the end,
-/// and expanded references can turn literal text into markup here: both only make the
-/// extra reading refuse more. Each piece is passed over once, so this is linear.
+/// A `<style>` element's text as librsvg hands it to the stylesheet. The XML parser
+/// drops comments and processing instructions and unwraps CDATA sections, and librsvg
+/// keeps only the style element's own character data: a child element, and all it holds,
+/// contributes nothing. So the text on either side of any of those is one run
+/// (`url(data:…;base64,AAAA<x/>BBBB)` is one URI to the stylesheet).
+///
+/// `text` is as written, before references and escapes are expanded, because that is
+/// where the parser finds markup: `&lt;!--` and `\3c !--` are text to it, and inside a
+/// CDATA section only `]]>` is markup. Everything outside style elements is kept as it
+/// is. A comment, instruction or tag with no end is kept as text (the parser fails on
+/// it; dropping it could let this reading see less than the decoder might).
+///
+/// `None` unless something removed inside a style element has text before it and after
+/// it in that element, so an honest page is not read twice. One pass, each byte once
+/// (a search for an end that fails is not repeated), so linear.
 fn without_joining_markup(text: &[u8]) -> Option<Vec<u8>> {
-    const PIECES: &[(&[u8], &[u8])] = &[
-        (b"<!--", b"-->"),
-        (b"<?", b"?>"),
-        (b"<![CDATA[", b""),
-        (b"]]>", b""),
-    ];
     let mut out = Vec::with_capacity(text.len());
-    let mut last_text: Option<u8> = None;
+    let mut unended = Unended::default();
+    // Inside a style element: how deep in child elements, whether its own text has begun,
+    // and whether something was removed since.
+    let mut in_style = false;
+    let mut depth = 0usize;
+    let mut text_seen = false;
+    let mut removed = false;
     let mut joins = false;
+    let mut in_cdata = false;
     let mut i = 0;
     while i < text.len() {
-        let piece = PIECES.iter().find(|(open, _)| text[i..].starts_with(open));
-        let Some(&(open, close)) = piece else {
-            if !text[i].is_ascii_whitespace() {
-                last_text = Some(text[i]);
+        let rest = &text[i..];
+        // The extent of the markup at `i`, if any, and whether it is removed.
+        let markup = if in_cdata {
+            rest.starts_with(b"]]>").then(|| {
+                in_cdata = false;
+                i + 3
+            })
+        } else if rest.starts_with(b"<!--") {
+            unended.find(text, i + 4, b"-->", 0)
+        } else if rest.starts_with(b"<?") {
+            unended.find(text, i + 2, b"?>", 1)
+        } else if rest.starts_with(b"<![CDATA[") {
+            in_cdata = true;
+            Some(i + 9)
+        } else if let Some(tag) = Tag::at(text, i, &mut unended) {
+            if !in_style {
+                if tag.is_style && !tag.closing && !tag.self_closing {
+                    in_style = true;
+                    (depth, text_seen, removed) = (0, false, false);
+                }
+                out.extend_from_slice(&text[i..tag.end]);
+                i = tag.end;
+                continue;
             }
-            out.push(text[i]);
-            i += 1;
-            continue;
-        };
-        let end = if close.is_empty() {
-            i + open.len()
+            if depth == 0 && tag.closing && tag.is_style {
+                in_style = false;
+                out.extend_from_slice(&text[i..tag.end]);
+                i = tag.end;
+                continue;
+            }
+            if tag.closing {
+                depth = depth.saturating_sub(1);
+            } else if !tag.self_closing {
+                depth += 1;
+            }
+            Some(tag.end)
         } else {
-            find_ci(text, close, i + open.len()).map_or(text.len(), |at| at + close.len())
+            None
         };
-        let next = text[end..].iter().find(|b| !b.is_ascii_whitespace());
-        joins |= last_text.is_some_and(|b| b != b'>') && next.is_some_and(|&b| b != b'<');
-        i = end;
+        match markup {
+            Some(end) if in_style => {
+                removed |= text_seen;
+                i = end;
+            }
+            Some(end) => {
+                out.extend_from_slice(&text[i..end]);
+                i = end;
+            }
+            None => {
+                let b = text[i];
+                if !in_style || depth == 0 {
+                    out.push(b);
+                    if in_style && !b.is_ascii_whitespace() {
+                        joins |= removed;
+                        text_seen = true;
+                        removed = false;
+                    }
+                }
+                i += 1;
+            }
+        }
     }
     joins.then_some(out)
+}
+
+/// Which ends [`without_joining_markup`] has already failed to find: once one is not
+/// found, none is found later, so the search is not repeated.
+#[derive(Default)]
+struct Unended([bool; 3]);
+
+impl Unended {
+    const TAG: usize = 2;
+
+    /// The index just past the first `close` at or after `from`, unless an earlier
+    /// search for the same kind failed.
+    fn find(&mut self, text: &[u8], from: usize, close: &[u8], kind: usize) -> Option<usize> {
+        if self.0[kind] {
+            return None;
+        }
+        let found = find_ci(text, close, from).map(|at| at + close.len());
+        self.0[kind] = found.is_none();
+        found
+    }
+}
+
+/// A start or end tag as the XML parser reads one.
+struct Tag {
+    end: usize,
+    closing: bool,
+    self_closing: bool,
+    /// Its local name (any prefix dropped) is `style`, in any case.
+    is_style: bool,
+}
+
+impl Tag {
+    fn at(text: &[u8], i: usize, unended: &mut Unended) -> Option<Self> {
+        if text.get(i) != Some(&b'<') {
+            return None;
+        }
+        let closing = text.get(i + 1) == Some(&b'/');
+        let name_from = i + 1 + usize::from(closing);
+        let first = *text.get(name_from)?;
+        if !(first.is_ascii_alphabetic() || matches!(first, b'_' | b':')) {
+            return None;
+        }
+        let name_len = text[name_from..]
+            .iter()
+            .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b':' | b'.' | b'-'))
+            .count();
+        let name = &text[name_from..name_from + name_len];
+        let local = name.rsplit(|&b| b == b':').next().unwrap_or(name);
+        // The end is the first `>` outside a quoted attribute value.
+        if unended.0[Unended::TAG] {
+            return None;
+        }
+        let mut quote = None;
+        let mut at = name_from + name_len;
+        let end = loop {
+            let Some(&b) = text.get(at) else {
+                unended.0[Unended::TAG] = true;
+                return None;
+            };
+            match (quote, b) {
+                (None, b'"' | b'\'') => quote = Some(b),
+                (Some(q), _) if b == q => quote = None,
+                (None, b'>') => break at + 1,
+                _ => {}
+            }
+            at += 1;
+        };
+        Some(Self {
+            end,
+            closing,
+            self_closing: !closing && text[end - 2] == b'/',
+            is_style: local.eq_ignore_ascii_case(b"style"),
+        })
+    }
 }
 
 /// What a real decoder makes of one decoded `data:` payload on the way to the next: the
@@ -1050,6 +1190,8 @@ fn find_ci(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 
 #[cfg(test)]
 thread_local! {
+    /// How many texts [`inspect_reading`] has read, so a test can bound the joined readings.
+    static READINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Lets a test measure what an honest raster would cost without [`inert_prefix`].
     static NO_INERT_PREFIX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }

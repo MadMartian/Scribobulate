@@ -1069,26 +1069,42 @@ fn a_form_feed_after_a_css_escape_does_not_split_base64() {
 }
 
 /// The XML parser hands a `<style>` element's text to the stylesheet with comments and
-/// processing instructions dropped and CDATA unwrapped, so markup between two halves
-/// of a payload joins them.
+/// processing instructions dropped and CDATA unwrapped, and librsvg drops a child
+/// element with all it holds, so markup between two halves of a payload joins them.
 #[test]
 fn markup_splitting_a_payload_in_element_text_hides_nothing() {
-    let splits = ["<!-- x -->", "<?p q?>", "]]><![CDATA["];
+    let splits = [
+        "<!-- x -->",
+        "<?p q?>",
+        "]]><![CDATA[",
+        "<x/>",
+        "<x>junk <y>more</y></x>",
+    ];
     for split in splits {
-        let wrap = |doc: &str| {
+        // The hostile half stops short of the namespace, so only the joined run names it;
+        // the benign one is split past its declarations, so its first half reads honestly.
+        let wrap = |doc: &str, at: usize| {
             let b64 = base64(doc.as_bytes());
-            // Past the benign twin's declarations, so its first half reads honestly.
-            let (head, tail) = b64.split_at(192);
-            format!(
-                "<svg><style><![CDATA[a{{b:url(data:image/svg+xml;base64,{head}{split}{tail})}}]]></style></svg>"
-            )
+            let (head, tail) = b64.split_at(at);
+            let css = format!("a{{b:url(data:image/svg+xml;base64,{head}{split}{tail})}}");
+            // Only a section boundary splits from inside a section: there a comment or
+            // tag is text the parser keeps.
+            if split.starts_with("]]>") {
+                format!("<svg><style><![CDATA[{css}]]></style></svg>")
+            } else {
+                format!("<svg><style>{css}</style></svg>")
+            }
         };
         assert_eq!(
-            refused(wrap(ATTACK)),
+            refused(wrap(ATTACK, 64)),
             Some(Reason::XInclude),
             "base64 split by {split:?}"
         );
-        assert_eq!(refused(wrap(BENIGN)), None, "benign split by {split:?}");
+        assert_eq!(
+            refused(wrap(BENIGN, 192)),
+            None,
+            "benign split by {split:?}"
+        );
     }
     let word = percent_all(b"XInclude");
     let inner = percent_all(
@@ -1107,7 +1123,9 @@ fn markup_between_tags_does_not_join_anything() {
         without_joining_markup(b"<svg><style><![CDATA[ .a{} ]]></style> <!-- c --> </svg>")
             .is_none()
     );
-    assert!(without_joining_markup(b"<s>ab<!-- c -->cd</s>").is_some());
+    assert!(without_joining_markup(b"<style>ab<!-- c -->cd</style>").is_some());
+    // Element text elsewhere carries no stylesheet, so nothing is joined there.
+    assert!(without_joining_markup(b"<s>ab<!-- c -->cd</s>").is_none());
 }
 
 /// An honest page near the cap holding one base64 raster is screened in full and passes.
@@ -1136,4 +1154,87 @@ fn an_honest_raster_near_the_cap_is_not_refused_for_its_cost() {
     NO_INERT_PREFIX.with(|off| off.set(false));
     assert_eq!(without, Some(Reason::TooLarge), "precondition");
     assert_eq!(refused(&page), None);
+}
+
+/// Inside a CDATA section a `<!--` or `<?` is text to the XML parser (and a comment to
+/// CSS), so it must not swallow the section's close and the payload's halves after it,
+/// whether or not a closer follows somewhere later.
+#[test]
+fn an_opener_inside_cdata_does_not_hide_the_section_that_joins_a_payload() {
+    for (opener, closer) in [("<!--", "<!-- z -->"), ("<?", "<?z?>")] {
+        for later in ["", closer] {
+            let wrap = |doc: &str, split: usize| {
+                let b64 = base64(doc.as_bytes());
+                let (head, tail) = b64.split_at(split);
+                format!(
+                    "<svg><style><![CDATA[/* {opener} */ a{{b:url(data:image/svg+xml;base64,{head}]]><![CDATA[{tail})}}]]></style>{later}</svg>"
+                )
+            };
+            // The first half stops short of the namespace, so only the joined run names it.
+            assert_eq!(
+                refused(wrap(ATTACK, 64)),
+                Some(Reason::XInclude),
+                "{opener:?} with {later:?} after"
+            );
+            assert_eq!(
+                refused(wrap(BENIGN, 192)),
+                None,
+                "benign, {opener:?}, {later:?}"
+            );
+        }
+    }
+}
+
+/// Removing markup can make new markup at the seam; the joined reading is read once and
+/// never joined again, so a long run of seams cannot recurse once per seam.
+#[test]
+fn a_run_of_seams_is_joined_once() {
+    let n = 5_000;
+    let text = format!(
+        "<style>a{}{}b<!-<!---->-->c</style>",
+        "]".repeat(n + 1),
+        ">".repeat(n)
+    );
+    READINGS.with(|c| c.set(0));
+    let _ = refused(&text);
+    let readings = READINGS.with(std::cell::Cell::get);
+    assert!(readings <= 2, "{readings} readings");
+}
+
+/// Markup is found where the XML parser finds it, in the text as written: an opener
+/// written as a reference or a CSS escape is text to the parser (and to CSS), so it must
+/// not swallow the real split that follows it.
+#[test]
+fn an_opener_spelled_by_a_reference_or_escape_does_not_swallow_a_split() {
+    for opener in ["&lt;!--", "\\3c !--", "&lt;?", "\\3c ?"] {
+        let wrap = |doc: &str, split: usize| {
+            let b64 = base64(doc.as_bytes());
+            let (head, tail) = b64.split_at(split);
+            format!(
+                "<svg><style>/* {opener} */ a{{b:url(data:image/svg+xml;base64,{head}<!-- x -->{tail})}}</style></svg>"
+            )
+        };
+        assert_eq!(
+            refused(wrap(ATTACK, 64)),
+            Some(Reason::XInclude),
+            "{opener:?}"
+        );
+        assert_eq!(refused(wrap(BENIGN, 192)), None, "benign, {opener:?}");
+    }
+}
+
+/// The style-text pass reads each byte once however its markup is left unended.
+#[test]
+fn unended_markup_in_a_style_is_read_in_linear_time() {
+    let cap = crate::limits::MAX_LOCAL_IMAGE_BYTES as usize;
+    for unit in ["<!--a", "<?a", "<x a=\"", "<x", "<x>a", "</x>a"] {
+        let text = format!("<style>a{}b", unit.repeat(cap / 8 / unit.len()));
+        let started = std::time::Instant::now();
+        let _ = without_joining_markup(text.as_bytes());
+        let took = started.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(5),
+            "{unit:?}: {took:?}"
+        );
+    }
 }

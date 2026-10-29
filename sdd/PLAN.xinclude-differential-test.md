@@ -135,8 +135,10 @@ behaviour is built.
   newlines the URL parser drops, and any C0 whitespace (form feed, CR LF) after a CSS escape or an
   escaped newline; carriers `<image href>`, `xlink:href`, `<use>`, CSS `url()` in a `style`
   attribute, a `<style>` element (CDATA-wrapped too), an `<?xml-stylesheet href?>` pseudo-attribute,
-  and a `data:text/css` stylesheet; a payload split by a comment, a processing instruction or
-  `]]><![CDATA[` in element text; gzip; UTF-16 both byte orders, with and without BOM;
+  and a `data:text/css` stylesheet; a payload split inside a `<style>` element by a comment, a
+  processing instruction, `]]><![CDATA[`, or a child element (`<x/>`, `<x>…</x>`), with decoy
+  openers ahead of the split written raw inside CDATA, as a reference (`&lt;!--`) or as a CSS
+  escape (`\3c !--`), with and without a later closer; gzip; UTF-16 both byte orders, with and without BOM;
   the XInclude namespace under any prefix or as the default namespace. Header spellings the
   decoder REJECTS as base64 must be in the grammar too (`%3Bbase64`, `;base64%20`, a CSS form
   feed), each with a percent-hostile body: the Round 11 leak was a header only the screen read

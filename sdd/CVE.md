@@ -272,6 +272,17 @@ reads names no SVG loader but the staged one.
     read with all of it removed.
   Reachability of each is unmeasured; every closure only refuses more. ("Read stylesheet text as
   the decoder's CSS and XML parsers hand it over…", 2026-10-29)
+- **Round 14.** That joined reading saw less than the stylesheet in three ways. It found markup in
+  the normalised text, so an opener written as a reference or CSS escape (`&lt;!--`, `\3c !--`),
+  or a `<!--` inside a CDATA section, all text to the parser, swallowed the real split after it
+  (an unclosed one, everything to the end); and it removed no tags, where librsvg (by its source)
+  keeps only a style element's own character data and drops any child element with all it holds
+  (`AAAA<x/>BBBB` is one run). It also re-joined its own output, recursing once per seam the
+  removal made. Closed: markup is found in the text as written, with CDATA read as the parser reads
+  it, only inside style elements, child elements removed whole; an unclosed comment, instruction
+  or tag is kept as text; the joined text is read once and never joined again. Reachability is
+  unmeasured. ("Join a style element's text as librsvg receives it, from the markup as written",
+  2026-10-29)
 
 **The pattern behind every parsing leak** (the stand-down leaks are the other class, above): each
 bypass was a place where the screen parsed a `data:` URI
