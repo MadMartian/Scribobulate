@@ -53,6 +53,9 @@ mod disclosurebands;
 mod geometry;
 mod gutter;
 mod listmarkers;
+mod markercard;
+mod markernav;
+mod markerrows;
 mod markers;
 mod navkeys;
 mod paint;
@@ -67,6 +70,9 @@ mod quotes;
 /// than the plain presence/order guards above.
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod animsprite_tests;
+/// The annotation markers' live-display tests (see the module's own doc).
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod marker_a11y_tests;
 /// The compositing-ORDER guards — one test per pair of decorations that can overlap.
 /// A sibling module rather than more bodies inside [`gtk_integration_tests`] because
 /// they answer a different question about the same function: those tests ask whether
@@ -78,9 +84,9 @@ mod ordertests;
 mod painttest;
 
 pub(crate) use geometry::move_or_create_mark;
+pub(crate) use markernav::{CardFocus, PendingMarkerOpen};
 pub(crate) use markers::{
-    AnnotateTrigger, AnnotationEdit, AnnotationSink, CardFocus, CreateAnnotation, MarkerData,
-    MarkerSource, PendingMarkerOpen,
+    AnnotateTrigger, AnnotationEdit, AnnotationSink, CreateAnnotation, MarkerData, MarkerSource,
 };
 
 mod imp {
@@ -909,7 +915,7 @@ impl CodePreviewView {
                     // A chip click is the reader asking to READ this comment, so the card
                     // takes focus — the pointer path's long-standing behaviour, now stated
                     // rather than implied (see `CardFocus`).
-                    o.open_marker_popover(&idxs, markers::CardFocus::Take);
+                    o.open_marker_popover(&idxs, markernav::CardFocus::Take);
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                 }
             ),

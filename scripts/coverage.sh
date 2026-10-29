@@ -772,9 +772,10 @@ FULL_BUDGET="${SCRIB_COVERAGE_FULL_BUDGET:-1800}"
 #                   not enable, so counting the file here would report 0% for code the
 #                   suite exercises thoroughly.
 #   codeview/       mod (GObject subclass + snapshot chip painting), geometry
-#                   (line/cell buffer-Y reads), markers (popover UI) are all
-#                   view-bound → excluded. The one pure piece, group_by_line, keeps
-#                   its unit tests but rides along inside the excluded markers.rs.
+#                   (line/cell buffer-Y reads), markers/markerrows/markernav/markercard
+#                   (popover UI) are all view-bound → excluded. The one pure piece,
+#                   group_by_line, keeps its unit tests but rides along inside the
+#                   excluded markernav.rs.
 #                   `marker_substitute` used to be a second such piece, and QA round 1
 #                   named the exclusion swallowing it. It is no longer here: the
 #                   marker's precedence moved to `theme::decor`, which is gated and at
@@ -808,7 +809,7 @@ FULL_BUDGET="${SCRIB_COVERAGE_FULL_BUDGET:-1800}"
 # runtime besides. The one pure piece, `is_benign_gtk_startup_noise` (the substring
 # match that demotes known-benign GTK startup diagnostics), keeps its own unit test
 # (`demotes_only_the_known_benign_gtk_startup_transients`) but rides along inside
-# the excluded file, the same shape as `codeview/markers.rs`'s group_by_line above.
+# the excluded file, the same shape as `codeview/markernav.rs`'s group_by_line above.
 #
 # `tags` registers every fixed `GtkTextTag` via direct property setters
 # (`set_scale`, `set_left_margin`, `set_background_rgba`, …) against a live
@@ -817,7 +818,7 @@ FULL_BUDGET="${SCRIB_COVERAGE_FULL_BUDGET:-1800}"
 # `TagName::is_list_item()` (the fixed-tag-name vocabulary and its totality over
 # every depth, including depths the caller contract says cannot occur), keeps its
 # own unit tests (`list_depth_tests`) but rides along inside the excluded file, the
-# same shape as `logging` and `codeview/markers.rs` above.
+# same shape as `logging` and `codeview/markernav.rs` above.
 #
 # Every separator below is the class `[/\\]`, not a literal `/`, because llvm-cov
 # reports paths in the host's native form — `src\window\toolbar.rs` on Windows. With
