@@ -1015,16 +1015,18 @@ fn a_comma_produced_by_an_escape_does_not_hide_a_payload_known_by_its_first_byte
 }
 
 /// Each later comma that leads a signature gets a whole reading of its own, so a text
-/// of many of them must be refused by the budget, not screened in quadratic time.
+/// of many of them must be refused by the budget before those readings are built. The
+/// text is small enough to screen in well under a second when each reading is charged
+/// as it is built, and large enough that building them all first (about 2 GiB here)
+/// takes far longer than the bound, even in an instrumented build.
 #[test]
 fn many_commas_leading_a_signature_are_bounded_by_the_budget() {
-    let cap = crate::limits::MAX_LOCAL_IMAGE_BYTES as usize;
     let text = format!(
         r#"<svg><image href="data:a\2c,{}"/></svg>"#,
-        ",%1F%8B".repeat(cap / 7)
+        ",%1F%8B".repeat(25_000)
     );
     let started = std::time::Instant::now();
-    assert!(refused(&text).is_some());
+    assert_eq!(refused(&text), Some(Reason::TooLarge));
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }
 
