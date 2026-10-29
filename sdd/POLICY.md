@@ -323,7 +323,8 @@ not fit one commit is more than one batch.
 - A lesson learned the hard way on this project is recorded in ANTI-PATTERNS.md when it
   is learned, not at the end of the work.
 - Read an entry before citing it.
-- **Citation forms.** `ScrAP-N` is an entry in `sdd/ANTI-PATTERNS.md`. `GTK4Rs/AP-N` and
+- **Citation forms.** `ScrAP-N` is an entry in `sdd/ANTI-PATTERNS.md`; `ScrSEC-N` is an entry
+  in `sdd/CVE.md`. `GTK4Rs/AP-N` and
   `GEP-N` are entries in two private knowledge bases (the `gtk4-rs` and
   `general-engineering-principles` skills). They are not in this repository and not
   published anywhere, deliberately, so a contributor without them cannot look these up. A

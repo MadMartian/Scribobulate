@@ -67,20 +67,109 @@ const STAGED_SVG_LOADER: &str = "Frameworks/libpixbufloader_svg.so";
 /// staged file. The handle is kept: gdk-pixbuf loads the same module for the first SVG
 /// anyway, and dyld hands it back the same image, already bound.
 ///
-/// Fails closed: a loader that will not load, or no librsvg image after it did, is
-/// `false`, and the screen stays up.
+/// **And only when gdk-pixbuf will load that loader.** Which module gdk-pixbuf opens for
+/// an SVG is whatever the module file it reads names, and [`configure_paths`] points it
+/// at the bundle's cache only when writing that cache succeeds. When it does not,
+/// gdk-pixbuf falls back to the cache it was compiled against, Homebrew's, whose SVG
+/// loader binds Homebrew's librsvg, and the loader loaded here proves nothing about it.
+/// So the module file gdk-pixbuf will read (`GDK_PIXBUF_MODULE_FILE`, the one setting
+/// that overrides the compiled default) must exist, and every SVG module it names must
+/// be the staged loader.
+///
+/// Fails closed: no module file, one naming any other SVG loader, a loader that will not
+/// load, or no librsvg image after it did, is `false`, and the screen stays up.
 pub(crate) fn carries_verified_librsvg() -> bool {
-    contents_dir().is_some_and(|contents| loader_binds_staged_librsvg(&contents))
+    contents_dir().is_some_and(|contents| {
+        let module_file = std::env::var_os("GDK_PIXBUF_MODULE_FILE").map(PathBuf::from);
+        svg_modules_are_staged(module_file.as_deref(), &contents.join(STAGED_SVG_LOADER))
+            && loader_binds_staged_librsvg(&contents, load_and_keep, loaded_images)
+    })
 }
 
-fn loader_binds_staged_librsvg(contents: &Path) -> bool {
+/// Whether gdk-pixbuf, reading `module_file`, would load SVG through `staged_loader` and
+/// nothing else: the file exists, names at least one SVG module, and every one it names
+/// is `staged_loader`, by absolute path. `None`, gdk-pixbuf reading its compiled-in
+/// default, is `false`.
+///
+/// An SVG module is one whose format is `svg` or which claims `image/svg+xml`: gdk-pixbuf
+/// picks a loader by content sniff and MIME as well as by name, so a second module
+/// claiming the type could take the decode. A relative module name is not the staged
+/// loader: the dynamic loader resolves it by its own search.
+fn svg_modules_are_staged(module_file: Option<&Path>, staged_loader: &Path) -> bool {
+    let Some(text) = module_file.and_then(|f| std::fs::read_to_string(f).ok()) else {
+        return false;
+    };
+    let Ok(staged) = std::fs::canonicalize(staged_loader) else {
+        return false;
+    };
+    let svg_modules = loader_cache_modules(&text)
+        .into_iter()
+        .filter(|m| m.format == "svg" || m.mime_types.contains(&"image/svg+xml"))
+        .collect::<Vec<_>>();
+    !svg_modules.is_empty()
+        && svg_modules.iter().all(|m| {
+            let path = Path::new(m.path);
+            path.is_absolute() && std::fs::canonicalize(path).is_ok_and(|p| p == staged)
+        })
+}
+
+/// One module block of a gdk-pixbuf `loaders.cache`: the module line, then the format
+/// line (`"svg" 6 "gdk-pixbuf" …`), then the MIME types line.
+struct CacheModule<'a> {
+    path: &'a str,
+    format: &'a str,
+    mime_types: Vec<&'a str>,
+}
+
+/// The module blocks of a `loaders.cache`. A block is the module line and the lines up
+/// to the next blank one; comments are skipped.
+fn loader_cache_modules(cache: &str) -> Vec<CacheModule<'_>> {
+    let mut modules = Vec::new();
+    let mut lines = cache.lines().filter(|l| !l.starts_with('#'));
+    while let Some(line) = lines.next() {
+        let Some(path) = module_path(line) else {
+            continue;
+        };
+        let block: Vec<&str> = lines
+            .by_ref()
+            .take_while(|l| !l.trim().is_empty())
+            .collect();
+        let quoted = |i: usize| block.get(i).map(|l| quoted_fields(l)).unwrap_or_default();
+        modules.push(CacheModule {
+            path,
+            format: quoted(0).first().copied().unwrap_or(""),
+            mime_types: quoted(1).into_iter().filter(|t| !t.is_empty()).collect(),
+        });
+    }
+    modules
+}
+
+/// The `"…"` fields of a cache line, in order.
+fn quoted_fields(line: &str) -> Vec<&str> {
+    line.split('"').skip(1).step_by(2).collect()
+}
+
+/// The path a module line names, verbatim, if it is a module line ([`module_basename`]).
+fn module_path(line: &str) -> Option<&str> {
+    module_basename(line)?;
+    line.strip_prefix('"')?.strip_suffix('"')
+}
+
+/// Whether loading the staged SVG loader with `load` leaves `images` (dyld's image list,
+/// read after the load) holding the staged librsvg and no other. Both are parameters so
+/// the composed decision is testable without a real loader.
+fn loader_binds_staged_librsvg(
+    contents: &Path,
+    load: impl FnOnce(&Path) -> bool,
+    images: impl FnOnce() -> Vec<PathBuf>,
+) -> bool {
     let Ok(staged) = std::fs::canonicalize(contents.join(STAGED_LIBRSVG)) else {
         return false;
     };
-    if !load_and_keep(&contents.join(STAGED_SVG_LOADER)) {
+    if !load(&contents.join(STAGED_SVG_LOADER)) {
         return false;
     }
-    only_the_staged_librsvg_is_loaded(&loaded_images(), &staged)
+    only_the_staged_librsvg_is_loaded(&images(), &staged)
 }
 
 /// `dlopen` `path` and leak the handle. `false` when it does not load.
@@ -246,16 +335,24 @@ pub(crate) fn configure_paths() {
     }
 
     // The loader cache has to be rewritten rather than shipped ready to use, because the
-    // absolute paths inside it are only knowable once the bundle is somewhere.
-    let staged = resources.join("loaders.cache");
-    let loaders_dir = contents.join("Frameworks");
-    if let Ok(template) = std::fs::read_to_string(&staged) {
-        let rewritten = absolutize_loader_cache(&template, &loaders_dir);
-        let target = std::env::temp_dir().join(LOADER_CACHE_NAME);
-        if std::fs::write(&target, rewritten).is_ok() {
-            std::env::set_var("GDK_PIXBUF_MODULE_FILE", &target);
-        }
+    // absolute paths inside it are only knowable once the bundle is somewhere. A failure
+    // leaves gdk-pixbuf on its compiled-in cache, and [`carries_verified_librsvg`] then
+    // keeps the image screen up.
+    if let Some(cache) = install_loader_cache(
+        &resources.join("loaders.cache"),
+        &contents.join("Frameworks"),
+        &std::env::temp_dir().join(LOADER_CACHE_NAME),
+    ) {
+        std::env::set_var("GDK_PIXBUF_MODULE_FILE", cache);
     }
+}
+
+/// Write the staged cache `template`, absolutized against `loaders_dir`, to `target`.
+/// `Some(target)` only when it was written.
+fn install_loader_cache(template: &Path, loaders_dir: &Path, target: &Path) -> Option<PathBuf> {
+    let template = std::fs::read_to_string(template).ok()?;
+    std::fs::write(target, absolutize_loader_cache(&template, loaders_dir)).ok()?;
+    Some(target.to_path_buf())
 }
 
 /// Put the bundle's GtkSourceView validators ahead of the compile-time prefix.
@@ -306,8 +403,9 @@ pub(crate) fn configure_language_path() {
 #[cfg(test)]
 mod tests {
     use super::{
-        absolutize_loader_cache, contents_for_exe, loader_binds_staged_librsvg, module_basename,
-        only_the_staged_librsvg_is_loaded,
+        absolutize_loader_cache, contents_for_exe, install_loader_cache, load_and_keep,
+        loaded_images, loader_binds_staged_librsvg, module_basename,
+        only_the_staged_librsvg_is_loaded, svg_modules_are_staged,
     };
     use std::path::Path;
     use std::path::PathBuf;
@@ -385,19 +483,53 @@ mod tests {
     fn only_a_bundle_carrying_its_librsvg_counts_as_verified() {
         let dir = tempfile::tempdir().unwrap();
         let (_, contents) = staged_bundle(dir.path());
-        assert!(!loader_binds_staged_librsvg(&contents), "no librsvg staged");
+        assert!(
+            !loader_binds_staged_librsvg(&contents, load_and_keep, loaded_images),
+            "no librsvg staged"
+        );
         let frameworks = contents.join("Frameworks");
         std::fs::create_dir_all(&frameworks).unwrap();
         std::fs::write(frameworks.join("librsvg-2.2.dylib"), b"").unwrap();
         std::fs::write(frameworks.join("libpixbufloader_svg.so"), b"not a Mach-O").unwrap();
         assert!(
-            !loader_binds_staged_librsvg(&contents),
+            !loader_binds_staged_librsvg(&contents, load_and_keep, loaded_images),
             "a staged librsvg whose loader does not load is not proof of anything"
         );
         assert!(
             !super::carries_verified_librsvg(),
             "a test binary runs outside any bundle"
         );
+    }
+
+    /// The composed decision: it is the image list read AFTER the loader loads that
+    /// decides, not the load succeeding. Mutation: returning `true` once `load` succeeds
+    /// passes the second and third cases.
+    #[test]
+    fn a_loader_that_loads_counts_only_if_the_staged_librsvg_is_what_it_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, contents) = staged_bundle(dir.path());
+        std::fs::create_dir_all(contents.join("Frameworks")).unwrap();
+        let staged = contents.join("Frameworks/librsvg-2.2.dylib");
+        std::fs::write(&staged, b"").unwrap();
+        let homebrew = PathBuf::from("/opt/homebrew/opt/librsvg/lib/librsvg-2.2.dylib");
+        let loaded = |_: &Path| true;
+        let decide = |load: &dyn Fn(&Path) -> bool, images: Vec<PathBuf>| {
+            loader_binds_staged_librsvg(&contents, load, || images)
+        };
+
+        assert!(
+            decide(&loaded, vec![staged.clone()]),
+            "anti-vacuity: the staged copy alone"
+        );
+        assert!(
+            !decide(&loaded, vec![homebrew.clone()]),
+            "the loader bound another librsvg"
+        );
+        assert!(
+            !decide(&loaded, vec![]),
+            "the loader bound no librsvg at all"
+        );
+        assert!(!decide(&|_| false, vec![staged]), "the loader did not load");
     }
 
     /// The decision over dyld's image list: the staged copy alone passes; a librsvg from
@@ -422,6 +554,91 @@ mod tests {
         assert!(!ok(&[other.clone(), sibling.clone()], &staged));
         assert!(!ok(&[via_rpath, sibling], &staged));
         assert!(!ok(&[other], &staged));
+    }
+
+    /// A bundle staging only its SVG loader, and the template cache `bundle.sh` stages
+    /// beside it, as `(contents, template)`.
+    fn staged_cache(root: &Path) -> (PathBuf, PathBuf) {
+        let (_, contents) = staged_bundle(root);
+        std::fs::create_dir_all(contents.join("Frameworks")).unwrap();
+        std::fs::create_dir_all(contents.join("Resources")).unwrap();
+        std::fs::write(contents.join("Frameworks/libpixbufloader_svg.so"), b"").unwrap();
+        let template = contents.join("Resources/loaders.cache");
+        std::fs::write(
+            &template,
+            "# GdkPixbuf Image Loader Modules file\n\n\
+             \"libpixbufloader-png.so\"\n\
+             \"png\" 5 \"gdk-pixbuf\" \"PNG\" \"LGPL\"\n\
+             \"image/png\" \"\"\n\"png\" \"\"\n\n\
+             \"libpixbufloader_svg.so\"\n\
+             \"svg\" 6 \"gdk-pixbuf\" \"Scalable Vector Graphics\" \"LGPL\"\n\
+             \"image/svg+xml\" \"image/svg\" \"\"\n\"svg\" \"svgz\" \"\"\n\n",
+        )
+        .unwrap();
+        (contents, template)
+    }
+
+    /// When the bundle's cache cannot be written, gdk-pixbuf reads its compiled-in one and
+    /// may load another SVG loader, so the screen must stay up. Mutation: dropping the
+    /// module-file check from `carries_verified_librsvg` lets the staged loader, which
+    /// gdk-pixbuf never opens, stand the screen down.
+    #[test]
+    fn the_screen_stays_up_unless_the_bundles_cache_is_the_one_gdk_pixbuf_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let (contents, template) = staged_cache(dir.path());
+        let frameworks = contents.join("Frameworks");
+        let loader = frameworks.join("libpixbufloader_svg.so");
+
+        // The write fails: nothing to point GDK_PIXBUF_MODULE_FILE at.
+        let unwritable = dir.path().join("no-such-dir/scribobulate-loaders.cache");
+        let installed = install_loader_cache(&template, &frameworks, &unwritable);
+        assert_eq!(installed, None, "a failed write must not report a cache");
+        assert!(!svg_modules_are_staged(installed.as_deref(), &loader));
+
+        // The write succeeds: the cache names the staged loader by absolute path.
+        let target = dir.path().join("scribobulate-loaders.cache");
+        let installed = install_loader_cache(&template, &frameworks, &target);
+        assert_eq!(installed.as_deref(), Some(target.as_path()));
+        assert!(svg_modules_are_staged(installed.as_deref(), &loader));
+    }
+
+    /// Every module claiming SVG must be the staged loader, named absolutely. Mutation:
+    /// accepting the first SVG module passes a cache where a second one claims the type.
+    #[test]
+    fn a_module_file_naming_any_other_svg_loader_is_not_the_bundles() {
+        let dir = tempfile::tempdir().unwrap();
+        let (contents, template) = staged_cache(dir.path());
+        let loader = contents.join("Frameworks/libpixbufloader_svg.so");
+        let homebrew = dir.path().join("libpixbufloader_svg.so");
+        std::fs::write(&homebrew, b"").unwrap();
+        let check = |cache: &str| {
+            let f = dir.path().join("cache");
+            std::fs::write(&f, cache).unwrap();
+            svg_modules_are_staged(Some(&f), &loader)
+        };
+        let block = |path: &str, format: &str, mime: &str| {
+            format!("\"{path}\"\n\"{format}\" 6 \"gdk-pixbuf\" \"X\" \"LGPL\"\n\"{mime}\" \"\"\n\n")
+        };
+        let ours = block(&loader.to_string_lossy(), "svg", "image/svg+xml");
+        let theirs = block(&homebrew.to_string_lossy(), "svg", "image/svg+xml");
+        let claimant = block(&homebrew.to_string_lossy(), "rsvg2", "image/svg+xml");
+        let png = block(&homebrew.to_string_lossy(), "png", "image/png");
+
+        assert!(check(&format!("{png}{ours}")));
+        assert!(!check(&theirs), "Homebrew's SVG loader");
+        assert!(
+            !check(&format!("{ours}{claimant}")),
+            "a second module claiming the MIME type"
+        );
+        assert!(!check(&png), "no SVG module at all");
+        assert!(
+            !check(&std::fs::read_to_string(&template).unwrap()),
+            "a bare, unrewritten name"
+        );
+        assert!(!svg_modules_are_staged(
+            Some(&dir.path().join("absent")),
+            &loader
+        ));
     }
 
     #[test]

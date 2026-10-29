@@ -2283,7 +2283,7 @@ mod gtk_integration_tests {
         // back to `line_at_y` on an unmapped view, whose geometry isn't settled —
         // the cached-target path below is what the zoom re-render actually reads.)
         let offset = view.buffer().iter_at_line(120).map(|i| i.offset()).unwrap();
-        view.scroll_to_buffer_offset(offset);
+        view.coalesced_scroll_to_offset(offset);
         assert_eq!(
             view.reading_line(),
             120,
@@ -2293,7 +2293,7 @@ mod gtk_integration_tests {
         // A second programmatic scroll re-anchors to the newer target (a rapid
         // zoom burst re-targets, and the latest must win — never a stale line).
         let offset = view.buffer().iter_at_line(40).map(|i| i.offset()).unwrap();
-        view.scroll_to_buffer_offset(offset);
+        view.coalesced_scroll_to_offset(offset);
         assert_eq!(
             view.reading_line(),
             40,
@@ -2318,7 +2318,7 @@ mod gtk_integration_tests {
 
         // Schedule a deferred scroll_to_mark — creates the persistent mark on buffer A.
         let offset = view.buffer().iter_at_line(150).map(|i| i.offset()).unwrap();
-        view.scroll_to_buffer_offset(offset);
+        view.coalesced_scroll_to_offset(offset);
         let mark_a = view
             .buffer()
             .mark("scrib-outline-target")

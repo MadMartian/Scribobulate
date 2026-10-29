@@ -135,6 +135,10 @@ pub(super) fn park_reader_at(view: &CodePreviewView, line: i32) {
         .iter_at_line(line)
         .map(|i| i.offset())
         .expect("the line exists");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test fixture positioning the view as a precondition, not a navigation"
+    )]
     view.scroll_to_buffer_offset(offset);
     assert_eq!(
         view.reading_line(),

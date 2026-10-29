@@ -501,10 +501,21 @@ pub(crate) fn attach_context_menu(container: &gtk::Widget) {
 /// here.
 ///
 /// The structural assertion comes first because, with the menu on the window, the
-/// window's finalize leaves the menu's parent pointer dangling, so the after-state
-/// cannot be read safely. `menu` and `win` are taken by value and dropped here, and the
-/// caller must hold no other strong reference to the window or the menu's host: one
-/// would keep the host alive past the close and fail this for the wrong reason.
+/// window's finalize leaves the menu's parent pointer dangling. For the same reason no
+/// widget is read after the close at all: a host whose sweep was narrowed finalizes
+/// with the menu still its child, and the menu's parent pointer then names freed
+/// memory. The release is therefore RECORDED as it happens (`notify::parent` going to
+/// `None`, emitted by `gtk_widget_unparent`), and afterwards only weak references are
+/// upgraded: "the menu was unparented, or freed", and "its host was freed".
+///
+/// `menu` and `win` are taken by value and dropped here, and the caller must hold no
+/// other strong reference to the window or the menu's host: one would keep the host
+/// alive past the close and fail this for the wrong reason.
+///
+/// After the assertions it drains past the deferred release (`release_after_close`
+/// runs `TOOLTIP_HOVER_DRAIN` after `closed`), so a critical raised by a release that
+/// fires against the gone window is raised inside the test that provoked it, not in
+/// whichever test runs next.
 ///
 /// NOT asserted: that the popover object is freed. MEASURED on the document menu, it is
 /// unparented and still alive after the window and its content are both finalized; what
@@ -516,29 +527,48 @@ pub(crate) fn assert_closing_the_window_releases(
     what: &str,
 ) {
     use crate::testpump::{drain_for, until, until_or_for, Clock, TOOLTIP_HOVER_DRAIN};
-    let menu = {
+    use std::{cell::Cell, rc::Rc, time::Duration};
+    let unparented = Rc::new(Cell::new(false));
+    let (menu, host) = {
         until(Clock::Frame, "the menu to map", || menu.is_mapped());
+        let host = menu.parent().expect("an open menu has a parent");
         assert!(
-            menu.parent().is_some_and(|p| !p.is::<gtk::Window>()),
+            !host.is::<gtk::Window>(),
             "{what} is parented to the window, whose teardown never unparents a \
              set_parent child"
         );
-        menu.downgrade()
+        let flag = unparented.clone();
+        menu.connect_notify_local(Some("parent"), move |m, _| {
+            if m.parent().is_none() {
+                flag.set(true);
+            }
+        });
+        (menu.downgrade(), host.downgrade())
     };
     // Let the tooltip timeout the menu's map-time enter armed fire while its surface
     // exists (GTK4Rs/AP-117): this guard is about the unparent, not that.
     drain_for(Clock::Frame, TOOLTIP_HOVER_DRAIN);
     win.as_ref().destroy();
     drop(win);
-    let released = || menu.upgrade().and_then(|m| m.parent()).is_none();
+    // Waited for on the host alone, and judged the moment it goes: a sweeping host
+    // unparents the menu in its own dispose, before it is freed, so by then the release
+    // has been recorded; a host that did not sweep has left the menu's parent pointer
+    // dangling, and the deferred release would read it.
+    let host_freed = || host.upgrade().is_none();
     until_or_for(
         Clock::Frame,
-        TOOLTIP_HOVER_DRAIN + std::time::Duration::from_secs(2),
-        released,
+        TOOLTIP_HOVER_DRAIN + Duration::from_secs(2),
+        host_freed,
     );
+    assert!(host_freed(), "{what}'s host outlived its window");
+    let released = unparented.get() || menu.upgrade().is_none();
     assert!(
-        released(),
+        released,
         "{what} is still parented after its window was torn down"
+    );
+    drain_for(
+        Clock::Frame,
+        TOOLTIP_HOVER_DRAIN + Duration::from_millis(200),
     );
 }
 

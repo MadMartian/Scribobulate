@@ -840,6 +840,7 @@ fn wire_format_surface_updates(window: &ApplicationWindow) {
             }
         ),
     );
+    actions::connect_selection_states_on_activation(window);
 }
 
 /// Register all of the window's teardown handlers in one place, in the order

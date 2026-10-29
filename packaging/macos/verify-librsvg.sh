@@ -108,6 +108,75 @@ self_test() {
     rp "$fw" /opt/homebrew/Cellar/jpeg-turbo/3.2.0/lib out
     rp "$fw" lib out                        # relative: the process's working directory
     rp "$fw" @executable_path/../../.. out
+
+    # The readers FAIL CLOSED: each tool is replaced by a stub that crashes or answers
+    # nothing, and every reader must return exactly 2, never an empty "nothing found".
+    # ANTI-VACUITY first: the real tools on a real universal binary read cleanly.
+    local tmp; tmp="$(mktemp -d)"
+    reader() {  # $1 = stub dir ("" = real tools), $2 = expected rc, rest = the call
+        local stubs="$1" want="$2"; shift 2
+        rc=0; ( [ -z "$stubs" ] || PATH="$stubs:$PATH"; "$@" >/dev/null 2>&1 ) || rc=$?
+        if [ "$rc" -eq "$want" ]; then
+            echo "   ok    $* -> $want${stubs:+ (${stubs##*/})}"
+        else
+            echo "   FAILED $*${stubs:+ (${stubs##*/})} (expected $want, got $rc)"; failures=$((failures + 1))
+        fi
+    }
+    stub() {  # $1 = case dir, $2 = tool, $3 = body
+        mkdir -p "$tmp/$1"; printf '#!/bin/sh\n%s\n' "$3" > "$tmp/$1/$2"; chmod +x "$tmp/$1/$2"
+    }
+    stub otool-crashes otool 'exit 1'
+    stub otool-headers-only otool 'eval "last=\${$#}"; echo "$last:"'
+    stub file-crashes file 'exit 1'
+    stub file-silent file 'exit 0'
+    printf 'text\n' > "$tmp/not-macho"
+    reader "" 0 load_deps /bin/ls
+    reader "" 0 rpaths_of /bin/ls
+    reader "" 0 is_macho /bin/ls
+    reader "" 1 is_macho "$tmp/not-macho"
+    reader "$tmp/otool-crashes" 2 load_deps /bin/ls
+    reader "$tmp/otool-crashes" 2 rpaths_of /bin/ls
+    reader "$tmp/otool-crashes" 2 install_id /bin/ls
+    reader "$tmp/otool-headers-only" 2 load_deps /bin/ls
+    reader "$tmp/otool-headers-only" 2 rpaths_of /bin/ls
+    reader "$tmp/file-crashes" 2 is_macho /bin/ls
+    reader "$tmp/file-silent" 2 is_macho /bin/ls
+
+    # Load-command and install-ID references, resolved before they are judged
+    # (reference_problem). Against a real staged file, so "exists" is tested too.
+    local app="$tmp/S.app"
+    mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks"
+    : > "$app/Contents/Frameworks/liba.dylib"
+    : > "$tmp/beside.dylib"                 # exists, so only resolution can refuse it
+    local obj="$app/Contents/Frameworks/liba.dylib"
+    ref() {  # $1 = reference, $2 = expected (in|out)
+        if [ -z "$(reference_problem "$app" "$obj" "$1")" ]; then rc=in; else rc=out; fi
+        if [ "$rc" = "$2" ]; then
+            echo "   ok    reference $1 is $2"
+        else
+            echo "   FAILED reference $1 (expected $2, got $rc)"; failures=$((failures + 1))
+        fi
+    }
+    # ANTI-VACUITY first: a judge that refuses everything passes every "out" case.
+    ref @rpath/liba.dylib in
+    ref /usr/lib/libSystem.B.dylib in
+    ref /System/Library/Frameworks/AppKit.framework/AppKit in
+    ref @loader_path/liba.dylib in
+    ref @executable_path/../Frameworks/liba.dylib in
+    ref @rpath/libmissing.dylib out
+    ref @rpath/../../../beside.dylib out
+    ref /usr/lib/../../opt/homebrew/lib/libglib-2.0.0.dylib out
+    ref /System/Library/../../opt/homebrew/lib/libglib-2.0.0.dylib out
+    ref @loader_path/../../../beside.dylib out
+    ref /opt/homebrew/lib/libglib-2.0.0.dylib out
+    ref liba.dylib out                      # relative: the process's working directory
+    # A glob character in a component is a name, not a pattern.
+    if [ "$(normalize_path "$tmp/*")" = "$tmp/*" ]; then
+        echo "   ok    normalize_path leaves * unexpanded"
+    else
+        echo "   FAILED normalize_path expanded *"; failures=$((failures + 1))
+    fi
+    rm -rf "$tmp"
     # The reader, end to end, against whatever librsvg Homebrew links. Proves it loads the
     # dylib and reads three numbers; deliberately NOT a floor check, because the
     # self-test must not depend on which librsvg this machine happens to have.

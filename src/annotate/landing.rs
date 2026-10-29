@@ -31,11 +31,11 @@
 //! the text with CriticMarkup already stripped, without front matter, and without
 //! math, which the preview shows as plain text. This scan reads the raw file with the
 //! extensions other tools commonly enable, because those tools are who it protects. It
-//! parses the same text `annotate::scan` reads code through — `scan::as_written`, the
-//! file with every comment body outside code masked, parsed with
-//! `NormalizedMd::parse_as_written` — so the two never disagree about what is code: a
-//! stray backtick in an existing comment makes no code span here that extraction would
-//! not see.
+//! parses the same text over the same span that `annotate::scan` reads code through —
+//! `written::as_written`, the body after any front matter with every comment body
+//! outside code masked, parsed with `NormalizedMd::parse_as_written` — so the two
+//! never disagree about what is code: a stray backtick in an existing comment makes no
+//! code span here that extraction would not see.
 
 use pulldown_cmark::{Event, Tag};
 use std::ops::Range;
@@ -123,21 +123,20 @@ fn is_blank(line: &str) -> bool {
 fn scan(source: &str) -> Verbatim {
     let mut blocks = Vec::new();
     let mut whole = Vec::new();
-    let body_from = match crate::renderer::frontmatter::scan(source) {
-        Some(fm) => {
-            blocks.push(Block {
-                kind: Kind::FrontMatter,
-                lines: 0..fm.end(),
-            });
-            fm.end()
-        }
-        None => 0,
-    };
+    // The body and its masked text both come from the one reading extraction takes, so
+    // the two parse the same bytes over the same span.
+    let written = super::written::as_written(source);
+    let body_from = written.body_from;
+    if body_from > 0 {
+        blocks.push(Block {
+            kind: Kind::FrontMatter,
+            lines: 0..body_from,
+        });
+    }
     // Through the inline-tab pre-pass like every other parse site (ScrAP-75): it is
     // length-preserving and leaves leading tabs alone, so every offset and every code
     // block's indent read here are the file's own.
-    let written = super::scan::as_written(source);
-    let body = crate::renderer::NormalizedMd::new(&written[body_from..]);
+    let body = crate::renderer::NormalizedMd::new(&written.text[body_from..]);
     for (ev, r) in body.parse_as_written().into_offset_iter() {
         let r = r.start + body_from..r.end + body_from;
         let kind = match ev {

@@ -308,6 +308,10 @@ mod tests {
     /// correct supersession red, so that half is announced as skipped when the run
     /// missed the window rather than asserted on a moment that was never reached.
     ///
+    /// The precondition that there is something to supersede is state too: the first
+    /// release is checked to be still attached and the only one pending directly before
+    /// the second close, and a run where it already fired is announced as skipped.
+    ///
     /// Mutation checks, each red whatever the host's load: dropping `id.remove()` for the
     /// superseded release, or skipping `take_pending`, fails the "still scheduled"
     /// assertion; not recording the superseding release fails the "exactly one" one.
@@ -328,14 +332,29 @@ mod tests {
         };
         drain_for(Clock::Frame, TOOLTIP_HOVER_DRAIN / 2);
         open(&popover);
+        // The precondition is STATE, not a clock: the first close's release must still
+        // be pending when the second close lands, or the second close supersedes
+        // nothing and every assertion below would hold on a build with no supersession.
+        // A loaded host can let it fire inside the reopen's pump (finding the popover
+        // visible, it does nothing); that run is announced, not failed.
+        if !(source_is_attached(first_release) && pending_for(&popover) == [first_release]) {
+            crate::testsymlink::skipped(
+                "popover release: supersession",
+                &format!(
+                    "the first close's release ran before the second close ({:?} since \
+                     the first, {TOOLTIP_HOVER_DRAIN:?} allowed), so there was nothing to \
+                     supersede",
+                    first_close.elapsed()
+                ),
+            );
+            drop(releasing);
+            popover.popdown();
+            popover.unparent();
+            window.destroy();
+            return;
+        }
         popover.popdown();
         let second_close = std::time::Instant::now();
-        assert!(
-            second_close - first_close < TOOLTIP_HOVER_DRAIN,
-            "precondition: the second close must land while the first close's release is \
-             still pending, else this test cannot see it fire early (took {:?})",
-            second_close - first_close
-        );
         assert!(
             !source_is_attached(first_release),
             "the first close's release is still scheduled: it was not superseded and will \

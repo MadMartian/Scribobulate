@@ -2675,7 +2675,7 @@ mod gtk_integration_tests {
         // Open the find bar and seed the query the boundary re-sync reads.
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("cell");
+        super::testkit::type_query(&window, "cell");
 
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let view = super::find_target(&window).expect_preview();
@@ -2723,7 +2723,7 @@ mod gtk_integration_tests {
 
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("cell");
+        super::testkit::type_query(&window, "cell");
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let view = super::find_target(&window).expect_preview();
         assert!(super::highlight_preview_literal(&st.preview_find, &view, "cell") >= 1);
@@ -2837,7 +2837,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
 
         let view = super::find_target(&window).expect_preview();
         super::highlight_preview_literal(&st.preview_find, &view, "needle");
@@ -2900,7 +2900,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
 
         let view = super::find_target(&window).expect_preview();
         super::highlight_preview_literal(&st.preview_find, &view, "needle");
@@ -2955,7 +2955,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
 
         let view = super::find_target(&window).expect_preview();
         assert_eq!(
@@ -3015,7 +3015,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
         let view = super::find_target(&window).expect_preview();
         super::highlight_preview_literal(&st.preview_find, &view, "needle");
 
@@ -3093,7 +3093,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
         let view = super::find_target(&window).expect_preview();
         super::highlight_preview_literal(&st.preview_find, &view, "needle");
 
@@ -3174,7 +3174,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
         let view = super::find_target(&window).expect_preview();
         super::highlight_preview_literal(&st.preview_find, &view, "needle");
         crate::app::re_render_all_windows(&app);
@@ -3226,7 +3226,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
         crate::app::re_render_all_windows(&app);
         crate::testpump::drain_for(
             crate::testpump::Clock::Idle,

@@ -467,14 +467,11 @@ mod gtk_integration_tests {
         park_reader_at(&view, departure);
         crate::preview::activate_link_url(&view, "#section-two");
         assert_eq!(view.reading_line(), line_of(&sw, "section-two"));
-        // Without this the driver assertion below is vacuous: if anything on the
-        // way here had already claimed Preview, the traversal could omit the claim
-        // entirely and still be graded correct (T-6).
-        assert_eq!(
-            st.scroll.driver.get(),
-            crate::winstate::ScrollDriver::Editor,
-            "precondition: split mode leaves the editor driving until something claims it"
-        );
+        // The link itself made the preview lead, so hand the lead back to the editor,
+        // as a wheel over it would. Without this the driver assertion below is
+        // vacuous: the traversal could omit its claim entirely and still be graded
+        // correct (T-6).
+        st.scroll.driver.set(crate::winstate::ScrollDriver::Editor);
 
         WidgetExt::activate_action(&window, "win.nav-back", None).expect("activates");
         assert_eq!(view.reading_line(), departure);

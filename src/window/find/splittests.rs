@@ -31,10 +31,15 @@ const PREVIEW_COUNT: i32 = 3;
 
 /// A presented split window over the fixture, laid out: both panes have a viewport.
 fn split_window(suffix: &str) -> ApplicationWindow {
+    split_window_over(suffix, &fixture())
+}
+
+/// [`split_window`] over the Markdown `md`.
+fn split_window_over(suffix: &str, md: &str) -> ApplicationWindow {
     let app = test_app(&format!(
         "com.extollit.scribobulate.integrationtest.splitfind{suffix}"
     ));
-    let win = crate::window::new_window(&app, "IT-splitfind", &fixture(), None);
+    let win = crate::window::new_window(&app, "IT-splitfind", md, None);
     crate::window::change_action_state(&win, "view-mode", &"split".to_variant());
     win.set_default_size(1000, 600);
     win.present();
@@ -345,6 +350,59 @@ fn find_in_the_preview_takes_the_lead_from_a_wheeled_editor() {
         std::time::Duration::from_secs(5),
         "the match to stay in view after the sync has run",
         || on_screen(&view, at),
+    );
+    win.destroy();
+}
+
+/// The same with the match in a table cell, which the preview scrolls to by another
+/// route (`panescroll::preview_to_cell`, the cell-precise two-step), so the lead it
+/// takes is guarded on its own.
+///
+/// Mutation check: dropping the `lead` call from `panescroll::preview_to_cell` fails
+/// the driver assertion here, and the body-hit twin above stays green.
+#[gtktest::test]
+fn find_in_the_preview_takes_the_lead_from_a_wheeled_editor_for_a_cell_hit() {
+    let mut md = String::from("# Split find in a cell\n\n");
+    for i in 0..600 {
+        if i == 300 {
+            md.push_str("| Key | Value |\n|---|---|\n| row | holds omega here |\n\n");
+        } else {
+            md.push_str(&format!("Paragraph {i} is filler.\n\n"));
+        }
+    }
+    let win = split_window_over("preview_lead_cell", &md);
+    let view = preview_view(&win);
+    focus(&win, &view, FocusedPane::Preview);
+    let st = state(&win).expect("active tab");
+    // What a wheel over the editor does: lead without taking focus.
+    st.scroll.driver.set(crate::winstate::ScrollDriver::Editor);
+
+    search(&win, "omega");
+    super::find_step(&win, &st.search_context, super::SearchDir::Forward);
+    let FindCursor::Preview { at, .. } = st.find_cursor.get() else {
+        panic!("precondition: Find stepped the focused preview");
+    };
+    assert!(
+        view.buffer().iter_at_offset(at).child_anchor().is_some(),
+        "precondition: the hit is in a table cell, so the cell route scrolled to it"
+    );
+    assert_eq!(
+        st.scroll.driver.get(),
+        crate::winstate::ScrollDriver::Preview,
+        "the preview's cell-match scroll must lead the split sync"
+    );
+    // The cell route scrolls the matched ROW to the top, so the table's own line
+    // starts just above the viewport: the test is that the line is in view at all.
+    let table_in_view = || {
+        let (y, h) = view.line_yrange(&view.buffer().iter_at_offset(at));
+        let rect = view.visible_rect();
+        rect.height() > 0 && y + h > rect.y() && y < rect.y() + rect.height()
+    };
+    crate::testpump::until_for(
+        crate::testpump::Clock::Frame,
+        std::time::Duration::from_secs(5),
+        "the matched cell's table to be in view after the sync has run",
+        table_in_view,
     );
     win.destroy();
 }

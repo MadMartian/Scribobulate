@@ -1007,13 +1007,32 @@ pub(crate) fn wire_annotation_overlay(
         let clip = view.primary_clipboard();
         let schedule = schedule.clone();
         let weak_view = view.downgrade();
-        let id = clip.connect_changed(move |_| {
-            if let Some(view) = weak_view.upgrade() {
+        // PRIMARY is display-global, so every preview of every tab in every window hears
+        // each claim: one drag step in one pane woke all of them (57 handlers per step in a
+        // session of 11 windows). Only a view on screen can show a bubble or a selection
+        // ink, so an unmapped one (a background tab, a minimized window, another desktop)
+        // skips the work and catches up once when it is mapped again. That catch-up is
+        // not optional: a claim made elsewhere may have cleared this view's cell selection
+        // while it was hidden (GTK4Rs/AP-120).
+        let id = clip.connect_changed({
+            let schedule = schedule.clone();
+            let weak_view = weak_view.clone();
+            move |_| {
+                let Some(view) = weak_view.upgrade() else {
+                    return;
+                };
+                if !view.is_mapped() {
+                    return;
+                }
                 crate::widgets::table::refresh_cell_selection_ink(&view);
+                schedule();
             }
-            schedule();
         });
         view.store_primary_sel_handler(&clip, id);
+        view.connect_map(move |view| {
+            crate::widgets::table::refresh_cell_selection_ink(view);
+            schedule();
+        });
     }
 
     // Hide on scroll (unless the entry is open — the anchor scrolls away but the user

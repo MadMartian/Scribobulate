@@ -12,7 +12,8 @@
 #   1. STATIC. Every Mach-O in the bundle, walked with `otool -L`, references only
 #      /usr/lib and /System/Library (the OS itself, present on every Mac by definition),
 #      `@rpath/<name>` with <name> staged in Frameworks/, or an `@loader_path/…` /
-#      `@executable_path/…` path that RESOLVES to an existing file inside the bundle.
+#      `@executable_path/…` path that RESOLVES to an existing file inside the bundle,
+#      every form resolved before it is judged (rpath.sh's `reference_problem`).
 #      Install IDs are checked as well as load commands: an absolute ID left behind still
 #      launches, so a launch test alone reports success on a half-done rewrite. And no
 #      LC_RPATH may point outside the bundle (packaging/macos/rpath.sh's header).
@@ -40,34 +41,6 @@ APP="${1:?usage: verify-selfcontained.sh <path-to-.app>}"
 
 BIN="$APP/Contents/MacOS/scribobulate"
 [ -x "$BIN" ] || { echo "error: no executable at $BIN" >&2; exit 1; }
-
-# Why reference $3 of object $2 does NOT resolve inside bundle $1, or nothing when it does.
-#
-# AN INTERNAL-LOOKING REFERENCE IS NOT AN INTERNAL ONE, in either spelling.
-# `@rpath/libfoo.dylib` reads as internal whether or not libfoo was ever staged -- MEASURED,
-# and it took the sandboxed launch in condition 2 to catch it (libwebp needing
-# @rpath/libsharpyuv.0.dylib, which the closure had not followed) -- so it is resolved
-# against Frameworks/. `@loader_path/…` and `@executable_path/…` are resolved with the same
-# resolver as the rpath check, so `@loader_path/../../../libfoo.dylib`, which names a file
-# beside the .app, is the external reference it is and not a pass on its prefix.
-reference_problem() {
-    local app="$1" obj="$2" ref="$3" loc
-    case "$ref" in
-        /usr/lib/*|/System/Library/*) return 0 ;;     # the OS itself, on every Mac
-        @rpath/*)
-            [ -e "$app/Contents/Frameworks/${ref#@rpath/}" ] || echo "is not in Frameworks/"
-            return 0 ;;
-        @loader_path/*|@executable_path/*)
-            loc="$(bundle_location "$app" "$obj" "$ref")"
-            if ! inside_bundle "$app" "$loc"; then
-                echo "resolves outside the bundle, to ${loc:-<unresolvable>}"
-            elif [ ! -e "$loc" ]; then
-                echo "resolves to $loc, which does not exist"
-            fi
-            return 0 ;;
-        *) echo "is outside the bundle" ;;
-    esac
-}
 
 echo ":: Condition 1 — no library resolved from outside the bundle"
 findings=0
@@ -101,14 +74,12 @@ while IFS= read -r obj; do
     done <<< "$deps"
     # An rpath outside the bundle is searched BEFORE the executable's, so a file there
     # replaces a staged library even though every load command above reads as internal.
-    rps="$(rpaths_of "$obj")" || { echo "   FAIL — could not read $name" >&2; exit 1; }
+    esc="$(object_escaping_rpaths "$APP" "$obj")" || { echo "   FAIL — could not read $name" >&2; exit 1; }
     while IFS= read -r rp; do
         [ -n "$rp" ] || continue
-        if ! rpath_is_internal "$APP" "$obj" "$rp"; then
-            echo "   ESCAPING RPATH $name: $rp"
-            findings=$((findings + 1))
-        fi
-    done <<< "$rps"
+        echo "   ESCAPING RPATH $name: $rp"
+        findings=$((findings + 1))
+    done <<< "$esc"
 done <<< "$objs"
 [ "$checked" -gt 0 ] || { echo "   FAIL — no Mach-O files found; nothing was checked" >&2; exit 1; }
 
@@ -137,7 +108,9 @@ PROFILE_EOF
 out="$(LC_ALL=C sandbox-exec -f "$PROFILE" "$BIN" --probe-startup 2>&1 || true)"
 rm -f "$PROFILE"
 
-if printf '%s' "$out" | grep -q 'Library not loaded\|dyld\[' ; then
+# Here-strings, never `printf | grep -q`: under pipefail grep quitting at its first match
+# can SIGPIPE the writer and fail the pipeline (rpath.sh's header).
+if grep -q 'Library not loaded\|dyld\[' <<< "$out"; then
     echo "   FAIL — dyld could not resolve the graph with the prefix hidden:" >&2
     printf '%s\n' "$out" | head -4 >&2
     exit 1
@@ -163,7 +136,7 @@ fi
 # nothing about anything dlopen'ed later: pixbuf loaders, GIO modules, GSettings schemas.
 # A zero exit here is not "the bundle is complete", the same way an internal-LOOKING
 # @rpath reference is not an internal one. The resource assertions are what cover that.
-if ! printf '%s' "$out" | grep -qF 'scribobulate: startup-probe ok'; then
+if ! grep -qF 'scribobulate: startup-probe ok' <<< "$out"; then
     echo "   FAIL — no dyld error, but the application never spoke either." >&2
     echo "          Silence is not a pass; it never reached the probe in run()." >&2
     printf '   output: %s\n' "${out:-<empty>}" | head -3 >&2

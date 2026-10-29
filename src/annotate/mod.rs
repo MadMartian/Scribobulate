@@ -24,6 +24,7 @@
 pub(crate) mod landing;
 pub(crate) mod mutate;
 pub(crate) mod scan;
+mod written;
 
 pub(crate) use landing::{Landing, Slot};
 pub(crate) use mutate::{

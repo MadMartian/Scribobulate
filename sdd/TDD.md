@@ -353,7 +353,7 @@
 - **And** when that document is not the one in front of its window, the notice names the document too (e.g. "xinclude.md: Blocked 5 images: …"); when several documents in one window refuse images at the same time (e.g. a session restore) they share one notice that counts them (e.g. "Blocked 7 images in 2 documents: …"); and a document closed before its notice is shown gets none
 - **And** a refused theme sprite, which no document shows, is reported in the window in front as the theme's (e.g. "Blocked theme image rule.svg: …"), once per image content however often the theme is reloaded, and in the same notice as that window's document images when both are refused at once (e.g. "Blocked image a.svg and theme image rule.png: …", or, when that document is not in front, "Blocked image a.svg in doc.md and theme image rule.png: …", the document named beside its own images so the theme's is not attributed to it), never as two notices, one hiding the other; a PDF export only logs its refusals, since the exported document's preview has already reported them
 - **And** the refusal errs towards refusing: an SVG that only *might* reach XInclude (one that declares entities, uses an encoding the check cannot read, or embeds a `data:` URI whose payload does not decode) is refused too, while an ordinary SVG — including one embedding raster images, or one whose text merely says "data:" (e.g. "Source data: World Bank") — still shows, whether or not a comma comes later in the file
-- **And** on macOS run from the app bundle, which carries a fixed decoder, nothing is refused on this account; the same binary run from outside the bundle (from the build directory, say) loads the system's decoder and refuses exactly as on Linux
+- **And** on macOS run from the app bundle, which carries a fixed decoder, nothing is refused on this account as long as the bundle's decoder is the one actually in use; if the bundle cannot make it so (its loader list could not be installed, or names any other SVG decoder), it refuses exactly as on Linux; the same binary run from outside the bundle (from the build directory, say) loads the system's decoder and refuses exactly as on Linux
 
 ### 2.25 A Markdown construct the renderer cannot render is visible, never silently dropped
 - **Given** a document containing constructs from parser extensions this build does not handle — math (`$E=mc^2$`, `$$…$$`), footnotes (`[^1]` and its definition), a definition list, and a wikilink
@@ -540,7 +540,7 @@
 - **And** the emoji-free slugs disambiguate among themselves the same way (`#escalations`, `#escalations-1`), and **GitHub's slug always wins**: a fragment that is some heading's GitHub slug goes to that heading even when it is also another heading's emoji-free slug (with `## 🚨 Escalations` and `## Escalations` both present, `#escalations` goes to the plain one, exactly as on GitHub, and the emoji heading is reached by `#-escalations`). No link that resolved before emoji-free slugs existed changes its target
 - **And** the first click on such a link lands even when it comes right after a mouse-wheel scroll, while the pane is still gliding to a stop; the same holds for an outline jump
 - **And** the exported HTML answers to the same fragments as the preview (25.1)
-- **Coverage** `anchors::tests` (the slug rule, emoji classes, duplicates and precedence); `codeview::geometry::gtk_integration_tests::a_scroll_issued_during_a_kinetic_glide_still_lands`; `window::linknav::gtk_integration_tests::an_emoji_heading_is_reached_by_its_emoji_free_and_its_github_fragment`; `export::html::html_sink_tests::an_emoji_headings_alias_is_an_anchor_unless_a_github_id_shadows_it`; `tests/MANUAL-TEST.md` §2.17
+- **Coverage** `anchors::tests` (the slug rule, emoji classes, duplicates and precedence); `codeview::geometry::gtk_integration_tests::a_scroll_issued_during_a_kinetic_glide_still_lands`; `window::linknav::gtk_integration_tests::a_keyboard_fragment_link_in_split_mode_makes_the_preview_lead`; `window::linknav::gtk_integration_tests::an_emoji_heading_is_reached_by_its_emoji_free_and_its_github_fragment`; `export::html::html_sink_tests::an_emoji_headings_alias_is_an_anchor_unless_a_github_id_shadows_it`; `tests/MANUAL-TEST.md` §2.17
 
 ### 2.7 Untrusted content is contained
 - **Given** a document containing embedded HTML or script
@@ -1997,7 +1997,7 @@
 - **And when** the user moves to the other pane while the bar is open
 - **Then** the search moves with them at once: the count and highlights describe the new pane, the pane they left keeps no find highlight, and the replace row is available only while the editor is the pane searched
 - **Rationale** searching the editor while the user reads the preview gave a count and highlights for a pane they were not looking at, and stepping appeared to do nothing: the editor's scroll to each match was undone by the split scroll sync, which follows the pane the user is working in
-- **Coverage** `winstate::viewmode::tests::find_searches_the_focused_pane_only_in_split`; `window::find::splittests::find_in_split_searches_and_scrolls_the_focused_preview`; `window::find::splittests::moving_focus_between_split_panes_moves_the_open_search`; `tests/MANUAL-TEST.md` §11.21
+- **Coverage** `winstate::viewmode::tests::find_searches_the_focused_pane_only_in_split`; `window::find::splittests::find_in_split_searches_and_scrolls_the_focused_preview`; `window::find::splittests::moving_focus_between_split_panes_moves_the_open_search`; `window::find::splittests::find_in_the_preview_takes_the_lead_from_a_wheeled_editor`; `window::find::splittests::find_in_the_preview_takes_the_lead_from_a_wheeled_editor_for_a_cell_hit`; `tests/MANUAL-TEST.md` §11.21
 
 ## 12. Document outline
 
@@ -2986,6 +2986,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the block is left byte-for-byte as it was, and the comment is kept on a line of its own just after the block, inside whatever quote or list holds it; its marker appears in the preview beside the block, not beside the text above it, and the page otherwise renders as before
 - **And** nothing in the file is replaced: the comment is only ever inserted, never written over a blank line or the end of a block, and removing it returns the file to what it was
 - **And** a highlight that touches math (`$…$`, `$$…$$`) covers the whole formula rather than splitting it
+- **And** a new annotation is never written inside an existing one's comment
 - **And** annotations everywhere else — headings, lists, quotes, footnotes, inline formatting — are unchanged
 - **Rationale** Scribobulate strips annotations before it reads the Markdown, so none of this shows in its own preview; every other tool — GitHub, a static-site generator, another editor — reads the markup as text. Inside a paragraph that is harmless. Ahead of an opening fence, after a closing one, inside front matter or directly after an HTML block it changes the document's structure: the code becomes a paragraph and the rest of the file becomes code, or the metadata becomes text
 
@@ -3000,6 +3001,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **When** it is shown in the preview
 - **Then** the code reads exactly as written, with no margin marker and no annotation in the annotations list
 - **And** a real annotation on the same line, one wrapping a whole code span, or a comment on its own line after a code block (17.59), still renders and lists as an annotation
+- **And** a backtick inside a comment's text belongs to that comment and is never code: the comment ends at its own `<<}`, the prose after it stays prose, and removing it removes only the annotation, however many comments in the paragraph hold one
 
 ### 17.62 Every card stays with its window
 - **Given** any card is showing — the Annotate pop-up over a preview selection, the editor's formatting bar, or an annotation's comment card

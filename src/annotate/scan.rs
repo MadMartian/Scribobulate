@@ -21,6 +21,7 @@
 //! **out of CriticMarkup spec** and are left as literal text (not extracted).
 
 use super::mutate::{COMMENT_CLOSE, COMMENT_OPEN, HL_CLOSE, HL_OPEN};
+use super::written::{as_written, blank_lines, in_code};
 use crate::span::{CleanedByteOffset, OriginalByteOffset};
 use std::ops::Range;
 
@@ -215,10 +216,11 @@ struct Parsed {
 struct DelimIndex {
     /// Ascending positions of each needle, parallel to [`Self::NEEDLES`].
     needles: [Vec<usize>; Self::NEEDLES.len()],
-    /// Ascending positions of every `\n\n` — the block break a CriticMarkup span
-    /// may not cross. Indexed for the same reason: `content.contains("\n\n")` is
-    /// O(content), and content can be the rest of the document.
-    blank_lines: Vec<usize>,
+    /// Every whitespace-only line, as `written::blank_lines` gives it, ascending — the
+    /// block break a CriticMarkup span may not cross. Indexed for the same reason as
+    /// the needles: searching the content is O(content), and content can be the rest
+    /// of the document.
+    blank_lines: Vec<Range<usize>>,
 }
 
 impl DelimIndex {
@@ -244,8 +246,6 @@ impl DelimIndex {
     /// `code` is [`code_ranges`]'s answer: a delimiter inside code is that code's
     /// literal text, so it is never indexed and cannot close a construct.
     fn build(source: &str, code: &[Range<usize>]) -> Self {
-        let positions =
-            |pat: &str| -> Vec<usize> { source.match_indices(pat).map(|(i, _)| i).collect() };
         let outside_code = |pat: &str| -> Vec<usize> {
             source
                 .match_indices(pat)
@@ -255,7 +255,7 @@ impl DelimIndex {
         };
         DelimIndex {
             needles: Self::NEEDLES.map(outside_code),
-            blank_lines: positions("\n\n"),
+            blank_lines: blank_lines(source).collect(),
         }
     }
 
@@ -285,15 +285,10 @@ impl DelimIndex {
         (p + needle.len() <= range.end).then_some(p)
     }
 
-    /// Whether `range` contains a `\n\n`. Equivalent to
-    /// `source[range].contains("\n\n")`, in O(log n) rather than O(len).
-    ///
-    /// A `\n\n` starting at `p` lies within `[start, end)` iff `p + 2 <= end`,
-    /// so the guard is on `p + 2`, not on `p` — an off-by-one here would reject
-    /// a legal span whose content merely ENDS with a newline.
+    /// Whether `range` contains a whole whitespace-only line with the break before
+    /// it, in O(log n) rather than O(len) — the same test comment masking applies.
     fn crosses_block(&self, range: &Range<usize>) -> bool {
-        let i = self.blank_lines.partition_point(|&p| p < range.start);
-        self.blank_lines.get(i).is_some_and(|&p| p + 2 <= range.end)
+        super::written::crosses_block(&self.blank_lines, range)
     }
 }
 
@@ -303,103 +298,16 @@ impl DelimIndex {
 ///
 /// Every other Markdown tool reads `` `{>>x<<}` `` and a fenced sample of CriticMarkup
 /// as code, so CriticMarkup inside code is literal text: it renders as written and is
-/// never an annotation (TDD 17.61). Found by parsing [`as_written`] — the text
-/// `annotate::landing` also parses — so extraction and landing never disagree about
-/// what is code.
-///
-/// Skipped when the source holds no opener at all, so a document without CriticMarkup
-/// pays for no parse.
+/// never an annotation (TDD 17.61). Taken from [`as_written`], the one reading
+/// `annotate::landing` also takes, so extraction and landing never disagree about
+/// what is code. A document without CriticMarkup pays for no parse.
 fn code_ranges(source: &str) -> Vec<Range<usize>> {
-    if !PAIRS.iter().any(|(open, _)| source.contains(open)) {
-        return Vec::new();
-    }
-    parsed_code_ranges(&as_written(source))
+    as_written(source).code
 }
 
-/// The most rounds [`as_written`] takes to settle which comments lie outside code.
-const MASK_ROUNDS: usize = 8;
-
-/// `source` as other Markdown tools read it, for deciding what is code: the same bytes
-/// at the same offsets, with the body of every comment that lies outside code
-/// overwritten by filler. The ONE text both extraction ([`code_ranges`]) and landing
-/// (`annotate::landing`) parse, so they cannot disagree about where code is.
-///
-/// A comment's body is the annotator's prose, not the document's Markdown, so a
-/// backtick in it must not pair with one in the text around it — pulldown does not
-/// know CriticMarkup and would pair them, hiding a real closer inside a "code span" and
-/// letting a construct close on a later one, swallowing the prose between. Whether a
-/// comment lies outside code depends on the code, which depends on which comments are
-/// masked, so it is settled by repetition: mask the comments whose opener is outside
-/// the code of the text as last masked, parse again, until the set stops changing. A
-/// single pass decided from the unmasked text left a comment that an earlier comment's
-/// stray backtick had swallowed into a "code span" unmasked, and it then swallowed the
-/// next one in turn. A comment opening inside real code is that code's text and stays.
-pub(super) fn as_written(source: &str) -> std::borrow::Cow<'_, str> {
-    let mut masked: Option<String> = None;
-    for _ in 0..MASK_ROUNDS {
-        let code = parsed_code_ranges(masked.as_deref().unwrap_or(source));
-        let next = mask_comment_bodies(source, &code);
-        if next == masked {
-            break;
-        }
-        masked = next;
-    }
-    masked.map_or(std::borrow::Cow::Borrowed(source), std::borrow::Cow::Owned)
-}
-
-fn mask_comment_bodies(source: &str, code: &[Range<usize>]) -> Option<String> {
-    const FILLER: u8 = b'x';
-    let could_open_code = |body: &[u8]| body.iter().any(|b| matches!(b, b'`' | b'~' | b'\n'));
-    let mut bytes = source.as_bytes().to_vec();
-    let mut masked_any = false;
-    let mut from = 0;
-    while let Some(found) = source.get(from..).and_then(|rest| rest.find(COMMENT_OPEN)) {
-        let open = from + found;
-        let body_start = open + COMMENT_OPEN.len();
-        from = body_start;
-        if in_code(code, open) {
-            continue;
-        }
-        let Some(len) = source[body_start..].find(COMMENT_CLOSE) else {
-            break;
-        };
-        let body = body_start..body_start + len;
-        from = body.end + COMMENT_CLOSE.len();
-        if source[body.clone()].contains("\n\n") || !could_open_code(&bytes[body.clone()]) {
-            continue;
-        }
-        for b in &mut bytes[body] {
-            if !matches!(*b, b'\n' | b'\r') {
-                *b = FILLER;
-            }
-        }
-        masked_any = true;
-    }
-    masked_any.then(|| String::from_utf8(bytes).ok()).flatten()
-}
-
-fn parsed_code_ranges(source: &str) -> Vec<Range<usize>> {
-    // Through the normalising seam, like every parse site, so a tab-padded table is a
-    // table here exactly as on the page. The pre-pass keeps every byte where it was,
-    // so the ranges index `source` itself.
-    crate::renderer::NormalizedMd::new(source)
-        .parse_as_written()
-        .into_offset_iter()
-        .filter_map(|(ev, r)| {
-            matches!(
-                ev,
-                pulldown_cmark::Event::Code(_)
-                    | pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(_))
-            )
-            .then_some(r)
-        })
-        .collect()
-}
-
-/// Whether byte `i` lies inside one of `code` (ascending, non-overlapping).
-fn in_code(code: &[Range<usize>], i: usize) -> bool {
-    let k = code.partition_point(|r| r.end <= i);
-    code.get(k).is_some_and(|r| r.start <= i)
+/// Whether `source` holds any CriticMarkup opener at all.
+pub(super) fn has_opener(source: &str) -> bool {
+    PAIRS.iter().any(|(open, _)| source.contains(open))
 }
 
 /// If `source[i..]` opens with `open`, return the delimited content's original
@@ -770,8 +678,8 @@ mod tests {
         assert_eq!(e.annotations.len(), 2);
     }
 
-    /// R9-AP1-01: which comments lie outside code is settled to a fixpoint, not decided
-    /// once from the unmasked text. Unmasked, comment 1's stray backtick pairs with
+    /// Which comments lie outside code is settled, not decided once from the unmasked
+    /// text (`written::as_written`; the long-chain case is tested there). Unmasked, comment 1's stray backtick pairs with
     /// comment 2's, so comment 2's opener sits "in code" and a single pass never masked
     /// it; its own backtick then paired with `e`'s and it closed on `f`'s closer.
     #[test]
@@ -945,6 +853,30 @@ mod tests {
             assert_eq!(e.annotations.len(), 0, "`{open}` alone parses nothing");
             assert_eq!(e.cleaned, src, "`{open}` alone survives verbatim");
         }
+
+        // Shape C: comments that each hold a stray backtick, chained, then a code span.
+        // Repeating mask → parse settles one of them per parse, so this is the shape on
+        // which settling which comments lie outside code turns quadratic.
+        let unit = "{>>a ` b<<} ";
+        let chained = |kib: usize| unit.repeat(kib * 1024 / unit.len()) + "`z` w";
+        let (small, large) = (chained(128), chained(1024));
+        let consume = |src: &str| {
+            std::hint::black_box(extract(src));
+        };
+        let growth = crate::testtiming::matched_growth(
+            SPAN,
+            || consume(&small),
+            || consume(&large),
+            LINEAR_CEILING,
+        );
+        assert!(
+            growth.is_linear() && growth.large < LINEAR_CEILING,
+            "chained stray-backtick comments: one 1024 KiB extraction cost {:.1}x eight \
+             128 KiB ones ({:?} -> {:?}) — settling the comment mask has turned quadratic",
+            growth.ratio(),
+            growth.small,
+            growth.large,
+        );
     }
 
     /// The delimiter index must be a faithful re-implementation of the scans it

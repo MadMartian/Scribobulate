@@ -744,7 +744,8 @@ mod gtk_integration_tests {
     /// exactly that: every row strong-captured the tab, which reaches the bar.
     ///
     /// Mutation checks: emptying the tab bar's `dispose` sweep fails the release
-    /// assertion, and so does restoring a `#[strong] tab` capture on any one row.
+    /// assertion, and restoring a `#[strong] tab` capture on any one row fails the
+    /// host assertion (the bar outlives its window).
     #[gtktest::test]
     fn closing_the_window_with_the_tab_menu_open_releases_the_menu() {
         let app = gtk::Application::new(

@@ -20,12 +20,14 @@
 //!   The raw `CodePreviewView::scroll_to_cell_offset` is banned in `clippy.toml`; this
 //!   module's call carries the sanctioned `#[expect]`.
 //! - [`preview_to_offset`] is the route for a navigation that scrolls the preview to a
-//!   buffer offset (Find's hits, the reveal of a change). The raw
-//!   `CodePreviewView::scroll_to_buffer_offset` is NOT banned, and deliberately: most of
-//!   its callers are not navigations at all — the preview's own coalesced scroll inside
-//!   the view, the heading and fragment seams, the reading-position restores, and a link
-//!   click in the preview, which the click itself has already made lead — so a ban would
-//!   be almost all exceptions (POLICY § Typed GTK seams).
+//!   buffer offset (Find's hits, the reveal of a change, an in-document link). The raw
+//!   `CodePreviewView::scroll_to_buffer_offset` is banned in `clippy.toml`. The view's
+//!   own scrolls inside `codeview` go through a module-private twin the ban does not
+//!   see, so what is left carries an `#[expect]` the ban's reason enumerates: this
+//!   module, the heading and fragment seams (whose navigating callers lead first), the
+//!   reading-position restore, and test fixtures. An in-document link once went
+//!   unbanned here on the argument that the click had already made the preview lead;
+//!   activated from the keyboard while the editor led, it had not.
 //! - [`lead`] is for a navigation whose scroll goes through another seam (the preview's
 //!   heading and line scrolls), which takes the pane and has no mark.
 //!
@@ -66,6 +68,10 @@ pub(crate) fn preview_to_fragment(st: &TabState, fragment: &str) -> bool {
 /// (ScrAP-361).
 pub(crate) fn preview_to_offset(st: &TabState, view: &CodePreviewView, offset: i32) {
     lead(st, ScrollDriver::Preview);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the sanctioned route: the preview was made to lead the split sync on the line above (ScrAP-361)"
+    )]
     view.scroll_to_buffer_offset(offset);
 }
 

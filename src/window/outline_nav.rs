@@ -1368,6 +1368,10 @@ mod disclosure_reveal_tests {
         let byte = text
             .find("Section 120")
             .expect("the deep section is rendered");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture positioning the view as a precondition, not a navigation"
+        )]
         view.scroll_to_buffer_offset(text[..byte].chars().count() as i32);
         crate::testpump::until(
             crate::testpump::Clock::Idle,

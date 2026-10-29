@@ -213,19 +213,41 @@ pub(crate) fn connect_buf_to_copy_action(window: &ApplicationWindow) {
     if let Some(old) = take_copy_primary_handler(window) {
         clipboard.disconnect(old);
     }
+    // Every window hears every claim (PRIMARY is display-global), so a drag in one window
+    // re-derived Copy, Annotate and Find-scope in all of them on every step. Only the
+    // active window's selection is changing; the others re-derive when they become
+    // active (`connect_selection_states_on_activation`), since a claim made elsewhere may
+    // have cleared their own selection meanwhile (GTK4Rs/AP-120).
     let id = clipboard.connect_changed(glib::clone!(
         #[weak(rename_to = w)]
         window,
         move |_| {
-            recompute_copy_enabled(&w);
-            // Table-cell annotation: cell-label selection also gates win.annotate (same GTK4Rs/AP-28 signal).
-            update_annotate_action_state(&w);
-            // A PREVIEW selection is what "search in selection" captures in preview
-            // mode, and the preview buffer's own selection reaches here too.
-            super::findbar::update_find_scope_sensitivity(&w);
+            if w.is_active() {
+                refresh_selection_states(&w);
+            }
         }
     ));
     store_copy_primary_handler(window, id);
+}
+
+/// Re-derive every action whose enabled state follows a selection: Copy, Annotate
+/// (a table-cell selection gates it too, by the same GTK4Rs/AP-28 signal), and Find's
+/// "in selection" scope (a PREVIEW selection is what it captures in preview mode).
+fn refresh_selection_states(window: &ApplicationWindow) {
+    recompute_copy_enabled(window);
+    update_annotate_action_state(window);
+    super::findbar::update_find_scope_sensitivity(window);
+}
+
+/// The other half of the active-window gate in [`connect_buf_to_copy_action`]: a
+/// window that was not active while PRIMARY changed hands re-derives its selection
+/// states when it becomes active. Wired once per window.
+pub(crate) fn connect_selection_states_on_activation(window: &ApplicationWindow) {
+    window.connect_is_active_notify(|w| {
+        if w.is_active() {
+            refresh_selection_states(w);
+        }
+    });
 }
 /// Set `win.copy`'s enabled state from the FOCUSED view — in split mode the pane
 /// holding focus (`focused_text_view`), otherwise the sole visible view: enabled iff

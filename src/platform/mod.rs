@@ -78,6 +78,25 @@ pub(crate) fn is_ancestor_process(pid: i32) -> bool {
     platform_is_ancestor_process(pid)
 }
 
+/// The bundle identifier of the frontmost application, for a test's message: under
+/// tmux, screen or ssh the terminal a suite was started from is not an ancestor of it, so
+/// a skip that blames "an application that did not launch it" may be blaming that
+/// terminal, and naming it lets the reader tell.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) fn frontmost_bundle_id() -> Option<String> {
+    platform_frontmost_bundle_id()
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests", target_os = "macos"))]
+fn platform_frontmost_bundle_id() -> Option<String> {
+    mac::frontmost::frontmost_bundle_id()
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests", not(target_os = "macos")))]
+fn platform_frontmost_bundle_id() -> Option<String> {
+    None
+}
+
 #[cfg(all(test, feature = "gtk-integration-tests", target_os = "macos"))]
 fn platform_frontmost_pid() -> Option<i32> {
     mac::frontmost::frontmost_pid()

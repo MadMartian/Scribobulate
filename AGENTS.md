@@ -52,6 +52,14 @@ Read all of the above, plus:
   decoration geometry or zoom.
 - [`sdd/ISSUES.md`](sdd/ISSUES.md) — known unresolved issues. A register: scan its table of
   contents the moment you hit a bug, and read its header before picking work off it.
+- [`sdd/CVE.md`](sdd/CVE.md) — security vulnerabilities patched or worked around, each with the
+  leaks later found in its workaround and what upstream must deliver to retire it. A register:
+  read its table of contents, then the matching entry. (Open vulnerabilities are ISSUES.)
+- [`sdd/PLAN.windows-gtk-4-24.md`](sdd/PLAN.windows-gtk-4-24.md) — before moving the Windows GTK
+  runtime (the gvsbuild pin), or changing where the XInclude screen applies. Deferred by the
+  operator.
+- [`sdd/PLAN.xinclude-differential-test.md`](sdd/PLAN.xinclude-differential-test.md) — before
+  changing the XInclude screen's tests, or reviewing the screen for another leak.
 - [`sdd/PLAN.accessibility.md`](sdd/PLAN.accessibility.md) — before adding accessibility
   markup beyond a control name.
 - [`sdd/PLAN.profiling.md`](sdd/PLAN.profiling.md) — before profiling, proposing a
@@ -66,6 +74,7 @@ Read the named document before doing any of these:
 | Writing an anti-pattern citation, or a lesson worth recording | POLICY § SDD register writes |
 | Holding an offset, line number or index into the document in a field, closure, widget or idle | CAM § Document-Reference CAM, and `src/docref.rs` |
 | Fetching anything over the network | `src/imagefetch.rs`'s header (POLICY § Architecture rules) |
+| Patching a security vulnerability, or touching a security workaround (the XInclude screen in `src/imagedecode/xinclude.rs`, the macOS bundle gates) | CVE.md's header and the matching entry; record the fix or leak there |
 | Touching crash handling or logging (`src/forensics/`, `src/logging.rs`) | `src/forensics/mod.rs`'s header |
 | Touching the crash-recovery snapshot (`src/window/swap.rs`, `src/swapfile/`) | TDD §22 and SCHEMA § Crash-recovery swap file |
 | Renaming a file through GIO, or cancelling a `gio::FileMonitor` | `src/docio/rename.rs`'s header |

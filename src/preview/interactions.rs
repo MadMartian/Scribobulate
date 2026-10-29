@@ -245,14 +245,28 @@ pub(crate) fn activate_link_url(view: &CodePreviewView, url: &str) {
             // overwrites the view's tracked reading line with its own target — so
             // reading it afterwards would stamp the entry being left with the place
             // being navigated TO, and Back would land where Forward does.
-            if let Some((window, tab)) = crate::winstate::tab_for_descendant(view) {
-                crate::window::record_in_document_jump(
-                    &window,
-                    &tab,
-                    crate::winstate::NavSpot::Heading(slug),
-                );
+            //
+            // The scroll makes the preview lead the split sync. A pointer press on the
+            // link has already done so, but a link can be activated from the keyboard
+            // too (Enter on a focused cell link) while the editor leads, and the sync
+            // would then put the editor's position straight back (ScrAP-361).
+            match crate::winstate::tab_for_descendant(view) {
+                Some((window, tab)) => {
+                    crate::window::record_in_document_jump(
+                        &window,
+                        &tab,
+                        crate::winstate::NavSpot::Heading(slug),
+                    );
+                    crate::window::panescroll::preview_to_offset(&tab, view, target);
+                }
+                None => {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "a preview outside any tab has no split sync to lead"
+                    )]
+                    view.scroll_to_buffer_offset(target);
+                }
             }
-            view.scroll_to_buffer_offset(target);
         }
         return;
     }

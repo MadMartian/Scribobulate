@@ -102,6 +102,8 @@ mkdir -p "$FRAMEWORKS"
 # Load-command reading and path resolution, shared with the gates that check the result.
 # shellcheck source=rpath.sh
 . "$REPO_ROOT/packaging/macos/rpath.sh"
+# shellcheck source=homebrew.sh
+. "$REPO_ROOT/packaging/macos/homebrew.sh"
 
 # Every dependency of $1 that this bundle must carry, as an ABSOLUTE SOURCE PATH.
 #
@@ -154,8 +156,7 @@ resolve_deps() {
 # So they are copied in first and their ORIGINALS are seeded into the work list below,
 # which makes their dependencies part of the same closure rather than a second staging
 # list that has to be kept in step with it.
-PIXBUF_VER="2.10.0"
-PIXBUF_SRC="/opt/homebrew/lib/gdk-pixbuf-2.0/$PIXBUF_VER/loaders"
+PIXBUF_SRC="$PIXBUF_LOADERS"   # homebrew.sh
 # FLAT IN Contents/Frameworks, with no directory of its own, and that is not a style
 # choice. `codesign --deep` treats ANY DIRECTORY under Frameworks/ as a nested bundle and
 # refuses one that is not: "bundle format unrecognized, invalid, or unsuitable -- In
@@ -312,17 +313,19 @@ fi
 # stand in for a staged library. The reasoning and the measurement are rpath.sh's header;
 # the gates at the end fail the build if one survives. Re-read after every deletion,
 # because `-delete_rpath` removes a single entry and a path can be listed twice, while
-# rpaths_of reports each path once.
+# rpaths_of reports each path once. Bounded by the object's LC_RPATH count (every slice
+# counted), so a deletion that silently changes nothing fails here instead of looping.
 for obj in "${BUNDLE_OBJS[@]}"; do
+    lcs="$(load_commands "$obj")" || { echo "error: could not read $obj" >&2; exit 1; }
+    budget=$(( $(grep -c 'cmd LC_RPATH' <<< "$lcs" || true) + 1 ))
     while :; do
-        rps="$(rpaths_of "$obj")" || { echo "error: could not read the rpaths of $obj" >&2; exit 1; }
-        escaping=""
-        while IFS= read -r rp; do
-            [ -n "$rp" ] || continue
-            rpath_is_internal "$APP" "$obj" "$rp" || { escaping="$rp"; break; }
-        done <<< "$rps"
-        [ -n "$escaping" ] || break
-        retool -delete_rpath "$escaping" "$obj"
+        esc="$(object_escaping_rpaths "$APP" "$obj")" \
+            || { echo "error: could not read the rpaths of $obj" >&2; exit 1; }
+        [ -n "$esc" ] || break
+        [ "$budget" -gt 0 ] \
+            || { echo "error: $obj still has an rpath outside the bundle after deleting every entry it had" >&2; exit 1; }
+        budget=$((budget - 1))
+        retool -delete_rpath "$(head -1 <<< "$esc")" "$obj"
     done
 done
 

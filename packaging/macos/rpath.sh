@@ -97,11 +97,15 @@ install_id() {
 }
 
 # $1 as an absolute path with `.` and `..` folded, without touching the filesystem.
+# Split with `read -a`, not an unquoted `for part in $p`: word splitting there also
+# glob-expands, so a component such as `*` would come back as the names of whatever files
+# match it.
 normalize_path() {
     local p="$1" part out=""
+    local -a parts=()
     case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
-    local IFS=/
-    for part in $p; do
+    IFS=/ read -r -a parts <<< "$p"
+    for part in ${parts[@]+"${parts[@]}"}; do
         case "$part" in
             ''|.) ;;
             ..)   out="${out%/*}" ;;
@@ -145,18 +149,70 @@ rpath_is_internal() {
     inside_bundle "$1" "$(bundle_location "$1" "$2" "$3")"
 }
 
+# Every rpath of object $2 that points outside bundle $1, one per line.
+object_escaping_rpaths() {
+    local app="$1" obj="$2" rps rp
+    rps="$(rpaths_of "$obj")" || return 2
+    while IFS= read -r rp; do
+        [ -n "$rp" ] || continue
+        rpath_is_internal "$app" "$obj" "$rp" || printf '%s\n' "$rp"
+    done <<< "$rps"
+}
+
 # Every rpath in bundle $1 that points outside it, as `<object><TAB><rpath>` lines.
 escaping_rpaths() {
-    local app="$1" objs obj rps rp
+    local app="$1" objs obj esc rp
     objs="$(bundle_machos "$app")" || return 2
     while IFS= read -r obj; do
         [ -n "$obj" ] || continue
-        rps="$(rpaths_of "$obj")" || return 2
+        esc="$(object_escaping_rpaths "$app" "$obj")" || return 2
         while IFS= read -r rp; do
             [ -n "$rp" ] || continue
-            rpath_is_internal "$app" "$obj" "$rp" || printf '%s\t%s\n' "$obj" "$rp"
-        done <<< "$rps"
+            printf '%s\t%s\n' "$obj" "$rp"
+        done <<< "$esc"
     done <<< "$objs"
+}
+
+# Why reference $3 (an install ID or load command) of object $2 does NOT resolve inside
+# bundle $1, or nothing when it does.
+#
+# AN INTERNAL-LOOKING REFERENCE IS NOT AN INTERNAL ONE, in any spelling, so every form is
+# resolved before it is judged, never matched on its prefix:
+#   - `@rpath/<name>` against Frameworks/, where the executable's one rpath points. It
+#     reads as internal whether or not <name> was ever staged -- MEASURED, and it took the
+#     sandboxed launch in verify-selfcontained.sh to catch it (libwebp needing
+#     @rpath/libsharpyuv.0.dylib, which the closure had not followed) -- and
+#     `@rpath/../../../libfoo.dylib` reads as internal while naming a file beside the .app.
+#   - `@loader_path/…` and `@executable_path/…` with the rpath resolver above.
+#   - An absolute path folded before it is matched, so `/usr/lib/../../opt/homebrew/…`
+#     is the Homebrew path it is. Only /usr/lib and /System/Library are allowed: the OS
+#     itself, present on every Mac.
+# Anything else, a relative name included, is taken from somewhere no bundle controls.
+reference_problem() {
+    local app="$1" obj="$2" ref="$3" loc fw
+    case "$ref" in
+        @rpath/*)
+            fw="$(normalize_path "$app/Contents/Frameworks")"
+            loc="$(normalize_path "$fw/${ref#@rpath/}")"
+            case "$loc" in
+                "$fw"/*) [ -e "$loc" ] || echo "is not in Frameworks/" ;;
+                *) echo "resolves outside Frameworks/, to $loc" ;;
+            esac ;;
+        @loader_path/*|@executable_path/*)
+            loc="$(bundle_location "$app" "$obj" "$ref")"
+            if ! inside_bundle "$app" "$loc"; then
+                echo "resolves outside the bundle, to ${loc:-<unresolvable>}"
+            elif [ ! -e "$loc" ]; then
+                echo "resolves to $loc, which does not exist"
+            fi ;;
+        /*)
+            loc="$(normalize_path "$ref")"
+            case "$loc" in
+                /usr/lib/*|/System/Library/*) ;;
+                *) echo "is outside the bundle" ;;
+            esac ;;
+        *) echo "is outside the bundle" ;;
+    esac
 }
 
 # POSITIVE CONTROL for every reader above: bundle.sh gives the executable exactly one rpath

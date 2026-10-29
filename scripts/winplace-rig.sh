@@ -51,7 +51,12 @@ fi
 
 # ── inside the private session ─────────────────────────────────────────────────────
 PIDS=()
-cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done; wait 2>/dev/null || true; }
+# CONT before TERM: a process the rig stopped (the KWin positive control) ignores TERM
+# until continued, and the `wait` after it would then block for good.
+cleanup() {
+    for p in "${PIDS[@]}"; do kill -CONT "$p" 2>/dev/null || true; kill "$p" 2>/dev/null || true; done
+    wait 2>/dev/null || true
+}
 trap cleanup EXIT
 
 N=90
@@ -163,23 +168,25 @@ check "capture size" "$CAPTURE" "width = 640"
 # remembered a 93x36 default size and the window came back tiny once unshaded (x11.rs's
 # header). So its size is checked on screen after unshading.
 # Polled, not slept: unshaded only once the probe has printed its capture, which must
-# see the window shaded, and the size read once the window manager has unshaded it and
-# the size has stopped changing. The case holds the window long enough for every poll
-# to run out.
+# see the window shaded. The size is then polled until it reads the size the case
+# placed (or a deadline passes), held for longer than a frame-clock round trip, and
+# read again: a window that reaches the size and then shrinks fails, where "two reads
+# in a row agree" could stop before the resize arrived. The case holds the window long
+# enough for every poll to run out.
 UNSHADED=""
+win_size() { xwininfo -id "$1" 2>&1 | grep -E 'Width|Height' | tr -s ' ' | tr '\n' ' '; }
 shaded() { xprop -id "$1" _NET_WM_STATE 2>/dev/null | grep -q _NET_WM_STATE_SHADED; }
 unshade() { # <wid>
     for _ in $(seq 50); do [[ -s "$SCRATCH/capture.toml" ]] && break; sleep 0.1; done
     wmctrl -i -r "$1" -b remove,shaded
     for _ in $(seq 50); do shaded "$1" || break; sleep 0.1; done
-    local size last=""
-    for _ in $(seq 20); do
-        size=$(xwininfo -id "$1" 2>&1 | grep -E 'Width|Height' | tr -s ' ' | tr '\n' ' ')
-        [[ -n "$last" && "$size" == "$last" ]] && break
-        last=$size
+    local want="Width: 500  Height: 300"
+    for _ in $(seq 50); do
+        [[ "$(win_size "$1")" == *"$want"* ]] && break
         sleep 0.1
     done
-    UNSHADED=$size
+    sleep 0.5
+    UNSHADED=$(win_size "$1")
 }
 HOLD=10 run_case "all desktops, kept below, shaded, all activities" "$(cat <<EOF
 width = 500
@@ -345,7 +352,7 @@ echo "case: a window manager that does not manage the window is waited for, then
 kill -STOP "$KWIN_PID"
 printf 'width = 600\nheight = 400\ndesktop = 1\n' >"$SCRATCH/place.toml"
 STATUS=0
-"$PROBE" "$SCRATCH/place.toml" >"$SCRATCH/capture.toml" 2>"$SCRATCH/probe.err" || STATUS=$?
+timeout 60 "$PROBE" "$SCRATCH/place.toml" >"$SCRATCH/capture.toml" 2>"$SCRATCH/probe.err" || STATUS=$?
 kill -CONT "$KWIN_PID"
 check "the probe exits cleanly" "status $STATUS" "status 0"
 check "present warned that it was not managed" "$(cat "$SCRATCH/probe.err")" "did not manage the window"
@@ -361,7 +368,7 @@ STALE=$(xprop -root _NET_SUPPORTING_WM_CHECK 2>&1)
 echo "  root: $STALE"
 printf 'width = 600\nheight = 400\ndesktop = 1\n' >"$SCRATCH/place.toml"
 STATUS=0
-"$PROBE" "$SCRATCH/place.toml" >"$SCRATCH/capture.toml" 2>"$SCRATCH/probe.err" || STATUS=$?
+timeout 60 "$PROBE" "$SCRATCH/place.toml" >"$SCRATCH/capture.toml" 2>"$SCRATCH/probe.err" || STATUS=$?
 check "the root still names the dead manager's window" "$STALE" "window id"
 # The absence below means something only if the probe got past present: it exits 0 and
 # prints its capture only after present has returned.

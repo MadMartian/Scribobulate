@@ -172,17 +172,24 @@ fn a_press_away_from_a_focused_cell_takes_its_focus() {
     if !until_or_for(Clock::Frame, Duration::from_secs(2), || win.is_active()) {
         let after = crate::platform::frontmost_pid();
         let me = i32::try_from(std::process::id()).expect("a pid fits in pid_t");
+        // Named, not just counted: under tmux, screen or ssh the launching terminal is no
+        // ancestor of this process, so a reader must be able to see WHICH application a
+        // skip blamed.
+        let front = crate::platform::frontmost_bundle_id().unwrap_or_else(|| "?".to_owned());
         let Some(why) =
             inactive_window_skip(before, after, me, crate::platform::is_ancestor_process)
         else {
             panic!(
                 "the test window never became the active window (front before present: \
-                 {before:?}, after the wait: {after:?}, this process: {me})"
+                 {before:?}, after the wait: {after:?} ({front}), this process: {me})"
             );
         };
         crate::testsymlink::skipped(
             "TDD 17.63",
-            &format!("the test window never became the active window because {why}, so no cell can take focus"),
+            &format!(
+                "the test window never became the active window because {why} ({front}), \
+                 so no cell can take focus"
+            ),
         );
         destroy_after_tooltip_delay(&win, || ());
         return;

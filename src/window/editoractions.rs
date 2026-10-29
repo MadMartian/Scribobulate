@@ -873,6 +873,10 @@ mod gtk_integration_tests {
                     settled.converged,
                     "the re-rendered preview's layout to settle"
                 );
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "a test fixture positioning the view as a precondition, not a navigation"
+                )]
                 preview().scroll_to_buffer_offset(0);
             }
             crate::testpump::until(
@@ -947,6 +951,10 @@ mod gtk_integration_tests {
         // Park a few lines above the change, so the change is on screen below the top.
         let mut park = marker_at;
         park.backward_lines(4);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture positioning the view as a precondition, not a navigation"
+        )]
         preview().scroll_to_buffer_offset(park.offset());
         let parked = crate::testpump::until_stable(
             crate::testpump::Clock::Frame,

@@ -56,6 +56,7 @@ src/annotate/landing.rs
 src/annotate/mod.rs
 src/annotate/mutate.rs
 src/annotate/scan.rs
+src/annotate/written.rs
 src/annotations.rs
 src/annotations_view.rs
 src/app/coldstart.rs

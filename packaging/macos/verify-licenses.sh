@@ -48,19 +48,11 @@ has_anchor() {
     return 1
 }
 
-# The formula behind a staged file name, or empty.
-formula_of() {
-    local name="$1" cand real
-    for cand in "/opt/homebrew/lib/$name" \
-                "/opt/homebrew/lib/gdk-pixbuf-2.0/2.10.0/loaders/$name"; do
-        [ -e "$cand" ] || continue
-        real="$(/usr/bin/readlink -f "$cand" 2>/dev/null || true)"
-        case "$real" in
-            */Cellar/*) printf '%s' "$real" | sed 's|.*/Cellar/||; s|/.*||'; return 0 ;;
-        esac
-    done
-    return 1
-}
+# formula_of, and Mach-O detection that fails closed (is_macho), each written once.
+# shellcheck source=rpath.sh
+. "$(dirname "${BASH_SOURCE[0]}")/rpath.sh"
+# shellcheck source=homebrew.sh
+. "$(dirname "${BASH_SOURCE[0]}")/homebrew.sh"
 
 # Returns the number of problems found, and prints each one.
 #
@@ -77,14 +69,19 @@ audit_bundle() {
     # because the case harness redirects stderr.
     local app="$1"
     local manifest="$app/Contents/Resources/licenses/MANIFEST.tsv"
-    local problems=0 shipped="" name formula
+    local problems=0 shipped="" name formula rc
     if [ ! -f "$manifest" ]; then
         echo "   NO MANIFEST at $manifest"
         return 1
     fi
 
     while IFS= read -r obj; do
-        file "$obj" 2>/dev/null | grep -q 'Mach-O' || continue
+        rc=0; is_macho "$obj" || rc=$?
+        case "$rc" in
+            0) ;;
+            1) continue ;;
+            *) echo "   UNREADABLE   could not tell whether $obj is Mach-O"; problems=$((problems + 1)); continue ;;
+        esac
         name="$(basename "$obj")"
         if formula="$(formula_of "$name")"; then
             case " $shipped " in *" $formula "*) ;; *) shipped="$shipped $formula" ;; esac

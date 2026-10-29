@@ -307,7 +307,19 @@ impl CodePreviewView {
     /// line validation) on an idle, NOT `scroll_to_iter` (immediate, pre-validation
     /// — blanks the view). Coalescing avoids stacking N in-flight scrolls, each of
     /// which would re-trigger validation churn (GTK4Rs/AP-22).
+    ///
+    /// Banned outside this module in `clippy.toml`: a navigation scrolls the preview
+    /// through `window::panescroll::preview_to_offset`, which first makes the preview
+    /// lead the split sync (ScrAP-361). The view's own scrolls call
+    /// [`Self::coalesced_scroll_to_offset`], which this forwards to.
     pub(crate) fn scroll_to_buffer_offset(&self, offset: i32) {
+        self.coalesced_scroll_to_offset(offset);
+    }
+
+    /// The body of [`Self::scroll_to_buffer_offset`], for the view's own scrolls (the
+    /// reading-line re-anchor, the cell scroll's fallback) and its tests, which move
+    /// the view rather than navigate it.
+    pub(super) fn coalesced_scroll_to_offset(&self, offset: i32) {
         use gtk::subclass::prelude::*;
         let buffer = self.buffer();
         let it = buffer.iter_at_offset(offset);
@@ -370,7 +382,7 @@ impl CodePreviewView {
         let Some(it) = self.buffer().iter_at_line(line) else {
             return;
         };
-        self.scroll_to_buffer_offset(it.offset());
+        self.coalesced_scroll_to_offset(it.offset());
     }
 
     /// Scroll a table-**cell** match to its own row, not merely the table's top.
@@ -400,7 +412,7 @@ impl CodePreviewView {
         let it = buffer.iter_at_offset(anchor_off);
         let Some(tanchor) = it.child_anchor() else {
             // The offset is not actually a child anchor — fall back to a plain scroll.
-            self.scroll_to_buffer_offset(anchor_off);
+            self.coalesced_scroll_to_offset(anchor_off);
             return;
         };
         // Step 1: mirror scroll_to_buffer_offset's coalesced, validation-safe
@@ -504,7 +516,7 @@ mod gtk_integration_tests {
 
         // Schedule the deferred scroll, then tear the view down in the SAME turn with no
         // pump — leaving the idle pending against a now-unrealized view.
-        view.scroll_to_buffer_offset(far);
+        view.coalesced_scroll_to_offset(far);
         window.destroy();
 
         // Drop every strong ref this test holds. Pre-fix the idle's strong clone would
@@ -534,7 +546,7 @@ mod gtk_integration_tests {
             .map(|it| it.offset())
             .expect("line 1500 exists in a 2000-line buffer");
 
-        view.scroll_to_buffer_offset(far);
+        view.coalesced_scroll_to_offset(far);
 
         let vadj = sw.vadjustment();
         {
@@ -724,7 +736,7 @@ mod gtk_integration_tests {
             .iter_at_line(target_line)
             .map(|it| it.offset())
             .expect("line 200 exists");
-        view.scroll_to_buffer_offset(target);
+        view.coalesced_scroll_to_offset(target);
         drain_for(Clock::Frame, Duration::from_millis(2_000));
         let (top, _) = view.line_at_y(view.visible_rect().y());
         let top_line = top.line();

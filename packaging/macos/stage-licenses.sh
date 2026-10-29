@@ -47,27 +47,19 @@ is_history() {
     esac
 }
 
-# The formula a staged binary came from, via the Cellar path its Homebrew original
-# resolves to. Loaders live in their own directory, so both roots are tried.
-formula_of() {
-    local name="$1" cand real
-    for cand in "/opt/homebrew/lib/$name" \
-                "/opt/homebrew/lib/gdk-pixbuf-2.0/2.10.0/loaders/$name"; do
-        [ -e "$cand" ] || continue
-        real="$(/usr/bin/readlink -f "$cand")"
-        case "$real" in
-            */Cellar/*) printf '%s\n' "$real" | sed 's|.*/Cellar/||; s|/.*||'; return 0 ;;
-        esac
-    done
-    return 1
-}
+# formula_of, and Mach-O detection that fails closed (is_macho), each written once.
+# shellcheck source=rpath.sh
+. "$(dirname "${BASH_SOURCE[0]}")/rpath.sh"
+# shellcheck source=homebrew.sh
+. "$(dirname "${BASH_SOURCE[0]}")/homebrew.sh"
 
 printf 'formula\tspdx_declared\tdetermination\tstaged_files\n' > "$MANIFEST"
 
 declare -a SEEN=()
 count=0
 while IFS= read -r obj; do
-    file "$obj" | grep -q 'Mach-O' || continue
+    rc=0; is_macho "$obj" || rc=$?
+    case "$rc" in 0) ;; 1) continue ;; *) echo "error: could not tell whether $obj is Mach-O" >&2; exit 1 ;; esac
     name="$(basename "$obj")"
     if ! formula="$(formula_of "$name")"; then
         echo "error: no Homebrew formula maps to staged binary '$name'." >&2

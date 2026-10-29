@@ -59,6 +59,10 @@ pub(crate) fn scroll_preview_to_heading(
             // The view owns the coalesced, validation-safe scroll (mark +
             // scroll_to_mark on an idle, with rapid re-targeting collapsed to the
             // latest) — GTK4Rs/AP-22.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the heading seam: its navigating caller makes the preview lead first (panescroll::lead in outline_nav)"
+            )]
             view.scroll_to_buffer_offset(site.offset);
             Some(site)
         })
@@ -101,6 +105,10 @@ pub(crate) fn scroll_preview_to_fragment(sw: &ScrolledWindow, fragment: &str) ->
         .map(|(_, offset)| offset);
     match offset {
         Some(offset) => {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the fragment seam: its navigating caller is panescroll::preview_to_fragment, which leads first"
+            )]
             view.scroll_to_buffer_offset(offset);
             true
         }
@@ -411,6 +419,10 @@ pub(crate) fn restore_preview_scroll_to_line(sw: &ScrolledWindow, line: i32) {
             .iter_at_line(line)
             .unwrap_or_else(|| buffer.end_iter())
             .offset();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a reading-position restore preserves a place rather than moving to one (Reading-Position Preservation CAM)"
+        )]
         cpv.scroll_to_buffer_offset(offset);
         return;
     }

@@ -695,4 +695,77 @@ mod gtk_integration_tests {
         drain_pending_idle();
         window.destroy();
     }
+
+    /// The label inside `root` whose text contains `needle`, searched depth first.
+    fn label_containing(root: &gtk::Widget, needle: &str) -> Option<gtk::Label> {
+        if let Some(label) = root.downcast_ref::<gtk::Label>() {
+            if label.text().contains(needle) {
+                return Some(label.clone());
+            }
+        }
+        std::iter::successors(root.first_child(), |w| w.next_sibling())
+            .find_map(|child| label_containing(&child, needle))
+    }
+
+    /// TDD 2.17 in split mode, from the keyboard: a table-cell link to a heading in
+    /// this document, activated while the EDITOR leads the split sync, must make the
+    /// preview lead, or the next sync frame projects the editor's unmoved position
+    /// onto the preview and the jump is undone (ScrAP-361).
+    ///
+    /// The pointer press that usually precedes `activate-link` already makes the
+    /// preview lead; the keyboard (Enter on a focused cell link) does not, and the
+    /// editor can lead with the focus still in the preview after a wheel over it. So
+    /// the press is left out and `activate-link` is emitted on the cell's own label,
+    /// as GTK's `activate-current-link` binding does.
+    ///
+    /// Mutation check: scrolling with the raw `scroll_to_buffer_offset` in
+    /// `activate_link_url` again, instead of `panescroll::preview_to_offset`, fails the
+    /// driver assertion.
+    #[gtktest::test]
+    fn a_keyboard_fragment_link_in_split_mode_makes_the_preview_lead() {
+        let filler = "Filler paragraph.\n\n".repeat(200);
+        let md = format!(
+            "# Top\n\n| Where | Link |\n|---|---|\n| jump | see [the target](#far-target) |\n\n\
+             {filler}## Far Target\n\nbody\n\n{filler}"
+        );
+        let app = make_app("com.extollit.scribobulate.integrationtest.linknav.splitkeylink");
+        let window = new_window(&app, "IT", &md, None);
+        crate::window::change_action_state(&window, "view-mode", &"split".to_variant());
+        window.set_default_size(1000, 600);
+        window.present();
+        let tab = state(&window).expect("state registered after new_window");
+        let view = preview_view_of(&tab);
+        let editor = tab.editor.clone();
+        crate::testpump::until(
+            crate::testpump::Clock::Frame,
+            "both split panes to be laid out",
+            || editor.visible_rect().height() > 0 && view.visible_rect().height() > 0,
+        );
+        let label = label_containing(view.upcast_ref(), "the target")
+            .expect("the cell link is rendered as a label inside the preview");
+        let target_line = line_of_heading_text(&view, "Far Target");
+        // What a wheel over the editor does: lead without taking focus.
+        tab.scroll.driver.set(crate::winstate::ScrollDriver::Editor);
+
+        label.emit_by_name::<bool>("activate-link", &[&"#far-target"]);
+
+        assert_eq!(
+            tab.scroll.driver.get(),
+            crate::winstate::ScrollDriver::Preview,
+            "the link's scroll must make the preview lead the split sync"
+        );
+        let on_screen = || {
+            let (y, h) = view.line_yrange(&view.buffer().iter_at_line(target_line).unwrap());
+            let rect = view.visible_rect();
+            rect.height() > 0 && y >= rect.y() && y + h <= rect.y() + rect.height()
+        };
+        crate::testpump::until_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_secs(5),
+            "the target heading to be in view after the sync has run",
+            on_screen,
+        );
+        drain_pending_idle();
+        window.destroy();
+    }
 }

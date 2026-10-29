@@ -21,8 +21,9 @@
 use crate::lint::checks::references::citation_targets;
 use crate::lint::contract::{git_index, Contract, ScanSet};
 use crate::lint::patterns::{
-    bare_ap_citations, commit_hash_citations, declares_whole_id, issues_rx, prose_prescriptions,
-    reverse_dns_rx, win_illegal_path,
+    bare_ap_citations, commit_hash_citations, declares_whole_id, issues_rx,
+    malformed_scrsec_citations, prose_prescriptions, reverse_dns_rx, scrsec_heading_rx, scrsec_rx,
+    scrsec_toc_row_rx, win_illegal_path,
 };
 use crate::lint::patterns::{marker_reason, parser_dispatch_wildcards};
 use std::path::{Path, PathBuf};
@@ -328,6 +329,68 @@ fn legal_citations_and_near_misses_are_not_flagged() {
     for line in BARE_AP_MUST_NOT_FLAG {
         assert!(bare_ap_citations(line).is_empty(), "FALSE POSITIVE: {line}");
     }
+}
+
+// ── Check 26: the `ScrSEC-N` citation form ───────────────────────────────────
+
+const SCRSEC_MALFORMED: &[&str] = &[
+    "see ScrSec-1 for the leaks",
+    "SCRSEC-1 is the entry",
+    "(scrsec-2)",
+    "ScrSEC 1 records it",
+    "ScrSEC1 records it",
+    "Scr-SEC-1 records it",
+    "ScrSEC-#1 records it",
+];
+
+const SCRSEC_WELL_FORMED: &[&str] = &[
+    "Its history is ScrSEC-1 in `sdd/CVE.md`",
+    "(CVE.md ScrSEC-1, \"Leaks found and closed\")",
+    "| [ScrSEC-2](#scrsec-2-the-macos-bundle-could-load-a-library-placed-beside-the-app) |",
+    "`ScrSEC-N` is an entry in `sdd/CVE.md`",
+    "a security section, unrelated prose",
+];
+
+#[test]
+fn misspelled_security_citations_are_flagged() {
+    for line in SCRSEC_MALFORMED {
+        assert!(
+            !malformed_scrsec_citations(line).is_empty(),
+            "MISS (should flag): {line}"
+        );
+    }
+}
+
+#[test]
+fn well_formed_security_citations_and_anchors_are_not_flagged() {
+    for line in SCRSEC_WELL_FORMED {
+        assert!(
+            malformed_scrsec_citations(line).is_empty(),
+            "FALSE POSITIVE: {line}"
+        );
+    }
+}
+
+#[test]
+fn security_register_heading_row_and_citation_yield_the_number() {
+    let number =
+        |caps: Option<regex::Captures>| caps.and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
+    assert_eq!(
+        number(scrsec_heading_rx().captures("## ScrSEC-12. A title")),
+        Some("12".into())
+    );
+    assert_eq!(
+        number(scrsec_toc_row_rx().captures("| [ScrSEC-12](#scrsec-12-x) | Patched |")),
+        Some("12".into())
+    );
+    assert_eq!(
+        number(scrsec_rx().captures("see ScrSEC-12, below")),
+        Some("12".into())
+    );
+    assert!(scrsec_heading_rx()
+        .captures("### ScrSEC-12. not an entry")
+        .is_none());
+    assert!(scrsec_rx().captures("ScrSEC-12a").is_none());
 }
 
 // ── Check 20: a cited git commit hash ─────────────────────────────────────────

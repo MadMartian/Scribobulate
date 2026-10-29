@@ -31,6 +31,10 @@
 //! refuses. Relative and `file:` references are not followed: the loader is fed a
 //! stream with no base URL, and librsvg resolves no non-`data:` reference without one.
 //!
+//! **Its history is ScrSEC-1 in `sdd/CVE.md`**: every leak review later found in this screen,
+//! and the rule that closed it. Read it before simplifying anything here — each closed leak is
+//! a shape a simplification reopens.
+//!
 //! Pure: no GTK, no I/O, no global state. The decision of WHETHER to screen
 //! ([`enforced`]) and what a refusal does are `super`'s.
 
@@ -52,10 +56,19 @@ pub(crate) fn enforced() -> bool {
 /// How deep `data:` URIs and gzip layers may nest before the content is refused.
 const MAX_DEPTH: usize = 4;
 
-/// The total bytes one screen may inspect across every layer it decodes. A multiple of
-/// the local image cap, so an honest `.svgz` with embedded images fits and a gzip bomb
-/// or a quadratic tangle of nested `data:` URIs is refused rather than scanned.
+/// The total bytes one screen may inspect across every layer it decodes, outside the
+/// whole-text readings. A multiple of the local image cap, so an honest `.svgz` with
+/// embedded images fits and a gzip bomb or a quadratic tangle of nested `data:` URIs is
+/// refused rather than scanned.
 const SCAN_BUDGET: usize = 4 * crate::limits::MAX_LOCAL_IMAGE_BYTES as usize;
+
+/// The total bytes the whole-text readings ([`screen_spliced`]) may inspect, every one
+/// of them in one screen together, on top of [`SCAN_BUDGET`]. Their own pool because
+/// they re-read what the cuts already read: on an honest cap-sized page of
+/// percent-encoded icons they need about two and a half times the text, which on the
+/// shared pool pushed the page past it. Sized as [`SCAN_BUDGET`] is, so the most one
+/// screen can inspect is the two together, a fixed bound whatever the input.
+const SPLICE_BUDGET: usize = SCAN_BUDGET;
 
 const GZIP_MAGIC: &[u8] = &[0x1f, 0x8b];
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
@@ -123,7 +136,7 @@ pub(crate) enum Reason {
     Undecodable,
     /// Layers nest deeper than [`MAX_DEPTH`].
     TooDeep,
-    /// Decoding its layers would exceed [`SCAN_BUDGET`].
+    /// Decoding its layers would exceed [`SCAN_BUDGET`] or [`SPLICE_BUDGET`].
     TooLarge,
 }
 
@@ -143,17 +156,86 @@ impl std::fmt::Display for Reason {
 
 /// Screen `bytes`. `Ok` when nothing in them can make librsvg process an XInclude.
 pub(crate) fn inspect(bytes: &[u8]) -> Result<(), Reason> {
-    let mut budget = SCAN_BUDGET;
-    inspect_at(bytes, 0, &mut budget)
+    inspect_at(bytes, 0, &mut Budget::new(SCAN_BUDGET, SPLICE_BUDGET))
 }
 
-fn inspect_at(bytes: &[u8], depth: usize, budget: &mut usize) -> Result<(), Reason> {
+/// What is left to inspect: one pool for the whole-text readings and everything they
+/// decode ([`SPLICE_BUDGET`]), one for the rest ([`SCAN_BUDGET`]). Every byte any layer
+/// inspects is charged to the pool of the reading it is part of, so each pool bounds
+/// its share and neither can be refilled from the other.
+struct Budget {
+    scan: usize,
+    spliced: usize,
+    splicing: bool,
+}
+
+impl Budget {
+    fn new(scan: usize, spliced: usize) -> Self {
+        Self {
+            scan,
+            spliced,
+            splicing: false,
+        }
+    }
+
+    fn pool(&mut self) -> &mut usize {
+        if self.splicing {
+            &mut self.spliced
+        } else {
+            &mut self.scan
+        }
+    }
+
+    /// What the current reading may still inspect.
+    fn left(&self) -> usize {
+        if self.splicing {
+            self.spliced
+        } else {
+            self.scan
+        }
+    }
+
+    fn charge(&mut self, bytes: usize) -> Result<(), Reason> {
+        let pool = self.pool();
+        *pool = pool.checked_sub(bytes).ok_or(Reason::TooLarge)?;
+        Ok(())
+    }
+
+    /// Run `read` charging the whole-text pool, then return to the pool it was on.
+    fn splicing<T>(&mut self, read: impl FnOnce(&mut Self) -> T) -> T {
+        let was = std::mem::replace(&mut self.splicing, true);
+        let out = read(self);
+        self.splicing = was;
+        out
+    }
+}
+
+fn inspect_at(bytes: &[u8], depth: usize, budget: &mut Budget) -> Result<(), Reason> {
+    inspect_layer(bytes, depth, budget, Splice::Read)
+}
+
+/// Whether a text's `data:` cuts are also read whole ([`screen_spliced`]). Suppressed
+/// only for the whole-tail reading itself: it already holds every later sibling URI,
+/// and reading ITS tail whole again would nest each sibling one level deeper than the
+/// last, refusing an honest page of icons as too deep.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Splice {
+    Read,
+    Skip,
+}
+
+fn inspect_layer(
+    bytes: &[u8],
+    depth: usize,
+    budget: &mut Budget,
+    splice: Splice,
+) -> Result<(), Reason> {
     if depth > MAX_DEPTH {
         return Err(Reason::TooDeep);
     }
-    *budget = budget.checked_sub(bytes.len()).ok_or(Reason::TooLarge)?;
+    budget.charge(bytes.len())?;
     if bytes.starts_with(GZIP_MAGIC) {
-        let (inflated, tail) = gunzip(bytes, *budget)?;
+        let (inflated, tail) = gunzip(bytes, budget.left())?;
         inspect_at(&inflated, depth + 1, budget)?;
         return if tail.is_empty() {
             Ok(())
@@ -172,6 +254,7 @@ fn inspect_at(bytes: &[u8], depth: usize, budget: &mut usize) -> Result<(), Reas
         &normalise(body.iter().map(|&b| char::from(b))),
         depth,
         budget,
+        splice,
     )?;
     // ASCII written as UTF-16 always has a zero byte beside it, so content with none
     // cannot spell anything when read that way.
@@ -180,7 +263,7 @@ fn inspect_at(bytes: &[u8], depth: usize, budget: &mut usize) -> Result<(), Reas
             let tail = bytes.get(offset..).unwrap_or_default();
             for big_endian in [false, true] {
                 let text = normalise(utf16_chars(tail, big_endian));
-                inspect_text(&text, depth, budget)?;
+                inspect_text(&text, depth, budget, splice)?;
             }
         }
     }
@@ -328,20 +411,37 @@ fn expand_css_escapes(text: &[u8]) -> Vec<u8> {
     out
 }
 
-fn inspect_text(text: &[u8], depth: usize, budget: &mut usize) -> Result<(), Reason> {
+fn inspect_text(
+    text: &[u8],
+    depth: usize,
+    budget: &mut Budget,
+    splice: Splice,
+) -> Result<(), Reason> {
     check_patterns(text)?;
     let starts = delimited_starts(text, data_uri_starts(text));
     for (i, &at) in starts.iter().enumerate() {
         let end = starts.get(i + 1).copied().unwrap_or(text.len());
-        match data_uri_payload(&text[at + DATA_SCHEME.len()..end])? {
-            Payload::Base64(decoded) => inspect_at(&decoded, depth + 1, budget)?,
-            Payload::Percent(decoded) => inspect_every_decoding(decoded, depth, budget)?,
+        for reading in data_uri_payload(&text[at + DATA_SCHEME.len()..end])? {
+            match reading {
+                Payload::Base64(decoded) => inspect_at(&decoded, depth + 1, budget)?,
+                Payload::Percent(decoded) => inspect_every_decoding(decoded, depth, budget)?,
+            }
         }
     }
-    if let [first, _, ..] = starts[..] {
-        screen_spliced(&text[first + DATA_SCHEME.len()..], budget)?;
+    if let ([first, _, ..], Splice::Read) = (&starts[..], splice) {
+        screen_spliced(&text[first + DATA_SCHEME.len()..], depth, budget)?;
     }
     Ok(())
+}
+
+/// What a real decoder makes of one decoded `data:` payload on the way to the next: the
+/// payload is a document whose parser expands XML character and entity references (and,
+/// in a stylesheet, CSS escapes) before the URL inside it is percent-decoded. So
+/// `&#37;1F` is one layer from the byte 0x1F, as `%1F` is. The ONE step both the
+/// per-segment loop and the whole-tail reading take, so neither can skip a layer the
+/// other models.
+fn next_layer(level: &[u8]) -> Vec<u8> {
+    percent_decode(&expand_css_escapes(&expand_xml_references(level)))
 }
 
 /// Inspect a percent-encoded payload at every level of decoding it has, not just the
@@ -350,22 +450,27 @@ fn inspect_text(text: &[u8], depth: usize, budget: &mut usize) -> Result<(), Rea
 /// decoded once more than the segment decodes it — a double-encoded gzip or SVG would
 /// otherwise reach the screen still encoded. Each level that differs from the last is
 /// inspected in full (gzip, UTF-16, nested URIs); one still changing after
-/// [`MAX_DEPTH`] levels is refused, as nesting that deep is anyway.
+/// [`MAX_DEPTH`] levels is refused, as nesting that deep is anyway. A level that is
+/// gzip ends the walk: inflating it is how its content is read, and "decoding" the
+/// compressed bytes as text would corrupt an honest `.svgz` into a refusal.
 fn inspect_every_decoding(
     mut level: Vec<u8>,
     depth: usize,
-    budget: &mut usize,
+    budget: &mut Budget,
 ) -> Result<(), Reason> {
     inspect_at(&level, depth + 1, budget)?;
     for _ in 0..MAX_DEPTH {
-        let next = percent_decode(&level);
+        if level.starts_with(GZIP_MAGIC) {
+            return Ok(());
+        }
+        let next = next_layer(&level);
         if next == level {
             return Ok(());
         }
         inspect_at(&next, depth + 1, budget)?;
         level = next;
     }
-    if percent_decode(&level) == level {
+    if level.starts_with(GZIP_MAGIC) || next_layer(&level) == level {
         Ok(())
     } else {
         Err(Reason::TooDeep)
@@ -395,34 +500,28 @@ fn check_patterns(text: &[u8]) -> Result<(), Reason> {
 /// So the text after the first URI's comma is also read whole, the way a decoder reads
 /// the one URI it may all belong to: every real payload is a contiguous run of it (a
 /// payload ends before a later byte, never mid-escape, since a comma is never part of
-/// one). It is percent-decoded and re-normalised round after round until nothing more
-/// decodes, and every round is screened by the flat rules. Each round is charged to the
-/// budget, so a chain of `%25` cannot spin it. Nested gzip and base64 layers are left
-/// to the per-segment recursion, which decodes them.
-fn screen_spliced(after_scheme: &[u8], budget: &mut usize) -> Result<(), Reason> {
+/// one). It is taken a [`next_layer`] at a time until nothing more decodes, and every
+/// layer is inspected in full — gzip inflated, UTF-16 read, nested URIs cut and decoded
+/// — though not read whole again ([`Splice::Skip`]). Each layer is charged to the
+/// whole-text pool ([`SPLICE_BUDGET`]) with all it decodes, so a chain of `%25` cannot
+/// spin it, and a gzip layer ends the walk as in [`inspect_every_decoding`].
+fn screen_spliced(after_scheme: &[u8], depth: usize, budget: &mut Budget) -> Result<(), Reason> {
     let comma = after_scheme
         .iter()
         .position(|&b| b == b',')
         .ok_or(Reason::Undecodable)?;
     let mut layer = after_scheme[comma + 1..].to_vec();
-    loop {
-        let decoded = percent_decode(&layer);
-        if decoded == layer {
+    budget.splicing(|budget| loop {
+        let next = next_layer(&layer);
+        if next == layer {
             return Ok(());
         }
-        *budget = budget.checked_sub(decoded.len()).ok_or(Reason::TooLarge)?;
-        let body = decoded.strip_prefix(UTF8_BOM).unwrap_or(&decoded);
-        layer = normalise(body.iter().map(|&b| char::from(b)));
-        check_patterns(&layer)?;
-        if decoded.contains(&0) {
-            for offset in [0, 1] {
-                let tail = decoded.get(offset..).unwrap_or_default();
-                for big_endian in [false, true] {
-                    check_patterns(&normalise(utf16_chars(tail, big_endian)))?;
-                }
-            }
+        inspect_layer(&next, depth + 1, budget, Splice::Skip)?;
+        if next.starts_with(GZIP_MAGIC) {
+            return Ok(());
         }
-    }
+        layer = next;
+    })
 }
 
 /// The `starts` that a comma follows before the next one, the only ones that can begin
@@ -575,14 +674,13 @@ fn trim_start(bytes: &[u8]) -> &[u8] {
 /// taken to run to the end of `rest`, past any quote, since the quote may belong to the
 /// nested document rather than close the attribute — and screening more text than the
 /// URI holds can only refuse more.
-fn data_uri_payload(rest: &[u8]) -> Result<Payload, Reason> {
+fn data_uri_payload(rest: &[u8]) -> Result<Vec<Payload>, Reason> {
     let comma = rest
         .iter()
         .position(|&b| b == b',')
         .ok_or(Reason::Undecodable)?;
-    let header = &rest[..comma];
     let body = &rest[comma + 1..];
-    if ends_with_ci(trim_end(header), b";base64") {
+    let base64_body = || {
         // The scan admits all the whitespace `base64_decode` skips, so a CSS-escaped
         // form feed cannot end the payload early.
         let len = body
@@ -593,28 +691,58 @@ fn data_uri_payload(rest: &[u8]) -> Result<Payload, Reason> {
                     || matches!(b, b'+' | b'/' | b'=' | b'%')
             })
             .count();
-        let decoded = percent_decode(&body[..len]);
-        return base64_decode(&decoded)
-            .map(Payload::Base64)
-            .ok_or(Reason::Undecodable);
+        base64_decode(&percent_decode(&body[..len]))
+    };
+    Ok(match header_encoding(&rest[..comma]) {
+        HeaderEncoding::Base64 => vec![Payload::Base64(base64_body().ok_or(Reason::Undecodable)?)],
+        HeaderEncoding::Percent => vec![Payload::Percent(percent_decode(body))],
+        HeaderEncoding::Either => {
+            let mut readings = vec![Payload::Percent(percent_decode(body))];
+            readings.extend(base64_body().map(Payload::Base64));
+            readings
+        }
+    })
+}
+
+/// How a `data:` header says its payload is encoded, read the way the decoder reads
+/// it rather than by matching bytes: the header percent-decoded, its parameters split
+/// on `;`, each trimmed of whitespace and compared without case. `;base64` is the
+/// decoder's rule (WHATWG: the media type ends in `;`, any spaces, then `base64`), and a
+/// spelling such as `; base64`, `;BASE64` or `%3Bbase64` is the same rule. A header that
+/// names `base64` anywhere else could be read either way by some decoder, so it gets
+/// both readings and refuses if either does.
+fn header_encoding(header: &[u8]) -> HeaderEncoding {
+    let decoded = percent_decode(header);
+    let mut params = decoded
+        .split(|&b| b == b';')
+        .skip(1)
+        .map(|p| p.trim_ascii());
+    let last = decoded
+        .rsplit(|&b| b == b';')
+        .next()
+        .map(<[u8]>::trim_ascii)
+        .filter(|_| decoded.contains(&b';'));
+    if last.is_some_and(|p| p.eq_ignore_ascii_case(b"base64")) {
+        HeaderEncoding::Base64
+    } else if params.any(|p| p.eq_ignore_ascii_case(b"base64"))
+        || find_ci(&decoded, b"base64", 0).is_some()
+    {
+        HeaderEncoding::Either
+    } else {
+        HeaderEncoding::Percent
     }
-    Ok(Payload::Percent(percent_decode(body)))
+}
+
+enum HeaderEncoding {
+    Base64,
+    Percent,
+    Either,
 }
 
 /// A `data:` payload, decoded once, and how it was encoded.
 enum Payload {
     Base64(Vec<u8>),
     Percent(Vec<u8>),
-}
-
-fn trim_end(bytes: &[u8]) -> &[u8] {
-    let keep = bytes.len()
-        - bytes
-            .iter()
-            .rev()
-            .take_while(|b| b.is_ascii_whitespace())
-            .count();
-    &bytes[..keep]
 }
 
 fn percent_decode(text: &[u8]) -> Vec<u8> {
@@ -688,10 +816,6 @@ fn starts_with_ci(hay: &[u8], prefix: &[u8]) -> bool {
         .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
-fn ends_with_ci(hay: &[u8], suffix: &[u8]) -> bool {
-    hay.len() >= suffix.len() && hay[hay.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
-}
-
 /// The first case-insensitive occurrence of ASCII `needle` in `hay` at or after `from`.
 fn find_ci(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     let first = needle.first()?.to_ascii_lowercase();
@@ -703,537 +827,4 @@ fn find_ci(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-
-    /// The published trigger's shape: an `xi:include` of a `data:` URI.
-    const ATTACK: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xi="http://www.w3.org/2001/XInclude" width="8" height="8"><xi:include href="data:text/xml,%3C!DOCTYPE%20a%5B%3C!ENTITY%20e%20'x'%3E%5D%3E%3Ca%3E%26e;%3C/a%3E" parse="xml"/></svg>"#;
-
-    /// A plain badge-style SVG with nothing to refuse.
-    const BENIGN: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="90" height="20">
-  <style>.t { font: 11px sans-serif; fill: url(#g); }</style>
-  <linearGradient id="g"><stop offset="0" stop-color="#bbb"/></linearGradient>
-  <rect width="90" height="20" rx="3" fill="#555"/>
-  <text x="45" y="14" class="t">build &amp; test &#169; &lt;ok&gt;</text>
-  <image width="1" height="1" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="/>
-</svg>"##;
-
-    fn utf16(text: &str, big_endian: bool, bom: bool) -> Vec<u8> {
-        let mut out = Vec::new();
-        let units = bom
-            .then_some(0xFEFF_u16)
-            .into_iter()
-            .chain(text.encode_utf16());
-        for unit in units {
-            out.extend(if big_endian {
-                unit.to_be_bytes()
-            } else {
-                unit.to_le_bytes()
-            });
-        }
-        out
-    }
-
-    fn gzip(bytes: &[u8]) -> Vec<u8> {
-        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        enc.write_all(bytes).expect("gzip write");
-        enc.finish().expect("gzip finish")
-    }
-
-    fn base64(bytes: &[u8]) -> String {
-        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::new();
-        for chunk in bytes.chunks(3) {
-            let n = chunk
-                .iter()
-                .enumerate()
-                .fold(0u32, |acc, (i, &b)| acc | (u32::from(b) << (16 - 8 * i)));
-            for i in 0..4 {
-                if i <= chunk.len() {
-                    out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize]));
-                } else {
-                    out.push('=');
-                }
-            }
-        }
-        out
-    }
-
-    fn refused(bytes: impl AsRef<[u8]>) -> Option<Reason> {
-        inspect(bytes.as_ref()).err()
-    }
-
-    #[test]
-    fn the_published_trigger_is_refused() {
-        assert_eq!(refused(ATTACK), Some(Reason::XInclude));
-    }
-
-    #[test]
-    fn the_namespace_is_refused_under_any_prefix_or_as_the_default() {
-        for svg in [
-            r#"<svg xmlns:zz="http://www.w3.org/2001/XInclude"><zz:include href="a"/></svg>"#,
-            r#"<svg><include xmlns="http://www.w3.org/2001/XInclude" href="a"/></svg>"#,
-            r#"<svg xmlns:q='http://www.w3.org/2003/XInclude'/>"#,
-            r#"<svg xmlns:q="HTTP://WWW.W3.ORG/2001/XINCLUDE"/>"#,
-        ] {
-            assert_eq!(refused(svg), Some(Reason::XInclude), "{svg}");
-        }
-    }
-
-    #[test]
-    fn a_namespace_spelled_with_references_or_split_by_newlines_is_refused() {
-        for svg in [
-            r#"<svg xmlns:a="http://www.w3.org/2001/&#88;Include"/>"#,
-            r#"<svg xmlns:a="http://www.w3.org/2001/&#x58;&#x49;nclude"/>"#,
-            r#"<svg xmlns:a="http://www.w3.org/2001/XIn&#000099;lude"/>"#,
-            "<svg xmlns:a=\"http://www.w3.org/2001/XIn\nclude\"/>",
-        ] {
-            assert_eq!(refused(svg), Some(Reason::XInclude), "{svg}");
-        }
-    }
-
-    #[test]
-    fn entity_declarations_and_foreign_dtds_are_refused() {
-        assert_eq!(
-            refused(
-                r#"<!DOCTYPE svg [<!ENTITY ns "http://www.w3.org/2001/X&#37;49nclude">]><svg/>"#
-            ),
-            Some(Reason::EntityDeclaration)
-        );
-        assert_eq!(
-            refused(r#"<!DOCTYPE svg [ <!-- subset --> ]><svg/>"#),
-            Some(Reason::Doctype)
-        );
-        assert_eq!(
-            refused(r#"<!DOCTYPE svg SYSTEM "data:application/xml-dtd,x"><svg/>"#),
-            Some(Reason::Doctype)
-        );
-        assert_eq!(
-            refused(r#"<!DOCTYPE svg SYSTEM "evil.dtd"><svg/>"#),
-            Some(Reason::Doctype)
-        );
-        assert_eq!(refused(r#"<!DOCTYPE svg"#), Some(Reason::Doctype));
-    }
-
-    #[test]
-    fn utf16_in_either_byte_order_with_or_without_a_bom_is_read() {
-        for big_endian in [false, true] {
-            for bom in [false, true] {
-                assert_eq!(
-                    refused(utf16(ATTACK, big_endian, bom)),
-                    Some(Reason::XInclude),
-                    "big_endian={big_endian} bom={bom}"
-                );
-                assert_eq!(refused(utf16(BENIGN, big_endian, bom)), None);
-            }
-        }
-    }
-
-    #[test]
-    fn a_mid_stream_switch_to_utf16_at_an_odd_offset_is_read() {
-        let mut bytes = b"<?xml version='1.0' encoding='UTF-16'?>x".to_vec();
-        bytes.extend(utf16(ATTACK, false, false));
-        assert_eq!(refused(bytes), Some(Reason::XInclude));
-    }
-
-    #[test]
-    fn unreadable_encodings_are_refused() {
-        assert_eq!(
-            refused([0x4C, 0x6F, 0xA7, 0x94, 0x40]),
-            Some(Reason::Encoding)
-        );
-        assert_eq!(
-            refused([0, 0, 0, 0x3C, 0, 0, 0, 0x73]),
-            Some(Reason::Encoding)
-        );
-        for enc in ["UTF-7", "ISO-2022-JP", "IBM037", "UCS-4", "Shift_JIS"] {
-            let svg = format!(r#"<?xml version="1.0" encoding="{enc}"?><svg/>"#);
-            assert_eq!(refused(&svg), Some(Reason::Encoding), "{enc}");
-        }
-        assert_eq!(
-            refused(r#"<?xml version="1.0" encoding=UTF-7?><svg/>"#),
-            Some(Reason::Encoding),
-            "an unquoted value is unreadable, so refused"
-        );
-        for separator in ["\n", "\t", "\r\n"] {
-            let svg =
-                format!(r#"<?xml{separator}version="1.0"{separator}encoding="UTF-7"?><svg/>"#);
-            assert_eq!(refused(&svg), Some(Reason::Encoding), "{separator:?}");
-        }
-        for enc in ["utf-8", "ISO-8859-1", "windows-1252", "US-ASCII", "UTF-16"] {
-            let svg = format!(r#"<?xml version="1.0" encoding = '{enc}' ?><svg/>"#);
-            assert_eq!(refused(&svg), None, "{enc}");
-        }
-    }
-
-    #[test]
-    fn a_gzipped_svgz_is_inflated_and_screened() {
-        assert_eq!(refused(gzip(ATTACK.as_bytes())), Some(Reason::XInclude));
-        assert_eq!(
-            refused(gzip(&gzip(ATTACK.as_bytes()))),
-            Some(Reason::XInclude)
-        );
-        assert_eq!(refused(gzip(BENIGN.as_bytes())), None);
-        // What follows the last member is screened too, not dropped.
-        let mut trailed = gzip(BENIGN.as_bytes());
-        trailed.extend_from_slice(ATTACK.as_bytes());
-        assert_eq!(refused(&trailed), Some(Reason::XInclude));
-        let mut padded = gzip(BENIGN.as_bytes());
-        padded.extend_from_slice(b"\n\n");
-        assert_eq!(refused(&padded), None, "harmless trailing bytes pass");
-        assert_eq!(
-            refused([0x1f, 0x8b, 0x08, 0x00, 0xde, 0xad]),
-            Some(Reason::Undecodable)
-        );
-    }
-
-    #[test]
-    fn a_nested_document_in_a_data_uri_is_screened() {
-        let base64_svg = format!(
-            r#"<svg xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="data:image/svg+xml;base64,{}"/></svg>"#,
-            base64(ATTACK.as_bytes())
-        );
-        assert_eq!(refused(&base64_svg), Some(Reason::XInclude));
-        let gz_base64 = format!(
-            r#"<svg><use href="data:image/svg+xml;base64,{}#x"/></svg>"#,
-            base64(&gzip(ATTACK.as_bytes()))
-        );
-        assert_eq!(refused(&gz_base64), Some(Reason::XInclude));
-        assert_eq!(
-            refused(
-                r#"<svg><image href="data:image/svg+xml,%3Csvg xmlns:a=%22http://www.w3.org/2001/%58Include%22/%3E"/></svg>"#
-            ),
-            Some(Reason::XInclude)
-        );
-        assert_eq!(
-            refused(
-                r#"<svg><style>rect { fill: url(data\3a image/svg+xml;base64,AAAA!) }</style></svg>"#
-            ),
-            None,
-            "a payload that stops at a non-base64 character decodes the prefix"
-        );
-        assert_eq!(
-            refused(r#"<svg><image href="data:image/svg+xml;base64,QUJD="/></svg>"#),
-            Some(Reason::Undecodable),
-            "padding in the wrong place does not decode, so refuses"
-        );
-    }
-
-    #[test]
-    fn a_percent_encoded_payload_is_screened_past_any_literal_quote() {
-        // Optimiser output: single-quoted attributes inside a double-quoted href.
-        let svg = r#"<svg><image href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' xmlns:a='http://www.w3.org/2001/%58Include'/%3E"/></svg>"#;
-        assert_eq!(refused(svg), Some(Reason::XInclude));
-        let svg = r#"<svg><image href='data:image/svg+xml,%3Csvg xmlns:a="http://www.w3.org/2001/%58%49nclude"/%3E'/></svg>"#;
-        assert_eq!(refused(svg), Some(Reason::XInclude));
-    }
-
-    #[test]
-    fn a_data_uri_header_that_cannot_be_delimited_or_bounded_still_screens() {
-        let payload = base64(ATTACK.as_bytes());
-        let long = format!(
-            r#"<svg><image href="data:image/svg+xml;a={};base64,{payload}"/></svg>"#,
-            "A".repeat(300)
-        );
-        assert_eq!(refused(&long), Some(Reason::XInclude), "a long header");
-        let quoted =
-            format!(r#"<svg><image href="data:image/svg+xml;q=';base64,{payload}"/></svg>"#);
-        assert_eq!(
-            refused(&quoted),
-            Some(Reason::XInclude),
-            "a quote in the header"
-        );
-        assert_eq!(
-            refused(r#"<svg><text>data: none</text></svg>"#),
-            None,
-            "no comma ends a header, so there is no URI, only prose"
-        );
-    }
-
-    /// R9-GTK2-06: prose holding `data:` is decided by what it says, not by whether a
-    /// comma happens to come later in the file; and a URI whose comma is encoded inside
-    /// an encoded payload is still decoded and screened, with that payload.
-    ///
-    /// Mutations, each failing here: refusing a start no comma follows (the first two
-    /// asserts); dropping such a start without its text joining the segment before it
-    /// (the encoded-comma asserts).
-    #[test]
-    fn prose_holding_data_is_decided_without_regard_to_a_later_comma() {
-        let prose = "<svg><title>Source data: World Bank</title><path d='M0 0 L1 1'/>";
-        assert_eq!(refused(format!("{prose}</svg>")), None);
-        assert_eq!(refused(format!("{prose}<desc>a, b</desc></svg>")), None);
-        let after_an_icon = format!(
-            r#"<svg><image href="data:image/svg+xml,%3Csvg/%3E"/>{}</svg>"#,
-            "<title>Source data: World Bank</title>"
-        );
-        assert_eq!(refused(after_an_icon), None);
-        let hostile = base64(ATTACK.as_bytes());
-        for comma in ["%2C", "%252C"] {
-            let encoded = format!(
-                r#"<svg><image href="data:image/svg+xml,%3Csvg%3E%3Cimage href='data:image/svg+xml;base64{comma}{hostile}'/%3E%3C/svg%3E"/></svg>"#
-            );
-            assert_eq!(refused(&encoded), Some(Reason::XInclude), "{comma}");
-        }
-    }
-
-    #[test]
-    fn a_base64_payload_is_not_cut_short_by_escaped_whitespace() {
-        let payload = base64(ATTACK.as_bytes());
-        let (head, tail) = payload.split_at(8);
-        let svg = format!(
-            r#"<svg><style>rect {{ fill: url(data:image/svg+xml;base64,{head}\c {tail}) }}</style></svg>"#
-        );
-        assert_eq!(refused(&svg), Some(Reason::XInclude));
-    }
-
-    #[test]
-    fn sibling_percent_encoded_uris_neither_nest_nor_compound() {
-        let icon = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E";
-        let images: String = (0..=2 * MAX_DEPTH)
-            .map(|_| format!(r#"<image href="{icon}"/>"#))
-            .collect();
-        assert_eq!(refused(format!("<svg>{images}</svg>")), None);
-    }
-
-    /// R9-TST1-01: a literal `data:` inside a percent-encoded document must not split
-    /// one real payload so that its bytes go unscreened.
-    #[test]
-    fn a_literal_data_scheme_inside_an_encoded_document_hides_nothing() {
-        // The cut after `a='` makes `xmlns:xi=…%58Include…` a "header" up to `b=','`.
-        let header_hidden = r#"<svg><image href="data:image/svg+xml,%3Csvg a='data:' xmlns:xi='http://www.w3.org/2001/%58Include' b=','%3E%3Cxi:include href='data:text/plain,x'/%3E%3C/svg%3E"/></svg>"#;
-        assert_eq!(refused(header_hidden), Some(Reason::XInclude));
-        // A URI written literally inside an encoded one is decoded twice by a real
-        // decoder: once with the outer layer, once as itself.
-        let twice = r#"<svg><image href="data:image/svg+xml,%3Csvg%3E%3Cimage href='data:image/svg+xml,%253Csvg xmlns:a=%2522http://www.w3.org/2001/%2558Include%2522/%253E'/%3E%3C/svg%3E"/></svg>"#;
-        assert_eq!(refused(twice), Some(Reason::XInclude));
-        // An SVG nested in an encoded SVG and encoded again, its `:`, `,` and `'` left
-        // literal, so the inner `data:` follows a quote and is a start of its own (one
-        // after `%27` is read as the tail of a word and not cut at all): a real decoder
-        // decodes its payload twice. As text, and as gzip.
-        let enc = |b: &[u8]| -> String {
-            b.iter()
-                .map(|&c| {
-                    if c.is_ascii_alphanumeric() || matches!(c, b':' | b',' | b'/' | b'.' | b'\'') {
-                        char::from(c).to_string()
-                    } else {
-                        format!("%{c:02X}")
-                    }
-                })
-                .collect()
-        };
-        // Padded so deflate really compresses it: a short document is stored, and its
-        // text would then be screened in the clear without the gzip layer ever opening.
-        let padded = format!("{ATTACK}<!-- {} -->", "pad ".repeat(500));
-        let packed = gzip(padded.as_bytes());
-        assert!(
-            find_ci(&packed, b"xinclude", 0).is_none(),
-            "precondition: the namespace is not readable in the compressed bytes"
-        );
-        for (what, inner) in [("text", ATTACK.as_bytes().to_vec()), ("gzip", packed)] {
-            let middle = format!(
-                "<svg><image href='data:image/svg+xml,{}'/></svg>",
-                enc(&inner)
-            );
-            let outer = format!(
-                r#"<svg><image href="data:image/svg+xml,{}"/></svg>"#,
-                enc(middle.as_bytes())
-            );
-            assert!(refused(&outer).is_some(), "double-encoded {what}");
-        }
-        // `%da` decodes to one byte, so this `data:` never existed and is not a start.
-        // Redundant today: the whole-tail pass refuses this with or without that rule
-        // (mutation-checked: dropping the flat pass fails here, dropping only the rule
-        // does not), which keeps the cut honest rather than being the only guard.
-        let escaped_start = r#"<svg><image href="data:image/svg+xml,%3Csvg x='%data:' y='%5data:' xmlns:a='http://www.w3.org/2001/%58Include'/%3E"/></svg>"#;
-        assert_eq!(refused(escaped_start), Some(Reason::XInclude));
-        // Many honest siblings, some with literal `<` and `,`, still pass.
-        let icon = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0,0,8,8'/>";
-        let images: String = (0..=2 * MAX_DEPTH)
-            .map(|_| format!(r#"<image href="{icon}"/>"#))
-            .collect();
-        assert_eq!(refused(format!("<svg>{images}</svg>")), None);
-    }
-
-    #[test]
-    fn a_data_scheme_spelled_with_css_escapes_or_references_is_still_found() {
-        let hidden = format!(
-            r#"<svg><style>rect {{ fill: url(da\74 a:image/svg+xml;base64,{}) }}</style><image href="&#100;ata:image/svg+xml;base64,{}"/></svg>"#,
-            base64(ATTACK.as_bytes()),
-            base64(ATTACK.as_bytes())
-        );
-        assert_eq!(refused(&hidden), Some(Reason::XInclude));
-    }
-
-    #[test]
-    fn nesting_past_the_depth_limit_is_refused() {
-        let mut bytes = b"<svg/>".to_vec();
-        for _ in 0..=MAX_DEPTH {
-            bytes = gzip(&bytes);
-        }
-        assert_eq!(refused(bytes), Some(Reason::TooDeep));
-    }
-
-    /// The budget bounds what one screen inspects, layer by layer: a plain document is
-    /// charged its length, a gzip layer may inflate only to what is left, and a nested
-    /// `data:` payload is charged against the same budget as the document around it.
-    ///
-    /// Mutations, each failing here: `saturating_sub` for `checked_sub`; dropping the
-    /// `+ 1` from `gunzip`'s take (a payload cut at the budget would then be screened
-    /// truncated rather than refused); dropping `gunzip`'s length check; handing the
-    /// nested payload a fresh budget, or a copy of what is left.
-    #[test]
-    fn the_scan_budget_bounds_every_layer_and_refuses_past_it() {
-        let plain = b"<svg/>";
-        assert_eq!(inspect_at(plain, 0, &mut plain.len()), Ok(()));
-        assert_eq!(
-            inspect_at(plain, 0, &mut (plain.len() - 1)),
-            Err(Reason::TooLarge)
-        );
-
-        let bomb = gzip(&[0; 4096]);
-        assert!(bomb.len() < 1024, "the bomb is small before inflating");
-        assert_eq!(inspect_at(&bomb, 0, &mut 1024), Err(Reason::TooLarge));
-        let packed = gzip(&[b' '; 100]);
-        assert_eq!(
-            gunzip(&packed, 100).map(|(out, tail)| (out.len(), tail.len())),
-            Ok((100, 0))
-        );
-        assert_eq!(gunzip(&packed, 99), Err(Reason::TooLarge));
-
-        let inner = "<svg/>";
-        let image = format!(r#"<image href="data:image/svg+xml,{inner}"/>"#);
-        let outer = format!("<svg>{image}{image}</svg>");
-        // A percent-encoded payload runs to the next `data:` URI or the end of the text
-        // (see `data_uri_payload`), so each sibling is charged that extent.
-        let after = |from: usize| outer[from..].find(',').map(|c| from + c + 1);
-        let first = after(0).expect("first payload");
-        let second_uri = outer[first..]
-            .find("data:")
-            .map(|d| first + d)
-            .expect("second URI");
-        let second = after(second_uri).expect("second payload");
-        let exact = outer.len() + (second_uri - first) + (outer.len() - second);
-        assert_eq!(inspect_at(outer.as_bytes(), 0, &mut { exact }), Ok(()));
-        assert_eq!(
-            inspect_at(outer.as_bytes(), 0, &mut (exact - 1)),
-            Err(Reason::TooLarge),
-            "each nested payload is charged to the one budget, its siblings' charges kept"
-        );
-    }
-
-    /// The screen's oracle over its own encodings, composed: a hostile document refuses
-    /// under every carrier (gzip, a base64, percent-encoded or CSS-escaped `data:` URI)
-    /// wrapped around every encoding (those carriers again, UTF-16 in both byte orders
-    /// with and without a BOM, a character reference), while the benign document under
-    /// the same wrapping still passes, so each refusal is the content's and not the
-    /// wrapper's.
-    #[test]
-    fn every_wrapping_of_a_hostile_document_refuses_and_of_a_benign_one_passes() {
-        type Wrap = fn(&[u8]) -> Vec<u8>;
-        fn data_base64(b: &[u8]) -> Vec<u8> {
-            format!(
-                r#"<svg><image href="data:image/svg+xml;base64,{}"/></svg>"#,
-                base64(b)
-            )
-            .into_bytes()
-        }
-        fn data_percent(b: &[u8]) -> Vec<u8> {
-            let body: String = b.iter().map(|byte| format!("%{byte:02X}")).collect();
-            format!(r#"<svg><image href="data:image/svg+xml,{body}"/></svg>"#).into_bytes()
-        }
-        fn data_css(b: &[u8]) -> Vec<u8> {
-            format!(
-                r#"<svg><style>rect {{ fill: url(data\3a image/svg+xml;base64,{}) }}</style></svg>"#,
-                base64(b)
-            )
-            .into_bytes()
-        }
-        fn text(b: &[u8]) -> String {
-            b.iter().map(|&byte| char::from(byte)).collect()
-        }
-        fn utf16_le(b: &[u8]) -> Vec<u8> {
-            utf16(&text(b), false, false)
-        }
-        fn utf16_be_bom(b: &[u8]) -> Vec<u8> {
-            utf16(&text(b), true, true)
-        }
-        fn char_ref(b: &[u8]) -> Vec<u8> {
-            text(b).replace("XInclude", "&#88;Include").into_bytes()
-        }
-        let carriers: &[(&str, Wrap)] = &[
-            ("gzip", gzip),
-            ("base64 data:", data_base64),
-            ("percent data:", data_percent),
-            ("CSS-escaped data:", data_css),
-        ];
-        let encodings: &[(&str, Wrap)] = &[
-            ("plain", <[u8]>::to_vec),
-            ("gzip", gzip),
-            ("base64 data:", data_base64),
-            ("percent data:", data_percent),
-            ("CSS-escaped data:", data_css),
-            ("UTF-16LE", utf16_le),
-            ("UTF-16BE with BOM", utf16_be_bom),
-            ("character reference", char_ref),
-        ];
-        for (outer, carry) in carriers {
-            for (inner, encode) in encodings {
-                let hostile = carry(&encode(ATTACK.as_bytes()));
-                assert!(refused(&hostile).is_some(), "{inner} inside {outer}");
-                let benign = carry(&encode(BENIGN.as_bytes()));
-                assert_eq!(refused(&benign), None, "benign {inner} inside {outer}");
-            }
-        }
-    }
-
-    #[test]
-    fn benign_content_passes() {
-        assert_eq!(refused(BENIGN), None);
-        assert_eq!(refused(format!("\u{FEFF}{BENIGN}")), None);
-        assert_eq!(refused(r#"<?xml-stylesheet href="s.css"?><svg/>"#), None);
-        assert_eq!(refused(r#"<svg><text>metadata: none</text></svg>"#), None);
-        // A still PNG's real header and IDAT, which carry zero bytes.
-        let png = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/wide.png"
-        ));
-        assert_eq!(refused(png), None);
-        let svg = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/diagram.svg"
-        ));
-        assert_eq!(refused(svg), None);
-    }
-
-    /// The manual-test fixtures (MANUAL-TEST 2.23c) are what this screen says they
-    /// are, so a placeholder seen there is the screen's doing.
-    #[test]
-    fn the_manual_test_fixtures_are_refused_except_the_plain_one() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/xinclude");
-        for name in [
-            "prefixed.svg",
-            "hidden.svg",
-            "utf16.svg",
-            "compressed.svgz",
-            "nested.svg",
-        ] {
-            let bytes = std::fs::read(dir.join(name)).expect("fixture");
-            assert_eq!(refused(bytes), Some(Reason::XInclude), "{name}");
-        }
-        let plain = std::fs::read(dir.join("plain.svg")).expect("fixture");
-        assert_eq!(refused(plain), None);
-    }
-
-    #[test]
-    fn the_helpers_decode_what_they_claim() {
-        assert_eq!(base64_decode(b"aGVs bG8=").as_deref(), Some(&b"hello"[..]));
-        assert_eq!(base64_decode(b"aGVsbG8").as_deref(), Some(&b"hello"[..]));
-        assert_eq!(base64_decode(b"a"), None);
-        assert_eq!(percent_decode(b"%3Cx%zz%4"), b"<x%zz%4");
-        assert_eq!(find_ci(b"abXINCLUDE", b"xinclude", 0), Some(2));
-        assert_eq!(find_ci(b"ab", b"xinclude", 0), None);
-    }
-}
+mod tests;

@@ -60,6 +60,10 @@ described from a different vantage point.
 | S | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
 | T | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | U | Any | Production | A benign SVG written in UTF-16, or gzip-compressed (`.svgz`), never shows: the size probe in front of every decode cannot read its dimensions and refuses it | Medium |
+| V | Linux | Production | On Ubuntu 22.04 the XInclude screen still refuses honest SVGs, because Ubuntu's "not affected" verdict on CVE-2026-96889 for its librsvg 2.52.5 has not been measured by us | Low |
+| W | Windows | Production | Restoring a window's size at a fractional Windows display scale (125%, 150%) has never been run, so whether a window comes back at its saved size there is unknown | Low |
+| X | Any | Production | A floating card (the Annotate bubble, the formatting bar, a comment card) stays put when the thing it points at moves without its pane re-laying out, so it can end up pointing at the wrong text | Low |
+| Y | Any | Production | In an annotation card's list of rows, the mouse wheel over a row's highlighted-text or comment box scrolls that box (or nothing), never the list, so a long list cannot be wheel-scrolled from over its rows | Low |
 
 ## Closed issues
 
@@ -363,54 +367,22 @@ Any pointer motion brings it back. Judged negligible by the operator.
 
 ## Q. Every SVG is decoded by librsvg, which has a published use-after-free
 
-**Severity**: High (a crafted SVG can corrupt memory in the Windows and Linux builds
-wherever the screen below misses a route; a crash is the realistic worst case, code
-execution is not ruled out).
+**Severity**: High (a crafted SVG can corrupt memory in the Windows and Linux builds wherever
+the interim screen misses a route; a crash is the realistic worst case, code execution is not
+ruled out).
 
-**Report**: GHSA-wq5f-xc86-pv6w / CVE-2026-96889 (2026-10-06), filed against the npm `sharp`
-package; the flaw is librsvg's own (upstream
-https://gitlab.gnome.org/GNOME/librsvg/-/work_items/1241, RUSTSEC-2026-0305). Fixed in
-librsvg **2.63.2**. An SVG whose nested `xi:include` (a `data:` URI is enough) redefines an
-XML entity makes librsvg free that entity while libxml2 is still expanding it.
+**Report**: GHSA-wq5f-xc86-pv6w / CVE-2026-96889, fixed in librsvg **2.63.2**. Windows loads
+2.62.3 (gvsbuild). Linux loads the distribution's: Ubuntu 22.04's 2.52.5 is "Not affected" per
+Ubuntu's tracker (a vendor assessment we have not measured); other distributions are unassessed.
+macOS from its bundle loads 2.63.2.
 
-**Why it reaches us**: the app decodes SVG through the gdk-pixbuf loader chain, and the SVG
-loader is librsvg's. MEASURED on macOS: an SVG drawing through a `data:` `xi:include` renders
-through our bundled loader (the included rect's pixels appear; the control does not), so the
-vulnerable path runs, with no base URL needed. Any SVG a document references is decoded:
-local files next to the document by default (a cloned repo, a download), and remote images
-only with "Show Unsafe Images" on.
+**Open because**: the vulnerable librsvg is still what Windows and Linux load. The interim
+workaround — the XInclude screen ahead of every decode — is recorded, with every leak found in it
+and what upstream must deliver to retire it, in [CVE.md](CVE.md) as **ScrSEC-1**. Read that entry
+before changing the screen. This entry closes when ScrSEC-1 is marked Closed on both platforms.
 
-**Code execution**: the advisory's published route needs a non-PIE executable on glibc.
-Ours is PIE on every platform checked (Linux `readelf -h`: DYN; macOS `otool -hv`: PIE), and
-macOS does not use glibc's allocator. So no published route applies; a crash does.
-
-**Per platform**:
-
-| Platform | librsvg in use | Fixed? |
-|---|---|---|
-| macOS | 2.63.2, copied from Homebrew into the bundle by `packaging/macos/bundle.sh`. MEASURED 2026-10-08 in the built `.app` and `.dmg` | Yes. `bundle.sh` fails the build if the staged librsvg is below 2.63.2 (`packaging/macos/verify-librsvg.sh`; refused 2.62.3 in a negative control). A copy installed from an earlier bundle still carries 2.62.3 until it is reinstalled |
-| Windows | 2.62.3. The installer ships the gvsbuild 2026.8.0 GTK zip pinned in the CI workflow; gvsbuild's recipe at that tag pins 2.62.3 (read, not measured). MEASURED 2.62.3 in a locally built install (gvsbuild 2026.6.0), whose SVG loader is registered in `loaders.cache` | No. No gvsbuild release has the fix yet; needs a local gvsbuild with a version override, or a wait |
-| Linux | The distro's package; Ubuntu 22.04: 2.52.5+dfsg-3ubuntu0.2, newest security patch CVE-2023-38633, no newer candidate | Not known: whether 2.52.5 has the faulty code is not established |
-
-**Mitigation in place (Linux, Windows)**: every hand-off of image bytes to the gdk-pixbuf
-loader chain is screened first (`src/imagedecode/xinclude.rs`, TDD 2.23c), on every route —
-local and remote images, theme sprites, PDF export. Content naming the XInclude namespace
-is refused, as is anything that could hide the name from the check (entity declarations,
-DTD subsets, unreadable encodings) after gzip, UTF-16, references, CSS escapes and nested
-`data:` documents are undone. A refused image shows the placeholder and one status notice.
-Cost: an SVG using XInclude, declaring entities or carrying a non-W3C DTD does not show.
-The screen is a mitigation, not the fix: the vulnerable librsvg is still loaded, so a route
-to XInclude the screen does not model would still reach it. On macOS the screen stands
-down only when the process runs from an app bundle carrying its own librsvg
-(`xinclude::enforced`), because that bundle carries the fix and its build enforces it; the
-same binary run from outside a bundle is screened as on Linux.
-
-**What remains**:
-- Windows and Linux: remove the screen once a fixed librsvg is what each platform loads —
-  a gvsbuild release (or local build) with 2.63.2 on Windows; the distribution's package on
-  Linux, where whether 2.52.5 even has the faulty code is still not established.
-- The screen's premise that librsvg follows no non-`data:` reference without a base URL
-  (the loader is fed a stream with none) is read from librsvg's design, not measured.
+**Not measured**: the screen's premise that librsvg follows no non-`data:` reference without a
+base URL (the loader is fed a stream with none) is read from librsvg's design.
 
 ## R. Split-mode live-reload tests sometimes find the editor short of where they parked it on Windows CI
 
@@ -515,6 +487,87 @@ or gzip input before the sentinel stops it, or whether the format sniff fails fi
 screen already decodes both (`xinclude.rs` inflates gzip and reads UTF-16), so the probe could
 learn the size from that decoded text — but measure which half fails before choosing.
 MANUAL-TEST 2.23c's "six squares from the bundle" on macOS cannot pass until this is fixed.
+
+## V. On Ubuntu 22.04 the XInclude screen refuses honest SVGs against an unmeasured "not affected"
+
+**Severity**: Low (the screen errs safe: the cost is honest SVGs that use XInclude, declare
+entities or nest `data:` documents, refused on a platform that may not need the screen).
+
+Ubuntu's tracker (https://ubuntu.com/security/CVE-2026-96889, read 2026-10-28) marks jammy's
+librsvg **2.52.5+dfsg-3ubuntu0.2** "Not affected" by CVE-2026-96889. That is the vendor's
+assessment. ScrSEC-1 in [CVE.md](CVE.md) admits a vendor verdict for retiring the screen on a
+distribution only once we have confirmed it by measurement, so the screen stays on for Ubuntu
+22.04 until someone runs the check.
+
+**The check**: run the published trigger (GHSA-wq5f-xc86-pv6w) against jammy's own librsvg,
+outside this app, under a memory checker (AddressSanitizer or Valgrind), through both
+`rsvg-convert` and the gdk-pixbuf loader, since the app decodes through the loader. Clean on
+both, and a read of 2.52.5's XInclude path confirming the freed-entity sequence is absent, is the
+confirmation. A report there is not.
+
+**Mitigation options**:
+- Run the check. Confirmed: record it in ScrSEC-1 and stand the screen down for that librsvg
+  version only, by the version the process loaded, never by distribution name. Refuted: Ubuntu's
+  verdict is wrong; report it to Ubuntu and keep the screen.
+- Accept the limitation: keep the screen on Ubuntu 22.04 until it carries librsvg 2.63.2 or a
+  backport.
+
+## W. A window's restored size at a fractional Windows display scale is unverified
+
+**Severity**: Low (unverified, not observed broken; the worst case is a window restored larger or
+smaller than it was saved).
+
+On Windows the un-maximized size saved for a maximized window is converted between physical and
+logical pixels by a scale the app measures from the window's client area
+(`winplace/src/win32.rs`, `winplace/src/geom.rs`). Every Windows run so far was at 100%. MANUAL-TEST
+15.10f at 125% and 150% has never been run: the `windows` seat does not change system settings, so
+it needs the operator at a Windows desktop.
+
+**Expected** (source reading only, not measured): GDK-Win32 4.22.4 reports an integer scale of
+`dpi / 96` (`gdkdisplay-win32.c`, about lines 978-987), so 125% and 150% both read as scale 1 and
+the measured scale should agree with it. A maximized window that is minimized at quit falls back
+to GDK's integer scale, which is the one case where the two could differ if that reading is wrong.
+
+**Mitigation options**:
+- Run MANUAL-TEST 15.10f at 125% and at 150% on Windows, with one window maximized and minimized
+  at quit. Delete this entry if both pass; otherwise the failing case becomes the fix's test.
+- Accept the limitation until a user at a fractional scale reports a size change.
+
+## X. A floating card does not follow an anchor that moves without its pane re-laying out
+
+**Severity**: Low (seen while fixing review findings, not reported by a user; the card is
+mispositioned until the next layout of its pane).
+
+A `FloatingCard` (`src/widgets/floating_card.rs`) is a child of its pane's `GtkOverlay` and is
+placed when that overlay lays out its children. When the anchor moves without the overlay laying
+out again (the anchor widget reallocates inside a scrolled child, say), nothing moves the card, so
+it keeps pointing where the anchor was.
+
+**Not established**: which anchor movements in the app reach this (a scroll, a reflow, a live
+reload), and whether any user-visible case exists today. Reproduce one before fixing.
+
+**Mitigation options**:
+- Re-place the card when its anchor's allocation changes (a size or allocation notification on
+  the anchor, or a frame tick while the card is shown), within the continuous-signal rules of
+  `sdd/CAM.md`.
+- Pop the card down when its anchor moves, as a popover does when its parent scrolls away.
+
+## Y. The mouse wheel over an annotation card's row scrolls the row's box, never the list
+
+**Severity**: Low (seen while fixing review findings; the list still scrolls by its scrollbar,
+by keyboard, or with the pointer between rows).
+
+In the code view's annotation card (`src/codeview/card.rs`, `src/codeview/cardscroll.rs`) each
+row holds a scrollable box for its highlighted text and one for its comment. A wheel event over
+either box is taken by that inner scroller, even when it has nothing left to scroll, so it never
+reaches the scroller that holds the rows. With the pointer over rows, which is most of the card,
+the list does not move.
+
+**Mitigation options**:
+- Hand the wheel to the outer list when the inner box is already at the end it is being scrolled
+  towards (or cannot scroll at all): the usual nested-scroll rule.
+- Give the inner boxes no scrolling of their own and let them grow to their content, so the list
+  is the only scroller.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 
