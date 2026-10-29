@@ -9,7 +9,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 2. General engineering discipline that survives deleting every Scribobulate noun? → route it to `general-engineering-principles` and cite `GEP-N` at the site. **Nothing here** either — the `**Routed**` tombstones were retired 2026-09-24 the same way as the gtk4-rs stubs.
 3. Neither — Scribobulate internals, or a non-gtk4-rs dependency (Pango, GtkSourceView, pulldown-cmark, librsvg, syntect, serde/toml, the toolchain)? → it stays here, **in ≤ 6 lines**: Symptom · Root cause · Resolution · Lesson · Scribobulate · See. Extend an existing entry rather than minting a sibling for the same root cause. Route a Pango lesson on whose API *contract* it is about, and raise it before routing.
 
-**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 364**+ (358 is in use on an unmerged branch on the `improving` remote) — check this table and announce the range you claim; never derive it from the highest heading below. (It read 354 while 354 and 355 both had bodies, so a writer who obeyed it minted a duplicate — and the same sentence forbids the one check a reader would otherwise make. Check 9 can only see a duplicate after it exists. **Check 21 now asserts the one relation the header must satisfy whatever the reserved gaps are — strictly above the highest heading present** — so this line is no longer guarded by prose alone; move it in the same change that mints.)
+**Numbers are frozen** (check 9): never renumbered, never reused; a retired entry keeps its `## N.` heading as a landing spot. Reserved gaps — do not fill: **176–179** (Windows port; holder gone, held pending operator resolution), **186** (`feat/spelling`, inbound), **276–289** (unmerged branches). **Next free number: 366**+ (358 is in use on an unmerged branch on the `improving` remote) — check this table and announce the range you claim; never derive it from the highest heading below. (It read 354 while 354 and 355 both had bodies, so a writer who obeyed it minted a duplicate — and the same sentence forbids the one check a reader would otherwise make. Check 9 can only see a duplicate after it exists. **Check 21 now asserts the one relation the header must satisfy whatever the reserved gaps are — strictly above the highest heading present** — so this line is no longer guarded by prose alone; move it in the same change that mints.)
 
 **Growth** is gated in bytes (check 11). The ratchet only tightens; consolidate in the change that trips it.
 
@@ -92,6 +92,7 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 | 361 | A command that scrolls the split pane the reader is NOT in — the scroll sync puts it straight back | C |
 | 362 | An emoji with a variation selector, or newer than Emoji 12, in a theme symbol — Windows draws a missing-glyph box | C |
 | 363 | A strong `TabState` capture in a widget the tab bar owns — the tab reaches the bar, so it is a cycle | C |
+| 365 | A pasted fence that never closes re-pairs the document's own fences — each mask check then finds one comment more | C |
 
 ---
 
@@ -551,3 +552,10 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 **Resolution**: the rows capture the tab `#[weak]` and do nothing when it is gone; one shared window-close guard test now runs over the document, tab and toolbar menus.
 **Lesson**: in this tree, a closure on any widget inside a window's chrome must hold a `TabState` (or the window) weakly — ownership runs from the tab outward to the chrome, never back. The cycle shows only on the path nobody exercises by hand (closing a window with the menu open), so the guard test is what catches it.
 **Scribobulate**: `window::tabs::contextmenu::show_tab_context_menu`; test `closing_the_window_with_the_tab_menu_open_releases_the_menu`. Shape: GTK4Rs/AP-63, GTK4Rs/AP-140.
+
+## 365. A pasted fence that never closes re-pairs the document's own fences — each mask check then finds one comment more
+**Symptom**: a comment holding a stray backtick rendered as literal text, with no marker and missing from the annotations list, but only when four or more fence-holding comments followed a document fence that followed one.
+**Root cause**: in pulldown-cmark's raw parse, an unclosed fence pasted into a comment pairs with the document's next opening fence, which turns the document's closing fence into an opener that runs to the end of the file. The lexer trusted that block, so each mask check uncovered just one more fence comment; four rounds ran out, and the fallback then lost the stray-backtick comment.
+**Resolution**: once a check sees a block opening inside an unmasked comment and running past it, the next mask takes every later fence-holding comment at once, and the following check confirms it; the parse bound is unchanged.
+**Lesson**: a settle loop whose budget grows by one item per round needs a one-step jump wherever one item can hide the next; otherwise the round count scales with the document, not with the ambiguity.
+**Scribobulate**: `annotate::written::settle` (`escaping_block`, `fence_bodies_after`); tests `pasted_fences_after_a_document_fence_settle_in_one_step`, `the_manual_pasted_fence_document_keeps_every_comment`; TDD 17.61.

@@ -885,28 +885,66 @@ mod tests {
     /// masked one such comment per full parse: once no mask settles, `k` of them cost
     /// `k` parses, and a 1 MiB file hung the window on open. Counted in parses rather
     /// than timed, since the count is what regressed. Mutation check: let the fallback
-    /// mask one body per parse with no cap and the count grows with `k`.
+    /// mask one body per parse with no cap and the count grows with `k`, past the bound.
     #[test]
     fn reading_code_past_unclosable_fences_in_comments_takes_bounded_parses() {
-        use crate::annotate::written::PARSES;
+        use crate::annotate::written::{FALLBACKS, MAX_PARSES, PARSES};
         let doc = |k: usize| {
             "````{>>`<<} a\n\nAfter {>>c ` d<<} `e`.\n\n".to_string()
                 + &"p {>>see\n```py\n<<} q\n\n".repeat(k)
         };
         let read = |src: &str| {
             PARSES.set(0);
+            FALLBACKS.set(0);
             let pasted = extract(src)
                 .annotations
                 .into_iter()
                 .filter(|a| a.comment.as_deref() == Some("see\n```py\n"))
                 .count();
-            (PARSES.get(), pasted)
+            assert_eq!(FALLBACKS.get(), 1, "the fixture must take the fallback");
+            let parses = PARSES.get();
+            assert!(
+                parses <= MAX_PARSES,
+                "{parses} parses, past the bound of {MAX_PARSES}"
+            );
+            (parses, pasted)
         };
         let (few, few_pasted) = read(&doc(20));
         let (many, many_pasted) = read(&doc(200));
         assert_eq!(few_pasted, 20, "every pasted fence stays a comment");
         assert_eq!(many_pasted, 200, "every pasted fence stays a comment");
         assert_eq!(many, few, "200 comments and 20 took different parse counts");
+    }
+
+    /// Past the fallback's cap, a pasted fence the document's own fence closes turns
+    /// that fence's closing line into an opener, so the code it starts runs over every
+    /// later comment. Those comments' bodies were then read as code and never masked,
+    /// so a later pasted fence ran on and every comment after it vanished. A pasted
+    /// fence after a list marker is a fence too. Mutation check: build the later bodies
+    /// from the rest of that parse's code again, or read `- ```py` as no fence.
+    #[test]
+    fn pasted_fences_after_a_document_fence_stay_comments_past_the_fallbacks_cap() {
+        use crate::annotate::written::FALLBACKS;
+        let pasted = "p {>>see\n```py\n<<} q\n\n";
+        let listed = "- {>>see\n- ```py\n  x\n  <<} q\n\n";
+        let src = "````{>>`<<} a\n\nAfter {>>c ` d<<} `e`.\n\n".to_string()
+            + &pasted.repeat(5)
+            + "```\ndoc\n```\n\n"
+            + &pasted.repeat(3)
+            + listed
+            + &pasted.repeat(2)
+            + "Last {>>z<<}.\n";
+        FALLBACKS.set(0);
+        let comments: Vec<String> = extract(&src)
+            .annotations
+            .into_iter()
+            .filter_map(|a| a.comment)
+            .collect();
+        assert_eq!(FALLBACKS.get(), 1, "the fixture must take the fallback");
+        let count = |c: &str| comments.iter().filter(|got| *got == c).count();
+        assert_eq!(count("see\n```py\n"), 10, "{comments:?}");
+        assert_eq!(count("see\n- ```py\n  x\n  "), 1, "{comments:?}");
+        assert_eq!(count("z"), 1, "{comments:?}");
     }
 
     /// The delimiter index must be a faithful re-implementation of the scans it
