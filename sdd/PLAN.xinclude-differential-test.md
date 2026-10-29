@@ -34,10 +34,10 @@ the test is safe to run on every platform's runtime, including Windows' 2.62.3.
 
 **Pros**: the oracle is the decoder each platform really loads, so the test measures the very
 disagreement every leak was, on each runtime the pipeline builds against. Shrinking hands the next
-fix a minimal case instead of a review finding. The decoder is consulted only when the screen
-passes, so a run stays cheap. It also measures what the screen costs honest users: generated
-inputs whose include the decoder would *not* act on, but which the screen refused, are a count we
-can report.
+fix a minimal case instead of a review finding. In the pipeline run the decoder is consulted only
+when the screen passes, so a run stays cheap. The long run also measures what the screen costs
+honest users: there the decoder also judges a sample of the inputs the screen refused, and those
+whose include it would *not* act on are a count we can report.
 
 **Cons**: it finds only what the generator can compose; an encoding nobody put in the grammar
 stays unseen (the byte-mutation stage under Technical details narrows this, but does not close
@@ -104,7 +104,15 @@ behaviour is built.
 ### The test cannot trigger the flaw it guards against
 - **Given** a runtime whose decoder still has the use-after-free
 - **When** the test runs on it
-- **Then** no generated input can reach the flaw, so the run is safe on every platform's pipeline
+- **Then** no generated input can reach the flaw, so the run is safe on every platform's pipeline,
+  and that is checked on what each input decodes to, not on the bytes the generator wrote
+
+### The oracle is proven able to see an include before it is trusted
+- **Given** any run, pipeline or long
+- **When** it starts, before any generated input
+- **Then** a control SVG whose include the decoder acts on is decoded with no screen and must show
+  its marker; if it does not, the run fails and names the decoder's version, rather than reporting
+  every generated input as safe
 
 ### A pipeline run is reproducible and bounded; a long run is on demand
 - **Given** a pipeline run on any platform
@@ -113,9 +121,10 @@ behaviour is built.
   bound, while a developer can ask for a longer run over fresh inputs without changing code
 
 ### What the screen costs honest SVGs is reported
-- **Given** generated inputs whose include the decoder would not act on
-- **When** the screen refuses some of them
-- **Then** the run reports how many, and that count is not a failure
+- **Given** a long run, and a sample of the inputs the screen refused
+- **When** the decoder judges that sample
+- **Then** the run reports how many of them the decoder would not have acted on, and that count is
+  not a failure
 
 ## Technical details preserved
 
@@ -125,13 +134,23 @@ behaviour is built.
   accepts (`%3Bbase64`, spaces, case, extra parameters); CSS escapes (`data\3a`); tabs and
   newlines the URL parser drops; carriers `<image href>`, `xlink:href`, `<use>`, CSS `url()` in a
   `style` attribute and a `<style>` element; gzip; UTF-16 both byte orders, with and without BOM;
-  the XInclude namespace under any prefix or as the default namespace. Nest up to the screen's
+  the XInclude namespace under any prefix or as the default namespace. Header spellings the
+  decoder REJECTS as base64 must be in the grammar too (`%3Bbase64`, `;base64%20`, a CSS form
+  feed), each with a percent-hostile body: the Round 11 leak was a header only the screen read
+  as base64, which a grammar of accepted spellings cannot produce. Nest up to the screen's
   depth limit, and one past it (which must refuse regardless).
-- **Byte mutation stage**: mutate known-hostile seeds (every past leak's fixture) one byte or one
-  layer at a time, and judge each survivor by the same oracle. Cheap, and it reaches shapes the
-  grammar does not name.
-- **The generator must never emit a DOCTYPE or `<!ENTITY`.** Assert it in the generator, not only
-  by construction: an entity redefinition inside a nested include is the use-after-free itself.
+- **Byte mutation stage**: mutate known-hostile seeds one byte or one layer at a time, and judge
+  each survivor by the same oracle. Cheap, and it reaches shapes the grammar does not name. **Seed
+  from entity-free twins of the past leak fixtures, never the fixtures themselves**: those wrap the
+  published trigger (an encoded `<!DOCTYPE … <!ENTITY`), and a mutant the screen passes is handed to
+  the decoder, which on Windows still has the flaw. Each twin keeps its fixture's encoding layers
+  around an `xi:include` of a relative `href` with an `xi:fallback`, and no DOCTYPE.
+- **No input may carry a DOCTYPE or `<!ENTITY` once decoded.** Asserting it on the emitted bytes is
+  not enough, because hiding markup under encodings is the whole point of the inputs: decode each
+  input with approach 2's model first and drop any whose decoded tree holds either. An entity
+  redefinition inside a nested include is the use-after-free itself.
+- **The grammar composes layers in any order, with repetition, up to one past the screen's depth
+  limit**, so a layer the screen undoes once but the decoder undoes twice is reachable.
 - **Oracle facts to verify against the loaded librsvg before relying on them**: that librsvg (not
   libxml2) processes `xi:include` and its `xi:fallback`; that it resolves no relative `href`
   without a base URL, so the fallback runs; and that it decodes `data:` URIs with the `data-url`

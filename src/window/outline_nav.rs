@@ -329,22 +329,15 @@ fn navigate_to_heading(window: &ApplicationWindow, path: &HeadingPath, row_index
         record_outline_activation(window, &st, path);
     }
     match current_mode(window) {
-        ViewMode::Preview => {
-            if let Some(sw) = st.split.preview_scroller() {
-                scroll_preview_to_heading_revealing(window, &sw, row_index);
-            }
-        }
-        ViewMode::Split => {
-            if let Some((_, preview_sw)) = split_scrollers(window) {
-                // The editor↔preview sync normally treats the editor as
-                // driver and projects editor→preview every frame, so a preview-only
-                // jump is undone on the next tick. Make the preview the driver for
-                // this navigation, so the jump sticks and the editor follows it
-                // (the coalesced sync projects preview→editor). Genuine user input
-                // on the editor switches the driver back via mark_driver_on_input.
-                super::panescroll::lead(&st, ScrollDriver::Preview);
-                scroll_preview_to_heading_revealing(window, &preview_sw, row_index);
-            }
+        // The editor↔preview sync normally treats the editor as driver and projects
+        // editor→preview every frame, so in Split a preview-only jump is undone on the
+        // next tick. The route makes the preview the driver for this navigation, so the
+        // jump sticks and the editor follows it (the coalesced sync projects
+        // preview→editor); genuine input on the editor switches the driver back via
+        // mark_driver_on_input. In Preview mode the lead is inert (entering Split hands
+        // the lead to the editor), so both modes take the one route.
+        ViewMode::Preview | ViewMode::Split => {
+            scroll_preview_to_heading_revealing(window, &st, row_index);
         }
         ViewMode::Edit => scroll_editor_to_offset(&st, src_offset),
     }
@@ -361,16 +354,17 @@ fn navigate_to_heading(window: &ApplicationWindow, path: &HeadingPath, row_index
 /// exactly what the plain scroll always did.
 fn scroll_preview_to_heading_revealing(
     window: &ApplicationWindow,
-    sw: &gtk::ScrolledWindow,
+    st: &TabState,
     doc_index: usize,
 ) {
-    let hidden_by = scroll_preview_to_heading(sw, doc_index);
-    let sw = sw.clone();
-    super::foldreveal::reveal_folds(window, &hidden_by, move |_| {
+    let hidden_by = super::panescroll::preview_to_heading(st, doc_index);
+    super::foldreveal::reveal_folds(window, &hidden_by, move |window| {
         // The re-render rebuilt the preview's buffer, so the heading's offset is a
         // NEW one; re-reading it through the same accessor is what makes this
         // correct rather than re-using the offset from before the expansion.
-        scroll_preview_to_heading(&sw, doc_index);
+        if let Some(st) = state(window) {
+            super::panescroll::preview_to_heading(&st, doc_index);
+        }
     });
 }
 

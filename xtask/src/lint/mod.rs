@@ -117,6 +117,22 @@ pub struct Tree {
 }
 
 impl Tree {
+    /// A tree of the given files and nothing else, for the corpora to plant violations in.
+    #[cfg(test)]
+    pub fn from_texts(files: &[(&str, &str)]) -> Tree {
+        Tree {
+            repo: PathBuf::new(),
+            scan: ScanSet {
+                paths: files.iter().map(|(path, _)| (*path).to_string()).collect(),
+                prescriptive: Vec::new(),
+            },
+            texts: files
+                .iter()
+                .map(|(path, text)| ((*path).to_string(), Some((*text).to_string())))
+                .collect(),
+        }
+    }
+
     /// The text of a scan-set member, or `None` when it is binary (or unreadable).
     ///
     /// Binary members are skipped the way `grep` skips them — a NUL byte near the start —

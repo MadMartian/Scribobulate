@@ -80,19 +80,16 @@ pub(super) fn restore_place(tab: &Rc<TabState>, spot: Option<&NavSpot>) {
     let Some(spot) = spot else {
         return;
     };
-    let Some(sw) = tab.split.preview_scroller() else {
-        return;
-    };
     // The preview leads the split sync for this jump, exactly as an outline activation
     // does: otherwise the sync treats the editor as driver and projects editor→preview
-    // on the next tick, undoing the traversal. The fragment seam takes the lead itself.
+    // on the next tick, undoing the traversal. Both routes take the lead themselves.
+    // A tab with no preview (Edit mode) scrolls nothing.
     match spot {
         NavSpot::Heading(slug) => {
             crate::window::panescroll::preview_to_fragment(tab, slug);
         }
         NavSpot::Line(line) => {
-            crate::window::panescroll::lead(tab, crate::winstate::ScrollDriver::Preview);
-            crate::preview::restore_preview_scroll_to_line(&sw, *line);
+            crate::window::panescroll::preview_to_line(tab, *line);
         }
     }
 }

@@ -334,6 +334,7 @@ fn legal_citations_and_near_misses_are_not_flagged() {
 // ── Check 26: the `ScrSEC-N` citation form ───────────────────────────────────
 
 const SCRSEC_MALFORMED: &[&str] = &[
+    "ScrSEC-12a is not a number",
     "see ScrSec-1 for the leaks",
     "SCRSEC-1 is the entry",
     "(scrsec-2)",
@@ -391,6 +392,41 @@ fn security_register_heading_row_and_citation_yield_the_number() {
         .captures("### ScrSEC-12. not an entry")
         .is_none());
     assert!(scrsec_rx().captures("ScrSEC-12a").is_none());
+}
+
+/// The composed check over planted trees: one clean, and one per kind of violation, so
+/// a regression in the composition (not only in a pattern) turns a test red.
+#[test]
+fn the_security_register_check_fails_each_planted_violation_and_passes_a_clean_tree() {
+    use crate::lint::checks::references::scrsec_citations_resolve;
+    use crate::lint::Tree;
+    let register = |rows: &str, bodies: &str| {
+        format!("# Security Vulnerabilities\n\n## Contents\n\n| ID | Status |\n|---|---|\n{rows}\n{bodies}")
+    };
+    let row = |n: u32| format!("| [ScrSEC-{n}](#scrsec-{n}-x) | Patched |\n");
+    let body = |n: u32| format!("## ScrSEC-{n}. A title\n\ntext\n\n");
+    let clean = register(&row(1), &body(1));
+    let cases = [
+        ("clean", clean.as_str(), "see ScrSEC-1", true),
+        ("dangling citation", clean.as_str(), "see ScrSEC-2", false),
+        ("misspelled citation", clean.as_str(), "see ScrSec-1", false),
+        (
+            "entry with no row",
+            &register("", &body(1)),
+            "see ScrSEC-1",
+            false,
+        ),
+        (
+            "row with no entry",
+            &register(&(row(1) + &row(2)), &body(1)),
+            "see ScrSEC-1",
+            false,
+        ),
+    ];
+    for (what, cve, citing, expect) in cases {
+        let tree = Tree::from_texts(&[("sdd/CVE.md", cve), ("src/x.rs", citing)]);
+        assert_eq!(scrsec_citations_resolve(&tree), expect, "{what}");
+    }
 }
 
 // ── Check 20: a cited git commit hash ─────────────────────────────────────────

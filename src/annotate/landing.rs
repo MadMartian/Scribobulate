@@ -33,9 +33,10 @@
 //! extensions other tools commonly enable, because those tools are who it protects. It
 //! parses the same text over the same span that `annotate::scan` reads code through —
 //! `written::as_written`, the body after any front matter with every comment body
-//! outside code masked, parsed with `NormalizedMd::parse_as_written` — so the two
-//! never disagree about what is code: a stray backtick in an existing comment makes no
-//! code span here that extraction would not see.
+//! outside code masked, parsed with `NormalizedMd::parse_as_written` — and keeps
+//! whole every piece of code that reading reports, so the two never disagree about
+//! what is code: a stray backtick in an existing comment makes no code span here that
+//! extraction would not see, and a comment extraction reads as code is not split.
 
 use pulldown_cmark::{Event, Tag};
 use std::ops::Range;
@@ -92,7 +93,7 @@ struct Block {
 
 struct Verbatim {
     blocks: Vec<Block>,
-    /// Math and inline code spans, in document order, which are kept whole rather
+    /// Math and code, ascending, joined where they overlap, which are kept whole rather
     /// than kept out.
     whole: Vec<Range<usize>>,
 }
@@ -116,8 +117,11 @@ fn eol_near(source: &str, at: usize) -> &'static str {
     }
 }
 
+/// Whether `line` holds nothing but a quote's `>` markers and what a blank line may
+/// hold (`written::is_line_space`, the one rule extraction's block break uses too).
 fn is_blank(line: &str) -> bool {
-    line.trim_matches([' ', '\t', '>', '\r', '\n']).is_empty()
+    line.trim_matches(|c| c == '>' || c == '\r' || c == '\n' || super::written::is_line_space(c))
+        .is_empty()
 }
 
 fn scan(source: &str) -> Verbatim {
@@ -165,6 +169,10 @@ fn scan(source: &str) -> Verbatim {
             lines: line_start(source, r.start)..end,
         });
     }
+    // Code as extraction reads it is kept whole too. Normally that is what this parse
+    // just found; when no mask settled it also holds each comment read as code because
+    // the parse hid its closer, which this parse does not report.
+    let whole = super::written::merged(whole.into_iter().chain(written.code).collect());
     Verbatim { blocks, whole }
 }
 

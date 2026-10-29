@@ -405,16 +405,32 @@ fn a_reference_layer_between_percent_layers_hides_nothing() {
             .collect()
     };
     let pct = |c: u8| format!("%{c:02X}");
-    let padded = format!("{ATTACK}<!-- {} -->", "pad ".repeat(500));
-    let packed = gzip(padded.as_bytes());
+    let pad = |doc: &str| format!("{doc}<!-- {} -->", "pad ".repeat(500));
+    // Each document, gzipped and plain, written through the reference layer: the
+    // hostile one must be refused for naming the namespace, and its benign twin, built
+    // the same way, must pass, so the refusal is the content's and not the route's.
     for (form, reference) in [("decimal", "&#37;"), ("hex", "&#x25;")] {
-        let inner = literal(&packed, &|c| format!("{reference}{c:02X}"));
-        let middle = format!("<svg><image href='data:image/svg+xml,{inner}'/></svg>");
-        let outer = format!(
-            r#"<svg><image href="data:image/svg+xml,{}"/></svg>"#,
-            literal(middle.as_bytes(), &pct)
-        );
-        assert!(refused(&outer).is_some(), "{form} reference layer");
+        let route = |doc: &[u8]| {
+            let inner = literal(doc, &|c| format!("{reference}{c:02X}"));
+            let middle = format!("<svg><image href='data:image/svg+xml,{inner}'/></svg>");
+            format!(
+                r#"<svg><image href="data:image/svg+xml,{}"/></svg>"#,
+                literal(middle.as_bytes(), &pct)
+            )
+        };
+        for (doc, expect) in [(ATTACK, Some(Reason::XInclude)), (BENIGN, None)] {
+            let padded = pad(doc);
+            assert_eq!(
+                refused(route(&gzip(padded.as_bytes()))),
+                expect,
+                "{form} reference layer, gzipped"
+            );
+            assert_eq!(
+                refused(route(padded.as_bytes())),
+                expect,
+                "{form} reference layer, plain"
+            );
+        }
     }
 
     let mut stored = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::none());
@@ -448,17 +464,34 @@ fn every_spelling_of_a_base64_header_is_read_as_base64() {
         "image/svg+xml; base64",
         "image/svg+xml;BASE64",
         "image/svg+xml;charset=utf-8;base64",
+        // These two reach the header with the tab or newline already gone (the
+        // screen's normalisation drops both), so they pin that normalisation, not
+        // the header rule; `decoder_reads_base64` is held to its own filter below.
         "image/svg+xml;\tbase64",
         "image/svg+xml;\nbase64",
         "image/svg+xml%3Bbase64",
         "image/svg+xml;base64 ",
     ] {
         let wrap = |b64: &str| format!(r#"<svg><image href="data:{header},{b64}"/></svg>"#);
-        assert!(
-            refused(wrap(&hostile)).is_some(),
+        assert_eq!(
+            refused(wrap(&hostile)),
+            Some(Reason::XInclude),
             "hostile under {header:?}"
         );
         assert_eq!(refused(wrap(&benign)), None, "benign under {header:?}");
+    }
+    // The decoder's rule itself, on headers the normalisation never hands it: the URL
+    // parser drops a tab or newline anywhere in the header.
+    for header in [
+        &b"image/svg+xml;\tbase64"[..],
+        b"image/svg+xml;\nbase64",
+        b"x;ba\r\nse64",
+    ] {
+        assert!(
+            decoder_reads_base64(header),
+            "{}",
+            String::from_utf8_lossy(header)
+        );
     }
     // R10-AP2-01: a literal inner `data:` inside a percent-encoded document, its
     // header written `%3Bbase64`.
@@ -473,19 +506,105 @@ fn every_spelling_of_a_base64_header_is_read_as_base64() {
             })
             .collect()
     };
-    for (what, payload, expect_refused) in [("hostile", &hostile, true), ("benign", &benign, false)]
-    {
+    for (what, payload, expect) in [
+        ("hostile", &hostile, Some(Reason::XInclude)),
+        ("benign", &benign, None),
+    ] {
         let middle = format!("<svg><image href='data:image/svg+xml;base64,{payload}'/></svg>");
         let outer = format!(
             r#"<svg><image href="data:image/svg+xml,{}"/></svg>"#,
             enc(middle.as_bytes())
         );
-        assert_eq!(
-            refused(&outer).is_some(),
-            expect_refused,
-            "{what} %3Bbase64 inner"
-        );
+        assert_eq!(refused(&outer), expect, "{what} %3Bbase64 inner");
     }
+}
+
+/// The converse of the matrix above: a header that only LOOKS like `;base64` once
+/// something decodes it is percent to the decoder, which reads the raw header. Each
+/// carries a percent-hostile body that a base64 reading empties (it stops at the first
+/// `&`), so a screen that took the base64 reading alone would let the nested document
+/// through.
+#[test]
+fn a_header_that_spells_base64_only_once_decoded_is_also_read_as_percent() {
+    let attr = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    };
+    // No `data:` of its own: a second start would bring in the spliced reading, which
+    // is not the reading under test.
+    let hostile = attr(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xi="http://www.w3.org/2001/X%49nclude"><xi:include href="x.xml" parse="xml"/></svg>"#,
+    );
+    let benign = attr(BENIGN);
+    for header in [
+        "image/svg+xml;base64%20",
+        "image/svg+xml;%20base64",
+        "image/svg+xml%3Bbase64",
+        "image/svg+xml;x=%3Bbase64",
+        "image/svg+xml;base%364",
+        "image/svg+xml;\\62 ase64",
+    ] {
+        let wrap = |body: &str| format!(r#"<svg><image href="data:{header},{body}"/></svg>"#);
+        assert_eq!(
+            refused(wrap(&hostile)),
+            Some(Reason::XInclude),
+            "percent-hostile under {header:?}"
+        );
+        assert_eq!(refused(wrap(&benign)), None, "benign under {header:?}");
+    }
+    // In a stylesheet the decoder DOES undo CSS escapes, and `\c ` is a form feed, which
+    // is not one of the spaces the base64 rule allows.
+    let css = |body: &str| {
+        format!(
+            r#"<svg><style>rect {{ fill: url(data:image/svg+xml;\c base64,{body}) }}</style></svg>"#
+        )
+    };
+    assert_eq!(
+        refused(css(&hostile)),
+        Some(Reason::XInclude),
+        "percent-hostile under a CSS form feed"
+    );
+    assert_eq!(refused(css(&benign)), None, "benign under a CSS form feed");
+}
+
+/// A header that names base64 where the decoder's rule does not look for it (a
+/// parameter after it, or inside another word) is percent to the decoder, and the
+/// screen reads it both ways: a base64 body that hides the namespace is refused, as it
+/// would be by a decoder that took the looser reading, and a benign one passes.
+/// Mutation-checked: reading such a header as percent alone leaves the hostile body
+/// unread.
+#[test]
+fn a_header_naming_base64_off_the_end_is_read_both_ways() {
+    let hostile = base64(ATTACK.as_bytes());
+    let benign = base64(BENIGN.as_bytes());
+    for header in [
+        "image/svg+xml;base64;charset=utf-8",
+        "image/svg+xml;x-base64",
+    ] {
+        assert!(!decoder_reads_base64(header.as_bytes()), "{header:?}");
+        let wrap = |b64: &str| format!(r#"<svg><image href="data:{header},{b64}"/></svg>"#);
+        assert_eq!(
+            refused(wrap(&hostile)),
+            Some(Reason::XInclude),
+            "hostile under {header:?}"
+        );
+        assert_eq!(refused(wrap(&benign)), None, "benign under {header:?}");
+    }
+}
+
+/// A layer holding a NUL is read four more times, as UTF-16 at both offsets in both
+/// byte orders, and each reading is charged its code units: one byte short of the
+/// total refuses. Mutation-checked: dropping that charge passes the short budget.
+#[test]
+fn every_utf16_reading_is_charged() {
+    let bytes = b"<svg/>\0x";
+    let readings = 2 * (bytes.len() / 2) + 2 * ((bytes.len() - 1) / 2);
+    let exact = bytes.len() + readings;
+    let run = |scan| inspect_at(bytes, 0, &mut Budget::new(scan, 0));
+    assert_eq!(run(exact), Ok(()));
+    assert_eq!(run(exact - 1), Err(Reason::TooLarge));
 }
 
 #[test]
@@ -748,7 +867,11 @@ fn every_wrapping_of_a_hostile_document_refuses_and_of_a_benign_one_passes() {
     for (outer, carry) in carriers {
         for (inner, encode) in encodings {
             let hostile = carry(&encode(ATTACK.as_bytes()));
-            assert!(refused(&hostile).is_some(), "{inner} inside {outer}");
+            assert_eq!(
+                refused(&hostile),
+                Some(Reason::XInclude),
+                "{inner} inside {outer}"
+            );
             let benign = carry(&encode(BENIGN.as_bytes()));
             assert_eq!(refused(&benign), None, "benign {inner} inside {outer}");
         }
@@ -801,4 +924,37 @@ fn the_helpers_decode_what_they_claim() {
     assert_eq!(percent_decode(b"%3Cx%zz%4"), b"<x%zz%4");
     assert_eq!(find_ci(b"abXINCLUDE", b"xinclude", 0), Some(2));
     assert_eq!(find_ci(b"ab", b"xinclude", 0), None);
+}
+
+/// Overlapping declarations made two checks quadratic outside any budget: `<!doctype `
+/// repeated before one `>`, and `<?xml` repeated with no `?>` (each rescanned to the
+/// end). At the image cap that hung the main thread for good. Each shape, at the cap,
+/// must finish in seconds; the old code needed on the order of 10^13 steps.
+#[test]
+fn cap_sized_runs_of_declarations_are_screened_in_bounded_time() {
+    let cap = crate::limits::MAX_LOCAL_IMAGE_BYTES as usize;
+    let shapes: [(&str, String); 4] = [
+        (
+            "doctypes before one `>`",
+            "<!doctype ".repeat(cap / 10) + ">",
+        ),
+        ("xml declarations with no `?>`", "<?xml ".repeat(cap / 6)),
+        (
+            "unclosed encoding values",
+            "<?xml encoding=\"".repeat(cap / 16),
+        ),
+        (
+            "declarations sharing one `?>`",
+            "<?xml encoding=\"utf-8\" ".repeat(cap / 23) + "?>",
+        ),
+    ];
+    for (what, text) in shapes {
+        let started = std::time::Instant::now();
+        let _ = refused(&text);
+        let took = started.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(20),
+            "{what}: {took:?}"
+        );
+    }
 }

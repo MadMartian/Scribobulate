@@ -61,7 +61,7 @@ pub(crate) fn scroll_preview_to_heading(
             // latest) — GTK4Rs/AP-22.
             #[expect(
                 clippy::disallowed_methods,
-                reason = "the heading seam: its navigating caller makes the preview lead first (panescroll::lead in outline_nav)"
+                reason = "the heading seam, itself banned: its only caller is panescroll::preview_to_heading, which leads first"
             )]
             view.scroll_to_buffer_offset(site.offset);
             Some(site)
@@ -421,7 +421,7 @@ pub(crate) fn restore_preview_scroll_to_line(sw: &ScrolledWindow, line: i32) {
             .offset();
         #[expect(
             clippy::disallowed_methods,
-            reason = "a reading-position restore preserves a place rather than moving to one (Reading-Position Preservation CAM)"
+            reason = "the line seam, itself banned: its navigating caller is panescroll::preview_to_line, which leads first; its restoring callers preserve a place and must not lead (Reading-Position Preservation CAM)"
         )]
         cpv.scroll_to_buffer_offset(offset);
         return;
@@ -796,6 +796,10 @@ mod gtk_integration_tests {
         let sw = ScrolledWindow::new();
         sw.set_child(Some(&view));
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture: this test is about the seam itself, not a navigation through it"
+        )]
         restore_preview_scroll_to_line(&sw, 501);
 
         assert_eq!(

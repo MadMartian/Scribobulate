@@ -969,4 +969,75 @@ mod gtk_integration_tests {
 
         while glib::MainContext::default().iteration(false) {}
     }
+
+    /// **A window that was inactive while its selection went re-derives Copy when it
+    /// becomes active again.**
+    ///
+    /// The PRIMARY handler skips an inactive window, so a claim made in another window
+    /// that clears this one's table-cell selection leaves Copy enabled until the window is
+    /// activated, where `connect_selection_states_on_activation` re-derives it
+    /// (GTK4Rs/AP-120). The stale state is asserted as a precondition, so the test cannot
+    /// pass on a refresh that ran early. Mutation: emptying that handler fails here.
+    #[gtktest::test]
+    fn activation_re_derives_copy_after_a_selection_lost_while_inactive() {
+        use crate::testpump::{until, Clock};
+        let app = crate::window::testkit::test_app_suffixed("copyonactivation");
+        let md = "Prose.\n\n| Name | Value |\n|------|-------|\n| alpha cell | beta cell |\n";
+        let window = crate::window::new_window(&app, "IT", md, None);
+        until(Clock::Frame, "the document window to be active", || {
+            window.is_active()
+        });
+        let tv = preview_text_view(&window).expect("preview view exists in preview mode");
+        until(Clock::Frame, "the table's cells to lay out", || {
+            crate::preview::scrib_labels(&tv)
+                .is_some_and(|l| l.borrow().iter().any(|c| c.width() > 0))
+        });
+        let cell = crate::preview::scrib_labels(&tv)
+            .expect("the table registered its cells")
+            .borrow()
+            .iter()
+            .find(|l| l.text() == "alpha cell")
+            .cloned()
+            .expect("a cell reads \"alpha cell\"");
+        cell.select_region(0, 5);
+        until(Clock::Frame, "the cell selection to enable Copy", || {
+            action_enabled(&window, "copy")
+        });
+
+        let other = gtk::Window::new();
+        other.present();
+        until(Clock::Frame, "the other window to take activation", || {
+            other.is_active() && !window.is_active()
+        });
+        // A selection in the other window claims PRIMARY.
+        let foreign = gtk::gdk::ContentProvider::for_value(&"elsewhere".to_value());
+        tv.primary_clipboard()
+            .set_content(Some(&foreign))
+            .expect("PRIMARY accepts a provider");
+        until(
+            Clock::Frame,
+            "the foreign claim to clear the cell's selection",
+            || cell.selection_bounds().is_none(),
+        );
+        assert!(
+            action_enabled(&window, "copy"),
+            "precondition: the inactive window did not re-derive Copy on the claim, so \
+             only its activation can"
+        );
+
+        window.present();
+        until(
+            Clock::Frame,
+            "the document window to be active again",
+            || window.is_active(),
+        );
+        assert!(
+            !action_enabled(&window, "copy"),
+            "Copy stayed enabled after activation, for a cell selection that went while \
+             the window was inactive"
+        );
+
+        other.destroy();
+        window.destroy();
+    }
 }

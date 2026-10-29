@@ -275,7 +275,10 @@ pub fn scrsec_toc_row_rx() -> &'static Regex {
 /// GitHub derives in lower case, not a citation.
 fn scrsec_candidate_rx() -> &'static Regex {
     static RX: OnceLock<Regex> = OnceLock::new();
-    rx(&RX, r"(?i)(?:^|[^#/a-z0-9_-])(scr[ _-]?sec[ _-]?#?[0-9]+)")
+    rx(
+        &RX,
+        r"(?i)(?:^|[^#/a-z0-9_-])(scr[ _-]?sec[ _-]?#?[0-9]+[a-z0-9_]*)",
+    )
 }
 
 /// The near-miss `ScrSEC-N` spellings on `line`: another letter case, a space or no

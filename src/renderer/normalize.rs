@@ -325,7 +325,6 @@ mod normalize_inline_tabs_tests {
         const SANCTIONED: &[&str] = &[
             "renderer/normalize.rs",   // the seam itself, plus the pre-pass
             "renderer/frontmatter.rs", // the front-matter walk seam every site reads through
-            "preview/annotate.rs",
             "preview/build.rs",
             "docio/mod.rs",
             "renderer/disclosure.rs",

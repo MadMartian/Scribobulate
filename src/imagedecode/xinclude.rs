@@ -257,11 +257,14 @@ fn inspect_layer(
         splice,
     )?;
     // ASCII written as UTF-16 always has a zero byte beside it, so content with none
-    // cannot spell anything when read that way.
+    // cannot spell anything when read that way. Each of these four readings is a full
+    // pass of its own, so each is charged its code units before it runs: the budget
+    // bounds work done, not bytes received.
     if bytes.contains(&0) {
         for offset in [0, 1] {
             let tail = bytes.get(offset..).unwrap_or_default();
             for big_endian in [false, true] {
+                budget.charge(tail.len() / 2)?;
                 let text = normalise(utf16_chars(tail, big_endian));
                 inspect_text(&text, depth, budget, splice)?;
             }
@@ -417,7 +420,7 @@ fn inspect_text(
     budget: &mut Budget,
     splice: Splice,
 ) -> Result<(), Reason> {
-    check_patterns(text)?;
+    check_patterns(text, budget)?;
     let starts = delimited_starts(text, data_uri_starts(text));
     for (i, &at) in starts.iter().enumerate() {
         let end = starts.get(i + 1).copied().unwrap_or(text.len());
@@ -478,14 +481,14 @@ fn inspect_every_decoding(
 }
 
 /// The rules that read the text as it stands, with no layer decoded.
-fn check_patterns(text: &[u8]) -> Result<(), Reason> {
+fn check_patterns(text: &[u8], budget: &mut Budget) -> Result<(), Reason> {
     if find_ci(text, b"xinclude", 0).is_some() {
         return Err(Reason::XInclude);
     }
     if find_ci(text, b"<!entity", 0).is_some() {
         return Err(Reason::EntityDeclaration);
     }
-    check_doctypes(text)?;
+    check_doctypes(text, budget)?;
     check_encodings(text)
 }
 
@@ -577,15 +580,23 @@ fn data_uri_starts(text: &[u8]) -> Vec<usize> {
     starts
 }
 
-fn check_doctypes(text: &[u8]) -> Result<(), Reason> {
+/// Every `<!doctype` is examined from its own start, even one inside an earlier
+/// declaration's quoted literal: skipping past each declaration would leave a real one
+/// unexamined behind a decoy whose literal swallows it. So the scans can overlap, and
+/// `<!doctype ` repeated to the image cap before a single `>` is quadratic. Each scan is
+/// therefore charged to the inspection budget, byte for byte, and a text that exhausts
+/// it is refused as too large rather than hanging the main thread.
+fn check_doctypes(text: &[u8], budget: &mut Budget) -> Result<(), Reason> {
     let mut from = 0;
     while let Some(at) = find_ci(text, b"<!doctype", from) {
         from = at + 1;
+        let mut scanned = 0;
         let mut quote = None;
         let mut literals: Vec<&[u8]> = Vec::new();
         let mut literal_start = 0;
         let mut closed = false;
         for (i, &b) in text.iter().enumerate().skip(at) {
+            scanned += 1;
             match quote {
                 Some(q) if b == q => {
                     literals.push(&text[literal_start..i]);
@@ -604,6 +615,7 @@ fn check_doctypes(text: &[u8]) -> Result<(), Reason> {
                 None => {}
             }
         }
+        budget.charge(scanned)?;
         if !closed {
             return Err(Reason::Doctype);
         }
@@ -618,18 +630,30 @@ fn check_doctypes(text: &[u8]) -> Result<(), Reason> {
 
 fn check_encodings(text: &[u8]) -> Result<(), Reason> {
     let mut from = 0;
+    // The first `?>` at or after the current declaration. Declarations are visited in
+    // order, so it only ever moves forward: one search per `?>` in the text, where a
+    // search per `<?xml` made `<?xml` repeated with no `?>` quadratic.
+    let mut close: Option<usize> = None;
+    let mut searched_from = 0;
+    let mut judged_to = 0;
     while let Some(at) = find_ci(text, b"<?xml", from) {
         from = at + 1;
         let after = at + b"<?xml".len();
         // Every `<?xml…?>` is examined, `<?xml-stylesheet …?>` and friends included:
         // normalising drops the tab or newline that may separate `<?xml` from
         // `version`, so what follows `<?xml` cannot tell the declaration apart.
-        let end = find_ci(text, b"?>", after).unwrap_or(text.len());
-        let decl = &text[after..end];
-        let mut key_from = 0;
-        while let Some(key) = find_ci(decl, b"encoding", key_from) {
+        if close.map_or(searched_from <= after, |c| c < after) {
+            close = find_ci(text, b"?>", after);
+            searched_from = close.map_or(text.len() + 1, |c| c);
+        }
+        let end = close.unwrap_or(text.len());
+        // A key is judged once. Every declaration that holds it ends at the same `?>`
+        // (the first after it), so its verdict cannot differ between them, and
+        // overlapping unterminated declarations would otherwise re-judge every key.
+        let mut key_from = after.max(judged_to);
+        while let Some(key) = find_ci(&text[..end], b"encoding", key_from) {
             key_from = key + 1;
-            let rest = &decl[key + b"encoding".len()..];
+            let rest = &text[key + b"encoding".len()..end];
             // `encoding` not followed by `=` is a word inside some other value.
             if !trim_start(rest).starts_with(b"=") {
                 continue;
@@ -645,6 +669,9 @@ fn check_encodings(text: &[u8]) -> Result<(), Reason> {
                 return Err(Reason::Encoding);
             }
         }
+        // A key that straddles `end` is not in this declaration but may be in a later
+        // one that reaches further.
+        judged_to = judged_to.max(key_from.max(end.saturating_sub(b"encoding".len() - 1)));
     }
     Ok(())
 }
@@ -694,7 +721,17 @@ fn data_uri_payload(rest: &[u8]) -> Result<Vec<Payload>, Reason> {
         base64_decode(&percent_decode(&body[..len]))
     };
     Ok(match header_encoding(&rest[..comma]) {
-        HeaderEncoding::Base64 => vec![Payload::Base64(base64_body().ok_or(Reason::Undecodable)?)],
+        // The percent reading too, even here. The header this sees has already had the
+        // screen's own normalisation applied (CSS escapes undone everywhere, references
+        // expanded even in CDATA), which a decoder applies only in some contexts, so a
+        // header that reads as base64 HERE can be percent to the decoder (`;\62 ase64`
+        // in a plain attribute). For an honest base64 body the extra reading is inert:
+        // base64 text holds no `:` or `<`, so it can spell neither the namespace nor
+        // markup.
+        HeaderEncoding::Base64 => vec![
+            Payload::Percent(percent_decode(body)),
+            Payload::Base64(base64_body().ok_or(Reason::Undecodable)?),
+        ],
         HeaderEncoding::Percent => vec![Payload::Percent(percent_decode(body))],
         HeaderEncoding::Either => {
             let mut readings = vec![Payload::Percent(percent_decode(body))];
@@ -704,33 +741,58 @@ fn data_uri_payload(rest: &[u8]) -> Result<Vec<Payload>, Reason> {
     })
 }
 
-/// How a `data:` header says its payload is encoded, read the way the decoder reads
-/// it rather than by matching bytes: the header percent-decoded, its parameters split
-/// on `;`, each trimmed of whitespace and compared without case. `;base64` is the
-/// decoder's rule (WHATWG: the media type ends in `;`, any spaces, then `base64`), and a
-/// spelling such as `; base64`, `;BASE64` or `%3Bbase64` is the same rule. A header that
-/// names `base64` anywhere else could be read either way by some decoder, so it gets
-/// both readings and refuses if either does.
+/// How a `data:` header says its payload is encoded.
+///
+/// **Base64 only on the decoder's own rule, applied to the header as written.** WHATWG's
+/// `data:` processor (librsvg decodes with the `data-url` crate, which implements it)
+/// never percent-decodes the media type: after the URL parser drops tabs and newlines
+/// and the trailing whitespace is stripped, the header must end in `;`, any spaces, and
+/// a case-insensitive `base64`. So `; base64` and `;BASE64` are base64, and `%3Bbase64`,
+/// `;base64%20` or `;base%364` are percent text that only LOOKS like base64 once
+/// decoded. Reading the decoded header there gave the base64 reading alone to a body
+/// the decoder reads as percent, and a base64 scan empties a percent body at its first
+/// `&` or `<`: a bypass with a single URI. Even a base64 verdict keeps the percent
+/// reading ([`data_uri_payload`] says why).
+///
+/// **Every other header that could spell `base64` through some decoding** — it holds
+/// `base`, or any byte that begins an encoding (`%`, a CSS `\`, an XML `&`) — gets both
+/// readings, and refuses if either does. A header with none of those is percent.
+///
+/// **Redundant for safety today, and kept on purpose.** Since a base64 verdict keeps the
+/// percent reading as well, reverting this to the decoded-header rule leaves every test
+/// green (measured). It stays because it is the decoder's own rule, and it decides the
+/// one thing the percent reading cannot: when an undecodable base64 body refuses.
 fn header_encoding(header: &[u8]) -> HeaderEncoding {
-    let decoded = percent_decode(header);
-    let mut params = decoded
-        .split(|&b| b == b';')
-        .skip(1)
-        .map(|p| p.trim_ascii());
-    let last = decoded
-        .rsplit(|&b| b == b';')
-        .next()
-        .map(<[u8]>::trim_ascii)
-        .filter(|_| decoded.contains(&b';'));
-    if last.is_some_and(|p| p.eq_ignore_ascii_case(b"base64")) {
+    if decoder_reads_base64(header) {
         HeaderEncoding::Base64
-    } else if params.any(|p| p.eq_ignore_ascii_case(b"base64"))
-        || find_ci(&decoded, b"base64", 0).is_some()
+    } else if find_ci(header, b"base", 0).is_some()
+        || header.iter().any(|b| matches!(b, b'%' | b'\\' | b'&'))
     {
         HeaderEncoding::Either
     } else {
         HeaderEncoding::Percent
     }
+}
+
+/// The WHATWG `data:` rule for a base64 body, on the header exactly as the decoder
+/// receives it: tabs and newlines removed (the URL parser drops them anywhere), trailing
+/// whitespace stripped, then `;`, any number of spaces, and `base64` in any case.
+fn decoder_reads_base64(header: &[u8]) -> bool {
+    let kept: Vec<u8> = header
+        .iter()
+        .copied()
+        .filter(|b| !matches!(b, b'\t' | b'\n' | b'\r'))
+        .collect();
+    let h = kept.trim_ascii_end();
+    let Some(cut) = h.len().checked_sub(b"base64".len()) else {
+        return false;
+    };
+    if !h[cut..].eq_ignore_ascii_case(b"base64") {
+        return false;
+    }
+    let before = &h[..cut];
+    let spaces = before.iter().rev().take_while(|&&b| b == b' ').count();
+    before[..before.len() - spaces].ends_with(b";")
 }
 
 enum HeaderEncoding {

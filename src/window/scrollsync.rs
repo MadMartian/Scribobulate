@@ -546,6 +546,10 @@ pub(super) fn apply_content_reading_position(
         let char_off = readingpos::to_editor_char(&st.editor_text(), pos);
         let line = st.editor_buf.iter_at_offset(char_off).line();
         written_line = Some(line);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a reading-position restore: a mode switch re-applies the reader's place and must not lead (Reading-Position Preservation CAM); the navigating route is panescroll::preview_to_line"
+        )]
         restore_preview_scroll_to_line(&st.split.editor_scroller(), line);
     }
     if mode.is_preview_visible() {
@@ -570,6 +574,10 @@ pub(super) fn apply_content_reading_position(
             if written_line.is_none() {
                 written_line = Some(line);
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "a reading-position restore: a mode switch re-applies the reader's place and must not lead (Reading-Position Preservation CAM); the navigating route is panescroll::preview_to_line"
+            )]
             restore_preview_scroll_to_line(&preview_sw, line);
         }
     }

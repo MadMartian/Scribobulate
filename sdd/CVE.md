@@ -85,7 +85,7 @@ Each entry carries, in this order:
 
 | ID | Status | Severity | CVE / CWE | Vulnerability |
 |---|---|---|---|---|
-| [ScrSEC-1](#scrsec-1-librsvg-use-after-free-through-an-svgs-xinclude-cve-2026-96889) | Worked around | High | CVE-2026-96889 / CWE-416; workaround leaks CWE-436, CWE-184 | librsvg use-after-free through an SVG's XInclude |
+| [ScrSEC-1](#scrsec-1-librsvg-use-after-free-through-an-svgs-xinclude-cve-2026-96889) | Worked around | High | CVE-2026-96889 / CWE-416; workaround leaks CWE-436, CWE-184, CWE-407, CWE-636/693 | librsvg use-after-free through an SVG's XInclude |
 | [ScrSEC-2](#scrsec-2-the-macos-bundle-could-load-a-library-placed-beside-the-app) | Patched | High | no CVE / CWE-427 | The macOS bundle could load a library placed beside the `.app` |
 
 ---
@@ -105,11 +105,18 @@ crash, with code execution not ruled out.
   [CWE-827: Improper Control of Document Type Definition](https://cwe.mitre.org/data/definitions/827.html)
   (an included document redefining an entity).
 - Our workaround's leaks (below):
-  [CWE-436: Interpretation Conflict](https://cwe.mitre.org/data/definitions/436.html) — every one
-  was the screen reading a `data:` URI or an XML layer differently from the real decoder — and
+  [CWE-436: Interpretation Conflict](https://cwe.mitre.org/data/definitions/436.html) — every
+  parsing leak was the screen reading a `data:` URI or an XML layer differently from the real
+  decoder — and
   [CWE-184: Incomplete List of Disallowed Inputs](https://cwe.mitre.org/data/definitions/184.html)
-  for the encoding shapes it did not yet undo. No CVE assigned: our own code, patched before
-  publication of each leak.
+  for the encoding shapes it did not yet undo;
+  [CWE-407: Inefficient Algorithmic Complexity](https://cwe.mitre.org/data/definitions/407.html)
+  for two checks whose overlapping scans let a crafted SVG hang the app; and, for the three macOS
+  stand-down leaks, which read no input at all but decided to stand the screen down on evidence
+  that did not establish the fixed decoder was in use,
+  [CWE-636: Not Failing Securely](https://cwe.mitre.org/data/definitions/636.html) /
+  [CWE-693: Protection Mechanism Failure](https://cwe.mitre.org/data/definitions/693.html). No CVE
+  assigned: our own code, patched before publication of each leak.
 
 **Upstream**: GHSA-wq5f-xc86-pv6w / CVE-2026-96889 (2026-10-06), RUSTSEC-2026-0305; librsvg issue
 https://gitlab.gnome.org/GNOME/librsvg/-/work_items/1241. Fixed in librsvg **2.63.2**. Mechanism: an
@@ -164,9 +171,14 @@ reads names no SVG loader but the staged one.
   newline-separated XML declarations")
 - **Round 8.** A newline or tab after `<?xml` hid the encoding declaration from the encoding check.
   Closed: every `<?xml…?>` has its `encoding=` checked. (same commit)
-- **Round 8 (review note SEC-V2).** The macOS stand-down was a compile-time platform test, not a
-  check of the librsvg loaded. Closed in two steps: stand down only from a bundle carrying the
-  staged librsvg, then only when the dyld image list shows that librsvg loaded.
+- **Round 8 (review note SEC-V2), macOS stand-down.** The stand-down was a compile-time platform
+  test, not a check of the librsvg loaded, so a binary run outside its bundle stood down too.
+  Closed: stand down only from a bundle carrying the staged librsvg. ("Keep the automount table,
+  screen macOS runs outside the bundle, and keep annotations out of code spans")
+- **Round 9, macOS stand-down.** A bundle stood down because the staged librsvg was PRESENT, not
+  because it was the one loaded. Closed: stand down only when the dyld image list shows the staged
+  librsvg is what the staged loader bound. ("Gate every macOS bundle build, fail closed, and decide
+  the librsvg from what dyld loaded")
 - **Round 9.** Cutting the text at each literal `data:` split one real payload: the bytes up to the
   next comma were screened as nobody's "header", and a URI written literally inside an encoded one
   was decoded once where a real decoder decodes it twice. Closed: the text after the first URI is
@@ -178,15 +190,14 @@ reads names no SVG loader but the staged one.
   gzip. Closed: one shared next-layer step (references, CSS escapes, then percent) in both walks,
   full inspection of every layer, and a gzip level ends a walk so an honest `.svgz` is inflated
   rather than mis-decoded. ("Take the XML reference layer between percent layers…")
-- **Round 10.** A header spelled `; base64`, `%3Bbase64` and the like was base64 to the decoder but
-  not to the screen. Closed: the header is percent-decoded and its parameters read as the decoder
-  reads them; an ambiguous header gets both readings. ("Read a data: header the way the decoder
-  does…")
+- **Round 10.** A header spelled `; base64` was base64 to the decoder but not to the screen.
+  Closed then by percent-decoding the header, which was itself wrong: see Round 11. ("Read a data:
+  header the way the decoder does…")
 - **Round 10, over-refusal (not a leak).** The whole-text readings charged the shared inspection
   budget once per round, so an honest page near the image cap with many percent-encoded icons was
   refused as too large. Closed: those readings charge a pool of their own, the same size as the
   main one, and every charge is checked, so one screen inspects at most the two pools: twice the
-  old ceiling, about 1.4 s for a cap-sized page in a release build. Its tests now assert the
+  old ceiling. Its tests now assert the
   namespace refusal and pair the double-encoded case with benign twins; the depth exit and both
   pools have tests that fail under mutation. ("Give the XInclude screen's whole-text readings
   their own budget pool…", 2026-10-28)
@@ -197,8 +208,31 @@ reads names no SVG loader but the staged one.
   Closed: the stand-down also requires `GDK_PIXBUF_MODULE_FILE` to name a cache whose every SVG
   module is the staged loader. ("Keep the XInclude screen up unless gdk-pixbuf reads the bundle's
   loader cache…")
+- **Round 11.** The Round 10 fix percent-decoded the header, but the decoder reads it raw, so
+  `%3Bbase64`, `;base64%20`, `;base%364` and a CSS form feed (`;\c base64`) were base64 to the
+  screen alone; a base64 scan empties a percent body at its first `&` or `<`, and with a single
+  URI nothing read it as percent. A CSS escape in a plain attribute (`;\62 ase64`) did the same
+  through the screen's own normalisation. Closed: base64 is decided on the raw header by the
+  decoder's rule, any header that could spell `base64` through an encoding gets both readings,
+  and a base64 verdict keeps the percent reading too. ("Read a data: header raw, as the decoder
+  does…", 2026-10-29)
+- **Round 11, a hang.** The DOCTYPE and `<?xml` encoding checks rescanned from every match to
+  the end of the text, outside any budget, so `<!doctype ` repeated before one `>`, or `<?xml`
+  repeated with no `?>`, was quadratic: at the image cap, a main thread that never returned.
+  Closed: the encoding check finds each `?>` once and judges each `encoding` key once, and the
+  DOCTYPE scans (which must still start at every match) are charged to the inspection budget, so
+  such a text is refused as too large in seconds. ("Bound the XInclude screen's declaration
+  checks…", 2026-10-29)
+- **Round 11, cost.** The UTF-16 readings were never charged, so the ceiling counted bytes received
+  rather than work done, and one load screened the same bytes two or three times (the size probe,
+  the decode, the fallback). Closed: every reading is charged before it runs, and a verdict is kept
+  per content (its length and a hash under a key chosen per process, never its address), so each
+  content is screened once per load. A cap-sized page now costs about 0.1–0.5 s per load in a
+  release build, down from 0.25–3 s. ("Charge every UTF-16 reading of the XInclude screen and screen
+  one content once per load", 2026-10-29)
 
-**The pattern behind every leak**: each bypass was a place where the screen parsed a `data:` URI
+**The pattern behind every parsing leak** (the stand-down leaks are the other class, above): each
+bypass was a place where the screen parsed a `data:` URI
 or an XML layer differently from the real decoder. A differential test — generate encodings,
 decode them with a reference decoder, require a refusal whenever the decoded tree contains
 XInclude — is planned in [PLAN.xinclude-differential-test.md](PLAN.xinclude-differential-test.md).
@@ -253,7 +287,19 @@ libraries from beside the .app"; "Gate every macOS bundle build, fail closed, an
 librsvg from what dyld loaded") TDD and MANUAL-TEST 26.1 carry the check that a librsvg beside the
 `.app` is not loaded, with its negative control.
 
-**Leaks found and closed**: none since the patch.
+**Leaks found and closed** (QA review rounds, all 2026-10-28):
+- **Round 9.** The self-contained gate never ran on an ordinary bundle build; the gates failed
+  open when `otool` or `file` crashed or answered nothing; and `@loader_path` / `@executable_path`
+  references were accepted on their prefix. Closed: every build runs every gate, a tool that
+  fails or answers nothing fails the gate, and each reference is resolved before it is judged.
+  ("Gate every macOS bundle build, fail closed, and decide the librsvg from what dyld loaded")
+- **Round 10.** `@rpath/../../../x.dylib` and `/usr/lib/../../opt/homebrew/…` were accepted on their
+  lexical prefix, and the path normaliser left rpath components open to pathname globbing.
+  Closed: every reference is folded against the bundle (or the OS root) before it is judged, and
+  paths are split without globbing. ("Keep the XInclude screen up unless gdk-pixbuf reads the
+  bundle's loader cache, and resolve every bundle reference before judging it")
+- **Open**: an install-ID read passes on an empty `otool -D` answer, so that one reader does not
+  yet fail closed. Being fixed on the `mac` seat.
 
 **To close for good**: nothing upstream. This entry stays Patched while the bundle copies
 third-party libraries; it is the record of why those gates must not be removed.

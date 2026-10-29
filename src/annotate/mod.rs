@@ -32,6 +32,7 @@ pub(crate) use mutate::{
     point_comment_anchor, remove_annotation,
 };
 pub(crate) use scan::{cleaned_to_original, extract, original_to_cleaned, AnnKind, Annotation};
+pub(crate) use written::holds_block_break;
 
 /// Chars of `run[..upto]` that survive into the rendered buffer: everything except
 /// the **delimiters** of the tight constructs the renderer strips (`==mark==`,

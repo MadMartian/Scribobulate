@@ -314,14 +314,46 @@ fn point_at_selection(view: &CodePreviewView, pop: &FloatingCard) -> bool {
 /// round 2). At that point `point_at_selection`'s on-viewport read is trustworthy: a
 /// genuinely-visible selection reads on-viewport → show; a scrolled-away one reads
 /// off-viewport → hide (the legitimate suppression). Marker-popover open → stay down.
-fn decide_show_action_popover(view: &CodePreviewView, pop: &FloatingCard) {
+/// A decision that `may_raise` nothing (see [`RaiseOwed`]) leaves a hidden card hidden.
+fn decide_show_action_popover(view: &CodePreviewView, pop: &FloatingCard, may_raise: bool) {
     if view.annotation_sink().is_some()
         && point_at_selection(view, pop)
         && !view.marker_card_is_showing()
     {
-        pop.popup();
+        raise(pop, may_raise);
     } else {
         pop.popdown();
+    }
+}
+
+/// Whether the action card's next decision may raise it, rather than only keep it up or
+/// take it down.
+///
+/// A selection change owes the reader a raise: they just selected something. A catch-up
+/// owes none. When a preview is mapped again (a tab or pane shown again), the selection
+/// it still holds is the one the reader left, and they may have left the card down over
+/// it (a scroll hides it). The catch-up must still take the card down when the
+/// selection went while the preview was hidden (GTK4Rs/AP-120), but raising it would
+/// pop it back up unasked. So a selection change sets the debt, the decision that acts
+/// on it pays it, and a catch-up re-runs the decision without adding to it. A debt left
+/// by a selection change whose decision a catch-up superseded is still honoured.
+#[derive(Clone, Default)]
+struct RaiseOwed(Rc<Cell<bool>>);
+
+impl RaiseOwed {
+    fn owe(&self) {
+        self.0.set(true);
+    }
+    /// Settle the debt for a decision being made now; whether a raise was owed.
+    fn pay(&self) -> bool {
+        self.0.replace(false)
+    }
+}
+
+/// Show the action card when a raise is owed, or reposition it when it is already up.
+fn raise(pop: &FloatingCard, may_raise: bool) {
+    if may_raise || pop.is_visible() {
+        pop.popup();
     }
 }
 
@@ -743,7 +775,10 @@ pub(crate) fn wire_annotation_overlay(
     // never-firing handler can't dangle on the frame clock. One slot, always the latest.
     let pending_after_paint: Rc<RefCell<Option<(gtk::gdk::FrameClock, glib::SignalHandlerId)>>> =
         Rc::new(RefCell::new(None));
-    let schedule = {
+    let raise_owed = RaiseOwed::default();
+    // Re-runs the show/hide decision, owing no raise: the map catch-up below.
+    let arm = {
+        let raise_owed = raise_owed.clone();
         let view = view.downgrade();
         let pop = pop.clone();
         let entry_open = entry_open.clone();
@@ -768,6 +803,7 @@ pub(crate) fn wire_annotation_overlay(
             let anchor_sel = anchor_sel.clone();
             let anchor_gen = anchor_gen.clone();
             let pending_after_paint = pending_after_paint.clone();
+            let raise_owed = raise_owed.clone();
             let id = glib::timeout_add_local_once(Duration::from_millis(40), move || {
                 timer_inner.replace(None);
                 let Some(v) = view.upgrade() else { return };
@@ -845,6 +881,7 @@ pub(crate) fn wire_annotation_overlay(
                 // live when its margin marker is clicked, so the create popover must stay
                 // down rather than stack over the marker popover.
                 if v.marker_card_is_showing() {
+                    raise_owed.pay();
                     pop.popdown();
                     return;
                 }
@@ -852,16 +889,18 @@ pub(crate) fn wire_annotation_overlay(
                 // (it is NOT lazily height-validated like a GtkTextView line), so its
                 // geometry is trustworthy in this same turn — decide immediately.
                 if let Some((label, a, b)) = cell_sel {
+                    let may_raise = raise_owed.pay();
                     if v.annotation_sink().is_some()
                         && point_at_cell_selection(&v, &label, a, b, &pop)
                     {
-                        pop.popup();
+                        raise(&pop, may_raise);
                     } else {
                         pop.popdown();
                     }
                     return;
                 }
                 if buf_sel.is_none() {
+                    raise_owed.pay();
                     pop.popdown();
                     return;
                 }
@@ -898,7 +937,7 @@ pub(crate) fn wire_annotation_overlay(
                 }
                 let Some(clock) = v.frame_clock() else {
                     // Unmapped (no frame clock): best-effort direct decision.
-                    decide_show_action_popover(&v, &pop);
+                    decide_show_action_popover(&v, &pop, raise_owed.pay());
                     return;
                 };
                 v.queue_draw(); // guarantee a paint so `after-paint` fires with validated geometry
@@ -907,6 +946,7 @@ pub(crate) fn wire_annotation_overlay(
                 let v_weak = v.downgrade();
                 let pop_weak = pop.downgrade();
                 let pap = pending_after_paint.clone();
+                let raise_owed = raise_owed.clone();
                 let id = clock.connect_after_paint(move |clock| {
                     // One-shot: clear the shared slot + disconnect self on the first fire —
                     // the paint that just ran validated the on-screen band, so this single
@@ -922,11 +962,19 @@ pub(crate) fn wire_annotation_overlay(
                     if anchor_gen.get() != my_gen {
                         return; // a newer selection superseded this one before the paint
                     }
-                    decide_show_action_popover(&v, &pop);
+                    decide_show_action_popover(&v, &pop, raise_owed.pay());
                 });
                 *pending_after_paint.borrow_mut() = Some((clock, id));
             });
             timer.replace(Some(id));
+        }
+    };
+    // Every selection change: owes the reader a raise, then decides.
+    let schedule = {
+        let arm = arm.clone();
+        move || {
+            raise_owed.owe();
+            arm();
         }
     };
 
@@ -1009,11 +1057,15 @@ pub(crate) fn wire_annotation_overlay(
         let weak_view = view.downgrade();
         // PRIMARY is display-global, so every preview of every tab in every window hears
         // each claim: one drag step in one pane woke all of them (57 handlers per step in a
-        // session of 11 windows). Only a view on screen can show a bubble or a selection
-        // ink, so an unmapped one (a background tab, a minimized window, another desktop)
-        // skips the work and catches up once when it is mapped again. That catch-up is
-        // not optional: a claim made elsewhere may have cleared this view's cell selection
-        // while it was hidden (GTK4Rs/AP-120).
+        // session of 11 windows). Only a mapped view can show a bubble or a selection ink,
+        // so an unmapped one (a background tab, or a preview the view mode hides) skips
+        // the work and catches up once when it is mapped again. A minimized window, or one
+        // on another virtual desktop, is NOT unmapped: GTK 4.6.9 on X11 under KWin leaves
+        // its widgets mapped (measured; the X window itself is unmapped), so such a window
+        // still does the work. The catch-up is not optional: a claim made elsewhere may
+        // have cleared this view's cell selection while it was hidden (GTK4Rs/AP-120). It
+        // owes no raise, so it re-inks and takes the card down for a selection that went,
+        // and never pops the card back up over one the reader left (`RaiseOwed`).
         let id = clip.connect_changed({
             let schedule = schedule.clone();
             let weak_view = weak_view.clone();
@@ -1031,7 +1083,7 @@ pub(crate) fn wire_annotation_overlay(
         view.store_primary_sel_handler(&clip, id);
         view.connect_map(move |view| {
             crate::widgets::table::refresh_cell_selection_ink(view);
-            schedule();
+            arm();
         });
     }
 
@@ -1083,6 +1135,9 @@ mod fracscroll_tests;
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod cellpress_tests;
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod catchup_tests;
 
 /// The action card wired onto `view`, for tests.
 #[cfg(all(test, feature = "gtk-integration-tests"))]

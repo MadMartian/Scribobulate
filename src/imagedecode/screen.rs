@@ -40,7 +40,7 @@ pub(super) fn screen<'a>(bytes: &'a [u8], origin: &str) -> Option<Screened<'a>> 
     if !xinclude::enforced() {
         return Some(Screened(bytes));
     }
-    match xinclude::inspect(bytes) {
+    match verdicts::inspect(bytes) {
         Ok(()) => {
             refusals::forget(origin);
             Some(Screened(bytes))
@@ -70,7 +70,7 @@ pub(super) fn screen_quietly(bytes: &[u8]) -> Option<Screened<'_>> {
     if !xinclude::enforced() {
         return Some(Screened(bytes));
     }
-    match xinclude::inspect(bytes) {
+    match verdicts::inspect(bytes) {
         Ok(()) => Some(Screened(bytes)),
         Err(reason) => {
             log::debug!("image header probe refused: {reason}");
@@ -112,6 +112,75 @@ pub(crate) fn take_unreported_refusals() -> Vec<(RefusalTarget, String)> {
 }
 
 static LISTENER: OnceLock<fn()> = OnceLock::new();
+
+/// The screen's recent verdicts, so one byte string is screened once however many
+/// hand-offs it makes: a load probes the header and then decodes, a refused vector
+/// decode falls back to the raster route, and each zoom step re-rasterises — every one
+/// of them screens, and at the image cap one screen costs a visible fraction of a
+/// second on the main thread.
+///
+/// Keyed on the CONTENT, never on where it sits: a buffer freed and reallocated at the
+/// same address, or rewritten in place, is new content. The key is the length and a
+/// SipHash under this process's random key ([`std::collections::hash_map::RandomState`]),
+/// so serving one content another's verdict needs a collision an attacker cannot aim
+/// without that key. The verdict is a pure function of the bytes, so a hit is exactly
+/// what a fresh screen would say.
+mod verdicts {
+    use super::xinclude::{self, Reason};
+    use std::collections::hash_map::RandomState;
+    use std::collections::VecDeque;
+    use std::hash::BuildHasher;
+    use std::sync::{Mutex, OnceLock};
+
+    /// How many verdicts are kept. One load makes at most three hand-offs of one
+    /// content; a page re-rendered at a new zoom makes them for every image it shows.
+    const KEPT: usize = 32;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct Key {
+        len: usize,
+        hash: u64,
+    }
+
+    static KEYING: OnceLock<RandomState> = OnceLock::new();
+    static KEPT_VERDICTS: Mutex<VecDeque<(Key, Result<(), Reason>)>> = Mutex::new(VecDeque::new());
+
+    fn lock() -> std::sync::MutexGuard<'static, VecDeque<(Key, Result<(), Reason>)>> {
+        KEPT_VERDICTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// [`xinclude::inspect`], answered from a kept verdict when `bytes` were screened
+    /// recently. The lock is not held while screening.
+    pub(super) fn inspect(bytes: &[u8]) -> Result<(), Reason> {
+        let key = Key {
+            len: bytes.len(),
+            hash: KEYING.get_or_init(RandomState::new).hash_one(bytes),
+        };
+        if let Some(&(_, verdict)) = lock().iter().find(|(kept, _)| *kept == key) {
+            return verdict;
+        }
+        #[cfg(test)]
+        tests::SCREENS.with(|n| n.set(n.get() + 1));
+        let verdict = xinclude::inspect(bytes);
+        let mut kept = lock();
+        if kept.len() >= KEPT {
+            kept.pop_front();
+        }
+        kept.push_back((key, verdict));
+        verdict
+    }
+
+    #[cfg(test)]
+    pub(super) mod tests {
+        thread_local! {
+            /// Screens this thread actually ran, a kept verdict not counted.
+            pub(in super::super) static SCREENS: std::cell::Cell<usize> =
+                const { std::cell::Cell::new(0) };
+        }
+    }
+}
 
 mod refusals {
     use super::*;
@@ -315,5 +384,36 @@ mod tests {
         }
         assert!(screen_quietly(XINCLUDE_SVG).is_none());
         assert!(screen_quietly(b"<svg/>").is_some());
+    }
+
+    /// The probe, the decode and the raster fallback each screen the bytes they hand
+    /// on; one content is screened once among them. Mutation-checked: screening
+    /// without the kept verdicts runs three.
+    #[test]
+    fn one_content_is_screened_once_however_many_hand_offs_it_makes() {
+        let bytes = b"<svg><desc>screened once, once only</desc></svg>";
+        let before = verdicts::tests::SCREENS.with(std::cell::Cell::get);
+        assert!(screen_quietly(bytes).is_some());
+        assert!(screen(bytes, "test:screen:once.svg").is_some());
+        assert!(screen(bytes, "test:screen:once.svg").is_some());
+        let ran = verdicts::tests::SCREENS.with(std::cell::Cell::get) - before;
+        assert_eq!(ran, 1);
+    }
+
+    /// A kept verdict answers only for the same content. A buffer rewritten in place,
+    /// at the same address and length, is screened afresh, so a key on where bytes
+    /// sit, or on their length, cannot pass hostile content on a benign verdict.
+    /// Mutation-checked: keying on the length alone passes the rewritten buffer (an
+    /// address-and-length key would see the same address and length).
+    #[test]
+    fn content_rewritten_in_place_is_screened_afresh() {
+        let mut bytes = br#"<svg xmlns:a="http://www.w3.org/2001/XIncludX"><desc>rewritten in place</desc></svg>"#.to_vec();
+        assert!(screen_quietly(&bytes).is_some());
+        let at = bytes
+            .windows(b"XIncludX".len())
+            .position(|w| w == b"XIncludX")
+            .expect("the decoy");
+        bytes[at + b"XInclud".len()] = b'e';
+        assert!(screen_quietly(&bytes).is_none());
     }
 }

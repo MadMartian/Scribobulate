@@ -345,7 +345,7 @@
 - **And** an image over the pixel limit is refused before any memory is set aside for its pixels
 - **And** the file size limit can be changed in the configuration file
 
-### 2.23c An SVG that may use XInclude is refused, and the reader is told why (Linux, Windows, and macOS outside the app bundle)
+### 2.23c An SVG that may use XInclude is refused, and the reader is told why (Linux, Windows, and macOS wherever the fixed decoder is not proven in use)
 - **Given** a document referencing an SVG that uses XInclude — local or remote, plain or gzip-compressed, in any text encoding, with the XInclude namespace under any prefix or hidden behind character references, entities, or an SVG embedded inside it — on Linux, on Windows or on macOS outside the app bundle, whose image decoder carries a published memory-corruption flaw triggered by XInclude
 - **When** it is rendered, used as a theme sprite, or exported to PDF
 - **Then** the SVG is never handed to the image decoder: the broken-image placeholder shows in its place, as for any image that cannot be shown (2.23b), and its tooltip says it was blocked because SVGs that may use XInclude are refused while the decoder has a security flaw
@@ -2700,9 +2700,10 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the other pane tracks to the corresponding position without drift introduced by the removed CriticMarkup (an un-annotated document syncs exactly as before)
 
 ### 17.12 Malformed or block-crossing CriticMarkup is shown literally, never lost
-- **Given** a document with an unclosed `{==` or a `{==…==}` whose close crosses a blank line
+- **Given** a document with an unclosed CriticMarkup construct, or one whose close crosses a blank line (an empty line, or one holding only spaces or tabs, in either line ending)
 - **When** it is shown in the preview
 - **Then** the text is rendered literally (delimiters visible) rather than being swallowed or treated as an annotation
+- **And** annotating a selection that crosses such a line, from the editor or the preview, writes a comment at the selection's end rather than a highlight that would then show literally
 
 ### 17.13 Annotating over an existing annotation extends it, never nests
 - **Given** a document with an existing highlight annotation
