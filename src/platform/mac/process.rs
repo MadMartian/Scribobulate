@@ -74,6 +74,32 @@ pub(crate) fn phys_footprint_bytes() -> Option<u64> {
     }
 }
 
+/// The address of `symbol` in the librsvg dyld has already loaded into this process, or
+/// `None` when none is. Found in dyld's image list, not by name lookup, so this names
+/// the decoder in use (Homebrew's, or a bundle's staged copy), never one merely
+/// installed; `RTLD_NOLOAD` keeps the lookup from loading anything.
+#[cfg(test)]
+pub(crate) fn loaded_librsvg_symbol(symbol: &std::ffi::CStr) -> Option<*const libc::c_void> {
+    use std::os::unix::ffi::OsStrExt;
+    let image = super::bundle::loaded_images()
+        .into_iter()
+        .find(|p| p.file_name().is_some_and(|n| n == "librsvg-2.2.dylib"))?;
+    let path = std::ffi::CString::new(image.as_os_str().as_bytes()).ok()?;
+    // SAFETY: dlopen with RTLD_NOLOAD returns a handle to an already-loaded image or
+    // NULL; dlsym reads that image's symbol table; dlclose drops only the reference
+    // this call took, and the loader that loaded librsvg keeps it mapped, so the
+    // address stays valid for the life of the process.
+    unsafe {
+        let handle = libc::dlopen(path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_NOLOAD);
+        if handle.is_null() {
+            return None;
+        }
+        let address = libc::dlsym(handle, symbol.as_ptr());
+        libc::dlclose(handle);
+        (!address.is_null()).then_some(address.cast_const())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::executable_name;

@@ -58,6 +58,9 @@ mod decode;
 // build.
 #[cfg(all(test, feature = "memory-gates"))]
 pub(crate) mod decode_probe;
+// The XInclude screen judged by the decoder it protects (TDD 2.23d–2.23i).
+#[cfg(test)]
+mod differential;
 mod probe;
 mod screen;
 mod xinclude;

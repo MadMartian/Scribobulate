@@ -54,7 +54,7 @@ pub(crate) fn enforced() -> bool {
 }
 
 /// How deep `data:` URIs and gzip layers may nest before the content is refused.
-const MAX_DEPTH: usize = 4;
+pub(super) const MAX_DEPTH: usize = 4;
 
 /// The total bytes one screen may inspect across every layer it decodes, outside the
 /// whole-text readings. A multiple of the local image cap, so an honest `.svgz` with

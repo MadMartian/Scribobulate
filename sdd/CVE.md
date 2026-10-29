@@ -288,9 +288,13 @@ reads names no SVG loader but the staged one.
 
 **The pattern behind every parsing leak** (the stand-down leaks are the other class, above): each
 bypass was a place where the screen parsed a `data:` URI
-or an XML layer differently from the real decoder. A differential test — generate encodings,
-decode them with a reference decoder, require a refusal whenever the decoded tree contains
-XInclude — is planned in [PLAN.xinclude-differential-test.md](PLAN.xinclude-differential-test.md).
+or an XML layer differently from the real decoder. The differential test in
+`src/imagedecode/differential/` (TDD 2.23d–2.23i) tests for exactly that: it generates SVGs
+holding an include under layers of encoding and nesting, mutates entity-free twins of the leaks
+above one byte or layer at a time, and has the librsvg each platform loads judge whatever the
+screen lets through, by whether the include's fallback was drawn. It finds only what its grammar
+and mutations can compose. POLICY § Unit tests says when to run its long run; a leak it finds is
+recorded here as "Round: differential test".
 
 **To close for good**:
 - **Windows**: move the CI workflow's gvsbuild pin to 2026.10.0 or later (librsvg ≥ 2.63.2 is
@@ -298,9 +302,12 @@ XInclude — is planned in [PLAN.xinclude-differential-test.md](PLAN.xinclude-di
   librsvg version in the installed tree.
 - **Linux**: per distribution, either a librsvg ≥ 2.63.2 (or a vendor backport), or a vendor "not
   affected" assessment that we have confirmed by measurement — the published trigger run against
-  that distribution's librsvg under a memory checker. Ubuntu 22.04 has the assessment
-  (unconfirmed); the screen stays on Linux until the measurement, or until the plan's
-  loaded-decoder rule can tell a fixed or unaffected decoder from the rest.
+  that distribution's librsvg under a memory checker. Ubuntu 22.04 has the assessment, unconfirmed,
+  and the operator chose (2026-10-29) not to confirm it: the screen stays on there until its
+  librsvg is 2.63.2 or carries a backport, at the cost of refusing the few honest SVGs that use
+  XInclude, declare entities or nest `data:` documents past the bound. Elsewhere on Linux it stays
+  on until the measurement, or until the plan's loaded-decoder rule can tell a fixed or unaffected
+  decoder from the rest.
 - **Then** delete the screen and everything that exists only for it (the refusal notice, the
   2.23c fixtures that expect refusals) on that platform, and mark this entry Closed. The macOS
   stand-down and its bundle gates stay as long as macOS relies on the staged librsvg.

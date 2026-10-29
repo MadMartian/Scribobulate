@@ -355,6 +355,36 @@
 - **And** the refusal errs towards refusing: an SVG that only *might* reach XInclude (one that declares entities, uses an encoding the check cannot read, or embeds a `data:` URI whose payload does not decode) is refused too, while an ordinary SVG — including one embedding raster images, or one whose text merely says "data:" (e.g. "Source data: World Bank") — still shows, whether or not a comma comes later in the file
 - **And** on macOS run from the app bundle, which carries a fixed decoder, nothing is refused on this account as long as the bundle's decoder is the one actually in use; if the bundle cannot make it so (its loader list could not be installed, or names any other SVG decoder), it refuses exactly as on Linux; the same binary run from outside the bundle (from the build directory, say) loads the system's decoder and refuses exactly as on Linux
 
+### 2.23d The XInclude screen is judged by the decoder it protects (Linux, Windows, and macOS outside the app bundle)
+- **Given** an SVG that the platform's own image decoder would act on an XInclude in, however its content is layered — character references, percent or base64 `data:` URIs in any header spelling, CSS escapes, compression, a non-UTF-8 text encoding, nesting, and any combination of these
+- **When** the screen of 2.23c inspects it
+- **Then** it is refused before the decoder sees it
+
+### 2.23e The XInclude differential test judges the screen by the decoder, never by a model of it
+- **Given** a generated or mutated SVG that the screen lets through
+- **When** the test asks whether the screen was right
+- **Then** the answer comes from the decoder the platform actually loads, by whether the include's fallback was drawn, and a failure names that decoder's version and shows the smallest input that leaks
+
+### 2.23f The XInclude differential test cannot trigger the flaw it guards against
+- **Given** a runtime whose decoder still has the use-after-free
+- **When** the test runs on it
+- **Then** no input reaches the decoder unless nothing it decodes to holds a DOCTYPE or an entity declaration, checked on what each input decodes to under every layer, not on the bytes the generator wrote — so the run is safe on every platform's pipeline
+
+### 2.23g The differential test's oracle is proven able to see an include before it is trusted
+- **Given** any run, pipeline or long
+- **When** it starts, before any generated input
+- **Then** a control SVG whose include the decoder acts on is decoded with no screen and must show its marker, and the same SVG with its include in another namespace must not; if either fails, the run fails and names the decoder's version, rather than reporting every generated input as safe
+
+### 2.23h A pipeline run of the differential test is reproducible and bounded; a long run is on demand
+- **Given** a pipeline run on any platform
+- **When** the test runs
+- **Then** it covers the same generated inputs as every other pipeline run and finishes within its bound, while a developer can ask for a longer run over fresh inputs without changing code (POLICY § Unit tests)
+
+### 2.23i What the XInclude screen costs honest SVGs is reported
+- **Given** a long run, and a sample of the inputs the screen refused
+- **When** the decoder judges that sample
+- **Then** the run reports how many of them the decoder would not have acted on, and that count is not a failure
+
 ### 2.25 A Markdown construct the renderer cannot render is visible, never silently dropped
 - **Given** a document containing constructs from parser extensions this build does not handle — math (`$E=mc^2$`, `$$…$$`), footnotes (`[^1]` and its definition), a definition list, and a wikilink
 - **When** it is rendered, and when it is exported

@@ -91,6 +91,14 @@ success, and that announcement is removed in the same change that introduces sig
   `SKIPPED [<rubric>]: <reason>`.
 - A test that installs process-global state restores it before returning.
 - A new gate or guard is mutation-tested: break what it protects and watch it fail.
+- After any change to the XInclude screen (`src/imagedecode/xinclude.rs`), and in a
+  review round of it, run the differential test's long run on each platform as well
+  as the pipeline's bounded one (TDD 2.23d–2.23i):
+  `SCRIBOBULATE_XINCLUDE_DIFFERENTIAL_CASES=1000000 cargo test --release --lib
+  imagedecode::differential::the_screen -- --nocapture`. It draws a fresh seed and
+  prints it; `SCRIBOBULATE_XINCLUDE_DIFFERENTIAL_SEED` replays one. A leak it finds
+  becomes a fixed case in `xinclude/tests.rs` and a "Leaks found and closed" line in
+  ScrSEC-1, in the fixing commit.
 
 ### GTK-object integration tests
 

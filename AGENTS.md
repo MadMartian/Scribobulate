@@ -58,8 +58,6 @@ Read all of the above, plus:
 - [`sdd/PLAN.windows-gtk-4-24.md`](sdd/PLAN.windows-gtk-4-24.md) — before moving the Windows GTK
   runtime (the gvsbuild pin), or changing where the XInclude screen applies. Deferred by the
   operator.
-- [`sdd/PLAN.xinclude-differential-test.md`](sdd/PLAN.xinclude-differential-test.md) — before
-  changing the XInclude screen's tests, or reviewing the screen for another leak.
 - [`sdd/PLAN.accessibility.md`](sdd/PLAN.accessibility.md) — before adding accessibility
   markup beyond a control name.
 - [`sdd/PLAN.profiling.md`](sdd/PLAN.profiling.md) — before profiling, proposing a

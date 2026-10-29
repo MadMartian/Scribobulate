@@ -60,7 +60,6 @@ described from a different vantage point.
 | S | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
 | T | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | U | Any | Production | A benign SVG written in UTF-16, or gzip-compressed (`.svgz`), never shows: the size probe in front of every decode cannot read its dimensions and refuses it | Medium |
-| V | Linux | Production | On Ubuntu 22.04 the XInclude screen still refuses honest SVGs, because Ubuntu's "not affected" verdict on CVE-2026-96889 for its librsvg 2.52.5 has not been measured by us | Low |
 | W | Windows | Production | Restoring a window's size at a fractional Windows display scale (125%, 150%) has never been run, so whether a window comes back at its saved size there is unknown | Low |
 | X | Any | Production | A floating card (the Annotate bubble, the formatting bar, a comment card) stays put when the thing it points at moves without its pane re-laying out, so it can end up pointing at the wrong text | Low |
 | Y | Any | Production | In an annotation card's list of rows, the mouse wheel over a row's highlighted-text or comment box scrolls that box (or nothing), never the list, so a long list cannot be wheel-scrolled from over its rows | Low |
@@ -488,30 +487,6 @@ or gzip input before the sentinel stops it, or whether the format sniff fails fi
 screen already decodes both (`xinclude.rs` inflates gzip and reads UTF-16), so the probe could
 learn the size from that decoded text — but measure which half fails before choosing.
 MANUAL-TEST 2.23c's "six squares from the bundle" on macOS cannot pass until this is fixed.
-
-## V. On Ubuntu 22.04 the XInclude screen refuses honest SVGs against an unmeasured "not affected"
-
-**Severity**: Low (the screen errs safe: the cost is honest SVGs that use XInclude, declare
-entities or nest `data:` documents deeper than the bound, refused on a platform that may not need the screen).
-
-Ubuntu's tracker (https://ubuntu.com/security/CVE-2026-96889, read 2026-10-28) marks jammy's
-librsvg **2.52.5+dfsg-3ubuntu0.2** "Not affected" by CVE-2026-96889. That is the vendor's
-assessment. ScrSEC-1 in [CVE.md](CVE.md) admits a vendor verdict for retiring the screen on a
-distribution only once we have confirmed it by measurement, so the screen stays on for Ubuntu
-22.04 until someone runs the check.
-
-**The check**: run the published trigger (GHSA-wq5f-xc86-pv6w) against jammy's own librsvg,
-outside this app, under a memory checker (AddressSanitizer or Valgrind), through both
-`rsvg-convert` and the gdk-pixbuf loader, since the app decodes through the loader. Clean on
-both, and a read of 2.52.5's XInclude path confirming the freed-entity sequence is absent, is the
-confirmation. A report there is not.
-
-**Mitigation options**:
-- Run the check. Confirmed: record it in ScrSEC-1 and stand the screen down for that librsvg
-  version only, by the version the process loaded, never by distribution name. Refuted: Ubuntu's
-  verdict is wrong; report it to Ubuntu and keep the screen.
-- Accept the limitation: keep the screen on Ubuntu 22.04 until it carries librsvg 2.63.2 or a
-  backport.
 
 ## W. A window's restored size at a fractional Windows display scale is unverified
 

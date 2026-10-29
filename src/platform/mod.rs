@@ -366,6 +366,47 @@ fn platform_svg_decoder_is_delivered_fixed() -> bool {
     false
 }
 
+/// The version of the librsvg this process has ALREADY loaded, `major.minor.micro`, read
+/// from the version variables librsvg exports; `None` until a loader has brought one in,
+/// or where there is no reader. Test-only: the XInclude differential test names the
+/// decoder that judged it with this.
+#[cfg(test)]
+pub(crate) fn loaded_svg_decoder_version() -> Option<String> {
+    let part = |name: &std::ffi::CStr| {
+        let address = platform_loaded_librsvg_symbol(name)?;
+        // SAFETY: librsvg declares each of these as an exported `const guint`, so the
+        // address is that of an aligned, initialised, immutable u32 in a loaded image.
+        Some(unsafe { *address.cast::<u32>() })
+    };
+    Some(format!(
+        "{}.{}.{}",
+        part(c"rsvg_major_version")?,
+        part(c"rsvg_minor_version")?,
+        part(c"rsvg_micro_version")?
+    ))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn platform_loaded_librsvg_symbol(name: &std::ffi::CStr) -> Option<*const std::ffi::c_void> {
+    linux::process::loaded_librsvg_symbol(name)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+fn platform_loaded_librsvg_symbol(name: &std::ffi::CStr) -> Option<*const std::ffi::c_void> {
+    mac::process::loaded_librsvg_symbol(name)
+}
+
+#[cfg(all(test, windows))]
+fn platform_loaded_librsvg_symbol(name: &std::ffi::CStr) -> Option<*const std::ffi::c_void> {
+    win32::process::loaded_librsvg_symbol(name)
+}
+
+#[cfg(all(test, not(any(target_os = "linux", target_os = "macos", windows))))]
+fn platform_loaded_librsvg_symbol(name: &std::ffi::CStr) -> Option<*const std::ffi::c_void> {
+    let _ = name;
+    None
+}
+
 // ── directories that mount something when a name inside them is looked up ──────────
 
 /// Whether `dir` is an automounter's directory: one where looking up any name inside it

@@ -245,7 +245,7 @@ unsafe extern "C" {
 }
 
 /// The path of every image dyld has loaded into this process.
-fn loaded_images() -> Vec<PathBuf> {
+pub(super) fn loaded_images() -> Vec<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
     // SAFETY: plain reads of dyld's image list. An index past an image unloaded meanwhile
     // yields NULL, which is skipped; a non-NULL name is a NUL-terminated string dyld owns.

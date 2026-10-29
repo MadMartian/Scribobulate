@@ -115,6 +115,11 @@ src/imagecache/mod.rs
 src/imagecache/policy.rs
 src/imagedecode/admission.rs
 src/imagedecode/decode.rs
+src/imagedecode/differential/grammar.rs
+src/imagedecode/differential/mod.rs
+src/imagedecode/differential/oracle.rs
+src/imagedecode/differential/safety.rs
+src/imagedecode/differential/seeds.rs
 src/imagedecode/probe.rs
 src/imagedecode/screen.rs
 src/imagedecode/xinclude.rs
