@@ -233,9 +233,11 @@ reads names no SVG loader but the staged one.
   one content once per load", 2026-10-29)
 - **Round 11, macOS bundle.** The stand-down checked a fixed-name loader cache in the shared temp
   directory that any other launch of any bundle copy could rewrite between the check and
-  gdk-pixbuf's read. Closed (pending the macOS pipeline): each launch writes its own (exclusive
-  create, named by process), and the check reads the path this process wrote, never the inherited
-  environment value. ("Check the loader cache this process wrote…", 2026-10-29)
+  gdk-pixbuf's read. Closed: each launch writes its own (exclusive create, named by process), and
+  the check reads the path this process wrote, never the inherited environment value; the macOS
+  pipeline and the bundle gates pass on it, and the built app stands the screen down, failing
+  closed with an unwritable temp directory (MEASURED by the `mac` seat). ("Check the loader cache
+  this process wrote…", 2026-10-29)
 - **Round 12.** The screen ended a `data:` header at the first comma of its normalised text, where
   an escape can produce one (`\2c`, or `&#92;2c`, which the XML parser turns into `\2c`) that the
   decoder, ending the header at the first LITERAL comma, does not see. Under a plain `href`,
@@ -353,9 +355,10 @@ librsvg from what dyld loaded") TDD and MANUAL-TEST 26.1 carry the check that a 
   bundle's loader cache, and resolve every bundle reference before judging it")
 - **Round 11.** The install-ID read returned success on an empty `otool -D` answer, so a tool that
   answered nothing about a library's install ID read as "no ID" and the bundle passed unread.
-  Closed (pending the macOS pipeline): it fails closed when the object's load commands carry an
-  install ID; the librsvg gate's self-test holds this with a stub `otool`. ("Check the loader cache
-  this process wrote, in a file of its own, and fail closed on a missing install ID", 2026-10-29)
+  Closed: it fails closed when the object's load commands carry an install ID; the librsvg gate's
+  self-test holds this with a stub `otool`, and the macOS pipeline passes on it. ("Check the loader
+  cache this process wrote, in a file of its own, and fail closed on a missing install ID",
+  2026-10-29)
 
 **To close for good**: nothing upstream. This entry stays Patched while the bundle copies
 third-party libraries; it is the record of why those gates must not be removed.

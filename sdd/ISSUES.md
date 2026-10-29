@@ -401,8 +401,9 @@ that. The failed job passed on re-run each time.
 editor never reached the parked line, or did not stay there. Linux: 0 of 20 runs of the module,
 on both the old and the new code, unloaded. Mac: green on every CI run; one local failure in a
 full macOS pipeline (2026-10-27, Paragraph case, editor top 441 where 442 was expected: an
-off-by-one, not the Windows "top 0" shape), and 5 of 5 module reruns passed. Not reproduced
-locally on Windows.
+off-by-one, not the Windows "top 0" shape), and 5 of 5 module reruns passed; a second sighting
+of that same Paragraph 441/442 shape in a full pipeline on 2026-10-29, again with 5 of 5 module
+reruns passing and the pipeline green on re-run. Not reproduced locally on Windows.
 
 **Suspects, unmeasured**: the editor's scroll to the park line is an animated `scroll_to_mark`
 that lands in stages (GTK4Rs/AP-14, GTK4Rs/AP-115), and the helpers' settle may time out on a
