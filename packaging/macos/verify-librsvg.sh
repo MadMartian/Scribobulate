@@ -34,7 +34,12 @@
 # must FAIL.
 set -euo pipefail
 
-FLOOR="2.63.2"
+# The floor is written once, in packaging/librsvg-floor, which the Windows gate
+# (packaging/windows/verify-librsvg.ps1) reads too. A missing or malformed file fails closed.
+FLOOR_FILE="$(dirname "${BASH_SOURCE[0]}")/../librsvg-floor"
+FLOOR="$(tr -d '[:space:]' < "$FLOOR_FILE" 2>/dev/null)" || FLOOR=""
+[[ "$FLOOR" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || { echo "error: $FLOOR_FILE does not hold one x.y.z version (got '$FLOOR')" >&2; exit 1; }
 
 # 0 when $1 >= $2, numerically per component (so 2.100.0 > 2.63.2, which a string compare
 # gets wrong).

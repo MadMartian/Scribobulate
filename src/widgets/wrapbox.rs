@@ -100,7 +100,15 @@ mod imp {
                         }
                         sum_w += nat_w;
                     }
-                    (min_w, sum_w, -1, -1)
+                    // Given a height, the minimum is the narrowest width whose rows fit
+                    // in it, or the height-for-width answer contradicts this one. GTK
+                    // 4.24 checks the pair and warns ("Widget reports min width of …
+                    // for height of …, but min height of … for width of …").
+                    if for_size > 0 {
+                        min_w =
+                            narrowest_fitting(&children, for_size, min_w, sum_w, col_sp, row_sp);
+                    }
+                    (min_w, sum_w.max(min_w), -1, -1)
                 }
                 gtk::Orientation::Vertical => {
                     let h = if for_size <= 0 {
@@ -154,6 +162,33 @@ mod imp {
             next = child.next_sibling();
         }
         out
+    }
+
+    /// The narrowest width in `widest..=one_row` at which [`pack`] fits in `height`, or
+    /// `one_row` when even a single row does not. Fewer rows never need more height, so
+    /// the fit only improves with width and a binary search finds the edge.
+    fn narrowest_fitting(
+        children: &[gtk::Widget],
+        height: i32,
+        widest: i32,
+        one_row: i32,
+        col_spacing: i32,
+        row_spacing: i32,
+    ) -> i32 {
+        let fits = |width: i32| pack(children, width, col_spacing, row_spacing).1 <= height;
+        if fits(widest) || !fits(one_row) {
+            return if fits(widest) { widest } else { one_row };
+        }
+        let (mut too_narrow, mut wide_enough) = (widest, one_row);
+        while wide_enough - too_narrow > 1 {
+            let mid = too_narrow + (wide_enough - too_narrow) / 2;
+            if fits(mid) {
+                wide_enough = mid;
+            } else {
+                too_narrow = mid;
+            }
+        }
+        wide_enough
     }
 
     /// Greedy left-to-right, top-to-bottom pack at `avail_width`: place each
@@ -291,6 +326,45 @@ mod gtk_integration_tests {
         assert!(
             b_alloc.y() > a_alloc.y(),
             "the overflowing child must land on a NEW row, below the first"
+        );
+    }
+
+    /// **The width it asks for at a height fits in that height.** Given one row's height,
+    /// the minimum width is the whole row, not the widest child: at the widest child's
+    /// width the children wrap and need two rows. The two answers are checked against
+    /// each other here, on every GTK; GTK 4.24 checks the same pair itself and warns.
+    #[gtktest::test]
+    fn the_minimum_width_for_a_height_fits_in_that_height() {
+        let wrap = ToolbarWrapBox::new(2, 0);
+        for label in ["AAAA", "BBBB", "CCCC"] {
+            wrap.append(&gtk::Button::with_label(label));
+        }
+        let (widest, one_row_w, _, _) = wrap.measure(gtk::Orientation::Horizontal, -1);
+        let (one_row_h, _, _, _) = wrap.measure(gtk::Orientation::Vertical, one_row_w);
+        let (stacked_h, _, _, _) = wrap.measure(gtk::Orientation::Vertical, widest);
+        assert!(
+            stacked_h > one_row_h,
+            "precondition: at the widest child's width the children wrap"
+        );
+
+        for height in [one_row_h, stacked_h, stacked_h + 10] {
+            let (min_w, nat_w, _, _) = wrap.measure(gtk::Orientation::Horizontal, height);
+            let (min_h, _, _, _) = wrap.measure(gtk::Orientation::Vertical, min_w);
+            assert!(
+                min_h <= height,
+                "min width {min_w} for height {height}, but min height {min_h} at that width"
+            );
+            assert!(min_w <= nat_w, "minimum {min_w} above natural {nat_w}");
+        }
+        let (min_w, _, _, _) = wrap.measure(gtk::Orientation::Horizontal, one_row_h);
+        assert_eq!(
+            min_w, one_row_w,
+            "one row's height needs the whole row's width"
+        );
+        let (min_w, _, _, _) = wrap.measure(gtk::Orientation::Horizontal, stacked_h);
+        assert_eq!(
+            min_w, widest,
+            "room for every row needs only the widest child"
         );
     }
 

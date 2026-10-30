@@ -90,6 +90,7 @@ src/export/pdftable.rs
 src/export/walk.rs
 src/farscroll.rs
 src/farscroll/settle.rs
+src/focusrelease.rs
 src/fold.rs
 src/forensics/identity.rs
 src/forensics/mod.rs

@@ -10,7 +10,7 @@
 //!   delivers to.
 //! * [`footprint`] — one sampler, three `cfg` bodies. The field is named
 //!   **footprint**, never RSS: `/proc` VmRSS, macOS `ri_phys_footprint` and
-//!   Windows `WorkingSetSize` are not the same quantity.
+//!   Windows `PrivateUsage` are not the same quantity.
 //!
 //! The GTK drivers that *produce* the samples live in [`gtk`] (6.6–6.9, and
 //! 6.7's still-image half) and [`playback`] (6.10, and 6.7 extended to the

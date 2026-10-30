@@ -21,6 +21,7 @@
 //! fn __gtktest_body_foo() { BODY }                     // 1. the body, renamed
 //! #[gtk::test] fn foo() {                               // 2. the libtest path
 //!     crate::gtk_log_harness::install_once();           //    TDD 21.13 — see below
+//!     crate::focusrelease::install();                   //    `src/focusrelease.rs`
 //!     __gtktest_body_foo()
 //! }
 //! inventory::submit! { Case { name: "…::foo", run: __gtktest_body_foo } }  // 3. runner
@@ -135,7 +136,7 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let generated = format!(
         "{harness_attr_text}\
          #[gtk::test]\n\
-         fn {name}() {{ crate::gtk_log_harness::install_once(); {body}() }}\n\
+         fn {name}() {{ crate::gtk_log_harness::install_once(); crate::focusrelease::install(); {body}() }}\n\
          inventory::submit! {{\n\
          \x20   crate::suite_registry::Case {{\n\
          \x20       name: concat!(module_path!(), \"::\", \"{name}\"),\n\

@@ -1,10 +1,18 @@
 //! Process footprint sampler — one function, three `cfg` bodies.
 //!
 //! The returned number is **not RSS**. Linux reads `VmRSS`, macOS reads
-//! `ri_phys_footprint`, Windows reads `WorkingSetSize`. A shared name invites
+//! `ri_phys_footprint`, Windows reads `PrivateUsage`. A shared name invites
 //! a shared threshold; the bounds a series is judged against live next to this
 //! module in [`GROWTH_BOUNDS`], and [`assert_bounded`] is the only thing that
 //! reads them.
+//!
+//! **Windows reads private commit, not the working set**, because the working set
+//! moves with no allocation at all. MEASURED on GTK 4.24.1: after the SVG gate's peak,
+//! Windows trims the process and the PNG control's series faults those pages back in —
+//! ~19k page faults, the working set +5–6 MB across the window while private commit rose
+//! ~1.0–1.3 MB — so the control failed the residual bound in about one group run in five
+//! on growth no code made. Private commit is allocation-driven, like macOS's
+//! `ri_phys_footprint`.
 
 /// Per-platform bounds for [`super::growth::assert_no_growth`], in bytes.
 ///
@@ -31,8 +39,14 @@
 /// | Linux CI runner, huge-page collapse armed | 12.98 MB | 12.08 MB | **0.86 MB** |
 /// | Linux CI runner, collapse disabled | −0.38 MB | 0.38 MB | −0.77 MB |
 /// | macOS CI runner | 0.31 MB | 0.31 MB | 0 |
-/// | Windows CI runner | 0.26 MB | 0.53 MB | −0.28 MB |
+/// | Windows CI runner (working set, before `PrivateUsage`) | 0.26 MB | 0.53 MB | −0.28 MB |
 /// | macOS seat, per-stretch rule, 11 runs | 1.2–2.3 MB | 0.5–1.6 MB | **0.02–1.25 MB** |
+/// | Windows seat, `PrivateUsage`, GTK 4.24.1, 10 runs | ≤1.93 MB | ≤1.15 MB | **≤1.11 MB** |
+/// | Windows seat, `PrivateUsage`, GTK 4.22.4, 5 runs | ≤1.58 MB | ≤1.32 MB | ≤0.47 MB |
+///
+/// The two Windows-seat rows are worst-of-every-gate over every run, and the bounds did
+/// not move for them. The gate still bites under `PrivateUsage`: retaining every decode
+/// in 6.9's loop left 8.9 MB (animated WebP) and 69.5 MB (PNG) of residual.
 ///
 /// **The per-stretch rule (see `growth::residual_growth`) raised the bound from 2 MiB to
 /// 3 MiB** (operator decision, 2026-10-02). Judging every stretch rather than first to

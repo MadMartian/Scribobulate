@@ -38,11 +38,13 @@ the sources listed below, at the versions listed below.
 ## READ THIS BEFORE PUBLISHING ANYTHING: the dev box is not what ships
 
 **The Windows installer is not built from a locally built GTK.** `pipeline.yml` pins
-`GVSBUILD_VERSION: 2026.8.0` and downloads the prebuilt `GTK4_Gvsbuild_2026.8.0_x64.zip`;
+`GVSBUILD_VERSION: 2026.10.0` and downloads the prebuilt `GTK4_Gvsbuild_2026.10.0_x64.zip`;
 CI never runs gvsbuild and never sees a source tarball. The operator's box, meanwhile, has
 gvsbuild **2026.6.0** installed and a prefix built by it.
 
-**Those two recipes do not pin the same component versions. Three of ten differ:**
+**Those recipes do not pin the same component versions.** When CI pinned 2026.8.0, three of
+ten differed from the dev box; against 2026.10.0, seven of nine source-owing components do
+(all but GtkSourceView and gettext). The original three, as measured then:
 
 | Component | Dev box (gvsbuild 2026.6.0) | **Shipped (gvsbuild 2026.8.0)** |
 |---|---|---|
@@ -65,48 +67,49 @@ not evidence about the right one.
 
 ## The components, and what each owes
 
-Versions are **gvsbuild 2026.8.0's pins** — the recipe CI's zip is built from. Ids are
+Versions are **gvsbuild 2026.10.0's**, read from the shipped zip (below). Ids are
 `licenses.psd1` row ids; that file remains the authority on which staged files belong to
 which component, and this table deliberately does not restate its `Match` patterns.
 
 | Row id | Component | Version shipped | Licence | Source owed |
 |---|---|---|---|---|
-| `glib` | GLib | **2.88.3** | LGPL-2.1-or-later | Yes — §4 |
-| `gtk4`, `gtk4-schemas`, `icon-theme-cache` | GTK | 4.22.4 | LGPL-2.0-or-later | Yes — §4. One source tree covers all three rows |
-| `gdk-pixbuf` | gdk-pixbuf | **2.44.7** | LGPL-2.1-or-later | Yes — §4 |
+| `glib` | GLib | 2.90.1 | LGPL-2.1-or-later | Yes — §4 |
+| `gtk4`, `gtk4-schemas`, `icon-theme-cache` | GTK | 4.24.1 | LGPL-2.0-or-later | Yes — §4. One source tree covers all three rows |
+| `gdk-pixbuf` | gdk-pixbuf | 2.44.8 | LGPL-2.1-or-later | Yes — §4 |
 | `gtksourceview` | GtkSourceView | 5.20.0 | LGPL-2.1-or-later | Yes — §4. Also the tree the `gtksourceview-icons` CC-BY-SA artwork comes from |
-| `pango` | Pango | **1.58.0** | LGPL-2.0-or-later | Yes — §4 |
-| `librsvg` | librsvg | 2.62.3 | LGPL-2.1-or-later | Yes — §4, **and its `Cargo.lock`**; see below |
-| `librsvg-rust` | librsvg's static Rust graph | (with librsvg 2.62.3) | includes MPL-2.0 | Yes, but under **MPL-2.0 §3.2**, not §4; see below |
-| `cairo` | cairo | 1.18.4 | LGPL-2.1-only **OR** MPL-1.1 | Yes either way — §4 on one limb, MPL-1.1 §3.2 on the other. **Election unmade** |
-| `fribidi` | GNU FriBidi | 1.0.16 | LGPL-2.1-or-later | Yes — §4 |
+| `pango` | Pango | 1.58.2 | LGPL-2.0-or-later | Yes — §4 |
+| `librsvg` | librsvg | 2.63.2 | LGPL-2.1-or-later | Yes — §4, **and its `Cargo.lock`**; see below |
+| `librsvg-rust` | librsvg's static Rust graph | (with librsvg 2.63.2) | includes MPL-2.0 | Yes, but under **MPL-2.0 §3.2**, not §4; see below |
+| `cairo` | cairo | 1.18.6 | LGPL-2.1-only **OR** MPL-1.1 | Yes either way — §4 on one limb, MPL-1.1 §3.2 on the other. **Election unmade** |
+| `fribidi` | GNU FriBidi | 1.0.17 | LGPL-2.1-or-later | Yes — §4 |
 | `gettext-runtime` | GNU gettext (`intl.dll`, libintl) | 0.21 | LGPL-2.1-or-later | Yes — §4. The **runtime**, LGPL-2.1; not the GPL-3.0 tools |
-| `adwaita-icon-theme` | adwaita-icon-theme | 50.0 | CC-BY-SA-3.0 **OR** LGPL-3.0-or-later | **Depends on the election** — none under CC-BY-SA, §4 under LGPL. **Election unmade** |
+| `adwaita-icon-theme` | adwaita-icon-theme | 51.0 | CC-BY-SA-3.0 **OR** LGPL-3.0-or-later | **Depends on the election** — none under CC-BY-SA, §4 under LGPL. **Election unmade** |
 | `hicolor-icon-theme` | hicolor-icon-theme | 0.18 | GPL-2.0-or-later | **No.** Ruled: `index.theme` is plain text shipped verbatim, so it is already its own source and falls under §1, not §3. Nothing to publish |
 
 Every other row is permissive or proprietary and owes notice only, which
 `THIRD-PARTY-LICENSES.md` and the vendored texts already carry.
 
 **MEASURED IN THE SHIPPED ZIP — the inference step is closed.**
-`GTK4_Gvsbuild_2026.8.0_x64.zip` (300,885,620 bytes) was downloaded from the same URL
-`pipeline.yml` uses, unpacked to its own prefix, and its `lib/pkgconfig/*.pc` read directly:
+`GTK4_Gvsbuild_2026.10.0_x64.zip` (298,673,975 bytes, SHA-256 as pinned) was downloaded from
+the same URL `pipeline.yml` uses, unpacked to its own prefix, and its `lib/pkgconfig/*.pc` read
+directly (adwaita-icon-theme from `share/pkgconfig`, libintl from `intl.dll`'s version resource):
 
-    glib-2.0  2.88.3    gtk4  4.22.4       gdk-pixbuf-2.0  2.44.7
-    pango     1.58.0    cairo 1.18.4       gtksourceview-5 5.20.0
-    librsvg-2.0 2.62.3  fribidi 1.0.16
+    glib-2.0  2.90.1    gtk4  4.24.1       gdk-pixbuf-2.0  2.44.8
+    pango     1.58.2    cairo 1.18.6       gtksourceview-5 5.20.0
+    librsvg-2.0 2.63.2  fribidi 1.0.17     adwaita-icon-theme 51.0   intl 0.21.0
 
-Every figure matches what was inferred from the recipe, including all three that differ from
-the dev box. The table above is now read off the artefact users receive, not off a tag.
+The table above is read off the artefact users receive, not off a tag.
 
 ### librsvg owes its lockfile, and that is not a restatement of the notices row
 
 `packaging/windows/licenses/librsvg/THIRD-PARTY-RUST-NOTICES.txt` discharges *attribution*
-for the 198 crates compiled into `rsvg-2-2.dll`. **Complete corresponding source is a
+for the crates compiled into `rsvg-2-2.dll`. **Complete corresponding source is a
 separate duty**: the Rust graph must be rebuildable, which means the lockfile travels with
-the source, not just the notice. It is on the dev box at
-`C:\gtk-build\build\x64\release\librsvg\Cargo.lock`, 84,387 bytes — measured, and matching
-the figure recorded in the plan. librsvg is one of the seven components whose version is
-the same on both recipes, so that lockfile is the right one.
+the source, not just the notice. For 2.63.2 it is the one in the release tarball gvsbuild
+2026.10.0 builds from (`librsvg-2.63.2.tar.xz`, SHA-256 `852b18e1…`): `Cargo.lock`, 86,466
+bytes, SHA-256 `E79E2A27…` — the same hash the notice's PROVENANCE block records. The dev
+box's `C:\gtk-build\build\x64\release\librsvg\Cargo.lock` is 2.62.3's and is no longer the
+right one.
 
 The MPL-2.0 crates inside that graph (five, of Servo CSS lineage, unmodified) carry
 **MPL-2.0 §3.2**, which is a source-availability duty over the covered *files* and is not
@@ -137,24 +140,24 @@ ruled out of.
 Ratify both in `PROVENANCE.md` beside the files, the way FreeType's was — not here, and not
 by inference from what is present.
 
-## THE UPSTREAM TARBALL IS NOT THE CORRESPONDING SOURCE FOR FOUR OF THESE
+## THE UPSTREAM TARBALL IS NOT THE CORRESPONDING SOURCE FOR THREE OF THESE
 
 **We do not ship upstream's GTK. We ship gvsbuild's build of it, and gvsbuild patches it.**
 §4 owes *complete corresponding source* — the source the shipped binary was actually built
 from — so for any patched component the pristine tarball does not discharge the duty. It
 discharges the duty for a library we did not distribute.
 
-Measured against gvsbuild **2026.8.0**'s own `projects/*.py` (the recipe CI's zip is built
-from), of the nine components that owe source:
+Measured against gvsbuild **2026.10.0**'s own `projects/*.py` and `patches/` (the recipe CI's
+zip is built from), of the nine components that owe source:
 
 | Component | Patched by gvsbuild? |
 |---|---|
 | GLib | **Yes** — `001-glib-package-installation-directory.patch` |
-| GTK 4 | **Yes** — `0001-remove-direct-composition.patch` |
 | gettext | **Yes** — four patches (`*-c99`, `gnulib-memset`, `libtextstyle-c99`) |
 | librsvg | **Yes** — `001-fix-duplicate-symbols.patch` |
-| Pango, GtkSourceView | No — `patches=[]`, declared and empty |
-| gdk-pixbuf, cairo, FriBidi | No — no `patches` key at all |
+| GTK 4 | No — 2026.8.0 carried `0001-remove-direct-composition.patch`; 2026.10.0 has no `gtk4` patch directory and its recipe names none (GTK 4.24 made DirectComposition opt-in upstream) |
+| Pango, GtkSourceView | No — `patches=[]`, declared and empty (as at 2026.8.0; not re-read) |
+| gdk-pixbuf, cairo, FriBidi | No — no `patches` directory |
 
 **Build configuration counts too, not only patches.** Every recipe passes Meson flags that
 change what is compiled — GTK 4 alone is built `-Dvulkan=disabled -Dmedia-gstreamer=disabled
@@ -163,7 +166,7 @@ a recipient can rebuild *our* binary, which needs those flags, not just the pris
 
 **So the deliverable is upstream tarball + gvsbuild's patch set and recipes at the pinned
 tag**, not the tarball alone. gvsbuild is itself public and GPL-2.0 licensed, so a snapshot
-of its tree at `2026.8.0` supplies both halves and is small — the patches are single files
+of its tree at the pinned tag supplies both halves and is small — the patches are single files
 and the recipes are a few kB of Python each.
 
 **This is the same failure shape as the version drift above, one layer deeper.** A tarball
@@ -184,10 +187,10 @@ alternative of publishing upstream URLs and relying on them staying reachable �
 "from the same place" wording does not obviously permit anyway.
 
 **But those tarballs cannot simply be uploaded from the dev box, and this is the trap.**
-They are 2026.6.0's downloads, so seven are the right bytes and **three — GLib, gdk-pixbuf,
-Pango — are the wrong versions**. A release assembled by copying that directory would
-publish source for three libraries the user did not receive, and every filename would look
-right. Whatever mechanism is built must take its version list from the shipped prefix, not
+They are 2026.6.0's downloads, so against the 2026.10.0 pin only GtkSourceView and gettext
+are the right bytes and **seven — GLib, GTK, gdk-pixbuf, Pango, librsvg, cairo, FriBidi — are
+the wrong versions**. A release assembled by copying that directory would publish source for
+seven libraries the user did not receive, and every filename would look right. Whatever mechanism is built must take its version list from the shipped prefix, not
 from whatever is sitting in `src\`.
 
 That leaves a real choice for the operator, and it is the one thing here that is not
@@ -198,12 +201,11 @@ measurable:
    recipes, attach the lot to the release beside the `.exe`. Self-maintaining across a
    gvsbuild bump; costs a download per release.
 2. **A manual upload from a box that ran gvsbuild at the pinned version** — which today no
-   box has, since the dev box is two releases behind CI's pin.
+   box has, since the dev box is several releases behind CI's pin.
 
 **One measured convenience for whichever route is taken:** gvsbuild's recipes carry a
-`hash=` for each tarball, so the archives can be verified rather than trusted. Spot-checked
-here — `gtk-4.22.4.tar.xz` on the dev box is SHA-256 `51bd9f60c7d23a66…`, byte-identical to
-2026.8.0's pin. That makes the seven unchanged components re-usable from `C:\gtk-build\src\`
-with proof, and isolates the re-fetch to GLib, gdk-pixbuf and Pango.
+`hash=` for each tarball, so the archives can be verified rather than trusted — at 2026.10.0
+the GTK 4 recipe pins `gtk-4.24.1.tar.xz` to SHA-256 `e98abe72…`. With seven of nine versions
+moved, the dev box's `C:\gtk-build\src\` no longer saves a meaningful re-fetch.
 
 Until one route is built and run, no release should be published.

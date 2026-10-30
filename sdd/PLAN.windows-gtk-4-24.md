@@ -1,6 +1,7 @@
 # Plan: Move Windows to gvsbuild 2026.10.0 (GTK 4.24.1, fixed librsvg)
 
-**Status**: deferred by the operator (2026-10-28). Not started.
+**Status**: in progress (deferral lifted 2026-10-30; the operator chose to ship with the Win32
+input-method workaround below). Phase 1 done; phase 2 owed.
 
 ## Problem
 
@@ -79,11 +80,26 @@ Approach 1, in two phases, each its own commit and ratification.
    frame, desktop light/dark, window-place restore including the 125%/150% run, popovers and menus,
    keys and focus), plus the 4.24 changes the gtk4-rs skill records (reduced-motion scroll jumps,
    capture-phase click gestures, popover anchor-resize). Add whatever the step 1 diff turns up.
+   **Done**: every Windows check driven passed unchanged, including window-place at 100/125/150%
+   (sizes exact, no creep). Not run, each for a stated reason: fullscreen restore (Windows has no
+   fullscreen control), the taskbar and Alt+Tab icon (outside a window capture), and the two
+   gestures above (covered by the GTK suite only). The step 1 diff turned up the input-method
+   defect below and nothing else that changed a workaround.
 5. **Footprint and attribution.** Measure VRAM on the release build (POLICY: a rendering-dependency
    change; 50 MiB ceiling). Run the licence verification for the changed dependencies, and record
    the installer size against the previous one.
+   **Done**: VRAM unmeasurable on the `windows` seat — the GPU memory counter reads 0 for every
+   process there, the compositor included — so the ceiling stands on the Cairo renderer the log
+   confirms and on the other platforms' readings. Licence gate clean (921 staged files, 36 rows,
+   the 36th attributing the app's own theme sprites, which had none); the librsvg Rust notice regenerated for 2.63.2; the attribution documents
+   updated to 2026.10.0's measured versions and patch set (GTK 4 is no longer patched). Installer
+   45,601,663 bytes, the first figure on record.
 6. **Prove the fix is delivered.** Measure the librsvg version in the installed tree, and add a
    packaging check that refuses an installer whose librsvg is below the fixed release.
+   **Done**: `packaging/windows/verify-librsvg.ps1` reads the staged DLL's own version and
+   `package.ps1` refuses to build below the floor; the floor is written once, in
+   `packaging/librsvg-floor`, which the macOS gate now reads too. Measured 2.63.2 in the staged
+   and the installed tree; a 2.62.3 DLL is refused.
 
 **Phase 2: one screen rule for every platform**
 1. Read the loaded librsvg's version at run time on each platform, through the library the loader
@@ -147,5 +163,11 @@ Rubric 2 replaces 2.23c's platform clause.*
   compiled in), while the README's local recipe builds `--configuration release` (assertions
   compiled out, GTK4Rs/AP-272). A critical that appears in only one of them is this, not a
   platform difference.
+- **GTK 4.24.1 brought a Win32 input-method use-after-free** (GNOME/gtk MR !9958; fixed by MR
+  !10411, in no gvsbuild release yet): a focused text widget unrealized before it loses focus
+  leaves a display-wide message filter on its freed context. 16 of the GTK suite's cases failed
+  on it, none on 4.22.4 with the same binary. `src/focusrelease.rs` clears the window's focus
+  first, from one `unrealize` emission hook; retire it when the pin carries the fix. Whether to
+  ship the move with that workaround or hold for a fixed release is the operator's call.
 - **macOS is already on GTK 4.24.1** (Homebrew) and its pipeline is green there, so 4.24's
   cross-platform behaviour is partly ratified. What is new here is GDK-Win32.

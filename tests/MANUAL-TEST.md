@@ -1697,6 +1697,19 @@ and this file is just the run-sheet.
 - [ ] Missing `libgtksourceview-5` types (simulate by checking startup on a
   minimal container, if available) → fails with a clear message, not an
   opaque dynamic-link crash (dev-environment sanity, low priority)
+- [ ] **Windows: a focused editor torn down leaves no input-method filter behind**
+  (GTK 4.24.1's Win32 input method keeps a message filter on a freed context otherwise;
+  `src/focusrelease.rs` is the workaround). **The proof is the GTK suite on Windows**, not
+  this check: without the hook, 16 cases fail on the `gtk_im_context_ime_message_filter`
+  critical, all in teardowns that destroy a window directly after its editor took focus
+  without the window ever being active. The app's ordinary routes were MEASURED not to leak
+  even with the hook removed (GTK 4.24.1, release): Ctrl+W on a focused edit-mode tab,
+  Alt+F4 on a focused edit-mode window, Ctrl+Q, and closing a restored edit-mode window with
+  `WM_CLOSE` — each window was active, and an active window's hide gives the editor a
+  focus-out while it still has its surface. Run that set after a runtime move and confirm
+  the run's `scribobulate.log` has no such critical and there is no crash report. The one
+  candidate route NOT tried: an editor that takes focus in a window Windows refused to
+  activate (opened from the background), closed without ever activating it
 
 ### 4.7 Session file corruption / migration
 - [ ] Session file: `sed -i 's/windows/xxindows/' ~/.local/state/scribobulate/session.toml`

@@ -98,6 +98,7 @@ mod docio;
 mod docref;
 mod export;
 mod farscroll;
+mod focusrelease;
 mod fold;
 mod forensics;
 mod format;
@@ -465,6 +466,8 @@ fn run_child(cases: &[&Case], names: &[&str], report: Option<&str>) -> ! {
     // piped/intercepted here, and for the libtest harness's own init point
     // (`#[gtktest::test]`'s generated wrapper), which this call has no bearing on.
     gtk_log_harness::install_once();
+    // What the app installs at startup, so a case tears its windows down as the app does.
+    focusrelease::install();
 
     let mut all_passed = true;
     for case in resolved {

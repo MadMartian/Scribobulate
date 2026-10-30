@@ -124,7 +124,8 @@ asserted premise and a measured one carry different weight with a lawyer.
 
 **Read this before quoting a gate result as evidence about the product.** The gate
 resolves every `prefix:` Source against the **local** GTK prefix. A developer box
-runs gvsbuild **2026.6.0**; CI pins **2026.8.0** and downloads the prebuilt zip. So
+runs gvsbuild **2026.6.0**; CI pins **2026.10.0** (2026.8.0 when this was first measured)
+and downloads the prebuilt zip. So
 a pass here is evidence about *2026.6.0's licence texts*, not about the ones the
 installer carries.
 
@@ -142,9 +143,17 @@ duty in `SOURCE-AVAILABILITY.md` turns on.
 |---|---|---|---|
 | dev prefix, 2026.6.0 | 902 | 35 | 1 problem — `msvc-runtime` |
 | **shipped prefix, 2026.8.0** | **903** | **35** | **1 problem — `msvc-runtime`** |
+| **shipped prefix, 2026.10.0** | **921** | **36** | **PASS** |
 
 Conditions 1, 2 and 4 clean **against the GTK that actually ships**. The table
 covers the shipped tree, not merely a same-named lookalike.
+
+At 2026.10.0 (measured on the `windows` seat, staged with `stage.ps1 -GtkPrefix` from the
+published zip) every runtime file is attributed and every licence text is present and is
+the licence. The first run there failed condition 1 on 16 files that were **not the
+runtime**: the app's own theme sprites, staged with no row. The operator ruled them
+project-original under Scribobulate's own licence, and the `scribobulate-sprites` row
+(the 36th) closes it.
 
 **The one-file difference is real and was chased rather than rounded off.**
 2026.8.0 stages one extra file — `share\icons\Adwaita\symbolic\places\folder-drag-accept-symbolic.svg`
@@ -194,6 +203,9 @@ probe (`assertion failed: (` plus the stringified expression sitting beside its
 |---|---|---|---|---|
 | dev prefix, 2026.6.0 | 7 | 1 | 1 | 1 |
 | shipped prefix, 2026.8.0 | 8 | 2 | 1 | 1 |
+
+Re-run on **2026.10.0's GTK 4.24.1** with the same probe, which first reproduced the dev
+prefix's row exactly as a control: **8 / 2 / 1 / 1** — assertions still compiled in.
 
 **Assertions are compiled IN on both.** Neither build is `-DG_DISABLE_ASSERT`, so
 the divergence that would have been serious is **not present** — measured on both

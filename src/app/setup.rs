@@ -151,6 +151,10 @@ fn on_startup(app: &Application) {
     // preview's first-map popover pre-warm is covered too.
     #[cfg(target_os = "macos")]
     crate::popoverrelease::set_enabled(true);
+    // Clears a window's focus before the widget holding it is unrealized, so GTK 4.24's
+    // Win32 input method removes its message filter while it still can. Before any
+    // window, so every teardown is covered.
+    crate::focusrelease::install();
     #[cfg(windows)]
     crate::platform::win32::track_system_dark_mode();
     add_new_action(app);
