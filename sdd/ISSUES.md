@@ -59,7 +59,6 @@ described from a different vantage point.
 | R | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | S | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
 | T | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
-| W | Windows | Production | Restoring a window's size at a fractional Windows display scale (125%, 150%) has never been run, so whether a window comes back at its saved size there is unknown | Low |
 
 ## Closed issues
 
@@ -464,27 +463,6 @@ is not ruled out.
 **Fix**: upstream, a destroyed-surface guard in `windowDidResize:`. An app-side workaround
 (leaving full screen before closing) would add AppKit's exit animation to every close of a
 full-screen window, a visible cost for a log line; it has not been tried.
-
-## W. A window's restored size at a fractional Windows display scale is unverified
-
-**Severity**: Low (unverified, not observed broken; the worst case is a window restored larger or
-smaller than it was saved).
-
-On Windows the un-maximized size saved for a maximized window is converted between physical and
-logical pixels by a scale the app measures from the window's client area
-(`winplace/src/win32.rs`, `winplace/src/geom.rs`). Every Windows run so far was at 100%. MANUAL-TEST
-15.10f at 125% and 150% has never been run: the `windows` seat does not change system settings, so
-it needs the operator at a Windows desktop.
-
-**Expected** (source reading only, not measured): GDK-Win32 4.22.4 reports an integer scale of
-`dpi / 96` (`gdkdisplay-win32.c`, about lines 978-987), so 125% and 150% both read as scale 1 and
-the measured scale should agree with it. A maximized window that is minimized at quit falls back
-to GDK's integer scale, which is the one case where the two could differ if that reading is wrong.
-
-**Mitigation options**:
-- Run MANUAL-TEST 15.10f at 125% and at 150% on Windows, with one window maximized and minimized
-  at quit. Delete this entry if both pass; otherwise the failing case becomes the fix's test.
-- Accept the limitation until a user at a fractional scale reports a size change.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

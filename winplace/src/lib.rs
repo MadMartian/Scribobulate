@@ -102,19 +102,20 @@ pub fn capture(window: &impl IsA<gtk::Window>) -> Place {
         ..place
     };
     // Maximized, GTK's default size is the maximized size here, not the one a restore
-    // returns to (`win32.rs`'s header).
+    // returns to (`win32.rs`'s header); minimized, GTK no longer reads it as maximized.
     #[cfg(windows)]
-    let place = match place
-        .maximized
-        .then(|| win32::normal_size(window))
-        .flatten()
-    {
-        Some((width, height)) => Place {
+    let place = {
+        let ((width, height), maximized) = geom::saved_state(
+            (place.width, place.height),
+            place.maximized,
+            win32::placement(window),
+        );
+        Place {
             width,
             height,
+            maximized,
             ..place
-        },
-        None => place,
+        }
     };
     place
 }

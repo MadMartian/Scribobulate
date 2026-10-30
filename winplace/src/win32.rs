@@ -10,6 +10,11 @@
 //! not GTK, holds the rectangle a restore returns to, as the window's placement
 //! (`WINDOWPLACEMENT::rcNormalPosition`). So that is where this reads it.
 //!
+//! **Minimized, the window is no longer maximized to GTK.** Minimizing a maximized window
+//! clears `WS_MAXIMIZE` while the default size is still the maximized size; the placement
+//! record keeps `WPF_RESTORETOMAXIMIZED` and the restore rectangle, so the maximized
+//! state is read from there too ([`crate::geom::saved_state`]).
+//!
 //! `rcNormalPosition` is the OUTER rectangle in physical pixels. GTK's default size is
 //! the client area in logical pixels, so the frame a normal window of this style has at
 //! this DPI is taken off, and the remainder divided by the scale GDK applies to the
@@ -41,7 +46,10 @@ use std::ffi::c_void;
 const GWL_STYLE: i32 = -16;
 const GWL_EXSTYLE: i32 = -20;
 const WS_MAXIMIZE: u32 = 0x0100_0000;
+const WS_MINIMIZE: u32 = 0x2000_0000;
 const SW_MAXIMIZE: i32 = 3;
+const SW_SHOWMINIMIZED: u32 = 2;
+const WPF_RESTORETOMAXIMIZED: u32 = 0x0002;
 #[cfg(feature = "test-support")]
 const WM_SYSCOMMAND: u32 = 0x0112;
 #[cfg(feature = "test-support")]
@@ -133,9 +141,9 @@ pub(crate) fn restore_natively(window: &gtk::Window) -> bool {
     true
 }
 
-/// The logical client size `window` returns to when it leaves maximized, or `None` when
-/// Windows cannot say (no surface yet, or a call failed).
-pub(crate) fn normal_size(window: &gtk::Window) -> Option<(i32, i32)> {
+/// `window`'s placement record, or `None` when Windows cannot say (no surface yet, or the
+/// call failed).
+pub(crate) fn placement(window: &gtk::Window) -> Option<crate::geom::Placement> {
     let surface = window.surface()?;
     let hwnd = hwnd(window)?;
     let mut placement = WindowPlacement {
@@ -146,14 +154,22 @@ pub(crate) fn normal_size(window: &gtk::Window) -> Option<(i32, i32)> {
     if unsafe { GetWindowPlacement(hwnd, &mut placement) } == 0 {
         return None;
     }
-    let outer = &placement.normal_position;
+    Some(crate::geom::Placement {
+        minimized: placement.show_cmd == SW_SHOWMINIMIZED,
+        restores_maximized: placement.flags & WPF_RESTORETOMAXIMIZED != 0,
+        normal_size: normal_size(hwnd, &surface, &placement.normal_position),
+    })
+}
 
-    // The frame of a NORMAL window of this style: a maximized one's is not the frame
-    // the restore rectangle was measured with.
+/// The logical client size of a window whose restore rectangle is `outer`, or `None` when
+/// a call failed.
+fn normal_size(hwnd: *mut c_void, surface: &gtk::gdk::Surface, outer: &Rect) -> Option<(i32, i32)> {
+    // The frame of a NORMAL window of this style: a maximized or minimized one's is not
+    // the frame the restore rectangle was measured with.
     // SAFETY: plain reads of a valid window's longs and DPI.
     let (style, ex_style, dpi) = unsafe {
         (
-            GetWindowLongW(hwnd, GWL_STYLE) as u32 & !WS_MAXIMIZE,
+            GetWindowLongW(hwnd, GWL_STYLE) as u32 & !(WS_MAXIMIZE | WS_MINIMIZE),
             GetWindowLongW(hwnd, GWL_EXSTYLE) as u32,
             GetDpiForWindow(hwnd),
         )

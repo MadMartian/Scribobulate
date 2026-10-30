@@ -81,6 +81,49 @@ pub(crate) fn to_logical(physical: (i32, i32), scale: f64) -> Option<(i32, i32)>
     (w > 0 && h > 0 && scale > 0.0).then(|| (logical(w), logical(h)))
 }
 
+#[cfg(any(test, windows))] // Windows only; tested everywhere.
+/// What Windows' placement record (`GetWindowPlacement`) says about a window, reduced to
+/// what a save needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Placement {
+    /// Minimized now (`showCmd` is `SW_SHOWMINIMIZED`).
+    pub minimized: bool,
+    /// `WPF_RESTORETOMAXIMIZED`: restoring from minimized returns to maximized. Windows
+    /// leaves the flag set after such a window is restored and then un-maximized, so it
+    /// means something only while `minimized`.
+    pub restores_maximized: bool,
+    /// The restore rectangle (`rcNormalPosition`) as a logical client size, or `None`
+    /// when it could not be converted.
+    pub normal_size: Option<(i32, i32)>,
+}
+
+#[cfg(any(test, windows))] // Windows only; tested everywhere.
+/// The size and maximized state to save for a window GTK reads as `size` and
+/// `maximized`, given its placement record.
+///
+/// Minimizing a maximized window clears `WS_MAXIMIZE`, so GTK reads it as not maximized,
+/// while its default size is still the maximized size (`win32.rs`'s header). Saved as
+/// read, it would come back as a plain window the size of the screen. The placement
+/// record still holds both facts: the flag says it returns to maximized, and the
+/// restore rectangle is the size it had before. A maximized or minimized window takes its
+/// size from that rectangle; any other keeps GTK's reading.
+pub(crate) fn saved_state(
+    size: (i32, i32),
+    maximized: bool,
+    placement: Option<Placement>,
+) -> ((i32, i32), bool) {
+    let Some(placement) = placement else {
+        return (size, maximized);
+    };
+    let maximized = maximized || (placement.minimized && placement.restores_maximized);
+    let size = if maximized || placement.minimized {
+        placement.normal_size.unwrap_or(size)
+    } else {
+        size
+    };
+    (size, maximized)
+}
+
 #[cfg(any(test, all(unix, not(target_os = "macos"))))] // X11 only; tested everywhere.
 /// The nil UUID, which KWin reads as "every activity".
 pub(crate) const ALL_ACTIVITIES: &str = "00000000-0000-0000-0000-000000000000";
@@ -220,6 +263,79 @@ mod tests {
         assert_eq!(to_logical((1600, 1000), 2.0), Some((800, 500)));
         assert_eq!(to_logical((0, 900), 1.5), None);
         assert_eq!(to_logical((1500, 900), 0.0), None);
+    }
+
+    /// MEASURED on Windows 10, GTK 4.22.4, at 100%: a window of client 935x538, maximized
+    /// and then minimized, reads to GTK as not maximized at the maximized client size
+    /// 2025x1141, while its placement says minimized, `WPF_RESTORETOMAXIMIZED`, and the
+    /// restore rectangle is 935x538.
+    #[test]
+    fn a_maximized_window_minimized_at_quit_is_saved_maximized_at_its_own_size() {
+        let placement = Placement {
+            minimized: true,
+            restores_maximized: true,
+            normal_size: Some((935, 538)),
+        };
+        assert_eq!(
+            saved_state((2025, 1141), false, Some(placement)),
+            ((935, 538), true)
+        );
+    }
+
+    #[test]
+    fn a_plain_window_minimized_is_saved_plain_at_its_restore_size() {
+        let placement = Placement {
+            minimized: true,
+            restores_maximized: false,
+            normal_size: Some((861, 494)),
+        };
+        assert_eq!(
+            saved_state((861, 494), false, Some(placement)),
+            ((861, 494), false)
+        );
+    }
+
+    #[test]
+    fn a_maximized_window_takes_its_size_from_the_restore_rectangle() {
+        let placement = Placement {
+            minimized: false,
+            restores_maximized: true,
+            normal_size: Some((985, 574)),
+        };
+        assert_eq!(
+            saved_state((2025, 1141), true, Some(placement)),
+            ((985, 574), true)
+        );
+    }
+
+    /// Windows leaves `WPF_RESTORETOMAXIMIZED` set on a window restored from minimized to
+    /// maximized and then to normal (MEASURED as above), so the flag alone must not make a
+    /// plain window maximized.
+    #[test]
+    fn a_stale_restore_to_maximized_flag_on_a_plain_window_is_ignored() {
+        let placement = Placement {
+            minimized: false,
+            restores_maximized: true,
+            normal_size: Some((935, 538)),
+        };
+        assert_eq!(
+            saved_state((935, 538), false, Some(placement)),
+            ((935, 538), false)
+        );
+    }
+
+    #[test]
+    fn without_a_placement_or_its_size_gtk_s_reading_stands() {
+        assert_eq!(saved_state((800, 600), true, None), ((800, 600), true));
+        let no_size = Placement {
+            minimized: true,
+            restores_maximized: true,
+            normal_size: None,
+        };
+        assert_eq!(
+            saved_state((2025, 1141), false, Some(no_size)),
+            ((2025, 1141), true)
+        );
     }
 
     #[test]
