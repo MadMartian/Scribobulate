@@ -152,12 +152,18 @@ no image took. The gzip layer is inflated by us, to a bound, and the inflated te
 again, so librsvg never inflates anything — on the macOS bundle too, where the screen stands down.
 ("Show UTF-16 and gzip-compressed SVGs, and re-render small SVGs at zoom", 2026-10-29)
 
+**On Linux no SVG goes through gdk-pixbuf**: `src/imagedecode/rsvg.rs` loads the system's
+`librsvg-2.so.2` and decodes every SVG with it, after the same screen. gdk-pixbuf 2.44 built with
+glycin (Ubuntu 26.04) decodes in glycin's own loaders with glycin's own librsvg, so through
+gdk-pixbuf the decoder, and whether this entry applies to it, would depend on how the distribution
+built gdk-pixbuf. The row below is the library that route loads.
+
 | Platform | librsvg loaded (checked 2026-10-28) | Fixed upstream for us? |
 |---|---|---|
 | macOS, from the `.app` | 2.63.2, staged from Homebrew by the bundle build, which fails below 2.63.2 | Yes |
 | macOS, binary run outside a bundle | Homebrew's, whatever is installed | Not guaranteed — screened as Linux |
 | Windows | 2.62.3, from the gvsbuild GTK zip pinned in CI | No |
-| Linux | the distribution's (Ubuntu 22.04: 2.52.5+dfsg-3ubuntu0.2) | Ubuntu 22.04: not affected, per Ubuntu's tracker (vendor assessment, not measured by us); other distributions unassessed |
+| Linux | the distribution's `librsvg-2.so.2`, loaded directly (Ubuntu 22.04: 2.52.5+dfsg-3ubuntu0.2; Ubuntu 26.04: 2.61.3+dfsg-3ubuntu0.1) | Ubuntu 22.04: not affected, per Ubuntu's tracker (vendor assessment, not measured by us); Ubuntu 26.04 and other distributions unassessed |
 
 **Workaround**: the XInclude screen, `src/imagedecode/xinclude.rs` (TDD 2.23c), runs ahead of every
 hand-off of encoded image bytes to the loader chain, and a refusal is final. It refuses content

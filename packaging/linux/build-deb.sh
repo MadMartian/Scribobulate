@@ -99,6 +99,9 @@ find "$stage" -type d -exec chmod 755 {} +
 # gdk-pixbuf's formats; with it present the same file reports its declared size. An
 # install without it renders every SVG in a document, and every SVG theme sprite, as
 # nothing -- silently, since a missing loader is a decode failure and not a crash.
+# The app itself decodes document SVGs with librsvg-2.so.2 loaded at run time
+# (src/imagedecode/rsvg.rs), never through the loader; librsvg2-common depends on
+# librsvg2-2, which carries it, so this one dependency covers both.
 cat > "$stage/DEBIAN/control" <<EOF
 Package: $PKG
 Version: $VERSION

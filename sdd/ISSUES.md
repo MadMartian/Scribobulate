@@ -59,7 +59,6 @@ described from a different vantage point.
 | R | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | S | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
 | T | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
-| U | Linux | Project | Ubuntu 26.04 fails nine unit tests: SVG bytes that gdk-pixbuf decoded on 24.04 are not decoded (eight `imagedecode` tests), and a fatal GLib message ends the process by SIGABRT, not the SIGTRAP the crash handler's test expects. CI's Linux jobs are pinned to ubuntu-24.04 until this is fixed | Medium |
 
 ## Closed issues
 
@@ -464,29 +463,6 @@ is not ruled out.
 **Fix**: upstream, a destroyed-surface guard in `windowDidResize:`. An app-side workaround
 (leaving full screen before closing) would add AppKit's exit animation to every close of a
 full-screen window, a visible cost for a log line; it has not been tried.
-
-## U. Ubuntu 26.04 fails nine unit tests: SVG decoding and the GLib fatal-message signal
-
-**Severity**: Medium (CI is pinned to 24.04, so nothing is gated on 26.04; a user on 26.04 may
-see SVG images fail to load, and a crash of this kind may leave no report).
-
-**Observed** (2026-10-30). GitHub moved `ubuntu-latest` from 24.04 to 26.04 between two runs
-of the same tree (runs 41024880202 and 41074630723). On 26.04 (GTK 4.22.4, gdk-pixbuf 2.44.5,
-glycin 2.1.5) the unit suite failed 9 of 2166:
-- `imagedecode::svgencoding::tests` (7) and `imagedecode::decode::tests::a_format_richimg_claims_never_falls_back_to_gtk`:
-  SVG bytes the tests decode through gdk-pixbuf come back undecoded, e.g. `green-utf16le.svg`
-  sizes to `None`, not `Some((40, 40))`.
-- `forensics::signal::tests::a_glib_fatal_message_dies_by_a_signal_this_handler_takes`: the
-  fatal-message probe exited with status 134 (SIGABRT), not SIGTRAP.
-
-macOS and Windows passed on the same run. The Linux jobs in `.github/workflows/pipeline.yml`
-now pin `ubuntu-24.04`.
-
-**Not established**: why either changed. gdk-pixbuf 2.44 decodes through glycin, which runs
-its loaders in a sandbox, so a loader that cannot start on the runner would explain the SVG
-half; that is a guess, not a measurement. The SIGABRT may be a GLib change to how a fatal
-message aborts. If it is, the crash handler still catches it (it handles SIGABRT), and only
-the test's premise is wrong. Reproduce on a 26.04 machine before changing either.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

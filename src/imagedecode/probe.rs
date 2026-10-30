@@ -91,7 +91,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-fn header_probes() -> usize {
+pub(super) fn header_probes() -> usize {
     HEADER_PROBES.with(|n| n.get())
 }
 
@@ -99,7 +99,8 @@ fn header_probes() -> usize {
 /// format gdk-pixbuf identified the CONTENT as.
 struct Header {
     size: Option<(i32, i32)>,
-    format: Option<gtk::gdk_pixbuf::PixbufFormat>,
+    /// Whether that format is scalable (a vector image).
+    scalable: bool,
 }
 
 /// **The one copy of the `size-prepared` → `set_size(0, 0)` bomb guard**, shared by
@@ -132,12 +133,21 @@ fn probe_header(input: &LoaderInput<'_>) -> Header {
     #[cfg(test)]
     HEADER_PROBES.with(|n| n.set(n.get() + 1));
 
+    // On Linux an SVG never reaches gdk-pixbuf (`super::rsvg`'s module doc).
+    #[cfg(target_os = "linux")]
+    if input.svg_only() {
+        return Header {
+            size: super::svgencoding::svg_size(input),
+            scalable: true,
+        };
+    }
+
     let bytes = input.bytes();
     let seen: Rc<Cell<Option<(i32, i32)>>> = Rc::new(Cell::new(None));
     let Some(loader) = input.loader() else {
         return Header {
             size: None,
-            format: None,
+            scalable: false,
         };
     };
     loader.connect_size_prepared({
@@ -156,10 +166,10 @@ fn probe_header(input: &LoaderInput<'_>) -> Header {
         }
     }
     let _ = loader.close();
-    let format = loader.format();
+    let scalable = loader.format().is_some_and(|f| f.is_scalable());
     Header {
         size: seen.get(),
-        format,
+        scalable,
     }
 }
 
@@ -205,9 +215,9 @@ pub(crate) fn probe_vector_dimensions(bytes: &[u8]) -> Option<(i32, i32)> {
 /// enforces the richimg-first precondition above.
 fn probe_vector(bytes: &[u8]) -> Option<(i32, i32)> {
     let input = loader_input(super::screen::screen_quietly(bytes)?, None)?;
-    let Header { size, format } = probe_header(&input);
+    let Header { size, scalable } = probe_header(&input);
     let (w, h) = size?;
-    if !format?.is_scalable() {
+    if !scalable {
         return None;
     }
     Some((w, h))
