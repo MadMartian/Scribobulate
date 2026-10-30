@@ -75,13 +75,13 @@ jobs:
   # preinstalled on all three runner images, and `xtask` is a small crate with a `regex`
   # dependency, not the application.
   # --------------------------------------------------------------------------------------
-  # The Linux jobs pin ubuntu-24.04, not ubuntu-latest: when ubuntu-latest moved to
-  # 26.04, nine unit tests failed there (SVG decoding through gdk-pixbuf, and the GLib
-  # fatal-message signal the crash handler relies on). Moving the pin is a deliberate
-  # change, made together with fixing 26.04 support.
+  # The Linux jobs name their Ubuntu release rather than ubuntu-latest, so a release
+  # change is a deliberate commit: when ubuntu-latest moved to 26.04 unannounced, nine
+  # unit tests failed there (gdk-pixbuf 2.44 decoding through glycin, and GLib 2.87's
+  # fatal-message signal). Ubuntu 22.04, the GTK 4.6 floor, is covered by local runs.
   contract-linux:
     name: contract (linux)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - name: Pipeline runner derives its steps from the contract
@@ -163,7 +163,7 @@ jobs:
   parity:
     name: parity
     needs: [contract-linux, contract-macos, contract-windows]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -208,7 +208,7 @@ jobs:
   # --------------------------------------------------------------------------------------
   execute-linux:
     name: execute (linux)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       RUST_BACKTRACE: "1"
       # A hosted runner is a shared vCPU, and the two growth-ratio guards in this tree
@@ -234,7 +234,7 @@ jobs:
             libgtk-4-dev libgtksourceview-5-dev librsvg2-common \
             xvfb libxml2-utils fonts-dejavu-core
 
-      # Packaging tooling, and ONLY when packaging -- ubuntu-24.04 provides dpkg-deb but
+      # Packaging tooling, and ONLY when packaging -- ubuntu-26.04 provides dpkg-deb but
       # neither rpmbuild nor fakeroot. fakeroot is not optional dressing: build-deb.sh
       # uses it so the payload is owned by root:root, and without it every file carries
       # the building user's uid, which dpkg installs VERBATIM. The package then "works"
@@ -707,7 +707,7 @@ jobs:
     name: attach installers to the release
     if: github.event_name == 'release'
     needs: [execute-linux, execute-macos, execute-windows]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:

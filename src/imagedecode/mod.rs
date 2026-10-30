@@ -29,6 +29,8 @@
 //! which only a `screen::Screened` can become, and which only the screen hands out
 //! (TDD 2.23c). [`svgencoding`] is also where a UTF-16 or gzip SVG, which no sniff
 //! recognises, is handed to the SVG loader by name (TDD 2.23j).
+//! On Linux no SVG reaches gdk-pixbuf at all: [`svgencoding`] hands every SVG to
+//! `rsvg`, which decodes it with the system librsvg (that module's doc says why).
 //!
 //! `clippy.toml`'s `disallowed-methods` bans SEVEN GTK/gdk-pixbuf entry points outside
 //! this module — `Texture::from_bytes`/`from_file`/`from_filename`,
@@ -54,6 +56,8 @@
 
 mod admission;
 mod decode;
+#[cfg(target_os = "linux")]
+mod rsvg;
 // Test-only decode counter (Finding 2 / TDD 6.8), gated identically to the ONE call
 // site that increments it (inside `decode::decode`) and to `memgate::gtk`, its only
 // reader — see this module's own doc comment for why that keeps it out of every other

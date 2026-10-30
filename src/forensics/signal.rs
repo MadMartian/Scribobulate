@@ -1323,6 +1323,15 @@ mod tests {
     /// (`SIGTRAP`); only `g_assert_not_reached()` exits 134 (`SIGABRT`), via the same
     /// function's other branch. If a future GLib aborts instead, this fails and says
     /// so — the enumeration is then merely wider than it needs to be, not wrong.
+    ///
+    /// **Which signal depends on the GLib this runs against.** From GLib 2.87.0 (GNOME/glib
+    /// #3790), `_g_log_abort` on unix reads `TracerPid` from `/proc/self/status` and
+    /// breakpoints only when a debugger is attached; otherwise it aborts. MEASURED, GLib
+    /// 2.88.0 (Ubuntu 26.04): exit 134 (`SIGABRT`). Where there is no `/proc`, as on
+    /// macOS, it still assumes a debugger and traps. So this test, run without a tracer
+    /// on Linux, expects `SIGABRT` from 2.87 on and `SIGTRAP` before it. `SIGTRAP` stays in
+    /// [`FATAL_SIGNALS`] either way: older GLib, macOS, and any run under a debugger
+    /// still land there.
     #[test]
     fn a_glib_fatal_message_dies_by_a_signal_this_handler_takes() {
         if !cfg!(all(target_os = "linux", target_env = "gnu")) {
@@ -1357,17 +1366,22 @@ mod tests {
             "the child never emitted the fatal GLib message, so it died of something \
              else and proves nothing:\n{stderr}"
         );
+        let (expected, name) = if gtk::glib::check_version(2, 87, 0).is_none() {
+            (libc::SIGABRT, "SIGABRT")
+        } else {
+            (libc::SIGTRAP, "SIGTRAP")
+        };
         assert_eq!(
             output.status.signal(),
-            Some(libc::SIGTRAP),
-            "a GLib FATAL message no longer lands on SIGTRAP (status {:?}) — \
-             FATAL_SIGNALS was widened on the premise that it does:\n{stderr}",
+            Some(expected),
+            "a GLib FATAL message no longer lands on {name} (status {:?}) — \
+             FATAL_SIGNALS was chosen on the premise that it does:\n{stderr}",
             output.status
         );
 
         let text = std::fs::read_to_string(&path)
-            .expect("a GLib fatal death left no crash report — the whole point of taking SIGTRAP");
-        assert!(text.contains("signal: SIGTRAP"), "{text}");
+            .expect("a GLib fatal death left no crash report — the whole point of this test");
+        assert!(text.contains(&format!("signal: {name}")), "{text}");
         assert!(
             text.contains("a GLib fatal message is about to fire"),
             "{text}"

@@ -115,6 +115,8 @@ Requires:       gtksourceview5
 # `dnf repoquery --whatprovides '<libdir>/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader_svg.so'`;
 # re-derive it rather than assume when adding a distribution (openSUSE's is
 # gdk-pixbuf-loader-rsvg).
+# The app also loads librsvg-2.so.2 itself at run time (src/imagedecode/rsvg.rs);
+# rsvg-pixbuf-loader requires librsvg2, which carries it.
 Requires:       rsvg-pixbuf-loader
 
 # The binary is built by the pipeline's step 3 and staged into BUILDROOT before

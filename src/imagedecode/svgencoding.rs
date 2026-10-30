@@ -29,6 +29,7 @@
 //! anything claims, and stays refused.
 
 use super::screen::{self, Screened};
+#[cfg(not(target_os = "linux"))]
 use gtk::gdk_pixbuf::prelude::PixbufLoaderExt;
 use gtk::gdk_pixbuf::{Pixbuf, PixbufLoader};
 use std::borrow::Cow;
@@ -97,7 +98,7 @@ pub(super) fn loader_input<'a>(
     if !bytes.starts_with(GZIP_MAGIC) {
         return Some(LoaderInput {
             bytes: Cow::Borrowed(bytes),
-            svg_only: is_utf16(bytes),
+            svg_only: is_utf16(bytes) || (cfg!(target_os = "linux") && is_plain_svg(bytes)),
         });
     }
     let inflated = match inflate(bytes) {
@@ -118,6 +119,13 @@ pub(super) fn loader_input<'a>(
         bytes: Cow::Owned(inflated),
         svg_only: true,
     })
+}
+
+/// Whether `bytes` are SVG by content, as gdk-pixbuf 2.42 decided it: the shared MIME
+/// database's guess from the bytes alone. On Linux every SVG goes to [`decode_svg`], so
+/// gdk-pixbuf never decodes one (`super::rsvg`'s module doc says why).
+fn is_plain_svg(bytes: &[u8]) -> bool {
+    gtk::gio::content_type_guess(None::<&str>, bytes).0 == "image/svg+xml"
 }
 
 fn is_utf16(bytes: &[u8]) -> bool {
@@ -174,6 +182,34 @@ fn inflate(bytes: &[u8]) -> Result<Vec<u8>, Inflate> {
 /// output over [`crate::limits::MAX_IMAGE_PIXELS`]: the caller has already probed and
 /// capped the declared size, and this holds the cap on the decode itself rather than
 /// trusting that a second parse of the same bytes declares the same size.
+#[cfg(target_os = "linux")]
+pub(super) fn decode_svg(input: &LoaderInput<'_>, target_w: Option<i32>) -> Result<Pixbuf, String> {
+    if !input.svg_only {
+        return Err("it is not SVG".to_owned());
+    }
+    let document = super::rsvg::Document::parse(input.bytes())?;
+    let (w, h) = document.size();
+    let (out_w, out_h) = output_size(w, h, target_w);
+    if out_w <= 0 || out_h <= 0 {
+        return Err(format!("it has no size ({w}×{h})"));
+    }
+    if !crate::limits::image_pixels_within_cap(out_w, out_h) {
+        return Err(format!(
+            "it renders past the {}-pixel cap",
+            crate::limits::MAX_IMAGE_PIXELS
+        ));
+    }
+    document.render(out_w, out_h)
+}
+
+/// The natural size of [`LoaderInput::svg_only`] input, read by librsvg on Linux.
+#[cfg(target_os = "linux")]
+pub(super) fn svg_size(input: &LoaderInput<'_>) -> Option<(i32, i32)> {
+    let size = super::rsvg::Document::parse(input.bytes()).ok()?.size();
+    (size.0 > 0 && size.1 > 0).then_some(size)
+}
+
+#[cfg(not(target_os = "linux"))]
 pub(super) fn decode_svg(input: &LoaderInput<'_>, target_w: Option<i32>) -> Result<Pixbuf, String> {
     use std::cell::Cell;
     use std::rc::Rc;

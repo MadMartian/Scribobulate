@@ -1,7 +1,7 @@
 //! The judge: the decoder this platform really loads, asked by rendering.
 //!
-//! An input is decoded through the same gdk-pixbuf loader chain the app uses, with no
-//! screen in front of it, and the verdict is whether the sentinel colour appears — which
+//! An input is decoded by the same decoder the app uses (librsvg directly on Linux, the
+//! gdk-pixbuf loader chain elsewhere), with no screen in front of it, and the verdict is whether the sentinel colour appears — which
 //! only the core's fallback paints, and only once librsvg has processed the include
 //! (`super::grammar`'s module doc). No model of librsvg decides anything here.
 //!
@@ -38,6 +38,22 @@ pub(super) enum Verdict {
 
 /// The decoder's verdict on `input`, and the loader's error when it decoded nothing.
 pub(super) fn judge(input: &Admitted) -> (Verdict, Option<String>) {
+    // On Linux the app decodes SVG with librsvg directly (`super::super::rsvg`), so that
+    // is the decoder judged there.
+    #[cfg(target_os = "linux")]
+    let decoded = super::super::rsvg::Document::parse(input.bytes())
+        .and_then(|doc| doc.render(RASTER_SIDE, RASTER_SIDE));
+    #[cfg(not(target_os = "linux"))]
+    let decoded = unscreened_loader_chain(input).map_err(|err| err.to_string());
+    match decoded {
+        Ok(pixbuf) if shows_sentinel(&pixbuf) => (Verdict::Acted, None),
+        Ok(_) => (Verdict::Inert, None),
+        Err(err) => (Verdict::Inert, Some(err)),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn unscreened_loader_chain(input: &Admitted) -> Result<gtk::gdk_pixbuf::Pixbuf, gtk::glib::Error> {
     let stream = gtk::gio::MemoryInputStream::from_bytes(&gtk::glib::Bytes::from(input.bytes()));
     // The oracle IS the unscreened loader chain; `Admitted` is what keeps an entity out.
     #[expect(clippy::disallowed_methods)] // the differential test's unscreened oracle
@@ -48,11 +64,7 @@ pub(super) fn judge(input: &Admitted) -> (Verdict, Option<String>) {
         true,
         gtk::gio::Cancellable::NONE,
     );
-    match decoded {
-        Ok(pixbuf) if shows_sentinel(&pixbuf) => (Verdict::Acted, None),
-        Ok(_) => (Verdict::Inert, None),
-        Err(err) => (Verdict::Inert, Some(err.to_string())),
-    }
+    decoded
 }
 
 fn shows_sentinel(pixbuf: &gtk::gdk_pixbuf::Pixbuf) -> bool {

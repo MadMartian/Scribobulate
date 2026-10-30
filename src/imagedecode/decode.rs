@@ -611,13 +611,18 @@ mod tests {
         assert_eq!(pixbuf.width(), 1600);
     }
 
-    /// The no-fallback rule, with a SELF-VERIFYING oracle: a GIF whose header is
-    /// valid (so `richimg::sniff` claims it) but whose image data stops early, which
-    /// `richimg` refuses and gdk-pixbuf's own lenient GIF loader decodes anyway. The
-    /// first assertion PROVES the GTK route would have succeeded on these exact
-    /// bytes; the second proves `decode` returns `None` regardless. Without the first,
-    /// a day when GTK also refuses the fixture would leave this passing vacuously
-    /// (GEP-1's species).
+    /// The no-fallback rule: a GIF whose header is valid (so `richimg::sniff` claims it)
+    /// but whose image data stops early, which `richimg` refuses. **The assertion that
+    /// holds on every host is the arrival count**: `decode` must refuse without the bytes
+    /// ever reaching a gdk-pixbuf loader, and a fallback reaches one in its first step
+    /// (`decode_gtk` → `within_cap` → the header probe), whatever that loader would then
+    /// answer. Mutation run: returning `decode_gtk` from `decode_richimg`'s refusal fails
+    /// it on Ubuntu 22.04 and 26.04 alike.
+    ///
+    /// Where gdk-pixbuf's own GIF decoder is lenient, the fallback would also have
+    /// SUCCEEDED, and the test says so as a second, visible witness. That half is
+    /// host-dependent: glycin (gdk-pixbuf 2.44.5 on Ubuntu 26.04) refuses these bytes as
+    /// richimg does, so there it cannot be observed and only the arrival count speaks.
     ///
     /// **The vehicle must be GIF and cannot be APNG**, because whether gdk-pixbuf will
     /// so much as CLAIM an APNG is a per-host answer. MEASURED on the same bytes:
@@ -638,14 +643,22 @@ mod tests {
             richimg::first_frame(&bytes, &richimg_limits()).is_err(),
             "precondition: richimg refuses these bytes"
         );
-        assert!(
-            decode_gtk(&bytes, "test:control.png").is_some(),
-            "ORACLE: gdk-pixbuf decodes these exact bytes, so a fallback would be visible"
-        );
+        let before = super::super::probe::header_probes();
         assert!(
             decode(&bytes, "test:disagreeing.png").is_none(),
             "a format richimg claims must never fall back to GTK on richimg's own refusal"
         );
+        assert_eq!(
+            super::super::probe::header_probes(),
+            before,
+            "richimg's refusal must not reach a gdk-pixbuf loader at all"
+        );
+        if decode_gtk(&bytes, "test:control.png").is_none() {
+            eprintln!(
+                "NOTE: this host's gdk-pixbuf refuses the fixture too, so a fallback would \
+                 not have decoded it; the arrival count above is the only witness here"
+            );
+        }
     }
 
     /// A GIF89a that is structurally complete — logical screen descriptor, global
@@ -658,15 +671,13 @@ mod tests {
     /// above able to fail at all.
     ///
     /// MEASURED against gdk-pixbuf 2.42.8, 2.42.10, 2.44.6 and 2.44.7 — all four decode
-    /// it — and `gif` 0.14.2, which refuses it. The four are worth keeping named: at
-    /// 2.44 GIF is built into gdk-pixbuf rather than being a loader module, so the two
-    /// pairs exercise different code inside the decoder this oracle rests on.
+    /// it — and `gif` 0.14.2, which refuses it. gdk-pixbuf 2.44.5 built with glycin
+    /// (Ubuntu 26.04) refuses it as well, which is why the test's visible witness is
+    /// host-dependent and its arrival count is not.
     ///
     /// Malformed-but-tolerated, never truncated: a file that simply ENDS early is
     /// refused by gdk-pixbuf too ("Not all frames of the GIF image were loaded"), which
-    /// would leave the oracle unsatisfiable rather than live. That control has been run
-    /// — truncating this fixture six bytes early fails the ORACLE assertion below, which
-    /// is how we know the assertion is not vacuous here (GEP-85, GEP-1).
+    /// would take the visible witness away on every host.
     fn gtk_decodable_gif_richimg_refuses() -> Vec<u8> {
         #[rustfmt::skip]
         const BYTES: [u8; 45] = [
