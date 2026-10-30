@@ -124,6 +124,14 @@ try {
     & "$PSScriptRoot\stage.ps1" -GtkPrefix $GtkPrefix -OutDir $StageDir -RepoRoot $repo
     if ($LASTEXITCODE -ne 0) { throw "FAILED: stage the redistributable tree (exit $LASTEXITCODE)" }
 
+    # No installer is built around a librsvg below the security floor (CVE-2026-96889). The
+    # gate reads the STAGED DLL, so it judges what ships, not the prefix it came from; its
+    # self-test runs first, or a comparator broken to pass everything would pass this too.
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\verify-librsvg.ps1" -SelfTest
+    if ($LASTEXITCODE -ne 0) { throw "FAILED: verify-librsvg.ps1 -SelfTest (exit $LASTEXITCODE); its verdict cannot be trusted" }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\verify-librsvg.ps1" $StageDir
+    if ($LASTEXITCODE -ne 0) { throw "FAILED: the staged librsvg is below the security floor (exit $LASTEXITCODE)" }
+
     $iscc = Find-Iscc
     if (-not $iscc) {
         # A missing ISCC.exe FAILS rather than warning: packaging was asked for explicitly,

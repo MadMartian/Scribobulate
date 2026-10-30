@@ -1,7 +1,7 @@
 # Plan: Move Windows to gvsbuild 2026.10.0 (GTK 4.24.1, fixed librsvg)
 
 **Status**: in progress (deferral lifted 2026-10-30; the operator chose to ship with the Win32
-input-method workaround below). Phase 1 steps 1–5 done; step 6 and phase 2 owed.
+input-method workaround below). Phase 1 done; phase 2 owed.
 
 ## Problem
 
@@ -96,6 +96,10 @@ Approach 1, in two phases, each its own commit and ratification.
    45,601,663 bytes, the first figure on record.
 6. **Prove the fix is delivered.** Measure the librsvg version in the installed tree, and add a
    packaging check that refuses an installer whose librsvg is below the fixed release.
+   **Done**: `packaging/windows/verify-librsvg.ps1` reads the staged DLL's own version and
+   `package.ps1` refuses to build below the floor; the floor is written once, in
+   `packaging/librsvg-floor`, which the macOS gate now reads too. Measured 2.63.2 in the staged
+   and the installed tree; a 2.62.3 DLL is refused.
 
 **Phase 2: one screen rule for every platform**
 1. Read the loaded librsvg's version at run time on each platform, through the library the loader

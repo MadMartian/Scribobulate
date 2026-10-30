@@ -124,6 +124,12 @@ runtime travels inside it. Two tick-boxes, both **off** by default: a desktop
 shortcut, and making Scribobulate the default app for `.md`/`.markdown`. It
 appears under *Open with* either way.
 
+It refuses to build an installer whose librsvg is below the security floor
+written in `packaging\librsvg-floor` (CVE-2026-96889): after staging,
+`verify-librsvg.ps1` loads the **staged** `rsvg-2-2.dll`, reads the version it
+reports, and fails the build below the floor. The fix is a gvsbuild pin carrying
+a fixed librsvg, never a lower floor.
+
 Two things to expect:
 
 - **SmartScreen warns on first run.** The installer is not code-signed, so

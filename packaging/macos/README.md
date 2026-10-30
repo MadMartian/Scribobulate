@@ -150,8 +150,9 @@ defects before they were features:
 
 ### librsvg has a security floor
 
-The bundled librsvg must be **2.63.2 or newer** (CVE-2026-96889, a use-after-free reachable
-from any SVG through the pixbuf loader). The app's XInclude screen stands down when it runs
+The bundled librsvg must be at or above the floor written in `packaging/librsvg-floor`
+(CVE-2026-96889, a use-after-free reachable from any SVG through the pixbuf loader); the
+Windows installer's gate reads the same file. The app's XInclude screen stands down when it runs
 from the bundle, because the bundle carries the fix, so `bundle.sh` enforces it (a binary run
 outside the bundle, such as `./target/release/scribobulate`, loads Homebrew's librsvg and is
 screened like Linux): after signing,
