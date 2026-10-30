@@ -18,7 +18,8 @@ pub(super) fn session_path() -> Option<PathBuf> {
     Some(state_directory()?.join("session.toml"))
 }
 
-/// The application's state directory (`…/scribobulate`), or `None` if none can be
+/// The application's state directory (`…/scribobulate`, or
+/// `…/scribobulate/instances/<name>` for a named instance), or `None` if none can be
 /// located.
 ///
 /// **The single state-directory lookup in the tree.** `session.toml` and the
@@ -65,7 +66,13 @@ pub(crate) fn state_directory() -> Option<PathBuf> {
         }
         return None;
     };
-    Some(base.join("scribobulate"))
+    // A named instance keeps its state one level down, in `instances/<name>`, so the
+    // default instance's folder is the one it always used (TDD 8.12, 8.15). Applied
+    // here, in the single lookup, so session, swap and forensics all follow it.
+    Some(crate::instance::state_dir_for(
+        base.join("scribobulate"),
+        crate::instance::current(),
+    ))
 }
 
 /// Create the state directory **private to the owning user**, and tighten it if an

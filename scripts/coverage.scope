@@ -125,6 +125,7 @@ src/imagedecode/screen.rs
 src/imagedecode/svgencoding.rs
 src/imagedecode/xinclude.rs
 src/imagefetch.rs
+src/instance.rs
 src/keynav.rs
 src/limits.rs
 src/lineendings.rs

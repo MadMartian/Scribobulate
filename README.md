@@ -301,6 +301,15 @@ A second launch reuses the running process. To force a **separate** instance
 ./target/release/scribobulate -n path/to/document.md
 ```
 
+To keep a second **reusable** copy — say one for work and one for personal notes,
+each with its own windows and session — give it a name. Launches with the same name
+reuse each other; the copy without a name is unaffected:
+
+```bash
+scribobulate --instance work notes.md
+packaging/linux/install.sh --instance work   # Linux: a launcher for it in the app menu
+```
+
 Logging uses `RUST_LOG` (app and GTK/GLib share one sink):
 
 ```bash

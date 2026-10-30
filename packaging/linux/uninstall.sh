@@ -27,8 +27,29 @@ BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
 APP_DIR="$DATA_DIR/applications"
 
+# shellcheck source=packaging/linux/instance.sh
+. "$(dirname "${BASH_SOURCE[0]}")/instance.sh"
+
+# `--instance NAME`: remove that instance's launcher only. Its state stays where it is,
+# as the default instance's does on a full uninstall.
+if [ "${1:-}" = "--instance" ]; then
+    name="${2:?--instance needs a name}"
+    # Not the name rules (the binary owns those, and may be gone by now): only that the
+    # name cannot steer `rm` out of the applications folder.
+    case "$name" in
+        *[!A-Za-z0-9]*) echo "uninstall: not an instance name: $name" >&2; exit 1 ;;
+    esac
+    rm -fv "$(instance_desktop_path "$name")"
+    refresh_launcher_index
+    echo
+    echo "Removed the launcher for the Scribobulate instance \"$name\"."
+    exit 0
+fi
+
 rm -fv "$BIN_DIR/$PKG"
 rm -fv "$APP_DIR/$PKG.desktop"
+# Every named instance's launcher: each one runs the binary removed above.
+rm -fv "$APP_DIR/$APP_ID".*.desktop
 rm -fv "$DATA_DIR/icons/hicolor/scalable/apps/$APP_ID.svg"
 rm -fv "$DATA_DIR/$PKG/themes.toml"
 # `rm -rf` on the sprite directory rather than naming its files: its contents change
@@ -48,7 +69,7 @@ for d in "$DATA_DIR/$PKG" "$DATA_DIR/doc/$PKG"; do
     [ -d "$d" ] && rmdir "$d" 2>/dev/null || true
 done
 
-command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APP_DIR" || true
+refresh_launcher_index
 command -v gtk-update-icon-cache  >/dev/null 2>&1 && \
     gtk-update-icon-cache -f -t "$DATA_DIR/icons/hicolor" 2>/dev/null || true
 

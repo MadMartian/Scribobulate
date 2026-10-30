@@ -58,6 +58,8 @@ Read all of the above, plus:
 - [`sdd/PLAN.windows-gtk-4-24.md`](sdd/PLAN.windows-gtk-4-24.md) — before moving the Windows GTK
   runtime (the gvsbuild pin), or changing where the XInclude screen applies. Deferred by the
   operator.
+- [`sdd/PLAN.named-instances.md`](sdd/PLAN.named-instances.md) — before adding `--instance`,
+  changing the application ID, where state lives, or the Linux launchers.
 - [`sdd/PLAN.accessibility.md`](sdd/PLAN.accessibility.md) — before adding accessibility
   markup beyond a control name.
 - [`sdd/PLAN.profiling.md`](sdd/PLAN.profiling.md) — before profiling, proposing a

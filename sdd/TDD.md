@@ -1281,6 +1281,60 @@
 - **And** every platform gives the same answer to the same argument
 - **And** a document whose name genuinely begins with a dash can still be opened, by ending option parsing with a bare `--` first
 
+### 8.9 A named instance reuses only itself
+- **Given** a named instance is running
+- **When** the application is launched again with the same instance name and a document
+- **Then** the document opens in the running named instance, and no new process starts
+- **And** a launch with a different name, or with no name, neither reaches nor is reached by it: each starts or reuses its own process
+
+### 8.10 Instance names are checked before anything starts
+- **Given** a launch whose instance name is empty, too long, starts with a digit, or contains anything but letters and digits
+- **When** it starts
+- **Then** it prints why the name is refused, exits with a failure status, and opens no window
+- **And** it never falls back to the default instance
+
+### 8.11 An instance's folder name is always lower case
+- **Given** a launch whose instance name has upper-case letters (e.g. `--instance Work`)
+- **When** it starts and saves its state
+- **Then** its folder is `instances/work`, never `instances/Work`, on every platform
+- **And** `Work`, `WORK` and `work` select the same instance: one ID, one folder, one process
+- **And** the case as typed is kept only for the window title (8.16); the ID, the folder and the program name are lower case
+
+### 8.12 Each named instance keeps its own state
+- **Given** two named instances, or a named instance and the default one, with no XDG directory redirected
+- **When** each is used and closed
+- **Then** each restores only its own windows and documents, and crash recovery offers each only its own unsaved work
+- **And** all of them keep that state under the one state home, one folder per instance, readable only by the user
+- **And** the settings file (`config.toml`) and the reading-theme definitions (`themes.toml`) are shared by all of them, while what a session remembers (the chosen reading theme, toolbar and split layout, windows and zoom) is each instance's own
+
+### 8.13 The default instance never touches the named instances' state
+- **Given** one or more named instances with state under `<state home>/scribobulate/instances/`
+- **When** the default instance saves its session, prunes its crash-recovery files, rotates its log, prunes its crash reports, or starts with no saved session
+- **Then** nothing under `instances/` is read, changed or deleted
+- **And** no named instance touches the default instance's files or another named instance's folder
+
+### 8.14 The XDG directories still choose where things live
+- **Given** a named instance launched with `XDG_STATE_HOME` and/or `XDG_CONFIG_HOME` pointing elsewhere
+- **When** it runs
+- **Then** its state lives under that state home and its settings come from that config home, exactly as for the default instance
+
+### 8.15 A launch without a name is unchanged
+- **Given** an existing installation with a saved session
+- **When** it is launched without `--instance`
+- **Then** it restores that session from where it always was, and reuses or is reused exactly as before (8.1, 8.5)
+
+### 8.16 A named instance says which one it is
+- **Given** a named instance
+- **When** any of its windows is shown
+- **Then** the window title ends with the application name followed by ` | ` and the instance name in the case it was typed with when the instance started (e.g. `--instance Work` gives "notes.md — Scribobulate | Work")
+- **And** a later launch that reaches the instance with a different spelling does not change its titles
+- **And** a window of the default instance keeps today's title, with no ` | <name>` suffix (e.g. "notes.md — Scribobulate")
+
+### 8.17 A named instance has its own desktop launcher
+- **Given** an instance launcher installed for a name (Linux)
+- **When** it is started from the desktop, and started again with a document
+- **Then** both reach the same named instance, its windows group under that launcher rather than under the default Scribobulate entry, and opening a Markdown file from the file manager still uses the default instance
+
 ## 9. Menu bar, toolbar, and actions
 
 ### 9.1 File ▸ New Document opens a tab in the current window
