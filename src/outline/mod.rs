@@ -221,6 +221,14 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
                     text.push_str(&t);
                 }
             }
+            // A setext heading's content can span source lines. The page shows a soft
+            // break as a space (TDD 2.20), and the renderer slugs either break as one,
+            // so the label reads as the page does and its slug is the heading's anchor.
+            Event::SoftBreak | Event::HardBreak => {
+                if let Some((_, _, ref mut text)) = current {
+                    text.push(' ');
+                }
+            }
             // Every other construct in pulldown-cmark's vocabulary contributes
             // nothing to a heading's label — spelled out per variant, not `_`, so a
             // parser upgrade that adds one fails to COMPILE here rather than
@@ -281,8 +289,6 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
             | Event::Html(_)
             | Event::InlineHtml(_)
             | Event::FootnoteReference(_)
-            | Event::SoftBreak
-            | Event::HardBreak
             | Event::Rule
             | Event::TaskListMarker(_) => {}
         }
@@ -450,5 +456,30 @@ mod tests {
             .collect();
         assert_eq!(ids.len(), 8, "fixture lists eight headings: {ids:?}");
         assert_eq!(section_fragments(&extract_headings(md)), ids);
+    }
+
+    /// A setext heading's content may span several source lines. A break between
+    /// them renders as a space (TDD 2.20), so the label reads as the page does and the
+    /// words do not run together — and the slug the outline derives from that label
+    /// is the anchor the export issues, which already read the break as a space.
+    #[test]
+    fn a_line_break_inside_a_heading_reads_as_a_space() {
+        // Under both line endings: a CRLF break is the same event with a two-byte
+        // range, and the label must not carry the `\r`.
+        let lf = "Foo\nbar\n===\n\nOne\\\ntwo\n---\n";
+        for md in [lf.to_string(), lf.replace('\n', "\r\n")] {
+            let labels: Vec<String> = extract_headings(&md).into_iter().map(|h| h.text).collect();
+            assert_eq!(labels, vec!["Foo bar", "One two"], "{md:?}");
+            let ids: Vec<String> = crate::export::doc::build(&md, &Default::default())
+                .blocks
+                .iter()
+                .filter_map(|b| match b {
+                    crate::export::Block::Heading { id, .. } => Some(format!("#{id}")),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(section_fragments(&extract_headings(&md)), ids);
+            assert_eq!(ids, vec!["#foo-bar", "#one-two"], "{md:?}");
+        }
     }
 }

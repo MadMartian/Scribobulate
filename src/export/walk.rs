@@ -261,12 +261,22 @@ impl<'a> Builder<'a> {
                     .push((src.start, src.end, before, self.rendered));
                 self.push_inline(Inline::Code(c.to_string()));
             }
+            // CommonMark line breaks, as the preview renders them (TDD 2.20): a soft
+            // break is a space, a hard break the one `Inline::Break` a sink draws as a
+            // line break. Either is one rendered char, the unit the claim mapper counts.
             Event::SoftBreak | Event::HardBreak => {
                 let before = self.rendered;
                 self.rendered += 1;
                 self.content_evs
                     .push((src.start, src.end, before, self.rendered));
-                self.push_inline(Inline::Break);
+                self.push_inline(if matches!(ev, Event::SoftBreak) {
+                    Inline::Text {
+                        text: " ".to_string(),
+                        span: (before, self.rendered),
+                    }
+                } else {
+                    Inline::Break
+                });
             }
             Event::Rule => {
                 self.flush_implicit();
@@ -852,3 +862,6 @@ fn is_block_end(tag: &TagEnd) -> bool {
             | TagEnd::Image
     )
 }
+
+#[cfg(test)]
+mod tests;

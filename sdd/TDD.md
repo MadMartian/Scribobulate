@@ -161,13 +161,16 @@
 - **And** `######` (h6) renders **identically** to `#####` (h5) — no distinct sixth tier exists on any surface (the buffer registers `h1`–`h5` only and the renderer folds h6 onto the `h5` tag), and the outline applies the same fold (an h6 entry takes the h5 row style)
 - *(Format ▸ Heading still offers all six for valid Markdown authoring — see 10.4 — but h6 and h5 are indistinguishable once rendered: a deliberate fold, since h4 is already body-adjacent and leaves no room for a distinct sixth tier below it.)*
 
-### 2.20 A single source line break renders as a line break
+### 2.20 Source line breaks follow CommonMark
 - **Given** a paragraph whose source wraps across several lines separated by a **single** newline each (e.g. `Line one\nLine two\nLine three`)
 - **When** it is rendered
-- **Then** each source line appears on its **own** rendered line — a single newline is an explicit line break (the hard-wrap model), not collapsed to a space as stock CommonMark would do
+- **Then** the lines flow as **one** line of text, each single newline (a CommonMark *soft break*) rendered as a space, and the text wraps to the width of the pane
+- **And** a *hard break* — two or more trailing spaces, or a backslash, before the newline — still renders as a line break
 - **And** a blank line (two newlines) still starts a new, separated paragraph
-- **And** the hard-wrap model applies *inside a list item's own text* too: an item's source line-wraps (and hard breaks) each render on their **own** rendered line, every line left-justified to the item's content margin (the marker is drawn in a left gutter, so there is no hanging `indent` to preserve — see 2.4a); a blank line starts a new (loose) paragraph, also at the content margin
-- *(Trade-off: prose hard-wrapped at a fixed column breaks at each wrap point — accepted for an editor previewing the author's own notes.)*
+- **And** the same holds in every inline context: inside a list item (tight or loose, at the item's content margin — see 2.4a), a blockquote, emphasis or a link, and beside inline code; a setext heading written across two lines renders on one line, and its outline label and `#anchor` read the break as a space (`#foo-bar`), as an export does
+- **And** the export (HTML and PDF) and find over a collapsed disclosure body read a soft break as the same space, so a phrase across one is found and exported as the page shows it
+- **And** a copy across a soft break still yields the Markdown source, newline included (2.8)
+- **And** all of the above holds for a CRLF document exactly as for an LF one: a `\r\n` soft break is one space, no `\r` reaches the page, and its copy yields `\r\n`
 
 ### 2.2 Tables
 - **Given** a GitHub-flavored Markdown table

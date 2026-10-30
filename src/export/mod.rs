@@ -218,7 +218,7 @@ pub(crate) enum Inline {
         inner: Vec<Inline>,
     },
     Image(ImageRef),
-    /// A soft or hard line break.
+    /// A hard line break (a soft break exports as a space, TDD 2.20).
     Break,
     /// An annotated claim — the index into [`ExportDoc::annotations`] plus the run it
     /// covers. Produced by a post-pass over the built tree, never by the walk, so the

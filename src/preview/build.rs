@@ -1647,11 +1647,12 @@ mod gtk_integration_tests {
     /// tag on/off toggle. Without those toggles, GtkTextView's `one_style_cache`
     /// reuses the previous line's style and DROPS the left-margin on toggle-free
     /// middle lines (GTK4Rs/AP-72). Assert the structural invariant that produces
-    /// the toggles: content chars are tagged, internal newlines are NOT.
+    /// the toggles: content chars are tagged, internal newlines are NOT. The quote's
+    /// lines end in HARD breaks: a soft break renders as a space (TDD 2.20), so only a
+    /// hard break still gives the quote several logical lines.
     #[gtktest::test]
     fn multiline_blockquote_tags_each_line_leaving_newlines_untagged() {
-        let md =
-            "Lead.\n\n> line one of the quote\n> line two of the quote\n> line three of the quote";
+        let md = "Lead.\n\n> line one of the quote\\\n> line two of the quote\\\n> line three of the quote";
         let products = build_render_products(md, None, 1.0, false);
         let buf = &products.buf;
         let tag = buf
@@ -1697,9 +1698,8 @@ mod gtk_integration_tests {
         );
     }
 
-    /// Phase 1: a list item's source line break renders as a
-    /// real newline again — the flow-to-spaces workaround is REVERTED (TDD 2.20 hard-wrap
-    /// restored inside lists). Every logical line of the item carries the uniform per-level
+    /// A HARD break inside a list item renders as a real newline (TDD 2.20; a soft
+    /// break flows as a space, `preview::linebreaks`). Every logical line of the item carries the uniform per-level
     /// `left_margin` tag applied PER LINE (content only, '\n' untagged — GTK4Rs/AP-72): the FIRST
     /// line gets `li-1` (the inter-item gap line), later lines get `li-1-cont`. Both
     /// variants share the SAME left-margin and `indent = 0` (no hanging indent — the marker
