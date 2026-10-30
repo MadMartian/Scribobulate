@@ -177,10 +177,10 @@
 - *(Cells are selectable, with working links — §2.9, §2.9a — but are per-cell selection islands.)*
 
 ### 2.2·a11y Text views use a screen-reader-safe wrap mode (no AT-SPI abort)
-- **Given** GTK 4.6 with a screen reader (Orca/AT-SPI) reading the preview
+- **Given** the preview, under any GTK, with or without a screen reader (Orca/AT-SPI) reading it
 - **When** AT-SPI requests the text-run attributes of the preview view or a run under the inline-code tag
-- **Then** the app does **not** abort: the preview view and the CodeInline tag use a `GtkWrapMode` in `PangoWrapMode`'s range (`Char`, never `WordChar`), because GTK 4.6's AT-SPI path casts the raw `GtkWrapMode` to `PangoWrapMode` untranslated and `WordChar`(3) is out of range → `pango_wrap_mode_to_string`'s `g_assert_not_reached()` (GTK4Rs/AP-136; 4.6-only, fixed 4.8+, restore `WordChar` at floor ≥4.8)
-- **And** `Char` also never produces an over-wide line, preserving the no-horizontal-overflow invariant §2.2 / GTK4Rs/AP-22 depends on (regression test in `preview::render`)
+- **Then** the app does **not** abort: on GTK **4.8 and later** the preview view and the CodeInline tag wrap at words and break within a word only when it cannot fit (`WordChar`); **below 4.8** they wrap at characters (`Char`), because GTK 4.6's AT-SPI path casts the raw `GtkWrapMode` to `PangoWrapMode` untranslated and `WordChar`(3) is out of range → `pango_wrap_mode_to_string`'s `g_assert_not_reached()` (GTK4Rs/AP-136)
+- **And** neither mode ever produces an over-wide line — never plain `Word`, which lets a long unbreakable token overflow — preserving the no-horizontal-overflow invariant §2.2 / GTK4Rs/AP-22 depends on (regression test in `preview::render`)
 
 ### 2.2a Table header row is visually distinguished
 - **Given** a GFM table (the header row is the row above the `---` delimiter row)
