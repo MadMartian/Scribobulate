@@ -178,7 +178,8 @@ they are not mistaken for body text, but carrying no editorial behaviour:
 ## Crash-recovery swap file (`*.swap`)
 
 A **swap file** is a periodic full-content snapshot of a dirty buffer, written to
-`$XDG_STATE_HOME/scribobulate/swap/` so an unclean exit does not discard unsaved work.
+`swap/` in the state directory (`$XDG_STATE_HOME/scribobulate/`, or its `instances/<name>/` for
+a named instance) so an unclean exit does not discard unsaved work.
 It crosses a boundary in time rather than between components — one process writes it, a
 later one reads it — which is why its shape is pinned here rather than left to the code.
 
@@ -242,7 +243,8 @@ understand is left untouched for the build that does.
 
 ## Window place in the session file (`[windows.place]`)
 
-`session.toml` (in `$XDG_STATE_HOME/scribobulate/`) is otherwise described by its own
+`session.toml` (in `$XDG_STATE_HOME/scribobulate/`, or `$XDG_STATE_HOME/scribobulate/instances/<name>/`
+for a named instance, `<name>` lower-cased) is otherwise described by its own
 types in `src/session/schema.rs`. Each `[[windows]]` entry carries one `[windows.place]`
 table, the window's **window place** (PRODUCT.md vocabulary), written by session save and
 read only by session restore. Every key is optional; an absent key means "not recorded"

@@ -137,9 +137,22 @@ pub(crate) fn window_title_for_tabs(tab_count: usize, active_tab_name: Option<&s
         1 => " (+1 document)".to_string(),
         n => format!(" (+{n} documents)"),
     };
+    window_title_in(extra, active_tab_name, crate::instance::current())
+}
+
+/// [`window_title_for_tabs`] with the instance made explicit, so the named-instance
+/// suffix is testable without selecting an instance for the whole test process. The
+/// suffix always ends the title: `notes.md (+2 documents) — Scribobulate | Work`,
+/// and `Scribobulate (+2 documents) | Work` with no document named (TDD 8.16).
+fn window_title_in(
+    extra: String,
+    active_tab_name: Option<&str>,
+    instance: Option<&crate::instance::InstanceName>,
+) -> String {
+    let suffix = crate::instance::title_suffix(instance);
     match active_tab_name {
-        Some(name) => format!("{name}{extra} — {APP_NAME}"),
-        None => format!("{APP_NAME}{extra}"),
+        Some(name) => format!("{name}{extra} — {APP_NAME}{suffix}"),
+        None => format!("{APP_NAME}{extra}{suffix}"),
     }
 }
 
@@ -749,6 +762,25 @@ mod tests {
             "Scribobulate (+3 documents)"
         );
         assert_eq!(window_title_for_tabs(0, None), "Scribobulate"); // transient zero-tab window
+    }
+
+    /// TDD 8.16: a named instance's titles end with its name as typed; the default
+    /// instance's (every assertion above, where no instance is selected) carry none.
+    #[test]
+    fn a_named_instance_ends_every_title_with_its_name() {
+        let work = crate::instance::InstanceName::parse("Work").unwrap();
+        assert_eq!(
+            super::window_title_in(" (+2 documents)".into(), Some("notes.md"), Some(&work)),
+            "notes.md (+2 documents) — Scribobulate | Work"
+        );
+        assert_eq!(
+            super::window_title_in(String::new(), None, Some(&work)),
+            "Scribobulate | Work"
+        );
+        assert_eq!(
+            super::window_title_in(String::new(), Some("notes.md"), None),
+            "notes.md — Scribobulate"
+        );
     }
 
     // A fixed sentinel colour so the ordering assertions don't hard-code a

@@ -54,6 +54,28 @@ itself, which is why it does not appear in
 .BR \-\-help :
 by the time GLib parses options, the decision it controls has already been made.
 .TP
+.BI \-\-instance " NAME\fR, " \-\-instance= NAME
+Run as the named instance
+.IR NAME :
+a separate, reusable copy of the application with its own windows, session,
+crash recovery and log. Launches with the same name reuse each other; launches
+with a different name, or none, never reach it. Its state lives in
+.IR instances/name/
+under the default state directory, and its window titles end with
+.RI \(lq\ |\  NAME \(rq.
+Settings are shared with every other instance unless
+.B XDG_CONFIG_HOME
+is redirected for it.
+.IP
+.I NAME
+is a short run of ASCII letters and digits starting with a letter, and is not case
+sensitive: the folder and the application ID use it in lower case, and only the
+title keeps the spelling given. Any other name is refused with a message and a
+non-zero exit; it never falls back to the default instance. Like
+.BR \-\-new\-instance ,
+this switch does not appear in
+.BR \-\-help .
+.TP
 .B \-\-probe\-startup
 Print a startup marker and exit 0 without opening a window. It is a packaging
 self-check \(em reaching this point proves the executable resolved its entire
@@ -155,9 +177,20 @@ arguments to the running process and exits, so one process holds every window an
 every document. Passing
 .B \-\-new\-instance
 opts out of the negotiation for that launch only.
+.PP
+A named instance
+.RB ( \-\-instance
+.IR NAME )
+registers
+.BI com.extollit.scribobulate. name
+instead, with the name in lower case, so it negotiates only with launches of the
+same name. On X11 its window class is
+.BI scribobulate\- name\fR.
 .SH EXIT STATUS
 Returns 0 on a clean shutdown and a non-zero status if GTK could not be
-initialised \(em most commonly because no display is available.
+initialised \(em most commonly because no display is available \(em or if
+.B \-\-instance
+was given an invalid name.
 .SH NOTES
 On GTK versions before 4.12 the application redirects its own
 .B XDG_CONFIG_HOME

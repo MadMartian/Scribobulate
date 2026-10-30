@@ -50,7 +50,7 @@
 
   <rect class="note" x="26" y="62" width="948" height="30" rx="4" stroke-width="1"/>
   <text class="lbl" x="36" y="75" font-size="10.5"><tspan font-weight="bold">Single instance (HANDLES_OPEN):</tspan> a second launch with file arguments forwards its argv over D-Bus to this process — no second process starts.</text>
-  <text class="lbl" x="36" y="87" font-size="10.5"><tspan class="mono">--new-instance</tspan> opts out; it is stripped from argv in <tspan class="mono">main()</tspan> before registration, because registration forwards argv before any handler runs.</text>
+  <text class="lbl" x="36" y="87" font-size="10.5"><tspan class="mono">--new-instance</tspan> opts out; <tspan class="mono">--instance NAME</tspan> picks a separate ID and state folder. Both are stripped from argv before registration, which forwards argv before any handler runs.</text>
 
   <!-- ── Document Window ────────────────────────────────────────────────── -->
   <rect class="group" x="26" y="102" width="616" height="406" rx="5" stroke-width="1.5"/>

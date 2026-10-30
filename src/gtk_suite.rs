@@ -110,6 +110,7 @@ mod icons;
 mod imagecache;
 mod imagedecode;
 mod imagefetch;
+mod instance;
 mod keynav;
 mod limits;
 mod lineendings;

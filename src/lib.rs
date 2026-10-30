@@ -79,6 +79,7 @@ pub(crate) mod imagecache;
 /// goes through it.
 pub(crate) mod imagedecode;
 pub(crate) mod imagefetch;
+pub(crate) mod instance;
 pub(crate) mod keynav;
 pub(crate) mod limits;
 pub(crate) mod lineendings;
@@ -239,6 +240,28 @@ pub fn run() -> glib::ExitCode {
         return glib::ExitCode::SUCCESS;
     }
 
+    // `--instance NAME` (TDD 8.9–8.17): decided here, before logging starts, because
+    // the persistent log and the crash reports live in the state folder and a named
+    // instance's belong in its own; and before the application registers, because
+    // uniqueness is keyed by the application ID the name selects (GTK4Rs/AP-17). A
+    // refused name ends the launch here: no window, no fallback to the default
+    // instance (TDD 8.10). The switch is taken out of argv so it never reaches
+    // `HANDLES_OPEN` as a file. See `instance`.
+    //
+    // Ahead of `--version` so that `--instance NAME --version` is the validator the
+    // Linux launcher installer asks (exit status and message), instead of a second
+    // copy of the name rules in shell.
+    let argv = match instance::instance_argv(argv) {
+        Ok((name, rest)) => {
+            instance::select(name);
+            rest
+        }
+        Err(refusal) => {
+            eprintln!("scribobulate: {refusal}");
+            return glib::ExitCode::FAILURE;
+        }
+    };
+
     // `--version`, answered here for the same reason `--probe-startup` is: before any
     // window, any GTK initialisation, and — on macOS — before the single-instance handoff
     // that would otherwise forward it to a running primary as a FILE PATH. That forwarding
@@ -319,15 +342,27 @@ pub fn run() -> glib::ExitCode {
     // switch so the remaining args still flow into HANDLES_OPEN as file paths.
     // The decision itself is `app::new_instance_argv` — pure, and unit-tested there
     // rather than here, where the coverage gate cannot reach it.
-    let (force_new, args) = app::new_instance_argv(std::env::args().collect());
+    let (force_new, args) = app::new_instance_argv(argv.clone());
 
     let mut flags = ApplicationFlags::HANDLES_OPEN;
     if force_new {
         flags |= ApplicationFlags::NON_UNIQUE;
     }
 
+    // A named instance's program name, `<program-name>-<instance-name>`, is the X11
+    // window class its launcher's `StartupWMClass` names. Set before
+    // `run_with_args`, which only sets it if unset, and before any window exists: a
+    // window keeps the class it was created with. The default instance leaves GLib's.
+    if let Some(program) = argv
+        .first()
+        .and_then(|program| instance::program_name_for(program, instance::current()))
+    {
+        glib::set_prgname(Some(program.as_str()));
+    }
+
+    let app_id = instance::app_id_for(APP_ID, instance::current());
     let app = Application::builder()
-        .application_id(APP_ID)
+        .application_id(app_id.as_str())
         .flags(flags)
         .build();
 
@@ -356,7 +391,7 @@ pub fn run() -> glib::ExitCode {
     // and it is why the two platforms disagreed at all, since GIO parses options before it
     // forwards and Linux therefore never showed the defect.
     #[cfg(target_os = "macos")]
-    let _single_instance = if force_new || app::carries_option_argument(&argv) {
+    let _single_instance = if force_new || app::carries_option_argument(&args) {
         None
     } else {
         use crate::platform::mac::single_instance::{elect, Launch};

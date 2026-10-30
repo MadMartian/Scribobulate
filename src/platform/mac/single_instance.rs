@@ -168,8 +168,16 @@ fn paths() -> Option<(PathBuf, PathBuf)> {
         return None;
     }
 
-    let sock = dir.join("handoff.sock");
-    let lock = dir.join("handoff.lock");
+    // One rendezvous per instance (TDD 8.9). The default instance keeps the names it
+    // always used, so it still meets a running older build. A named instance's carry a
+    // short tag rather than the name itself: a 32-character name would push the socket
+    // path past the limit checked below and silently switch its handoff off.
+    let stem = match crate::instance::current() {
+        Some(name) => format!("handoff-{}", crate::instance::short_tag(name)),
+        None => "handoff".to_owned(),
+    };
+    let sock = dir.join(format!("{stem}.sock"));
+    let lock = dir.join(format!("{stem}.lock"));
 
     // `sockaddr_un.sun_path` is 104 bytes on macOS (`sys/un.h`) and an
     // over-long path is TRUNCATED, not rejected — two processes would then bind
@@ -230,6 +238,34 @@ fn paths() -> Option<(PathBuf, PathBuf)> {
 /// later check even though `/tmp` is world-writable — only its owner (or
 /// root) can remove an entry they don't own from a sticky directory.
 fn ensure_private_dir(dir: &Path) -> bool {
+    // Create first and verify on `AlreadyExists`, never look first and then create:
+    // launches started together (the default instance and a named one) race here, and
+    // the loser of a look-then-create gets `EEXIST` for a directory that did not exist
+    // when it looked. Refusing that left the process with its handoff off. An entry
+    // that appeared mid-race is held to exactly the same check as one that was there
+    // first, because nothing says it is the winner's and not an attacker's.
+    //
+    // `DirBuilder::mode` can only be narrowed by the process umask, never widened by
+    // it — umask clears requested bits, it never sets ones we didn't ask for — so a
+    // `0700` request can never produce a directory with group/other bits set,
+    // regardless of the ambient umask. No follow-up `chmod` is needed for correctness;
+    // unlike R1-S02's socket narrowing, there is no window here where the directory
+    // exists at a looser mode.
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    match builder.create(dir) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => is_private_dir(dir),
+        Err(e) => {
+            log::warn!("single-instance: cannot create {}: {e}", dir.display());
+            false
+        }
+    }
+}
+
+/// Whether the existing entry at `dir` is exactly ours: a real directory (not a
+/// symlink), owned by this uid, with no group/other bits. Logs and refuses anything else.
+fn is_private_dir(dir: &Path) -> bool {
     let uid = unsafe { libc::getuid() };
     match std::fs::symlink_metadata(dir) {
         Ok(meta) => {
@@ -246,23 +282,9 @@ fn ensure_private_dir(dir: &Path) -> bool {
                 false
             }
         }
-        Err(_) => {
-            // `DirBuilder::mode` can only be narrowed by the process umask,
-            // never widened by it — umask clears requested bits, it never
-            // sets ones we didn't ask for — so a `0700` request can never
-            // produce a directory with group/other bits set, regardless of
-            // the ambient umask. No follow-up `chmod` is needed for
-            // correctness; unlike R1-S02's socket narrowing, there is no
-            // window here where the directory exists at a looser mode.
-            let mut builder = std::fs::DirBuilder::new();
-            builder.mode(0o700);
-            match builder.create(dir) {
-                Ok(()) => true,
-                Err(e) => {
-                    log::warn!("single-instance: cannot create {}: {e}", dir.display());
-                    false
-                }
-            }
+        Err(e) => {
+            log::warn!("single-instance: cannot inspect {}: {e}", dir.display());
+            false
         }
     }
 }
@@ -551,4 +573,61 @@ fn forward(sock_path: &Path, args: &[String]) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_private_dir;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Arc, Barrier};
+
+    /// Two launches at once with no rendezvous directory yet (the default instance and a
+    /// named one, say) both try to create it. The one that loses must still accept the
+    /// directory the winner made: refusing it left that process with its handoff off, so
+    /// every later launch of it started a process of its own. Many rounds, because one
+    /// round rarely lands in the gap between looking and creating.
+    #[test]
+    fn launches_racing_to_create_the_rendezvous_directory_all_accept_it() {
+        const THREADS: usize = 8;
+        const ROUNDS: usize = 200;
+        let root = tempfile::tempdir().unwrap();
+        for round in 0..ROUNDS {
+            let dir = Arc::new(root.path().join(format!("r{round}")));
+            let barrier = Arc::new(Barrier::new(THREADS));
+            let refused = (0..THREADS)
+                .map(|_| {
+                    let (dir, barrier) = (Arc::clone(&dir), Arc::clone(&barrier));
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        ensure_private_dir(&dir)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(std::thread::JoinHandle::join)
+                .filter(|joined| !matches!(joined, Ok(true)))
+                .count();
+            assert_eq!(
+                refused, 0,
+                "round {round}: a racing launch refused the directory"
+            );
+        }
+    }
+
+    /// The race fix must not relax the check: an existing directory that others can
+    /// enter is still refused, whether it was there first or appeared mid-race.
+    #[test]
+    fn an_existing_directory_others_can_enter_is_still_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("open");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!ensure_private_dir(&dir));
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(root.path(), &link).unwrap();
+        assert!(
+            !ensure_private_dir(&link),
+            "a symlink is never the rendezvous"
+        );
+    }
 }

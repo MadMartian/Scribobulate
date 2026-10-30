@@ -28,6 +28,9 @@
 # Usage:
 #   packaging/linux/install.sh          # build, then install into ~/.local
 #   packaging/linux/install.sh --no-build   # install an existing release binary
+#   packaging/linux/install.sh --instance NAME [--state-home DIR] [--config-home DIR]
+#       # add a launcher for the named instance NAME to an existing install (TDD 8.17);
+#       # builds nothing. See instance.sh.
 #
 # REACHED BY `./install.sh` AT THE REPO ROOT, which is a router that dispatches on
 # `uname -s`; running this file directly is equivalent. The root script holds no install
@@ -57,6 +60,42 @@ DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
 BIN_PATH="$BIN_DIR/$PKG"
 APP_DIR="$DATA_DIR/applications"
 DESKTOP_PATH="$APP_DIR/$PKG.desktop"
+
+# --- A named instance's launcher, and nothing else ------------------------------------
+if [ "${1:-}" = "--instance" ]; then
+    # shellcheck source=packaging/linux/instance.sh
+    . "$repo/packaging/linux/instance.sh"
+    name="${2:-}"
+    shift 2 || { echo "install: --instance needs a name" >&2; exit 1; }
+    state_home=""
+    config_home=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --state-home)  state_home="${2:?--state-home needs a directory}"; shift 2 ;;
+            --config-home) config_home="${2:?--config-home needs a directory}"; shift 2 ;;
+            *) echo "install: unknown option with --instance: $1" >&2; exit 1 ;;
+        esac
+    done
+    [ -x "$BIN_PATH" ] || {
+        echo "install: $BIN_PATH is not installed; run install.sh without --instance first" >&2
+        exit 1
+    }
+    # The installed binary owns the name rules; it prints why it refuses one.
+    "$BIN_PATH" --instance "$name" --version >/dev/null || exit 1
+    [ -z "$state_home" ] || instance_check_dir "--state-home" "$state_home" || exit 1
+    [ -z "$config_home" ] || instance_check_dir "--config-home" "$config_home" || exit 1
+
+    launcher="$(write_instance_launcher "$name" "$BIN_PATH" "$state_home" "$config_home")"
+    if command -v desktop-file-validate >/dev/null 2>&1; then
+        desktop-file-validate "$launcher" && echo "   desktop entry valid"
+    fi
+    refresh_launcher_index
+    echo
+    echo "Added a launcher for the Scribobulate instance \"$name\"."
+    echo "  launcher : $launcher"
+    echo "  remove   : packaging/linux/uninstall.sh --instance $name"
+    exit 0
+fi
 
 BIN="target/release/$PKG"
 if [ "${1:-}" = "--no-build" ]; then

@@ -201,6 +201,67 @@ mod tests {
     use schema::sample_session;
     use statedir::with_state_home_for_test as with_state_home;
 
+    /// Every file and folder under `root`, with each file's bytes, in a stable order.
+    fn tree(root: &std::path::Path) -> Vec<(std::path::PathBuf, Option<Vec<u8>>)> {
+        let mut out = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                let rel = path.strip_prefix(root).unwrap().to_path_buf();
+                if path.is_dir() {
+                    out.push((rel, None));
+                    pending.push(path);
+                } else {
+                    out.push((rel, Some(std::fs::read(&path).unwrap())));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// TDD 8.13: the default instance's state work never reaches into `instances/`.
+    /// Each file planted there has the name of one the default instance itself reads,
+    /// writes, rotates or prunes at its own level, so a lookup that strayed one folder
+    /// down would find a target.
+    #[test]
+    fn the_default_instance_leaves_the_named_instances_folder_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        with_state_home(dir.path(), || {
+            // Spelled out, not asked of `state_directory`: the lookup is part of what
+            // is under test, and a test that took its paths from it would follow it
+            // anywhere (mutation-tested: with the default instance's folder moved into
+            // `instances/`, a version reading the paths back stayed green).
+            let state = dir.path().join("scribobulate");
+            assert_eq!(state_directory(), Some(state.clone()), "TDD 8.15");
+            let instances = state.join("instances");
+            let named = instances.join("work");
+            let swap = crate::swapfile::swap_directory().unwrap();
+            std::fs::create_dir_all(named.join(swap.file_name().unwrap())).unwrap();
+            for name in [
+                "session.toml",
+                "scribobulate.log",
+                "crash-20260101T000000Z-1.log",
+                "crash-last-seen",
+            ] {
+                std::fs::write(named.join(name), format!("named {name}")).unwrap();
+            }
+            let before = tree(&instances);
+
+            save(&sample_session());
+            save(&Session::default());
+            assert_eq!(load(), Session::default());
+            crate::forensics::report::announce_unread_report(&state);
+
+            assert_eq!(tree(&instances), before);
+            assert!(
+                state.join("session.toml").is_file(),
+                "the default instance saves at its own level"
+            );
+        });
+    }
+
     #[test]
     fn save_then_load_round_trips_through_the_filesystem() {
         let dir = tempfile::tempdir().unwrap();

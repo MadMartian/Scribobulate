@@ -11,7 +11,16 @@ packaging/linux/build-deb.sh --build  # cargo build --release first
 
 packaging/linux/install.sh            # build from source -> ~/.local, no root
 packaging/linux/install.sh --no-build # install an existing release binary
+packaging/linux/install.sh --instance work [--state-home DIR] [--config-home DIR]
+                                      # add a launcher for a named instance (TDD 8.17)
+packaging/linux/uninstall.sh --instance work  # remove that launcher; its state stays
 ```
+
+An instance launcher is a desktop entry named after the instance's application ID
+(`com.extollit.scribobulate.<name>.desktop`), because that is what the desktop matches
+a running window against; it registers no MIME types, so a double-clicked `.md` still
+opens in the default instance. It needs the normal install first and builds nothing.
+`instance.sh` writes it; the installed binary decides whether the name is valid.
 
 The two builders are also step 9 of the build pipeline (`scripts/pipeline.sh
 --package`), which is opt-in — see `scripts/pipeline.steps`. `install.sh` is not part
