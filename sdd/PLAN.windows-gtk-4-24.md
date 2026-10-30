@@ -1,7 +1,7 @@
 # Plan: Move Windows to gvsbuild 2026.10.0 (GTK 4.24.1, fixed librsvg)
 
-**Status**: in progress (deferral lifted 2026-10-30). Phase 1: pin moved and the pipeline green
-on GTK 4.24.1, with the Win32 input-method workaround below; ratification (step 4) onwards owed.
+**Status**: in progress (deferral lifted 2026-10-30; the operator chose to ship with the Win32
+input-method workaround below). Phase 1 steps 1–5 done; step 6 and phase 2 owed.
 
 ## Problem
 
@@ -80,9 +80,20 @@ Approach 1, in two phases, each its own commit and ratification.
    frame, desktop light/dark, window-place restore including the 125%/150% run, popovers and menus,
    keys and focus), plus the 4.24 changes the gtk4-rs skill records (reduced-motion scroll jumps,
    capture-phase click gestures, popover anchor-resize). Add whatever the step 1 diff turns up.
+   **Done**: every Windows check driven passed unchanged, including window-place at 100/125/150%
+   (sizes exact, no creep). Not run, each for a stated reason: fullscreen restore (Windows has no
+   fullscreen control), the taskbar and Alt+Tab icon (outside a window capture), and the two
+   gestures above (covered by the GTK suite only). The step 1 diff turned up the input-method
+   defect below and nothing else that changed a workaround.
 5. **Footprint and attribution.** Measure VRAM on the release build (POLICY: a rendering-dependency
    change; 50 MiB ceiling). Run the licence verification for the changed dependencies, and record
    the installer size against the previous one.
+   **Done**: VRAM unmeasurable on the `windows` seat — the GPU memory counter reads 0 for every
+   process there, the compositor included — so the ceiling stands on the Cairo renderer the log
+   confirms and on the other platforms' readings. Licence gate clean for the runtime (921 staged
+   files, 35 rows); the librsvg Rust notice regenerated for 2.63.2; the attribution documents
+   updated to 2026.10.0's measured versions and patch set (GTK 4 is no longer patched). Installer
+   45,601,663 bytes, the first figure on record.
 6. **Prove the fix is delivered.** Measure the librsvg version in the installed tree, and add a
    packaging check that refuses an installer whose librsvg is below the fixed release.
 
