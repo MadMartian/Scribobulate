@@ -90,8 +90,8 @@ Approach 1, in two phases, each its own commit and ratification.
    the installer size against the previous one.
    **Done**: VRAM unmeasurable on the `windows` seat — the GPU memory counter reads 0 for every
    process there, the compositor included — so the ceiling stands on the Cairo renderer the log
-   confirms and on the other platforms' readings. Licence gate clean for the runtime (921 staged
-   files, 35 rows); the librsvg Rust notice regenerated for 2.63.2; the attribution documents
+   confirms and on the other platforms' readings. Licence gate clean (921 staged files, 36 rows,
+   the 36th attributing the app's own theme sprites, which had none); the librsvg Rust notice regenerated for 2.63.2; the attribution documents
    updated to 2026.10.0's measured versions and patch set (GTK 4 is no longer patched). Installer
    45,601,663 bytes, the first figure on record.
 6. **Prove the fix is delivered.** Measure the librsvg version in the installed tree, and add a

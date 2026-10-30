@@ -76,8 +76,22 @@
             License   = 'Apache-2.0'
             Source    = 'repo:LICENSE'
             Expect    = 'Apache License'
-            Evidence  = 'I'
-            Basis     = 'Inferred from the SOURCE TREE, not the artefact, because the seat that added this row cannot stage on Windows: data\themes.toml is versioned here, carries no third-party content, and stage.ps1 copies it verbatim. Promote to M on the first -Package run that sees it.'
+            Evidence  = 'M'
+            Basis     = 'data\themes.toml is versioned here, carries no third-party content, and stage.ps1 copies it verbatim; seen staged at share\scribobulate\themes.toml by a -Package run on the windows seat.'
+        },
+        @{
+            # The reading themes' decoration art (Pixel Quest and Candy), staged from
+            # data\sprites. Project-original, licensed as Scribobulate itself, by the
+            # operator's ruling. Names each file rather than the directory, for the reason
+            # the themes row gives: a new sprite must reach this table on purpose.
+            Id        = 'scribobulate-sprites'
+            Component = 'Scribobulate (theme decoration art)'
+            Match     = '^share\\scribobulate\\sprites\\(candy-sparkles-h1|candy-sparkles-h2|candy-stripes|chest-marker|copper-plate|flower-marker|grass-platform|scene-cave|scene-knoll|scene-reef|scene-ridge|scene-stage|sign-down|sign-right|slime-marker|sword)\.png$'
+            License   = 'Apache-2.0'
+            Source    = 'repo:LICENSE'
+            Expect    = 'Apache License'
+            Evidence  = 'M'
+            Basis     = 'Project-original art (operator ruling, 2026-10-30), versioned under data\sprites and staged verbatim by stage.ps1.'
         },
         @{
             # NOT STAGED TODAY. The About dialog tells the user this file is "in the

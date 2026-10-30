@@ -143,16 +143,17 @@ duty in `SOURCE-AVAILABILITY.md` turns on.
 |---|---|---|---|
 | dev prefix, 2026.6.0 | 902 | 35 | 1 problem — `msvc-runtime` |
 | **shipped prefix, 2026.8.0** | **903** | **35** | **1 problem — `msvc-runtime`** |
-| **shipped prefix, 2026.10.0** | **921** | **35** | **Conditions 2–4 clean; condition 1: 16 files** |
+| **shipped prefix, 2026.10.0** | **921** | **36** | **PASS** |
 
 Conditions 1, 2 and 4 clean **against the GTK that actually ships**. The table
 covers the shipped tree, not merely a same-named lookalike.
 
 At 2026.10.0 (measured on the `windows` seat, staged with `stage.ps1 -GtkPrefix` from the
 published zip) every runtime file is attributed and every licence text is present and is
-the licence. The 16 condition-1 files are **not the runtime**: they are the app's own
-`share\scribobulate\sprites\*.png`, which no row claims. That gap is the repository's,
-independent of the GTK pin, and is open.
+the licence. The first run there failed condition 1 on 16 files that were **not the
+runtime**: the app's own theme sprites, staged with no row. The operator ruled them
+project-original under Scribobulate's own licence, and the `scribobulate-sprites` row
+(the 36th) closes it.
 
 **The one-file difference is real and was chased rather than rounded off.**
 2026.8.0 stages one extra file — `share\icons\Adwaita\symbolic\places\folder-drag-accept-symbolic.svg`
