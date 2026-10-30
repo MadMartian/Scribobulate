@@ -58,6 +58,9 @@ pub(crate) mod docio;
 pub(crate) mod docref;
 pub(crate) mod export;
 pub(crate) mod farscroll;
+/// Clears a window's focus before the widget holding it is unrealized, so GTK 4.24's
+/// Win32 input method can remove its message filter (a GTK use-after-free otherwise).
+pub(crate) mod focusrelease;
 pub(crate) mod fold;
 pub(crate) mod forensics;
 pub(crate) mod format;

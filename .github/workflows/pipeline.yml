@@ -487,8 +487,8 @@ jobs:
       #   gh api repos/wingtk/gvsbuild/releases/tags/<version> \
       #     | yq -r '.assets[] | [.name, .digest] | @tsv'
       # Hashing what you just downloaded proves only that the download did not corrupt.
-      GVSBUILD_VERSION: "2026.8.0"
-      GVSBUILD_SHA256: "1f95a92d037f5292da05e6ab1037032ff21ddb7b20d4ac8e83e3674c864c07b0"
+      GVSBUILD_VERSION: "2026.10.0"
+      GVSBUILD_SHA256: "8005b860447e73b10c7f508b1f348e2b6390e01dd61fd5c617b8190a046022fe"
       SCRIB_GTK_PREFIX: 'C:\gtk-build\gtk\x64\release'
     steps:
       # Before checkout, so the checkout itself is covered by it.

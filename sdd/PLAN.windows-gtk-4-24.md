@@ -1,6 +1,7 @@
 # Plan: Move Windows to gvsbuild 2026.10.0 (GTK 4.24.1, fixed librsvg)
 
-**Status**: deferred by the operator (2026-10-28). Not started.
+**Status**: in progress (deferral lifted 2026-10-30). Phase 1: pin moved and the pipeline green
+on GTK 4.24.1, with the Win32 input-method workaround below; ratification (step 4) onwards owed.
 
 ## Problem
 
@@ -147,5 +148,11 @@ Rubric 2 replaces 2.23c's platform clause.*
   compiled in), while the README's local recipe builds `--configuration release` (assertions
   compiled out, GTK4Rs/AP-272). A critical that appears in only one of them is this, not a
   platform difference.
+- **GTK 4.24.1 brought a Win32 input-method use-after-free** (GNOME/gtk MR !9958; fixed by MR
+  !10411, in no gvsbuild release yet): a focused text widget unrealized before it loses focus
+  leaves a display-wide message filter on its freed context. 16 of the GTK suite's cases failed
+  on it, none on 4.22.4 with the same binary. `src/focusrelease.rs` clears the window's focus
+  first, from one `unrealize` emission hook; retire it when the pin carries the fix. Whether to
+  ship the move with that workaround or hold for a fixed release is the operator's call.
 - **macOS is already on GTK 4.24.1** (Homebrew) and its pipeline is green there, so 4.24's
   cross-platform behaviour is partly ratified. What is new here is GDK-Win32.
