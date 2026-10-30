@@ -59,6 +59,7 @@ described from a different vantage point.
 | R | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | S | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
 | T | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
+| V | Windows | Production | Dragging a tab into another window's tabs sometimes crashes or hangs the app, and once left the tab's widget inside the destination's editor or preview pane. Intermittent; no crash report was written, and Windows logged a hang | High |
 
 ## Closed issues
 
@@ -463,6 +464,45 @@ is not ruled out.
 **Fix**: upstream, a destroyed-surface guard in `windowDidResize:`. An app-side workaround
 (leaving full screen before closing) would add AppKit's exit animation to every close of a
 full-screen window, a visible cost for a log line; it has not been tried.
+
+## V. Dragging a tab between windows on Windows sometimes crashes, and once left the tab inside the document
+
+**Severity**: High (the app crashes, and a misplaced tab leaves the window in a state the
+user cannot recover from without closing it).
+
+**Observed** (user report, 2026-10-31, Windows). Two symptoms while dragging a tab from one
+window into the tabs of another window; intermittent, and the user cannot reproduce it on
+demand:
+- The app sometimes crashes during or after the drag.
+- Once, the dragged tab did not land in the destination window's tab bar: its tab widget
+  appeared inside the editor or preview pane, as if it had been made a child of the
+  document view.
+
+**Evidence from the reporter's machine** (relayed by its agent, 2026-10-31; release builds from
+early and mid October, GTK 4.22.4, cairo, Windows 11):
+- **No crash report was written**, and Windows recorded no application crash. The one
+  unclean end with a Windows event is a **hang**: Application Hang (1002) / AppHangB1, "stopped
+  interacting with Windows and was closed", most likely the run whose log ends 5 s after
+  session restore on a `Pango: All font fallbacks failed!!!!` warning. So at least one
+  "crash" is a hang the crash handler cannot see.
+- `Gtk: Error finding last focus widget of GtkPaned …, gtk_paned_set_focus_child was called on
+  widget 0000000000000000 which is not child of …`, 14 ms after `window close-request (0 tabs,
+  forced: false)`, a window closing after its last tab left it. It repeated later alongside
+  `GtkLabel … reported min width -5, but sizes must be >= 0` (three labels).
+- Unclean exits restored from swap on six dates between 2026-09-14 and 2026-10-10.
+- Nothing logs a tab drag at the default level, so the log cannot show where a drag ended.
+
+**Checked so far**: the `windows` seat ran MANUAL-TEST 7.6 (tab drag between windows) and
+7.10 (tab to the desktop) on GTK 4.24.1 and both passed, but the rejected-drop case (a tab
+dropped on another window's document) was weak: the drag could not be proven to have
+started. Linux and macOS have not been checked against this report.
+
+**Not established**: whether the crash and the misplaced tab are one defect; whether the
+drop target that received the tab was the document view's own drop handling (files dropped
+on a document) taking a tab payload; whether the hang is the same defect; and a reproduction. Start with the
+user's crash report from the state directory (`crash-*.log`) and the log, then the
+cross-window drag code in `src/window/tabs`, and drive drops onto the editor and preview
+of a second window on each platform.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

@@ -87,13 +87,14 @@ Each entry carries, in this order:
 |---|---|---|---|---|
 | [ScrSEC-1](#scrsec-1-librsvg-use-after-free-through-an-svgs-xinclude-cve-2026-96889) | Worked around | High | CVE-2026-96889 / CWE-416; workaround leaks CWE-436, CWE-184, CWE-407, CWE-636/693 | librsvg use-after-free through an SVG's XInclude |
 | [ScrSEC-2](#scrsec-2-the-macos-bundle-could-load-a-library-placed-beside-the-app) | Patched | High | no CVE / CWE-427 | The macOS bundle could load a library placed beside the `.app` |
+| [ScrSEC-3](#scrsec-3-gtk-424s-win32-input-method-keeps-a-message-filter-on-a-freed-context) | Worked around | Medium | no CVE / CWE-416 | GTK 4.24's Win32 input method keeps a message filter on a freed context |
 
 ---
 
 ## ScrSEC-1. librsvg use-after-free through an SVG's XInclude (CVE-2026-96889)
 
 **Status**: Worked around (Linux, Windows; macOS run outside its bundle). Fixed by packaging on
-macOS from the bundle.
+macOS from the bundle, and on Windows, where the screen still runs until its stand-down is built.
 
 **Severity**: High. A crafted SVG can corrupt memory. Code execution has a published route only for
 a non-PIE glibc executable; ours is PIE on every platform checked, so the realistic worst case is a
@@ -129,9 +130,9 @@ that entity while libxml2 is still expanding it.
   when we learned of it.
 - **gvsbuild (Windows packaging) — pre-existing, delivered**: no ticket needed; gvsbuild updated its
   librsvg pin itself ("Update librsvg to version 2.63.2", 2026-10-05), and its release **2026.10.0**
-  (2026-10-26) ships librsvg 2.63.2 (its `main` already pins 2.63.4). Our CI still pins gvsbuild
-  2026.8.0 (librsvg 2.62.3). Moving to 2026.10.0 also moves Windows from GTK 4.22.4 to 4.24.1,
-  so it is an operator decision with its own ratification, not a pin edit.
+  (2026-10-26) ships librsvg 2.63.2 (its `main` already pins 2.63.4). Our CI pins gvsbuild
+  2026.10.0 ("Move the Windows runtime to gvsbuild 2026.10.0 (GTK 4.24.1) …", 2026-10-31), which
+  also moved Windows to GTK 4.24.1 (see ScrSEC-3).
 - **Ubuntu (Linux packaging) — pre-existing**: https://ubuntu.com/security/CVE-2026-96889, which
   marks jammy (22.04, librsvg 2.52.5) **Not affected** (read by the operator 2026-10-28). That is
   Ubuntu's assessment, not our measurement, and it covers one distribution release; other
@@ -162,7 +163,7 @@ built gdk-pixbuf. The row below is the library that route loads.
 |---|---|---|
 | macOS, from the `.app` | 2.63.2, staged from Homebrew by the bundle build, which fails below 2.63.2 | Yes |
 | macOS, binary run outside a bundle | Homebrew's, whatever is installed | Not guaranteed — screened as Linux |
-| Windows | 2.62.3, from the gvsbuild GTK zip pinned in CI | No |
+| Windows | 2.63.2, from the gvsbuild 2026.10.0 GTK zip pinned in CI; the installer build refuses a staged librsvg below `packaging/librsvg-floor` | Yes |
 | Linux | the distribution's `librsvg-2.so.2`, loaded directly (Ubuntu 22.04: 2.52.5+dfsg-3ubuntu0.2; Ubuntu 26.04: 2.61.3+dfsg-3ubuntu0.1) | Ubuntu 22.04: not affected, per Ubuntu's tracker (vendor assessment, not measured by us); Ubuntu 26.04 and other distributions unassessed |
 
 **Workaround**: the XInclude screen, `src/imagedecode/xinclude.rs` (TDD 2.23c), runs ahead of every
@@ -309,9 +310,9 @@ and mutations can compose. POLICY § Unit tests says when to run its long run; a
 recorded here as "Round: differential test".
 
 **To close for good**:
-- **Windows**: move the CI workflow's gvsbuild pin to 2026.10.0 or later (librsvg ≥ 2.63.2 is
-  released there), ratified on the `windows` seat for the GTK 4.24 move it brings; measure the
-  librsvg version in the installed tree.
+- **Windows**: done in packaging (gvsbuild 2026.10.0, librsvg 2.63.2 measured in the installed
+  tree, 2026-10-31). What remains is to stand the screen down on Windows only when the loaded
+  librsvg is at or above the floor, as the macOS bundle does, and then delete it there.
 - **Linux**: per distribution, either a librsvg ≥ 2.63.2 (or a vendor backport), or a vendor "not
   affected" assessment that we have confirmed by measurement — the published trigger run against
   that distribution's librsvg under a memory checker. Ubuntu 22.04 has the assessment, unconfirmed,
@@ -381,3 +382,48 @@ librsvg from what dyld loaded") TDD and MANUAL-TEST 26.1 carry the check that a 
 
 **To close for good**: nothing upstream. This entry stays Patched while the bundle copies
 third-party libraries; it is the record of why those gates must not be removed.
+
+---
+
+## ScrSEC-3. GTK 4.24's Win32 input method keeps a message filter on a freed context
+
+**Status**: Worked around (Windows). Not reachable on Linux or macOS: the defect is in GTK's
+Win32 input-method module.
+
+**Severity**: Medium. A use-after-free inside the app, but nothing an attacker controls reaches
+it: it is triggered by ordinary window and tab teardown. Consequences seen: a GTK critical when
+the freed memory fails a type check; an access violation or a reused object when it does not.
+
+**Classification**: no CVE assigned.
+[CWE-416: Use After Free](https://cwe.mitre.org/data/definitions/416.html).
+
+**Upstream**: GTK, introduced by MR !9958 (the input method's focus-out returns early when the
+widget has no surface, and its dispose no longer removes the filter); fixed by MR !10411, merged
+to `main` 2026-10-07. No GTK release carries the fix (checked 2026-10-31).
+
+**Upstream ticket** (checked 2026-10-31):
+- **GTK — pre-existing**: MR !10411, merged. Not filed by us.
+- **gvsbuild (Windows packaging)**: nothing to request yet; gvsbuild can deliver the fix only once
+  a GTK release carries it. When one does, the CI workflow's gvsbuild pin must move to a release
+  built on it.
+
+**How it reaches us**: on Windows the input method adds a message filter to the display when a
+text widget (editor, entry, text view) gains focus and removes it on focus-out. A focused text
+widget unrealized before it loses focus (its window or tab closing, a popover or dialog going
+away) leaves the filter holding a freed context, and every later Win32 message passes that
+pointer to it. Symptom: `Gtk-CRITICAL gtk_im_context_ime_message_filter: assertion
+'GTK_IS_IM_CONTEXT_IME (data)' failed`. MEASURED on the `windows` seat: 16 GTK-suite cases fail
+with it on GTK 4.24.1 and none on 4.22.4.
+
+**Workaround**: `src/focusrelease.rs`, an emission hook on `GtkWidget::unrealize` that first
+clears the window's focus when the widget being unrealized holds it, so the input method's
+focus-out runs while the surface still exists. It runs on every platform, where it is harmless,
+and costs a user nothing visible: GTK would move the focus anyway, later.
+
+**Leaks found and closed**: none yet. The app's ordinary close routes were measured not to leave
+the filter behind; a window opened in the background and switched to edit mode without ever
+gaining focus is the one route not tried.
+
+**To close for good**: a GTK release carrying MR !10411, delivered through the gvsbuild pin. The
+GTK suite on Windows must then stay free of the critical without the hook; delete
+`src/focusrelease.rs` and mark this entry Closed.
