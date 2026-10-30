@@ -22,8 +22,10 @@
 //! popover that mapped under the pointer has armed GTK's tooltip hover timeout against
 //! itself. Unrealizing it before that timeout fires leaves the timeout aimed at a dead
 //! surface (GTK4Rs/AP-117), which is a `GDK_IS_SURFACE` critical, and fatal under
-//! `G_DEBUG=fatal-criticals`. So the release runs [`TOOLTIP_HOVER_DRAIN`] after the close,
-//! and only if the popover is still hidden then. A reopen in between cancels it.
+//! `G_DEBUG=fatal-criticals`. So the release runs [`TOOLTIP_HOVER_DRAIN`] after the LAST
+//! close, and only if the popover is still hidden then. A reopen cancels nothing — it
+//! emits no `closed` — so the pending release finds the popover visible and leaves it;
+//! a second close replaces the pending release, so it cannot fire early.
 //!
 //! The next `popup()` realizes the popover again. Whether that brings back the
 //! first-popup validation the preview's marker pre-warm exists to absorb
@@ -187,6 +189,42 @@ mod tests {
         until(Clock::Frame, "the popover to map", || popover.is_mapped());
     }
 
+    /// Releasing switched on until dropped, so a failed assertion cannot leave every
+    /// later popover in this suite process released behind its back.
+    struct Releasing;
+
+    impl Releasing {
+        fn on() -> Self {
+            set_enabled(true);
+            Self
+        }
+    }
+
+    impl Drop for Releasing {
+        fn drop(&mut self) {
+            set_enabled(false);
+        }
+    }
+
+    /// The raw ids of the releases pending for `popover`, in scheduling order.
+    fn pending_for(popover: &gtk::Popover) -> Vec<u32> {
+        PENDING.with(|p| {
+            p.borrow()
+                .iter()
+                .filter(|(w, _)| w.upgrade().as_ref() == Some(popover))
+                .map(|(_, id)| id.as_raw())
+                .collect()
+        })
+    }
+
+    /// Whether the source with raw id `id` is still attached to the default context.
+    /// GLib never reuses a source id within a context's lifetime short of wrapping
+    /// `guint`, so a destroyed id cannot be mistaken for a live one here.
+    fn source_is_attached(id: u32) -> bool {
+        // SAFETY: a NULL context is the default one, and the call only looks the id up.
+        !unsafe { glib::ffi::g_main_context_find_source_by_id(std::ptr::null_mut(), id) }.is_null()
+    }
+
     /// Past the release delay, with slack for the timeout to dispatch.
     fn past_the_delay() {
         drain_for(
@@ -221,7 +259,7 @@ mod tests {
              test cannot tell the release from GTK's own teardown"
         );
 
-        set_enabled(true);
+        let releasing = Releasing::on();
         open(&popover);
         popover.popdown();
         assert!(
@@ -239,7 +277,7 @@ mod tests {
         open(&popover);
         assert!(popover.is_realized() && popover.is_visible());
 
-        // A reopen within the delay cancels the pending release.
+        // A reopen within the delay: the pending release finds it visible.
         popover.popdown();
         drain_for(Clock::Frame, TOOLTIP_HOVER_DRAIN / 3);
         open(&popover);
@@ -249,8 +287,113 @@ mod tests {
             "a release scheduled before a reopen tore down the open popover"
         );
 
-        set_enabled(false);
+        drop(releasing);
         popover.popdown();
+        popover.unparent();
+        window.destroy();
+    }
+
+    /// **A second close restarts the wait: the release runs a full delay after the LAST
+    /// close.** Close, reopen half-way through the delay, close again: the first close's
+    /// release is still pending and would find the popover hidden, unrealizing it well
+    /// inside the second close's tooltip drain (GTK4Rs/AP-117). Only the supersession in
+    /// [`schedule_release`] stops that, and the reopen alone cannot test it — a reopen
+    /// emits no `closed`, so `release_if_hidden`'s visibility check is what saves it.
+    ///
+    /// **Two halves, because only one of them needs a clock.** The STATE the supersession
+    /// produces — the first close's release source destroyed, and exactly one release
+    /// pending for the popover, a new one — is asserted with no clock at all. The EFFECT
+    /// (still realized after the first deadline, inside the second) is a window only a
+    /// few hundred milliseconds wide; a drain that overshoots it under load would turn a
+    /// correct supersession red, so that half is announced as skipped when the run
+    /// missed the window rather than asserted on a moment that was never reached.
+    ///
+    /// The precondition that there is something to supersede is state too: the first
+    /// release is checked to be still attached and the only one pending directly before
+    /// the second close, and a run where it already fired is announced as skipped.
+    ///
+    /// Mutation checks, each red whatever the host's load: dropping `id.remove()` for the
+    /// superseded release, or skipping `take_pending`, fails the "still scheduled"
+    /// assertion; not recording the superseding release fails the "exactly one" one.
+    #[gtktest::test]
+    fn a_second_close_restarts_the_release_delay() {
+        let (window, label) = host();
+        let popover = gtk::Popover::new();
+        popover.set_child(Some(&gtk::Button::with_label("body")));
+        popover.set_parent(&label);
+        let releasing = Releasing::on();
+
+        open(&popover);
+        popover.popdown();
+        let first_close = std::time::Instant::now();
+        let first_release = match pending_for(&popover)[..] {
+            [id] => id,
+            ref ids => panic!("precondition: one close schedules one release, found {ids:?}"),
+        };
+        drain_for(Clock::Frame, TOOLTIP_HOVER_DRAIN / 2);
+        open(&popover);
+        // The precondition is STATE, not a clock: the first close's release must still
+        // be pending when the second close lands, or the second close supersedes
+        // nothing and every assertion below would hold on a build with no supersession.
+        // A loaded host can let it fire inside the reopen's pump (finding the popover
+        // visible, it does nothing); that run is announced, not failed.
+        if !(source_is_attached(first_release) && pending_for(&popover) == [first_release]) {
+            crate::testsymlink::skipped(
+                "popover release: supersession",
+                &format!(
+                    "the first close's release ran before the second close ({:?} since \
+                     the first, {TOOLTIP_HOVER_DRAIN:?} allowed), so there was nothing to \
+                     supersede",
+                    first_close.elapsed()
+                ),
+            );
+            drop(releasing);
+            popover.popdown();
+            popover.unparent();
+            window.destroy();
+            return;
+        }
+        popover.popdown();
+        let second_close = std::time::Instant::now();
+        assert!(
+            !source_is_attached(first_release),
+            "the first close's release is still scheduled: it was not superseded and will \
+             unrealize the popover inside the second close's tooltip drain"
+        );
+        let pending = pending_for(&popover);
+        assert!(
+            pending.len() == 1 && pending[0] != first_release,
+            "the second close must leave exactly one release pending, its own (first \
+             {first_release}, pending {pending:?})"
+        );
+
+        // Past the first close's deadline, inside the second's — when the host let us.
+        let past_first = TOOLTIP_HOVER_DRAIN + Duration::from_millis(100);
+        drain_for(
+            Clock::Frame,
+            past_first.saturating_sub(first_close.elapsed()),
+        );
+        if second_close.elapsed() < TOOLTIP_HOVER_DRAIN {
+            assert!(
+                popover.is_realized(),
+                "released inside the second close's tooltip drain: the first close's \
+                 release was not superseded"
+            );
+        } else {
+            crate::testsymlink::skipped(
+                "popover release: supersession effect half",
+                &format!(
+                    "the drain overshot the second close's own deadline ({:?} since it, \
+                     {TOOLTIP_HOVER_DRAIN:?} allowed), so a release now is the correct one; \
+                     the state half above still ran",
+                    second_close.elapsed()
+                ),
+            );
+        }
+        past_the_delay();
+        assert!(!popover.is_realized(), "the superseding release never ran");
+
+        drop(releasing);
         popover.unparent();
         window.destroy();
     }
@@ -268,7 +411,7 @@ mod tests {
         window.set_child(Some(&button));
         until(Clock::Frame, "the button to map", || button.is_mapped());
 
-        set_enabled(true);
+        let releasing = Releasing::on();
         button.popup();
         let popover = button
             .popover()
@@ -285,7 +428,7 @@ mod tests {
             "the GtkMenuButton's own PopoverMenu kept its surface after closing"
         );
 
-        set_enabled(false);
+        drop(releasing);
         window.destroy();
     }
 }

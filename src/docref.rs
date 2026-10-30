@@ -244,6 +244,18 @@ impl AnchoredSpan {
         self.at.clone()
     }
 
+    /// Whether `other`, captured from a later source, names the same construct as this
+    /// span: the same text with the same neighbours.
+    ///
+    /// For matching one scan's constructs to the next scan's when neither source is to
+    /// hand (an annotation card re-keyed onto a new render's markers). It asks what
+    /// [`resolve`](Self::resolve) asks of a candidate place, so an edit touching the
+    /// neighbours stops the match, as it stops the resolution. The ambiguity policy is not
+    /// compared: it belongs to the kind of construct, which both captures share.
+    pub(crate) fn names_same_construct(&self, other: &Self) -> bool {
+        self.text == other.text && self.context == other.context
+    }
+
     /// Re-express an absolute sub-range of the captured text as an offset
     /// relative to its start, so it can be carried alongside this span and
     /// re-absolutised after resolution.
@@ -275,6 +287,35 @@ mod tests {
     fn construct() -> AnchoredSpan {
         let at = SRC.find("{==").unwrap()..SRC.find("<<}").unwrap() + 3;
         AnchoredSpan::capture(SRC, at).unwrap()
+    }
+
+    /// A contextual capture of the construct in `src`.
+    fn construct_in(src: &str) -> AnchoredSpan {
+        let at = src.find("{==").unwrap()..src.find("<<}").unwrap() + 3;
+        AnchoredSpan::capture_in_context(src, at, Ambiguity::Nearest).unwrap()
+    }
+
+    #[test]
+    fn a_construct_moved_by_an_edit_far_above_it_is_the_same_construct() {
+        let pad = "x".repeat(2 * CONTEXT_BYTES);
+        let before = format!("{pad} {SRC}");
+        let after = format!("an inserted paragraph\n\n{before}");
+        let (a, b) = (construct_in(&before), construct_in(&after));
+        assert_ne!(a.captured_at(), b.captured_at(), "precondition: it moved");
+        assert!(a.names_same_construct(&b));
+    }
+
+    #[test]
+    fn a_construct_with_other_text_or_other_neighbours_is_not_the_same() {
+        let pad = "x".repeat(2 * CONTEXT_BYTES);
+        let a = construct_in(&format!("{pad} {SRC}"));
+        let reworded = construct_in(&format!("{pad} {}", SRC.replace("note", "memo")));
+        let renamed_neighbour = construct_in(&format!("{pad} {}", SRC.replace("alpha", "omega")));
+        assert!(!a.names_same_construct(&reworded), "the comment changed");
+        assert!(
+            !a.names_same_construct(&renamed_neighbour),
+            "a neighbour changed"
+        );
     }
 
     #[test]

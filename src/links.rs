@@ -540,17 +540,22 @@ fn reaches_a_foreign_remote_namespace(src: &str, doc_dir: Option<&Path>) -> bool
         is_remote_namespace(path) && !doc_dir.is_some_and(|dir| lexically_within(path, dir))
     };
     let decoded = percent_decode(src);
-    let foreign = [decoded.as_str(), src].into_iter().any(|form| {
-        local_candidate(form, doc_dir).is_some_and(|candidate| {
-            is_foreign(&candidate)
-                || links_reach_foreign(
-                    &candidate,
-                    doc_dir,
-                    &is_foreign,
-                    &crate::platform::mounts_on_lookup,
-                )
-        })
-    });
+    // The literal form only when decoding changed it: walking the same path twice
+    // doubles every `lstat` and automount question for the common, escape-free case.
+    let literal = (decoded != src).then_some(src);
+    let foreign = std::iter::once(decoded.as_str())
+        .chain(literal)
+        .any(|form| {
+            local_candidate(form, doc_dir).is_some_and(|candidate| {
+                is_foreign(&candidate)
+                    || links_reach_foreign(
+                        &candidate,
+                        doc_dir,
+                        &is_foreign,
+                        &crate::platform::mounts_on_lookup,
+                    )
+            })
+        });
     foreign
 }
 

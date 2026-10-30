@@ -4,7 +4,8 @@
 //! The driver for `scripts/winplace-rig.sh`, which runs it under a nested KWin and
 //! checks both the captured place and the window's X properties (read independently
 //! with `xprop`). `--hold <secs>` keeps the window up that long after printing, so the
-//! rig can inspect it; the process then exits on its own.
+//! rig can inspect it; the process then exits on its own. The crate's warnings go to
+//! stderr, so the rig can see one.
 //!
 //! Usage: `probe <place.toml> [--hold <secs>]`
 
@@ -13,6 +14,21 @@ use gtk::prelude::*;
 use std::time::Duration;
 
 const SETTLE: Duration = Duration::from_millis(1500);
+
+/// The crate's `warn` and `error` records on stderr.
+struct Stderr;
+
+impl log::Log for Stderr {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("{}: {}", record.level(), record.args());
+        }
+    }
+    fn flush(&self) {}
+}
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -26,6 +42,8 @@ fn main() {
     let text = std::fs::read_to_string(&path).expect("read the place file");
     let place: winplace::Place = toml::from_str(&text).expect("parse the place file");
 
+    log::set_logger(&Stderr).expect("the only logger");
+    log::set_max_level(log::LevelFilter::Warn);
     gtk::init().expect("gtk::init");
     let window = gtk::Window::builder().title("winplace-probe").build();
     window.set_child(Some(&gtk::Label::new(Some("winplace probe"))));

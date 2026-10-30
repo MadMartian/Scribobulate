@@ -162,6 +162,16 @@ impl ViewportRange {
     }
 }
 
+/// Whether this GTK is one where the allocation write-back [`moves_painted_text`] guards
+/// against was MEASURED: GTK 4.6.9 writes the truncated value back on the view's next
+/// allocation, and GTK 4.22 (macOS and Windows CI) was measured not to. A test that
+/// plants the write-back asserts it happened here, and reports a skip on any other GTK
+/// rather than pass on a run that never exercised it.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) fn truncated_writeback_measured() -> bool {
+    gtk::minor_version() == 6
+}
+
 #[cfg(test)]
 mod painted_text_tests {
     use super::moves_painted_text;

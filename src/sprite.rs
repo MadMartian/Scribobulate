@@ -1265,7 +1265,7 @@ mod tests {
     /// that name still reaches the loader the screen guards.
     #[test]
     fn a_sprite_refused_for_xinclude_is_reported_to_the_theme() {
-        if !crate::imagedecode::SCREENS_XINCLUDE {
+        if !crate::imagedecode::screens_xinclude() {
             println!("SKIPPED [2.23c]: this platform does not screen SVG XInclude");
             return;
         }

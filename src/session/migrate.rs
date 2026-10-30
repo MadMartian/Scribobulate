@@ -364,25 +364,56 @@ struct PreV7Session {
     windows: Vec<PreV7Window>,
 }
 
+/// The size keys as raw values, so one that is not an integer size costs only that
+/// window that half of its size, logged, rather than failing this whole parse and with
+/// it, silently, every window's size.
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 struct PreV7Window {
-    width: Option<i32>,
-    height: Option<i32>,
+    width: Option<toml::Value>,
+    height: Option<toml::Value>,
+    /// Present on every window a v7 file wrote.
+    place: Option<serde::de::IgnoredAny>,
 }
 
 /// Copy each window's old top-level `width` / `height` into its `place`, pairing
-/// windows by position (the same list, parsed twice). Inert on a v7 file, which has
-/// no such keys.
+/// windows by position (the same list, parsed twice). Inert on a v7 file: a window with
+/// a `place` table keeps the place's size, so a stray top-level key a hand edit left
+/// behind is not what wins.
 fn migrate_pre_v7_size(session: &mut Session, old: &PreV7Session) {
-    for (window, sizes) in session.windows.iter_mut().zip(&old.windows) {
-        if let Some(width) = sizes.width {
+    let windows = session.windows.iter_mut().zip(&old.windows).enumerate();
+    for (index, (window, sizes)) in windows {
+        if sizes.place.is_some() {
+            continue;
+        }
+        if let Some(width) = sizes
+            .width
+            .as_ref()
+            .and_then(|v| pre_v7_size(v, index, "width"))
+        {
             window.place.width = width;
         }
-        if let Some(height) = sizes.height {
+        if let Some(height) = sizes
+            .height
+            .as_ref()
+            .and_then(|v| pre_v7_size(v, index, "height"))
+        {
             window.place.height = height;
         }
     }
+}
+
+/// `value` as a size in pixels, or `None`, logged, when it is not one.
+fn pre_v7_size(value: &toml::Value, window: usize, key: &str) -> Option<i32> {
+    let size = value.as_integer().and_then(|v| i32::try_from(v).ok());
+    if size.is_none() {
+        log::warn!(
+            "session: window {window}'s pre-v7 `{key}` is not an integer size (a {}); \
+             that window opens at the default {key}",
+            value.type_str()
+        );
+    }
+    size
 }
 
 /// A v1 file migrated to a [`Session`], or `None` if this is not a v1 file.
@@ -427,7 +458,9 @@ pub(super) fn apply_superseded(text: &str, session: &mut Session) {
     // parse, which is exactly where v6 wants them (see `V2AppWideChrome`).
     let pre_v6 = toml::from_str::<PreV6Session>(text).unwrap_or_default();
     migrate_pre_v6_toolbar(session, &pre_v6);
-    // v2–v6 kept each window's size at its own top level.
+    // v2–v6 kept each window's size at its own top level. Its values are read raw, so
+    // this parse fails only where `windows` is not a list of tables, which the caller's
+    // own `Session` parse has already failed on.
     let pre_v7 = toml::from_str::<PreV7Session>(text).unwrap_or_default();
     migrate_pre_v7_size(session, &pre_v7);
 }
@@ -838,12 +871,45 @@ file = true
 
     #[test]
     fn a_v7_place_is_not_overwritten_by_the_size_migration() {
-        // A v7 file carries the size only inside `place`; a stray top-level key a
-        // hand edit left behind must not be what wins over it either, so the
-        // round trip of a written file is the check that the reader stays inert.
+        // A v7 file carries the size only inside `place`, so a written file round-trips
+        // through the reader untouched.
         let text = toml::to_string(&sample_session()).unwrap();
-        assert!(!text.contains("\nwidth = 1111\nheight = 222\nzoom_level"));
         let s = parse(&text);
         assert_eq!(s.windows[0].place, sample_session().windows[0].place);
+    }
+
+    #[test]
+    fn a_stray_top_level_size_beside_a_place_does_not_win() {
+        // A hand edit left the v6 keys on a window that also has its v7 place.
+        let text = "windows = [\n\
+            { width = 1111, height = 222, place = { width = 640, height = 480 } },\n\
+            { width = 900, height = 700 },\n\
+            ]\n";
+        let s = parse(text);
+        assert_eq!(
+            (s.windows[0].place.width, s.windows[0].place.height),
+            (640, 480)
+        );
+        // The window with no place still migrates.
+        assert_eq!(
+            (s.windows[1].place.width, s.windows[1].place.height),
+            (900, 700)
+        );
+    }
+
+    #[test]
+    fn a_pre_v7_size_that_is_not_an_integer_costs_only_that_half_of_that_window() {
+        let text = "windows = [\n\
+            { width = 1111.0, height = 222 },\n\
+            { width = 800, height = 99999999999 },\n\
+            ]\n";
+        let s = parse(text);
+        assert_eq!(s.windows.len(), 2);
+        assert_eq!(s.windows[0].place.height, 222);
+        assert_eq!(s.windows[1].place.width, 800);
+        // The unreadable halves keep the default a window with no size gets.
+        let default = WindowSession::default().place;
+        assert_eq!(s.windows[0].place.width, default.width);
+        assert_eq!(s.windows[1].place.height, default.height);
     }
 }

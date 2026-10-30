@@ -276,6 +276,9 @@ mod imp {
         pub(super) arrow: gtk::Box,
         /// The edge the pointer is on, from the last placement.
         pub(super) edge: Cell<Edge>,
+        /// The edge the body was last ALLOCATED clear of. Differs from `edge` after a flip
+        /// GTK has not re-allocated the card for yet (`set_arrow`).
+        pub(super) body_edge: Cell<Edge>,
         /// Where along that edge the pointer's centre is; `None` hides it.
         pub(super) arrow_at: Cell<Option<i32>>,
     }
@@ -291,6 +294,7 @@ mod imp {
                 body: gtk::Box::new(gtk::Orientation::Vertical, 0),
                 arrow: gtk::Box::new(gtk::Orientation::Vertical, 0),
                 edge: Cell::new(Side::Top.facing_edge()),
+                body_edge: Cell::new(Side::Top.facing_edge()),
                 arrow_at: Cell::new(None),
             }
         }
@@ -372,7 +376,9 @@ mod imp {
         }
 
         fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
-            let Rect { x, y, w, h } = body_rect(width, height, self.edge.get());
+            let edge = self.edge.get();
+            self.body_edge.set(edge);
+            let Rect { x, y, w, h } = body_rect(width, height, edge);
             self.body.allocate(
                 w,
                 h,
@@ -473,7 +479,7 @@ impl FloatingCard {
         let (ax, ay, aw, ah) = self.imp().pointing_to.get()?;
         let anchor = self.imp().anchor.upgrade()?;
         let (hx, hy) = anchor.translate_coordinates(host, f64::from(ax), f64::from(ay))?;
-        let (width, height) = self.size_within(host.width());
+        let (width, height) = self.size_within(host.width(), host.height());
         let anchor = Rect {
             x: hx as i32,
             y: hy as i32,
@@ -502,6 +508,14 @@ impl FloatingCard {
     /// allocation when its rectangle is unchanged, which a card clamped against the pane's
     /// edge keeps while its anchor moves along it. A draw request is safe here, inside the
     /// host's allocation pass, where a resize request would be dropped (GTK4Rs/AP-29).
+    ///
+    /// A flip to the other edge also moves the BODY, which `size_allocate` places. A flip
+    /// that follows `set_pointing_to`, `set_side` or `popup` gets that allocation from
+    /// their `queue_resize`; a flip caused only by the host's own re-allocation (the pane
+    /// resized under an open card) leaves the card's size unchanged, so GTK skips its
+    /// allocation and the body stays on the old side with the pointer drawn over it. So a
+    /// flip asks for the allocation itself — from an idle, after this pass, since a
+    /// request made inside it would be dropped.
     fn set_arrow(&self, edge: Edge, at: Option<i32>) {
         let imp = self.imp();
         let edge_moved = imp.edge.replace(edge) != edge;
@@ -509,17 +523,28 @@ impl FloatingCard {
         if edge_moved || arrow_moved {
             self.queue_draw();
         }
+        if edge_moved && imp.body_edge.get() != edge {
+            let weak = self.downgrade();
+            glib::idle_add_local_once(move || {
+                if let Some(card) = weak.upgrade() {
+                    if card.imp().body_edge.get() != card.imp().edge.get() {
+                        card.queue_resize();
+                    }
+                }
+            });
+        }
     }
 
-    /// The card's size inside a host `host_w` wide: its natural width when that fits, else
-    /// the host's width (never below its own minimum), with the height its content needs
-    /// at that width — so content that can wrap, wraps, rather than being cut off by the
-    /// host's clip.
-    fn size_within(&self, host_w: i32) -> (i32, i32) {
+    /// The card's size inside a host `host_w` × `host_h`: its natural width when that
+    /// fits, else the host's width, with the height its content needs at that width when
+    /// that fits, else the host's height — never below its own minimum on either axis. So
+    /// content that can wrap, wraps, and content that can scroll, scrolls, rather than
+    /// being cut off by the host's clip with controls past its edge.
+    fn size_within(&self, host_w: i32, host_h: i32) -> (i32, i32) {
         let (min_w, nat_w, _, _) = self.measure(gtk::Orientation::Horizontal, -1);
         let width = nat_w.min(host_w).max(min_w);
-        let (_, nat_h, _, _) = self.measure(gtk::Orientation::Vertical, width);
-        (width, nat_h)
+        let (min_h, nat_h, _, _) = self.measure(gtk::Orientation::Vertical, width);
+        (width, nat_h.min(host_h).max(min_h))
     }
 }
 
@@ -847,6 +872,85 @@ mod gtk_integration_tests {
                 "every button must be inside the card: {bb:?} in {bounds:?}"
             );
         }
+        destroy_after_tooltip_delay(&win, || card.popdown());
+    }
+
+    /// **A card the pane's own resize flips to the other side moves its body with the
+    /// pointer.** The anchor sits at the pane's bottom; laying the pane out again with the
+    /// anchor at its top takes away the room above it, so the card flips below without
+    /// changing size, as a window resize under an open card does: the pane's layout runs,
+    /// the card is asked where it goes, and nothing else tells it. GTK skips the
+    /// allocation of a widget whose size is unchanged, and the body is placed only there,
+    /// so without the flip's own re-allocation the body stays at the top of the card and
+    /// the pointer is drawn over its first rows (TDD 17.64).
+    #[gtktest::test]
+    fn a_card_flipped_by_a_pane_resize_moves_its_body_clear_of_the_pointer() {
+        let win = gtk::Window::new();
+        let host = gtk::Overlay::new();
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let above = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        above.set_size_request(300, 240);
+        let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        anchor.set_size_request(300, 60);
+        content.append(&above);
+        content.append(&anchor);
+        host.set_child(Some(&content));
+        host.set_size_request(300, 300);
+        win.set_child(Some(&host));
+        win.set_resizable(false);
+
+        let card = FloatingCard::new();
+        card.set_child(Some(&gtk::Label::new(Some("card"))));
+        card.attach(&host, &anchor);
+        card.set_pointing_to(Some(&gdk::Rectangle::new(150, 10, 1, 16)));
+        win.present();
+        card.popup();
+        until(
+            Clock::Frame,
+            "the card to be laid out above its anchor",
+            || {
+                card.is_mapped()
+                    && card.height() > 0
+                    && card.imp().edge.get() == Edge::Bottom
+                    && card.imp().body_edge.get() == Edge::Bottom
+            },
+        );
+        let size = crate::testpump::until_stable(
+            Clock::Frame,
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(200),
+            || (card.width(), card.height()),
+        );
+        assert!(size.converged, "the card's size never settled");
+        let size = size.value.expect("a sampled size");
+
+        // The pane lays its content out again with the anchor at its top: no room above,
+        // so the card flips below. Nothing tells the card; only the host re-allocates.
+        above.set_size_request(300, 0);
+        until(
+            Clock::Frame,
+            "the anchor to move up and the card to flip",
+            || card.imp().edge.get() == Edge::Top,
+        );
+        assert_eq!(
+            (card.width(), card.height()),
+            size,
+            "precondition: the flip must leave the card's size unchanged, or GTK \
+             re-allocates it anyway and nothing is tested"
+        );
+        crate::testpump::until_or_for(Clock::Frame, std::time::Duration::from_secs(2), || {
+            card.imp().body_edge.get() == Edge::Top
+        });
+        let body = card
+            .imp()
+            .body
+            .compute_bounds(&card)
+            .expect("the body is inside the card");
+        assert_eq!(
+            body.y() as i32,
+            ARROW_DEPTH,
+            "the body stayed where it was before the flip, under the pointer: {body:?}"
+        );
         destroy_after_tooltip_delay(&win, || card.popdown());
     }
 }

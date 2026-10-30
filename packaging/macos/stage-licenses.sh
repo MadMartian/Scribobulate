@@ -29,7 +29,38 @@
 # Usage: packaging/macos/stage-licenses.sh <path-to-.app>
 set -euo pipefail
 
-APP="${1:?usage: stage-licenses.sh <path-to-.app>}"
+APP="${1:?usage: stage-licenses.sh <path-to-.app> | --self-test}"
+
+# The fail-closed arms, run against throwaway bundles by invoking this script on them: a
+# Frameworks/ holding no Mach-O, and a `file` that crashes, must each refuse to produce a
+# manifest. ANTI-VACUITY first: a bundle holding one Homebrew dylib stages.
+if [ "$APP" = "--self-test" ]; then
+    # shellcheck source=rpath.sh
+    . "$(dirname "${BASH_SOURCE[0]}")/rpath.sh"
+    tmp="$(mktemp -d)"; failures=0
+    mkb() {  # $1 = case; a bundle with libglib in Frameworks/
+        mkdir -p "$tmp/$1/Contents/Frameworks" "$tmp/$1/Contents/Resources"
+        cp /opt/homebrew/lib/libglib-2.0.0.dylib "$tmp/$1/Contents/Frameworks/"
+    }
+    stages() {  # $1 = case, $2 = expected (ok|fail), $3 = stub dir (optional)
+        rc=0; ( [ -z "${3:-}" ] || PATH="$3:$PATH"; bash "${BASH_SOURCE[0]}" "$tmp/$1" >/dev/null 2>&1 ) || rc=$?
+        if { [ "$2" = ok ] && [ "$rc" -eq 0 ]; } || { [ "$2" = fail ] && [ "$rc" -ne 0 ]; }; then
+            echo "   ok    $1"
+        else
+            echo "   FAILED $1 (expected $2, got $rc)"; failures=$((failures + 1))
+        fi
+    }
+    mkb agreeing;  stages agreeing ok
+    mkb no-machos; rm -f "$tmp/no-machos/Contents/Frameworks/"*.dylib
+    printf 'text\n' > "$tmp/no-machos/Contents/Frameworks/readme"
+    stages no-machos fail
+    stub_tool "$tmp/file-crashes" file 'exit 1'
+    mkb file-unreadable; stages file-unreadable fail "$tmp/file-crashes"
+    rm -rf "$tmp"
+    [ "$failures" -eq 0 ] || { echo ":: self-test FAILED ($failures)"; exit 1; }
+    echo ":: self-test passed"; exit 0
+fi
+
 [ -d "$APP/Contents/Frameworks" ] || { echo "error: no Frameworks in $APP" >&2; exit 1; }
 
 DEST="$APP/Contents/Resources/licenses"
@@ -47,27 +78,22 @@ is_history() {
     esac
 }
 
-# The formula a staged binary came from, via the Cellar path its Homebrew original
-# resolves to. Loaders live in their own directory, so both roots are tried.
-formula_of() {
-    local name="$1" cand real
-    for cand in "/opt/homebrew/lib/$name" \
-                "/opt/homebrew/lib/gdk-pixbuf-2.0/2.10.0/loaders/$name"; do
-        [ -e "$cand" ] || continue
-        real="$(/usr/bin/readlink -f "$cand")"
-        case "$real" in
-            */Cellar/*) printf '%s\n' "$real" | sed 's|.*/Cellar/||; s|/.*||'; return 0 ;;
-        esac
-    done
-    return 1
-}
+# formula_of, and Mach-O detection that fails closed (is_macho), each written once.
+# shellcheck source=rpath.sh
+. "$(dirname "${BASH_SOURCE[0]}")/rpath.sh"
+# shellcheck source=homebrew.sh
+. "$(dirname "${BASH_SOURCE[0]}")/homebrew.sh"
 
 printf 'formula\tspdx_declared\tdetermination\tstaged_files\n' > "$MANIFEST"
 
 declare -a SEEN=()
 count=0
+# Listed through rpath.sh, which fails closed, never `< <(find …)`, which loses the exit
+# status of whatever produced the list.
+objs="$(bundle_machos "$APP/Contents/Frameworks")" \
+    || { echo "error: could not list the Mach-O files in $APP/Contents/Frameworks" >&2; exit 1; }
 while IFS= read -r obj; do
-    file "$obj" | grep -q 'Mach-O' || continue
+    [ -n "$obj" ] || continue
     name="$(basename "$obj")"
     if ! formula="$(formula_of "$name")"; then
         echo "error: no Homebrew formula maps to staged binary '$name'." >&2
@@ -106,6 +132,6 @@ print("NOT-IN-SBOM")' "$root/sbom.spdx.json" "$formula" 2>/dev/null || echo "NO-
 
     printf '%s\t%s\tNOT-GATE-ENFORCED\t%s\n' "$formula" "$spdx" "$staged" >> "$MANIFEST"
     count=$((count + 1))
-done < <(find "$APP/Contents/Frameworks" -type f)
+done <<< "$objs"
 
 echo "   staged licence texts for $count formulae"

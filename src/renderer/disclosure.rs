@@ -503,8 +503,11 @@ pub(crate) fn body_plain_text(body_src: &str) -> String {
             // Inline code is literal by definition — a `^` inside a code span IS shown,
             // so it must not go through the delimiter reduction.
             Event::Code(t) => plain.push_str(&t),
-            // A break or a rule separates two runs the reader sees apart.
-            Event::SoftBreak | Event::HardBreak | Event::Rule => plain.push('\n'),
+            // A soft break renders as a space (TDD 2.20), so a phrase across one
+            // matches as it does on the page. A hard break or a rule separates two
+            // runs the reader sees apart.
+            Event::SoftBreak => plain.push(' '),
+            Event::HardBreak | Event::Rule => plain.push('\n'),
             // A BLOCK boundary separates runs; an INLINE one does not. `foo*bar*`
             // renders as the single word `foobar`, so treating its emphasis boundary
             // as a separator would make a search for that word miss it — which is one
@@ -587,6 +590,19 @@ mod body_text_tests {
         let plain = super::body_plain_text("<div>markup</div>\n\nreal text\n");
         assert!(plain.contains("real text"));
         assert!(!plain.contains("div"), "{plain:?}");
+    }
+
+    #[test]
+    fn a_soft_break_is_a_space_so_a_phrase_across_it_matches() {
+        // The page shows `one two` (TDD 2.20), so find must too — and a hard break
+        // still separates two lines the reader sees apart.
+        // Under both line endings (a CRLF break is the same event, two bytes wide).
+        for nl in ["\n", "\r\n"] {
+            let soft = body_plain_text(&format!("one{nl}two{nl}"));
+            assert!(soft.contains("one two"), "{soft:?}");
+            let hard = body_plain_text(&format!("one\\{nl}two{nl}"));
+            assert!(!hard.contains("one two"), "{hard:?}");
+        }
     }
 
     #[test]

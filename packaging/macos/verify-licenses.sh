@@ -48,19 +48,11 @@ has_anchor() {
     return 1
 }
 
-# The formula behind a staged file name, or empty.
-formula_of() {
-    local name="$1" cand real
-    for cand in "/opt/homebrew/lib/$name" \
-                "/opt/homebrew/lib/gdk-pixbuf-2.0/2.10.0/loaders/$name"; do
-        [ -e "$cand" ] || continue
-        real="$(/usr/bin/readlink -f "$cand" 2>/dev/null || true)"
-        case "$real" in
-            */Cellar/*) printf '%s' "$real" | sed 's|.*/Cellar/||; s|/.*||'; return 0 ;;
-        esac
-    done
-    return 1
-}
+# formula_of, and Mach-O detection that fails closed (is_macho), each written once.
+# shellcheck source=rpath.sh
+. "$(dirname "${BASH_SOURCE[0]}")/rpath.sh"
+# shellcheck source=homebrew.sh
+. "$(dirname "${BASH_SOURCE[0]}")/homebrew.sh"
 
 # Returns the number of problems found, and prints each one.
 #
@@ -77,14 +69,20 @@ audit_bundle() {
     # because the case harness redirects stderr.
     local app="$1"
     local manifest="$app/Contents/Resources/licenses/MANIFEST.tsv"
-    local problems=0 shipped="" name formula
+    local problems=0 shipped="" name formula objs
     if [ ! -f "$manifest" ]; then
         echo "   NO MANIFEST at $manifest"
         return 1
     fi
 
+    # Listed through rpath.sh, which fails closed, never `< <(find …)`, which loses the
+    # exit status of whatever produced the list.
+    if ! objs="$(bundle_machos "$app/Contents/Frameworks" 2>/dev/null)"; then
+        echo "   UNREADABLE   could not list the Mach-O files in $app/Contents/Frameworks"
+        return 1
+    fi
     while IFS= read -r obj; do
-        file "$obj" 2>/dev/null | grep -q 'Mach-O' || continue
+        [ -n "$obj" ] || continue
         name="$(basename "$obj")"
         if formula="$(formula_of "$name")"; then
             case " $shipped " in *" $formula "*) ;; *) shipped="$shipped $formula" ;; esac
@@ -92,7 +90,7 @@ audit_bundle() {
             echo "   UNMAPPABLE   $name has no Homebrew formula"
             problems=$((problems + 1))
         fi
-    done < <(find "$app/Contents/Frameworks" -type f 2>/dev/null)
+    done <<< "$objs"
 
     # Condition 1 — every shipped formula has a row.
     for formula in $shipped; do
@@ -162,8 +160,8 @@ self_test() {
         printf 'GNU LESSER GENERAL PUBLIC LICENSE\nVersion 2.1\n' \
             > "$tmp/$1/Contents/Resources/licenses/glib/COPYING"
     }
-    check() {  # $1 = name, $2 = expected (ok|fail)
-        set +e; audit_bundle "$tmp/$1" >/dev/null 2>&1; rc=$?; set -e
+    check() {  # $1 = name, $2 = expected (ok|fail), $3 = stub dir put first on PATH (optional)
+        set +e; ( [ -z "${3:-}" ] || PATH="$3:$PATH"; audit_bundle "$tmp/$1" >/dev/null 2>&1 ); rc=$?; set -e
         if { [ "$2" = ok ] && [ "$rc" -eq 0 ]; } || { [ "$2" = fail ] && [ "$rc" -ne 0 ]; }; then
             echo "   ok    $1"
         else
@@ -200,6 +198,18 @@ self_test() {
     mk no-manifest;         rm -f "$tmp/no-manifest/Contents/Resources/licenses/MANIFEST.tsv"
     check no-manifest fail
 
+    # FAIL CLOSED on the Mach-O listing: a Frameworks/ with no Mach-O in it, and a `file`
+    # that crashes, are each a bundle that was not read, never one with nothing to attribute.
+    mk no-machos;           rm -f "$tmp/no-machos/Contents/Frameworks/"*.dylib
+    printf 'text\n' > "$tmp/no-machos/Contents/Frameworks/readme"
+    # Header-only manifest, so nothing ELSE is wrong: only the empty listing can fail it.
+    head -1 "$tmp/no-machos/Contents/Resources/licenses/MANIFEST.tsv" > "$tmp/nm.tsv"
+    mv "$tmp/nm.tsv" "$tmp/no-machos/Contents/Resources/licenses/MANIFEST.tsv"
+    check no-machos fail
+    stub_tool "$tmp/file-crashes" file 'exit 1'
+    mk file-unreadable;     check file-unreadable fail "$tmp/file-crashes"
+    check agreeing ok "$tmp/no-stubs"       # the PATH harness itself passes a good bundle
+
     rm -rf "$tmp"
     [ "$failures" -eq 0 ] || { echo ":: self-test FAILED ($failures)"; return 1; }
     echo ":: self-test passed"
@@ -221,6 +231,10 @@ set -e
 rows=$(($(wc -l < "$APP/Contents/Resources/licenses/MANIFEST.tsv" 2>/dev/null || echo 1) - 1))
 if [ "$problems" -ne 0 ]; then
     echo "   FAIL — $problems problem(s) across $rows row(s)" >&2
+    exit 1
+fi
+if [ "$rows" -le 0 ]; then
+    echo "   FAIL — the manifest has no rows; nothing is attributed" >&2
     exit 1
 fi
 echo "   PASS — $rows formulae attributed, every row carrying real licence text"

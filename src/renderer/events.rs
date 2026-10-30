@@ -222,20 +222,30 @@ impl Renderer {
                 }
             }
 
-            // A single source newline (CommonMark "soft break") renders as a real
-            // line break, not a space — the hard-wrap model authors expect from an
-            // editor previewing their own notes (TDD 2.20).
-            // Trade-off: prose hard-wrapped at a fixed column breaks at each wrap
-            // point. HardBreak (two trailing spaces / backslash) is identical.
+            // CommonMark line breaks (TDD 2.20). A single source newline inside a
+            // paragraph (a SOFT break) renders as a space, so lines flow and wrap to
+            // the pane; a HARD break (two trailing spaces, or a backslash) is a real
+            // line break. Both stay ONE buffer char, which is what keeps the copymap,
+            // the source map and every other buffer-offset map aligned with the
+            // events they were built from.
             //
-            // This holds INSIDE list items too: the
-            // old flow-to-spaces workaround — which joined an item's source lines into one
-            // paragraph so the fragile `indent` hanging-indent stayed reliable (GTK4Rs/AP-95) —
-            // is retired now that items carry a uniform per-level `left_margin` with NO
-            // `indent`. Every line of an item (first, soft wrap, hard break, continuation
-            // paragraph) left-justifies to the same content margin, so an in-item break can
-            // render as a real newline again without re-outdenting.
-            Event::SoftBreak | Event::HardBreak => self.newline(),
+            // The space goes through `insert`, so it carries the run's inline tags
+            // (a soft break inside `**bold**` or a link stays inside it). Inside a
+            // heading both breaks read as a space in the slug text, the reduction the
+            // outline and the export make, so `#foo-bar` lands on a setext heading
+            // written across two lines.
+            Event::SoftBreak => {
+                if self.heading.is_some() {
+                    self.heading_text.push(' ');
+                }
+                self.insert(" ");
+            }
+            Event::HardBreak => {
+                if self.heading.is_some() {
+                    self.heading_text.push(' ');
+                }
+                self.newline();
+            }
 
             // Raw block HTML arrives line-by-line between `Tag::HtmlBlock` start/end
             // (start.rs / end.rs); accumulate each line so the whole block is parsed

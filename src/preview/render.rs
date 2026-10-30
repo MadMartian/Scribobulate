@@ -19,7 +19,7 @@ use super::qdata::{
 };
 use crate::codeview::CodePreviewView;
 use gtk::prelude::*;
-use gtk::{Label, ScrolledWindow, TextChildAnchor, WrapMode};
+use gtk::{Label, ScrolledWindow, TextChildAnchor};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -120,26 +120,10 @@ pub(crate) fn render(
     // list of widget types: this view publishes role TextBox and had no accessible name, so
     // AT announced the rendered document as an unnamed text box.
     crate::a11y::name_field(&view, "Rendered preview");
-    // Char, NOT WordChar — a screen reader reading this preview aborts the app on
-    // GTK 4.6: the AT-SPI text-attribute path casts the raw GtkWrapMode straight to
-    // PangoWrapMode (gtkatspitextbuffer.c:77-78, Site A — GetDefaultAttributes), and
-    // WordChar(3) is out of PangoWrapMode's range → `pango_wrap_mode_to_string` hits
-    // `g_assert_not_reached()` → `Aborted` (GTK4Rs/AP-136;
-    // researcher-verified against 4.6.9 source).
-    //
-    // Char, NOT Word, is the right substitute here: this view MUST NOT produce
-    // over-wide lines. The vertical scrollbar is pinned always-on and the horizontal
-    // is Automatic precisely because an over-wide line makes the content wider than the
-    // viewport, which churns the width↔height-for-width bound and leaves the view
-    // stuck-blank until a manual resize (GTK4Rs/AP-22/23). `Word` lets long unbreakable tokens
-    // (URLs, paths, long identifiers) overflow the wrap width → exactly that churn;
-    // `Char` (like the original `WordChar`) always breaks within the width, so no line
-    // is ever over-wide. Both Char(1) and Word(2) are in PangoWrapMode range and
-    // crash-free; only Char also preserves the never-overflow invariant. Prose wraps at
-    // character boundaries rather than word boundaries — a small cosmetic change from
-    // WordChar, chosen over Word's functional blank-view regression. The buggy cast is
-    // 4.6-ONLY (fixed in gtk-4-8+); restore WordChar at floor ≥4.8.
-    view.set_wrap_mode(WrapMode::Char);
+    // Word-then-character where GTK can carry it, character below 4.8 (the screen-reader
+    // abort, GTK4Rs/AP-136); never plain Word, whose long tokens overflow the pane and
+    // churn the width bound into a stuck-blank view (GTK4Rs/AP-22/23).
+    view.set_wrap_mode(crate::tags::preview_wrap_mode());
     view.set_cursor_visible(false);
     apply_preview_margins(&view, zoom);
     // Install the render's typed outputs — the shared lockstep sequence
@@ -521,6 +505,7 @@ pub(crate) fn refresh_annotations_in_place(
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod gtk_integration_tests {
     use super::*;
+    use gtk::WrapMode;
 
     #[gtktest::test]
     fn preview_view_and_code_tag_avoid_wordchar_the_atspi_abort_trigger() {
@@ -534,16 +519,20 @@ mod gtk_integration_tests {
             &crate::fold::FoldState::default(),
         );
         let view = crate::preview::view_of(&widget).expect("the preview tree render() built");
-        assert_ne!(
+        // WordChar only where GTK translates it for AT-SPI (4.8+); below, Char. Never
+        // Word: it lets long unbreakable tokens overflow → blank-view churn
+        // (GTK4Rs/AP-22/23).
+        let atspi_safe = if gtk::check_version(4, 8, 0).is_none() {
+            WrapMode::WordChar
+        } else {
+            WrapMode::Char
+        };
+        assert_eq!(
             view.wrap_mode(),
-            WrapMode::WordChar,
-            "GTK4Rs/AP-136: the preview view must not use WrapMode::WordChar — it aborts the \
-             app under a screen reader on GTK 4.6 (gtkatspitextbuffer.c Site A)"
+            atspi_safe,
+            "GTK4Rs/AP-136: below GTK 4.8 WordChar aborts the app under a screen reader \
+             (gtkatspitextbuffer.c Site A); Word overflows the pane"
         );
-        // Char, not Word: Char never produces an over-wide line, preserving the
-        // no-horizontal-overflow invariant the GTK4Rs/AP-22/23 width machinery needs (Word
-        // lets long unbreakable tokens overflow → blank-view churn).
-        assert_eq!(view.wrap_mode(), WrapMode::Char);
 
         // Site B — the CodeInline tag's wrap mode (per-run tag attributes), read from
         // the rendered view's own buffer (setup_tags installed it during render).
@@ -559,13 +548,27 @@ mod gtk_integration_tests {
                 .tag_table()
                 .lookup(name)
                 .unwrap_or_else(|| panic!("{name} installed by setup_tags"));
-            assert_ne!(
+            assert_eq!(
                 code_tag.wrap_mode(),
-                WrapMode::WordChar,
-                "GTK4Rs/AP-136: {name} must not use WrapMode::WordChar — it aborts the \
-                 app under a screen reader on GTK 4.6 (gtkatspitextbuffer.c Site B)"
+                atspi_safe,
+                "GTK4Rs/AP-136: {name} below GTK 4.8 must not use WordChar (Site B)"
             );
-            assert_eq!(code_tag.wrap_mode(), WrapMode::Char);
+            assert!(
+                !code_tag.is_insert_hyphens(),
+                "{name}: a wrap inside code must not insert a hyphen the code does not have"
+            );
+        }
+        for quote_depth in 0..=crate::tags::MAX_QUOTE_DEPTH {
+            let name = crate::tags::TagName::CodeBlock { quote_depth }.name();
+            let block_tag = view
+                .buffer()
+                .tag_table()
+                .lookup(name)
+                .unwrap_or_else(|| panic!("{name} installed by setup_tags"));
+            assert!(
+                !block_tag.is_insert_hyphens(),
+                "{name}: a wrap inside code must not insert a hyphen the code does not have"
+            );
         }
     }
 
@@ -817,9 +820,10 @@ mod gtk_integration_tests {
     }
 
     /// **No TEXT construct produces an over-wide line, at any pane width** — the
-    /// second half of TDD 2.2·a11y, which asserts that `WrapMode::Char` "also never
-    /// produces an over-wide line, preserving the no-horizontal-overflow invariant
-    /// §2.2 / GTK4Rs/AP-22 depends on (regression test in `preview::render`)".
+    /// second half of TDD 2.2·a11y: neither the `Char` (GTK below 4.8) nor the `WordChar`
+    /// (4.8 and later) preview wrap mode ever produces an over-wide line, preserving
+    /// the no-horizontal-overflow invariant §2.2 / GTK4Rs/AP-22 depends on. Each
+    /// platform's run checks the mode its GTK selects.
     ///
     /// **That claimed regression test did not exist.** Its sibling
     /// [`indented_wide_table_does_not_force_a_horizontal_scrollbar`] covers the
@@ -836,7 +840,7 @@ mod gtk_integration_tests {
     /// out cannot clear this assert vacuously (GEP-1).
     ///
     /// **Mutation check (measured):** reverting `render`'s
-    /// `view.set_wrap_mode(WrapMode::Char)` to `WrapMode::Word` fails this test —
+    /// wrap mode (then `WrapMode::Char`) to `WrapMode::Word` fails this test —
     /// `unbreakable-heading` overflows by 1300px at a 400px pane and by 800px at 900px,
     /// `heading-in-list` by 1328px, `long-inline-code` by 514px, `long-url` by 327px.
     ///
@@ -1354,9 +1358,12 @@ pub(super) fn wire_spliced_disclosure_toggles(
 /// pane is intact and the fallback merely shows the toggle) or after the region was
 /// already deleted (the fallback is the repair).
 fn connect_disclosure_toggle(view: &CodePreviewView, toggle: &gtk::ToggleButton) {
-    toggle.connect_toggled(glib::clone!(
+    let sync = crate::widgets::disclosure::ActiveSync::new(toggle);
+    let handler = toggle.connect_toggled(glib::clone!(
         #[weak]
         view,
+        #[strong]
+        sync,
         move |toggle| {
             let Some(window) = view
                 .root()
@@ -1368,6 +1375,17 @@ fn connect_disclosure_toggle(view: &CodePreviewView, toggle: &gtk::ToggleButton)
                 return;
             };
             let mode = st.view_mode.get();
+            // GTK has already flipped `active`; a dropped idle puts it back, because
+            // the fold model and the indicator it would disagree with stay as they are.
+            let restore = {
+                let toggle = toggle.downgrade();
+                let sync = sync.clone();
+                move || {
+                    if let Some(toggle) = toggle.upgrade() {
+                        sync.restore(&toggle);
+                    }
+                }
+            };
             // **Resolved at the click, against the text the pane is showing NOW** —
             // `previewed_cleaned` is the one accessor that owns which text that is
             // (the live editor buffer in split mode, the stored source otherwise), and
@@ -1390,41 +1408,57 @@ fn connect_disclosure_toggle(view: &CodePreviewView, toggle: &gtk::ToggleButton)
                      document as it now stands; re-rendering the pane so the next \
                      click acts"
                 );
-                crate::window::defer_with_window(&window, move |window| {
+                crate::window::defer_with_tab(
+                    &window,
+                    &st,
+                    |window, _, mode| {
+                        crate::window::rerender_preview_in_place(
+                            window,
+                            mode,
+                            crate::window::RenderShape::SameContent,
+                        );
+                    },
+                    restore,
+                );
+                return;
+            };
+            // Through the shared deferral, bound to THIS tab at THIS text in THIS mode:
+            // `key` was resolved against the text the pane shows now, and a tab switch,
+            // an edit or a mode switch dispatched before the idle would otherwise have it
+            // toggled and spliced into a document it does not index. The fold toggle waits in the idle with
+            // the splice for the same reason `reveal_folds`' expansion does — a dropped
+            // deferral must leave the fold model agreeing with the render on screen,
+            // which a toggle applied here and a splice dropped there would not.
+            let landed = sync.clone();
+            crate::window::defer_with_tab(
+                &window,
+                &st,
+                move |window, st, mode| {
+                    st.folds.borrow_mut().toggle(key);
+                    landed.landed();
+                    // Anything but a landed splice falls back to a full re-render — which
+                    // for `RegionLost` is not a nicety but the repair: the region has
+                    // already been deleted from the live buffer.
+                    if crate::window::splice_disclosure_in_place(window, mode, key).spliced() {
+                        // The splice's own boundary notification. It does NOT go through
+                        // `rerender_preview_in_place` — that is the whole point of splicing —
+                        // so it owes the notification separately, and this is the route the
+                        // macOS seat caught missing it: the passage stayed ticked over a count
+                        // nothing had recomputed, looking correct only because a `GtkTextTag`
+                        // range moves with an insertion on its own while a held offset does
+                        // not.
+                        crate::window::refresh_preview_find_highlight(window);
+                        return;
+                    }
                     crate::window::rerender_preview_in_place(
                         window,
                         mode,
-                        crate::window::RenderShape::SameContent,
+                        crate::window::RenderShape::ChangedContent,
                     );
-                });
-                return;
-            };
-            st.folds.borrow_mut().toggle(key);
-            // Through the shared deferral, which holds the window WEAKLY — a strong
-            // capture here kept the whole window tree alive for as long as the idle was
-            // pending (POLICY "widget-owned closures capture weakly", GTK4Rs/AP-63), and its
-            // sibling in `foldreveal` had always done it correctly.
-            crate::window::defer_with_window(&window, move |window| {
-                // Anything but a landed splice falls back to a full re-render — which
-                // for `RegionLost` is not a nicety but the repair: the region has
-                // already been deleted from the live buffer.
-                if crate::window::splice_disclosure_in_place(window, mode, key).spliced() {
-                    // The splice's own boundary notification. It does NOT go through
-                    // `rerender_preview_in_place` — that is the whole point of splicing —
-                    // so it owes the notification separately, and this is the route the
-                    // macOS seat caught missing it: the passage stayed ticked over a count
-                    // nothing had recomputed, looking correct only because a `GtkTextTag`
-                    // range moves with an insertion on its own while a held offset does
-                    // not.
-                    crate::window::refresh_preview_find_highlight(window);
-                    return;
-                }
-                crate::window::rerender_preview_in_place(
-                    window,
-                    mode,
-                    crate::window::RenderShape::ChangedContent,
-                );
-            });
+                },
+                restore,
+            );
         }
     ));
+    sync.armed(handler);
 }

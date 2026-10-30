@@ -32,7 +32,7 @@ fn render_for(tab: Option<TabId>, dir: &std::path::Path) {
 /// reader sees tells nobody.
 #[gtktest::test]
 fn a_refused_image_is_reported_to_the_tab_whose_render_shows_it() {
-    if !crate::imagedecode::SCREENS_XINCLUDE {
+    if !crate::imagedecode::screens_xinclude() {
         println!("SKIPPED [2.23c]: this platform does not screen SVG XInclude");
         return;
     }

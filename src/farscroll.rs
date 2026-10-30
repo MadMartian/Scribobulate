@@ -387,6 +387,7 @@ pub(crate) fn scroll_to_mark_when_ready(
     let buffer = view.buffer();
     let caret_at_call = buffer.iter_at_mark(&buffer.get_insert()).offset();
     let target = crate::saferizer::buffer_mark::BufferMark::new(mark.clone(), &buffer);
+    stop_kinetic_glide(view);
 
     // The immediate attempt: correct and sufficient whenever the layout is valid.
     #[expect(clippy::disallowed_methods)]
@@ -406,6 +407,55 @@ pub(crate) fn scroll_to_mark_when_ready(
         #[expect(clippy::disallowed_methods)]
         view.scroll_to_mark(mark, within_margin, use_align, xalign, yalign);
     });
+}
+
+/// End any kinetic glide the parent `GtkScrolledWindow` of `view` is still running, so
+/// the scroll about to be issued is not undone by it. Called by every navigation that
+/// scrolls a text pane: [`scroll_to_mark_when_ready`] (the editor's jumps) and the
+/// preview's own scroll idle.
+///
+/// After a wheel burst the scroller decelerates on a frame-clock tick that
+/// `set_value`s the adjustment for most of a second, and a plain `set_value` ends a
+/// running `animate_to_value` (GTK4Rs/AP-260, GTK4Rs/AP-361): a link or outline jump
+/// issued in that window was cancelled in its first frame, so the first click after a
+/// wheel scroll did nothing. The deceleration is not gated on `kinetic-scrolling` (it
+/// runs from the capture-phase scroll controller's `decelerate`), and GTK has no public
+/// cancel. The setter's `else` branch is the only route to `cancel_deceleration`
+/// (`gtkscrolledwindow.c:2611`, GTK 4.6.9), and it early-returns on an unchanged value,
+/// hence the toggle; the property ends where it started. The toggle also re-phases the
+/// scroller's drag/swipe/long-press gestures, harmless here because a programmatic
+/// scroll never runs inside a touch drag (GTK4Rs/AP-326).
+pub(crate) fn stop_kinetic_glide(view: &impl IsA<gtk::Widget>) {
+    let Some(sw) = view.parent().and_downcast::<gtk::ScrolledWindow>() else {
+        return;
+    };
+    let kinetic = sw.is_kinetic_scrolling();
+    sw.set_kinetic_scrolling(!kinetic);
+    sw.set_kinetic_scrolling(kinetic);
+}
+
+/// Start a kinetic glide on `sw` the way a wheel does, for a test: `#[gtktest::test]`
+/// cannot synthesise a wheel event, so emit the sequence the scroller's own controllers
+/// see. GTK 4.22 glides only inside a smooth-scroll sequence: its `decelerate` handler
+/// returns early unless the bubble controller's `scroll` has set the private `scrolling`
+/// flag, which takes a `scroll-begin` first (gtkscrolledwindow.c,
+/// `scroll_controller_decelerate` / `scroll_controller_scroll`, 4.22.4). 4.6.9 has no
+/// such gate. So: begin, one step, then the release's `decelerate` on the capture-phase
+/// controller.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) fn start_kinetic_glide_for_test(sw: &gtk::ScrolledWindow) {
+    let scroll_ctl = |phase| {
+        sw.observe_controllers()
+            .into_iter()
+            .filter_map(|c| c.ok().and_downcast::<gtk::EventControllerScroll>())
+            .find(|c| c.propagation_phase() == phase)
+            .expect("the scroller carries a kinetic scroll controller in each phase")
+    };
+    let bubble = scroll_ctl(gtk::PropagationPhase::Bubble);
+    let capture = scroll_ctl(gtk::PropagationPhase::Capture);
+    bubble.emit_by_name::<()>("scroll-begin", &[]);
+    bubble.emit_by_name::<bool>("scroll", &[&0.0f64, &1.0f64]);
+    capture.emit_by_name::<()>("decelerate", &[&0.0f64, &4_000.0f64]);
 }
 
 #[cfg(test)]
@@ -1029,5 +1079,63 @@ mod gtk_integration_tests {
             top.line(),
         );
         window.destroy();
+    }
+
+    /// **An editor jump issued while the scroller is still gliding lands** (TDD 2.17,
+    /// an outline jump in Edit mode). The editor's jumps come through
+    /// [`scroll_to_mark_when_ready`], so the glide stop has to live there as well as in
+    /// the preview's scroll idle, or a wheel glide cancels the jump's animation in its
+    /// first frame. The in-body control asserts the glide really moved the adjustment.
+    ///
+    /// Mutation check: removing the `stop_kinetic_glide` call from
+    /// `scroll_to_mark_when_ready` fails the landing assertion here.
+    #[gtktest::test]
+    fn an_editor_jump_issued_during_a_kinetic_glide_still_lands() {
+        use crate::testpump::{drain_for, until, Clock};
+        use std::time::Duration;
+        let _motion = crate::testmotion::AnimatedScrolls::pin();
+        let body: String = (0..2_000).map(|i| format!("Line {i}\n")).collect();
+        let (buffer, view) = build_tab_editor(&body);
+        let scroller = gtk::ScrolledWindow::new();
+        scroller.set_child(Some(&view));
+        let window = gtk::Window::new();
+        window.set_default_size(800, 600);
+        window.set_child(Some(&scroller));
+        window.present();
+        let vadj = scroller.vadjustment();
+        {
+            let vadj = vadj.clone();
+            until(Clock::Frame, "the document's height to settle", move || {
+                vadj.page_size() > 0.0 && vadj.upper() > vadj.page_size() * 20.0
+            });
+        }
+        crate::saferizer::scrollpos::jump(&vadj, vadj.upper() / 2.0);
+        drain_for(Clock::Frame, Duration::from_millis(300));
+
+        let before_glide = vadj.value();
+        crate::farscroll::start_kinetic_glide_for_test(&scroller);
+        drain_for(Clock::Frame, Duration::from_millis(60));
+        let glided = vadj.value() - before_glide;
+
+        let target_line = 200;
+        let target = buffer.iter_at_line(target_line).expect("line 200 exists");
+        buffer.place_cursor(&target);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the function under test; a bare editor has no split sync to lead"
+        )]
+        scroll_to_mark_when_ready(view.upcast_ref(), &buffer.get_insert(), 0.0, true, 0.0, 0.0);
+        drain_for(Clock::Frame, Duration::from_millis(2_000));
+        let (top, _) = view.line_at_y(view.visible_rect().y());
+        let top_line = top.line();
+        window.destroy();
+        assert!(
+            glided > 0.0,
+            "precondition: the emitted deceleration must move the adjustment (moved {glided})"
+        );
+        assert!(
+            (top_line - target_line).abs() <= 1,
+            "a jump issued mid-glide must land on line {target_line}, the editor shows line {top_line}"
+        );
     }
 }

@@ -33,7 +33,9 @@ pub(super) fn add_tab(window: &ApplicationWindow, md: &str) -> TabId {
 
 /// A document whose table of contents links to its own sections, with enough
 /// filler that a heading's line and the reader's departure line are far apart
-/// (an assertion that passed for both would prove nothing).
+/// (an assertion that passed for both would prove nothing). Every fixture's filler
+/// lines end in a hard break (`\\` in this source) so each renders on its own line —
+/// a soft break flows as a space (TDD 2.20) and would collapse the filler into one.
 pub(super) const TOC_DOC: &str = "\
 # Guide
 
@@ -42,13 +44,13 @@ pub(super) const TOC_DOC: &str = "\
 
 ## Section One
 
-alpha
-alpha
-alpha
-alpha
-alpha
-alpha
-alpha
+alpha\\
+alpha\\
+alpha\\
+alpha\\
+alpha\\
+alpha\\
+alpha\\
 alpha
 
 ## Section Two
@@ -69,23 +71,23 @@ pub(super) const LONG_TOC_DOC: &str = "\
 
 ## Section One
 
-alpha
-alpha
-alpha
+alpha\\
+alpha\\
+alpha\\
 alpha
 
 ## Section Two
 
-beta
-beta
-beta
+beta\\
+beta\\
+beta\\
 beta
 
 ## Section Three
 
-omega
-omega
-omega
+omega\\
+omega\\
+omega\\
 omega
 ";
 
@@ -95,13 +97,13 @@ omega
 pub(super) const TOP_TARGET_DOC: &str = "\
 # Top Section
 
-alpha
-alpha
-alpha
-alpha
-alpha
-alpha
-alpha
+alpha\\
+alpha\\
+alpha\\
+alpha\\
+alpha\\
+alpha\\
+alpha\\
 alpha
 
 ## Elsewhere
@@ -135,6 +137,10 @@ pub(super) fn park_reader_at(view: &CodePreviewView, line: i32) {
         .iter_at_line(line)
         .map(|i| i.offset())
         .expect("the line exists");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test fixture positioning the view as a precondition, not a navigation"
+    )]
     view.scroll_to_buffer_offset(offset);
     assert_eq!(
         view.reading_line(),

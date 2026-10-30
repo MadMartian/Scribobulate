@@ -80,18 +80,17 @@ pub(super) fn restore_place(tab: &Rc<TabState>, spot: Option<&NavSpot>) {
     let Some(spot) = spot else {
         return;
     };
-    let Some(sw) = tab.split.preview_scroller() else {
-        return;
-    };
-    // Make the preview the scroll driver for this jump, exactly as an outline
-    // activation does: in split mode the sync otherwise treats the editor as
-    // driver and projects editor→preview on the next tick, undoing the traversal.
-    crate::window::panescroll::lead(tab, crate::winstate::ScrollDriver::Preview);
+    // The preview leads the split sync for this jump, exactly as an outline activation
+    // does: otherwise the sync treats the editor as driver and projects editor→preview
+    // on the next tick, undoing the traversal. Both routes take the lead themselves.
+    // A tab with no preview (Edit mode) scrolls nothing.
     match spot {
         NavSpot::Heading(slug) => {
-            crate::preview::scroll_preview_to_fragment(&sw, slug);
+            crate::window::panescroll::preview_to_fragment(tab, slug);
         }
-        NavSpot::Line(line) => crate::preview::restore_preview_scroll_to_line(&sw, *line),
+        NavSpot::Line(line) => {
+            crate::window::panescroll::preview_to_line(tab, *line);
+        }
     }
 }
 
@@ -465,14 +464,11 @@ mod gtk_integration_tests {
         park_reader_at(&view, departure);
         crate::preview::activate_link_url(&view, "#section-two");
         assert_eq!(view.reading_line(), line_of(&sw, "section-two"));
-        // Without this the driver assertion below is vacuous: if anything on the
-        // way here had already claimed Preview, the traversal could omit the claim
-        // entirely and still be graded correct (T-6).
-        assert_eq!(
-            st.scroll.driver.get(),
-            crate::winstate::ScrollDriver::Editor,
-            "precondition: split mode leaves the editor driving until something claims it"
-        );
+        // The link itself made the preview lead, so hand the lead back to the editor,
+        // as a wheel over it would. Without this the driver assertion below is
+        // vacuous: the traversal could omit its claim entirely and still be graded
+        // correct (T-6).
+        st.scroll.driver.set(crate::winstate::ScrollDriver::Editor);
 
         WidgetExt::activate_action(&window, "win.nav-back", None).expect("activates");
         assert_eq!(view.reading_line(), departure);
@@ -485,6 +481,28 @@ mod gtk_integration_tests {
         WidgetExt::activate_action(&window, "win.nav-forward", None).expect("activates");
         assert_eq!(view.reading_line(), line_of(&sw, "section-two"));
 
+        window.destroy();
+    }
+
+    /// A link into a split tab whose editor leads: the fragment scroll takes the lead,
+    /// or the next sync frame puts the editor's position back (ScrAP-361). The
+    /// precondition pins the editor leading, so the assertion is not met by default.
+    #[gtktest::test]
+    fn a_fragment_scroll_makes_the_preview_lead() {
+        let app = make_app("com.extollit.scribobulate.integrationtest.nav.fragmentlead");
+        let window = new_window(&app, "IT", LONG_TOC_DOC, None);
+        change_action_state(&window, "view-mode", &"split".to_variant());
+        let st = winstate::state(&window).expect("a tab");
+        st.scroll.driver.set(crate::winstate::ScrollDriver::Editor);
+
+        assert!(
+            crate::window::panescroll::preview_to_fragment(&st, "section-two"),
+            "the heading exists"
+        );
+        assert_eq!(
+            st.scroll.driver.get(),
+            crate::winstate::ScrollDriver::Preview
+        );
         window.destroy();
     }
 }

@@ -18,15 +18,17 @@ fn action_popover(view: &CodePreviewView) -> crate::widgets::floating_card::Floa
         .expect("the action card is wired onto the preview view")
 }
 
-/// A wheel scroll leaves the preview's vadjustment at a fraction. Showing the action
-/// popover allocates the view it is parented to, and that allocation writes the truncated
-/// value back: a `value-changed` that moves no text. The scroll-hide must not take it for
-/// a scroll, or the first selection after a wheel scroll shows no Annotate popover.
+/// A wheel scroll leaves the preview's vadjustment at a fraction, and the view's next
+/// allocation writes the truncated value back: a `value-changed` that moves no text. The
+/// scroll-hide must not take it for a scroll, or the first selection after a wheel scroll
+/// shows no Annotate card.
 ///
 /// The fraction is planted with a plain adjustment write (`#[gtktest::test]` cannot
 /// synthesise a wheel event), and asserted still present just before the selection, so
-/// the test cannot pass on a value an earlier frame already snapped. It also asserts the
-/// write-back happened, so it cannot pass on a run that never exercised it.
+/// the test cannot pass on a value an earlier frame already snapped. The allocation is
+/// planted too, once the card is open. On GTK 4.6, where the write-back was measured, the
+/// test asserts it happened; on any other GTK it reports a skip for that half instead.
+/// Mutation check: hiding on every `value-changed` fails here on GTK 4.6.
 #[gtktest::test]
 fn the_first_selection_after_a_fractional_scroll_keeps_the_annotate_popover() {
     let mut md = String::new();
@@ -90,19 +92,26 @@ fn the_first_selection_after_a_fractional_scroll_keeps_the_annotate_popover() {
     // Not a fatal wait: with the defect the popover opens and closes within one frame, so
     // it may never be seen open, and the assertion below names that failure.
     until_or_for(Clock::Frame, Duration::from_secs(2), || pop.is_visible());
+    // Plant the write-back: a fresh allocation of the view. Opening the card used to be
+    // that allocation, when it was a popover parented to the view; the floating card does
+    // not re-allocate the view, so the test asks for the allocation itself.
+    view.queue_resize();
     drain_for(Clock::Frame, Duration::from_millis(400));
     assert!(
         pop.is_visible(),
         "the Annotate popover closed on the first selection after a fractional scroll"
     );
-    // GTK 4.6 writes the truncated value back when the popover's opening re-lays-out the
-    // view; GTK 4.22 (macOS and Windows CI) does not, so there the case this guards never
-    // arises and the half above is all that is checked.
     if vadj.value().fract() != 0.0 {
+        assert!(
+            !crate::saferizer::viewport::truncated_writeback_measured(),
+            "precondition: GTK 4.6 writes the truncated scroll value back on the view's \
+             allocation, and it still reads {}, so the guard was not exercised",
+            vadj.value()
+        );
         crate::testsymlink::skipped(
             "TDD 17.5 truncated write-back",
-            "this GTK left the fractional scroll value in place when the popover opened, so \
-             the write-back the fix guards against did not happen",
+            "this GTK left the fractional scroll value in place when the view was \
+             re-allocated, so the write-back the fix guards against did not happen",
         );
     }
 

@@ -772,9 +772,10 @@ FULL_BUDGET="${SCRIB_COVERAGE_FULL_BUDGET:-1800}"
 #                   not enable, so counting the file here would report 0% for code the
 #                   suite exercises thoroughly.
 #   codeview/       mod (GObject subclass + snapshot chip painting), geometry
-#                   (line/cell buffer-Y reads), markers (popover UI) are all
-#                   view-bound → excluded. The one pure piece, group_by_line, keeps
-#                   its unit tests but rides along inside the excluded markers.rs.
+#                   (line/cell buffer-Y reads), markers/markerrows/markernav/markercard
+#                   (popover UI) are all view-bound → excluded. The one pure piece,
+#                   group_by_line, keeps its unit tests but rides along inside the
+#                   excluded markernav.rs.
 #                   `marker_substitute` used to be a second such piece, and QA round 1
 #                   named the exclusion swallowing it. It is no longer here: the
 #                   marker's precedence moved to `theme::decor`, which is gated and at
@@ -808,7 +809,7 @@ FULL_BUDGET="${SCRIB_COVERAGE_FULL_BUDGET:-1800}"
 # runtime besides. The one pure piece, `is_benign_gtk_startup_noise` (the substring
 # match that demotes known-benign GTK startup diagnostics), keeps its own unit test
 # (`demotes_only_the_known_benign_gtk_startup_transients`) but rides along inside
-# the excluded file, the same shape as `codeview/markers.rs`'s group_by_line above.
+# the excluded file, the same shape as `codeview/markernav.rs`'s group_by_line above.
 #
 # `tags` registers every fixed `GtkTextTag` via direct property setters
 # (`set_scale`, `set_left_margin`, `set_background_rgba`, …) against a live
@@ -817,7 +818,7 @@ FULL_BUDGET="${SCRIB_COVERAGE_FULL_BUDGET:-1800}"
 # `TagName::is_list_item()` (the fixed-tag-name vocabulary and its totality over
 # every depth, including depths the caller contract says cannot occur), keeps its
 # own unit tests (`list_depth_tests`) but rides along inside the excluded file, the
-# same shape as `logging` and `codeview/markers.rs` above.
+# same shape as `logging` and `codeview/markernav.rs` above.
 #
 # Every separator below is the class `[/\\]`, not a literal `/`, because llvm-cov
 # reports paths in the host's native form — `src\window\toolbar.rs` on Windows. With
@@ -919,13 +920,18 @@ IGNORE='src[/\\](window[/\\](tabs[/\\]|editbar[/\\]|navhistory[/\\])?[a-z_]+|app
 # individually for the reason `altsuppression` is. `preview/markertests.rs` is the ninth,
 # and the same kind as `altsuppression`: `#[gtktest::test]` bodies for the heading marker's
 # two shapes, beside `preview/build.rs` rather than inside it for the same size reason.
-# `window/find/parity.rs`, `window/find/bartests.rs` and `window/find/splittests.rs` are
-# the tenth to twelfth, and
+# `window/find/parity.rs`, `window/find/bartests.rs`, `window/find/splittests.rs` and
+# `window/find/testkit.rs` (the helpers the two bar suites share) are the tenth to
+# thirteenth, and
 # they are named individually for a reason the others only imply: the directory they sit
 # in, `window/find/`, holds three PRODUCTION files that must stay measured
 # (`matcher`, `options`, `bodytext`, `plan`), so a `window[/\\]find[/\\][a-z_]+` shape
 # would take the whole feature's decision core out of the gate in one term.
-IGNORE_TESTONLY='src[/\\](testpump|testmotion|animation[/\\]sprites[/\\]testkit|preview[/\\]markertests|preview[/\\]altsuppression|preview[/\\]refusalnotice|preview[/\\]splice[/\\]excursion([/\\][a-z_]+)*|animation[/\\]visibility[/\\]gtk_tests([/\\][a-z_]+)*|window[/\\]tabs[/\\]documents[/\\]gtk_integration_tests|window[/\\]find[/\\](parity|bartests|splittests)|gtk_log_harness|logrepeat_reproduce)\.rs'
+# `preview/linebreaks.rs` is the fourteenth, and the same kind as `altsuppression`: the
+# `#[gtktest::test]` bodies for TDD 2.20's line breaks, rendered for real and so behind the
+# feature, beside `preview/build.rs` rather than inside it for the same size reason. Named
+# individually for the reason `altsuppression` is.
+IGNORE_TESTONLY='src[/\\](testpump|testmotion|animation[/\\]sprites[/\\]testkit|preview[/\\]markertests|preview[/\\]linebreaks|preview[/\\]altsuppression|preview[/\\]refusalnotice|preview[/\\]splice[/\\]excursion([/\\][a-z_]+)*|animation[/\\]visibility[/\\]gtk_tests([/\\][a-z_]+)*|window[/\\]tabs[/\\]documents[/\\]gtk_integration_tests|window[/\\]find[/\\](parity|bartests|splittests|testkit)|gtk_log_harness|logrepeat_reproduce)\.rs'
 
 # SCOPE_FILE — the measured set, recorded. Its own header states its role; the one thing
 # worth repeating HERE, where the enforcement lives, is what keeps the two files from

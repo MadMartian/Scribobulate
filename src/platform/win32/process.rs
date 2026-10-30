@@ -129,6 +129,56 @@ pub(crate) fn current_working_set_bytes() -> Option<u64> {
     }
 }
 
+#[cfg(test)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetProcAddress(module: *mut c_void, name: *const std::ffi::c_char) -> *const c_void;
+}
+
+#[cfg(test)]
+#[link(name = "psapi")]
+extern "system" {
+    fn EnumProcessModules(
+        process: *mut c_void,
+        modules: *mut *mut c_void,
+        cb: u32,
+        needed: *mut u32,
+    ) -> i32;
+}
+
+/// The address of `symbol` in whichever module already loaded into this process exports
+/// it, or `None` when none does. Asked of the modules loaded, never of a name to load,
+/// so this names the librsvg the loader chain is using, never one merely installed (its
+/// DLL name differs between GTK builds, and a librsvg is the only module exporting its
+/// own version variables).
+#[cfg(test)]
+pub(crate) fn loaded_librsvg_symbol(symbol: &std::ffi::CStr) -> Option<*const c_void> {
+    let mut modules: Vec<*mut c_void> = vec![std::ptr::null_mut(); 1024];
+    let mut needed = 0u32;
+    let bytes = (modules.len() * std::mem::size_of::<*mut c_void>()) as u32;
+    // SAFETY: `modules` holds `bytes` bytes of handle slots; the call writes at most
+    // that many and reports how many it needed. The pseudo-handle is not closed.
+    let ok = unsafe {
+        EnumProcessModules(
+            GetCurrentProcess(),
+            modules.as_mut_ptr(),
+            bytes,
+            std::ptr::addr_of_mut!(needed),
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let count = (needed as usize / std::mem::size_of::<*mut c_void>()).min(modules.len());
+    modules[..count].iter().find_map(|&module| {
+        // SAFETY: `module` is a handle the enumeration just returned, and a module is
+        // not unloaded while the loader that loaded it holds it; GetProcAddress only
+        // reads its export table.
+        let address = unsafe { GetProcAddress(module, symbol.as_ptr()) };
+        (!address.is_null()).then_some(address)
+    })
+}
+
 /// `PROCESS_QUERY_LIMITED_INFORMATION` — see the module doc for why not the full right.
 const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x0000_1000;
 /// `SYNCHRONIZE`, required to wait on the handle at all. Without it the liveness gate

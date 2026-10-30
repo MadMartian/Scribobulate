@@ -129,10 +129,11 @@ fn restore_window(
     let default_tab = TabSession::default();
     let first = ws.tabs.first().unwrap_or(&default_tab);
     let init = WindowInit {
-        width: ws.place.width,
-        height: ws.place.height,
         // Session restore is the one path that puts a window back where it was;
-        // every other new window opens where the window manager places it.
+        // every other new window opens where the window manager places it. The
+        // place carries the size too, and `winplace::present` alone applies it — the
+        // init's own `width`/`height` stay the configured default, which is what a
+        // place with no recorded size opens at.
         place: Some(ws.place.clone()),
         zoom_level: ws.zoom_level,
         show_unsafe_images: first.show_unsafe_images,
@@ -142,6 +143,7 @@ fn restore_window(
         // every window by `session::parse`'s migration, so each window here
         // restores what the whole app was showing when it was saved.
         chrome: ws.chrome,
+        ..WindowInit::default()
     };
     let first_doc = &docs[0];
     let path = first_doc.backing.clone();

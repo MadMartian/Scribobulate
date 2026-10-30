@@ -295,31 +295,8 @@ impl CodePreviewView {
             self.imp().scroll_await_alloc.replace(Some(work));
             return;
         }
-        self.stop_kinetic_glide();
+        crate::farscroll::stop_kinetic_glide(self);
         work(self);
-    }
-
-    /// End any kinetic glide the parent `GtkScrolledWindow` is still running, so the
-    /// scroll about to be issued is not undone by it.
-    ///
-    /// After a wheel burst the scroller decelerates on a frame-clock tick that
-    /// `set_value`s the adjustment for most of a second, and a plain `set_value` ends a
-    /// running `animate_to_value` (GTK4Rs/AP-260, GTK4Rs/AP-361): a link or outline jump issued in that
-    /// window was cancelled in its first frame, so the first click after a wheel scroll
-    /// did nothing. The deceleration is not gated on `kinetic-scrolling` (it runs from
-    /// the capture-phase scroll controller's `decelerate`), and GTK has no public cancel.
-    /// The setter's `else` branch is the only route to `cancel_deceleration`
-    /// (`gtkscrolledwindow.c:2611`, GTK 4.6.9), and it early-returns on an unchanged
-    /// value, hence the toggle; the property ends where it started. The toggle also
-    /// re-phases the scroller's drag/swipe/long-press gestures, harmless here because a
-    /// programmatic scroll never runs inside a touch drag (GTK4Rs/AP-326).
-    fn stop_kinetic_glide(&self) {
-        let Some(sw) = self.parent().and_downcast::<gtk::ScrolledWindow>() else {
-            return;
-        };
-        let kinetic = sw.is_kinetic_scrolling();
-        sw.set_kinetic_scrolling(!kinetic);
-        sw.set_kinetic_scrolling(kinetic);
     }
 
     /// Scroll so the buffer position `offset` is at the top of the viewport,
@@ -330,7 +307,19 @@ impl CodePreviewView {
     /// line validation) on an idle, NOT `scroll_to_iter` (immediate, pre-validation
     /// — blanks the view). Coalescing avoids stacking N in-flight scrolls, each of
     /// which would re-trigger validation churn (GTK4Rs/AP-22).
+    ///
+    /// Banned outside this module in `clippy.toml`: a navigation scrolls the preview
+    /// through `window::panescroll::preview_to_offset`, which first makes the preview
+    /// lead the split sync (ScrAP-361). The view's own scrolls call
+    /// [`Self::coalesced_scroll_to_offset`], which this forwards to.
     pub(crate) fn scroll_to_buffer_offset(&self, offset: i32) {
+        self.coalesced_scroll_to_offset(offset);
+    }
+
+    /// The body of [`Self::scroll_to_buffer_offset`], for the view's own scrolls (the
+    /// reading-line re-anchor, the cell scroll's fallback) and its tests, which move
+    /// the view rather than navigate it.
+    pub(super) fn coalesced_scroll_to_offset(&self, offset: i32) {
         use gtk::subclass::prelude::*;
         let buffer = self.buffer();
         let it = buffer.iter_at_offset(offset);
@@ -393,7 +382,7 @@ impl CodePreviewView {
         let Some(it) = self.buffer().iter_at_line(line) else {
             return;
         };
-        self.scroll_to_buffer_offset(it.offset());
+        self.coalesced_scroll_to_offset(it.offset());
     }
 
     /// Scroll a table-**cell** match to its own row, not merely the table's top.
@@ -423,7 +412,7 @@ impl CodePreviewView {
         let it = buffer.iter_at_offset(anchor_off);
         let Some(tanchor) = it.child_anchor() else {
             // The offset is not actually a child anchor — fall back to a plain scroll.
-            self.scroll_to_buffer_offset(anchor_off);
+            self.coalesced_scroll_to_offset(anchor_off);
             return;
         };
         // Step 1: mirror scroll_to_buffer_offset's coalesced, validation-safe
@@ -527,7 +516,7 @@ mod gtk_integration_tests {
 
         // Schedule the deferred scroll, then tear the view down in the SAME turn with no
         // pump — leaving the idle pending against a now-unrealized view.
-        view.scroll_to_buffer_offset(far);
+        view.coalesced_scroll_to_offset(far);
         window.destroy();
 
         // Drop every strong ref this test holds. Pre-fix the idle's strong clone would
@@ -557,7 +546,7 @@ mod gtk_integration_tests {
             .map(|it| it.offset())
             .expect("line 1500 exists in a 2000-line buffer");
 
-        view.scroll_to_buffer_offset(far);
+        view.coalesced_scroll_to_offset(far);
 
         let vadj = sw.vadjustment();
         {
@@ -736,25 +725,8 @@ mod gtk_integration_tests {
         crate::saferizer::scrollpos::jump(&vadj, vadj.upper() / 2.0);
         drain_for(Clock::Frame, Duration::from_millis(300));
 
-        // GTK 4.22 glides only inside a smooth-scroll sequence: its `decelerate` handler
-        // returns early unless the bubble controller's `scroll` has set the private
-        // `scrolling` flag, which takes a `scroll-begin` first (gtkscrolledwindow.c,
-        // `scroll_controller_decelerate` / `scroll_controller_scroll`, 4.22.4). 4.6.9
-        // has no such gate. So replay the sequence a wheel produces: begin, one step,
-        // then the release's `decelerate` on the capture-phase controller.
-        let scroll_ctl = |phase| {
-            sw.observe_controllers()
-                .into_iter()
-                .filter_map(|c| c.ok().and_downcast::<gtk::EventControllerScroll>())
-                .find(|c| c.propagation_phase() == phase)
-                .expect("the scroller carries a kinetic scroll controller in each phase")
-        };
-        let bubble = scroll_ctl(gtk::PropagationPhase::Bubble);
-        let capture = scroll_ctl(gtk::PropagationPhase::Capture);
         let before_glide = vadj.value();
-        bubble.emit_by_name::<()>("scroll-begin", &[]);
-        bubble.emit_by_name::<bool>("scroll", &[&0.0f64, &1.0f64]);
-        capture.emit_by_name::<()>("decelerate", &[&0.0f64, &4_000.0f64]);
+        crate::farscroll::start_kinetic_glide_for_test(&sw);
         drain_for(Clock::Frame, Duration::from_millis(60));
         let glided = vadj.value() - before_glide;
 
@@ -764,7 +736,7 @@ mod gtk_integration_tests {
             .iter_at_line(target_line)
             .map(|it| it.offset())
             .expect("line 200 exists");
-        view.scroll_to_buffer_offset(target);
+        view.coalesced_scroll_to_offset(target);
         drain_for(Clock::Frame, Duration::from_millis(2_000));
         let (top, _) = view.line_at_y(view.visible_rect().y());
         let top_line = top.line();

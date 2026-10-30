@@ -44,6 +44,7 @@ const ANCHORED_LINE_END_SLACK: i32 = 1;
 mod bandpaint;
 mod bands;
 mod card;
+mod cardfollow;
 mod cards;
 mod cardscroll;
 mod chips;
@@ -52,6 +53,9 @@ mod disclosurebands;
 mod geometry;
 mod gutter;
 mod listmarkers;
+mod markercard;
+mod markernav;
+mod markerrows;
 mod markers;
 mod navkeys;
 mod paint;
@@ -66,6 +70,9 @@ mod quotes;
 /// than the plain presence/order guards above.
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod animsprite_tests;
+/// The annotation markers' live-display tests (see the module's own doc).
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod marker_a11y_tests;
 /// The compositing-ORDER guards — one test per pair of decorations that can overlap.
 /// A sibling module rather than more bodies inside [`gtk_integration_tests`] because
 /// they answer a different question about the same function: those tests ask whether
@@ -77,9 +84,9 @@ mod ordertests;
 mod painttest;
 
 pub(crate) use geometry::move_or_create_mark;
+pub(crate) use markernav::{CardFocus, PendingMarkerOpen};
 pub(crate) use markers::{
-    AnnotateTrigger, AnnotationEdit, AnnotationSink, CardFocus, CreateAnnotation, MarkerData,
-    MarkerSource, PendingMarkerOpen,
+    AnnotateTrigger, AnnotationEdit, AnnotationSink, CreateAnnotation, MarkerData, MarkerSource,
 };
 
 mod imp {
@@ -353,6 +360,10 @@ mod imp {
         /// Created once and reused for the view's life; torn down by `dispose` via
         /// `AnnotationCard::teardown`.
         pub(crate) marker_card: RefCell<Option<super::card::AnnotationCard>>,
+        /// The open card's re-point waiting for the paint after a render in place, and
+        /// the frame clock it waits on (`cardfollow`). At most one: a later render
+        /// replaces it, and `dispose` disconnects it.
+        pub(crate) card_follow_paint: RefCell<Option<(gdk::FrameClock, glib::SignalHandlerId)>>,
         /// One-shot guard: has the persistent marker popover been PRE-WARMED (first
         /// `set_parent`+`popup`/`popdown` done while the view sat at scroll 0)? The
         /// first-EVER `set_parent`+`popup` of a popover parented to this view forces
@@ -430,6 +441,7 @@ mod imp {
                 annotate_trigger: RefCell::new(None),
                 overlay_popover: RefCell::new(None),
                 marker_card: RefCell::new(None),
+                card_follow_paint: RefCell::new(None),
                 card_host: glib::WeakRef::new(),
                 marker_popover_warmed: Cell::new(false),
                 primary_sel_handler: RefCell::new(None),
@@ -458,6 +470,7 @@ mod imp {
             if let Some(card) = self.marker_card.borrow_mut().take() {
                 card.teardown();
             }
+            super::cardfollow::cancel_pending(&self.obj());
             // Drop our handler on the long-lived primary clipboard (table-cell annotation) so it
             // doesn't outlive the view and accumulate across renders (GTK4Rs/AP-28).
             if let Some((clip, id)) = self.primary_sel_handler.borrow_mut().take() {
@@ -902,7 +915,7 @@ impl CodePreviewView {
                     // A chip click is the reader asking to READ this comment, so the card
                     // takes focus — the pointer path's long-standing behaviour, now stated
                     // rather than implied (see `CardFocus`).
-                    o.open_marker_popover(&idxs, markers::CardFocus::Take);
+                    o.open_marker_popover(&idxs, markernav::CardFocus::Take);
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                 }
             ),
@@ -2283,7 +2296,7 @@ mod gtk_integration_tests {
         // back to `line_at_y` on an unmapped view, whose geometry isn't settled —
         // the cached-target path below is what the zoom re-render actually reads.)
         let offset = view.buffer().iter_at_line(120).map(|i| i.offset()).unwrap();
-        view.scroll_to_buffer_offset(offset);
+        view.coalesced_scroll_to_offset(offset);
         assert_eq!(
             view.reading_line(),
             120,
@@ -2293,7 +2306,7 @@ mod gtk_integration_tests {
         // A second programmatic scroll re-anchors to the newer target (a rapid
         // zoom burst re-targets, and the latest must win — never a stale line).
         let offset = view.buffer().iter_at_line(40).map(|i| i.offset()).unwrap();
-        view.scroll_to_buffer_offset(offset);
+        view.coalesced_scroll_to_offset(offset);
         assert_eq!(
             view.reading_line(),
             40,
@@ -2318,7 +2331,7 @@ mod gtk_integration_tests {
 
         // Schedule a deferred scroll_to_mark — creates the persistent mark on buffer A.
         let offset = view.buffer().iter_at_line(150).map(|i| i.offset()).unwrap();
-        view.scroll_to_buffer_offset(offset);
+        view.coalesced_scroll_to_offset(offset);
         let mark_a = view
             .buffer()
             .mark("scrib-outline-target")

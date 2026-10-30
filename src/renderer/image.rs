@@ -215,7 +215,7 @@ mod image_placeholder_tests {
     /// TDD 2.23c: a placeholder for an image the XInclude screen refused says why.
     #[test]
     fn an_svg_refused_for_xinclude_says_so_in_its_tooltip() {
-        if !crate::imagedecode::SCREENS_XINCLUDE {
+        if !crate::imagedecode::screens_xinclude() {
             println!("SKIPPED [2.23c]: this platform does not screen SVG XInclude");
             return;
         }

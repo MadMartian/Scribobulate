@@ -146,6 +146,10 @@ fn rerender_and_restore_scroll(
     // GTK 4.6.9 path — the former pre-read primer was vestigial and is gone;
     // ANTI-PATTERNS deferred-work meta-pattern, myth-bust #1)
     // (ScrAP-14/GTK4Rs/AP-15/GTK4Rs/AP-14).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a reading-position restore: a re-render preserves the reader's place and must not lead (Reading-Position Preservation CAM); the navigating route is panescroll::preview_to_line"
+    )]
     restore_preview_scroll_to_line(preview_sw, top_line);
 }
 

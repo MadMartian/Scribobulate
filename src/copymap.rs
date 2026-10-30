@@ -711,9 +711,8 @@ impl Builder<'_> {
                     out.push(node);
                 }
                 RawKind::Break => {
-                    let (buf, src) = (ev.buf, ev.src.clone());
                     self.i += 1;
-                    out.push(leaf(self.md, buf, src));
+                    out.push(break_leaf(ev.buf, ev.src.clone()));
                 }
                 RawKind::Atomic => {
                     let node = Node::Opaque {
@@ -793,9 +792,8 @@ impl Builder<'_> {
                     children.push(node);
                 }
                 RawKind::Break => {
-                    let (buf, src) = (ev.buf, ev.src.clone());
                     self.i += 1;
-                    children.push(leaf(self.md, buf, src));
+                    children.push(break_leaf(ev.buf, ev.src.clone()));
                 }
                 RawKind::Atomic => {
                     children.push(Node::Opaque {
@@ -1003,13 +1001,19 @@ fn children_span(children: &[Node]) -> Option<Range<usize>> {
     Some(start..end)
 }
 
-/// A plain 1:1-if-possible leaf over a buffer range and its source.
-fn leaf(md: &str, buf: BufSpan, src: Range<usize>) -> Node {
-    let one_to_one = sl(md, src.clone()).chars().count() as i32 == buf.end - buf.start;
+/// A line break's leaf: its one rendered char (a soft break's space, a hard break's
+/// newline — TDD 2.20) stands for the whole break source, so it is never 1:1 and any
+/// overlap copies that source whole, line ending and any trailing spaces or backslash
+/// included. A break's glyph is not its source even when both are one char (an LF
+/// soft break's `\n` under a space), so `debug_verify` must not compare them; keying
+/// 1:1 on the char count made that depend on the document's line endings (1:1 under
+/// LF, not under CRLF) and pushed a soft-break exception into the guard, which then
+/// misread a CRLF code block's own one-byte `\n` leaves.
+fn break_leaf(buf: BufSpan, src: Range<usize>) -> Node {
     Node::Leaf {
         buf,
         src,
-        one_to_one,
+        one_to_one: false,
     }
 }
 

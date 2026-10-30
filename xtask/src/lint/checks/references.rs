@@ -1,4 +1,4 @@
-//! The citation and document-path checks: 1, 2, 3, 6, 7 and 8.
+//! The citation and document-path checks: 1, 2, 3, 6, 7, 8, 20, 25 and 26.
 
 use super::{fail, header, pass};
 use crate::lint::patterns as rx;
@@ -14,6 +14,8 @@ const PATTERNS_FILE: &str = "xtask/src/lint/patterns.rs";
 /// the point.
 const ISSUES_REGISTER: &str = "sdd/ISSUES.md";
 const PLAN_PREFIX: &str = "sdd/PLAN.";
+/// The security register check 26 resolves `ScrSEC-N` against.
+const CVE_REGISTER: &str = "sdd/CVE.md";
 use std::collections::BTreeSet;
 
 /// Check 1 — no `sdd/ISSUES.md` entry referenced from outside that file.
@@ -474,6 +476,70 @@ pub fn policy_step_cited(tree: &Tree) -> bool {
             "where it helps, e.g. (coverage ratchet). Step numbers are the contract's",
             "(scripts/pipeline.steps), and are cited from it, never from POLICY.",
         ],
+    )
+}
+
+/// Check 26 — every `ScrSEC-N` citation is well-formed and names an entry `sdd/CVE.md`
+/// defines, and every entry there has a Contents row (and every row an entry).
+///
+/// The security register's entries are permanent like ANTI-PATTERNS', so they are the
+/// citable home for a workaround's history — `src/imagedecode/xinclude.rs` cites one. A
+/// number that names nothing sends the next reader changing that workaround to no record
+/// of the leaks already found in it, which is the one read the citation exists to force.
+///
+/// Scans the whole tree, not `src/` alone as check 2 does for `ScrAP-N`: the citations
+/// today sit in ISSUES, a plan and POLICY as much as in code.
+pub fn scrsec_citations_resolve(tree: &Tree) -> bool {
+    header(
+        "26",
+        "ScrSEC-N citations malformed, or absent from sdd/CVE.md or its Contents",
+    );
+    let register = tree.text(CVE_REGISTER).unwrap_or_default();
+    let numbers = |pattern: &regex::Regex| -> BTreeSet<u32> {
+        register
+            .lines()
+            .filter_map(|line| pattern.captures(line))
+            .filter_map(|caps| caps.get(1)?.as_str().parse().ok())
+            .collect()
+    };
+    let defined = numbers(rx::scrsec_heading_rx());
+    let listed = numbers(rx::scrsec_toc_row_rx());
+    let mut findings = Vec::new();
+    for (name, text) in tree.subset_texts(|path| path != CORPUS_FILE) {
+        for (index, line) in text.lines().enumerate() {
+            for caps in rx::scrsec_rx().captures_iter(line) {
+                let Some(number) = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok()) else {
+                    continue;
+                };
+                if !defined.contains(&number) {
+                    findings.push(format!(
+                        "{name}:{} — ScrSEC-{number} has no `## ScrSEC-{number}.` entry",
+                        index + 1
+                    ));
+                }
+            }
+            for form in rx::malformed_scrsec_citations(line) {
+                findings.push(format!(
+                    "{name}:{} — `{form}` is not the citation form ScrSEC-N",
+                    index + 1
+                ));
+            }
+        }
+    }
+    for number in defined.difference(&listed) {
+        findings.push(format!(
+            "{CVE_REGISTER}: ScrSEC-{number} has an entry but no Contents row"
+        ));
+    }
+    // A Contents row with no entry needs no arm of its own: the row's link text is a
+    // `ScrSEC-N` citation, so the citation loop above already reports it as naming nothing.
+    if findings.is_empty() {
+        return pass();
+    }
+    fail(
+        "security-register citations that resolve to nothing:",
+        &findings,
+        &["Write `ScrSEC-<digits>` exactly; add the entry (and its Contents row) first."],
     )
 }
 

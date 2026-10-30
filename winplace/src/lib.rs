@@ -17,7 +17,8 @@
 //! back to where a new window would go without affecting the rest: an unknown virtual
 //! desktop is ignored by the window manager; activities that no longer exist are
 //! dropped, and if none remain the window opens on the current activity; a monitor that
-//! is gone means no position is written; a monitor that is smaller pulls the window back
+//! is gone means no position is written and the size is fitted to the largest monitor
+//! still listed; a monitor that is smaller pulls the window back
 //! until its title bar is reachable.
 //!
 //! Knows nothing about the application that uses it.
@@ -29,6 +30,8 @@ mod macos;
 mod win32;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod x11;
+#[cfg(any(test, all(unix, not(target_os = "macos"))))] // X11 only; tested everywhere.
+mod x11decode;
 
 use gtk::gdk;
 use gtk::prelude::*;
@@ -99,19 +102,20 @@ pub fn capture(window: &impl IsA<gtk::Window>) -> Place {
         ..place
     };
     // Maximized, GTK's default size is the maximized size here, not the one a restore
-    // returns to (`win32.rs`'s header).
+    // returns to (`win32.rs`'s header); minimized, GTK no longer reads it as maximized.
     #[cfg(windows)]
-    let place = match place
-        .maximized
-        .then(|| win32::normal_size(window))
-        .flatten()
-    {
-        Some((width, height)) => Place {
+    let place = {
+        let ((width, height), maximized) = geom::saved_state(
+            (place.width, place.height),
+            place.maximized,
+            win32::placement(window),
+        );
+        Place {
             width,
             height,
+            maximized,
             ..place
-        },
-        None => place,
+        }
     };
     place
 }
@@ -134,22 +138,19 @@ pub fn watch(window: &impl IsA<gtk::Window>) {
 pub fn present(window: &impl IsA<gtk::Window>, place: &Place) {
     let window = window.upcast_ref::<gtk::Window>();
     let display = WidgetExt::display(window);
+    let listed = monitors(&display);
     let monitor = place.monitor.as_deref().and_then(|name| {
-        monitors(&display)
-            .into_iter()
+        listed
+            .iter()
             .find(|m| m.connector().as_deref() == Some(name))
+            .cloned()
     });
-    let monitor_rect = monitor.as_ref().map(|m| {
-        let g = m.geometry();
-        geom::Rect {
-            x: g.x(),
-            y: g.y(),
-            width: g.width(),
-            height: g.height(),
-        }
-    });
+    let monitor_rect = monitor.as_ref().map(rect_of);
+    // The one place a restored window's size is decided; the application's builder
+    // sizes only windows with no place.
     if place.width > 0 && place.height > 0 {
-        let (w, h) = geom::fit_size((place.width, place.height), monitor_rect);
+        let listed: Vec<geom::Rect> = listed.iter().map(rect_of).collect();
+        let (w, h) = geom::fit_size((place.width, place.height), monitor_rect, &listed);
         window.set_default_size(w, h);
     }
     // With the native frame on Windows a maximized place is maximized through the OS
@@ -229,6 +230,17 @@ fn monitors(display: &gdk::Display) -> Vec<gdk::Monitor> {
     (0..list.n_items())
         .filter_map(|i| list.item(i).and_then(|o| o.downcast::<gdk::Monitor>().ok()))
         .collect()
+}
+
+/// `monitor`'s geometry, in GDK logical pixels.
+fn rect_of(monitor: &gdk::Monitor) -> geom::Rect {
+    let g = monitor.geometry();
+    geom::Rect {
+        x: g.x(),
+        y: g.y(),
+        width: g.width(),
+        height: g.height(),
+    }
 }
 
 #[cfg(test)]

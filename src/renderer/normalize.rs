@@ -51,6 +51,23 @@ pub(crate) fn md_options() -> Options {
         | Options::ENABLE_GFM
 }
 
+/// The extensions other Markdown tools commonly enable, for the passes that read a file
+/// AS WRITTEN — the way GitHub, a static-site generator or another editor reads it —
+/// rather than the way this renderer does: where a new annotation may be written
+/// (`annotate::landing`, TDD 17.59) and which CriticMarkup is literal code
+/// (`annotate::scan`, TDD 17.61). One set for both, because where they disagree about
+/// what is code, a highlight the first lets in is one the second reads as literal text.
+/// Footnotes are the case that matters: an indented paragraph in a footnote definition is
+/// footnote content with them and an indented code block without.
+pub(crate) fn as_written_options() -> Options {
+    Options::ENABLE_TABLES
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_GFM
+        | Options::ENABLE_MATH
+}
+
 /// A document string guaranteed to have passed the inline-tab pre-pass (ScrAP-75).
 /// [`NormalizedMd::new`] is the ONLY constructor — it runs [`normalize_inline_tabs`],
 /// a module-private function reachable from nowhere else, so a caller cannot obtain
@@ -130,6 +147,12 @@ impl<'a> NormalizedMd<'a> {
     /// `Parser` cannot be cloned or replayed.
     pub(crate) fn parse(&self) -> Parser<'_> {
         Parser::new_ext(&self.0, md_options())
+    }
+
+    /// As [`parse`](Self::parse), configured with [`as_written_options`]: the file as
+    /// other tools read it.
+    pub(crate) fn parse_as_written(&self) -> Parser<'_> {
+        Parser::new_ext(&self.0, as_written_options())
     }
 }
 
@@ -302,11 +325,9 @@ mod normalize_inline_tabs_tests {
         const SANCTIONED: &[&str] = &[
             "renderer/normalize.rs",   // the seam itself, plus the pre-pass
             "renderer/frontmatter.rs", // the front-matter walk seam every site reads through
-            "preview/annotate.rs",
             "preview/build.rs",
             "docio/mod.rs",
             "renderer/disclosure.rs",
-            "annotate/landing.rs", // where an annotation may be written (TDD 17.59)
         ];
 
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

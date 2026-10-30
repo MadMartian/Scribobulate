@@ -59,6 +59,10 @@ pub(crate) fn scroll_preview_to_heading(
             // The view owns the coalesced, validation-safe scroll (mark +
             // scroll_to_mark on an idle, with rapid re-targeting collapsed to the
             // latest) — GTK4Rs/AP-22.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the heading seam, itself banned: its only caller is panescroll::preview_to_heading, which leads first"
+            )]
             view.scroll_to_buffer_offset(site.offset);
             Some(site)
         })
@@ -101,6 +105,10 @@ pub(crate) fn scroll_preview_to_fragment(sw: &ScrolledWindow, fragment: &str) ->
         .map(|(_, offset)| offset);
     match offset {
         Some(offset) => {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the fragment seam: its navigating caller is panescroll::preview_to_fragment, which leads first"
+            )]
             view.scroll_to_buffer_offset(offset);
             true
         }
@@ -411,6 +419,10 @@ pub(crate) fn restore_preview_scroll_to_line(sw: &ScrolledWindow, line: i32) {
             .iter_at_line(line)
             .unwrap_or_else(|| buffer.end_iter())
             .offset();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the line seam, itself banned: its navigating caller is panescroll::preview_to_line, which leads first; its restoring callers preserve a place and must not lead (Reading-Position Preservation CAM)"
+        )]
         cpv.scroll_to_buffer_offset(offset);
         return;
     }
@@ -586,6 +598,10 @@ mod gtk_integration_tests {
         sw.set_child(Some(&view));
 
         let target = 30_000;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture: this test is about the seam itself, not a navigation through it"
+        )]
         restore_preview_scroll_to_line_fresh(&sw, target);
 
         let buffer = view.buffer();
@@ -631,6 +647,10 @@ mod gtk_integration_tests {
         }
 
         let target = 2_000;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture: this test is about the seam itself, not a navigation through it"
+        )]
         restore_preview_scroll_to_line_fresh(&sw, target);
 
         // Pump until the viewport reaches the target (tolerance == the assert's).
@@ -784,6 +804,10 @@ mod gtk_integration_tests {
         let sw = ScrolledWindow::new();
         sw.set_child(Some(&view));
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture: this test is about the seam itself, not a navigation through it"
+        )]
         restore_preview_scroll_to_line(&sw, 501);
 
         assert_eq!(
@@ -804,6 +828,10 @@ mod gtk_integration_tests {
         let sw = ScrolledWindow::new();
         sw.set_child(Some(&view));
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture: this test is about the seam itself, not a navigation through it"
+        )]
         restore_preview_scroll_to_line_fresh(&sw, 0);
         assert!(
             view.buffer().mark("scrib-scroll-restore").is_none(),
@@ -848,6 +876,10 @@ mod gtk_integration_tests {
         }
 
         // Schedule the progressive far-restore — installs the persistent mark on A.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture: this test is about the seam itself, not a navigation through it"
+        )]
         restore_preview_scroll_to_line_fresh(&sw, 2_000);
         let mark_a = view
             .buffer()

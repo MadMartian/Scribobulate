@@ -250,7 +250,7 @@ and that part of the place is left to the window manager.
 
 | Key | Type | Meaning |
 |-----|------|---------|
-| `width`, `height` | int, logical px | The window's default size: the size it returns to on leaving maximized or full screen. Not its allocation. `0` = unknown. |
+| `width`, `height` | int, logical px | The window's default size: the size it returns to on leaving maximized or full screen. Not its allocation. `0` = unknown. Restored no larger than `monitor`, or, when that monitor is gone, than the largest width and height any listed monitor has. |
 | `maximized`, `fullscreen` | bool | Window states, restored on every platform. |
 | `monitor` | string | The monitor's connector name (e.g. `HDMI-0`). Picks the full-screen monitor everywhere, and the position's monitor on X11. |
 | `x`, `y` | int, logical px | X11: the frame's top-left **relative to `monitor`'s origin**. Never root coordinates, which move whenever the monitor layout does. Applied only when `monitor` still exists. |
@@ -258,10 +258,17 @@ and that part of the place is left to the window manager.
 | `all_desktops` | bool | X11: on every desktop. X11 cannot express "several desktops but not all", so a place is one desktop or all. |
 | `activities` | array of string | X11/KDE: activity UUIDs. Empty = not recorded; the nil UUID `00000000-0000-0000-0000-000000000000` = every activity. UUIDs that no longer exist are dropped on restore; if none remain, the window opens on the current activity. |
 | `shaded`, `above`, `below` | bool | X11: shaded, kept above, kept below. |
-| `no_border` | bool | X11: shown without titlebar and frame. Captured as "the window manager gave it no frame" (no `_NET_FRAME_EXTENTS`, or all zero), excluding maximized and full screen. |
+| `no_border` | bool | X11: shown without titlebar and frame. Captured as "the window manager gave it no frame" — all-zero `_NET_FRAME_EXTENTS`, or none at all from a window manager that lists `_NET_FRAME_EXTENTS` in `_NET_SUPPORTED` — excluding maximized and full screen. |
+
+A `[windows.place]` table that does not read as this shape (a key of the wrong type)
+costs that window every part of its place except `width` / `height`, logged at `warn`;
+it never costs the session its other windows and tabs.
 
 A session file written before this table existed carries `width` / `height` at the
 `[[windows]]` level instead; reading it moves them into `place` (`session/migrate.rs`).
+A window that has a `[windows.place]` table keeps the place's size, whatever stray
+top-level `width` / `height` it also carries. A top-level value that is not an integer
+size is skipped for that window and logged at `warn`.
 
 ## Reading-theme file (`themes.toml`)
 

@@ -5,6 +5,9 @@
 pub(crate) mod appearance;
 pub(crate) mod automount;
 pub(crate) mod bundle;
+/// Which process is frontmost. Test-only: no product path asks.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) mod frontmost;
 pub(crate) mod fullscreen;
 pub(crate) mod menubar;
 pub(crate) mod pasteboard;

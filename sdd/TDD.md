@@ -161,13 +161,16 @@
 - **And** `######` (h6) renders **identically** to `#####` (h5) — no distinct sixth tier exists on any surface (the buffer registers `h1`–`h5` only and the renderer folds h6 onto the `h5` tag), and the outline applies the same fold (an h6 entry takes the h5 row style)
 - *(Format ▸ Heading still offers all six for valid Markdown authoring — see 10.4 — but h6 and h5 are indistinguishable once rendered: a deliberate fold, since h4 is already body-adjacent and leaves no room for a distinct sixth tier below it.)*
 
-### 2.20 A single source line break renders as a line break
+### 2.20 Source line breaks follow CommonMark
 - **Given** a paragraph whose source wraps across several lines separated by a **single** newline each (e.g. `Line one\nLine two\nLine three`)
 - **When** it is rendered
-- **Then** each source line appears on its **own** rendered line — a single newline is an explicit line break (the hard-wrap model), not collapsed to a space as stock CommonMark would do
+- **Then** the lines flow as **one** line of text, each single newline (a CommonMark *soft break*) rendered as a space, and the text wraps to the width of the pane
+- **And** a *hard break* — two or more trailing spaces, or a backslash, before the newline — still renders as a line break
 - **And** a blank line (two newlines) still starts a new, separated paragraph
-- **And** the hard-wrap model applies *inside a list item's own text* too: an item's source line-wraps (and hard breaks) each render on their **own** rendered line, every line left-justified to the item's content margin (the marker is drawn in a left gutter, so there is no hanging `indent` to preserve — see 2.4a); a blank line starts a new (loose) paragraph, also at the content margin
-- *(Trade-off: prose hard-wrapped at a fixed column breaks at each wrap point — accepted for an editor previewing the author's own notes.)*
+- **And** the same holds in every inline context: inside a list item (tight or loose, at the item's content margin — see 2.4a), a blockquote, emphasis or a link, and beside inline code; a setext heading written across two lines renders on one line, and its outline label and `#anchor` read the break as a space (`#foo-bar`), as an export does
+- **And** the export (HTML and PDF) and find over a collapsed disclosure body read a soft break as the same space, so a phrase across one is found and exported as the page shows it
+- **And** a copy across a soft break still yields the Markdown source, newline included (2.8)
+- **And** all of the above holds for a CRLF document exactly as for an LF one: a `\r\n` soft break is one space, no `\r` reaches the page, and its copy yields `\r\n`
 
 ### 2.2 Tables
 - **Given** a GitHub-flavored Markdown table
@@ -177,10 +180,10 @@
 - *(Cells are selectable, with working links — §2.9, §2.9a — but are per-cell selection islands.)*
 
 ### 2.2·a11y Text views use a screen-reader-safe wrap mode (no AT-SPI abort)
-- **Given** GTK 4.6 with a screen reader (Orca/AT-SPI) reading the preview
+- **Given** the preview, under any GTK, with or without a screen reader (Orca/AT-SPI) reading it
 - **When** AT-SPI requests the text-run attributes of the preview view or a run under the inline-code tag
-- **Then** the app does **not** abort: the preview view and the CodeInline tag use a `GtkWrapMode` in `PangoWrapMode`'s range (`Char`, never `WordChar`), because GTK 4.6's AT-SPI path casts the raw `GtkWrapMode` to `PangoWrapMode` untranslated and `WordChar`(3) is out of range → `pango_wrap_mode_to_string`'s `g_assert_not_reached()` (GTK4Rs/AP-136; 4.6-only, fixed 4.8+, restore `WordChar` at floor ≥4.8)
-- **And** `Char` also never produces an over-wide line, preserving the no-horizontal-overflow invariant §2.2 / GTK4Rs/AP-22 depends on (regression test in `preview::render`)
+- **Then** the app does **not** abort: on GTK **4.8 and later** the preview view and the CodeInline tag wrap at words and break within a word only when it cannot fit (`WordChar`); **below 4.8** they wrap at characters (`Char`), because GTK 4.6's AT-SPI path casts the raw `GtkWrapMode` to `PangoWrapMode` untranslated and `WordChar`(3) is out of range → `pango_wrap_mode_to_string`'s `g_assert_not_reached()` (GTK4Rs/AP-136)
+- **And** neither mode ever produces an over-wide line — never plain `Word`, which lets a long unbreakable token overflow — preserving the no-horizontal-overflow invariant §2.2 / GTK4Rs/AP-22 depends on (regression test in `preview::render`)
 
 ### 2.2a Table header row is visually distinguished
 - **Given** a GFM table (the header row is the row above the `---` delimiter row)
@@ -345,15 +348,51 @@
 - **And** an image over the pixel limit is refused before any memory is set aside for its pixels
 - **And** the file size limit can be changed in the configuration file
 
-### 2.23c An SVG that may use XInclude is refused, and the reader is told why (Linux and Windows)
-- **Given** a document referencing an SVG that uses XInclude — local or remote, plain or gzip-compressed, in any text encoding, with the XInclude namespace under any prefix or hidden behind character references, entities, or an SVG embedded inside it — on Linux or Windows, whose image decoder carries a published memory-corruption flaw triggered by XInclude
+### 2.23c An SVG that may use XInclude is refused, and the reader is told why (Linux, Windows, and macOS wherever the fixed decoder is not proven in use)
+- **Given** a document referencing an SVG that uses XInclude — local or remote, plain or gzip-compressed, in any text encoding, with the XInclude namespace under any prefix or hidden behind character references, entities, or an SVG embedded inside it — on Linux, on Windows or on macOS outside the app bundle, whose image decoder carries a published memory-corruption flaw triggered by XInclude
 - **When** it is rendered, used as a theme sprite, or exported to PDF
 - **Then** the SVG is never handed to the image decoder: the broken-image placeholder shows in its place, as for any image that cannot be shown (2.23b), and its tooltip says it was blocked because SVGs that may use XInclude are refused while the decoder has a security flaw
 - **And** the status bar of the window holding that document says so once, naming the image — or counting them when several are refused together — rather than once per image or once per re-render; the notice follows the document, never simply the window in front
 - **And** when that document is not the one in front of its window, the notice names the document too (e.g. "xinclude.md: Blocked 5 images: …"); when several documents in one window refuse images at the same time (e.g. a session restore) they share one notice that counts them (e.g. "Blocked 7 images in 2 documents: …"); and a document closed before its notice is shown gets none
-- **And** a refused theme sprite, which no document shows, is reported in the window in front as the theme's (e.g. "Blocked theme image rule.svg: …"), once per image content however often the theme is reloaded; a PDF export only logs its refusals, since the exported document's preview has already reported them
-- **And** the refusal errs towards refusing: an SVG that only *might* reach XInclude (one that declares entities, or uses an encoding the check cannot read) is refused too, while an ordinary SVG — including one embedding raster images — still shows
-- **And** on macOS, which carries a fixed decoder, nothing is refused on this account
+- **And** a refused theme sprite, which no document shows, is reported in the window in front as the theme's (e.g. "Blocked theme image rule.svg: …"), once per image content however often the theme is reloaded, and in the same notice as that window's document images when both are refused at once (e.g. "Blocked image a.svg and theme image rule.png: …", or, when that document is not in front, "Blocked image a.svg in doc.md and theme image rule.png: …", the document named beside its own images so the theme's is not attributed to it), never as two notices, one hiding the other; a PDF export only logs its refusals, since the exported document's preview has already reported them
+- **And** the refusal errs towards refusing: an SVG that only *might* reach XInclude (one that declares entities, uses an encoding the check cannot read, or embeds a `data:` URI whose payload does not decode) is refused too, while an ordinary SVG — including one embedding raster images, or one whose text merely says "data:" (e.g. "Source data: World Bank") — still shows, whether or not a comma comes later in the file
+- **And** on macOS run from the app bundle, which carries a fixed decoder, nothing is refused on this account as long as the bundle's decoder is the one actually in use; if the bundle cannot make it so (its loader list could not be installed, or names any other SVG decoder), it refuses exactly as on Linux; the same binary run from outside the bundle (from the build directory, say) loads the system's decoder and refuses exactly as on Linux
+
+### 2.23d The XInclude screen is judged by the decoder it protects (Linux, Windows, and macOS outside the app bundle)
+- **Given** an SVG that the platform's own image decoder would act on an XInclude in, however its content is layered — character references, percent or base64 `data:` URIs in any header spelling, CSS escapes, compression, a non-UTF-8 text encoding, nesting, and any combination of these
+- **When** the screen of 2.23c inspects it
+- **Then** it is refused before the decoder sees it
+
+### 2.23e The XInclude differential test judges the screen by the decoder, never by a model of it
+- **Given** a generated or mutated SVG that the screen lets through
+- **When** the test asks whether the screen was right
+- **Then** the answer comes from the decoder the platform actually loads, by whether the include's fallback was drawn, and a failure names that decoder's version and shows the smallest input that leaks
+
+### 2.23f The XInclude differential test cannot trigger the flaw it guards against
+- **Given** a runtime whose decoder still has the use-after-free
+- **When** the test runs on it
+- **Then** no input reaches the decoder unless nothing it decodes to holds a DOCTYPE or an entity declaration, checked on what each input decodes to under every layer, not on the bytes the generator wrote — so the run is safe on every platform's pipeline
+
+### 2.23g The differential test's oracle is proven able to see an include before it is trusted
+- **Given** any run, pipeline or long
+- **When** it starts, before any generated input
+- **Then** a control SVG whose include the decoder acts on is decoded with no screen and must show its marker, and the same SVG with its include in another namespace must not; if either fails, the run fails and names the decoder's version, rather than reporting every generated input as safe
+
+### 2.23h A pipeline run of the differential test is reproducible and bounded; a long run is on demand
+- **Given** a pipeline run on any platform
+- **When** the test runs
+- **Then** it covers the same generated inputs as every other pipeline run and finishes within its bound, while a developer can ask for a longer run over fresh inputs without changing code (POLICY § Unit tests)
+
+### 2.23i What the XInclude screen costs honest SVGs is reported
+- **Given** a long run, and a sample of the inputs the screen refused
+- **When** the decoder judges that sample
+- **Then** the run reports how many of them the decoder would not have acted on, and that count is not a failure
+
+### 2.23j An SVG saved as UTF-16 or compressed as `.svgz` shows like any other SVG
+- **Given** a document referencing an SVG that is UTF-16 text (with a byte-order mark, or an XML declaration) or gzip-compressed (`.svgz`), and that the XInclude screen of 2.23c does not refuse
+- **When** it is rendered, used as a theme sprite, or exported to PDF, on Linux, macOS or Windows
+- **Then** it shows exactly as the same picture saved as plain UTF-8 does: at its declared size, and re-rendered sharp at a zoomed size (13.11)
+- **And** its declared size is held to the same pixel limit as any image (2.23b), and a compressed one is refused if it expands past the image size limit or holds another compressed layer, without expanding it further
 
 ### 2.25 A Markdown construct the renderer cannot render is visible, never silently dropped
 - **Given** a document containing constructs from parser extensions this build does not handle — math (`$E=mc^2$`, `$$…$$`), footnotes (`[^1]` and its definition), a definition list, and a wikilink
@@ -540,7 +579,7 @@
 - **And** the emoji-free slugs disambiguate among themselves the same way (`#escalations`, `#escalations-1`), and **GitHub's slug always wins**: a fragment that is some heading's GitHub slug goes to that heading even when it is also another heading's emoji-free slug (with `## 🚨 Escalations` and `## Escalations` both present, `#escalations` goes to the plain one, exactly as on GitHub, and the emoji heading is reached by `#-escalations`). No link that resolved before emoji-free slugs existed changes its target
 - **And** the first click on such a link lands even when it comes right after a mouse-wheel scroll, while the pane is still gliding to a stop; the same holds for an outline jump
 - **And** the exported HTML answers to the same fragments as the preview (25.1)
-- **Coverage** `anchors::tests` (the slug rule, emoji classes, duplicates and precedence); `codeview::geometry::gtk_integration_tests::a_scroll_issued_during_a_kinetic_glide_still_lands`; `window::linknav::gtk_integration_tests::an_emoji_heading_is_reached_by_its_emoji_free_and_its_github_fragment`; `export::html::html_sink_tests::an_emoji_headings_alias_is_an_anchor_unless_a_github_id_shadows_it`; `tests/MANUAL-TEST.md` §2.17
+- **Coverage** `anchors::tests` (the slug rule, emoji classes, duplicates and precedence); `codeview::geometry::gtk_integration_tests::a_scroll_issued_during_a_kinetic_glide_still_lands`; `window::linknav::gtk_integration_tests::a_keyboard_fragment_link_in_split_mode_makes_the_preview_lead`; `window::linknav::gtk_integration_tests::an_emoji_heading_is_reached_by_its_emoji_free_and_its_github_fragment`; `export::html::html_sink_tests::an_emoji_headings_alias_is_an_anchor_unless_a_github_id_shadows_it`; `tests/MANUAL-TEST.md` §2.17
 
 ### 2.7 Untrusted content is contained
 - **Given** a document containing embedded HTML or script
@@ -549,7 +588,7 @@
 - **And given** an image whose `src` is an absolute path, a `..` traversal, or a symlink (under the doc folder) pointing outside the document's directory
 - **When** it is rendered
 - **Then** the file is **not** loaded — the canonicalized target must stay at or beneath the document's directory (an untitled document, having no directory, resolves no local images)
-- **And given** an image or a document link whose path reaches a network share outside the document's folder — a Windows `\\host\share` path, any spelling of one, a path through an automounter's directory (`/net` on macOS or Linux), or a symbolic link in the folder whose target is one. A chain of links too long to follow, or a link that cannot be read, is treated as one: where it leads is unknown
+- **And given** an image or a document link whose path reaches a network share outside the document's folder — a Windows `\\host\share` path, any spelling of one, a path through an automounter's directory (any directory the automounter serves on macOS or Linux, such as the stock `/net`; on Linux, any the mount table lists as an automount point), or a symbolic link in the folder whose target is one. A chain of links too long to follow, or a link that cannot be read, is treated as one: where it leads is unknown. So, on Linux, is a path through the stock `/net` or `/misc` map wherever the mount table cannot be read: what those directories lead to is then unknown
 - **When** it is rendered, or the link is clicked
 - **Then** nothing touches the share: the path is refused before any filesystem call, whatever "Show Unsafe Images" or "Load Unsafe Linked Documents" says — reaching a share authenticates with the user's credentials, which neither toggle is consent to — and the reader is told it is a network share rather than that the file is missing. A document opened from a share still loads the images in its own folder
 - **And given** an image, local or remote, whose header declares dimensions that decode past the project's pixel cap — a decompression bomb, which is small enough on disk to clear every byte limit and expands to hundreds of megabytes or more
@@ -1997,7 +2036,7 @@
 - **And when** the user moves to the other pane while the bar is open
 - **Then** the search moves with them at once: the count and highlights describe the new pane, the pane they left keeps no find highlight, and the replace row is available only while the editor is the pane searched
 - **Rationale** searching the editor while the user reads the preview gave a count and highlights for a pane they were not looking at, and stepping appeared to do nothing: the editor's scroll to each match was undone by the split scroll sync, which follows the pane the user is working in
-- **Coverage** `winstate::viewmode::tests::find_searches_the_focused_pane_only_in_split`; `window::find::splittests::find_in_split_searches_and_scrolls_the_focused_preview`; `window::find::splittests::moving_focus_between_split_panes_moves_the_open_search`; `tests/MANUAL-TEST.md` §11.21
+- **Coverage** `winstate::viewmode::tests::find_searches_the_focused_pane_only_in_split`; `window::find::splittests::find_in_split_searches_and_scrolls_the_focused_preview`; `window::find::splittests::moving_focus_between_split_panes_moves_the_open_search`; `window::find::splittests::find_in_the_preview_takes_the_lead_from_a_wheeled_editor`; `window::find::splittests::find_in_the_preview_takes_the_lead_from_a_wheeled_editor_for_a_cell_hit`; `tests/MANUAL-TEST.md` §11.21
 
 ## 12. Document outline
 
@@ -2437,6 +2476,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** that part of the place falls back to where a new window would go, every part that still exists is applied as usual, and the restore otherwise proceeds normally
 - **And** a window whose monitor is now smaller than it was opens with its title bar on that monitor, never off-screen
 - **And** a full screen window whose monitor is gone opens full screen on the monitor a new window would use
+- **And** a window whose monitor is gone opens at its saved size, but no wider than the widest and no taller than the tallest monitor still attached
 
 ### 15.10e Only session restore uses the place
 - **Given** the application is running
@@ -2699,9 +2739,10 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the other pane tracks to the corresponding position without drift introduced by the removed CriticMarkup (an un-annotated document syncs exactly as before)
 
 ### 17.12 Malformed or block-crossing CriticMarkup is shown literally, never lost
-- **Given** a document with an unclosed `{==` or a `{==…==}` whose close crosses a blank line
+- **Given** a document with an unclosed CriticMarkup construct, or one whose close crosses a blank line (an empty line, or one holding only spaces, tabs or a block quote's `>` markers, in either line ending)
 - **When** it is shown in the preview
 - **Then** the text is rendered literally (delimiters visible) rather than being swallowed or treated as an annotation
+- **And** annotating a selection that crosses such a line, from the editor or the preview, writes a comment at the selection's end rather than a highlight that would then show literally
 
 ### 17.13 Annotating over an existing annotation extends it, never nests
 - **Given** a document with an existing highlight annotation
@@ -2862,9 +2903,10 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the entry shows `note A | note B` — every intersecting comment, ` | `-joined, in source order
 - **And When** it is committed without editing
 - **Then** the single merged annotation carries `note A | note B`: both comments survive, and the joined text re-extracts as ONE comment with the ` | ` intact
+- **And** this holds for every comment the merge would replace, a standalone comment lying inside the merged span included (e.g. `{==x==}{>>c<<} {>>p<<} more`, selected from `x` to the end, shows and keeps `c | p`)
 
 ### 17.42 A card that merges nothing offers nothing
-- **Given** a selection over unannotated text, or one crossing a blank line (which becomes a point comment)
+- **Given** a selection over unannotated text, or one that crosses a blank line, or whose merge would cross one or swallow a suggested edit (each becomes a point comment)
 - **When** the Annotate card is raised
 - **Then** the comment entry is empty — the pre-population never invents a comment where none is at risk
 
@@ -2897,6 +2939,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** an open annotation card pointing at its margin chip
 - **When** the reader scrolls the preview while it is open
 - **Then** the card moves with its chip, staying beside the line it is about — it never stays where it was and ends up pointing at unrelated text
+- **And** the same holds when the document is rendered again under the card without any scrolling (the file changing on disk, the side-by-side view following an edit, a fold): the card stays open, keeps any comment being edited in it, and moves beside its own annotation's chip, even when another annotation now comes before it
 
 ### 17.48 An annotation card released by the viewport comes back with its chip
 - **Given** an open annotation card
@@ -2985,20 +3028,23 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the block is left byte-for-byte as it was, and the comment is kept on a line of its own just after the block, inside whatever quote or list holds it; its marker appears in the preview beside the block, not beside the text above it, and the page otherwise renders as before
 - **And** nothing in the file is replaced: the comment is only ever inserted, never written over a blank line or the end of a block, and removing it returns the file to what it was
 - **And** a highlight that touches math (`$…$`, `$$…$$`) covers the whole formula rather than splitting it
+- **And** a new annotation is never written inside an existing one's comment
+- **And** a selection that would merge with an existing highlight across a blank line is written as a comment at its end, and merges nothing
 - **And** annotations everywhere else — headings, lists, quotes, footnotes, inline formatting — are unchanged
 - **Rationale** Scribobulate strips annotations before it reads the Markdown, so none of this shows in its own preview; every other tool — GitHub, a static-site generator, another editor — reads the markup as text. Inside a paragraph that is harmless. Ahead of an opening fence, after a closing one, inside front matter or directly after an HTML block it changes the document's structure: the code becomes a paragraph and the rest of the file becomes code, or the metadata becomes text
 
 ### 17.60 A long annotation keeps its controls on the card
-- **Given** an annotation whose annotated text or comment is too long to fit on screen — or several such annotations on one line, which share one card
+- **Given** an annotation whose annotated text or comment is too long to fit in its pane — or several such annotations on one line, which share one card — in a window of any height
 - **When** its card opens
-- **Then** the whole card is on screen, and each annotation's Edit / Remove (or Save / Cancel while editing) sits directly under its own text, visible and clickable without scrolling past that text
-- **And** the long text scrolls inside the card rather than growing it; where several annotations share the card and still do not fit, their rows scroll together so every one stays reachable — the card never runs off the screen and never closes itself because of its size
+- **Then** the whole card is inside its pane, and each annotation's Edit / Remove (or Save / Cancel while editing) sits directly under its own text, visible and clickable without scrolling past that text
+- **And** the long text scrolls inside the card rather than growing it; where several annotations share the card and still do not fit, their rows scroll together so every one stays reachable — the card never runs past the pane's edge and never closes itself because of its size
 
 ### 17.61 CriticMarkup written as code shows as code
 - **Given** a document that writes CriticMarkup inside code — inline code such as `` `{>>…<<}` `` or "between the `` `{>>` `` and `` `<<}` `` markers", or a fenced or indented code block showing a sample annotation
 - **When** it is shown in the preview
 - **Then** the code reads exactly as written, with no margin marker and no annotation in the annotations list
 - **And** a real annotation on the same line, one wrapping a whole code span, or a comment on its own line after a code block (17.59), still renders and lists as an annotation
+- **And** a backtick inside a comment's text belongs to that comment and is never code: the comment ends at its own `<<}`, the prose after it stays prose, and removing it removes only the annotation, however many comments in the paragraph hold one
 
 ### 17.62 Every card stays with its window
 - **Given** any card is showing — the Annotate pop-up over a preview selection, the editor's formatting bar, or an annotation's comment card
@@ -3022,6 +3068,13 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Given** a reading theme that colours the page (Pixel Quest, Sepia, …)
 - **When** the reader selects preview text and the Annotate pop-up shows, then clicks Annotate and the comment entry opens
 - **Then** both cards are the same colour, the desktop's, as are the formatting bar and a comment card: the reading theme colours the document, not the cards floating over it (18.7)
+
+### 17.66 The wheel over an annotation's text reaches the card's list
+- **Given** a comment card whose rows overflow it, so the rows scroll, and the pointer over one row's annotated text or comment
+- **When** the reader turns the mouse wheel, or scrolls with a touchpad
+- **Then** text that can still scroll the way the wheel turns scrolls, and text at that end — or short enough to have nothing to scroll — moves the list of rows instead, by the same step the list takes with the pointer between rows
+- **And** turning back scrolls that text again before the list; a touchpad gesture that has started moving the list keeps moving it until the gesture ends, even as another row's text slides under the pointer
+- **And** where the toolkit already hands the wheel from inner text to the list itself (GTK 4.20.1 and later, so the macOS and Windows builds), its own behaviour is what the reader gets
 
 ## 18. Preview reading themes
 
@@ -4310,8 +4363,11 @@ up doing.
 ### 26.1 The bundle resolves no library outside itself
 - **Given** a `Scribobulate.app` produced by `bundle.sh`
 - **When** every Mach-O in the bundle is walked transitively with `otool -L`
-- **Then** every load path resolves under `@rpath`, `@executable_path`, `/usr/lib` or `/System/Library`, and none under `/opt/homebrew` or `/usr/local`
+- **Then** every load path resolves inside the bundle or under `/usr/lib` or `/System/Library`, and none under `/opt/homebrew` or `/usr/local`: an `@rpath/<name>` names a library staged in `Frameworks/`, and an `@loader_path/…` or `@executable_path/…` path resolves to a file that exists inside the bundle — a prefix that reads as internal is not proof of an internal target
 - **And** each staged library's own install **ID** is rewritten too, not only its dependents' load commands — an absolute ID works by accident and breaks the moment anything re-resolves it
+- **And** no `LC_RPATH` in the bundle points outside it, so a librsvg placed beside the `.app` is not loaded: dyld tries a library's own rpaths before the executable's, and a Homebrew rpath carried into the bundle once made the SVG loader bind such a sibling instead of the staged, floor-checked copy (`packaging/macos/rpath.sh`)
+- **And** the check fails closed: a tool that fails or answers nothing about a file fails the bundle, never reads as a bundle with nothing in it
+- **And** it runs at the end of every `bundle.sh` build, not only by hand
 
 ### 26.2 The bundle launches with the Homebrew prefix unreachable
 - **Given** the built bundle, on a machine that does have Homebrew GTK installed

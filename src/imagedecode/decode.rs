@@ -9,8 +9,9 @@
 //! GIF/APNG while their codecs are still `Unsupported` stubs) — a format `richimg`
 //! owns is never retried through the leaking route this module exists to close off.
 
-use super::probe::probe_screened_size;
+use super::probe::probe_input_size;
 use super::screen::screen;
+use super::svgencoding::{decode_svg, loader_input, LoaderInput};
 use std::sync::Arc;
 
 /// The result of decoding one image: the texture to show now (always the FIRST
@@ -258,6 +259,30 @@ mod frame_pixels_tests {
     }
 }
 
+/// Screen `bytes`, prepare them for a loader, and read their declared size, refusing
+/// (with the reason logged) content the screen refuses, content whose size cannot be
+/// read, and content over the pixel cap. The shared front half of [`decode_gtk`] and
+/// [`decode_pixbuf`]: TDD 2.23c screens before the probe, which is itself a loader.
+fn within_cap<'a>(bytes: &'a [u8], origin: &str) -> Option<LoaderInput<'a>> {
+    let input = loader_input(screen(bytes, origin)?, Some(origin))?;
+    let Some((w, h)) = probe_input_size(&input) else {
+        log::warn!(
+            "image {origin} not loaded: its dimensions could not be read, so the \
+             {}-pixel cap cannot be enforced and the decode is refused",
+            crate::limits::MAX_IMAGE_PIXELS
+        );
+        return None;
+    };
+    if !crate::limits::image_pixels_within_cap(w, h) {
+        log::warn!(
+            "image {origin} decodes to {w}×{h} pixels (cap {}) — not loaded",
+            crate::limits::MAX_IMAGE_PIXELS
+        );
+        return None;
+    }
+    Some(input)
+}
+
 fn decode_gtk(bytes: &[u8], origin: &str) -> Option<DecodedImage> {
     // FAILS CLOSED. A probe that cannot answer refuses the decode rather than waving it
     // through (QA round 2, F-R2-7).
@@ -276,26 +301,22 @@ fn decode_gtk(bytes: &[u8], origin: &str) -> Option<DecodedImage> {
     // three formats GTK handles natively, and WebP/GIF/APNG never reach here — they go
     // to richimg), but it is not provably empty, so the refusal is logged distinctly
     // from a cap breach: if a real host ever hits it, the log says which branch refused.
-    // TDD 2.23c: screened before the probe, which is itself a loader.
-    let screened = screen(bytes, origin)?;
-    let Some((w, h)) = probe_screened_size(screened) else {
-        log::warn!(
-            "image {origin} not loaded: its dimensions could not be read, so the \
-             {}-pixel cap cannot be enforced and the decode is refused",
-            crate::limits::MAX_IMAGE_PIXELS
-        );
-        return None;
-    };
-    if !crate::limits::image_pixels_within_cap(w, h) {
-        log::warn!(
-            "image {origin} decodes to {w}×{h} pixels (cap {}) — not loaded",
-            crate::limits::MAX_IMAGE_PIXELS
-        );
-        return None;
+    let input = within_cap(bytes, origin)?;
+    if input.svg_only() {
+        return match decode_svg(&input, None) {
+            Ok(pixbuf) => Some(DecodedImage {
+                texture: gtk::gdk::Texture::for_pixbuf(&pixbuf),
+                animation: None,
+            }),
+            Err(err) => {
+                log::warn!("image {origin} not decoded: {err}");
+                None
+            }
+        };
     }
     #[expect(clippy::disallowed_methods)] // this module IS the sanctioned route
     let result =
-        gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(screened.bytes().to_vec()));
+        gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(input.bytes().to_vec()));
     match result {
         Ok(texture) => Some(DecodedImage {
             texture,
@@ -334,25 +355,14 @@ pub(crate) fn decode_pixbuf(bytes: &[u8], origin: &str) -> Option<gtk::gdk_pixbu
     // refusal costs nothing at all: this route decodes through gdk-pixbuf itself, so
     // content its probe cannot identify is content `Pixbuf::from_stream` was going to
     // reject one step later anyway.
-    // TDD 2.23c: screened before the probe, which is itself a loader.
-    let screened = screen(bytes, origin)?;
-    let Some((w, h)) = probe_screened_size(screened) else {
-        log::warn!(
-            "image {origin} not loaded: its dimensions could not be read, so the \
-             {}-pixel cap cannot be enforced and the decode is refused",
-            crate::limits::MAX_IMAGE_PIXELS
-        );
-        return None;
-    };
-    if !crate::limits::image_pixels_within_cap(w, h) {
-        log::warn!(
-            "image {origin} decodes to {w}×{h} pixels (cap {}) — not loaded",
-            crate::limits::MAX_IMAGE_PIXELS
-        );
-        return None;
+    let input = within_cap(bytes, origin)?;
+    if input.svg_only() {
+        return decode_svg(&input, None)
+            .map_err(|err| log::warn!("image {origin} not decoded: {err}"))
+            .ok();
     }
     let stream = gtk::gio::MemoryInputStream::from_bytes(&gtk::glib::Bytes::from_owned(
-        screened.bytes().to_vec(),
+        input.bytes().to_vec(),
     ));
     #[expect(clippy::disallowed_methods)] // this module IS the sanctioned route
     match gtk::gdk_pixbuf::Pixbuf::from_stream(&stream, gtk::gio::Cancellable::NONE) {
@@ -394,9 +404,21 @@ pub(crate) fn rasterize_vector_bytes(
 ) -> Option<gtk::gdk::Texture> {
     // TDD 2.23c. Refused content returns `None`, so the caller's natural-size fallback
     // runs — and is refused by the same screen, which is what reports it.
-    let screened = screen(bytes, origin)?;
+    let input = loader_input(screen(bytes, origin)?, Some(origin))?;
+    if input.svg_only() {
+        return match decode_svg(&input, Some(target_w)) {
+            Ok(pixbuf) => Some(gtk::gdk::Texture::for_pixbuf(&pixbuf)),
+            Err(err) => {
+                log::debug!(
+                    "vector image {origin} not re-rendered at {target_w}px wide ({err}) — \
+                     using its natural size"
+                );
+                None
+            }
+        };
+    }
     let stream = gtk::gio::MemoryInputStream::from_bytes(&gtk::glib::Bytes::from_owned(
-        screened.bytes().to_vec(),
+        input.bytes().to_vec(),
     ));
     #[expect(clippy::disallowed_methods)] // this module IS the sanctioned route
     match gtk::gdk_pixbuf::Pixbuf::from_stream_at_scale(
@@ -513,7 +535,7 @@ mod tests {
     /// without it still decodes, so the refusal is the screen's and not the loader's.
     #[test]
     fn an_svg_using_xinclude_is_refused_by_every_entry_point() {
-        if !crate::imagedecode::xinclude::ENFORCED {
+        if !crate::imagedecode::xinclude::enforced() {
             println!("SKIPPED [2.23c]: this platform does not screen SVG XInclude");
             return;
         }

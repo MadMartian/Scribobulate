@@ -53,7 +53,7 @@ described from a different vantage point.
 | A | Windows, Mac | Production | No screen reader on Windows or macOS can read the app's accessible names: our GTK builds leave GTK's AccessKit accessibility backend off, so neither platform gets a tree to carry them. Linux/AT-SPI reads them | Medium |
 | B | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | D | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
-| F | Linux | Test | `window::sidebarfilter::gtk_integration_tests::closing_the_filter_returns_the_focus_to_the_highlighted_row` intermittently finds the list at its top instead of scrolled to the highlighted row (1 failure on CI; passed on retry, and about 160 of 160 loaded runs locally) | Low |
+| F | Linux, Mac | Test | `window::sidebarfilter::gtk_integration_tests::closing_the_filter_returns_the_focus_to_the_highlighted_row` intermittently finds the list at its top instead of scrolled to the highlighted row (3 failures on CI: Linux twice, the second on 2026-10-29, and macOS once on 2026-10-29, both 2026-10-29 failures reading "value 0, upper 0, page 0"; passed on retry, and about 160 of 160 loaded runs locally) | Low |
 | G | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | Q | Windows, Linux | Upstream | A crafted SVG can corrupt memory: Windows and Linux decode SVG through a librsvg with a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuse any SVG that may use XInclude before librsvg sees it until they carry the fix. The macOS bundle carries 2.63.2, and its build fails below that | High |
 | R | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
@@ -310,6 +310,11 @@ and a close with animations off skipping the hand-back. Not established: the mec
   it recurs, read them first: they say whether the reveal ran, ran against a stale size,
   or was undone afterwards. Change no product code before that.
 
+**Recurred** (2026-10-29, GitHub CI run 40960989179, macOS leg, GTK 4.24.1, at
+`src/window/sidebarfilter.rs:1156`): "value 0, upper 0, page 0", the same reading as the
+second Linux failure. `upper 0` and `page 0` say the list had never been allocated when the
+assertion read it, so the reveal had nothing to scroll; this is no longer Linux-only.
+
 ## G. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 
 **Severity**: Low (the slider alone, occasionally, and the next scroll brings it back).
@@ -362,52 +367,22 @@ Any pointer motion brings it back. Judged negligible by the operator.
 
 ## Q. Every SVG is decoded by librsvg, which has a published use-after-free
 
-**Severity**: High (a crafted SVG can corrupt memory in the Windows and Linux builds
-wherever the screen below misses a route; a crash is the realistic worst case, code
-execution is not ruled out).
+**Severity**: High (a crafted SVG can corrupt memory in the Windows and Linux builds wherever
+the interim screen misses a route; a crash is the realistic worst case, code execution is not
+ruled out).
 
-**Report**: GHSA-wq5f-xc86-pv6w / CVE-2026-96889 (2026-10-06), filed against the npm `sharp`
-package; the flaw is librsvg's own (upstream
-https://gitlab.gnome.org/GNOME/librsvg/-/work_items/1241, RUSTSEC-2026-0305). Fixed in
-librsvg **2.63.2**. An SVG whose nested `xi:include` (a `data:` URI is enough) redefines an
-XML entity makes librsvg free that entity while libxml2 is still expanding it.
+**Report**: GHSA-wq5f-xc86-pv6w / CVE-2026-96889, fixed in librsvg **2.63.2**. Windows loads
+2.62.3 (gvsbuild). Linux loads the distribution's: Ubuntu 22.04's 2.52.5 is "Not affected" per
+Ubuntu's tracker (a vendor assessment we have not measured); other distributions are unassessed.
+macOS from its bundle loads 2.63.2.
 
-**Why it reaches us**: the app decodes SVG through the gdk-pixbuf loader chain, and the SVG
-loader is librsvg's. MEASURED on macOS: an SVG drawing through a `data:` `xi:include` renders
-through our bundled loader (the included rect's pixels appear; the control does not), so the
-vulnerable path runs, with no base URL needed. Any SVG a document references is decoded:
-local files next to the document by default (a cloned repo, a download), and remote images
-only with "Show Unsafe Images" on.
+**Open because**: the vulnerable librsvg is still what Windows and Linux load. The interim
+workaround — the XInclude screen ahead of every decode — is recorded, with every leak found in it
+and what upstream must deliver to retire it, in [CVE.md](CVE.md) as **ScrSEC-1**. Read that entry
+before changing the screen. This entry closes when ScrSEC-1 is marked Closed on both platforms.
 
-**Code execution**: the advisory's published route needs a non-PIE executable on glibc.
-Ours is PIE on every platform checked (Linux `readelf -h`: DYN; macOS `otool -hv`: PIE), and
-macOS does not use glibc's allocator. So no published route applies; a crash does.
-
-**Per platform**:
-
-| Platform | librsvg in use | Fixed? |
-|---|---|---|
-| macOS | 2.63.2, copied from Homebrew into the bundle by `packaging/macos/bundle.sh`. MEASURED 2026-10-08 in the built `.app` and `.dmg` | Yes. `bundle.sh` fails the build if the staged librsvg is below 2.63.2 (`packaging/macos/verify-librsvg.sh`; refused 2.62.3 in a negative control). A copy installed from an earlier bundle still carries 2.62.3 until it is reinstalled |
-| Windows | 2.62.3. The installer ships the gvsbuild 2026.8.0 GTK zip pinned in the CI workflow; gvsbuild's recipe at that tag pins 2.62.3 (read, not measured). MEASURED 2.62.3 in a locally built install (gvsbuild 2026.6.0), whose SVG loader is registered in `loaders.cache` | No. No gvsbuild release has the fix yet; needs a local gvsbuild with a version override, or a wait |
-| Linux | The distro's package; Ubuntu 22.04: 2.52.5+dfsg-3ubuntu0.2, newest security patch CVE-2023-38633, no newer candidate | Not known: whether 2.52.5 has the faulty code is not established |
-
-**Mitigation in place (Linux, Windows)**: every hand-off of image bytes to the gdk-pixbuf
-loader chain is screened first (`src/imagedecode/xinclude.rs`, TDD 2.23c), on every route —
-local and remote images, theme sprites, PDF export. Content naming the XInclude namespace
-is refused, as is anything that could hide the name from the check (entity declarations,
-DTD subsets, unreadable encodings) after gzip, UTF-16, references, CSS escapes and nested
-`data:` documents are undone. A refused image shows the placeholder and one status notice.
-Cost: an SVG using XInclude, declaring entities or carrying a non-W3C DTD does not show.
-The screen is a mitigation, not the fix: the vulnerable librsvg is still loaded, so a route
-to XInclude the screen does not model would still reach it. On macOS the screen is compiled
-out (`xinclude::ENFORCED`), because the bundle carries the fix and its build enforces it.
-
-**What remains**:
-- Windows and Linux: remove the screen once a fixed librsvg is what each platform loads —
-  a gvsbuild release (or local build) with 2.63.2 on Windows; the distribution's package on
-  Linux, where whether 2.52.5 even has the faulty code is still not established.
-- The screen's premise that librsvg follows no non-`data:` reference without a base URL
-  (the loader is fed a stream with none) is read from librsvg's design, not measured.
+**Not measured**: the screen's premise that librsvg follows no non-`data:` reference without a
+base URL (the loader is fed a stream with none) is read from librsvg's design.
 
 ## R. Split-mode live-reload tests sometimes find the editor short of where they parked it on Windows CI
 
@@ -426,8 +401,9 @@ that. The failed job passed on re-run each time.
 editor never reached the parked line, or did not stay there. Linux: 0 of 20 runs of the module,
 on both the old and the new code, unloaded. Mac: green on every CI run; one local failure in a
 full macOS pipeline (2026-10-27, Paragraph case, editor top 441 where 442 was expected: an
-off-by-one, not the Windows "top 0" shape), and 5 of 5 module reruns passed. Not reproduced
-locally on Windows.
+off-by-one, not the Windows "top 0" shape), and 5 of 5 module reruns passed; a second sighting
+of that same Paragraph 441/442 shape in a full pipeline on 2026-10-29, again with 5 of 5 module
+reruns passing and the pipeline green on re-run. Not reproduced locally on Windows.
 
 **Suspects, unmeasured**: the editor's scroll to the park line is an animated `scroll_to_mark`
 that lands in stages (GTK4Rs/AP-14, GTK4Rs/AP-115), and the helpers' settle may time out on a

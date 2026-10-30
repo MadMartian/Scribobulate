@@ -873,6 +873,10 @@ mod gtk_integration_tests {
                     settled.converged,
                     "the re-rendered preview's layout to settle"
                 );
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "a test fixture positioning the view as a precondition, not a navigation"
+                )]
                 preview().scroll_to_buffer_offset(0);
             }
             crate::testpump::until(
@@ -893,10 +897,18 @@ mod gtk_integration_tests {
     }
 
     /// Preview-only mode, the other half of TDD 9.16: an undo whose change is already on
-    /// screen leaves the preview where it is. The reader is parked at the document's end,
-    /// where the change is, and must still be there after the preview re-renders.
+    /// screen leaves the preview where it is.
+    ///
+    /// The change sits in the MIDDLE of the document and the reader is parked with it in
+    /// view BELOW the top line. A reveal puts its line at the top of the viewport, so a
+    /// preview that scrolled when it should not have moves its top line down to the
+    /// change, and the assertion sees it. At the document's end, where this test used to
+    /// park, a reveal clamps to the bottom it was already at and an always-reveal
+    /// mutation passed. Mutation check: making `reveal_needed` always answer `true`
+    /// fails here on the first undo.
     #[gtktest::test]
     fn an_undo_already_on_screen_in_preview_mode_does_not_move_the_preview() {
+        const MARKER: &str = "inserted mid-document";
         let app = gtk::Application::new(
             Some("com.extollit.scribobulate.integrationtest.editoractions.undoreveal.onscreen"),
             gtk::gio::ApplicationFlags::NON_UNIQUE,
@@ -909,8 +921,11 @@ mod gtk_integration_tests {
         window.present();
         pump_until(|| window.is_mapped(), "toplevel to map");
         let st = state(&window).expect("state registered after new_window");
-        st.editor_buf
-            .insert(&mut st.editor_buf.end_iter(), "appended\n");
+        // Paragraph 200 of 400 starts on editor line 398.
+        st.editor_buf.insert(
+            &mut st.editor_buf.iter_at_line(398).expect("line 398"),
+            &format!("{MARKER}\n\n"),
+        );
         change_action_state(&window, "view-mode", &"preview".to_variant());
         let preview = || {
             st.split
@@ -920,20 +935,46 @@ mod gtk_integration_tests {
                 .expect("the preview view")
         };
         let adjustment = || preview().vadjustment().expect("the preview scrolls");
-        let at_bottom = || {
-            let a = adjustment();
-            a.value() > 0.0 && a.value() + a.page_size() >= a.upper() - 1.0
-        };
         pump_until(
             || adjustment().upper() > adjustment().page_size() * 2.0,
             "the preview to be laid out taller than two screens",
         );
-        let end = preview().buffer().end_iter().offset();
-        preview().scroll_to_buffer_offset(end);
-        crate::testpump::until(
+        // The preview renders the document as loaded, so it shows no `MARKER` yet; the
+        // change an undo makes is where that paragraph sits, just above paragraph 200.
+        let marker_at = preview()
+            .buffer()
+            .start_iter()
+            .forward_search("line 200", gtk::TextSearchFlags::empty(), None)
+            .map(|(start, _)| start)
+            .expect("paragraph 200 in the preview");
+        let change_line = marker_at.line();
+        // Park a few lines above the change, so the change is on screen below the top.
+        let mut park = marker_at;
+        park.backward_lines(4);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture positioning the view as a precondition, not a navigation"
+        )]
+        preview().scroll_to_buffer_offset(park.offset());
+        let parked = crate::testpump::until_stable(
             crate::testpump::Clock::Frame,
-            "precondition: the reader parked at the end, on the change",
-            at_bottom,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_millis(300),
+            || adjustment().value() as i64,
+        );
+        assert!(
+            parked.converged,
+            "precondition: the parking scroll to settle"
+        );
+        let on_screen = || {
+            super::super::panescroll::preview_lines_on_screen(&st)
+                .expect("the preview is on screen")
+        };
+        let (top, bottom) = on_screen();
+        assert!(
+            top < change_line && change_line <= bottom,
+            "precondition: the change (line {change_line}) on screen below the top; \
+             lines {top}..={bottom} are"
         );
 
         for command in ["undo", "redo", "undo"] {
@@ -951,11 +992,11 @@ mod gtk_integration_tests {
                 || adjustment().value() as i64,
             );
             assert!(settled.converged, "the preview to settle after {command}");
+            let (now_top, _) = on_screen();
             assert!(
-                at_bottom(),
-                "{command}: the change was on screen, so the preview must not move; it is at {} of {}",
-                adjustment().value(),
-                adjustment().upper()
+                now_top.abs_diff(top) <= 1,
+                "{command}: the change was on screen, so the preview must not move; its top \
+                 line went from {top} to {now_top} (the change is line {change_line})"
             );
         }
         window.destroy();

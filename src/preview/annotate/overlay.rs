@@ -62,11 +62,10 @@ fn wire_cell_press_exclusivity(view: &CodePreviewView) {
     let press = gtk::EventControllerLegacy::new();
     press.set_propagation_phase(gtk::PropagationPhase::Capture);
     press.connect_event(|controller, event| {
-        let is_primary_press = event.event_type() == gtk::gdk::EventType::ButtonPress
-            && event
-                .downcast_ref::<gtk::gdk::ButtonEvent>()
-                .is_some_and(|b| b.button() == gtk::gdk::BUTTON_PRIMARY);
-        if !is_primary_press {
+        let button = event
+            .downcast_ref::<gtk::gdk::ButtonEvent>()
+            .map(|b| b.button());
+        if !super::press::is_primary_press(event.event_type(), button) {
             return glib::Propagation::Proceed;
         }
         let Some(view) = controller
@@ -87,12 +86,12 @@ fn wire_cell_press_exclusivity(view: &CodePreviewView) {
 /// coordinates; the widget's native and its surface transform turn them into the
 /// widget's own.
 fn event_point_in(widget: &impl IsA<gtk::Widget>, event: &gtk::gdk::Event) -> Option<(f64, f64)> {
-    let (sx, sy) = event.position()?;
+    let surface = event.position()?;
     let native = widget.as_ref().native()?;
-    let (tx, ty) = native.surface_transform();
+    let (nx, ny) = super::press::surface_to_native(surface, native.surface_transform());
     native
         .upcast_ref::<gtk::Widget>()
-        .translate_coordinates(widget, sx - tx, sy - ty)
+        .translate_coordinates(widget, nx, ny)
 }
 
 /// The primary press at `(x, y)` in `view`'s coordinates. See
@@ -229,14 +228,42 @@ fn position_card_on_cell(
     let Some((vx, vy)) = label.translate_coordinates(view, f64::from(lx), f64::from(ly)) else {
         return false;
     };
-    let height = view.height();
     // Same on-viewport gate the popovers use, through the same constructor — this card is
     // an in-surface GtkOverlay child rather than a popover, so it is not exposed to GTK4Rs/AP-26
     // itself, but "is there a visible anchor here?" is one question and deserves one
-    // answer. The rect is discarded: `bar_placement` below owns this card's clamping.
+    // answer. The rect is discarded: `bar_placement` below places this card, by the
+    // floating card's own rule.
     if ViewportRect::at(Viewport::of(view), vx as i32, vy as i32, lh).is_none() {
         return false;
     }
+    place_entry_card(view.upcast_ref(), overlay, bar, (vx, vy), lh);
+    true
+}
+
+/// Place the entry `bar` (a GtkOverlay child) for an anchor at `at` in `view`'s widget
+/// coordinates, one line of `line_h` tall, by its start/top margins in **overlay-local**
+/// coordinates. The tail both placements share, once each has its anchor and has passed
+/// the on-viewport gate.
+///
+/// The margins are zeroed BEFORE measuring: GTK FOLDS a widget's own margins INTO its
+/// `measure()`/`preferred_size()` result, so measuring the bar while it still carries the
+/// PREVIOUS placement's margins double-counts them (natural height comes back as
+/// content plus the old margin_top), and the next placement compounds the error — the
+/// card drifts, and near the bottom the inflated height pins it to the top
+/// (GTK4Rs/AP-87). The measure is
+/// a fresh one — fine in the event phase this runs in, never from allocate.
+///
+/// View-widget coords → overlay-local by translation: the overlay wraps the
+/// ScrolledWindow whose viewport fills it, so the origins nominally coincide, but
+/// translate rather than assume (0,0)==(0,0) (researcher: gtkoverlaylayout copies the
+/// child rect verbatim in overlay-local space; don't hard-code the identity).
+fn place_entry_card(
+    view: &gtk::Widget,
+    overlay: &gtk::Overlay,
+    bar: &gtk::Widget,
+    (vx, vy): (f64, f64),
+    line_h: i32,
+) {
     let (ox, oy) = view
         .translate_coordinates(overlay, vx, vy)
         .map(|p| (p.0 as i32, p.1 as i32))
@@ -247,15 +274,14 @@ fn position_card_on_cell(
     let (x, y) = bar_placement(
         ox,
         oy,
-        lh,
+        line_h,
         nat.width(),
         nat.height(),
         overlay.width().max(1),
-        height,
+        view.height(),
     );
     bar.set_margin_start(x);
     bar.set_margin_top(y);
-    true
 }
 
 /// Point `pop`'s arrow at the horizontal midpoint of the preview selection — the same
@@ -288,14 +314,49 @@ fn point_at_selection(view: &CodePreviewView, pop: &FloatingCard) -> bool {
 /// round 2). At that point `point_at_selection`'s on-viewport read is trustworthy: a
 /// genuinely-visible selection reads on-viewport → show; a scrolled-away one reads
 /// off-viewport → hide (the legitimate suppression). Marker-popover open → stay down.
-fn decide_show_action_popover(view: &CodePreviewView, pop: &FloatingCard) {
+/// A decision that `may_raise` nothing (see [`RaiseOwed`]) leaves a hidden card hidden.
+fn decide_show_action_popover(view: &CodePreviewView, pop: &FloatingCard, may_raise: bool) {
     if view.annotation_sink().is_some()
         && point_at_selection(view, pop)
         && !view.marker_card_is_showing()
     {
-        pop.popup();
+        raise(pop, may_raise);
     } else {
         pop.popdown();
+    }
+}
+
+/// Whether the action card's next decision may raise it, rather than only keep it up or
+/// take it down.
+///
+/// A selection change owes the reader a raise: they just selected something. A catch-up
+/// owes none. When a preview is mapped again (a tab or pane shown again), the selection
+/// it still holds is the one the reader left, and they may have left the card down over
+/// it (a scroll hides it). The catch-up must still take the card down when the
+/// selection went while the preview was hidden (GTK4Rs/AP-120), but raising it would
+/// pop it back up unasked. So a selection change sets the debt, the decision that acts
+/// on it pays it, and a catch-up re-runs the decision without adding to it. A debt left
+/// by a selection change whose decision a catch-up superseded is still honoured.
+#[derive(Clone, Default)]
+struct RaiseOwed(Rc<Cell<bool>>);
+
+impl RaiseOwed {
+    fn owe(&self) {
+        self.0.set(true);
+    }
+    /// Settle the debt for a decision being made now; whether a raise was owed.
+    fn pay(&self) -> bool {
+        self.0.replace(false)
+    }
+}
+
+/// Show the action card when a raise is owed. A card already up is left up: the
+/// caller has just re-pinned it over the selection (`point_at_selection`,
+/// `point_at_cell_selection`), and that re-pin is what moves it, so there is nothing
+/// to add here for it.
+fn raise(pop: &FloatingCard, may_raise: bool) {
+    if may_raise {
+        pop.popup();
     }
 }
 
@@ -328,7 +389,6 @@ pub(crate) fn position_card(
     let r1 = view.iter_location(&end);
     let (x0, y0) = view.buffer_to_window_coords(gtk::TextWindowType::Widget, r0.x(), r0.y());
     let (x1, _y1) = view.buffer_to_window_coords(gtk::TextWindowType::Widget, r1.x(), r1.y());
-    let height = view.height();
     let line_h = r0.height().max(1);
     // See `position_card_on_cell`: one on-viewport question, one gate. The constructed
     // rect is discarded — `bar_placement` owns this card's clamping.
@@ -339,37 +399,13 @@ pub(crate) fn position_card(
     // `point_at_selection` gives the action popover — so `bar_placement` (which centers on
     // it) drops the entry card exactly where the popover's body sat, not at a corner.
     let mx = (x0 + x1) / 2;
-    // View-widget coords → overlay-local. The overlay wraps the ScrolledWindow whose
-    // viewport fills it, so the origins nominally coincide — but translate rather than
-    // assume (0,0)==(0,0) (researcher: gtkoverlaylayout copies the child rect verbatim
-    // in overlay-local space; don't hard-code the identity).
-    let (ox, oy) = view
-        .translate_coordinates(overlay, f64::from(mx), f64::from(y0))
-        .map(|p| (p.0 as i32, p.1 as i32))
-        .unwrap_or((mx, y0));
-    // We position the bar via its start/top margins — but GTK FOLDS a widget's own
-    // margins INTO its `measure()`/`preferred_size()` result, so measuring the bar
-    // while it still carries the PREVIOUS placement's margins double-counts them
-    // (natural height comes back as content + old margin_top), and the next placement
-    // compounds the error — the card drifts, and near the bottom the inflated height
-    // pins it to the top. Zero the margins BEFORE measuring so the size reflects only
-    // the card's content, then set the freshly-computed margins (AP: margin-inflated
-    // re-measure). `preferred_size` is a fresh measure — fine here in the event phase,
-    // never from allocate.
-    bar.set_margin_start(0);
-    bar.set_margin_top(0);
-    let (_, nat) = bar.preferred_size();
-    let (x, y) = bar_placement(
-        ox,
-        oy,
+    place_entry_card(
+        view.upcast_ref(),
+        overlay,
+        bar,
+        (f64::from(mx), f64::from(y0)),
         line_h,
-        nat.width(),
-        nat.height(),
-        overlay.width().max(1),
-        height,
     );
-    bar.set_margin_start(x);
-    bar.set_margin_top(y);
     true
 }
 
@@ -651,8 +687,7 @@ pub(crate) fn wire_annotation_overlay(
             // prior text, edits or prunes it, and what they see is what is written back.
             //
             // Resolved through the SAME `selection_target` the commit uses, and the same
-            // intersection predicate the mutation uses (`merged_comment_for` →
-            // `intersecting_highlights`), so the card can never show one set of comments
+            // merge decision the mutation uses (`merged_comment_for`), so the card can never show one set of comments
             // while the commit destroys another.
             let existing = crate::window::host_window(&v)
                 .and_then(|w| crate::window::document_source(&w))
@@ -742,7 +777,10 @@ pub(crate) fn wire_annotation_overlay(
     // never-firing handler can't dangle on the frame clock. One slot, always the latest.
     let pending_after_paint: Rc<RefCell<Option<(gtk::gdk::FrameClock, glib::SignalHandlerId)>>> =
         Rc::new(RefCell::new(None));
-    let schedule = {
+    let raise_owed = RaiseOwed::default();
+    // Re-runs the show/hide decision, owing no raise: the map catch-up below.
+    let arm = {
+        let raise_owed = raise_owed.clone();
         let view = view.downgrade();
         let pop = pop.clone();
         let entry_open = entry_open.clone();
@@ -767,6 +805,7 @@ pub(crate) fn wire_annotation_overlay(
             let anchor_sel = anchor_sel.clone();
             let anchor_gen = anchor_gen.clone();
             let pending_after_paint = pending_after_paint.clone();
+            let raise_owed = raise_owed.clone();
             let id = glib::timeout_add_local_once(Duration::from_millis(40), move || {
                 timer_inner.replace(None);
                 let Some(v) = view.upgrade() else { return };
@@ -823,7 +862,12 @@ pub(crate) fn wire_annotation_overlay(
                 };
                 if entry_open.get() && !superseded {
                     // Noise. Return outright — falling through would also re-evaluate the
-                    // action popover and pop it up ON TOP of the still-open card.
+                    // action popover and pop it up ON TOP of the still-open card. The
+                    // debt is settled all the same: the selection is still the one the
+                    // card was opened over, so nothing new was selected, and a debt left
+                    // standing here would be paid by the next catch-up, which would pop
+                    // the card up over a selection the reader closed the entry on.
+                    raise_owed.pay();
                     return;
                 }
                 if entry_open.get() {
@@ -844,6 +888,7 @@ pub(crate) fn wire_annotation_overlay(
                 // live when its margin marker is clicked, so the create popover must stay
                 // down rather than stack over the marker popover.
                 if v.marker_card_is_showing() {
+                    raise_owed.pay();
                     pop.popdown();
                     return;
                 }
@@ -851,16 +896,18 @@ pub(crate) fn wire_annotation_overlay(
                 // (it is NOT lazily height-validated like a GtkTextView line), so its
                 // geometry is trustworthy in this same turn — decide immediately.
                 if let Some((label, a, b)) = cell_sel {
+                    let may_raise = raise_owed.pay();
                     if v.annotation_sink().is_some()
                         && point_at_cell_selection(&v, &label, a, b, &pop)
                     {
-                        pop.popup();
+                        raise(&pop, may_raise);
                     } else {
                         pop.popdown();
                     }
                     return;
                 }
                 if buf_sel.is_none() {
+                    raise_owed.pay();
                     pop.popdown();
                     return;
                 }
@@ -897,7 +944,7 @@ pub(crate) fn wire_annotation_overlay(
                 }
                 let Some(clock) = v.frame_clock() else {
                     // Unmapped (no frame clock): best-effort direct decision.
-                    decide_show_action_popover(&v, &pop);
+                    decide_show_action_popover(&v, &pop, raise_owed.pay());
                     return;
                 };
                 v.queue_draw(); // guarantee a paint so `after-paint` fires with validated geometry
@@ -906,6 +953,7 @@ pub(crate) fn wire_annotation_overlay(
                 let v_weak = v.downgrade();
                 let pop_weak = pop.downgrade();
                 let pap = pending_after_paint.clone();
+                let raise_owed = raise_owed.clone();
                 let id = clock.connect_after_paint(move |clock| {
                     // One-shot: clear the shared slot + disconnect self on the first fire —
                     // the paint that just ran validated the on-screen band, so this single
@@ -921,11 +969,19 @@ pub(crate) fn wire_annotation_overlay(
                     if anchor_gen.get() != my_gen {
                         return; // a newer selection superseded this one before the paint
                     }
-                    decide_show_action_popover(&v, &pop);
+                    decide_show_action_popover(&v, &pop, raise_owed.pay());
                 });
                 *pending_after_paint.borrow_mut() = Some((clock, id));
             });
             timer.replace(Some(id));
+        }
+    };
+    // Every selection change: owes the reader a raise, then decides.
+    let schedule = {
+        let arm = arm.clone();
+        move || {
+            raise_owed.owe();
+            arm();
         }
     };
 
@@ -1006,13 +1062,36 @@ pub(crate) fn wire_annotation_overlay(
         let clip = view.primary_clipboard();
         let schedule = schedule.clone();
         let weak_view = view.downgrade();
-        let id = clip.connect_changed(move |_| {
-            if let Some(view) = weak_view.upgrade() {
+        // PRIMARY is display-global, so every preview of every tab in every window hears
+        // each claim: one drag step in one pane woke all of them (57 handlers per step in a
+        // session of 11 windows). Only a mapped view can show a bubble or a selection ink,
+        // so an unmapped one (a background tab, or a preview the view mode hides) skips
+        // the work and catches up once when it is mapped again. A minimized window, or one
+        // on another virtual desktop, is NOT unmapped: GTK 4.6.9 on X11 under KWin leaves
+        // its widgets mapped (measured; the X window itself is unmapped, GTK4Rs/AP-371), so
+        // such a window still does the work. The catch-up is not optional: a claim made elsewhere may
+        // have cleared this view's cell selection while it was hidden (GTK4Rs/AP-120). It
+        // owes no raise, so it re-inks and takes the card down for a selection that went,
+        // and never pops the card back up over one the reader left (`RaiseOwed`).
+        let id = clip.connect_changed({
+            let schedule = schedule.clone();
+            let weak_view = weak_view.clone();
+            move |_| {
+                let Some(view) = weak_view.upgrade() else {
+                    return;
+                };
+                if !view.is_mapped() {
+                    return;
+                }
                 crate::widgets::table::refresh_cell_selection_ink(&view);
+                schedule();
             }
-            schedule();
         });
         view.store_primary_sel_handler(&clip, id);
+        view.connect_map(move |view| {
+            crate::widgets::table::refresh_cell_selection_ink(view);
+            arm();
+        });
     }
 
     // Hide on scroll (unless the entry is open — the anchor scrolls away but the user
@@ -1063,6 +1142,9 @@ mod fracscroll_tests;
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod cellpress_tests;
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod catchup_tests;
 
 /// The action card wired onto `view`, for tests.
 #[cfg(all(test, feature = "gtk-integration-tests"))]

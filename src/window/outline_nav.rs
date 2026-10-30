@@ -20,10 +20,7 @@ pub(crate) fn refresh_outline(window: &ApplicationWindow) {
     // Cache what the hot paths read, so neither a caret move nor a viewport change has to
     // re-parse the document — see `TabState::heading_index`'s doc comment, and the
     // Hot-path CAM rows it anchors.
-    *st.heading_index.borrow_mut() = headings
-        .iter()
-        .map(crate::outline::HeadingRef::from)
-        .collect();
+    *st.heading_index.borrow_mut() = crate::outline::HeadingRef::index(&md, &headings);
     // The durable name of every heading this build shows, cached beside the offsets above
     // and for the same reason — it comes from this same parse, and the capture hook below
     // would otherwise have to re-parse the document just to name a row it is looking at.
@@ -332,22 +329,15 @@ fn navigate_to_heading(window: &ApplicationWindow, path: &HeadingPath, row_index
         record_outline_activation(window, &st, path);
     }
     match current_mode(window) {
-        ViewMode::Preview => {
-            if let Some(sw) = st.split.preview_scroller() {
-                scroll_preview_to_heading_revealing(window, &sw, row_index);
-            }
-        }
-        ViewMode::Split => {
-            if let Some((_, preview_sw)) = split_scrollers(window) {
-                // The editor↔preview sync normally treats the editor as
-                // driver and projects editor→preview every frame, so a preview-only
-                // jump is undone on the next tick. Make the preview the driver for
-                // this navigation, so the jump sticks and the editor follows it
-                // (the coalesced sync projects preview→editor). Genuine user input
-                // on the editor switches the driver back via mark_driver_on_input.
-                super::panescroll::lead(&st, ScrollDriver::Preview);
-                scroll_preview_to_heading_revealing(window, &preview_sw, row_index);
-            }
+        // The editor↔preview sync normally treats the editor as driver and projects
+        // editor→preview every frame, so in Split a preview-only jump is undone on the
+        // next tick. The route makes the preview the driver for this navigation, so the
+        // jump sticks and the editor follows it (the coalesced sync projects
+        // preview→editor); genuine input on the editor switches the driver back via
+        // mark_driver_on_input. In Preview mode the lead is inert (entering Split hands
+        // the lead to the editor), so both modes take the one route.
+        ViewMode::Preview | ViewMode::Split => {
+            scroll_preview_to_heading_revealing(window, &st, row_index);
         }
         ViewMode::Edit => scroll_editor_to_offset(&st, src_offset),
     }
@@ -364,16 +354,18 @@ fn navigate_to_heading(window: &ApplicationWindow, path: &HeadingPath, row_index
 /// exactly what the plain scroll always did.
 fn scroll_preview_to_heading_revealing(
     window: &ApplicationWindow,
-    sw: &gtk::ScrolledWindow,
+    st: &TabState,
     doc_index: usize,
 ) {
-    let hidden_by = scroll_preview_to_heading(sw, doc_index);
-    let sw = sw.clone();
-    super::foldreveal::reveal_folds(window, &hidden_by, move |_| {
+    let hidden_by = super::panescroll::preview_to_heading(st, doc_index);
+    super::foldreveal::reveal_folds(window, &hidden_by, move |_window, st| {
         // The re-render rebuilt the preview's buffer, so the heading's offset is a
         // NEW one; re-reading it through the same accessor is what makes this
-        // correct rather than re-using the offset from before the expansion.
-        scroll_preview_to_heading(&sw, doc_index);
+        // correct rather than re-using the offset from before the expansion. `st` is
+        // the tab the activation was for: `doc_index` indexes that document's
+        // headings and no other (`reveal_folds` drops the follow-up after a tab
+        // switch).
+        super::panescroll::preview_to_heading(st, doc_index);
     });
 }
 
@@ -742,9 +734,10 @@ fn preview_top_doc_index(window: &ApplicationWindow) -> Option<usize> {
 ///
 /// In edit/split mode the caret — not the viewport top — is the user's working
 /// position, so the outline highlights the heading the caret sits in.
-/// The editor buffer is the raw Markdown source, so the caret's char offset
-/// (`cursor-position`) is converted to a byte offset before the binary search into
-/// `extract_headings` src_offsets (byte offsets into the source string).
+/// The editor buffer is the raw Markdown source, and the cache carries each heading's
+/// character offset into it, so the caret's char offset (`cursor-position`) is searched
+/// directly — O(log headings) per caret move, with no copy of the buffer (Hot-path CAM
+/// row 3, cell B).
 ///
 /// Headings come from `TabState::heading_index` — `refresh_outline`'s cache of its own
 /// `extract_headings` result — rather than a fresh re-parse: re-parsing the whole document
@@ -753,22 +746,13 @@ fn preview_top_doc_index(window: &ApplicationWindow) -> Option<usize> {
 fn editor_cursor_doc_index(window: &ApplicationWindow) -> Option<usize> {
     let st = state(window)?;
     let char_off = st.editor_buf.property::<i32>("cursor-position").max(0) as usize;
-
-    // Convert char offset → byte offset in the UTF-8 source string.
-    let text = st.editor_text();
-    let byte_off = text
-        .char_indices()
-        .nth(char_off)
-        .map(|(b, _)| b)
-        .unwrap_or(text.len());
-
     let headings = st.heading_index.borrow();
     if headings.is_empty() {
         return None;
     }
 
-    // Largest heading src_offset ≤ byte_off = the caret's enclosing (or preceding) heading.
-    match headings.partition_point(|h| h.src_offset.raw() <= byte_off) {
+    // Largest heading offset ≤ the caret = the caret's enclosing (or preceding) heading.
+    match headings.partition_point(|h| h.src_char <= char_off) {
         0 => None, // caret is above the very first heading
         n => Some(n - 1),
     }
@@ -1338,6 +1322,85 @@ mod disclosure_reveal_tests {
         window.destroy();
     }
 
+    /// **A tab switch before the reveal's idle leaves both documents alone.**
+    ///
+    /// The reveal is deferred to an idle, and a tab switch can be dispatched first.
+    /// The follow-up scroll used to resolve "the active tab" when the idle ran, so the
+    /// tab switched TO was scrolled to its own heading at the first document's index,
+    /// a place its reader never asked for. Tab B's second heading sits far down, so
+    /// that wrong scroll moves B's preview off the top. The control at the end runs
+    /// the same reveal without the switch, so the test cannot pass on a reveal that
+    /// no longer does anything. Mutation: dropping the tab check in `reveal_folds`
+    /// fails here.
+    #[gtktest::test]
+    fn a_tab_switch_before_the_reveal_runs_drops_it() {
+        let app = test_app("com.extollit.scribobulate.integrationtest.foldrevealtab");
+        let window = new_window(&app, "IT-FOLDTAB", MD, None);
+        crate::testpump::until(crate::testpump::Clock::Idle, "the first render", || {
+            !preview_text(&window).is_empty()
+        });
+        let tab_a = state(&window).expect("tab A");
+
+        let mut md_b = String::from("# B0\n\n");
+        for i in 0..300 {
+            md_b.push_str(&format!("prose line {i}\n\n"));
+        }
+        md_b.push_str("# B1\n");
+
+        // The activation, then the switch, in one turn: the reveal's idle has not run.
+        scroll_preview_to_heading_revealing(&window, &tab_a, 1);
+        let tab_b_id =
+            crate::window::create_tab_in_window(&window, &md_b, None, false, false).expect("tab B");
+        assert_eq!(
+            state(&window).map(|s| s.id),
+            Some(tab_b_id),
+            "precondition: B is active before the reveal's idle runs"
+        );
+        let sw_b = crate::window::get_preview_sw(&window).expect("B's preview scroller");
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Idle,
+            std::time::Duration::from_millis(500),
+        );
+        assert!(
+            sw_b.vadjustment().upper() > sw_b.vadjustment().page_size() * 2.0,
+            "precondition: B's preview is long enough for a wrong heading scroll to show"
+        );
+        assert_eq!(
+            sw_b.vadjustment().value(),
+            0.0,
+            "B's preview was scrolled by an outline activation made in tab A"
+        );
+        // The half of the contract the deferral exists for: the dropped reveal expanded
+        // nothing in A's fold model either, so the model still agrees with the render
+        // A's reader saw. Mutation: expanding the chain before the idle fails here.
+        let key = crate::fold::FoldKey::from_source_offset(
+            MD.find("<details>").expect("the fixture's disclosure"),
+        );
+        assert!(
+            tab_a.folds.borrow().is_collapsed(key, false),
+            "the dropped reveal left A's block collapsed in A's fold model"
+        );
+
+        // Back on A, the same reveal still opens the block.
+        let chrome = crate::winstate::chrome(&window).expect("chrome");
+        chrome.tabs.focus_page(&tab_a.content_box);
+        crate::testpump::until(crate::testpump::Clock::Idle, "A to be active", || {
+            state(&window).map(|s| s.id) == Some(tab_a.id)
+        });
+        assert!(
+            !preview_text(&window).contains("Hidden"),
+            "the dropped reveal left A's block as the reader saw it"
+        );
+        scroll_preview_to_heading_revealing(&window, &tab_a, 1);
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "the reveal on the still-active tab to open the block",
+            || preview_text(&window).contains("Hidden"),
+        );
+
+        window.destroy();
+    }
+
     /// **The reading position survives a disclosure toggle.**
     ///
     /// A toggle re-renders, and the re-render used to restore by buffer LINE — a
@@ -1379,6 +1442,10 @@ mod disclosure_reveal_tests {
         let byte = text
             .find("Section 120")
             .expect("the deep section is rendered");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture positioning the view as a precondition, not a navigation"
+        )]
         view.scroll_to_buffer_offset(text[..byte].chars().count() as i32);
         crate::testpump::until(
             crate::testpump::Clock::Idle,
@@ -1394,7 +1461,7 @@ mod disclosure_reveal_tests {
         super::foldreveal::reveal_folds(
             &window,
             &[crate::fold::FoldKey::from_source_offset(0)],
-            |_| {},
+            |_, _| {},
         );
         crate::testpump::until(
             crate::testpump::Clock::Idle,

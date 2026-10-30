@@ -44,6 +44,7 @@ pub fn run_all(tree: &Tree) -> bool {
         register::register_prescribes_a_banned_route(tree),
         architecture::held_reference_rows(tree),
         references::policy_step_cited(tree),
+        references::scrsec_citations_resolve(tree),
     ];
     verdicts.into_iter().all(|ok| ok)
 }

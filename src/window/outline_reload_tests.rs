@@ -160,6 +160,42 @@ fn settled(window: &ApplicationWindow) -> (Option<String>, i32, i32) {
     s.value.expect("sampled at least once")
 }
 
+/// What every reload in this file appends to the document.
+const APPENDED: &str = "appended by another process";
+
+/// Another process appends [`APPENDED`] to the file; the monitor's decision core hands
+/// the new text to this same entry point.
+fn reload_with_appended(window: &ApplicationWindow, doc: &str) {
+    super::reload::apply_external_reload(window, &format!("{doc}\n{APPENDED}\n"));
+}
+
+/// The reload reached the panes: the editor holds the appended text and, where a
+/// preview is shown (`mode` is not `"edit"`), so does the preview. Every other assertion
+/// in this file is "the same as before", which is also what a reload that did nothing
+/// would leave, so each reload case asserts this first.
+fn assert_reloaded(window: &ApplicationWindow, mode: &str) {
+    let st = state(window).expect("tab");
+    assert!(
+        st.editor_text().contains(APPENDED),
+        "{mode}: the reload reached the editor"
+    );
+    if mode == "edit" {
+        return;
+    }
+    let preview = st
+        .split
+        .preview_scroller()
+        .and_then(|sw| sw.child())
+        .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
+        .expect("a preview view");
+    let buf = preview.buffer();
+    assert!(
+        buf.slice(&buf.start_iter(), &buf.end_iter(), false)
+            .contains(APPENDED),
+        "{mode}: the reload re-rendered the preview"
+    );
+}
+
 /// Park the reader on the target the way the report did: the filter box's Enter goes to
 /// the first match. Unfiltered, the filter is then closed — the place stays, the outline
 /// is whole again.
@@ -237,10 +273,9 @@ fn run(suffix: &str, mode: &str, filtered: bool) {
         "precondition: the filter is as this case needs it"
     );
 
-    // Another process appends to the file; the monitor's decision core hands the new
-    // text to this same entry point.
-    super::reload::apply_external_reload(&window, &format!("{doc}\nappended by another process\n"));
+    reload_with_appended(&window, &doc);
     let (after_row, after_top, after_caret) = settled(&window);
+    assert_reloaded(&window, mode);
 
     assert_eq!(
         after_row.as_deref(),
@@ -326,8 +361,9 @@ fn a_live_reload_returns_a_hand_scrolled_preview_to_the_same_line() {
         "precondition: the line at the top is the previous section's"
     );
 
-    super::reload::apply_external_reload(&window, &format!("{doc}\nappended by another process\n"));
+    reload_with_appended(&window, &doc);
     let (after_row, after_top, _) = settled(&window);
+    assert_reloaded(&window, "preview");
     assert_eq!(
         after_top, before_top,
         "the hand-scrolled reading position comes back to the same top line"
@@ -493,11 +529,9 @@ fn a_live_reload_keeps_a_heading_at_the_top_of_the_split_preview() {
         ("split_heading.reload_list", Before::List),
     ] {
         let (window, doc) = park_split_on_heading(suffix, before);
-        super::reload::apply_external_reload(
-            &window,
-            &format!("{doc}\nappended by another process\n"),
-        );
+        reload_with_appended(&window, &doc);
         assert_preview_top_is_the_heading(&window, &format!("after a reload, {before:?}"));
+        assert_reloaded(&window, "split");
         window.destroy();
     }
 }

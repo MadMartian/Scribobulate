@@ -9,7 +9,6 @@ use crate::outline_view::build_outline_content;
 use crate::preview::{
     cell_search_targets, preview_top_line, re_render, refresh_annotations_in_place, render,
     restore_preview_scroll_to_line, restore_preview_scroll_to_line_fresh,
-    scroll_preview_to_heading,
 };
 use crate::winstate::{
     self, edit_actions_enabled, save_enabled, save_is_safe, state, FmtInsertKind, ScrollDriver,
@@ -88,7 +87,7 @@ pub(crate) use find::{
     RenderKey,
 };
 pub(crate) use findbar::refresh_preview_find_highlight;
-pub(crate) use foldreveal::defer_with_window;
+pub(crate) use foldreveal::defer_with_tab;
 pub(crate) use foldsplice::splice_disclosure_in_place;
 pub(crate) use imagerefusal::install as install_image_refusal_notice;
 pub(crate) use lifecycle::quit_all_windows;
@@ -166,7 +165,7 @@ pub(crate) mod toolbarchrome;
 mod toolbarmenu;
 pub(crate) mod undo;
 mod viewactions;
-mod wheelcoalesce;
+pub(crate) mod wheelcoalesce;
 mod zoomwheel;
 
 use chrome::*;
@@ -222,6 +221,9 @@ pub(crate) fn apply_editor_style_scheme(buf: &sourceview::Buffer, dark: bool) {
 /// (`restore::apply_restored_tab_state`) so the content genuinely rebuilds,
 /// rather than only a stored flag being set that nothing then reads.
 struct WindowInit {
+    /// The size to open at. A window with a `place` opens at the place's size
+    /// instead, applied by `winplace::present`, which alone fits it to the monitors
+    /// here; these then only stand in for a place that recorded no size.
     width: i32,
     height: i32,
     /// Where to show the window (`winplace`), or `None` to let the window manager
@@ -451,8 +453,9 @@ fn build_window(
         // Never OPEN wider than any monitor here can show. A narrower initial size is
         // still only a request (GTK grows it back up to whatever the content-derived
         // minimum needs), so this never shrinks a window below what it can actually
-        // display; it only stops a wider-than-necessary `init.width` — a session
-        // restored from a bigger screen — from opening already off-edge.
+        // display; it only stops a wider-than-necessary `init.width` — a configured
+        // default wider than this screen — from opening already off-edge. A restored
+        // window's size is the place's, fitted by `winplace::present`, not this.
         //
         // Clamped to the WIDEST monitor, not the one this window is about to land on:
         // that monitor is the window manager's choice and an unrealized toplevel
@@ -836,6 +839,7 @@ fn wire_format_surface_updates(window: &ApplicationWindow) {
             }
         ),
     );
+    actions::connect_selection_states_on_activation(window);
 }
 
 /// Register all of the window's teardown handlers in one place, in the order

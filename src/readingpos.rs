@@ -466,4 +466,29 @@ mod tests {
             "a mid-line position keeps the at-or-before lookup"
         );
     }
+
+    /// The case the line-start test exists for: a mid-line position on a line that holds a
+    /// LATER waypoint. The line lookup would jump forward to that waypoint; the held
+    /// position must keep the one at or before it. The fixture above has no waypoint
+    /// after its mid-line byte, so there both lookups agree and cannot tell them apart.
+    #[test]
+    fn a_mid_line_position_does_not_jump_to_a_later_waypoint_on_its_line() {
+        let original = "alpha beta gamma\n";
+        let beta = original.find("beta").expect("fixture");
+        let gamma = original.find("gamma").expect("fixture");
+        let source_map: Vec<(i32, usize)> = vec![(0, 0), (10, beta), (20, gamma)];
+        let inv = invert(&source_map);
+        let shifts: Vec<(usize, usize)> = vec![(0, 0)];
+        let inside_beta = DocPosition::new(OriginalByteOffset::new(beta + 1));
+        assert_eq!(
+            line_to_preview_char(&inv, &shifts, original, inside_beta),
+            20,
+            "control: the line lookup from here takes the later waypoint"
+        );
+        assert_eq!(
+            reading_to_preview_char(&inv, &shifts, original, inside_beta),
+            10,
+            "a mid-line position keeps the waypoint at or before it"
+        );
+    }
 }

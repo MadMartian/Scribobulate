@@ -249,6 +249,58 @@ pub fn scrap_rx() -> &'static Regex {
     rx(&RX, r"ScrAP-([0-9]+)")
 }
 
+// ── Check 26: `ScrSEC-N`, an entry in `sdd/CVE.md` ───────────────────────────
+
+/// A `ScrSEC-N` citation, the one legal form (POLICY § SDD register writes).
+pub fn scrsec_rx() -> &'static Regex {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    rx(&RX, r"\bScrSEC-([0-9]+)\b")
+}
+
+/// A `## ScrSEC-N.` entry heading in `sdd/CVE.md`.
+pub fn scrsec_heading_rx() -> &'static Regex {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    rx(&RX, r"^##[[:space:]]+ScrSEC-([0-9]+)\.")
+}
+
+/// A `| [ScrSEC-N](#…) |` row in `sdd/CVE.md`'s Contents table, keyed on the ID cell only.
+pub fn scrsec_toc_row_rx() -> &'static Regex {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    rx(&RX, r"^\|[[:space:]]*\[?ScrSEC-([0-9]+)\]?")
+}
+
+/// Anything that reads as a security-register citation, in any case or separator, so the
+/// misspellings can be told from the legal form. A preceding `#`, `/` or word character
+/// rules a match out: `#scrsec-1-…` is the Contents table's own heading anchor, which
+/// GitHub derives in lower case, not a citation.
+fn scrsec_candidate_rx() -> &'static Regex {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    rx(
+        &RX,
+        r"(?i)(?:^|[^#/a-z0-9_-])(scr[ _-]?sec[ _-]?#?[0-9]+[a-z0-9_]*)",
+    )
+}
+
+/// The near-miss `ScrSEC-N` spellings on `line`: another letter case, a space or no
+/// separator, or a `#` before the number (the corpus holds one of each). A misspelled citation resolves against nothing and so escapes the
+/// defined-entry half of check 26 entirely; this is what keeps that half complete.
+pub fn malformed_scrsec_citations(line: &str) -> Vec<String> {
+    let mut found: Vec<String> = scrsec_candidate_rx()
+        .captures_iter(line)
+        .filter_map(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
+        .filter(|form| {
+            let exact = scrsec_rx()
+                .find(form)
+                .is_some_and(|m| m.start() == 0 && m.end() == form.len());
+            !exact
+        })
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
 /// A plain `mod x;` declaration, for check 4. A `#[cfg]` on the preceding line is ignored,
 /// which is what makes `suite_registry` (cfg-gated in the lib, unconditional in the suite
 /// root) and the `#[cfg(unix)]`/`#[cfg(windows)]` modules compare equal rather than

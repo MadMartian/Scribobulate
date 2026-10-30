@@ -20,7 +20,11 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 /// Whether `dir` is on an `autofs` filesystem, so that looking up any name inside it
-/// can mount something. `false` when `dir` cannot be examined.
+/// can mount something. `false` when `dir` cannot be examined: `statfs` fails only where
+/// `dir` itself cannot be reached (gone, or a search permission missing on the way), and
+/// then the `lstat` of a name inside it, the lookup this guards, fails the same way
+/// without reaching the automounter. The cross-platform contract, and why this reads
+/// through the path rather than from the mount table, is `platform::mounts_on_lookup`'s.
 pub(crate) fn is_automount_directory(dir: &Path) -> bool {
     let Ok(path) = CString::new(dir.as_os_str().as_bytes()) else {
         return false;

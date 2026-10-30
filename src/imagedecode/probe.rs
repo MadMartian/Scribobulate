@@ -8,7 +8,7 @@
 /// large EXIF block, and small enough that the probe is not a second full read.
 const PROBE_CHUNK: usize = 64 * 1024;
 
-use super::screen::Screened;
+use super::svgencoding::{loader_input, LoaderInput};
 
 /// The declared pixel dimensions of `bytes`, choosing the probe that can actually
 /// answer for this content.
@@ -65,13 +65,14 @@ pub(crate) fn probe_dimensions(bytes: &[u8]) -> Option<(i32, i32)> {
 /// Screened first ([`super::screen`]): bytes the XInclude screen refuses answer `None`
 /// without reaching the loader.
 pub(crate) fn probe_pixel_size(raw: &[u8]) -> Option<(i32, i32)> {
-    probe_screened_size(super::screen::screen_quietly(raw)?)
+    let input = loader_input(super::screen::screen_quietly(raw)?, None)?;
+    probe_input_size(&input)
 }
 
-/// [`probe_pixel_size`] for bytes the caller has already screened, so a decode does not
-/// screen the same buffer twice.
-pub(super) fn probe_screened_size(bytes: Screened<'_>) -> Option<(i32, i32)> {
-    probe_header(bytes).size
+/// [`probe_pixel_size`] for bytes the caller has already screened and prepared, so a
+/// decode does not screen (or inflate) the same buffer twice.
+pub(super) fn probe_input_size(input: &LoaderInput<'_>) -> Option<(i32, i32)> {
+    probe_header(input).size
 }
 
 #[cfg(test)]
@@ -114,9 +115,16 @@ struct Header {
 /// Feeds `bytes` in chunks only until the size is known, then stops: the loader is
 /// deliberately left partway through the file, so `close` reports a premature end of
 /// file and its error is discarded. Closing anyway is required — an unclosed loader
-/// warns at finalize. `format` is read BEFORE the close, while the loader still holds
-/// it.
-fn probe_header(screened: Screened<'_>) -> Header {
+/// warns at finalize. The loader is the one [`LoaderInput::loader`] picks, so a UTF-16
+/// or gzip SVG, which no sniff recognises, is probed by the `svg` module.
+///
+/// **`format` is read AFTER the close, never before.** gdk-pixbuf picks a module only
+/// once it has buffered enough bytes to sniff, or at `close`, so for a file shorter
+/// than that buffer the format is not known until the close has run. MEASURED on
+/// gdk-pixbuf 2.42.8: a 115-byte SVG reports no format before `close` and `svg` after
+/// it, so reading it first answered "not scalable" for every small SVG and none of them
+/// was re-rendered at zoom.
+fn probe_header(input: &LoaderInput<'_>) -> Header {
     use gtk::gdk_pixbuf::prelude::PixbufLoaderExt;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -124,10 +132,14 @@ fn probe_header(screened: Screened<'_>) -> Header {
     #[cfg(test)]
     HEADER_PROBES.with(|n| n.set(n.get() + 1));
 
-    let bytes = screened.bytes();
+    let bytes = input.bytes();
     let seen: Rc<Cell<Option<(i32, i32)>>> = Rc::new(Cell::new(None));
-    #[expect(clippy::disallowed_methods)] // this module IS the sanctioned route
-    let loader = gtk::gdk_pixbuf::PixbufLoader::new();
+    let Some(loader) = input.loader() else {
+        return Header {
+            size: None,
+            format: None,
+        };
+    };
     loader.connect_size_prepared({
         let seen = Rc::clone(&seen);
         move |l, w, h| {
@@ -143,8 +155,8 @@ fn probe_header(screened: Screened<'_>) -> Header {
             break;
         }
     }
-    let format = loader.format();
     let _ = loader.close();
+    let format = loader.format();
     Header {
         size: seen.get(),
         format,
@@ -192,7 +204,8 @@ pub(crate) fn probe_vector_dimensions(bytes: &[u8]) -> Option<(i32, i32)> {
 /// [`probe_vector_dimensions`] is the only sanctioned entry, because it is the one that
 /// enforces the richimg-first precondition above.
 fn probe_vector(bytes: &[u8]) -> Option<(i32, i32)> {
-    let Header { size, format } = probe_header(super::screen::screen_quietly(bytes)?);
+    let input = loader_input(super::screen::screen_quietly(bytes)?, None)?;
+    let Header { size, format } = probe_header(&input);
     let (w, h) = size?;
     if !format?.is_scalable() {
         return None;

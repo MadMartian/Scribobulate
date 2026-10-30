@@ -547,6 +547,28 @@ mod tests {
         assert_eq!(loaded.texture.height(), expected.h);
     }
 
+    /// TDD 13.11 and 2.23j: a small SVG, a UTF-16 one and an `.svgz` re-render at the
+    /// zoomed size too. Each failed before, two ways: the vector probe read the format
+    /// before closing its loader, which for any SVG shorter than gdk-pixbuf's sniff
+    /// buffer was not yet known, so it answered "not scalable"; and a UTF-16 or gzip SVG
+    /// had no loader at all.
+    #[gtktest::test]
+    fn small_and_encoded_svgs_rerender_at_zoom() {
+        crate::imagecache::reset_for_test();
+        let expected = cap_raster(zoomed_extent(40, 40, 2.0));
+        for name in ["green.svg", "green-utf16le.svg", "green.svgz"] {
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/svgencodings")
+                .join(name);
+            let loaded = load_texture(&ImageResolution::Local(path), 2.0).expect(name);
+            assert_eq!(
+                (loaded.texture.width(), loaded.texture.height()),
+                (expected.w, expected.h),
+                "{name}: re-rendered at the zoomed size"
+            );
+        }
+    }
+
     /// Finding 1 / TDD 2.23b: an animated WebP wearing a `.svg` name must still
     /// decode through `richimg` — proven the same way
     /// `a_vector_image_never_carries_animation_bytes` proves the opposite (a real

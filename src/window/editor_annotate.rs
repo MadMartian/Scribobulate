@@ -140,8 +140,8 @@ pub(crate) fn wire_editor_annotate_card(
             // with no prompt and no trace.
             //
             // The CAPTURED target is the same reference the commit acts on, and
-            // `merged_comment_for` shares `intersecting_highlights` with the mutation that
-            // does the merging — so the card and the mutation cannot disagree about what
+            // `merged_comment_for` shares the merge decision with the mutation that does
+            // the merging — so the card and the mutation cannot disagree about what
             // will be merged. A second predicate here would be free to drift.
             let existing = pending
                 .borrow()

@@ -593,20 +593,10 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
                 t.set_background(Some(hex));
             }
             // Long inline code spans have no spaces, so WrapMode::Word pushes the
-            // entire span to the next line.  Char breaks at character boundaries
-            // within the span, keeping it on the same line as the preceding text.
-            //
-            // Char, NOT WordChar — a screen reader reading a run over this tag aborts
-            // the app on GTK 4.6: its AT-SPI text-attribute path casts the raw
-            // GtkWrapMode straight to PangoWrapMode (gtkatspitextbuffer.c:259, Site B),
-            // and WordChar(3) is out of PangoWrapMode's range → `pango_wrap_mode_to_string`
-            // hits `g_assert_not_reached()` → `Aborted` (GTK4Rs/AP-136;
-            // researcher-verified against 4.6.9 source). Char(1) and Word(2) are both in
-            // range (Char→"char", Word→mislabelled "word-char" but no crash); Char keeps
-            // the char-boundary break WordChar gave us. The buggy cast is 4.6-ONLY —
-            // fixed in gtk-4-8+ (translated via gtk_wrap_mode_to_string) — so WordChar
-            // may be restored once the toolkit floor moves to ≥4.8.
-            t.set_wrap_mode(gtk::WrapMode::Char);
+            // entire span to the next line; the preview's wrap mode breaks within it.
+            t.set_wrap_mode(preview_wrap_mode());
+            // A wrap inside an identifier must not add a hyphen the code does not have.
+            t.set_insert_hyphens(false);
         });
     }
     // The block background is NOT a paragraph_background — that fill is pinned to
@@ -618,6 +608,8 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
     let view_rm = px(config().view.right_margin);
     add(TagName::CodeBlock { quote_depth: 0 }.name(), &|t| {
         t.set_family(Some(&code_font));
+        // Wrapped code shows its own characters only: no hyphen at a break.
+        t.set_insert_hyphens(false);
         t.set_left_margin(view_lm + code_pad);
         t.set_right_margin(view_rm + code_pad);
     });
@@ -702,6 +694,7 @@ pub(crate) fn setup_tags_with_theme(buf: &TextBuffer, palette: &Palette, zoom: f
             TagName::CodeBlock { quote_depth: depth }.name(),
             &move |t| {
                 t.set_family(Some(&code_font));
+                t.set_insert_hyphens(false);
                 t.set_left_margin(view_lm + indent + code_pad);
                 t.set_right_margin(view_rm + indent + code_pad);
             },
@@ -847,5 +840,44 @@ mod list_depth_tests {
             MAX_LIST_DEPTH as usize,
             "depths 1..={MAX_LIST_DEPTH} must map to distinct tags, got {names:?}"
         );
+    }
+}
+
+/// The wrap mode for the preview view and the inline-code tags: break at words, and
+/// within a word only when it cannot fit, so a long URL or identifier never makes a
+/// line wider than the pane (the no-overflow invariant GTK4Rs/AP-22/23 depend on).
+///
+/// That mode is `WordChar`, which GTK 4.6 cannot carry: its AT-SPI text-attribute path
+/// casts the raw `GtkWrapMode` to `PangoWrapMode` untranslated, and `WordChar`(3) is
+/// out of range, so a screen reader reading the preview aborts the app (GTK4Rs/AP-136;
+/// fixed in 4.8). Below 4.8 the answer is `Char`, which keeps the invariant at the cost
+/// of breaking prose mid-word. `Word` is never the answer: it lets a long token
+/// overflow.
+pub(crate) fn preview_wrap_mode() -> gtk::WrapMode {
+    wrap_mode_for(gtk::major_version(), gtk::minor_version())
+}
+
+/// [`preview_wrap_mode`]'s decision over a runtime GTK version.
+fn wrap_mode_for(major: u32, minor: u32) -> gtk::WrapMode {
+    if (major, minor) >= (4, 8) {
+        gtk::WrapMode::WordChar
+    } else {
+        gtk::WrapMode::Char
+    }
+}
+
+#[cfg(test)]
+mod preview_wrap_tests {
+    use super::wrap_mode_for;
+    use gtk::WrapMode;
+
+    /// TDD 2.2·a11y: WordChar only where AT-SPI translates it (GTK 4.8+); Char below.
+    #[test]
+    fn the_preview_breaks_words_only_where_gtk_can_report_it() {
+        assert_eq!(wrap_mode_for(4, 6), WrapMode::Char);
+        assert_eq!(wrap_mode_for(4, 7), WrapMode::Char);
+        assert_eq!(wrap_mode_for(4, 8), WrapMode::WordChar);
+        assert_eq!(wrap_mode_for(4, 24), WrapMode::WordChar);
+        assert_eq!(wrap_mode_for(5, 0), WrapMode::WordChar);
     }
 }

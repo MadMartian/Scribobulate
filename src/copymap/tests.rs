@@ -146,10 +146,10 @@ fn apply(
         // NO buffer char (previously an anchored U+FFFC). Its `[ ]`/`[x]` source is still
         // reconstructed by the copymap from the classified event's source span.
         Event::TaskListMarker(_) => {}
-        // A soft/hard break renders as a real newline everywhere, including inside a list
-        // item — the flow-to-spaces workaround is reverted, now
-        // that items carry a uniform per-level margin with no hanging indent (TDD 2.20).
-        Event::SoftBreak | Event::HardBreak => sim.newline(),
+        // CommonMark line breaks, as the renderer draws them (TDD 2.20): a soft break
+        // is a space, a hard break a newline — one buffer char either way.
+        Event::SoftBreak => sim.insert(" "),
+        Event::HardBreak => sim.newline(),
         Event::End(TagEnd::Heading(_)) => sim.newline(),
         Event::Rule => {
             sim.block_sep();
@@ -506,17 +506,18 @@ fn multi_line_blockquote_within_excludes_all_markers() {
     let md = "pre\n\n> a\n> b\n\npost";
     assert_eq!(pick(md, "a"), "a"); // line 1 fragment
     assert_eq!(pick(md, "b"), "b"); // line 2 fragment — no leaked `> `
-    assert_eq!(pick(md, "a\nb"), "a\nb"); // whole quote body → still no markers
+    assert_eq!(pick(md, "a b"), "a\nb"); // whole quote body (the soft break renders as a space, TDD 2.20) → still no markers
 }
 
 #[test]
 fn multi_line_blockquote_partial_cross_out_has_no_empty_quoted_line() {
-    // A selection that begins at an in-quote line break and spans OUT of the quote
+    // A selection that begins at an in-quote soft break (rendered as a space, TDD 2.20)
+    // and spans OUT of the quote
     // must not emit a spurious leading empty quoted line (`> \n> b`): line-1's
     // marker is dropped, the user's selected break is kept, and the first real
     // content line carries its reconstructed `> `.
     let md = "> a\n> b\n\npost";
-    assert_eq!(pick(md, "\nb\n\npost"), "\n> b\n\npost");
+    assert_eq!(pick(md, " b\n\npost"), "\n> b\n\npost");
     // Starting exactly at line-2 content (no leading break) still reconstructs the
     // marker directly on that line.
     assert_eq!(pick(md, "b\n\npost"), "> b\n\npost");
@@ -616,17 +617,16 @@ fn debug_verify_stays_aligned_when_an_anchor_precedes_text() {
 #[cfg(debug_assertions)]
 #[test]
 fn debug_verify_passes_for_a_multi_line_list_item() {
-    // With the flow-to-spaces workaround reverted, a list
-    // item's source line break renders as a real '\n' in the buffer again (TDD 2.20) —
-    // every line still sits at the uniform content margin, and the buffer text now
-    // matches the source verbatim (no whitespace substitution), so the strict 1:1-leaf
-    // guard must walk it cleanly and copy must stay byte-exact.
+    // A list item's soft-wrapped source line renders as a SPACE (TDD 2.20): one
+    // buffer char standing for the one-byte break, so the strict 1:1-leaf guard must
+    // still walk it cleanly and copy must stay byte-exact — the copy is the Markdown
+    // source, newline and continuation indent included (TDD 2.8).
     let md = "- first line of the item\n  second source line of the same item\n- next";
     let (t, md_s, slice) = render(md);
-    // The two source lines are separated by a real newline in the buffer now.
+    // The two source lines flow into one rendered line.
     assert!(
-        slice.contains("item\nsecond"),
-        "the in-item break renders as a newline in the sim buffer: {slice:?}"
+        slice.contains("item second"),
+        "the in-item soft break renders as a space in the sim buffer: {slice:?}"
     );
     debug_verify(&t, &md_s, &slice.chars().collect::<Vec<_>>(), None); // must not panic
                                                                        // Whole-document copy reconstructs the byte-exact source.
@@ -636,8 +636,29 @@ fn debug_verify_passes_for_a_multi_line_list_item() {
     // with the continuation indent suppressed (a within-block line marker).
     let a = slice.find("of the item").unwrap();
     let a = slice[..a].chars().count() as i32;
-    let b = a + "of the item\nsecond".chars().count() as i32;
+    let b = a + "of the item second".chars().count() as i32;
     assert_eq!(resolve(&t, &md_s, a, b), "of the item\nsecond");
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn debug_verify_passes_for_a_crlf_document() {
+    // A CRLF checkout (every Windows runner) changes two leaves. A soft break's
+    // source becomes `\r\n` — two bytes for its one rendered space, so it is no
+    // longer 1:1. And pulldown-cmark splits a code block's line endings into their
+    // own `Text("\n")` events whose range is the `\n` after the `\r` (MEASURED
+    // 0.13.4): a 1:1 leaf whose source and glyph are both a newline. A guard that
+    // reads a one-byte `\n` source as a soft break's space flags that leaf.
+    let md = "a\r\nb\r\n\r\n```\r\nx\r\n\r\ny\r\n```\r\n\r\n- item\r\n  wrap\r\n";
+    let (t, md_s, slice) = render(md);
+    assert!(slice.contains("a b"), "{slice:?}");
+    assert!(slice.contains("item wrap"), "{slice:?}");
+    // Must not panic: before break leaves were atomic it read the code block's `\n` as
+    // a soft break's space.
+    debug_verify(&t, &md_s, &slice.chars().collect::<Vec<_>>(), None);
+    // Copy across a CRLF soft break yields the source bytes, CR included (TDD 2.8).
+    assert_eq!(pick(md, "a b"), "a\r\nb");
+    assert_eq!(pick(md, "item wrap"), "item\r\nwrap");
 }
 
 // ── empty / degenerate selections never panic ─────────────────────────────────

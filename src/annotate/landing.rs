@@ -16,18 +16,29 @@
 //!   after it, and the paragraph after that, are read as raw HTML.
 //! - **Math** (`$…$`, `$$…$$`) is read verbatim by a math renderer, which fails on
 //!   markup inside the formula.
+//! - **An inline code span** is read verbatim too: markup inside one is shown as code
+//!   by every tool, this one included (`annotate::scan` reads CriticMarkup in code as
+//!   literal, TDD 17.61), so the annotation would vanish into the code it was meant
+//!   to mark.
 //!
 //! So the first three are never written into: an annotation inside one becomes a
 //! comment on a line of its own just after the block, and the block keeps every byte.
-//! Math is never split: a highlight touching a formula widens to the whole formula.
+//! Math and code spans are never split: a highlight touching one widens to the whole
+//! span, delimiters included, and a point comment inside one moves to its end.
 //!
 //! **Why this parses the file a second time** (POLICY § Architecture rules: a
 //! parallel path says why). The renderer's parse cannot answer the question: it reads
 //! the text with CriticMarkup already stripped, without front matter, and without
 //! math, which the preview shows as plain text. This scan reads the raw file with the
-//! extensions other tools commonly enable, because those tools are who it protects.
+//! extensions other tools commonly enable, because those tools are who it protects. It
+//! parses the same text over the same span that `annotate::scan` reads code through —
+//! `written::as_written`, the body after any front matter with every comment body
+//! outside code masked, parsed with `NormalizedMd::parse_as_written` — and keeps
+//! whole every piece of code that reading reports, so the two never disagree about
+//! what is code: a stray backtick in an existing comment makes no code span here that
+//! extraction would not see, and a comment extraction reads as code is not split.
 
-use pulldown_cmark::{Event, Options, Parser, Tag};
+use pulldown_cmark::{Event, Tag};
 use std::ops::Range;
 
 /// Where a new annotation is written, once the places it must not touch are kept out.
@@ -82,8 +93,9 @@ struct Block {
 
 struct Verbatim {
     blocks: Vec<Block>,
-    /// Math spans, which are kept whole rather than kept out.
-    math: Vec<Range<usize>>,
+    /// Math and code, ascending, joined where they overlap, which are kept whole rather
+    /// than kept out.
+    whole: Vec<Range<usize>>,
 }
 
 fn line_start(s: &str, at: usize) -> usize {
@@ -105,34 +117,31 @@ fn eol_near(source: &str, at: usize) -> &'static str {
     }
 }
 
+/// Whether `line` is blank (`written::is_blank_line_char`, the one rule extraction's
+/// block break uses too), its line end aside.
 fn is_blank(line: &str) -> bool {
-    line.trim_matches([' ', '\t', '>', '\r', '\n']).is_empty()
+    line.trim_matches(|c| c == '\r' || c == '\n' || super::written::is_blank_line_char(c))
+        .is_empty()
 }
 
 fn scan(source: &str) -> Verbatim {
     let mut blocks = Vec::new();
-    let mut math = Vec::new();
-    let body_from = match crate::renderer::frontmatter::scan(source) {
-        Some(fm) => {
-            blocks.push(Block {
-                kind: Kind::FrontMatter,
-                lines: 0..fm.end(),
-            });
-            fm.end()
-        }
-        None => 0,
-    };
+    let mut whole = Vec::new();
+    // The body and its masked text both come from the one reading extraction takes, so
+    // the two parse the same bytes over the same span.
+    let written = super::written::as_written(source);
+    let body_from = written.body_from;
+    if body_from > 0 {
+        blocks.push(Block {
+            kind: Kind::FrontMatter,
+            lines: 0..body_from,
+        });
+    }
     // Through the inline-tab pre-pass like every other parse site (ScrAP-75): it is
     // length-preserving and leaves leading tabs alone, so every offset and every code
     // block's indent read here are the file's own.
-    let body = crate::renderer::NormalizedMd::new(&source[body_from..]);
-    let opts = Options::ENABLE_TABLES
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_GFM
-        | Options::ENABLE_MATH;
-    for (ev, r) in Parser::new_ext(body.as_str(), opts).into_offset_iter() {
+    let body = crate::renderer::NormalizedMd::new(&written.text[body_from..]);
+    for (ev, r) in body.parse_as_written().into_offset_iter() {
         let r = r.start + body_from..r.end + body_from;
         let kind = match ev {
             Event::Start(Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(_))) => Kind::Code,
@@ -140,8 +149,8 @@ fn scan(source: &str) -> Verbatim {
                 Kind::IndentedCode
             }
             Event::Start(Tag::HtmlBlock) => Kind::Html,
-            Event::InlineMath(_) | Event::DisplayMath(_) => {
-                math.push(r);
+            Event::InlineMath(_) | Event::DisplayMath(_) | Event::Code(_) => {
+                whole.push(r);
                 continue;
             }
             // dispatch-selector: this picks out the few constructs other tools read verbatim; every other event is ordinary text to them, where an annotation is harmless
@@ -160,7 +169,11 @@ fn scan(source: &str) -> Verbatim {
             lines: line_start(source, r.start)..end,
         });
     }
-    Verbatim { blocks, math }
+    // Code as extraction reads it is kept whole too. Normally that is what this parse
+    // just found; when no mask settled it also holds each comment read as code because
+    // the parse hid its closer, which this parse does not report.
+    let whole = super::written::merged(whole.into_iter().chain(written.code).collect());
+    Verbatim { blocks, whole }
 }
 
 /// The comment on a line of its own just after `block`, in the block's container (a
@@ -208,32 +221,43 @@ fn after_block(source: &str, block: &Block) -> Slot {
 }
 
 /// Where a highlight over `range` lands. A highlight touching a block it must not
-/// enter becomes a comment after that block; one touching math widens to cover it.
+/// enter becomes a comment after that block; one touching math or a code span widens to
+/// cover it, and becomes a comment after a block if the widened range touches one.
 pub(crate) fn for_highlight(source: &str, range: Range<usize>) -> Landing {
-    let v = scan(source);
-    if let Some(block) = v
-        .blocks
-        .iter()
-        .rev()
-        .find(|b| range.start < b.lines.end && b.lines.start < range.end.max(range.start + 1))
-    {
+    highlight_in(source, &scan(source), range)
+}
+
+/// [`for_highlight`] over what `scan` read.
+fn highlight_in(source: &str, v: &Verbatim, range: Range<usize>) -> Landing {
+    let touched = |range: &Range<usize>| {
+        v.blocks
+            .iter()
+            .rev()
+            .find(|b| range.start < b.lines.end && b.lines.start < range.end.max(range.start + 1))
+    };
+    if let Some(block) = touched(&range) {
         return Landing::Point(after_block(source, block));
     }
     let mut range = range;
-    for m in &v.math {
+    for m in &v.whole {
         if m.start < range.end && range.start < m.end {
             range.start = range.start.min(m.start);
             range.end = range.end.max(m.end);
         }
+    }
+    // What it widened over may reach a block: a comment the fallback reads as code runs
+    // on through the code block that hides its closer.
+    if let Some(block) = touched(&range) {
+        return Landing::Point(after_block(source, block));
     }
     Landing::Highlight(range)
 }
 
 /// Where a point comment anchored at `at` lands: after any block it falls in or ends
 /// (the start of the line after a block is that block's business: an HTML block's
-/// terminating blank line, a fence's closing line), after any formula it would split,
-/// and never ONTO a blank line — text written at the start of one fills it, joining
-/// the blocks either side.
+/// terminating blank line, a fence's closing line), after any formula or code span it
+/// would split, and never ONTO a blank line — text written at the start of one fills
+/// it, joining the blocks either side.
 pub(crate) fn for_point(source: &str, at: usize) -> Slot {
     let v = scan(source);
     if let Some(block) = v
@@ -244,7 +268,7 @@ pub(crate) fn for_point(source: &str, at: usize) -> Slot {
         return after_block(source, block);
     }
     let at = v
-        .math
+        .whole
         .iter()
         .find(|m| m.start < at && at < m.end)
         .map_or(at, |m| m.end);
@@ -298,7 +322,7 @@ mod tests {
     fn apply(md: &str, landing: Landing) -> String {
         match landing {
             Landing::Highlight(r) => crate::annotate::insert_or_extend_highlight(md, r, "c"),
-            Landing::Point(slot) => crate::annotate::insert_point_comment(md, &slot, "c"),
+            Landing::Point(slot) => crate::annotate::insert_landed_point(md, slot, "c"),
         }
     }
 
@@ -401,6 +425,90 @@ mod tests {
         assert!(out.contains("{==$$\nx = y\n$$==}"), "{out:?}");
     }
 
+    /// Markup inside a code span is literal to every tool and to `extract`, so a
+    /// highlight touching one wraps the whole span, backticks included, and a point
+    /// comment inside one moves to its end. Each result still reads back as exactly
+    /// one annotation, which is the property the write path exists to keep.
+    ///
+    /// Mutation: drop `Event::Code` from `scan`'s whole-span arm and every case fails.
+    /// R9-AP1-02: an existing comment's stray backtick makes no code span here, because
+    /// landing parses the same masked text extraction does. Parsing the raw file, the
+    /// backtick paired with the one before `code`, "then" sat in that bogus span, and
+    /// the highlight widened into the old comment and wrote `{==` inside it.
+    #[test]
+    fn a_stray_backtick_in_an_existing_comment_makes_no_code_span() {
+        let md = "Text {>>odd ` tick<<} then `code` here.\n";
+        let out = annotate(md, "then");
+        assert_eq!(
+            out,
+            "Text {>>odd ` tick<<} {==then==}{>>c<<} `code` here.\n"
+        );
+        assert_eq!(
+            crate::annotate::extract(&out).annotations.len(),
+            2,
+            "{out:?}"
+        );
+        let out = apply_point(md, md.find("then").unwrap());
+        assert_eq!(
+            crate::annotate::extract(&out).annotations.len(),
+            2,
+            "{out:?}"
+        );
+        assert!(
+            out.contains("{>>odd ` tick<<}"),
+            "the old comment is intact: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_code_span_is_never_split() {
+        let md = "Run `cargo test` now.\n";
+        let out = annotate(md, "test");
+        assert_eq!(out, "Run {==`cargo test`==}{>>c<<} now.\n");
+        assert_eq!(
+            crate::annotate::extract(&out).annotations.len(),
+            1,
+            "{out:?}"
+        );
+        // Starting outside the span and ending inside it, and the reverse.
+        for (from, to) in [("Run", "cargo"), ("test", "now")] {
+            let start = md.find(from).unwrap();
+            let end = md.find(to).unwrap() + to.len();
+            let out = apply(md, for_highlight(md, start..end));
+            assert_eq!(
+                crate::annotate::extract(&out).annotations.len(),
+                1,
+                "{from}..{to}: {out:?}"
+            );
+        }
+        let out = apply_point(md, md.find("test").unwrap());
+        assert_eq!(out, "Run `cargo test`{>>c<<} now.\n");
+        assert_eq!(
+            crate::annotate::extract(&out).annotations.len(),
+            1,
+            "{out:?}"
+        );
+    }
+
+    /// Landing and extraction read the file through one parser configuration: an
+    /// indented paragraph in a footnote definition is footnote text to both, so a
+    /// highlight written there is one `extract` finds. With footnotes off on either
+    /// side it is an indented code block to that side alone.
+    ///
+    /// Mutation: drop `ENABLE_FOOTNOTES` from `as_written_options` and the comment
+    /// lands after a code block instead.
+    #[test]
+    fn landing_and_extraction_agree_on_footnote_content() {
+        let md = "Text[^1].\n\n[^1]: First.\n\n    Second paragraph word.\n";
+        let out = annotate(md, "word");
+        assert_eq!(
+            out,
+            "Text[^1].\n\n[^1]: First.\n\n    Second paragraph {==word==}{>>c<<}.\n"
+        );
+        let found = crate::annotate::extract(&out).annotations;
+        assert_eq!(found.len(), 1, "{out:?}");
+    }
+
     #[test]
     fn ordinary_text_is_untouched() {
         for (md, word) in [
@@ -457,6 +565,32 @@ mod tests {
         let out = apply_point(md, 6);
         assert_eq!(out, "para\r\n{>>c<<}\r\n\r\npara2\r\n");
         assert_eq!(remove_point(&out), md);
+    }
+
+    /// A comment the fallback reads as code runs on through the code that hides its
+    /// closer, and that can be a fenced block. Landing tested only the asked-for range
+    /// against the blocks, then widened it over that code, so a highlight on `note`
+    /// wrapped the paragraph, the fence and the line after it. The fallback now masks a
+    /// comment a block opens in, so no document is known to reach this; the reading is
+    /// built by hand. Mutation check: drop the second block test in `highlight_in` and
+    /// it lands as that highlight again.
+    #[test]
+    fn a_highlight_widened_onto_a_block_lands_after_it() {
+        let src = "x {>>note\n```\n<<}\n```\nmore <<} y\n";
+        let fence = src.find("```").unwrap();
+        let after_fence = src.find("more").unwrap();
+        let v = Verbatim {
+            blocks: vec![Block {
+                kind: Kind::Code,
+                lines: fence..after_fence,
+            }],
+            whole: std::iter::once(src.find("{>>").unwrap()..after_fence).collect(),
+        };
+        let note = src.find("note").unwrap();
+        match highlight_in(src, &v, note..note + 4) {
+            Landing::Point(slot) => assert_eq!(slot.at, after_fence),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

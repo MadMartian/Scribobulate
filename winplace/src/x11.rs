@@ -36,16 +36,21 @@
 //! - nothing that reaches `gdk_x11_display_ungrab`, which would release it early;
 //! - nothing but `present` and the property writes inside it.
 //!
+//! This module reads and writes; what the properties it reads mean, and the state list
+//! it writes, are decided in `x11decode.rs`, which is tested on every platform.
+//!
 //! Hand-rolled rather than a `gdk4-x11` dependency: a few GDK getters exported from
 //! `libgtk-4`, and a handful of Xlib calls.
 
 use crate::geom::{self, Rect};
+use crate::x11decode::{self, RawX11, StateAtoms};
 use crate::Place;
 use gtk::gdk;
 use gtk::glib;
 use gtk::glib::translate::{FromGlib, ToGlibPtr};
 use gtk::prelude::*;
 use std::ffi::{c_char, c_int, c_long, c_uchar, c_ulong, c_void, CString};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 type XDisplay = c_void;
@@ -61,6 +66,8 @@ extern "C" {
         display: *mut gdk::ffi::GdkDisplay,
         atom_name: *const c_char,
     ) -> Atom;
+    fn gdk_x11_display_error_trap_push(display: *mut gdk::ffi::GdkDisplay);
+    fn gdk_x11_display_error_trap_pop_ignored(display: *mut gdk::ffi::GdkDisplay);
 }
 
 /// Xlib's `XSizeHints` (`X11/Xutil.h`).
@@ -114,8 +121,6 @@ const CLIENT_MESSAGE: c_int = 33;
 const SUBSTRUCTURE_NOTIFY_MASK: c_long = 1 << 19;
 const SUBSTRUCTURE_REDIRECT_MASK: c_long = 1 << 20;
 const SUCCESS: c_int = 0;
-/// `_NET_WM_DESKTOP`'s value for "on every desktop".
-const ALL_DESKTOPS: c_ulong = 0xFFFF_FFFF;
 /// `_NET_WM_STATE` client message: add the state; the request comes from an application.
 const NET_WM_STATE_ADD: c_long = 1;
 const SOURCE_APPLICATION: c_long = 1;
@@ -215,6 +220,17 @@ struct Atoms {
     frame_extents: Atom,
     wm_state: Atom,
     wm_check: Atom,
+    supported: Atom,
+}
+
+impl Atoms {
+    fn state_atoms(&self) -> StateAtoms {
+        StateAtoms {
+            shaded: self.shaded,
+            above: self.above,
+            below: self.below,
+        }
+    }
 }
 
 impl Win {
@@ -273,6 +289,7 @@ impl Win {
             frame_extents: self.atom("_NET_FRAME_EXTENTS"),
             wm_state: self.atom("WM_STATE"),
             wm_check: self.atom("_NET_SUPPORTING_WM_CHECK"),
+            supported: self.atom("_NET_SUPPORTED"),
         }
     }
 
@@ -402,10 +419,31 @@ impl Win {
         }
     }
 
-    /// Whether an EWMH window manager is running on this screen.
+    /// Whether an EWMH window manager is running on this screen: the root's
+    /// `_NET_SUPPORTING_WM_CHECK` names a window that still carries the same property
+    /// (`x11decode::wm_check_alive`). Never called under the grab: the error trap syncs.
     fn wm_running(&self, atoms: &Atoms) -> bool {
-        self.read_longs(self.root, atoms.wm_check, XA_WINDOW)
-            .is_some_and(|v| v.first().is_some_and(|w| *w != 0))
+        let on_root = self.read_longs(self.root, atoms.wm_check, XA_WINDOW);
+        // Every decision is the decoder's; this only skips the read where it names no
+        // window to read.
+        let on_child = x11decode::wm_check_child(on_root.as_deref()).and_then(|child| {
+            // The window a crashed window manager named no longer exists, and reading
+            // off it raises BadWindow, which GDK treats as fatal unless trapped.
+            let display: *mut gdk::ffi::GdkDisplay = self.gdk_display.to_glib_none().0;
+            // SAFETY: a live GdkX11Display; the trap is pushed and popped around one read.
+            unsafe { gdk_x11_display_error_trap_push(display) };
+            let on_child = self.read_longs(child as XWindow, atoms.wm_check, XA_WINDOW);
+            // SAFETY: as above; pops the trap pushed just before.
+            unsafe { gdk_x11_display_error_trap_pop_ignored(display) };
+            on_child
+        });
+        x11decode::wm_check_alive(on_root.as_deref(), on_child.as_deref())
+    }
+
+    /// Whether the window manager lists `atom` in the root's `_NET_SUPPORTED`.
+    fn supports(&self, atoms: &Atoms, atom: Atom) -> bool {
+        self.read_longs(self.root, atoms.supported, XA_ATOM)
+            .is_some_and(|v| v.iter().any(|a| *a as Atom == atom))
     }
 
     /// Block until the window manager has managed the window (it sets `WM_STATE`), for
@@ -453,69 +491,34 @@ impl Win {
 }
 
 /// The X11-only parts of `window`'s place, read into `place`. Leaves `place` untouched
-/// when the display is not X11.
+/// when the display is not X11. This reads the properties; `x11decode` decides what
+/// they mean.
 pub(crate) fn capture(window: &gtk::Window, place: &mut Place) {
     let Some(win) = Win::of(window) else { return };
     let atoms = win.atoms();
-
-    if let Some(&desktop) = win
-        .read_longs(win.xid, atoms.desktop, XA_CARDINAL)
-        .as_deref()
-        .and_then(<[_]>::first)
-    {
-        if desktop as c_ulong & ALL_DESKTOPS == ALL_DESKTOPS {
-            place.all_desktops = true;
-        } else {
-            place.desktop = u32::try_from(desktop).ok();
-        }
-    }
-    if let Some(raw) = win.read_string(atoms.activities) {
-        place.activities = geom::split_activities(&raw);
-    }
-    if let Some(states) = win.read_longs(win.xid, atoms.state, XA_ATOM) {
-        let has = |a: Atom| states.iter().any(|s| *s as Atom == a);
-        place.shaded = has(atoms.shaded);
-        place.above = has(atoms.above);
-        place.below = has(atoms.below);
-    }
-    // KWin gives a window without titlebar and frame no `_NET_FRAME_EXTENTS` at all
-    // (MEASURED); an all-zero frame means the same. Full screen (and, with KWin's
-    // borderless-maximized option, maximized) also have no frame, so neither counts, and
-    // with no window manager there is no frame to speak of.
-    let extents = win.read_longs(win.xid, atoms.frame_extents, XA_CARDINAL);
-    let (left, top) = match extents.as_deref() {
-        Some([l, _r, t, _b, ..]) => (*l as i32, *t as i32),
-        _ => (0, 0),
+    let raw = RawX11 {
+        desktop: win
+            .read_longs(win.xid, atoms.desktop, XA_CARDINAL)
+            .and_then(|v| v.first().copied()),
+        activities: win.read_string(atoms.activities),
+        states: win
+            .read_longs(win.xid, atoms.state, XA_ATOM)
+            .map(|v| v.into_iter().map(|a| a as Atom).collect()),
+        // An extent too wide for `i32` is one no window manager publishes: unreadable.
+        frame_extents: win
+            .read_longs(win.xid, atoms.frame_extents, XA_CARDINAL)
+            .and_then(|v| v.into_iter().map(|e| i32::try_from(e).ok()).collect()),
+        frame_extents_supported: win.supports(&atoms, atoms.frame_extents),
+        wm_running: win.wm_running(&atoms),
+        client_origin: win.client_origin(),
+        scale: win.scale,
     };
-    place.no_border = matches!(extents.as_deref(), None | Some([0, 0, 0, 0, ..]))
-        && !place.fullscreen
-        && !place.maximized
-        && win.wm_running(&atoms);
-
-    // Position: the frame's top-left relative to the monitor the window is on, in
-    // logical pixels. Never root coordinates, which change with the monitor layout.
-    let geometry = place
+    let monitor = place
         .monitor
         .as_deref()
         .and_then(|n| monitor_named(&win.gdk_display, n))
-        .map(|m| m.geometry());
-    if let (Some((cx, cy)), Some(geometry)) = (win.client_origin(), geometry) {
-        place.x = Some((cx - left) / win.scale - geometry.x());
-        place.y = Some((cy - top) / win.scale - geometry.y());
-    }
-}
-
-/// Whether `place` has anything this module writes; a place with none is shown with a
-/// plain `present`, exactly like a new window.
-fn has_x11_parts(place: &Place) -> bool {
-    place.desktop.is_some()
-        || place.all_desktops
-        || !place.activities.is_empty()
-        || (place.x.is_some() && place.y.is_some())
-        || place.shaded
-        || place.above
-        || place.below
-        || place.no_border
+        .map(|m| crate::rect_of(&m));
+    x11decode::decode(&raw, atoms.state_atoms(), monitor, place);
 }
 
 /// Show `window` in `place`: the writes before, around and after `gtk_window_present`
@@ -523,7 +526,7 @@ fn has_x11_parts(place: &Place) -> bool {
 /// exists. Falls back to a plain `present` when the display is not X11 or the place has
 /// no X11 parts.
 pub(crate) fn present(window: &gtk::Window, place: &Place, monitor: Option<Rect>) {
-    let Some(win) = Win::of(window).filter(|_| has_x11_parts(place)) else {
+    let Some(win) = Win::of(window).filter(|_| x11decode::has_x11_parts(place)) else {
         window.present();
         return;
     };
@@ -531,7 +534,7 @@ pub(crate) fn present(window: &gtk::Window, place: &Place, monitor: Option<Rect>
     before_present(&win, &atoms, place, monitor, window.default_size().0);
 
     let desktop = if place.all_desktops {
-        Some(ALL_DESKTOPS)
+        Some(x11decode::ALL_DESKTOPS)
     } else {
         place.desktop.map(c_ulong::from)
     };
@@ -550,14 +553,16 @@ pub(crate) fn present(window: &gtk::Window, place: &Place, monitor: Option<Rect>
     }
     if !extra.is_empty() {
         // Read-modify-write: keep what GTK just wrote (maximized, full screen).
-        let mut states = win
+        let current = win
             .read_longs(win.xid, atoms.state, XA_ATOM)
-            .unwrap_or_default();
-        for a in extra {
-            if !states.iter().any(|s| *s as Atom == a) {
-                states.push(a as c_long);
-            }
-        }
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| a as Atom)
+            .collect();
+        let states: Vec<c_long> = x11decode::merged_states(current, &extra)
+            .into_iter()
+            .map(|a| a as c_long)
+            .collect();
         win.write_longs(atoms.state, XA_ATOM, &states);
     }
     // SAFETY: as above. Neither call flushes on its own.
@@ -633,11 +638,35 @@ fn monitor_named(display: &gdk::Display, name: &str) -> Option<gdk::Monitor> {
         .find(|m| m.connector().as_deref() == Some(name))
 }
 
+/// Set once the activity manager has failed to answer, so a restore of several windows
+/// pays for that at most once rather than once per window.
+static ACTIVITY_MANAGER_UNREACHABLE: AtomicBool = AtomicBool::new(false);
+
 /// The running KDE activities, or `None` when the activity manager cannot be asked
-/// (not KDE, no session bus). A bounded synchronous call: it runs once per restored
-/// window that has activities, at startup.
+/// (not KDE, no session bus). Synchronous, at startup, for a restored window that has
+/// activities, and bounded: never through GIO's X11 autolaunch of a session bus
+/// (`x11decode::session_bus_without_autolaunch`), never auto-starting the manager on a
+/// desktop that does not run it, a 500 ms reply timeout, and not asked again by this
+/// process once it has failed to answer.
 fn running_activities() -> Option<Vec<String>> {
     const TIMEOUT_MS: i32 = 500;
+    if ACTIVITY_MANAGER_UNREACHABLE.load(Ordering::Relaxed) {
+        return None;
+    }
+    let runtime_bus = std::env::var_os("XDG_RUNTIME_DIR")
+        .is_some_and(|dir| std::path::Path::new(&dir).join("bus").exists());
+    let address = std::env::var_os("DBUS_SESSION_BUS_ADDRESS");
+    if !x11decode::session_bus_without_autolaunch(address.as_deref(), runtime_bus) {
+        return None;
+    }
+    let list = list_activities(TIMEOUT_MS);
+    if list.is_none() {
+        ACTIVITY_MANAGER_UNREACHABLE.store(true, Ordering::Relaxed);
+    }
+    list
+}
+
+fn list_activities(timeout_ms: i32) -> Option<Vec<String>> {
     let bus =
         gtk::gio::bus_get_sync(gtk::gio::BusType::Session, gtk::gio::Cancellable::NONE).ok()?;
     let reply = bus
@@ -648,8 +677,8 @@ fn running_activities() -> Option<Vec<String>> {
             "ListActivities",
             None,
             Some(glib::VariantTy::new("(as)").ok()?),
-            gtk::gio::DBusCallFlags::NONE,
-            TIMEOUT_MS,
+            gtk::gio::DBusCallFlags::NO_AUTO_START,
+            timeout_ms,
             gtk::gio::Cancellable::NONE,
         )
         .ok()?;

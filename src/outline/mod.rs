@@ -35,7 +35,7 @@ pub(crate) struct Heading {
     pub src_offset: OriginalByteOffset,
 }
 
-/// A heading reduced to the two facts a continuously-firing handler asks for.
+/// A heading reduced to the facts a continuously-firing handler asks for.
 ///
 /// The cached projection of [`Heading`] that `TabState::heading_index` holds — the label
 /// is dropped because no hot reader wants it and keeping it would make the cache as large
@@ -48,14 +48,38 @@ pub(crate) struct HeadingRef {
     pub(crate) level: u8,
     /// Byte offset into the ORIGINAL source where the heading block begins.
     pub(crate) src_offset: OriginalByteOffset,
+    /// The same position as a CHARACTER offset, which is what a text buffer's caret
+    /// reports. Cached so the caret spy compares like with like without copying the
+    /// buffer to convert the caret's offset on every move (Hot-path CAM row 3, cell B).
+    pub(crate) src_char: usize,
 }
 
-impl From<&Heading> for HeadingRef {
-    fn from(h: &Heading) -> Self {
-        HeadingRef {
-            level: h.level,
-            src_offset: h.src_offset,
-        }
+impl HeadingRef {
+    /// The cache for `headings`, extracted from `source` in document order: one pass over
+    /// the source, however many headings, to find each one's character offset.
+    pub(crate) fn index(source: &str, headings: &[Heading]) -> Vec<HeadingRef> {
+        let mut chars = 0usize;
+        let mut scanned = 0usize;
+        headings
+            .iter()
+            .map(|h| {
+                let byte = h.src_offset.raw().min(source.len());
+                if byte >= scanned {
+                    chars += source.get(scanned..byte).map_or(0, |s| s.chars().count());
+                    scanned = byte;
+                } else {
+                    // Out of order, which extraction does not produce: count afresh rather
+                    // than give a wrong offset.
+                    chars = source.get(..byte).map_or(0, |s| s.chars().count());
+                    scanned = byte;
+                }
+                HeadingRef {
+                    level: h.level,
+                    src_offset: h.src_offset,
+                    src_char: chars,
+                }
+            })
+            .collect()
     }
 }
 
@@ -197,6 +221,14 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
                     text.push_str(&t);
                 }
             }
+            // A setext heading's content can span source lines. The page shows a soft
+            // break as a space (TDD 2.20), and the renderer slugs either break as one,
+            // so the label reads as the page does and its slug is the heading's anchor.
+            Event::SoftBreak | Event::HardBreak => {
+                if let Some((_, _, ref mut text)) = current {
+                    text.push(' ');
+                }
+            }
             // Every other construct in pulldown-cmark's vocabulary contributes
             // nothing to a heading's label — spelled out per variant, not `_`, so a
             // parser upgrade that adds one fails to COMPILE here rather than
@@ -257,8 +289,6 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
             | Event::Html(_)
             | Event::InlineHtml(_)
             | Event::FootnoteReference(_)
-            | Event::SoftBreak
-            | Event::HardBreak
             | Event::Rule
             | Event::TaskListMarker(_) => {}
         }
@@ -268,6 +298,27 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_heading_index_carries_each_headings_character_offset() {
+        let src = "# Ä\n\nnaïve text — more\n\n## B\n\n### C\n";
+        let headings = super::extract_headings(src);
+        let index = super::HeadingRef::index(src, &headings);
+        assert_eq!(index.len(), 3);
+        for (h, r) in headings.iter().zip(&index) {
+            let byte = h.src_offset.raw();
+            assert_eq!(
+                r.src_char,
+                src[..byte].chars().count(),
+                "heading at byte {byte}"
+            );
+            assert_eq!((r.level, r.src_offset), (h.level, h.src_offset));
+        }
+        assert!(
+            index[1].src_char < index[1].src_offset.raw(),
+            "precondition: multibyte text precedes"
+        );
+    }
+
     use super::*;
 
     /// The sidebar label must match the rendered heading, including a fence that
@@ -405,5 +456,30 @@ mod tests {
             .collect();
         assert_eq!(ids.len(), 8, "fixture lists eight headings: {ids:?}");
         assert_eq!(section_fragments(&extract_headings(md)), ids);
+    }
+
+    /// A setext heading's content may span several source lines. A break between
+    /// them renders as a space (TDD 2.20), so the label reads as the page does and the
+    /// words do not run together — and the slug the outline derives from that label
+    /// is the anchor the export issues, which already read the break as a space.
+    #[test]
+    fn a_line_break_inside_a_heading_reads_as_a_space() {
+        // Under both line endings: a CRLF break is the same event with a two-byte
+        // range, and the label must not carry the `\r`.
+        let lf = "Foo\nbar\n===\n\nOne\\\ntwo\n---\n";
+        for md in [lf.to_string(), lf.replace('\n', "\r\n")] {
+            let labels: Vec<String> = extract_headings(&md).into_iter().map(|h| h.text).collect();
+            assert_eq!(labels, vec!["Foo bar", "One two"], "{md:?}");
+            let ids: Vec<String> = crate::export::doc::build(&md, &Default::default())
+                .blocks
+                .iter()
+                .filter_map(|b| match b {
+                    crate::export::Block::Heading { id, .. } => Some(format!("#{id}")),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(section_fragments(&extract_headings(&md)), ids);
+            assert_eq!(ids, vec!["#foo-bar", "#one-two"], "{md:?}");
+        }
     }
 }

@@ -45,6 +45,30 @@ pub(crate) fn set_huge_page_collapse_disabled(disabled: bool) {
     );
 }
 
+/// The address of `symbol` in the librsvg already loaded into this process, or `None`
+/// when none is. `RTLD_NOLOAD` makes the lookup load nothing: only a library some
+/// loader has already brought in answers, so this names the decoder in use, never one
+/// merely installed.
+#[cfg(test)]
+pub(crate) fn loaded_librsvg_symbol(symbol: &std::ffi::CStr) -> Option<*const libc::c_void> {
+    // SAFETY: dlopen with RTLD_NOLOAD returns a handle to an already-loaded image or
+    // NULL; dlsym reads that image's symbol table; dlclose drops only the reference
+    // this call took, and the loader that loaded librsvg keeps it mapped, so the
+    // address stays valid for the life of the process.
+    unsafe {
+        let handle = libc::dlopen(
+            c"librsvg-2.so.2".as_ptr(),
+            libc::RTLD_LAZY | libc::RTLD_NOLOAD,
+        );
+        if handle.is_null() {
+            return None;
+        }
+        let address = libc::dlsym(handle, symbol.as_ptr());
+        libc::dlclose(handle);
+        (!address.is_null()).then_some(address.cast_const())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

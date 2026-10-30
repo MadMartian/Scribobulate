@@ -8,7 +8,7 @@
 //! so it overlaps none of the block decorations in either direction.
 
 use super::geometry::{chip_rect, marker_row_y_h};
-use super::markers::group_by_line;
+use super::markernav::group_by_line;
 use super::paint::PaintCtx;
 use crate::decorplan::{offset_on_screen, row_on_screen};
 use gtk::graphene;

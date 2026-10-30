@@ -40,6 +40,9 @@ mod scope;
 /// Find in side-by-side mode follows the pane the reader is in (TDD 11.19).
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod splittests;
+/// The find bar's test helpers, one copy for `bartests` and `splittests`.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod testkit;
 
 use crate::widgets::table::cellattrs;
 pub(crate) use history::{row_label, FindHistory};
@@ -948,16 +951,21 @@ fn clear_preview_view_highlights(view: &CodePreviewView) {
 /// cell-precise two-step (`scroll_to_cell_offset`), so a match deep in a tall table
 /// — and every subsequent in-cell match — lands in view rather than stopping at the
 /// table top (GTK4Rs/AP-91).
-fn scroll_to_preview_hit(view: &CodePreviewView, hit: &PreviewHit) {
+///
+/// The preview is made to lead the split sync first: a Find run from the editor's
+/// last wheel scroll otherwise leaves the editor leading, and the sync scrolls the
+/// match straight back out of view (ScrAP-361).
+fn scroll_to_preview_hit(st: &TabState, view: &CodePreviewView, hit: &PreviewHit) {
+    use super::panescroll::{preview_to_cell, preview_to_offset};
     match hit {
-        PreviewHit::Body { start, .. } => view.scroll_to_buffer_offset(*start),
+        PreviewHit::Body { start, .. } => preview_to_offset(st, view, *start),
         PreviewHit::Cell {
             anchor_off, label, ..
-        } => view.scroll_to_cell_offset(*anchor_off, label),
+        } => preview_to_cell(st, view, *anchor_off, label),
         // The block's summary line is the nearest thing to the match that exists in
         // this render. Scrolling there first means the reader watches the block they
         // are about to be taken into, rather than the expansion happening off-screen.
-        PreviewHit::Hidden { summary_off, .. } => view.scroll_to_buffer_offset(*summary_off),
+        PreviewHit::Hidden { summary_off, .. } => preview_to_offset(st, view, *summary_off),
     }
 }
 
@@ -1171,7 +1179,7 @@ fn preview_find_step(
     let Some((summary_off, resume_off, key)) = reveal else {
         return;
     };
-    reveal_and_resume(window, view, summary_off, resume_off, key, text);
+    reveal_and_resume(window, &st, view, summary_off, resume_off, key, text);
 }
 
 /// After a collapsed block has been expanded for find, land on the first match at or
@@ -1227,7 +1235,7 @@ fn select_preview_hit_at_or_after(window: &ApplicationWindow, min_off: i32, text
     let Some((summary_off, resume_off, key)) = reveal.ok().flatten() else {
         return;
     };
-    reveal_and_resume(window, &view, summary_off, resume_off, key, text);
+    reveal_and_resume(window, &st, &view, summary_off, resume_off, key, text);
 }
 
 /// Mark `hits[idx]` (0-based) as the current match — highlights, scroll, cursor and
@@ -1265,7 +1273,7 @@ fn land_on_hit(
     }
     let next = idx as i32 + 1;
     apply_preview_highlights(view, targets, hits, next as usize);
-    scroll_to_preview_hit(view, &hits[idx]);
+    scroll_to_preview_hit(st, view, &hits[idx]);
     st.find_cursor.set(FindCursor::Preview {
         ordinal: next,
         at: preview_hit_position(&hits[idx]),
@@ -1282,6 +1290,7 @@ fn land_on_hit(
 /// arriving somewhere it never travelled.
 fn reveal_and_resume(
     window: &ApplicationWindow,
+    st: &TabState,
     view: &CodePreviewView,
     summary_off: i32,
     resume_off: i32,
@@ -1290,10 +1299,10 @@ fn reveal_and_resume(
 ) {
     // Scroll to the LINE, resume from past its LABEL — two offsets because they answer
     // two questions. The reader is shown the block; the search starts below the text
-    // they were already on (F-AP-B-104).
-    view.scroll_to_buffer_offset(summary_off);
+    // they were already on (F-AP-B-104). The preview leads, as for any hit.
+    super::panescroll::preview_to_offset(st, view, summary_off);
     let text = text.to_string();
-    super::foldreveal::reveal_folds(window, &[key], move |window| {
+    super::foldreveal::reveal_folds(window, &[key], move |window, _tab| {
         select_preview_hit_at_or_after(window, resume_off, &text);
     });
 }
@@ -2666,7 +2675,7 @@ mod gtk_integration_tests {
         // Open the find bar and seed the query the boundary re-sync reads.
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("cell");
+        super::testkit::type_query(&window, "cell");
 
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let view = super::find_target(&window).expect_preview();
@@ -2714,7 +2723,7 @@ mod gtk_integration_tests {
 
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("cell");
+        super::testkit::type_query(&window, "cell");
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let view = super::find_target(&window).expect_preview();
         assert!(super::highlight_preview_literal(&st.preview_find, &view, "cell") >= 1);
@@ -2828,7 +2837,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
 
         let view = super::find_target(&window).expect_preview();
         super::highlight_preview_literal(&st.preview_find, &view, "needle");
@@ -2891,7 +2900,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
 
         let view = super::find_target(&window).expect_preview();
         super::highlight_preview_literal(&st.preview_find, &view, "needle");
@@ -2946,7 +2955,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
 
         let view = super::find_target(&window).expect_preview();
         assert_eq!(
@@ -3006,7 +3015,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
         let view = super::find_target(&window).expect_preview();
         super::highlight_preview_literal(&st.preview_find, &view, "needle");
 
@@ -3084,7 +3093,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
         let view = super::find_target(&window).expect_preview();
         super::highlight_preview_literal(&st.preview_find, &view, "needle");
 
@@ -3165,7 +3174,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
         let view = super::find_target(&window).expect_preview();
         super::highlight_preview_literal(&st.preview_find, &view, "needle");
         crate::app::re_render_all_windows(&app);
@@ -3217,7 +3226,7 @@ mod gtk_integration_tests {
         let st = crate::winstate::state(&window).expect("the window has an active tab");
         let chrome = crate::winstate::chrome(&window).expect("window chrome");
         chrome.find_bar_revealer.set_reveal_child(true);
-        chrome.find_entry.set_text("needle");
+        super::testkit::type_query(&window, "needle");
         crate::app::re_render_all_windows(&app);
         crate::testpump::drain_for(
             crate::testpump::Clock::Idle,

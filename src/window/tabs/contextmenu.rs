@@ -117,43 +117,28 @@ fn show_tab_context_menu(
     x: f64,
     y: f64,
 ) {
-    let popover = gtk::Popover::new();
-    popover.set_has_arrow(false);
-    popover.set_parent(&tab_view.bar_widget());
-    popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+    let menu = crate::window::contextmenu::ContextMenu::new();
+    let popover = menu.popover.clone();
 
-    // `marked` is a `_`-marked label; `access_markup` renders it with the access
-    // char underlined (a plain popover never gets mnemonics-visible — GTK4Rs/T-1). "Close Tab" reuses the File-menu mark so its `C` matches; the other two
-    // are context-only but keep the menu-bar letters (Close Other = O, Move = M).
-    // Bare-letter access keys (single flat page, so an always-true gate) — the same
-    // Capture/Local ShortcutController recipe as the pane context menu (GTK4Rs/T-1).
-    let key_controller = gtk::ShortcutController::new();
-    key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
-    key_controller.set_scope(gtk::ShortcutScope::Local);
-
+    // "Close Tab" reuses the File-menu mark so its `C` matches; the other two are
+    // context-only but keep the menu-bar letters (Close Other = O, Move = M). One flat
+    // page, so every access key has an always-true gate.
+    //
     // Building the button and registering its access key are ONE call, taking the item
     // rather than a string. Two things follow, and both were live defects: the label is
     // spelled once instead of twice per item, and — because `add_key` was a silent no-op
     // when `access_markup` found no `_` — a label edited to drop its marker can no longer
-    // lose its access key with neither a warning nor a failing test.
-    let make_btn = {
-        let ctrl = key_controller.clone();
-        move |item: TabMenuItem| -> gtk::Button {
-            let marked = item.label();
-            let lbl = gtk::Label::new(None);
-            lbl.set_markup(&crate::app::access_markup(marked).1);
-            lbl.set_halign(gtk::Align::Start);
-            let btn = gtk::Button::new();
-            btn.set_child(Some(&lbl));
-            btn.add_css_class("flat");
-            btn.set_halign(gtk::Align::Fill);
-            if let Some(ch) = crate::app::access_markup(marked).0 {
-                if let Some(sc) = crate::app::access_shortcut(&btn, ch, || true) {
-                    ctrl.add_shortcut(sc);
-                }
-            }
-            btn
-        }
+    // lose its access key with neither a warning nor a failing test. The registration
+    // itself is `ContextMenu::add_access_key`, shared with the other two menus.
+    let make_btn = |item: TabMenuItem| -> gtk::Button {
+        let lbl = gtk::Label::new(None);
+        lbl.set_halign(gtk::Align::Start);
+        let btn = gtk::Button::new();
+        btn.set_child(Some(&lbl));
+        btn.add_css_class("flat");
+        btn.set_halign(gtk::Align::Fill);
+        lbl.set_markup(&menu.add_access_key(&btn, item.label(), || true));
+        btn
     };
 
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -163,6 +148,13 @@ fn show_tab_context_menu(
     // does not merely go unchecked by the mnemonics guard — it does not RENDER, which is
     // the one kind of drift that reports itself. Identity, label, access key and
     // grouping are shared; sensitivity and the click handler stay per-item.
+    //
+    // Every row holds the tab WEAKLY. A tab reaches its window's chrome, and the chrome
+    // the tab bar this menu hangs off, so a strong capture is the cycle
+    // `bar → menu → row → closure → tab → chrome → bar`. A menu closed normally is
+    // unparented and breaks it; a window closed with the menu open never emits `closed`
+    // on X11, so the bar, the menu and the whole chrome outlived the window (MEASURED,
+    // `closing_the_window_with_the_tab_menu_open_releases_the_menu`; GTK4Rs/AP-63).
     let has_others = winstate::tabs_for_window(window)
         .iter()
         .any(|t| t.id != tab.id);
@@ -185,7 +177,7 @@ fn show_tab_context_menu(
                     popover,
                     #[weak(rename_to = w)]
                     window,
-                    #[strong]
+                    #[weak]
                     tab,
                     move |_| {
                         dismiss_context_popover(&po);
@@ -201,7 +193,7 @@ fn show_tab_context_menu(
                     popover,
                     #[weak(rename_to = w)]
                     window,
-                    #[strong]
+                    #[weak]
                     tab,
                     move |_| {
                         dismiss_context_popover(&po);
@@ -215,7 +207,7 @@ fn show_tab_context_menu(
                     popover,
                     #[weak(rename_to = w)]
                     window,
-                    #[strong]
+                    #[weak]
                     tab,
                     move |_| {
                         dismiss_context_popover(&po);
@@ -230,7 +222,7 @@ fn show_tab_context_menu(
                     popover,
                     #[weak(rename_to = w)]
                     window,
-                    #[strong]
+                    #[weak]
                     tab,
                     move |_| {
                         dismiss_context_popover(&po);
@@ -295,7 +287,7 @@ fn show_tab_context_menu(
                     popover,
                     #[weak(rename_to = w)]
                     window,
-                    #[strong]
+                    #[weak]
                     tab,
                     move |_| {
                         dismiss_context_popover(&po);
@@ -312,7 +304,7 @@ fn show_tab_context_menu(
                     popover,
                     #[weak(rename_to = w)]
                     window,
-                    #[strong]
+                    #[weak]
                     tab,
                     move |_| {
                         dismiss_context_popover(&po);
@@ -327,7 +319,7 @@ fn show_tab_context_menu(
                     popover,
                     #[weak(rename_to = w)]
                     window,
-                    #[strong]
+                    #[weak]
                     tab,
                     move |_| {
                         dismiss_context_popover(&po);
@@ -342,7 +334,7 @@ fn show_tab_context_menu(
                     popover,
                     #[weak(rename_to = w)]
                     window,
-                    #[strong]
+                    #[weak]
                     tab,
                     move |_| {
                         dismiss_context_popover(&po);
@@ -358,10 +350,7 @@ fn show_tab_context_menu(
     }
 
     // Scrolls rather than self-dismissing where the screen cannot fit it (TDD 9.39).
-    crate::window::contextmenu::install_menu_body(&popover, &box_);
-    popover.add_controller(key_controller);
-    popover.connect_closed(|p| p.unparent());
-    popover.popup();
+    menu.open(&tab_view.bar_widget(), (x, y), &box_, |_| {});
 }
 
 /// Drive `win.save` for `tab` — same focus-first requirement as
@@ -716,7 +705,8 @@ mod gtk_integration_tests {
     /// TDD 9.39: the tab menu takes the same scrolling body as the document menu, so
     /// its minimum height stops being its full height and GTK ≥ 4.14 cannot close it
     /// on the frame it opens wherever the screen cannot fit it. The effect itself is
-    /// tested once, on `install_menu_body`; this pins the tab menu to it.
+    /// tested once, on `install_menu_body` (which `ContextMenu::open` installs); this
+    /// pins the tab menu to it.
     #[gtktest::test]
     fn the_tab_menu_scrolls_rather_than_closing_where_the_screen_cannot_fit_it() {
         let app = gtk::Application::new(
@@ -744,6 +734,96 @@ mod gtk_integration_tests {
              menu closes it the frame it opens"
         );
         popover.popdown();
+        window.destroy();
+    }
+
+    /// **Closing the window with the tab menu open releases the menu** — the guard the
+    /// three menus share (`contextmenu::assert_closing_the_window_releases`). This menu
+    /// is released only because `TabBar`'s `dispose` unparents every child, and that
+    /// dispose runs only if nothing in the menu holds the bar alive. Written, it found
+    /// exactly that: every row strong-captured the tab, which reaches the bar.
+    ///
+    /// Mutation checks: emptying the tab bar's `dispose` sweep fails the release
+    /// assertion, and restoring a `#[strong] tab` capture on any one row fails the
+    /// host assertion (the bar outlives its window).
+    #[gtktest::test]
+    fn closing_the_window_with_the_tab_menu_open_releases_the_menu() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.tabcontextmenu.close"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let window = crate::window::new_window(&app, "IT", "# A", None);
+        window.present();
+        // Scoped: the tab and the chrome hold the tab bar strongly, and a reference the
+        // test keeps would hold the menu's host alive past the close.
+        let popover = {
+            let tab = state(&window).expect("state registered after new_window");
+            let chrome = winstate::chrome(&window).expect("chrome registered");
+            show_tab_context_menu(&window, &chrome.tabs, &tab, 10.0, 10.0);
+            let bar = chrome.tabs.bar_widget();
+            std::iter::successors(bar.first_child(), |w| w.next_sibling())
+                .find_map(|w| w.downcast::<gtk::Popover>().ok())
+                .expect("the tab menu is parented to the tab bar")
+        };
+        crate::window::contextmenu::assert_closing_the_window_releases(
+            window,
+            popover,
+            "the tab menu",
+        );
+    }
+
+    /// The tab menu is released after its `closed` emission has unwound, never inside
+    /// it: on GDK-Win32 `closed` can fire inside GTK's own unmap of the popover, where an
+    /// unparent unrealizes the surface GDK is still hiding (GTK4Rs/AP-30). A STATE guard,
+    /// as for the toolbar menu, because X11 queues that emission and cannot stage the
+    /// fault. The menu is presented and shown first, so the close is a real one.
+    ///
+    /// Mutation check: an `on_closed` of `|p| p.unparent()` fails the first assertion.
+    #[gtktest::test]
+    fn the_closed_tab_menu_is_unparented_after_its_close_not_during_it() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.tabcontextmenu.release"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let window = crate::window::new_window(&app, "IT", "# A", None);
+        window.present();
+        let tab = state(&window).expect("state registered after new_window");
+        let chrome = winstate::chrome(&window).expect("chrome registered");
+        show_tab_context_menu(&window, &chrome.tabs, &tab, 10.0, 10.0);
+        let bar = chrome.tabs.bar_widget();
+        let popover = std::iter::successors(bar.first_child(), |w| w.next_sibling())
+            .find_map(|w| w.downcast::<gtk::Popover>().ok())
+            .expect("the tab menu is parented to the tab bar");
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            crate::testpump::TOOLTIP_HOVER_DRAIN,
+        );
+        assert!(popover.is_visible(), "precondition: the menu is open");
+
+        let parented_in_closed = std::rc::Rc::new(std::cell::Cell::new(None));
+        popover.connect_closed({
+            let seen = std::rc::Rc::clone(&parented_in_closed);
+            // Connected after the menu's own handler, so it runs after it.
+            move |p| seen.set(Some(p.parent().is_some()))
+        });
+        popover.popdown();
+        assert_eq!(
+            parented_in_closed.get(),
+            Some(true),
+            "the tab menu's `closed` handler must not unparent it inside the emission"
+        );
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            crate::widgets::TOOLTIP_HOVER_DRAIN + std::time::Duration::from_millis(200),
+        );
+        assert!(
+            popover.parent().is_none(),
+            "the closed menu is released afterwards"
+        );
         window.destroy();
     }
 }

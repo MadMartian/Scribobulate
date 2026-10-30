@@ -31,6 +31,8 @@ mod cells;
 mod css;
 mod interactions;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
+mod linebreaks;
+#[cfg(all(test, feature = "gtk-integration-tests"))]
 mod markertests;
 pub(crate) mod qdata;
 #[cfg(all(test, feature = "gtk-integration-tests"))]

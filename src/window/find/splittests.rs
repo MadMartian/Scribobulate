@@ -4,7 +4,9 @@
 //! file in the tree and these drive the bar and the focus, not the search.
 
 use super::super::testkit::test_app;
+use super::testkit::{search, type_query, until_readout};
 use super::FindCursor;
+use crate::testpump::Clock;
 use crate::winstate::{chrome, state, FocusedPane};
 use gtk::prelude::*;
 use gtk::ApplicationWindow;
@@ -27,23 +29,27 @@ fn fixture() -> String {
 const EDITOR_COUNT: i32 = 4;
 const PREVIEW_COUNT: i32 = 3;
 
-fn settle() {
-    crate::testpump::drain_for(
-        crate::testpump::Clock::Frame,
-        std::time::Duration::from_millis(400),
-    );
+/// A presented split window over the fixture, laid out: both panes have a viewport.
+fn split_window(suffix: &str) -> ApplicationWindow {
+    split_window_over(suffix, &fixture())
 }
 
-/// A presented split window over the fixture, laid out.
-fn split_window(suffix: &str) -> ApplicationWindow {
+/// [`split_window`] over the Markdown `md`.
+fn split_window_over(suffix: &str, md: &str) -> ApplicationWindow {
     let app = test_app(&format!(
         "com.extollit.scribobulate.integrationtest.splitfind{suffix}"
     ));
-    let win = crate::window::new_window(&app, "IT-splitfind", &fixture(), None);
+    let win = crate::window::new_window(&app, "IT-splitfind", md, None);
     crate::window::change_action_state(&win, "view-mode", &"split".to_variant());
     win.set_default_size(1000, 600);
     win.present();
-    settle();
+    let editor = state(&win).expect("active tab").editor.clone();
+    let view = preview_view(&win);
+    crate::testpump::until(
+        crate::testpump::Clock::Frame,
+        "both split panes to be laid out",
+        || editor.visible_rect().height() > 0 && view.visible_rect().height() > 0,
+    );
     win
 }
 
@@ -52,33 +58,18 @@ fn preview_view(win: &ApplicationWindow) -> crate::codeview::CodePreviewView {
 }
 
 /// Give `widget` the keyboard focus as a click would, from a cleared focus so the
-/// grab is a real focus change the gate is notified of.
-fn focus(win: &ApplicationWindow, widget: &impl IsA<gtk::Widget>) {
+/// grab is a real focus change the gate is notified of, and return once the window
+/// records `pane` as the focused one. What the focus change retargets (the readout,
+/// the highlights) is waited on by the caller, through the readout.
+fn focus(win: &ApplicationWindow, widget: &impl IsA<gtk::Widget>, pane: FocusedPane) {
     GtkWindowExt::set_focus(win, None::<&gtk::Widget>);
     widget.grab_focus();
-    settle();
-}
-
-/// Open the bar the way the reader does and type `query`, past the entry's debounce.
-fn search(win: &ApplicationWindow, query: &str) {
-    crate::window::actions::simple_action(win, "find")
-        .expect("win.find is registered")
-        .activate(None);
-    state(win)
-        .expect("active tab")
-        .chrome()
-        .find_entry
-        .set_text(query);
-    settle();
-}
-
-fn readout(win: &ApplicationWindow) -> String {
-    state(win)
-        .expect("active tab")
-        .chrome()
-        .match_count_label
-        .text()
-        .to_string()
+    let ch = chrome(win).expect("window chrome");
+    crate::testpump::until(
+        crate::testpump::Clock::Idle,
+        &format!("the window to record {pane:?} as the focused pane"),
+        || ch.focused_pane.get() == pane,
+    );
 }
 
 fn preview_highlighted(view: &crate::codeview::CodePreviewView) -> bool {
@@ -116,13 +107,8 @@ fn on_screen(view: &crate::codeview::CodePreviewView, at: i32) -> bool {
 fn find_in_split_searches_and_scrolls_the_focused_preview() {
     let win = split_window("preview");
     let view = preview_view(&win);
-    focus(&win, &view);
+    focus(&win, &view, FocusedPane::Preview);
     let ch = chrome(&win).expect("window chrome");
-    assert_eq!(
-        ch.focused_pane.get(),
-        FocusedPane::Preview,
-        "precondition: the preview holds the focus"
-    );
 
     search(&win, "alpha");
     assert_eq!(
@@ -130,10 +116,10 @@ fn find_in_split_searches_and_scrolls_the_focused_preview() {
         FocusedPane::Preview,
         "precondition: the find field taking focus leaves the preview the focused pane"
     );
-    assert_eq!(
-        readout(&win),
-        readout_for_total(PREVIEW_COUNT),
-        "the readout counts the preview's matches, not the editor's {EDITOR_COUNT}"
+    until_readout(
+        &win,
+        &readout_for_total(PREVIEW_COUNT),
+        &format!("the readout to count the preview's matches, not the editor's {EDITOR_COUNT}"),
     );
     assert!(
         preview_highlighted(&view),
@@ -200,16 +186,15 @@ fn moving_focus_between_split_panes_moves_the_open_search() {
     let win = split_window("retarget");
     let view = preview_view(&win);
     let st = state(&win).expect("active tab");
-    focus(&win, &st.editor);
+    focus(&win, &st.editor, FocusedPane::Editor);
     crate::window::actions::simple_action(&win, "find-replace")
         .expect("win.find-replace is registered")
         .activate(None);
-    st.chrome().find_entry.set_text("alpha");
-    settle();
-    crate::testpump::until(
-        crate::testpump::Clock::Idle,
+    type_query(&win, "alpha");
+    until_readout(
+        &win,
+        &readout_for_total(EDITOR_COUNT),
         "the editor's engine to finish counting",
-        || readout(&win) == readout_for_total(EDITOR_COUNT),
     );
     assert!(
         !preview_highlighted(&view),
@@ -220,11 +205,11 @@ fn moving_focus_between_split_panes_moves_the_open_search() {
         "replace works in the editor"
     );
 
-    focus(&win, &view);
-    assert_eq!(
-        readout(&win),
-        readout_for_total(PREVIEW_COUNT),
-        "focusing the preview re-counts in the preview"
+    focus(&win, &view, FocusedPane::Preview);
+    until_readout(
+        &win,
+        &readout_for_total(PREVIEW_COUNT),
+        "focusing the preview to re-count in the preview",
     );
     assert!(preview_highlighted(&view), "the preview is now highlighted");
     assert!(
@@ -236,11 +221,11 @@ fn moving_focus_between_split_panes_moves_the_open_search() {
         "the preview is read-only, so replace is unavailable while it is searched"
     );
 
-    focus(&win, &st.editor);
-    crate::testpump::until(
-        crate::testpump::Clock::Idle,
+    focus(&win, &st.editor, FocusedPane::Editor);
+    until_readout(
+        &win,
+        &readout_for_total(EDITOR_COUNT),
         "the readout to return to the editor's count",
-        || readout(&win) == readout_for_total(EDITOR_COUNT),
     );
     assert!(
         !preview_highlighted(&view),
@@ -275,30 +260,44 @@ fn reopening_the_bar_in_split_describes_the_pane_now_searched() {
             .chrome()
             .find_entry
             .emit_by_name::<()>("stop-search", &[]);
-        settle();
+        let bar = state(w)
+            .expect("active tab")
+            .chrome()
+            .find_bar_revealer
+            .clone();
+        crate::testpump::until(Clock::Idle, "the find bar to close", || {
+            !bar.reveals_child()
+        });
     };
     let reopen = |w: &ApplicationWindow| {
         crate::window::actions::simple_action(w, "find")
             .expect("win.find is registered")
             .activate(None);
-        settle();
+        let bar = state(w)
+            .expect("active tab")
+            .chrome()
+            .find_bar_revealer
+            .clone();
+        crate::testpump::until(Clock::Idle, "the find bar to reopen", || {
+            bar.reveals_child()
+        });
     };
 
-    focus(&win, &view);
+    focus(&win, &view, FocusedPane::Preview);
     search(&win, "alpha");
-    assert_eq!(
-        readout(&win),
-        readout_for_total(PREVIEW_COUNT),
-        "precondition: the preview search counts the preview"
+    until_readout(
+        &win,
+        &readout_for_total(PREVIEW_COUNT),
+        "precondition: the preview search to count the preview",
     );
     close(&win);
 
-    focus(&win, &st.editor);
+    focus(&win, &st.editor, FocusedPane::Editor);
     reopen(&win);
-    assert_eq!(
-        readout(&win),
-        readout_for_total(EDITOR_COUNT),
-        "reopened from the editor, the readout is the editor's count"
+    until_readout(
+        &win,
+        &readout_for_total(EDITOR_COUNT),
+        "reopened from the editor, the readout to be the editor's count",
     );
     assert!(
         st.search_context.is_highlight(),
@@ -306,12 +305,104 @@ fn reopening_the_bar_in_split_describes_the_pane_now_searched() {
     );
     close(&win);
 
-    focus(&win, &view);
+    focus(&win, &view, FocusedPane::Preview);
     reopen(&win);
+    until_readout(
+        &win,
+        &readout_for_total(PREVIEW_COUNT),
+        "reopened from the preview, the readout to be the preview's count",
+    );
     assert!(
         !st.search_context.is_highlight(),
         "reopened from the preview, the editor keeps no highlight"
     );
-    assert_eq!(readout(&win), readout_for_total(PREVIEW_COUNT));
+    win.destroy();
+}
+
+/// TDD 11.19 with the lead elsewhere: a wheel over the editor makes it lead the split
+/// sync without moving the focus, so a Find from the focused preview must take the lead
+/// back before scrolling, or the next sync frame puts the editor's position back and
+/// scrolls the match away (ScrAP-361).
+///
+/// Mutation check: dropping the `lead` call from `panescroll::preview_to_offset`, the route
+/// `scroll_to_preview_hit` takes for a body hit, fails the driver assertion here.
+#[gtktest::test]
+fn find_in_the_preview_takes_the_lead_from_a_wheeled_editor() {
+    let win = split_window("preview_lead");
+    let view = preview_view(&win);
+    focus(&win, &view, FocusedPane::Preview);
+    let st = state(&win).expect("active tab");
+    // What a wheel over the editor does: lead without taking focus.
+    st.scroll.driver.set(crate::winstate::ScrollDriver::Editor);
+
+    search(&win, "alpha");
+    super::find_step(&win, &st.search_context, super::SearchDir::Forward);
+    let FindCursor::Preview { at, .. } = st.find_cursor.get() else {
+        panic!("precondition: Find stepped the focused preview");
+    };
+    assert_eq!(
+        st.scroll.driver.get(),
+        crate::winstate::ScrollDriver::Preview,
+        "the preview's match scroll must lead the split sync"
+    );
+    crate::testpump::until_for(
+        crate::testpump::Clock::Frame,
+        std::time::Duration::from_secs(5),
+        "the match to stay in view after the sync has run",
+        || on_screen(&view, at),
+    );
+    win.destroy();
+}
+
+/// The same with the match in a table cell, which the preview scrolls to by another
+/// route (`panescroll::preview_to_cell`, the cell-precise two-step), so the lead it
+/// takes is guarded on its own.
+///
+/// Mutation check: dropping the `lead` call from `panescroll::preview_to_cell` fails
+/// the driver assertion here, and the body-hit twin above stays green.
+#[gtktest::test]
+fn find_in_the_preview_takes_the_lead_from_a_wheeled_editor_for_a_cell_hit() {
+    let mut md = String::from("# Split find in a cell\n\n");
+    for i in 0..600 {
+        if i == 300 {
+            md.push_str("| Key | Value |\n|---|---|\n| row | holds omega here |\n\n");
+        } else {
+            md.push_str(&format!("Paragraph {i} is filler.\n\n"));
+        }
+    }
+    let win = split_window_over("preview_lead_cell", &md);
+    let view = preview_view(&win);
+    focus(&win, &view, FocusedPane::Preview);
+    let st = state(&win).expect("active tab");
+    // What a wheel over the editor does: lead without taking focus.
+    st.scroll.driver.set(crate::winstate::ScrollDriver::Editor);
+
+    search(&win, "omega");
+    super::find_step(&win, &st.search_context, super::SearchDir::Forward);
+    let FindCursor::Preview { at, .. } = st.find_cursor.get() else {
+        panic!("precondition: Find stepped the focused preview");
+    };
+    assert!(
+        view.buffer().iter_at_offset(at).child_anchor().is_some(),
+        "precondition: the hit is in a table cell, so the cell route scrolled to it"
+    );
+    assert_eq!(
+        st.scroll.driver.get(),
+        crate::winstate::ScrollDriver::Preview,
+        "the preview's cell-match scroll must lead the split sync"
+    );
+    // The cell route scrolls the matched ROW to the top, so the table's own line
+    // starts just above the viewport: the test is that the line is in view at all.
+    let table_in_view = || {
+        let (y, h) = view.line_yrange(&view.buffer().iter_at_offset(at));
+        let rect = view.visible_rect();
+        rect.height() > 0 && y + h > rect.y() && y < rect.y() + rect.height()
+    };
+    crate::testpump::until_for(
+        crate::testpump::Clock::Frame,
+        std::time::Duration::from_secs(5),
+        "the matched cell's table to be in view after the sync has run",
+        table_in_view,
+    );
     win.destroy();
 }

@@ -146,7 +146,7 @@ mod gtk_integration_tests {
     /// closed, and reports a theme image in the window in front.
     #[gtktest::test]
     fn the_blocked_image_notice_follows_the_document() {
-        if !crate::imagedecode::SCREENS_XINCLUDE {
+        if !crate::imagedecode::screens_xinclude() {
             println!("SKIPPED [2.23c]: this platform does not screen SVG XInclude");
             return;
         }
@@ -191,6 +191,18 @@ mod gtk_integration_tests {
         report_to(Some(&second));
         assert!(
             footer(&second).starts_with("Blocked theme image rule.svg: "),
+            "{}",
+            footer(&second)
+        );
+
+        // A theme image and the front document's image in one flush, in that window:
+        // one notice naming both, or the second pushed would hide the first throughout.
+        let other = state(&second).expect("a front tab").id;
+        report_shown_refusal(RefusalTarget::Theme, &refuse("dot.png"));
+        report_shown_refusal(doc(other), &refuse("o.svg"));
+        report_to(Some(&second));
+        assert!(
+            footer(&second).starts_with("Blocked image o.svg and theme image dot.png: "),
             "{}",
             footer(&second)
         );
