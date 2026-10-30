@@ -64,13 +64,15 @@ use std::ffi::c_void;
 
 use super::CloseHandle;
 
-/// This process's working set in bytes — the Windows body of
-/// [`crate::memgate::footprint::current`]. `WorkingSetSize`, never named RSS.
+/// This process's private committed bytes — the Windows body of
+/// [`crate::memgate::footprint::current`]. `PrivateUsage`, never named RSS, and not the
+/// working set: the working set also moves when Windows trims pages and the process
+/// faults them back, which no allocation caused (see `memgate::footprint`).
 /// The FFI it needs is test-only so a production Windows build does not carry
 /// an unused `psapi` import (clippy `-D warnings`).
 #[cfg(test)]
 #[repr(C)]
-struct ProcessMemoryCounters {
+struct ProcessMemoryCountersEx {
     cb: u32,
     page_fault_count: u32,
     peak_working_set_size: usize,
@@ -81,6 +83,7 @@ struct ProcessMemoryCounters {
     quota_non_paged_pool_usage: usize,
     pagefile_usage: usize,
     peak_pagefile_usage: usize,
+    private_usage: usize,
 }
 
 #[cfg(test)]
@@ -94,15 +97,15 @@ extern "system" {
 extern "system" {
     fn GetProcessMemoryInfo(
         process: *mut c_void,
-        counters: *mut ProcessMemoryCounters,
+        counters: *mut ProcessMemoryCountersEx,
         cb: u32,
     ) -> i32;
 }
 
 #[cfg(test)]
-pub(crate) fn current_working_set_bytes() -> Option<u64> {
-    let mut counters = ProcessMemoryCounters {
-        cb: std::mem::size_of::<ProcessMemoryCounters>() as u32,
+pub(crate) fn current_private_bytes() -> Option<u64> {
+    let mut counters = ProcessMemoryCountersEx {
+        cb: std::mem::size_of::<ProcessMemoryCountersEx>() as u32,
         page_fault_count: 0,
         peak_working_set_size: 0,
         working_set_size: 0,
@@ -112,9 +115,11 @@ pub(crate) fn current_working_set_bytes() -> Option<u64> {
         quota_non_paged_pool_usage: 0,
         pagefile_usage: 0,
         peak_pagefile_usage: 0,
+        private_usage: 0,
     };
     // SAFETY: `GetCurrentProcess` returns a pseudo-handle that must not be closed;
-    // `counters.cb` is the size of this struct, which is what the API reads first.
+    // `counters.cb` is the size of this struct, which is what the API reads first, and
+    // the `_EX` size is what makes it fill `PrivateUsage`.
     let ok = unsafe {
         GetProcessMemoryInfo(
             GetCurrentProcess(),
@@ -125,7 +130,7 @@ pub(crate) fn current_working_set_bytes() -> Option<u64> {
     if ok == 0 {
         None
     } else {
-        Some(counters.working_set_size as u64)
+        Some(counters.private_usage as u64)
     }
 }
 

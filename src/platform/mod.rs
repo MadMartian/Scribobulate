@@ -296,7 +296,7 @@ pub(crate) mod testing {
 // ── this process's memory footprint (the memory gates' instrument) ──────────────────
 
 /// This process's memory footprint in bytes, by each platform's own measure (Linux
-/// VmRSS, macOS physical footprint, Windows working set), or `None` where there is no
+/// VmRSS, macOS physical footprint, Windows private committed bytes), or `None` where there is no
 /// reader. Test-only: the memory gates are its one caller.
 #[cfg(test)]
 pub(crate) fn process_footprint_bytes() -> Option<u64> {
@@ -315,7 +315,7 @@ fn platform_process_footprint_bytes() -> Option<u64> {
 
 #[cfg(all(test, windows))]
 fn platform_process_footprint_bytes() -> Option<u64> {
-    win32::process::current_working_set_bytes()
+    win32::process::current_private_bytes()
 }
 
 #[cfg(all(test, not(any(target_os = "linux", target_os = "macos", windows))))]
