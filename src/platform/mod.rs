@@ -384,8 +384,10 @@ pub(crate) fn svg_decoder_is_delivered_fixed() -> bool {
 const LIBRSVG_FLOOR: &str = env!("SCRIB_LIBRSVG_FLOOR");
 
 /// A `major.minor.micro` version as numbers, so 2.63.10 sorts above 2.63.2.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS keeps the bundle's own proof
 type Version = (u32, u32, u32);
 
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS keeps the bundle's own proof
 fn parse_version(text: &str) -> Option<Version> {
     let mut parts = text.trim().split('.').map(|p| p.parse::<u32>().ok());
     let version = (parts.next()??, parts.next()??, parts.next()??);
@@ -394,10 +396,12 @@ fn parse_version(text: &str) -> Option<Version> {
 
 /// Whether every version in `versions` is at or above `floor`. An empty list, a version
 /// that could not be read, is not.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS keeps the bundle's own proof
 fn all_meet_floor(versions: &[Version], floor: Version) -> bool {
     !versions.is_empty() && versions.iter().all(|&v| v >= floor)
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS keeps the bundle's own proof
 fn describe(versions: &[Version]) -> String {
     match versions {
         [] => "a librsvg whose version could not be read".to_owned(),
@@ -409,6 +413,7 @@ fn describe(versions: &[Version]) -> String {
     }
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS keeps the bundle's own proof
 fn judge(versions: &[Version]) -> (bool, String) {
     let floor = parse_version(LIBRSVG_FLOOR).expect("build.rs checked the floor's shape");
     (all_meet_floor(versions, floor), describe(versions))
