@@ -1084,6 +1084,11 @@
 - **And given** the same setup
 - **When** the user drags a tab and drops it back onto its OWN window's strip
 - **Then** nothing crosses window boundaries — that drag reorders in place (15.6) instead
+- **And given** the same setup
+- **When** the user drops the dragged tab anywhere else on the other window — its editor, its preview, its sidebar or its toolbar — rather than exactly on its tab strip
+- **Then** the tab moves into that window exactly as if it had been dropped on the strip; no new window opens
+- **And when** the user drops a tab anywhere on its OWN window off the strip
+- **Then** the tab stays in that window and no new window opens; only a drop outside every Scribobulate window opens one (7.10)
 
 > Formerly required holding Shift to cross a window boundary (a plain drag
 > reordered in-window only); widgets/tab's custom tab strip retired

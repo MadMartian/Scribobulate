@@ -422,39 +422,60 @@ pub(crate) fn wire_tab_bar_dnd(window: &ApplicationWindow, tab_view: &TabView) {
         let win = window.downgrade();
         let wtv = tab_view.downgrade();
         target.connect_drop(move |_t, value, _x, _y| {
-            let Some(tv) = wtv.upgrade() else {
+            let (Some(tv), Some(dest)) = (wtv.upgrade(), win.upgrade()) else {
                 return false;
             };
-            let Some(dest) = win.upgrade() else {
-                return false;
-            };
-            let Some(dest_chrome) = winstate::chrome(&dest) else {
-                return false;
-            };
-            let Ok(raw_id) = value.get::<u64>() else {
-                return false;
-            };
-            let tab_id = winstate::TabId::from_raw(raw_id);
-            let Some(tab) = winstate::tab_by_id(tab_id) else {
-                return false;
-            };
-            let source_chrome = tab.chrome();
-            if Rc::ptr_eq(&source_chrome, &dest_chrome) {
-                // Dropped back onto its own window's strip — `preview_reorder`
-                // already left it in the right order; just make sure the
-                // animation runs to completion.
-                tv.settle_reorder();
-                return true;
-            }
-            move_tab_into_window(&tab, &dest_chrome);
-            // The tab-arrival callback (`wire_tab_arrival`) now owns every
-            // remaining step — registry rehome, titles, and closing an
-            // emptied source window — deferred exactly as it already was for
-            // the explicit "Move Tab to New Window" action this reuses.
-            true
+            value
+                .get::<u64>()
+                .is_ok_and(|raw| take_dropped_tab(&dest, &tv, winstate::TabId::from_raw(raw)))
         });
     }
     bar.add_controller(target);
+    wire_window_tab_drop(window, tab_view);
+}
+
+/// A tab dropped anywhere on a window, not only on its tab strip, joins that window
+/// (TDD 7.6). The strip's own target (above) is deeper in the widget tree, so a drop on
+/// the strip is the strip's and this one sees every other drop on the window: the
+/// editor, the preview, the sidebar, the toolbar. The document views' own drop targets
+/// take text, never this `u64` tab payload, so they decline it and leave it to this one
+/// (GTK4Rs/AP-283: a target that declines is transparent).
+///
+/// Without it a tab released over another window's document pane ended the drag with no
+/// target, and `connect_drag_cancel` popped it out into a NEW window, which on Windows
+/// opens at the cascade position, over the window the user aimed at.
+fn wire_window_tab_drop(window: &ApplicationWindow, tab_view: &TabView) {
+    let target = gtk::DropTarget::new(u64::static_type(), gdk::DragAction::MOVE);
+    target.set_preload(true);
+    let win = window.downgrade();
+    let wtv = tab_view.downgrade();
+    target.connect_drop(move |_t, value, _x, _y| {
+        let (Some(tv), Some(dest)) = (wtv.upgrade(), win.upgrade()) else {
+            return false;
+        };
+        value
+            .get::<u64>()
+            .is_ok_and(|raw| take_dropped_tab(&dest, &tv, winstate::TabId::from_raw(raw)))
+    });
+    window.add_controller(target);
+}
+
+/// Take the dragged tab `id` into `dest`, whose strip is `tv`: the one drop decision the
+/// strip and the rest of the window share. A tab of `dest` itself stays where it is (the
+/// strip's live reorder has already placed it); a tab of another window moves here.
+/// `false` only for a payload that names no open tab.
+fn take_dropped_tab(dest: &ApplicationWindow, tv: &TabView, id: winstate::TabId) -> bool {
+    let (Some(dest_chrome), Some(tab)) = (winstate::chrome(dest), winstate::tab_by_id(id)) else {
+        return false;
+    };
+    if Rc::ptr_eq(&tab.chrome(), &dest_chrome) {
+        tv.settle_reorder();
+        return true;
+    }
+    // `wire_tab_arrival` owns every later step: registry rehome, titles, and closing
+    // an emptied source window.
+    move_tab_into_window(&tab, &dest_chrome);
+    true
 }
 
 /// Hand `tab` from its current window's strip to `dest_chrome`'s — the drop half of
@@ -646,6 +667,68 @@ mod gtk_integration_tests {
             "the SOURCE window's format card is still floating over the pane handed to \
              another window"
         );
+
+        for w in app.windows() {
+            w.destroy();
+        }
+    }
+
+    /// TDD 7.6: a tab dropped on another window anywhere off its strip joins that
+    /// window, a tab dropped on its own window stays, and a payload naming no tab is
+    /// refused. Drives the one drop decision both targets share (`take_dropped_tab`);
+    /// that the window-wide target exists is `wire_window_tab_drop`'s, checked by the
+    /// count of drop targets on the window.
+    ///
+    /// Mutation: make `take_dropped_tab` return `false` for a foreign tab and this
+    /// fails on the destination count.
+    #[gtktest::test]
+    fn a_tab_dropped_anywhere_on_another_window_joins_it() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.dndwindowdrop"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let source = crate::window::new_window(&app, "IT", "# One\n\nbody", None);
+        let dest = crate::window::new_window(&app, "IT", "# Two\n\nbody", None);
+        let moving = state(&source).expect("source tab").id;
+        let staying = state(&dest).expect("dest tab").id;
+        let dest_tabs = winstate::chrome(&dest).expect("dest chrome").tabs.clone();
+
+        let window_targets = gtk::prelude::WidgetExt::observe_controllers(&dest)
+            .iter::<glib::Object>()
+            .filter_map(Result::ok)
+            .filter(|c| c.is::<gtk::DropTarget>())
+            .count();
+        assert_eq!(window_targets, 1, "the window itself takes a dropped tab");
+
+        assert!(take_dropped_tab(&dest, &dest_tabs, staying));
+        assert_eq!(
+            winstate::tab_count(&dest),
+            1,
+            "its own tab stays, nothing added"
+        );
+
+        assert!(take_dropped_tab(&dest, &dest_tabs, moving));
+        let ctx = glib::MainContext::default();
+        for _ in 0..200 {
+            if !ctx.iteration(false) {
+                break;
+            }
+        }
+        assert_eq!(
+            winstate::tab_count(&dest),
+            2,
+            "the other window's tab joined"
+        );
+        assert_eq!(dest_tabs.n_pages(), 2, "and is on its strip");
+        assert_eq!(winstate::tab_count(&source), 0, "and left its source");
+
+        assert!(!take_dropped_tab(
+            &dest,
+            &dest_tabs,
+            winstate::TabId::from_raw(u64::MAX)
+        ));
 
         for w in app.windows() {
             w.destroy();
