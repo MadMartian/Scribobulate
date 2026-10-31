@@ -290,18 +290,28 @@ mod tests {
     const XINCLUDE_SVG: &[u8] =
         br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xi="http://www.w3.org/2001/XInclude"/>"#;
 
-    /// A test binary runs outside any macOS bundle, so on every platform it loads a
-    /// decoder this project did not deliver and the screen is on (TDD 2.23c). This is
-    /// also what keeps the other 2.23c tests from skipping on macOS, where a
-    /// compile-time exemption once left a non-bundle run with no screen at all.
+    /// The screen is on wherever the decoder in use is not proven fixed (TDD 2.23c). A
+    /// test binary runs outside any macOS bundle, and the Linux hosts this runs on load a
+    /// librsvg below the floor, so there it must be on. This is also what keeps the other
+    /// 2.23c tests from skipping on macOS, where a compile-time exemption once left a
+    /// non-bundle run with no screen at all. On Windows the decoder is gvsbuild's, at the
+    /// floor since 2026.10.0, so the screen stands down and the content passes through:
+    /// the other 2.23c tests skip there, and the screen's own logic is covered by
+    /// `xinclude`'s pure tests on every platform.
     #[test]
-    fn a_process_outside_a_macos_bundle_is_screened() {
-        assert!(xinclude::enforced());
-        assert_eq!(
-            screen(XINCLUDE_SVG, "test:screen:outside-bundle.svg").map(Screened::bytes),
-            None
-        );
+    fn the_screen_is_on_unless_the_decoder_in_use_is_proven_fixed() {
+        let screened = screen(XINCLUDE_SVG, "test:screen:outside-bundle.svg").map(Screened::bytes);
         crate::imagedecode::forget_for_test("test:screen:outside-bundle.svg");
+        if cfg!(windows) && !xinclude::enforced() {
+            assert_eq!(
+                screened,
+                Some(XINCLUDE_SVG),
+                "stood down, so nothing is refused"
+            );
+            return;
+        }
+        assert!(xinclude::enforced());
+        assert_eq!(screened, None);
     }
 
     #[test]
@@ -391,6 +401,10 @@ mod tests {
     /// without the kept verdicts runs three.
     #[test]
     fn one_content_is_screened_once_however_many_hand_offs_it_makes() {
+        if !xinclude::enforced() {
+            println!("SKIPPED [2.23c]: the SVG decoder in use is fixed, so nothing is screened");
+            return;
+        }
         let bytes = b"<svg><desc>screened once, once only</desc></svg>";
         let before = verdicts::tests::SCREENS.with(std::cell::Cell::get);
         assert!(screen_quietly(bytes).is_some());
@@ -407,6 +421,10 @@ mod tests {
     /// address-and-length key would see the same address and length).
     #[test]
     fn content_rewritten_in_place_is_screened_afresh() {
+        if !xinclude::enforced() {
+            println!("SKIPPED [2.23c]: the SVG decoder in use is fixed, so nothing is screened");
+            return;
+        }
         let mut bytes = br#"<svg xmlns:a="http://www.w3.org/2001/XIncludX"><desc>rewritten in place</desc></svg>"#.to_vec();
         assert!(screen_quietly(&bytes).is_some());
         let at = bytes

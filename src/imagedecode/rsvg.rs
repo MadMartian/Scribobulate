@@ -53,6 +53,8 @@ type RenderDocument = unsafe extern "C" fn(
 ) -> glib::ffi::gboolean;
 
 struct Api {
+    /// librsvg's exported `rsvg_{major,minor,micro}_version`, read at load.
+    version: Option<(u32, u32, u32)>,
     new_from_data: NewFromData,
     get_dimensions: GetDimensions,
     render_document: RenderDocument,
@@ -76,7 +78,20 @@ fn api() -> Option<&'static Api> {
                 let address = libc::dlsym(handle, name.as_ptr().cast::<c_char>());
                 (!address.is_null()).then_some(address)
             };
+            let part = |name: &std::ffi::CStr| {
+                // librsvg exports each as a `const guint`, so the address is that of an
+                // aligned, initialised, immutable u32 in the library just loaded.
+                symbol(name).map(|address| *address.cast::<u32>())
+            };
+            let version = (|| {
+                Some((
+                    part(c"rsvg_major_version")?,
+                    part(c"rsvg_minor_version")?,
+                    part(c"rsvg_micro_version")?,
+                ))
+            })();
             Some(Api {
+                version,
                 new_from_data: std::mem::transmute::<*mut c_void, NewFromData>(symbol(
                     c"rsvg_handle_new_from_data",
                 )?),
@@ -90,6 +105,14 @@ fn api() -> Option<&'static Api> {
         }
     })
     .as_ref()
+}
+
+/// The version of the librsvg every SVG is decoded with, `None` when it cannot be loaded
+/// or does not export its version. The XInclude screen stands down on it
+/// (`platform::svg_decoder_is_delivered_fixed`), so it is read from the very library this
+/// module decodes with, never from one merely installed.
+pub(crate) fn version() -> Option<(u32, u32, u32)> {
+    api()?.version
 }
 
 /// A parsed SVG document.

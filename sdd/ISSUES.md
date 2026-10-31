@@ -55,7 +55,7 @@ described from a different vantage point.
 | D | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
 | F | Linux, Mac | Test | `window::sidebarfilter::gtk_integration_tests::closing_the_filter_returns_the_focus_to_the_highlighted_row` intermittently finds the list at its top instead of scrolled to the highlighted row (3 failures on CI: Linux twice, the second on 2026-10-29, and macOS once on 2026-10-29, both 2026-10-29 failures reading "value 0, upper 0, page 0"; passed on retry, and about 160 of 160 loaded runs locally) | Low |
 | G | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
-| Q | Windows, Linux | Upstream | A crafted SVG can corrupt memory: Windows and Linux decode SVG through a librsvg with a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuse any SVG that may use XInclude before librsvg sees it until they carry the fix. The macOS bundle carries 2.63.2, and its build fails below that | High |
+| Q | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | R | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | S | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
 | T | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
@@ -368,19 +368,21 @@ Any pointer motion brings it back. Judged negligible by the operator.
 
 ## Q. Every SVG is decoded by librsvg, which has a published use-after-free
 
-**Severity**: High (a crafted SVG can corrupt memory in the Windows and Linux builds wherever
-the interim screen misses a route; a crash is the realistic worst case, code execution is not
+**Severity**: High (a crafted SVG can corrupt memory on Linux wherever the interim screen
+misses a route; a crash is the realistic worst case, code execution is not
 ruled out).
 
 **Report**: GHSA-wq5f-xc86-pv6w / CVE-2026-96889, fixed in librsvg **2.63.2**. Windows loads
-2.62.3 (gvsbuild). Linux loads the distribution's: Ubuntu 22.04's 2.52.5 is "Not affected" per
+2.63.2 (gvsbuild 2026.10.0) and the screen stands down there. Linux loads the distribution's: Ubuntu 22.04's 2.52.5 is "Not affected" per
 Ubuntu's tracker (a vendor assessment we have not measured); other distributions are unassessed.
 macOS from its bundle loads 2.63.2.
 
-**Open because**: the vulnerable librsvg is still what Windows and Linux load. The interim
+**Open because**: the librsvg Linux distributions ship is older than 2.63.2 (Ubuntu 26.04:
+2.61.3). The interim
 workaround — the XInclude screen ahead of every decode — is recorded, with every leak found in it
 and what upstream must deliver to retire it, in [CVE.md](CVE.md) as **ScrSEC-1**. Read that entry
-before changing the screen. This entry closes when ScrSEC-1 is marked Closed on both platforms.
+before changing the screen. The screen stands down by itself on a Linux whose librsvg reaches the floor; this entry
+closes when ScrSEC-1 is marked Closed.
 
 **Not measured**: the screen's premise that librsvg follows no non-`data:` reference without a
 base URL (the loader is fed a stream with none) is read from librsvg's design.

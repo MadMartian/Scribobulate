@@ -55,9 +55,6 @@ Read all of the above, plus:
 - [`sdd/CVE.md`](sdd/CVE.md) — security vulnerabilities patched or worked around, each with the
   leaks later found in its workaround and what upstream must deliver to retire it. A register:
   read its table of contents, then the matching entry. (Open vulnerabilities are ISSUES.)
-- [`sdd/PLAN.windows-gtk-4-24.md`](sdd/PLAN.windows-gtk-4-24.md) — before moving the Windows GTK
-  runtime (the gvsbuild pin), or changing where the XInclude screen applies. Deferred by the
-  operator.
 - [`sdd/PLAN.accessibility.md`](sdd/PLAN.accessibility.md) — before adding accessibility
   markup beyond a control name.
 - [`sdd/PLAN.profiling.md`](sdd/PLAN.profiling.md) — before profiling, proposing a

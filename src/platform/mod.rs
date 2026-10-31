@@ -343,27 +343,166 @@ fn platform_set_huge_page_collapse_disabled(disabled: bool) {
 
 // ── the SVG decoder this process loads ───────────────────────────────────────────────
 
-/// Whether the SVG decoder this process loads is one this project delivered with the
-/// XInclude flaw fixed (CVE-2026-96889), so the image screen may stand down
-/// (`imagedecode::xinclude::enforced`). Read once per process: what is loaded cannot
+/// Whether the SVG decoder this process loads is a fixed one (CVE-2026-96889), so the
+/// image screen may stand down (`imagedecode::xinclude::enforced`). Decided once per
+/// process, before the first SVG is screened, and logged once: what is loaded cannot
 /// change while it runs.
 ///
-/// Only a macOS bundle answers `true`: it stages its own librsvg and its build gate
-/// holds that copy to the floor. Everywhere else, a macOS binary run outside its bundle
-/// included, the decoder is the system's or a package manager's, and this is `false`.
+/// - **macOS**: only a bundle answers `true`. It stages its own librsvg and its build
+///   gate holds that copy to the floor; a binary run outside a bundle decodes through
+///   Homebrew's.
+/// - **Linux**: the version of the librsvg `imagedecode` loads and decodes every SVG
+///   with, read from that library itself.
+/// - **Windows**: the SVG loader is loaded first, with a built-in one-pixel SVG, and then
+///   every librsvg loaded into the process is read; every SVG is decoded by that loader.
+///
+/// `true` only when every version read is at or above `packaging/librsvg-floor`. A
+/// version that cannot be read counts as unfixed, so the screen stays up.
 pub(crate) fn svg_decoder_is_delivered_fixed() -> bool {
     static FIXED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FIXED.get_or_init(platform_svg_decoder_is_delivered_fixed)
+    *FIXED.get_or_init(|| {
+        let (fixed, decoder) = platform_svg_decoder_is_delivered_fixed();
+        if fixed {
+            log::info!(
+                "SVG XInclude screen off: the SVG decoder is {decoder}, at or above the \
+                 fixed {}",
+                LIBRSVG_FLOOR
+            );
+        } else {
+            log::info!(
+                "SVG XInclude screen on: the SVG decoder is {decoder}, not known to be at or \
+                 above the fixed {}",
+                LIBRSVG_FLOOR
+            );
+        }
+        fixed
+    })
+}
+
+/// The first librsvg release with the XInclude flaw fixed, from `packaging/librsvg-floor`
+/// (`build.rs` checks its shape).
+const LIBRSVG_FLOOR: &str = env!("SCRIB_LIBRSVG_FLOOR");
+
+/// A `major.minor.micro` version as numbers, so 2.63.10 sorts above 2.63.2.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS keeps the bundle's own proof
+type Version = (u32, u32, u32);
+
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS keeps the bundle's own proof
+fn parse_version(text: &str) -> Option<Version> {
+    let mut parts = text.trim().split('.').map(|p| p.parse::<u32>().ok());
+    let version = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(version)
+}
+
+/// Whether every version in `versions` is at or above `floor`. An empty list, a version
+/// that could not be read, is not.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS keeps the bundle's own proof
+fn all_meet_floor(versions: &[Version], floor: Version) -> bool {
+    !versions.is_empty() && versions.iter().all(|&v| v >= floor)
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS keeps the bundle's own proof
+fn describe(versions: &[Version]) -> String {
+    match versions {
+        [] => "a librsvg whose version could not be read".to_owned(),
+        vs => vs
+            .iter()
+            .map(|(a, b, c)| format!("librsvg {a}.{b}.{c}"))
+            .collect::<Vec<_>>()
+            .join(" and "),
+    }
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS keeps the bundle's own proof
+fn judge(versions: &[Version]) -> (bool, String) {
+    let floor = parse_version(LIBRSVG_FLOOR).expect("build.rs checked the floor's shape");
+    (all_meet_floor(versions, floor), describe(versions))
 }
 
 #[cfg(target_os = "macos")]
-fn platform_svg_decoder_is_delivered_fixed() -> bool {
-    mac::bundle::carries_verified_librsvg()
+fn platform_svg_decoder_is_delivered_fixed() -> (bool, String) {
+    let fixed = mac::bundle::carries_verified_librsvg();
+    let decoder = if fixed {
+        "the bundle's verified librsvg"
+    } else {
+        "not the bundle's verified librsvg"
+    };
+    (fixed, decoder.to_owned())
 }
 
-#[cfg(not(target_os = "macos"))]
-fn platform_svg_decoder_is_delivered_fixed() -> bool {
-    false
+#[cfg(target_os = "linux")]
+fn platform_svg_decoder_is_delivered_fixed() -> (bool, String) {
+    let versions: Vec<Version> = crate::imagedecode::svg_decoder_version()
+        .into_iter()
+        .collect();
+    judge(&versions)
+}
+
+#[cfg(windows)]
+fn platform_svg_decoder_is_delivered_fixed() -> (bool, String) {
+    if !crate::imagedecode::load_svg_decoder() {
+        return (false, "an SVG loader that would not load".to_owned());
+    }
+    judge(&win32::process::loaded_librsvg_versions())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn platform_svg_decoder_is_delivered_fixed() -> (bool, String) {
+    (false, "unknown on this platform".to_owned())
+}
+
+#[cfg(test)]
+mod svg_floor_tests {
+    use super::*;
+
+    #[test]
+    fn versions_compare_as_numbers_and_every_one_must_meet_the_floor() {
+        let floor = (2, 63, 2);
+        assert!(all_meet_floor(&[(2, 63, 2)], floor));
+        assert!(
+            all_meet_floor(&[(2, 63, 10)], floor),
+            "2.63.10 is above 2.63.2"
+        );
+        assert!(all_meet_floor(&[(3, 0, 0)], floor));
+        assert!(!all_meet_floor(&[(2, 62, 3)], floor));
+        assert!(!all_meet_floor(&[(2, 52, 5)], floor));
+        assert!(
+            !all_meet_floor(&[(2, 63, 2), (2, 62, 3)], floor),
+            "one old copy is enough"
+        );
+        assert!(
+            !all_meet_floor(&[], floor),
+            "an unread version is not fixed"
+        );
+    }
+
+    #[test]
+    fn only_a_three_number_version_parses() {
+        assert_eq!(parse_version("2.63.2"), Some((2, 63, 2)));
+        assert_eq!(parse_version(" 2.63.2\n"), Some((2, 63, 2)));
+        for bad in ["2.63", "2.63.2.1", "v2.63.2", "2.63.x", "", "2..2"] {
+            assert_eq!(parse_version(bad), None, "{bad:?}");
+        }
+        assert!(
+            parse_version(LIBRSVG_FLOOR).is_some(),
+            "the built-in floor parses"
+        );
+    }
+
+    /// The stand-down decision on THIS host, end to end, against the library it really
+    /// loads. Linux CI and the seat run librsvg 2.52 or 2.61, below the floor, so the
+    /// screen must be on there.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn this_linux_hosts_librsvg_is_read_and_judged() {
+        let v = crate::imagedecode::svg_decoder_version().expect("librsvg is loadable here");
+        let (fixed, decoder) = platform_svg_decoder_is_delivered_fixed();
+        assert!(
+            decoder.contains(&format!("{}.{}.{}", v.0, v.1, v.2)),
+            "{decoder}"
+        );
+        assert_eq!(fixed, v >= parse_version(LIBRSVG_FLOOR).unwrap());
+    }
 }
 
 /// The version of the librsvg this process has ALREADY loaded, `major.minor.micro`, read

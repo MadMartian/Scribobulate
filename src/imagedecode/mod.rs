@@ -78,12 +78,16 @@ pub(crate) use decode::{
     richimg_limits, FramePixels,
 };
 pub(crate) use probe::{probe_dimensions, probe_pixel_size, probe_vector_dimensions};
+#[cfg(target_os = "linux")]
+pub(crate) use rsvg::version as svg_decoder_version;
 #[cfg(test)]
 pub(crate) use screen::{forget_for_test, told_for_test};
 pub(crate) use screen::{
     on_refusal, report_shown_refusal, screen_refuses, svg_refused, take_unreported_refusals,
     RefusalTarget,
 };
+#[cfg(windows)]
+pub(crate) use svgencoding::load_svg_decoder;
 #[cfg(test)]
 pub(crate) use xinclude::enforced as screens_xinclude;
 

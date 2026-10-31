@@ -93,8 +93,8 @@ Each entry carries, in this order:
 
 ## ScrSEC-1. librsvg use-after-free through an SVG's XInclude (CVE-2026-96889)
 
-**Status**: Worked around (Linux, Windows; macOS run outside its bundle). Fixed by packaging on
-macOS from the bundle, and on Windows, where the screen still runs until its stand-down is built.
+**Status**: Worked around (Linux; macOS run outside its bundle). Fixed by packaging on Windows
+and on macOS from the bundle, where the screen stands down because the decoder in use is fixed.
 
 **Severity**: High. A crafted SVG can corrupt memory. Code execution has a published route only for
 a non-PIE glibc executable; ours is PIE on every platform checked, so the realistic worst case is a
@@ -152,6 +152,16 @@ before any loader ran (measured on Linux and macOS), so the screen's UTF-16 and 
 no image took. The gzip layer is inflated by us, to a bound, and the inflated text is screened
 again, so librsvg never inflates anything — on the macOS bundle too, where the screen stands down.
 ("Show UTF-16 and gzip-compressed SVGs, and re-render small SVGs at zoom", 2026-10-29)
+
+**The screen follows the decoder in use.** Once per run, before the first SVG is screened, the
+app reads the version of the librsvg that will decode it and stands the screen down only when
+it is at or above `packaging/librsvg-floor`; an unreadable version keeps it up. Linux reads the
+librsvg it loaded itself (below). Windows loads the `svg` loader with a built-in one-pixel SVG,
+then reads every librsvg loaded into the process, and routes every SVG through that loader by
+name, so no SVG reaches a module whose librsvg was not read. macOS keeps the bundle's proof.
+The decision is logged (`SVG XInclude screen on/off: …`). This is the leak class the macOS
+stand-down rounds closed (CWE-636): the evidence must be the decoder in use, never a file on
+disk. ("Stand the XInclude screen down where the loaded librsvg is fixed", 2026-10-31)
 
 **On Linux no SVG goes through gdk-pixbuf**: `src/imagedecode/rsvg.rs` loads the system's
 `librsvg-2.so.2` and decodes every SVG with it, after the same screen. gdk-pixbuf 2.44 built with
@@ -310,9 +320,9 @@ and mutations can compose. POLICY § Unit tests says when to run its long run; a
 recorded here as "Round: differential test".
 
 **To close for good**:
-- **Windows**: done in packaging (gvsbuild 2026.10.0, librsvg 2.63.2 measured in the installed
-  tree, 2026-10-31). What remains is to stand the screen down on Windows only when the loaded
-  librsvg is at or above the floor, as the macOS bundle does, and then delete it there.
+- **Windows**: done (gvsbuild 2026.10.0, librsvg 2.63.2 measured in the installed tree,
+  2026-10-31). The screen stands down at run time when every librsvg loaded is at or above
+  the floor (below). It stays in the code for Linux and an unproven macOS run.
 - **Linux**: per distribution, either a librsvg ≥ 2.63.2 (or a vendor backport), or a vendor "not
   affected" assessment that we have confirmed by measurement — the published trigger run against
   that distribution's librsvg under a memory checker. Ubuntu 22.04 has the assessment, unconfirmed,

@@ -1,8 +1,10 @@
 # SVG XInclude refusal (TDD 2.23c)
 
 Every image below except the first uses XInclude (harmlessly: it includes a red
-square from a `data:` URI). On Linux and Windows each shows the broken-image
-placeholder; on macOS each shows a red square.
+square from a `data:` URI). Where the SVG decoder in use is not proven fixed (Linux
+today, macOS outside the app bundle) each shows the broken-image placeholder; where it
+is (Windows, the macOS bundle) each shows a red square. The log's `SVG XInclude
+screen` line says which.
 
 Plain SVG, always shown (a green square):
 

@@ -86,7 +86,6 @@ struct ProcessMemoryCountersEx {
     private_usage: usize,
 }
 
-#[cfg(test)]
 #[link(name = "kernel32")]
 extern "system" {
     fn GetCurrentProcess() -> *mut c_void;
@@ -134,13 +133,11 @@ pub(crate) fn current_private_bytes() -> Option<u64> {
     }
 }
 
-#[cfg(test)]
 #[link(name = "kernel32")]
 extern "system" {
     fn GetProcAddress(module: *mut c_void, name: *const std::ffi::c_char) -> *const c_void;
 }
 
-#[cfg(test)]
 #[link(name = "psapi")]
 extern "system" {
     fn EnumProcessModules(
@@ -151,13 +148,8 @@ extern "system" {
     ) -> i32;
 }
 
-/// The address of `symbol` in whichever module already loaded into this process exports
-/// it, or `None` when none does. Asked of the modules loaded, never of a name to load,
-/// so this names the librsvg the loader chain is using, never one merely installed (its
-/// DLL name differs between GTK builds, and a librsvg is the only module exporting its
-/// own version variables).
-#[cfg(test)]
-pub(crate) fn loaded_librsvg_symbol(symbol: &std::ffi::CStr) -> Option<*const c_void> {
+/// Every module loaded into this process, `None` when they cannot be listed.
+fn loaded_modules() -> Option<Vec<*mut c_void>> {
     let mut modules: Vec<*mut c_void> = vec![std::ptr::null_mut(); 1024];
     let mut needed = 0u32;
     let bytes = (modules.len() * std::mem::size_of::<*mut c_void>()) as u32;
@@ -175,13 +167,52 @@ pub(crate) fn loaded_librsvg_symbol(symbol: &std::ffi::CStr) -> Option<*const c_
         return None;
     }
     let count = (needed as usize / std::mem::size_of::<*mut c_void>()).min(modules.len());
-    modules[..count].iter().find_map(|&module| {
-        // SAFETY: `module` is a handle the enumeration just returned, and a module is
-        // not unloaded while the loader that loaded it holds it; GetProcAddress only
-        // reads its export table.
-        let address = unsafe { GetProcAddress(module, symbol.as_ptr()) };
-        (!address.is_null()).then_some(address)
-    })
+    modules.truncate(count);
+    Some(modules)
+}
+
+/// The address `module` exports `symbol` at, if it does.
+fn exported(module: *mut c_void, symbol: &std::ffi::CStr) -> Option<*const c_void> {
+    // SAFETY: `module` is a handle the enumeration returned, and a module is not unloaded
+    // while the loader that loaded it holds it; GetProcAddress only reads its export table.
+    let address = unsafe { GetProcAddress(module, symbol.as_ptr()) };
+    (!address.is_null()).then_some(address)
+}
+
+/// The address of `symbol` in whichever module already loaded into this process exports
+/// it, or `None` when none does. Asked of the modules loaded, never of a name to load,
+/// so this names the librsvg the loader chain is using, never one merely installed (its
+/// DLL name differs between GTK builds, and a librsvg is the only module exporting its
+/// own version variables).
+#[cfg(test)]
+pub(crate) fn loaded_librsvg_symbol(symbol: &std::ffi::CStr) -> Option<*const c_void> {
+    loaded_modules()?
+        .into_iter()
+        .find_map(|module| exported(module, symbol))
+}
+
+/// The version of EVERY librsvg loaded into this process, by the version variables each
+/// exports, so the XInclude screen stands down only if all of them are fixed
+/// (`platform::svg_decoder_is_delivered_fixed`). Empty when none is loaded or the
+/// modules cannot be listed. Asked of the modules loaded, never of a file name, for the
+/// reason `loaded_librsvg_symbol` gives.
+pub(crate) fn loaded_librsvg_versions() -> Vec<(u32, u32, u32)> {
+    let read = |module, name: &std::ffi::CStr| {
+        // SAFETY: librsvg exports each version variable as a `const guint`, so the
+        // address is that of an aligned, initialised, immutable u32 in a loaded image.
+        exported(module, name).map(|address| unsafe { *address.cast::<u32>() })
+    };
+    loaded_modules()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|module| {
+            Some((
+                read(module, c"rsvg_major_version")?,
+                read(module, c"rsvg_minor_version")?,
+                read(module, c"rsvg_micro_version")?,
+            ))
+        })
+        .collect()
 }
 
 /// `PROCESS_QUERY_LIMITED_INFORMATION` — see the module doc for why not the full right.

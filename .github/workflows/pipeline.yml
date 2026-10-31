@@ -487,6 +487,11 @@ jobs:
       #   gh api repos/wingtk/gvsbuild/releases/tags/<version> \
       #     | yq -r '.assets[] | [.name, .digest] | @tsv'
       # Hashing what you just downloaded proves only that the download did not corrupt.
+      # Bump the two lines together. A gvsbuild release moves the whole Windows GTK
+      # runtime (GTK, Pango, gdk-pixbuf, librsvg …), not one library, so a pin move is a
+      # runtime change: ratify it on the windows seat against tests/MANUAL-TEST.md's
+      # Windows checks, and the installer build refuses a librsvg below
+      # packaging/librsvg-floor whatever the pin says.
       GVSBUILD_VERSION: "2026.10.0"
       GVSBUILD_SHA256: "8005b860447e73b10c7f508b1f348e2b6390e01dd61fd5c617b8190a046022fe"
       SCRIB_GTK_PREFIX: 'C:\gtk-build\gtk\x64\release'
