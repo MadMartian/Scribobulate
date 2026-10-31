@@ -98,7 +98,7 @@ pub(super) fn loader_input<'a>(
     if !bytes.starts_with(GZIP_MAGIC) {
         return Some(LoaderInput {
             bytes: Cow::Borrowed(bytes),
-            svg_only: is_utf16(bytes) || (cfg!(target_os = "linux") && is_plain_svg(bytes)),
+            svg_only: is_utf16(bytes) || (ROUTES_EVERY_SVG && is_plain_svg(bytes)),
         });
     }
     let inflated = match inflate(bytes) {
@@ -121,11 +121,39 @@ pub(super) fn loader_input<'a>(
     })
 }
 
-/// Whether `bytes` are SVG by content, as gdk-pixbuf 2.42 decided it: the shared MIME
-/// database's guess from the bytes alone. On Linux every SVG goes to [`decode_svg`], so
-/// gdk-pixbuf never decodes one (`super::rsvg`'s module doc says why).
+/// Whether every SVG, not only the encodings no sniff recognises, goes to [`decode_svg`].
+/// On Linux that is librsvg called directly (`super::rsvg`'s module doc says why). On
+/// Windows it is the `svg` loader by name, the one `load_svg_decoder` loads before the
+/// XInclude screen decides whether to stand down: an SVG decoded through any other
+/// module would be decoded by a librsvg that decision never read.
+const ROUTES_EVERY_SVG: bool = cfg!(any(target_os = "linux", windows));
+
+/// Whether `bytes` are XML text, and so go to the SVG decoder: after an optional UTF-8
+/// byte-order mark and whitespace, the first byte is `<`. No raster format gdk-pixbuf or
+/// `richimg` reads begins that way. XML that is not SVG is refused by the SVG decoder,
+/// as it was by the sniff. Its own rule rather than GIO's content-type guess, which on
+/// Windows guesses from file extensions and has none here.
 fn is_plain_svg(bytes: &[u8]) -> bool {
-    gtk::gio::content_type_guess(None::<&str>, bytes).0 == "image/svg+xml"
+    let text = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes);
+    text.iter()
+        .find(|b| !b.is_ascii_whitespace())
+        .is_some_and(|&b| b == b'<')
+}
+
+/// Load the `svg` loader module, and with it the librsvg it binds, by decoding a built-in
+/// one-pixel SVG through it, so the XInclude screen's stand-down can read the version of
+/// the librsvg that will decode every SVG (`platform::svg_decoder_is_delivered_fixed`).
+/// Not screened: the bytes are this constant, and the screen's decision is what is being
+/// made. `false` when the loader is missing or will not decode it.
+#[cfg(windows)]
+pub(crate) fn load_svg_decoder() -> bool {
+    const ONE_PIXEL: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#;
+    #[expect(clippy::disallowed_methods)] // this module IS the sanctioned route
+    let Ok(loader) = PixbufLoader::with_type(SVG_MODULE) else {
+        return false;
+    };
+    let decoded = loader.write(ONE_PIXEL).and(loader.close()).is_ok();
+    decoded && loader.pixbuf().is_some()
 }
 
 fn is_utf16(bytes: &[u8]) -> bool {

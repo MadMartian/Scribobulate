@@ -24,6 +24,24 @@ fn main() {
 
     emit_git_commit();
 
+    // The librsvg security floor is written once, in `packaging/librsvg-floor`, for the
+    // packaging gates and for the run-time XInclude stand-down
+    // (`platform::svg_decoder_is_delivered_fixed`). A malformed floor fails the build
+    // rather than reaching run time.
+    println!("cargo:rerun-if-changed=packaging/librsvg-floor");
+    let floor = std::fs::read_to_string("packaging/librsvg-floor")
+        .expect("packaging/librsvg-floor not found");
+    let floor = floor.trim();
+    let parts: Vec<&str> = floor.split('.').collect();
+    assert!(
+        parts.len() == 3
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())),
+        "packaging/librsvg-floor must be MAJOR.MINOR.MICRO, found {floor:?}"
+    );
+    println!("cargo:rustc-env=SCRIB_LIBRSVG_FLOOR={floor}");
+
     generate_third_party_notices();
 
     // One source dir: `data/icons` is a freedesktop icon tree holding every
