@@ -17,7 +17,11 @@ a rule here on your own initiative.
 - Release builds are the reference for behaviour and footprint.
 - Every clone runs `git config core.hooksPath scripts/git-hooks` once. Its pre-push hook
   runs the pipeline's format and lint steps on the commits being pushed (not the working
-  tree) and refuses a push that fails them.
+  tree) and refuses a push that fails them. It also refuses a commit that adds a source
+  file the coverage gate will measure without listing it in `scripts/coverage.scope`
+  (fix: `scripts/coverage.sh --update-scope` in that commit). That check reads only git
+  objects and can misjudge a module enabled only by cfg or a feature at its declaration;
+  `SCRIB_PREPUSH_SKIP_SCOPE=1` skips it alone.
 
 ## Build pipeline
 
