@@ -401,6 +401,10 @@ mod tests {
     /// without the kept verdicts runs three.
     #[test]
     fn one_content_is_screened_once_however_many_hand_offs_it_makes() {
+        if !xinclude::enforced() {
+            println!("SKIPPED [2.23c]: the SVG decoder in use is fixed, so nothing is screened");
+            return;
+        }
         let bytes = b"<svg><desc>screened once, once only</desc></svg>";
         let before = verdicts::tests::SCREENS.with(std::cell::Cell::get);
         assert!(screen_quietly(bytes).is_some());
@@ -417,6 +421,10 @@ mod tests {
     /// address-and-length key would see the same address and length).
     #[test]
     fn content_rewritten_in_place_is_screened_afresh() {
+        if !xinclude::enforced() {
+            println!("SKIPPED [2.23c]: the SVG decoder in use is fixed, so nothing is screened");
+            return;
+        }
         let mut bytes = br#"<svg xmlns:a="http://www.w3.org/2001/XIncludX"><desc>rewritten in place</desc></svg>"#.to_vec();
         assert!(screen_quietly(&bytes).is_some());
         let at = bytes
