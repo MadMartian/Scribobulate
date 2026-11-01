@@ -125,6 +125,33 @@ if [ "${1-}" = "--self-test" ]; then
             exit 1
         }
         git reset -q --hard HEAD~1
+        # An added source file the coverage manifest does not list is refused; listing it,
+        # or the file being excluded by IGNORE or test-only, lets the same push through.
+        printf "IGNORE='src[/\\\\](main)\\.rs'\n" >scripts/coverage.sh
+        printf '# manifest\nsrc/old.rs\n' >scripts/coverage.scope
+        mkdir -p src/x && : >src/old.rs && : >src/main.rs && : >src/x/tests.rs
+        git add -A && git commit -qm "scope base"
+        git push -q origin main >"$st/sb.log" 2>&1 || {
+            echo "pre-push self-test: FAILED — excluded and listed files were refused:" >&2
+            tail -3 "$st/sb.log" >&2
+            exit 1
+        }
+        echo 'fn f() {}' >src/new.rs && git add src/new.rs && git commit -qm "unlisted"
+        if git push -q origin main >"$st/sn.log" 2>&1; then
+            echo "pre-push self-test: FAILED — an unlisted new source file was accepted" >&2
+            exit 1
+        fi
+        grep -q "src/new.rs" "$st/sn.log" || {
+            echo "pre-push self-test: FAILED — refused, but not naming the unlisted file:" >&2
+            tail -3 "$st/sn.log" >&2
+            exit 1
+        }
+        echo src/new.rs >>scripts/coverage.scope && git commit -qa --amend --no-edit
+        git push -q origin main >"$st/sl.log" 2>&1 || {
+            echo "pre-push self-test: FAILED — a listed new source file was refused:" >&2
+            tail -3 "$st/sl.log" >&2
+            exit 1
+        }
         # ...while history that genuinely predates it (no ancestor ever had the file) still
         # goes through, UNCHECKED, so the refusal above is not "no contract, no push".
         git checkout -q --orphan prehistory
@@ -140,7 +167,7 @@ if [ "${1-}" = "--self-test" ]; then
             exit 1
         }
     ) || exit 1
-    echo "pre-push self-test: ok (buried failing commit refused on an existing and a new ref; clean history accepted; contract deletion refused; pre-contract history accepted UNCHECKED)"
+    echo "pre-push self-test: ok (buried failing commit refused on an existing and a new ref; clean history accepted; contract deletion refused; unlisted new source refused, listed or excluded accepted; pre-contract history accepted UNCHECKED)"
     exit 0
 fi
 
@@ -263,6 +290,65 @@ check_tree() (
     done
 )
 
+# The coverage gate's scope manifest, checked for files a commit ADDS. CI's coverage step
+# fails when the set of measured files differs from scripts/coverage.scope, and a new
+# source file that nobody re-pinned is the commonest way to get there: it tripped CI three
+# times running, each a ~27-minute round trip for a one-line fix. This catches it in
+# milliseconds, from git objects alone, with no checkout and no cargo.
+#
+# It is NOT the gate. The measured set is whatever llvm-cov reports on the Linux unit run,
+# and that depends on cfg, features and whether a file has any code at all — nothing this
+# hook can see. So it asks one narrow question per commit: did this commit add a src/*.rs
+# file that neither the manifest lists nor `IGNORE`/`IGNORE_TESTONLY` exclude? Those two
+# regexes are read from the commit's own scripts/coverage.sh, never restated here ("a
+# number has one owner"). Added files the Linux unit run cannot measure by construction
+# are skipped: macOS and Windows platform code, test-only files (`tests.rs`, `*_tests.rs`,
+# anything under a `tests/` directory), and files with no `fn` (declarations only, so no
+# region to report). What remains can still be a file llvm-cov never reports (a module
+# cfg-gated off Linux or behind a feature at its declaration); for that, SCRIB_PREPUSH_SKIP_SCOPE=1 skips this check alone.
+scope_check() {
+    local oid="$1" short="$2" ignore testonly added f missing=()
+    [ "${SCRIB_PREPUSH_SKIP_SCOPE-}" = 1 ] && return 0
+    git cat-file -e "$oid:scripts/coverage.scope" 2>/dev/null || return 0
+    git cat-file -e "$oid:scripts/coverage.sh" 2>/dev/null || return 0
+    ignore="$(git show "$oid:scripts/coverage.sh" | sed -n "s/^IGNORE='\(.*\)'\$/\1/p" | head -1)"
+    testonly="$(git show "$oid:scripts/coverage.sh" | sed -n "s/^IGNORE_TESTONLY='\(.*\)'\$/\1/p" | head -1)"
+    if [ -z "$ignore" ]; then
+        echo "pre-push: $short's scripts/coverage.sh has no IGNORE='…' line to read, so" \
+            "its coverage scope cannot be checked; refusing. Override this one push with" \
+            "SCRIB_PREPUSH_SKIP_SCOPE=1." >&2
+        return 1
+    fi
+    added="$(git diff-tree --root --no-commit-id -r --diff-filter=A --name-only "$oid" -- 'src/*.rs')"
+    [ -n "$added" ] || return 0
+    local scope
+    scope="$(git show "$oid:scripts/coverage.scope" | sed '/^#/d;/^[[:space:]]*$/d')"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        case "$f" in
+            src/platform/mac/* | src/platform/win32/*) continue ;;
+            */tests.rs | *_tests.rs | */tests/*) continue ;;
+        esac
+        printf '%s\n' "$f" | grep -Eq -- "$ignore" && continue
+        # No `fn` at all (a module of declarations and re-exports) leaves llvm-cov no
+        # region to report, so the gate never lists the file.
+        git show "$oid:$f" | grep -Eq '(^|[^A-Za-z0-9_])fn([^A-Za-z0-9_]|$)' || continue
+        [ -n "$testonly" ] && printf '%s\n' "$f" | grep -Eq -- "$testonly" && continue
+        printf '%s\n' "$scope" | grep -qxF -- "$f" && continue
+        missing+=("$f")
+    done <<EOF
+$added
+EOF
+    [ "${#missing[@]}" -eq 0 ] && return 0
+    echo "pre-push: $short adds source the coverage gate will measure, but" \
+        "scripts/coverage.scope does not list it:" >&2
+    printf 'pre-push:   %s\n' "${missing[@]}" >&2
+    echo "pre-push: CI's coverage step would fail on it. Run scripts/coverage.sh" \
+        "--update-scope and amend it into that commit. If the file is genuinely never" \
+        "measured on Linux, push with SCRIB_PREPUSH_SKIP_SCOPE=1." >&2
+    return 1
+}
+
 HEAD_OID="$(git rev-parse HEAD)"
 tmp=""
 cleanup() {
@@ -290,6 +376,7 @@ for oid in "${oids[@]}"; do
         echo "pre-push: UNCHECKED $short — it predates $CONTRACT, so it has no steps to run." >&2
         continue
     fi
+    scope_check "$oid" "$short" || exit 1
     if [ "$oid" = "$HEAD_OID" ] && [ -z "$(git status --porcelain)" ]; then
         echo "pre-push: checking $short (HEAD, clean tree) in place"
         check_tree || exit 1
