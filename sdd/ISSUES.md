@@ -52,14 +52,14 @@ described from a different vantage point.
 |----|----------|-------|-------|----------|
 | A | Windows, Mac | Production | No screen reader on Windows or macOS can read the app's accessible names: our GTK builds leave GTK's AccessKit accessibility backend off, so neither platform gets a tree to carry them. Linux/AT-SPI reads them | Medium |
 | B | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
-| D | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
-| F | Linux, Mac | Test | `window::sidebarfilter::gtk_integration_tests::closing_the_filter_returns_the_focus_to_the_highlighted_row` intermittently finds the list at its top instead of scrolled to the highlighted row (3 failures on CI: Linux twice, the second on 2026-10-29, and macOS once on 2026-10-29, both 2026-10-29 failures reading "value 0, upper 0, page 0"; passed on retry, and about 160 of 160 loaded runs locally) | Low |
-| G | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
-| Q | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
-| R | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
-| S | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
-| T | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
-| V | Windows | Production | The app sometimes stops responding on a user's Windows 11 machine and Windows closes it (AppHang); no crash report is written. One hang came 5 s after startup, with no tab drag, right after `Pango: All font fallbacks failed!!!!`. Not reproduced | High |
+| C | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
+| D | Linux, Mac | Test | `window::sidebarfilter::gtk_integration_tests::closing_the_filter_returns_the_focus_to_the_highlighted_row` intermittently finds the list at its top instead of scrolled to the highlighted row (3 failures on CI: Linux twice, the second on 2026-10-29, and macOS once on 2026-10-29, both 2026-10-29 failures reading "value 0, upper 0, page 0"; passed on retry, and about 160 of 160 loaded runs locally) | Low |
+| E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
+| F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
+| G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
+| H | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
+| I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
+| J | Windows | Production | The app sometimes stops responding on a user's Windows 11 machine and Windows closes it (AppHang); no crash report is written. One hang came 5 s after startup, with no tab drag, right after `Pango: All font fallbacks failed!!!!`. Not reproduced | High |
 
 ## Closed issues
 
@@ -264,7 +264,7 @@ evidence must outlive it. Do not restate its figures here; several carry caveats
 survive summarising, and the transferable lessons already have permanent homes in
 `sdd/ANTI-PATTERNS.md`.
 
-## D. The Annotate bubble covers the line above a selection and takes a click meant for it
+## C. The Annotate bubble covers the line above a selection and takes a click meant for it
 
 **Severity**: Low (a click lands on the bubble instead of the text beneath it; nothing is lost).
 
@@ -290,7 +290,7 @@ Windows have not been driven.
 the bubble by clicking elsewhere first. Not taken: placing the bubble clear of text (in the
 margin or below the selection), which changes a placement other features and tests rely on.
 
-## F. The sidebar-filter focus test sometimes finds the list unscrolled
+## D. The sidebar-filter focus test sometimes finds the list unscrolled
 
 **Severity**: Low (a test-only intermittent; no product symptom has been seen).
 
@@ -316,7 +316,7 @@ and a close with animations off skipping the hand-back. Not established: the mec
 second Linux failure. `upper 0` and `page 0` say the list had never been allocated when the
 assertion read it, so the reveal had nothing to scroll; this is no longer Linux-only.
 
-## G. On Windows the editor's scrollbar slider sometimes goes missing after an edit
+## E. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 
 **Severity**: Low (the slider alone, occasionally, and the next scroll brings it back).
 
@@ -366,7 +366,7 @@ Any pointer motion brings it back. Judged negligible by the operator.
   0 of 40 on the unchanged overlay scrollbar, so the 2-of-40 figure above has not been
   reproduced since.
 
-## Q. Every SVG is decoded by librsvg, which has a published use-after-free
+## F. Every SVG is decoded by librsvg, which has a published use-after-free
 
 **Severity**: High (a crafted SVG can corrupt memory on Linux wherever the interim screen
 misses a route; a crash is the realistic worst case, code execution is not
@@ -387,7 +387,7 @@ closes when ScrSEC-1 is marked Closed.
 **Not measured**: the screen's premise that librsvg follows no non-`data:` reference without a
 base URL (the loader is fed a stream with none) is read from librsvg's design.
 
-## R. Split-mode live-reload tests sometimes find the editor short of where they parked it on Windows CI
+## G. Split-mode live-reload tests sometimes find the editor short of where they parked it on Windows CI
 
 **Severity**: Low (test-only; the run passes on a re-run of the failed job).
 
@@ -417,7 +417,7 @@ state behind for the next.
 editor's vadjustment value and upper across the park, as was done for the reading-position
 flake fixed by "Keep the reading position when a view switch comes before the editor has scrolled into place" (2026-10-11).
 
-## S. On a dark desktop the comment field's hint text is invisible
+## H. On a dark desktop the comment field's hint text is invisible
 
 **Severity**: Low (only the hint is unreadable; the field works and typed text is legible).
 
@@ -435,7 +435,7 @@ placeholder's ink follows the desktop theme, so either the field's fill or the h
 is coming from somewhere other than the desktop theme. Read the field's CSS node tree with
 the dark theme active before guessing.
 
-## T. Closing a full-screen window logs a frame-clock critical on macOS
+## I. Closing a full-screen window logs a frame-clock critical on macOS
 
 **Severity**: Low (one critical per window closed; nothing visible, the session saves
 correctly).
@@ -467,7 +467,7 @@ is not ruled out.
 (leaving full screen before closing) would add AppKit's exit animation to every close of a
 full-screen window, a visible cost for a log line; it has not been tried.
 
-## V. The app sometimes stops responding on a user's Windows machine
+## J. The app sometimes stops responding on a user's Windows machine
 
 **Severity**: High (Windows closes the app; unsaved work survives only through the swap
 file).
