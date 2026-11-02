@@ -1224,11 +1224,12 @@ mod tests {
         use crate::testsymlink::escaping_reference_or_skip;
         use std::fs;
         let outer = tempfile::tempdir().unwrap();
-        let secret = outer.path().join("secret.png");
-        fs::write(&secret, b"x").unwrap();
+        let outside_target = outer.path().join("outside.png");
+        fs::write(&outside_target, b"x").unwrap();
         let base = outer.path().join("doc");
         fs::create_dir(&base).unwrap();
-        let Ok(escaping) = escaping_reference_or_skip(&base, &secret, "TDD 2.7 image containment")
+        let Ok(escaping) =
+            escaping_reference_or_skip(&base, &outside_target, "TDD 2.7 image containment")
         else {
             return;
         };
