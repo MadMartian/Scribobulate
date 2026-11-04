@@ -174,6 +174,7 @@ fn push_inlines(inlines: &[Inline], out: &mut String) {
             Inline::Text { text, .. } => out.push_str(text),
             Inline::Code(code) => out.push_str(code),
             Inline::Break => out.push('\n'),
+            Inline::Anchor(_) => {}
             // Alt text describes an image; it is not prose on the page.
             Inline::Image(_) => {}
             Inline::Emphasis(inner)

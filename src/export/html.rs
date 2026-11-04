@@ -136,6 +136,14 @@ fn block_html(block: &Block, page: &Page<'_>, out: &mut String) {
             }
             let _ = writeln!(out, "</h{level}>");
         }
+        // Nothing but named positions: the artefact gets the targets without an empty
+        // paragraph's margin above the heading they name.
+        Block::Paragraph(inlines)
+            if !inlines.is_empty() && inlines.iter().all(|i| matches!(i, Inline::Anchor(_))) =>
+        {
+            inlines_html(inlines, page, out);
+            out.push('\n');
+        }
         Block::Paragraph(inlines) => {
             out.push_str("<p>");
             inlines_html(inlines, page, out);
@@ -312,6 +320,9 @@ fn inlines_html(inlines: &[Inline], page: &Page<'_>, out: &mut String) {
             Inline::Subscript(v) => wrap(out, "sub", "", v, page),
             Inline::Highlight(v) => wrap(out, "mark", "", v, page),
             Inline::Break => out.push_str("<br>\n"),
+            Inline::Anchor(name) => {
+                let _ = write!(out, "<span id=\"{}\"></span>", escape_attr(name));
+            }
             Inline::Link { href, title, inner } => {
                 let t = title
                     .as_deref()
@@ -2038,6 +2049,78 @@ mod html_sink_tests {
         let out = html_of("# My Section\n\n[go](#my-section)\n");
         assert!(out.contains("id=\"my-section\""), "{out}");
         assert!(out.contains("href=\"#my-section\""), "{out}");
+    }
+
+    /// TDD 2.17b — a named anchor is a target in the artefact, in every container, and
+    /// takes no paragraph's margin of its own.
+    #[test]
+    fn a_named_anchor_reaches_the_artefact_in_every_container() {
+        let out = html_of(concat!(
+            "<a id=\"above\"></a>\n## Title\n\n",
+            "## <a name=\"inside\"></a>Second\n\n",
+            "Prose <a id=\"prose\"></a>here\n\n",
+            "- <a id=\"item\"></a>item\n\n",
+            "> <a id=\"quote\"></a>quote\n\n",
+            "| h |\n|---|\n| <a id=\"cell\"></a>c |\n\n",
+            "<div><a id=\"block\"></a></div>\n\n",
+        ));
+        for name in ["above", "inside", "prose", "item", "quote", "cell", "block"] {
+            let target = format!("<span id=\"{name}\"></span>");
+            assert_eq!(out.matches(&target).count(), 1, "{name}: {out}");
+        }
+        assert!(
+            !out.contains("<p><span id=\"above\"></span></p>"),
+            "an anchor-only paragraph has nothing to draw: {out}"
+        );
+        assert!(
+            !out.contains("<a id"),
+            "the source's own tag never passes through"
+        );
+    }
+
+    /// TDD 2.17b — the artefact's ids answer as the preview's resolver does. A shadowed
+    /// `id` left in would come first and capture the fragment.
+    #[test]
+    fn a_shadowed_named_anchor_is_not_an_id_in_the_artefact() {
+        let heading_wins = html_of("Prose <a id=\"setup\"></a>.\n\n# Setup\n");
+        assert_eq!(
+            heading_wins.matches("id=\"setup\"").count(),
+            1,
+            "{heading_wins}"
+        );
+        assert!(heading_wins.contains("<h1 id=\"setup\">"), "{heading_wins}");
+
+        let first_wins = html_of("Top <a id=\"x\"></a>.\n\nNext <a id=\"x\"></a>.\n");
+        assert_eq!(first_wins.matches("id=\"x\"").count(), 1, "{first_wins}");
+
+        let beats_alias = html_of("# 🚨 Escalations\n\nText <a id=\"escalations\"></a>.\n");
+        assert_eq!(
+            beats_alias.matches("id=\"escalations\"").count(),
+            1,
+            "{beats_alias}"
+        );
+        assert!(
+            !beats_alias.contains("<h1 id=\"-escalations\"><span"),
+            "{beats_alias}"
+        );
+    }
+
+    /// TDD 2.17b — only `id` and `name` are read: an untrusted document's other
+    /// attributes stay out.
+    #[test]
+    fn a_named_anchor_cannot_smuggle_markup_or_attributes_into_the_artefact() {
+        let out = html_of("<a id='x\"><script>alert(1)</script>' onclick=\"evil()\" href=\"javascript:x\"></a>\n\ntext\n");
+        assert!(!out.contains("<script>alert"), "{out}");
+        assert!(!out.contains("onclick"), "{out}");
+        assert!(!out.contains("javascript:"), "{out}");
+    }
+
+    /// TDD 2.17b — text that only looks like an anchor names nothing.
+    #[test]
+    fn an_anchor_in_image_alt_text_or_code_is_not_a_target() {
+        let out = html_of("![<a id=\"alt\"></a>](x.png)\n\n`<a id=\"code\"></a>`\n");
+        assert!(!out.contains("id=\"alt\""), "{out}");
+        assert!(!out.contains("id=\"code\""), "{out}");
     }
 
     /// TDD 2.17 / 25.1 — an emoji heading's emoji-free alias is an anchor in the

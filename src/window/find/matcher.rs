@@ -491,6 +491,7 @@ mod tests {
 
     /// The wrapper has to be a non-capturing GROUP: `\bcat|dog\b` binds each anchor to
     /// one branch of the alternation and quietly matches `dog` inside `dogma`.
+    /// TDD 11.14.
     #[test]
     fn whole_word_wraps_an_alternation_as_a_group() {
         assert_eq!(

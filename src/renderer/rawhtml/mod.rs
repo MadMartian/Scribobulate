@@ -28,7 +28,7 @@ mod lex;
 mod tags;
 
 pub(crate) use lex::{RawHtml, RawItem, TagKind};
-pub(crate) use tags::{attr, has_attr};
+pub(crate) use tags::{attr, element_name, has_attr};
 
 /// One raw-HTML element this application renders rather than drops.
 ///

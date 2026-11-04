@@ -308,6 +308,7 @@ pub(crate) fn removal_span(source: &str, span: Range<usize>) -> Range<usize> {
     ls..le
 }
 
+/// TDD 20.23.
 #[cfg(test)]
 mod tests {
     use super::*;

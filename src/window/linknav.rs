@@ -696,6 +696,51 @@ mod gtk_integration_tests {
         window.destroy();
     }
 
+    /// TDD 2.17b — the document names the place, in each container a tag can sit in: the
+    /// heading it stands above or inside, a paragraph, a list item, a table cell.
+    #[gtktest::test]
+    fn a_named_anchor_is_reached_wherever_the_document_put_it() {
+        let filler = "filler\n\n".repeat(30);
+        let md = format!(
+            "# Top\n\n{filler}<a id=\"above\"></a>\n## 🎲 Above Heading\n\nbody\n\n\
+             {filler}## <a name=\"inside\"></a>Inside Heading\n\n\
+             {filler}Prose <a id=\"prose\"></a>MARKPROSE\n\n\
+             {filler}- <a id=\"item\"></a>MARKITEM\n\n\
+             {filler}| h |\n|---|\n| <a id=\"cell\"></a>c |\n\nMARKAFTERTABLE\n"
+        );
+        let app = make_app("com.extollit.scribobulate.integrationtest.linknav.namedanchor");
+        let window = new_window(&app, "IT", &md, None);
+        let tab = state(&window).expect("state registered after new_window");
+        let view = preview_view_of(&tab);
+
+        for (fragment, heading) in [
+            ("#above", "Above Heading"),
+            ("#inside", "Inside Heading"),
+            ("#-above-heading", "Above Heading"),
+        ] {
+            let line = line_of_heading_text(&view, heading);
+            assert!(line > 0, "sanity: {heading} is not the first line");
+            crate::preview::activate_link_url(&view, fragment);
+            assert_eq!(scroll_target_line(&view), Some(line), "{fragment}");
+        }
+        for (fragment, mark) in [("#prose", "MARKPROSE"), ("#item", "MARKITEM")] {
+            let line = line_of_heading_text(&view, mark);
+            crate::preview::activate_link_url(&view, fragment);
+            assert_eq!(scroll_target_line(&view), Some(line), "{fragment}");
+        }
+        // A table is one anchored child, so a cell's anchor lands at the table.
+        let after_table = line_of_heading_text(&view, "MARKAFTERTABLE");
+        crate::preview::activate_link_url(&view, "#cell");
+        let at_table = scroll_target_line(&view).expect("#cell resolves");
+        assert!(
+            (after_table - 3..after_table).contains(&at_table),
+            "#cell lands at the table, just above the prose after it: {at_table} vs {after_table}"
+        );
+
+        drain_pending_idle();
+        window.destroy();
+    }
+
     /// The label inside `root` whose text contains `needle`, searched depth first.
     fn label_containing(root: &gtk::Widget, needle: &str) -> Option<gtk::Label> {
         if let Some(label) = root.downcast_ref::<gtk::Label>() {

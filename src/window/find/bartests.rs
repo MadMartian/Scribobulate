@@ -859,6 +859,7 @@ fn history_rows(win: &ApplicationWindow, btn: &gtk::MenuButton) -> Vec<String> {
 /// looks fine on a fixture with one search and is useless on a real one, which is why
 /// the "typed but never committed" leg is asserted explicitly rather than inferred from
 /// the committed ones being present.
+/// TDD 11.18.
 #[gtktest::test]
 fn each_field_offers_that_tabs_own_recent_entries() {
     let app = test_app("com.extollit.scribobulate.integrationtest.findhistory");

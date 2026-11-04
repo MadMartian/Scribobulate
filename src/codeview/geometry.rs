@@ -704,6 +704,7 @@ mod gtk_integration_tests {
     /// starts it, by emitting its `decelerate` signal (`#[gtktest::test]` cannot
     /// synthesise a wheel event). The in-body control asserts the glide really moved the
     /// adjustment before the jump, so the test cannot pass on a run that never glided.
+    /// TDD 2.17.
     #[gtktest::test]
     fn a_scroll_issued_during_a_kinetic_glide_still_lands() {
         use crate::testpump::{drain_for, Clock};

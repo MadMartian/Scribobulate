@@ -496,7 +496,6 @@
 - **And** the negative entry expires on a deliberately short TTL, so a transient outage does not read as permanent for the rest of the session; a re-attempt roughly once a minute per URL is the contract, not a defect
 - **Limitation, stated rather than promised** the fetch is synchronous on the main thread, so the toggle on which an attempt actually runs **does block the window** for the connect timeout (MEASURED at 5.001s against the 5s timeout). This rubric therefore gates the FREQUENCY of that stall, which is what the cache can deliver; it does not promise responsiveness, which only an asynchronous fetch could. Do not read a stall on the attempting toggle as a failure of this rubric; an attempt on *every* toggle is one.
 - **Rationale** a toggle re-walks the document, so every image tag is re-visited, and an uncached fetch would re-run per toggle. The earlier wording promised "the window stays responsive throughout", which the shipped synchronous fetch does not deliver — so the manual check spent its text documenting the rubric being violated. A rubric that states a contract the code cannot meet trains its reader to ignore the check
-- **Coverage** the decidable half is tested against the **shipped** thread-local cache, not a stand-in — `imagecache::the_shipped_cache_re_attempts_a_dead_url_only_after_its_ttl` counts fetch attempts across a run of toggles inside and past the TTL, which the injected clock (`get_or_fetch_at`) makes reachable without sleeping through a real minute; `imagecache::policy`'s own tests cover the cache type beneath it. The attempt count across REAL toggles is `tests/MANUAL-TEST.md` §2.26k, read from the log rather than the clock
 
 ### 2.26l An edit forgets which blocks the reader had collapsed
 - **Given** a document open in split mode with one or more disclosures collapsed by the reader
@@ -515,7 +514,6 @@
 - **And** the reader's collapsed blocks are still collapsed, because nothing the fold keys index has moved
 - **And** the same holds for a flush whose text differs only in CriticMarkup, in any mode: an annotation's delimiters are extracted before the walk that mints a fold key, so the space the keys are measured in is byte-identical either side of the edit
 - **Rationale** in split mode the editor buffer is the text a fold key indexes and `tab.source` is deliberately stale, so a flush that makes the two agree moves nothing. Invalidating on it stranded every control in the pane, silently and indefinitely — the reader saw a dead UI with no cause visible at either end, self-healing on the next keystroke, which is why it was reported repeatedly and never reproduced on demand. The predicate a fold map is cleared on is "has the text these keys index moved?", and the mode is part of that question
-- **Coverage** `window::livepreview::gtk_integration_tests::every_command_that_moves_the_source_leaves_the_disclosure_controls_acting` (a table, one row per command) and `a_save_in_split_mode_keeps_every_collapsed_block`; `tests/MANUAL-TEST.md` §2.26m
 
 ### 2.26n A control resolves against the live document, and re-derives when it cannot
 - **Given** a disclosure control built by one render, and an edit elsewhere in the document that moved its block without destroying it
@@ -527,14 +525,12 @@
 - **Then** the activation toggles **neither** — and the pane is re-rendered, so the reader's next click acts on a control that names the current document
 - **And** in no case does a block other than the one whose summary was activated change its collapsed state
 - **Rationale** refusal is the floor, not the fix: a control that gives up whenever the document moved is useless in the session where it is most used, and one that gives up *silently* is the defect 2.26m records. Identity — the construct's own **opening delimiter**, carried beside the offset — is what distinguishes "moved" from "ambiguous", and the two have different answers: follow the first, decline the second **and say so by re-rendering**. An identity a document repeats cannot be disambiguated by proximity alone, so proximity is not consulted for one. The identity is the delimiter rather than the whole block because a block contains the reader's own typing, which would otherwise destroy the identity of the block being typed in
-- **Coverage** `docref` (the resolution rules, both ambiguity policies, as plain strings), `renderer::disclosure::identity` (what the delimiter is, including the synthetic front-matter case), and `window::livepreview::gtk_integration_tests::a_control_minted_before_a_keystroke_follows_its_block_rather_than_refusing` / `a_control_whose_identity_the_document_repeats_toggles_neither_block`; `tests/MANUAL-TEST.md` §2.26n
 
 ### 2.26o Every path that reinstalls a render's maps also re-mints its controls
 - **Given** a path that rebuilds a render's buffer-keyed maps while keeping the existing widget tree — today the in-place annotation refresh
 - **When** it completes
 - **Then** the controls in that tree name the document the new maps were built from, and act on the click that follows
 - **Rationale** the widget tree and the maps are two halves of one render. A path that refreshes one and not the other leaves controls addressing a document that no longer exists, which is the same defect as 2.26m by a shorter route
-- **Coverage** the "annotation refresh" row of `every_command_that_moves_the_source_leaves_the_disclosure_controls_acting`; `tests/MANUAL-TEST.md` §2.26o
 
 ### 2.27 A document's front matter reads as metadata, not as content
 - **Given** a document that opens with a front-matter block — YAML between `---` fences, or TOML between `+++` fences
@@ -585,7 +581,6 @@
 - **And** the emoji-free slugs disambiguate among themselves the same way (`#escalations`, `#escalations-1`), and **GitHub's slug always wins**: a fragment that is some heading's GitHub slug goes to that heading even when it is also another heading's emoji-free slug (with `## 🚨 Escalations` and `## Escalations` both present, `#escalations` goes to the plain one, exactly as on GitHub, and the emoji heading is reached by `#-escalations`). No link that resolved before emoji-free slugs existed changes its target
 - **And** the first click on such a link lands even when it comes right after a mouse-wheel scroll, while the pane is still gliding to a stop; the same holds for an outline jump
 - **And** the exported HTML answers to the same fragments as the preview (25.1)
-- **Coverage** `anchors::tests` (the slug rule, emoji classes, duplicates and precedence); `codeview::geometry::gtk_integration_tests::a_scroll_issued_during_a_kinetic_glide_still_lands`; `window::linknav::gtk_integration_tests::a_keyboard_fragment_link_in_split_mode_makes_the_preview_lead`; `window::linknav::gtk_integration_tests::an_emoji_heading_is_reached_by_its_emoji_free_and_its_github_fragment`; `export::html::html_sink_tests::an_emoji_headings_alias_is_an_anchor_unless_a_github_id_shadows_it`; `tests/MANUAL-TEST.md` §2.17
 
 ### 2.7 Untrusted content is contained
 - **Given** a document containing embedded HTML or script
@@ -666,6 +661,17 @@
 - **When** the user copies
 - **Then** the clipboard contains the Markdown source **including** the collapsed body and its `<details>`/`<summary>` markup — a copy reflects the document, not what happens to be on screen
 - **And** this holds for every anchored affordance the construct introduces: a widget anchored in the buffer contributes a `U+FFFC` that the copy map must account for, and an unaccounted one silently omits the construct's source rather than failing loudly
+### 2.17b A document can name a place with an HTML anchor
+- **Given** a document holding an HTML anchor, spelled `<a id="x"></a>` or `<a name="x"></a>`, as GitHub honours it
+- **When** the reader activates a link to `#x`, from the same document or from another one
+- **Then** the view goes to that place, whichever container the anchor sits in: a paragraph, a list item, a block quote, a table cell (where it lands at the table), or a raw-HTML block
+- **And** an anchor inside a heading, or with nothing visible between it and the next heading, names that heading: the link lands on the heading itself, the heading's own generated link keeps working, and Back/Forward treats the two links as one place
+- **And** an anchor overrides nothing. A link that reaches a heading by its generated form keeps reaching it wherever an anchor of the same name sits, so no link that worked before anchors were read changes its target. Among anchors the first in the document wins, and an anchor beats a heading's emoji-free form
+- **And** the anchor draws nothing and takes no space in the preview, adds no row to the outline, changes no heading's outline label or the numbering of repeated headings, and nothing else on the tag has any effect
+- **And** text that only looks like an anchor names nothing: code, an HTML comment, image alt text, the contents of a script
+- **And** an anchor inside a collapsed block has no position until the block opens, exactly as a heading there has none (2.17)
+- **And** the exported HTML answers to the same names as the preview, by the same precedence (25.1)
+
 ### 2.18 Selecting over an image marks it as selected
 - **Given** a rendered document containing an image
 - **When** the user drag-selects (or Select-All) a region that spans the image
@@ -1850,6 +1856,7 @@
 - **When** the user chooses **Section** (Alt+S; ⌘S on macOS), beside Browse…
 - **Then** it lists the document's own headings the way the outline sidebar does — the same tree, nesting and filter box, with no heading pre-selected — read from the text being edited, unsaved changes included
 - **And** choosing a heading (a click, or Enter in the filter box for the first match) **replaces** whatever the URL field held with a link to that heading that the preview follows and GitHub resolves, a repeated title included
+- **And** a heading the document has named with an HTML anchor (2.17b) gets a link by that name, and an anchor with no heading of its own gets a row of its own, labelled with its name, in document order; a name that would land somewhere else is not offered. The filter box matches what a row shows, so a heading is found by its title and not by its anchor's name
 - **And** a document with no headings says so
 
 ### 10.11d Insert over an existing link or image edits it
@@ -1937,7 +1944,6 @@
 - **And given** the field already holds the previous term — a reopen
 - **Then** the term is selected, so the next keystroke replaces it rather than extending it
 - **And** the selection is in place **before** the field takes focus, never after: `GtkText` arms its cursor-blink tick on a focus-in that finds no selection and has no path that disarms it when one appears, so the other order leaves the toolkit blinking a caret over a selection and logging `unexpected blinking selection` about itself. Both orders settle to the same selection, so only an observation taken at the instant of focus-in can tell them apart
-- **Coverage** `window::find::bartests::the_find_field_is_selected_before_it_takes_focus`; `tests/MANUAL-TEST.md` §11.1
 
 ### 11.2 Incremental search highlights matches with a count
 - **Given** the find bar is open
@@ -1986,7 +1992,6 @@
 - **And given** the match the reader was on has been edited away entirely
 - **Then** Find Next lands on the first match **after where it was**, rather than at the start of the list
 - **Rationale** the cursor used to be a bare ordinal into a collection the code already detects the re-derivation of — the weakest reference there is, and one that fails while every visible thing reads correct: "4 of 9" stays on screen and Find Next resumes at the fourth hit of a different list, skipping or repeating with nothing to warn on. Clamping it converts an out-of-range panic into a confidently wrong answer; re-finding by the POSITION the cursor landed on is what makes the readout and the thing it counts the same object
-- **Coverage** `window::find::tests::find_next_resumes_at_the_hit_it_landed_on_not_at_its_old_ordinal`; `tests/MANUAL-TEST.md` §11.12
 
 ### 11.7 Find scrolls to a match inside a table cell
 - **Given** pure-preview mode showing a **tall** table (taller than the viewport) whose cells contain the search term, with the find bar open
@@ -2026,7 +2031,6 @@
 - **Then** `notebook` is not a match, in both panes
 - **And** the options survive switching view mode, and are restored per tab on a tab switch alongside the query (§15.12)
 - **And** the options are reached only from the find bar: the Edit menu carries none of them, because they mean nothing while the bar is closed
-- **Coverage** `window::find::parity::a_literal_query_counts_the_same_in_both_panes`, `…::whole_word_draws_the_word_boundary_at_the_same_characters`; `window::find::matcher::tests`; `app::menubar::tests::no_menu_item_drives_a_find_option`; `tests/MANUAL-TEST.md` §11.13
 
 ### 11.14 A regular expression means the same thing in both panes
 - **Given** the regular-expression option enabled
@@ -2036,7 +2040,6 @@
 - **And** an ANCHORED pattern is expected to count differently in the two panes, because `^`/`$` anchor per source line in the editor and per rendered element in the preview — a table cell is its own anchoring context there. That is a difference of what is being searched, not of how, and it is the one case where §11.13's cross-pane agreement does not apply
 - **And** the agreement is *measured* rather than argued: both engines are run over one fixture and their counts compared, because neither implementation can evidence a claim about the pair
 - **Rationale** four properties of GtkSourceView's own regular-expression handling decide the preview matcher's design and none is stated in its documentation — how whole word wraps a pattern (`\b(?:…)\b`, not a bare `\b…\b`, or `cat|dog` would differ), which characters bound a word, whether `^` is per line, and what a zero-width pattern does. The last one diverged and the editor decided it: a zero-length match is not a match, because it has nothing to highlight and nowhere to scroll to, so counting one promises a position the reader can never be taken to
-- **Coverage** `window::find::parity::whole_word_wraps_an_alternation_as_one_group`, `…::an_anchor_means_the_same_thing_on_a_multi_line_document`, `…::a_compound_pattern_counts_the_same_in_both_panes`, `…::a_zero_width_pattern_does_not_diverge`; `tests/MANUAL-TEST.md` §11.14
 
 ### 11.15 A malformed regular expression says so
 - **Given** the regular-expression option enabled
@@ -2044,7 +2047,6 @@
 - **Then** the readout says the pattern is invalid rather than "No matches", nothing is highlighted, and Next/Prev do nothing
 - **And** completing the pattern into a valid one recovers without closing and reopening the bar
 - **Rationale** "No matches" for a malformed pattern is the confidently-wrong answer §11.8 already refuses for the scanning case: it reports on the document when what actually happened is that nobody was able to ask. It is also the state a reader occupies for most of the time they spend typing a pattern, so it has to read as "keep going" rather than as an answer
-- **Coverage** `window::find::parity::a_malformed_pattern_is_rejected_by_both_engines`; `tests/MANUAL-TEST.md` §11.15
 
 ### 11.16 Search in selection confines the search, in either pane
 - **Given** edit mode with a selection spanning part of the document, containing some but not all occurrences of a term
@@ -2064,7 +2066,6 @@
 - **When** the reader looks at the in-selection control
 - **Then** it is insensitive with an explanatory description — and a captured scope keeps it sensitive after the selection that made it is gone, or the reader is stuck inside it
 - **Rationale** `GtkSourceSearchContext` has no bounded region: `occurrences-count` counts the whole buffer, `replace_all` replaces in it, and its `highlight` property lights it, so this cannot be a property and has to be a bound the application enforces on stepping, counting, replacing **and painting** alike — the editor turns the engine's highlight off while a passage is in force and paints the enumerated in-scope matches itself, in the engine's own `search-match` colour so the reader sees the same matches rather than a different kind of match. A confined count beside an unconfined highlight is worse than either being wrong alone: the two contradict, and the number is the half that reads as broken. The two panes hold the bound differently because they index different spaces (CAM § Document-Reference rows 15–16)
-- **Coverage** `window::find::scope::tests`; `window::find::bartests::search_in_selection_confines_the_editor_search_and_its_replacements`, `…::the_editor_lights_only_the_matches_inside_the_passage`, `…::a_preview_scope_that_no_longer_resolves_turns_itself_off`, `…::expanding_a_fold_above_a_passage_releases_the_passage`, `…::the_in_selection_control_is_unavailable_with_nothing_to_confine`; `tests/MANUAL-TEST.md` §11.17–§11.19
 
 ### 11.17 Replace acts on the match the reader is looking at
 - **Given** a match selected and highlighted as the current match
@@ -2076,7 +2077,6 @@
 - **And** with the regular-expression option enabled, a backreference in the replacement expands against the match it replaced
 - **And** Replace All reports the number of replacements it made **in the footer**, rather than the number of matches left — which after a Replace All is normally zero and would read as nothing having happened. It is the footer rather than the find bar's readout because the replacements fire the buffer's own change signal, the search engine re-scans, and its notification repaints that readout within about 60 ms: a message there survives one frame, and an in-process assertion taken before the re-search cannot tell that from a message that stays
 - **Rationale** a replacement naming a group the pattern does not have is accepted by GRegex and expands to NOTHING, deleting the match rather than erroring, so "no error" cannot be read as "the reader got what they asked for". A genuinely malformed replacement — a trailing lone backslash — is rejected, and that is the case the error path exists for
-- **Coverage** `window::find::parity::a_replacement_expands_a_backreference_against_its_match`; `window::find::bartests::replace_acts_on_the_current_match_and_then_advances`; `tests/MANUAL-TEST.md` §11.18
 
 ### 11.18 Each field offers that tab's own recent entries
 - **Given** the reader has committed several distinct search terms and replacement texts in one tab
@@ -2091,7 +2091,6 @@
 - **When** the restored tab's drop-downs are opened
 - **Then** its own history is still there, in the same order — while the find bar itself restores closed and no search is in force, because a restore must not put the reader into a search they did not just ask for
 - **And** a persisted history that is malformed — over long, holding a duplicate or an empty entry — is repaired on load rather than failing the session, which would cost every window and tab to protect a convenience
-- **Coverage** `window::find::history::tests`; `window::find::bartests::each_field_offers_that_tabs_own_recent_entries`; `tests/MANUAL-TEST.md` §11.20
 
 ### 11.19 In split mode, Find searches the pane the user is working in
 - **Given** split mode, with the user last working in one of the two panes (clicked into it, or moved the keyboard focus to it)
@@ -2101,7 +2100,6 @@
 - **And when** the user moves to the other pane while the bar is open
 - **Then** the search moves with them at once: the count and highlights describe the new pane, the pane they left keeps no find highlight, and the replace row is available only while the editor is the pane searched
 - **Rationale** searching the editor while the user reads the preview gave a count and highlights for a pane they were not looking at, and stepping appeared to do nothing: the editor's scroll to each match was undone by the split scroll sync, which follows the pane the user is working in
-- **Coverage** `winstate::viewmode::tests::find_searches_the_focused_pane_only_in_split`; `window::find::splittests::find_in_split_searches_and_scrolls_the_focused_preview`; `window::find::splittests::moving_focus_between_split_panes_moves_the_open_search`; `window::find::splittests::find_in_the_preview_takes_the_lead_from_a_wheeled_editor`; `window::find::splittests::find_in_the_preview_takes_the_lead_from_a_wheeled_editor_for_a_cell_hit`; `tests/MANUAL-TEST.md` §11.21
 
 ## 12. Document outline
 
@@ -2248,7 +2246,6 @@
 - **And given** the heading has been renamed or deleted since the row was built
 - **Then** the activation navigates nowhere rather than to the heading that has moved into its place
 - **Rationale** the row used to bake a source offset at build time and to fetch its Back/Forward slug through a positional index into a list the outline re-derives. Both are stale for the length of the debounce, and the second **launders a stale index into a durable record**: the slug resolves perfectly, to the wrong heading. The row now carries the heading's own title path — the same durable name the collapsed-section state is keyed on (12.24) — the editor's offset is re-derived from the live document at the click, and the recorded slug is found by TITLE rather than by any index. The row's build-time index survives for one job only, the preview scroll, because the preview's own heading list is of that same build
-- **Coverage** `outline::expansion` (what a path is and what it survives) and `window::outline_nav`'s navigation tests; `tests/MANUAL-TEST.md` §12.25
 
 ### 12.11 The outline panel has a labelled header
 - **Given** the outline sidebar is shown
@@ -2276,7 +2273,6 @@
 - **And** each match stays under its section path: ancestors that do not match are shown dimmed, and a match's own sub-headings are hidden unless they match too
 - **And** the filter bar shows how many headings match out of the total, beside the filter box, while the outline's own heading stays "Outline"
 - **And** when nothing matches, the outline says so instead of going blank
-- **Coverage** `sidebarfilter` and `outline::filter` (the matching rule and the kept tree); `window::sidebarfilter`'s integration tests; `tests/MANUAL-TEST.md` §12.26
 
 ### 12.27 Clearing the outline filter restores the outline as it was
 - **Given** an outline with some sections collapsed by the reader, and a filter applied
@@ -2284,21 +2280,18 @@
 - **Then** every heading returns, folded exactly as it was before filtering
 - **And** closing the filter always clears it, so no rows are ever hidden while the filter is out of sight
 - **And** Expand all and Collapse all are unavailable while the filter is applied, and available again once it is cleared
-- **Coverage** `window::sidebarfilter`'s integration tests, including a chevron turned inside the filtered tree; `tests/MANUAL-TEST.md` §12.27
 
 ### 12.28 Navigating from a filtered outline keeps the filter
 - **Given** a filtered outline
 - **When** the reader activates a shown heading, by click or keyboard, or presses Enter in the filter box
 - **Then** the document navigates to that heading, or to the first match for Enter, exactly as from an unfiltered outline (12.4, 12.5)
 - **And** the filter stays applied so the reader can try another match
-- **Coverage** `window::sidebarfilter`'s integration tests; `tests/MANUAL-TEST.md` §12.28
 
 ### 12.29 The outline filter follows the document
 - **Given** a filtered outline
 - **When** the document's headings change, or the reader switches to another tab and back
 - **Then** the filter is re-applied to the current headings, and each document keeps its own filter text
 - **And** the outline's current-section highlight falls on the nearest shown heading when its own section is filtered out
-- **Coverage** `window::sidebarfilter`'s integration tests; `tests/MANUAL-TEST.md` §12.29
 
 ## 13. Preview zoom
 
@@ -3766,7 +3759,6 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** the annotation lands on **the text they selected**, or on nothing at all if that text is gone; it never lands on a different range
 - **And** the comments the card offered back as the ones a commit would merge are the comments that commit actually merges — one reference, resolved the same way at both ends
 - **Rationale** the captured offsets used to index the preview **buffer** and were resolved at Save against the render's copymap, which every render and splice reinstalls wholesale (Document-Reference CAM row 8). The card is open across an unbounded number of main-loop turns — the reader is typing — which makes it the longest-held reference in the application, and its failure **writes into the document** rather than merely mis-positioning a view (ScrAP-187 is the same defect on the Remove/Edit path). The selection is therefore crossed into source space and anchored to its own text at the moment the card is raised, and resolved once, at the point the mutation is applied
-- **Coverage** `preview::annotate`'s capture/resolve tests, including a target that follows its text through an edit above it and one that resolves to nothing once the claim is gone; `tests/MANUAL-TEST.md` §20.23
 
 ### 20.18 Tab switch scrolls the annotations list to its selected row
 - **Given** two tabs whose annotations lists are long enough to scroll, tab A with a selected annotation row that is not the first, and the shared annotations scroller left showing a different part of the list (e.g. after visiting a shorter list, or parked at the top)
@@ -3807,7 +3799,6 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **And** the matching text is highlighted, the filter bar shows how many match out of the total, and an empty result is stated rather than left blank
 - **And** navigating from a shown annotation keeps the filter, and clearing it restores the full list
 - **And** adding, editing or removing annotations re-applies the filter to the updated list
-- **Coverage** `annotations::filter_entries`; `window::sidebarfilter`'s integration tests; `tests/MANUAL-TEST.md` §20.24
 
 ### 20.25 A sidebar filter is reachable and dismissable from the keyboard
 - **Given** either sidebar pane, shown or hidden
@@ -3815,7 +3806,6 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** the pane is shown if it was hidden, its filter opens, and the keyboard focus is in the filter box
 - **And** from the box, Down moves into the list at its first match and goes there, as an arrow key in the list does; typing while the list is focused opens the filter with what was typed; Escape clears a non-empty filter and, on an empty one, closes the filter and returns focus to the list, at the row the list highlights (or the list itself when nothing is highlighted) — without navigating or scrolling away from it
 - **And** the search buttons and filter boxes have accessible names, the buttons' tooltips name their shortcuts, and the match count is announced to assistive technology
-- **Coverage** `window::sidebarfilter`'s integration tests (command, Escape, Down selecting and going to the first match after a prior navigation, focus returned to the highlighted row, names, the count's status role); typing into the list is GtkSearchBar's own key capture and is checked by hand, `tests/MANUAL-TEST.md` §20.25
 
 ## 21. Crash forensics
 

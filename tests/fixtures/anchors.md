@@ -225,3 +225,26 @@ StemTail paragraph 14. Lorem ipsum dolor sit amet, consectetur adipiscing elit, 
 StemTail paragraph 15. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
 
 StemTail paragraph 16. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+
+## Named anchors (TDD 2.17b)
+
+- [To the named heading](#ci-flakes)
+- [To the same heading by its generated slug](#-ci-flakes-separating-signal-from-noise)
+- [To the name inside a heading](#inside-name)
+- [To a place in a paragraph](#a-sentence)
+- [To a place in a table cell](#a-cell)
+
+<a id="ci-flakes"></a>
+## 🎲 CI Flakes: Separating Signal from Noise
+
+Body of the named heading.
+
+## <a name="inside-name"></a>A Name Inside a Heading
+
+Body.
+
+A paragraph with a named place <a id="a-sentence"></a>in the middle of it.
+
+| Column |
+|---|
+| A cell with a name <a id="a-cell"></a> |

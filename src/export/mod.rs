@@ -220,6 +220,9 @@ pub(crate) enum Inline {
     Image(ImageRef),
     /// A hard line break (a soft break exports as a space, TDD 2.20).
     Break,
+    /// A document-named position (`<a id="x">`, TDD 2.17b). Draws nothing. The walk's
+    /// post-pass leaves only the anchors the preview's resolver would answer to.
+    Anchor(String),
     /// An annotated claim — the index into [`ExportDoc::annotations`] plus the run it
     /// covers. Produced by a post-pass over the built tree, never by the walk, so the
     /// claim's extent is decided by the one mapper the preview uses.
@@ -266,7 +269,11 @@ impl Inline {
             | Inline::Link { inner: v, .. }
             | Inline::Claim { inner: v, .. } => Some(v),
             // Leaves. Listed, never `_`.
-            Inline::Text { .. } | Inline::Code(_) | Inline::Image(_) | Inline::Break => None,
+            Inline::Text { .. }
+            | Inline::Code(_)
+            | Inline::Image(_)
+            | Inline::Break
+            | Inline::Anchor(_) => None,
         }
     }
 
@@ -281,7 +288,11 @@ impl Inline {
             | Inline::Highlight(v)
             | Inline::Link { inner: v, .. }
             | Inline::Claim { inner: v, .. } => Some(v),
-            Inline::Text { .. } | Inline::Code(_) | Inline::Image(_) | Inline::Break => None,
+            Inline::Text { .. }
+            | Inline::Code(_)
+            | Inline::Image(_)
+            | Inline::Break
+            | Inline::Anchor(_) => None,
         }
     }
 }
@@ -395,6 +406,7 @@ fn collect_text(inlines: &[Inline], out: &mut String) {
             Inline::Text { text, .. } => out.push_str(text),
             Inline::Code(c) => out.push_str(c),
             Inline::Break => out.push(' '),
+            Inline::Anchor(_) => {}
             Inline::Image(img) => out.push_str(&img.alt),
             Inline::Emphasis(v)
             | Inline::Strong(v)

@@ -165,6 +165,9 @@ fn emit_markup(
                 out.push_str("</span>");
             }
             Inline::Break => out.push('\n'),
+            // A PDF sink carries no in-document fragments, so a named position has
+            // nothing to become.
+            Inline::Anchor(_) => {}
         }
     }
 }

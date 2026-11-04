@@ -4,12 +4,14 @@
 //! The rows, folding and filter come from the sidebar's own builders
 //! (`outline_view::build_heading_picker`, `outline::filter::filter_outline`), so the
 //! picker lists exactly the headings the outline lists, and a filter narrows it by the
-//! same rule. The fragment written is the heading's canonical anchor
-//! (`outline::section_fragments`), so the link resolves on the page and on GitHub.
+//! same rule. The picker adds one thing the sidebar does not list: a row per bare named
+//! anchor (`<a id="x"></a>` with no heading of its own). The fragment written is the name
+//! the document gave the place, or a heading's canonical anchor
+//! (`outline::section_entries`), so the link resolves on the page and on GitHub.
 
 use crate::outline::expansion::{paths_in_document_order, HeadingPath};
 use crate::outline::filter::{filter_outline, RowMark};
-use crate::outline::{build_tree, section_fragments, Heading};
+use crate::outline::{build_tree, Heading, SectionEntries};
 use gtk::prelude::*;
 use std::rc::Rc;
 
@@ -20,8 +22,8 @@ pub(in crate::window) struct SectionSpec {
     /// Index of the field whose row gets the Section button, and whose text a pick
     /// replaces.
     pub(in crate::window) field: usize,
-    /// The document's headings, read from the text the link is being inserted into.
-    pub(in crate::window) headings: Vec<Heading>,
+    /// The picker's rows and links, read from the text the link is being inserted into.
+    pub(in crate::window) entries: SectionEntries,
 }
 
 /// The picker's fixed viewport. Fixed rather than natural so filtering, which changes
@@ -120,10 +122,10 @@ pub(super) fn section_button(spec: SectionSpec, url: &gtk::Entry) -> gtk::MenuBu
     popover.set_child(Some(&vbox));
     button.set_popover(Some(&popover));
 
-    let paths = paths_in_document_order(&build_tree(&spec.headings));
+    let paths = paths_in_document_order(&build_tree(&spec.entries.headings));
     let picker = Rc::new(Picker {
-        fragments: section_fragments(&spec.headings),
-        headings: spec.headings,
+        fragments: spec.entries.fragments,
+        headings: spec.entries.headings,
         paths,
         url: url.downgrade(),
         popover: popover.downgrade(),

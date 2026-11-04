@@ -10,6 +10,7 @@ use super::{Align, Block, ExportDoc, ImageRef, ImageSource, Inline, ListItem, Re
 use crate::links::{self, ImageResolution};
 use crate::renderer::{is_inline_tag, BlockScripts, Script};
 use pulldown_cmark::{CodeBlockKind, Event, Tag, TagEnd};
+use std::collections::HashSet;
 
 pub(super) struct Builder<'a> {
     opts: &'a RenderOptions,
@@ -198,7 +199,7 @@ impl<'a> Builder<'a> {
         // — but a document that ends mid-frame must not silently lose its last run.
         self.flush_implicit();
         let mut blocks = self.block_stack.pop().unwrap_or_default();
-        drop_shadowed_aliases(&mut blocks, &self.slugger);
+        settle_named_positions(&mut blocks, &self.slugger);
         ExportDoc {
             title: self.title.take(),
             blocks,
@@ -742,6 +743,9 @@ impl<'a> Builder<'a> {
 
     /// One INLINE raw-HTML tag: images only. See the `Event::InlineHtml` arm.
     fn inline_html(&mut self, html: &str) {
+        for name in crate::anchors::scan_named_anchors(html) {
+            self.push_inline(Inline::Anchor(name));
+        }
         for tag in crate::renderer::scan_image_tags(html) {
             match tag {
                 crate::renderer::ImgTag::PictureOpen => {
@@ -808,25 +812,84 @@ impl<'a> Builder<'a> {
     }
 }
 
-/// Clear every heading alias some heading's own `id` shadows — the export's half of
-/// `anchors::HeadingAnchors::new`. Only possible once the walk is over, because the
-/// heading that shadows an alias may come after it. Left in place, an HTML anchor for
-/// the alias would come FIRST in the document and capture the fragment from the heading
-/// GitHub resolves it to, which would make the artefact disagree with the preview.
-fn drop_shadowed_aliases(blocks: &mut [Block], slugger: &crate::anchors::HeadingSlugger) {
+/// Make the artefact's ids answer as `anchors::HeadingAnchors::new` does: a heading's
+/// `id`, then the first anchor of a name, then an emoji-free alias. Only possible once
+/// the walk is over, because the name that shadows another may come after it. Left in
+/// place, the shadowed `id` could come FIRST in the document and capture the fragment,
+/// which would make the artefact disagree with the preview.
+fn settle_named_positions(blocks: &mut [Block], slugger: &crate::anchors::HeadingSlugger) {
+    let mut kept = HashSet::new();
+    keep_first_anchors(blocks, slugger, &mut kept);
+    drop_shadowed_aliases(blocks, slugger, &kept);
+}
+
+fn keep_first_anchors(
+    blocks: &mut [Block],
+    slugger: &crate::anchors::HeadingSlugger,
+    kept: &mut HashSet<String>,
+) {
+    for block in blocks {
+        match block {
+            Block::Heading { inlines, .. } | Block::Paragraph(inlines) => {
+                keep_first_inline_anchors(inlines, slugger, kept);
+            }
+            Block::BlockQuote(inner) => keep_first_anchors(inner, slugger, kept),
+            Block::Disclosure { summary, body, .. } => {
+                keep_first_inline_anchors(summary, slugger, kept);
+                keep_first_anchors(body, slugger, kept);
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    keep_first_anchors(&mut item.blocks, slugger, kept);
+                }
+            }
+            Block::Table { head, rows, .. } => {
+                for cell in head.iter_mut().chain(rows.iter_mut().flatten()) {
+                    keep_first_inline_anchors(cell, slugger, kept);
+                }
+            }
+            Block::CodeBlock { .. } | Block::Rule => {}
+        }
+    }
+}
+
+fn keep_first_inline_anchors(
+    inlines: &mut Vec<Inline>,
+    slugger: &crate::anchors::HeadingSlugger,
+    kept: &mut HashSet<String>,
+) {
+    inlines.retain_mut(|inline| {
+        if let Some(nested) = inline.nested_mut() {
+            keep_first_inline_anchors(nested, slugger, kept);
+        }
+        match inline {
+            Inline::Anchor(name) => !slugger.issued(name) && kept.insert(name.clone()),
+            _ => true,
+        }
+    });
+}
+
+fn drop_shadowed_aliases(
+    blocks: &mut [Block],
+    slugger: &crate::anchors::HeadingSlugger,
+    anchors: &HashSet<String>,
+) {
     for block in blocks {
         match block {
             Block::Heading { alias, .. } => {
-                if alias.as_deref().is_some_and(|a| slugger.issued(a)) {
+                if alias
+                    .as_deref()
+                    .is_some_and(|a| slugger.issued(a) || anchors.contains(a))
+                {
                     *alias = None;
                 }
             }
             Block::BlockQuote(inner) | Block::Disclosure { body: inner, .. } => {
-                drop_shadowed_aliases(inner, slugger);
+                drop_shadowed_aliases(inner, slugger, anchors);
             }
             Block::List { items, .. } => {
                 for item in items {
-                    drop_shadowed_aliases(&mut item.blocks, slugger);
+                    drop_shadowed_aliases(&mut item.blocks, slugger, anchors);
                 }
             }
             Block::Paragraph(_) | Block::CodeBlock { .. } | Block::Table { .. } | Block::Rule => {}

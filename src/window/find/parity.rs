@@ -99,6 +99,7 @@ fn opts(case_sensitive: bool, whole_word: bool, regex: bool) -> FindOptions {
 
 /// **The baseline.** A plain literal under each of the four case/word combinations must
 /// count the same in both panes, or nothing measured below means anything.
+/// TDD 11.13.
 #[gtktest::test]
 fn a_literal_query_counts_the_same_in_both_panes() {
     const HAY: &str = "note Note NOTE notebook footnote note_2 note2 note-2\n";
@@ -120,6 +121,7 @@ fn a_literal_query_counts_the_same_in_both_panes() {
 /// `note_2` (underscore), `note2` (digit), `note-2` (hyphen) and a non-ASCII letter.
 ///
 /// MEASURED: they agree. The matcher keeps its own predicate.
+/// TDD 11.13.
 #[gtktest::test]
 fn whole_word_draws_the_word_boundary_at_the_same_characters() {
     for hay in [
@@ -147,6 +149,7 @@ fn whole_word_draws_the_word_boundary_at_the_same_characters() {
 ///
 /// MEASURED: both anchor per line. `$` is measured with it, since the same flag governs
 /// both.
+/// TDD 11.14.
 #[gtktest::test]
 fn an_anchor_means_the_same_thing_on_a_multi_line_document() {
     const HAY: &str = "alpha one\nbeta two\nalpha three\ngamma alpha\n";
@@ -186,6 +189,7 @@ fn a_compound_pattern_counts_the_same_in_both_panes() {
 /// number of them — the guard never fires on a fixture this size, so it is a hang
 /// stopper rather than a behaviour difference. Recorded here because "the preview is
 /// wrong to truncate" was the live hypothesis, and it is not.
+/// TDD 11.14.
 #[gtktest::test]
 fn a_zero_width_pattern_does_not_diverge() {
     for hay in ["aaa\n", "abcabc\n", "\n"] {

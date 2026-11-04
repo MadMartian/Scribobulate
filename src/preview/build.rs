@@ -567,6 +567,7 @@ pub(super) fn build_products(buf: &TextBuffer, prepared: &Prepared<'_>) -> Rende
     // One entry per heading the SOURCE declares, in document order, whether or not a
     // collapsed disclosure kept it out of the buffer. See `outline::HeadingSite`.
     let mut heading_sites: Vec<crate::outline::HeadingSite> = Vec::new();
+    let mut named_anchors = crate::anchors::NamedAnchorWalk::<i32>::default();
     // Through the front-matter seam, rendering the block as a collapsed disclosure —
     // the ONE walk that shows it (TDD 2.27). Every map built below is keyed to these
     // ranges, and the seam's synthetic events carry the block's real source bytes.
@@ -684,6 +685,11 @@ pub(super) fn build_products(buf: &TextBuffer, prepared: &Prepared<'_>) -> Rende
             }
         }
         let is_heading_end = matches!(ev, Event::End(TagEnd::Heading(_)));
+        // Outside a collapsed body only, like the headings themselves: a `#fragment`
+        // names a position, and hidden text has none until the reader expands it.
+        if !collapsed {
+            named_anchors.observe(&ev, before);
+        }
         r.process(ev);
         // Paired with `before` above: the renderer's cursor, not the buffer's length.
         let after = r.end_offset();
@@ -806,7 +812,7 @@ pub(super) fn build_products(buf: &TextBuffer, prepared: &Prepared<'_>) -> Rende
     // Slug → buffer offset, over the headings that actually reached the buffer: a
     // `#fragment` names a position, and a heading inside a collapsed block has none
     // until the reader expands it.
-    let heading_map = crate::anchors::HeadingAnchors::new(r.headings);
+    let heading_map = crate::anchors::HeadingAnchors::new(r.headings, named_anchors.finish());
 
     // The drawn summary band's extents, PROJECTED from the extents rather than
     // recorded beside them: one producer, so the band cannot come to disagree with
@@ -3867,6 +3873,29 @@ mod gtk_integration_tests {
                 "a copy over the collapsed block must carry {expected:?}, got {copied:?}"
             );
         }
+    }
+
+    /// TDD 2.17b — hidden text has no position, exactly as a hidden heading has none. An
+    /// anchor is not lost when the block opens: it resolves on the re-render.
+    #[gtktest::test]
+    fn a_named_anchor_in_a_collapsed_block_has_no_position_until_it_opens() {
+        let md = "# Top\n\n<details>\n<summary>S</summary>\n\n\
+                  Text <a id=\"hidden\"></a>.\n\n<a id=\"named\"></a>\n## Hidden\n\n</details>\n\n# End\n";
+        let closed = build_render_products(md, None, 1.0, false);
+        assert_eq!(closed.maps.heading_map.resolve("hidden"), None);
+        assert_eq!(closed.maps.heading_map.resolve("named"), None);
+        assert!(
+            closed.maps.heading_map.resolve("end").is_some(),
+            "precondition: the document rendered and the walk went on past the block"
+        );
+        let opened = md.replace("<details>", "<details open>");
+        let open = build_render_products(&opened, None, 1.0, false);
+        assert!(open.maps.heading_map.resolve("hidden").is_some());
+        assert_eq!(
+            open.maps.heading_map.resolve("named").map(|r| r.0),
+            Some("hidden"),
+            "attached to its heading inside the block"
+        );
     }
 
     /// **Rubric 12.22 / `outline::HeadingSite`.** One site per heading the SOURCE

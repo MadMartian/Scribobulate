@@ -117,6 +117,7 @@ mod tests {
         assert!("bogus".parse::<ViewMode>().is_err());
     }
 
+    /// TDD 11.19.
     #[test]
     fn find_searches_the_focused_pane_only_in_split() {
         for focused in [FocusedPane::Editor, FocusedPane::Preview] {

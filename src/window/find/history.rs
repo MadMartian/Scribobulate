@@ -114,6 +114,7 @@ pub(crate) fn row_label(entry: &str) -> String {
     }
 }
 
+/// TDD 11.18.
 #[cfg(test)]
 mod tests {
     use super::{row_label, FindHistory, HISTORY_CAP, HISTORY_LABEL_CHARS};

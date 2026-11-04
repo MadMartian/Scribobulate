@@ -360,6 +360,7 @@ fn find_in_the_preview_takes_the_lead_from_a_wheeled_editor() {
 ///
 /// Mutation check: dropping the `lead` call from `panescroll::preview_to_cell` fails
 /// the driver assertion here, and the body-hit twin above stays green.
+/// TDD 11.19.
 #[gtktest::test]
 fn find_in_the_preview_takes_the_lead_from_a_wheeled_editor_for_a_cell_hit() {
     let mut md = String::from("# Split find in a cell\n\n");

@@ -131,19 +131,99 @@ fn level_to_u8(level: HeadingLevel) -> u8 {
     }
 }
 
-/// The same-document link (`#slug`) that reaches each heading, in document order.
+/// What Insert Link's "Section" picker offers: its rows and the same-document link
+/// each one writes, index for index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SectionEntries {
+    /// The document's headings, plus a leaf row for each bare named anchor.
+    pub(crate) headings: Vec<Heading>,
+    /// `#fragment` per row.
+    pub(crate) fragments: Vec<String>,
+}
+
+/// Where a picker row's fragment lands, for asking the page's own resolver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SectionSite {
+    Heading(usize),
+    Bare(usize),
+}
+
+/// The rows the Section picker lists for `md`, and the link each writes.
 ///
-/// Each heading's canonical GitHub slug, numbered `-1`, `-2` across the whole document by
-/// the same [`crate::anchors::HeadingSlugger`] the preview and the export issue anchors
-/// with, so a link written from this list is one the page resolves. The emoji-free alias
-/// is not offered: it is a convenience for hand-written links, and the canonical slug is
-/// the one GitHub also answers to. Backs Insert Link's "Section" picker.
-pub(crate) fn section_fragments(headings: &[Heading]) -> Vec<String> {
-    let mut slugger = crate::anchors::HeadingSlugger::default();
-    headings
-        .iter()
-        .map(|h| format!("#{}", slugger.next(&h.text).slug))
-        .collect()
+/// A heading writes the name the document gave it (`<a id="x"></a>` above or inside it),
+/// or else its canonical GitHub slug, numbered across the document by the same
+/// [`crate::anchors::HeadingSlugger`] the preview and the export use. A bare anchor gets
+/// a row of its own, labelled with its fragment, because it is a place a link can go and
+/// has no heading to be reached through. A name is offered only if the page's own
+/// resolver sends it here: one shadowed by a heading's slug or an earlier anchor would
+/// write a link that lands somewhere else. The emoji-free alias is not offered: it is a
+/// convenience for hand-written links, and the canonical slug is the one GitHub also
+/// answers to.
+pub(crate) fn section_entries(md: &str) -> SectionEntries {
+    use crate::anchors::{AnchorTarget, HeadingAnchors, HeadingSlugger, NamedAnchor};
+    let (headings, named) = walk_headings(md);
+
+    let mut slugger = HeadingSlugger::default();
+    let slugs: Vec<_> = headings.iter().map(|h| slugger.next(&h.text)).collect();
+    let sited = named.iter().enumerate().map(|(k, a)| NamedAnchor {
+        name: a.name.clone(),
+        target: match a.target {
+            AnchorTarget::Heading(i) => AnchorTarget::Heading(i),
+            AnchorTarget::Bare(_) => AnchorTarget::Bare(SectionSite::Bare(k)),
+        },
+    });
+    let page = HeadingAnchors::new(
+        slugs
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, s)| (s, SectionSite::Heading(i))),
+        sited,
+    );
+
+    let mut entries = SectionEntries {
+        headings: Vec::new(),
+        fragments: Vec::new(),
+    };
+    let bare_rows = |entries: &mut SectionEntries, before: usize| {
+        for (k, anchor) in named.iter().enumerate() {
+            if anchor.target != AnchorTarget::Bare(before) {
+                continue;
+            }
+            let reaches_here = page
+                .resolve(&anchor.name)
+                .is_some_and(|(_, site)| site == SectionSite::Bare(k));
+            if !reaches_here {
+                continue;
+            }
+            let fragment = format!("#{}", anchor.name);
+            entries.headings.push(Heading {
+                // The deepest tier, so the row is a leaf under the heading above it and
+                // no later heading can nest beneath it.
+                level: 6,
+                text: fragment.clone(),
+                src_offset: headings
+                    .get(before)
+                    .or(headings.last())
+                    .map_or_else(|| OriginalByteOffset::new(0), |h| h.src_offset),
+            });
+            entries.fragments.push(fragment);
+        }
+    };
+    for (i, (heading, slug)) in headings.iter().zip(&slugs).enumerate() {
+        bare_rows(&mut entries, i);
+        let own_name = named.iter().find(|a| {
+            a.target == AnchorTarget::Heading(i)
+                && page
+                    .resolve(&a.name)
+                    .is_some_and(|(_, site)| site == SectionSite::Heading(i))
+        });
+        let fragment = own_name.map_or(slug.slug.as_str(), |a| a.name.as_str());
+        entries.headings.push(heading.clone());
+        entries.fragments.push(format!("#{fragment}"));
+    }
+    bare_rows(&mut entries, headings.len());
+    entries
 }
 
 /// Walk the Markdown source and return its headings in document order.
@@ -154,7 +234,15 @@ pub(crate) fn section_fragments(headings: &[Heading]) -> Vec<String> {
 /// empty document — or one with no headings — yields an empty vector (the panel
 /// renders that as a muted "No headings" placeholder, not an error).
 pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
+    walk_headings(md).0
+}
+
+/// [`extract_headings`] plus the document's named anchors. A bare anchor's position is
+/// the number of headings before it. One walk, so an anchor's heading ordinal is an
+/// index into the returned list.
+fn walk_headings(md: &str) -> (Vec<Heading>, Vec<crate::anchors::NamedAnchor<usize>>) {
     let mut headings: Vec<Heading> = Vec::new();
+    let mut named = crate::anchors::NamedAnchorWalk::<usize>::default();
     // While inside a heading: (level, source-start offset, accumulated text).
     let mut current: Option<(u8, usize, String)> = None;
 
@@ -191,6 +279,7 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
     // Front matter omitted: it declares no heading, and the parser's reading of its
     // closing fence as a setext underline used to list the whole block as an H2 here.
     for (ev, range) in frontmatter::events(md, frontmatter::Show::Omitted) {
+        named.observe(&ev, headings.len());
         match ev {
             Event::Start(Tag::Heading { level, .. }) => {
                 current = Some((level_to_u8(level), range.start, String::new()));
@@ -293,7 +382,7 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
             | Event::TaskListMarker(_) => {}
         }
     }
-    headings
+    (headings, named.finish())
 }
 
 #[cfg(test)]
@@ -429,10 +518,10 @@ mod tests {
     }
 
     #[test]
-    fn section_fragments_number_duplicates_and_keep_githubs_emoji_hyphen() {
+    fn section_entries_number_duplicates_and_keep_githubs_emoji_hyphen() {
         let md = "# Intro\n\n## Notes\n\n## Notes\n\n## 🚨 Escalations\n";
         assert_eq!(
-            section_fragments(&extract_headings(md)),
+            section_entries(md).fragments,
             vec!["#intro", "#notes", "#notes-1", "#-escalations"]
         );
     }
@@ -442,7 +531,7 @@ mod tests {
     /// (`anchors::HeadingSlugger`), so the outline's labels slugged here must equal its
     /// heading ids for every heading shape whose label is reduced from markup.
     #[test]
-    fn section_fragments_match_the_anchors_the_document_issues() {
+    fn section_entries_match_the_anchors_the_document_issues() {
         let md = "---\ntitle: x\n---\n# **Bold** and `code`\n\n## [Linked](http://x) title\n\n\
                   ## {==Marked==}{>>note<<} heading\n\n## ~~Struck~~ out\n\nSetext\n------\n\n\
                   ## Café déjà vu\n\n## Intro\n\n## Intro\n";
@@ -455,7 +544,7 @@ mod tests {
             })
             .collect();
         assert_eq!(ids.len(), 8, "fixture lists eight headings: {ids:?}");
-        assert_eq!(section_fragments(&extract_headings(md)), ids);
+        assert_eq!(section_entries(md).fragments, ids);
     }
 
     /// A setext heading's content may span several source lines. A break between
@@ -478,8 +567,109 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(section_fragments(&extract_headings(&md)), ids);
+            assert_eq!(section_entries(&md).fragments, ids);
             assert_eq!(ids, vec!["#foo-bar", "#one-two"], "{md:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod section_entry_tests {
+    use super::{extract_headings, section_entries};
+
+    fn rows(md: &str) -> Vec<(String, String)> {
+        let e = section_entries(md);
+        e.headings
+            .into_iter()
+            .map(|h| h.text)
+            .zip(e.fragments)
+            .collect()
+    }
+
+    fn row(text: &str, fragment: &str) -> (String, String) {
+        (text.to_string(), fragment.to_string())
+    }
+
+    /// TDD 2.17b, 10.11c: an anchor names a section, and leaves the outline's label alone.
+    #[test]
+    fn a_section_with_a_named_anchor_writes_that_name() {
+        assert_eq!(
+            rows("# One\n\n<a id=\"flakes\"></a>\n## 🎲 CI Flakes\n"),
+            [row("One", "#one"), row("🎲 CI Flakes", "#flakes")]
+        );
+        assert_eq!(rows("## <a name=\"f\">Inside</a>\n"), [row("Inside", "#f")]);
+    }
+
+    /// TDD 10.11c — a name that would land somewhere else is not offered.
+    #[test]
+    fn a_shadowed_name_is_not_written_because_it_lands_elsewhere() {
+        // `#two` is the second heading's slug, so it cannot name the first.
+        assert_eq!(
+            rows("<a id=\"two\"></a>\n# One\n\n# Two\n"),
+            [row("One", "#one"), row("Two", "#two")]
+        );
+        // The first anchor of a name owns it.
+        assert_eq!(
+            rows("<a id=\"x\"></a>\n# One\n\n<a id=\"x\"></a>\n# Two\n"),
+            [row("One", "#x"), row("Two", "#two")]
+        );
+    }
+
+    #[test]
+    fn duplicate_headings_keep_github_numbering() {
+        assert_eq!(
+            rows("# Same\n\n# Same\n"),
+            [row("Same", "#same"), row("Same", "#same-1")]
+        );
+    }
+
+    /// TDD 10.11c — an anchor with no heading of its own gets a row of its own.
+    #[test]
+    fn a_bare_anchor_gets_a_row_in_document_order_that_nests_nothing() {
+        let md = "Top <a id=\"t\"></a>.\n\n# One\n\nMid <a id=\"m\"></a>.\n\n## Two\n\nEnd <a id=\"e\"></a>.\n";
+        assert_eq!(
+            rows(md),
+            [
+                row("#t", "#t"),
+                row("One", "#one"),
+                row("#m", "#m"),
+                row("Two", "#two"),
+                row("#e", "#e"),
+            ]
+        );
+        let entries = section_entries(md);
+        let tree = super::build_tree(&entries.headings);
+        let one = tree
+            .iter()
+            .find(|n| n.text == "One")
+            .expect("One is a root");
+        assert!(
+            one.children.iter().any(|c| c.text == "Two"),
+            "a later heading must not nest under a bare anchor's row"
+        );
+    }
+
+    /// TDD 10.11c — a shadowed name gets no row.
+    #[test]
+    fn a_bare_anchor_shadowed_by_a_heading_gets_no_row() {
+        assert_eq!(
+            rows("Prose <a id=\"one\"></a>.\n\n# One\n"),
+            [row("One", "#one")]
+        );
+    }
+
+    /// TDD 2.17b — the outline lists headings only: an anchor adds no row and changes no
+    /// label.
+    #[test]
+    fn the_outline_is_unmoved_by_anchors() {
+        let plain = extract_headings("# One\n\nProse.\n\n## Two\n");
+        let texts = |md: &str| -> Vec<String> {
+            extract_headings(md).into_iter().map(|h| h.text).collect()
+        };
+        let with = "<a id=\"a\"></a>\n# <a id=\"b\"></a>One\n\nProse <a id=\"c\"></a>.\n\n## <a name=\"d\">Two</a>\n";
+        assert_eq!(
+            texts(with),
+            plain.into_iter().map(|h| h.text).collect::<Vec<_>>()
+        );
     }
 }

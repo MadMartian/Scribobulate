@@ -14,9 +14,9 @@ pub(crate) fn insert_link(window: &ApplicationWindow) {
     let Some(st) = state(window) else { return };
     let (start, end, sel) = selection_range_and_text(&st.editor_buf);
     let start_dir = st.doc_dir();
-    // The headings of the text the link is going INTO — the editor's, unsaved edits
+    // The sections of the text the link is going INTO — the editor's, unsaved edits
     // included — read once, when the dialog opens.
-    let headings = crate::outline::extract_headings(&st.shown_source(ViewMode::Edit));
+    let entries = crate::outline::section_entries(&st.shown_source(ViewMode::Edit));
     // If the selection is exactly one existing link, EDIT it (pre-fill both fields)
     // rather than wrapping it again; otherwise the selection becomes the caption.
     // The dialog has no Title field, so an edited link's title is carried through
@@ -42,7 +42,7 @@ pub(crate) fn insert_link(window: &ApplicationWindow) {
                 start_dir,
                 image_filter: false,
             }),
-            section: Some(SectionSpec { field: 1, headings }),
+            section: Some(SectionSpec { field: 1, entries }),
             ..Default::default()
         },
         "Insert",

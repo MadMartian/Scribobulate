@@ -167,6 +167,14 @@ fn read_value(s: &str, at: &mut usize) -> String {
     }
 }
 
+/// The element name of a lowercased OPEN tag, or `None` for a close tag.
+pub(crate) fn element_name(tag_lower: &str) -> Option<&str> {
+    match tag_name(tag_lower) {
+        (false, name) => Some(name),
+        (true, _) => None,
+    }
+}
+
 /// Extract attribute `name`'s value from one tag. `name` must be lowercase; the tag is
 /// matched case-insensitively. Returns the unquoted value, or `None` when the attribute
 /// is absent **or** carries no value.

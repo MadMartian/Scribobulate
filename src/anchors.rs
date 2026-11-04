@@ -21,7 +21,19 @@
 //!
 //! The preview's anchor map and the export's heading ids are both built by
 //! [`HeadingSlugger`], so the two cannot disagree about what a heading answers to.
+//!
+//! A document may also **name a position itself**: `<a id="x"></a>` or `<a name="x">`,
+//! the HTML idiom GitHub honours (TDD 2.17b). [`NamedAnchorWalk`] classifies those, and
+//! it is the one definition the preview, the Section picker and the tests share. An
+//! anchor inside a heading, or with nothing visible between it and the next heading,
+//! NAMES that heading: the fragment lands on the heading and Back/Forward records the
+//! heading's slug, so `#ci-flakes` and the heading's generated slug are one spot. Any
+//! other anchor is a bare position of its own. Precedence, highest first: a heading's
+//! GitHub slug, then the first anchor of that name in document order, then an emoji-free
+//! alias. An anchor therefore never takes a fragment from a heading, so no link that
+//! resolved before anchors were read changes its target.
 
+use pulldown_cmark::{Event, Tag, TagEnd};
 use std::collections::{HashMap, HashSet};
 
 /// Convert heading text to a GitHub-style anchor slug: lowercase, then keep only
@@ -294,6 +306,261 @@ impl HeadingSlugger {
     }
 }
 
+/// What a document-named anchor points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AnchorTarget<P> {
+    /// The heading with this ordinal among the headings the walk saw.
+    Heading(usize),
+    /// A position of its own: nothing ties it to a heading.
+    Bare(P),
+}
+
+/// One `<a id>` or `<a name>`, as [`NamedAnchorWalk`] classified it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamedAnchor<P> {
+    pub(crate) name: String,
+    pub(crate) target: AnchorTarget<P>,
+}
+
+/// The names one raw-HTML fragment's `<a>` open tags declare, in document order.
+///
+/// Through the shared lexer, so an `<a id>` inside a `<script>` or a comment is not a
+/// tag here for the same reason an `<img>` there is not an image. `<a>` stays off the
+/// rendering allowlist: it draws nothing, and only `id` and `name` are read.
+pub(crate) fn scan_named_anchors(html: &str) -> Vec<String> {
+    use crate::renderer::rawhtml::{attr, RawHtml, RawItem, TagKind};
+    let doc = RawHtml::lex(html);
+    let mut names = Vec::new();
+    for item in doc.items() {
+        let RawItem::Tag(tag) = item else { continue };
+        let is_anchor_open = matches!(tag.kind, TagKind::Opens | TagKind::Empty)
+            && crate::renderer::rawhtml::element_name(tag.lower) == Some("a");
+        if !is_anchor_open {
+            continue;
+        }
+        for key in ["id", "name"] {
+            if let Some(value) = attr(tag.text, key).filter(|v| !v.is_empty()) {
+                if !names.contains(&value) {
+                    names.push(value);
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Classifies a document's named anchors from its event stream, one event at a time.
+///
+/// Fed by every walker that needs them, so "is this anchor attached to that heading?"
+/// has one answer. `pos` is the caller's position at the event: it is kept only for a
+/// bare anchor, and it is read when the tag is seen because the anchor's fate is often
+/// decided several blocks later.
+#[derive(Debug, Clone)]
+pub(crate) struct NamedAnchorWalk<P> {
+    headings_seen: usize,
+    in_heading: Option<usize>,
+    image_depth: u32,
+    /// An open paragraph: its anchors, and whether it has shown anything else so far.
+    paragraph: Option<(Vec<(String, P)>, bool)>,
+    /// An open raw-HTML block's text. Scanned whole at its close, as the renderer does.
+    html_block: Option<String>,
+    /// Anchors with nothing visible after them so far: the next heading's, if nothing
+    /// visible comes first.
+    pending: Vec<(String, P)>,
+    found: Vec<NamedAnchor<P>>,
+}
+
+impl<P> Default for NamedAnchorWalk<P> {
+    fn default() -> Self {
+        Self {
+            headings_seen: 0,
+            in_heading: None,
+            image_depth: 0,
+            paragraph: None,
+            html_block: None,
+            pending: Vec::new(),
+            found: Vec::new(),
+        }
+    }
+}
+
+impl<P: Copy> NamedAnchorWalk<P> {
+    /// Read one event, BEFORE the caller's own handling moves `pos` past it.
+    pub(crate) fn observe(&mut self, ev: &Event<'_>, pos: P) {
+        if matches!(ev, Event::Start(Tag::Image { .. })) {
+            self.image_depth += 1;
+            self.visible();
+            return;
+        }
+        if matches!(ev, Event::End(TagEnd::Image)) {
+            self.image_depth = self.image_depth.saturating_sub(1);
+            return;
+        }
+        if self.image_depth > 0 {
+            return;
+        }
+        if let Some(ordinal) = self.in_heading {
+            if let Event::InlineHtml(html) = ev {
+                for name in scan_named_anchors(html) {
+                    self.found.push(NamedAnchor {
+                        name,
+                        target: AnchorTarget::Heading(ordinal),
+                    });
+                }
+            }
+            if matches!(ev, Event::End(TagEnd::Heading(_))) {
+                self.in_heading = None;
+            }
+            return;
+        }
+        match ev {
+            Event::Start(Tag::Heading { .. }) => {
+                let ordinal = self.headings_seen;
+                self.headings_seen += 1;
+                self.in_heading = Some(ordinal);
+                for (name, _) in std::mem::take(&mut self.pending) {
+                    self.found.push(NamedAnchor {
+                        name,
+                        target: AnchorTarget::Heading(ordinal),
+                    });
+                }
+            }
+            Event::Start(Tag::Paragraph) => self.paragraph = Some((Vec::new(), true)),
+            Event::End(TagEnd::Paragraph) => {
+                if let Some((names, _)) = self.paragraph.take() {
+                    self.pending.extend(names);
+                }
+            }
+            Event::Start(Tag::HtmlBlock) => self.html_block = Some(String::new()),
+            Event::Html(html) => {
+                if let Some(block) = &mut self.html_block {
+                    block.push_str(html);
+                }
+            }
+            Event::End(TagEnd::HtmlBlock) => {
+                let html = self.html_block.take().unwrap_or_default();
+                let shows_something = !crate::renderer::scan_image_tags(&html).is_empty()
+                    || !crate::renderer::disclosure::scan_disclosure_tags(&html).is_empty();
+                if shows_something {
+                    self.visible();
+                }
+                let names = scan_named_anchors(&html);
+                self.take_names(names, pos, !shows_something);
+            }
+            Event::InlineHtml(html) => {
+                if !crate::renderer::scan_image_tags(html).is_empty() {
+                    self.visible();
+                }
+                let names = scan_named_anchors(html);
+                if let Some((held, true)) = &mut self.paragraph {
+                    held.extend(names.into_iter().map(|name| (name, pos)));
+                } else {
+                    self.take_names(names, pos, false);
+                }
+            }
+            Event::Text(t) if self.paragraph.is_some() && t.trim().is_empty() => {}
+            Event::SoftBreak if self.paragraph.is_some() => {}
+            // Everything else in the parser's vocabulary is, or opens or closes, something
+            // the reader can see, so nothing held so far can name a later heading. Spelled
+            // out per variant so a parser upgrade that adds one fails to compile here.
+            Event::Start(
+                Tag::BlockQuote(_)
+                | Tag::CodeBlock(_)
+                | Tag::List(_)
+                | Tag::Item
+                | Tag::FootnoteDefinition(_)
+                | Tag::DefinitionList
+                | Tag::DefinitionListTitle
+                | Tag::DefinitionListDefinition
+                | Tag::Table(_)
+                | Tag::TableHead
+                | Tag::TableRow
+                | Tag::TableCell
+                | Tag::Emphasis
+                | Tag::Strong
+                | Tag::Strikethrough
+                | Tag::Superscript
+                | Tag::Subscript
+                | Tag::Link { .. }
+                | Tag::Image { .. }
+                | Tag::MetadataBlock(_),
+            )
+            | Event::End(
+                TagEnd::Heading(_)
+                | TagEnd::BlockQuote(_)
+                | TagEnd::CodeBlock
+                | TagEnd::List(_)
+                | TagEnd::Item
+                | TagEnd::FootnoteDefinition
+                | TagEnd::DefinitionList
+                | TagEnd::DefinitionListTitle
+                | TagEnd::DefinitionListDefinition
+                | TagEnd::Table
+                | TagEnd::TableHead
+                | TagEnd::TableRow
+                | TagEnd::TableCell
+                | TagEnd::Emphasis
+                | TagEnd::Strong
+                | TagEnd::Strikethrough
+                | TagEnd::Superscript
+                | TagEnd::Subscript
+                | TagEnd::Link
+                | TagEnd::Image
+                | TagEnd::MetadataBlock(_),
+            )
+            | Event::Text(_)
+            | Event::Code(_)
+            | Event::InlineMath(_)
+            | Event::DisplayMath(_)
+            | Event::FootnoteReference(_)
+            | Event::SoftBreak
+            | Event::HardBreak
+            | Event::Rule
+            | Event::TaskListMarker(_) => self.visible(),
+        }
+    }
+
+    /// Hold `names` for the next heading, or record them as bare positions.
+    fn take_names(&mut self, names: Vec<String>, pos: P, hold: bool) {
+        if hold {
+            self.pending.extend(names.into_iter().map(|n| (n, pos)));
+        } else {
+            for name in names {
+                self.bare(name, pos);
+            }
+        }
+    }
+
+    /// Something visible has been reached: nothing held so far can name a later heading.
+    fn visible(&mut self) {
+        for (name, pos) in std::mem::take(&mut self.pending) {
+            self.bare(name, pos);
+        }
+        if let Some((held, clean)) = &mut self.paragraph {
+            *clean = false;
+            for (name, pos) in std::mem::take(held) {
+                self.found.push(NamedAnchor {
+                    name,
+                    target: AnchorTarget::Bare(pos),
+                });
+            }
+        }
+    }
+
+    fn bare(&mut self, name: String, pos: P) {
+        self.found.push(NamedAnchor {
+            name,
+            target: AnchorTarget::Bare(pos),
+        });
+    }
+
+    /// The anchors in document order. Anchors no heading followed are bare.
+    pub(crate) fn finish(mut self) -> Vec<NamedAnchor<P>> {
+        self.visible();
+        self.found
+    }
+}
+
 /// Where a document's headings sit, by anchor: `slug → position`, plus the
 /// emoji-free aliases that reach a heading no GitHub slug already claims.
 ///
@@ -303,8 +570,11 @@ impl HeadingSlugger {
 /// silently miss the emoji-free form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HeadingAnchors<P> {
+    /// Every heading's GitHub slug, plus each bare named anchor (`<a id>` with no
+    /// heading of its own), which is the canonical name of its position.
     by_slug: HashMap<String, P>,
-    /// alias → the canonical slug of the heading it reaches.
+    /// alias → the canonical slug of the heading it reaches: a name a heading's own
+    /// anchor gave it, or its emoji-free slug.
     aliases: HashMap<String, String>,
 }
 
@@ -318,27 +588,50 @@ impl<P> Default for HeadingAnchors<P> {
 }
 
 impl<P: Copy> HeadingAnchors<P> {
-    /// Build from each heading's issued slugs and position, in document order.
-    /// An alias equal to any heading's GitHub slug is dropped — that fragment
-    /// already names a heading, the one GitHub would choose.
-    pub(crate) fn new(headings: impl IntoIterator<Item = (HeadingSlugs, P)>) -> Self {
+    /// Build from each heading's issued slugs and position, and the document's named
+    /// anchors, both in document order and both from the same walk. Precedence is the
+    /// module's: a GitHub slug, then the first anchor of a name, then an emoji-free
+    /// alias. An anchor naming a heading this walk did not record is ignored.
+    pub(crate) fn new(
+        headings: impl IntoIterator<Item = (HeadingSlugs, P)>,
+        named: impl IntoIterator<Item = NamedAnchor<P>>,
+    ) -> Self {
         let mut by_slug = HashMap::new();
+        let mut canonical = Vec::new();
         let mut candidates = Vec::new();
         for (HeadingSlugs { slug, alias }, pos) in headings {
             if let Some(alias) = alias {
                 candidates.push((alias, slug.clone()));
             }
+            canonical.push(slug.clone());
             by_slug.insert(slug, pos);
         }
-        let aliases = candidates
-            .into_iter()
-            .filter(|(alias, _)| !by_slug.contains_key(alias))
-            .collect();
+        let mut aliases: HashMap<String, String> = HashMap::new();
+        for NamedAnchor { name, target } in named {
+            if by_slug.contains_key(&name) || aliases.contains_key(&name) {
+                continue;
+            }
+            match target {
+                AnchorTarget::Bare(pos) => {
+                    by_slug.insert(name, pos);
+                }
+                AnchorTarget::Heading(ordinal) => {
+                    if let Some(slug) = canonical.get(ordinal) {
+                        aliases.insert(name, slug.clone());
+                    }
+                }
+            }
+        }
+        for (alias, slug) in candidates {
+            if !by_slug.contains_key(&alias) {
+                aliases.entry(alias).or_insert(slug);
+            }
+        }
         Self { by_slug, aliases }
     }
 
-    /// The heading `fragment` names, as `(canonical slug, position)`: by GitHub
-    /// slug first, then by emoji-free alias. The canonical slug is what a durable
+    /// The place `fragment` names, as `(canonical name, position)`: by GitHub slug or
+    /// bare anchor first, then by alias. The canonical name is what a durable
     /// record (Back/Forward history) should hold, whichever form the link used.
     pub(crate) fn resolve<'a>(&'a self, fragment: &'a str) -> Option<(&'a str, P)> {
         let slug = match self.by_slug.get_key_value(fragment) {
@@ -348,11 +641,14 @@ impl<P: Copy> HeadingAnchors<P> {
         self.by_slug.get(slug).map(|&pos| (slug, pos))
     }
 
-    /// Every heading's canonical (GitHub) slug.
+    /// Every canonical name: each heading's GitHub slug and each bare anchor's name.
     pub(crate) fn slugs(&self) -> HashSet<String> {
         self.by_slug.keys().cloned().collect()
     }
 }
+
+#[cfg(test)]
+mod named_anchor_tests;
 
 #[cfg(test)]
 mod tests {
@@ -499,7 +795,7 @@ mod tests {
             (second.slug.as_str(), second.alias.as_deref()),
             ("-escalations-1", Some("escalations-1"))
         );
-        let anchors = HeadingAnchors::new([(first, 10), (second, 20)]);
+        let anchors = HeadingAnchors::new([(first, 10), (second, 20)], []);
         assert_eq!(anchors.resolve("escalations"), Some(("-escalations", 10)));
         assert_eq!(
             anchors.resolve("escalations-1"),
@@ -516,7 +812,8 @@ mod tests {
     #[test]
     fn both_the_github_and_the_emoji_free_fragment_resolve() {
         let mut s = HeadingSlugger::default();
-        let anchors = HeadingAnchors::new([(s.next("Intro"), 1), (s.next("🚨 Escalations"), 2)]);
+        let anchors =
+            HeadingAnchors::new([(s.next("Intro"), 1), (s.next("🚨 Escalations"), 2)], []);
         assert_eq!(anchors.resolve("-escalations"), Some(("-escalations", 2)));
         assert_eq!(anchors.resolve("escalations"), Some(("-escalations", 2)));
         assert_eq!(anchors.resolve("intro"), Some(("intro", 1)));
@@ -536,7 +833,7 @@ mod tests {
         let emoji = s.next("🚨 Escalations");
         let plain = s.next("Escalations");
         assert!(s.issued("escalations"));
-        let anchors = HeadingAnchors::new([(emoji, 1), (plain, 2)]);
+        let anchors = HeadingAnchors::new([(emoji, 1), (plain, 2)], []);
         assert_eq!(anchors.resolve("escalations"), Some(("escalations", 2)));
         assert_eq!(anchors.resolve("-escalations"), Some(("-escalations", 1)));
     }
