@@ -1124,8 +1124,10 @@
 
 ### 7.9 Dragging a tab shows where it can be dropped
 - **Given** the user is dragging a tab
-- **When** the drag passes over another window's tab strip (or continues hovering its own, mid-reorder)
-- **Then** that strip visibly highlights (glows) for as long as the drag hovers there, and stops as soon as it leaves
+- **When** the drag passes anywhere over a Scribobulate window — its tab strip, editor, preview, sidebar or toolbar, its own window included
+- **Then** that window's tab strip visibly highlights (glows) for as long as the drag hovers over the window, and stops as soon as it leaves
+- **And when** something other than a Scribobulate tab is dragged over the window (a file, selected text)
+- **Then** the strip does not highlight
 
 ### 7.9a A dragged tab is represented by an image of itself under the pointer
 - **Given** the user has begun dragging a tab
@@ -3834,10 +3836,12 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** each of those is recorded — with the path or tab it concerns — in both the persistent log and the in-memory breadcrumb ring, while stderr stays as quiet as it is today
 
 ### 21.4 A crash writes a report naming the fault
-- **Given** the application dies from a fatal signal — segmentation fault, bus error, illegal instruction, abort, **or the breakpoint trap a GLib *fatal* log message dies of** (`g_error`, and any level promoted to fatal by a `G_DEBUG=fatal-*` flag or by `g_log_set_always_fatal`: GLib breakpoints rather than aborting on unix, so this death is a `SIGTRAP` and is no less a crash for it — `g_assert_not_reached()` is the lone abort; from GLib 2.87 on Linux it breakpoints only under a debugger and otherwise aborts, so there the same death is a `SIGABRT`)
+- **Given** the application dies of a native crash — on unix a fatal signal: segmentation fault, bus error, illegal instruction, abort, **or the breakpoint trap a GLib *fatal* log message dies of** (`g_error`, and any level promoted to fatal by a `G_DEBUG=fatal-*` flag or by `g_log_set_always_fatal`: GLib breakpoints rather than aborting on unix, so this death is a `SIGTRAP` and is no less a crash for it — `g_assert_not_reached()` is the lone abort; from GLib 2.87 on Linux it breakpoints only under a debugger and otherwise aborts, so there the same death is a `SIGABRT`); on Windows an exception nothing handled, on any thread and in any module (access violation, illegal instruction, breakpoint, stack overflow and the like), or `abort()`, which is how a GLib fatal message dies there (GLib breakpoints only under a debugger)
 - **When** the state directory is inspected afterwards
-- **Then** a crash report file exists whose first lines name the signal, the faulting address, the faulting instruction pointer with the module and offset it falls in, and 21.1's build identity
-- **And** the process still terminates from that same signal — the handler reports and re-raises, it never swallows the fault or changes the exit status
+- **Then** a crash report file exists whose first lines name the signal or exception code, the faulting address, the faulting instruction pointer with the module and offset it falls in, and 21.1's build identity
+- **And** the process still terminates as it would have without the handler — on unix from that same signal, on Windows with the same exit code and still delivered to Windows Error Reporting; the handler reports and hands the fault on, it never swallows the fault or changes the exit status
+- **And** an exception something goes on to handle writes no report
+- **And** a death no handler can run for (Windows `__fastfail`, how Rust's own abort ends a process) is named in the code as uncaught, not claimed covered; a panic ending that way has already written 21.7's report
 
 ### 21.5 A crash report says what the application was doing
 - **Given** a crash report was written

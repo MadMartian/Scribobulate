@@ -371,6 +371,10 @@ pub(crate) fn wire_tab_bar_dnd(window: &ApplicationWindow, tab_view: &TabView) {
         #[upgrade_or]
         false,
         move |_src, _drag, reason| {
+            log::info!(
+                "tab drag cancelled: reason {reason:?}, source window has {} tab(s)",
+                winstate::tab_count(&w)
+            );
             let Some(content) = dragging.borrow().clone() else {
                 return false;
             };
@@ -671,6 +675,107 @@ mod gtk_integration_tests {
         for w in app.windows() {
             w.destroy();
         }
+    }
+
+    /// TDD 7.9: the strip glows while a tab hovers anywhere over its window. GTK sets
+    /// `:drop(active)` only on the widget owning the target in charge, which is the window
+    /// over its body and, measured on GTK 4.22 with real drags, the strip itself over the
+    /// strip. The rule has to answer both, and each half of it is asserted. The flags are
+    /// set directly here because XTEST cannot drive a real drag (the check that ran one
+    /// is tests/MANUAL-TEST.md 7.9).
+    ///
+    /// Mutation: remove either selector of the rule and its assertion below fails.
+    #[gtktest::test]
+    fn the_strip_glows_while_a_drop_is_active_on_its_window() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.dndglow"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let win = crate::window::new_window(&app, "IT", "# One\n\nbody", None);
+        let bar = winstate::chrome(&win)
+            .expect("chrome registered after new_window")
+            .tabs
+            .bar_widget();
+        // The app installs this sheet at startup, which a bare window does not run.
+        let display = gtk::prelude::WidgetExt::display(&win);
+        let provider = gtk::CssProvider::new();
+        provider.load_from_data(crate::preview::css());
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        win.present();
+        let settle = std::time::Duration::from_millis(300);
+        assert!(
+            crate::testpump::until_or_for(
+                crate::testpump::Clock::Frame,
+                std::time::Duration::from_secs(5),
+                || bar.is_mapped() && bar.width() > 0,
+            ),
+            "the strip never mapped"
+        );
+
+        // How far the strip's frame leans from blue to yellow, averaged over its pixels.
+        let yellowness = |bar: &gtk::Widget| -> f64 {
+            let (w, h) = (f64::from(bar.width()), f64::from(bar.height()));
+            let snapshot = gtk::Snapshot::new();
+            gtk::WidgetPaintable::new(Some(bar)).snapshot(
+                snapshot.upcast_ref::<gdk::Snapshot>(),
+                w,
+                h,
+            );
+            let node = snapshot
+                .to_node()
+                .expect("the strip snapshots to something");
+            let renderer = gtk::gsk::CairoRenderer::new();
+            renderer
+                .realize(None::<&gdk::Surface>)
+                .expect("the Cairo renderer realizes without a surface");
+            let texture = renderer.render_texture(&node, None);
+            renderer.unrealize();
+            let (tw, th) = (texture.width() as usize, texture.height() as usize);
+            let mut data = vec![0u8; tw * th * 4];
+            texture.download(&mut data, tw * 4);
+            // Cairo ARGB32 on a little-endian host is B, G, R, A.
+            let lean: f64 = data
+                .chunks_exact(4)
+                .map(|px| f64::from(px[2]) - f64::from(px[0]))
+                .sum();
+            lean / (tw * th) as f64
+        };
+
+        crate::testpump::drain_for(crate::testpump::Clock::Frame, settle);
+        let idle = yellowness(&bar);
+
+        win.set_state_flags(gtk::StateFlags::DROP_ACTIVE, false);
+        crate::testpump::drain_for(crate::testpump::Clock::Frame, settle);
+        let hovering = yellowness(&bar);
+
+        win.unset_state_flags(gtk::StateFlags::DROP_ACTIVE);
+        crate::testpump::drain_for(crate::testpump::Clock::Frame, settle);
+        let left = yellowness(&bar);
+
+        bar.set_state_flags(gtk::StateFlags::DROP_ACTIVE, false);
+        crate::testpump::drain_for(crate::testpump::Clock::Frame, settle);
+        let on_strip = yellowness(&bar);
+        bar.unset_state_flags(gtk::StateFlags::DROP_ACTIVE);
+        gtk::style_context_remove_provider_for_display(&display, &provider);
+
+        assert!(
+            hovering > idle + 10.0,
+            "no glow on the strip with a drop active on the window: {idle} then {hovering}"
+        );
+        assert!(
+            (left - idle).abs() < 1.0,
+            "the glow outlived the drag: {idle} then {left}"
+        );
+        assert!(
+            on_strip > idle + 10.0,
+            "no glow with a drop active on the strip itself: {idle} then {on_strip}"
+        );
     }
 
     /// TDD 7.6: a tab dropped on another window anywhere off its strip joins that

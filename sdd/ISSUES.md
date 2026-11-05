@@ -59,7 +59,6 @@ described from a different vantage point.
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | H | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
-| J | Windows | Production | The app sometimes stops responding on a user's Windows 11 machine and Windows closes it (AppHang); no crash report is written. One hang came 5 s after startup, with no tab drag, right after `Pango: All font fallbacks failed!!!!`. Not reproduced | High |
 
 ## Closed issues
 
@@ -466,34 +465,6 @@ is not ruled out.
 **Fix**: upstream, a destroyed-surface guard in `windowDidResize:`. An app-side workaround
 (leaving full screen before closing) would add AppKit's exit animation to every close of a
 full-screen window, a visible cost for a log line; it has not been tried.
-
-## J. The app sometimes stops responding on a user's Windows machine
-
-**Severity**: High (Windows closes the app; unsaved work survives only through the swap
-file).
-
-**Observed** (user report, 2026-10-31, Windows 11, release builds from early and mid
-October, GTK 4.22.4, cairo). The user reported crashes while dragging tabs between
-windows. Evidence from their machine, relayed by its agent:
-- **No crash report was written**, and Windows recorded no application crash. The one
-  unclean end Windows logged is a **hang**: Application Hang (1002) / AppHangB1, "stopped
-  interacting with Windows and was closed". The run it most likely belongs to logged
-  session restore of one window with one tab, then `Pango: All font fallbacks failed!!!!`
-  5 s later, then nothing. There was no tab drag in that run.
-- Unclean exits restored from swap on six dates between 2026-09-14 and 2026-10-10.
-- `Gtk: Error finding last focus widget of GtkPaned …` right after a window closed with no
-  tabs left, and `GtkLabel … reported min width -5` beside a repeat of it.
-
-**Checked**: the `windows` seat drove 150 real tab drags between two windows (one-tab
-and three-tab sources, fast, paused, onto the strip, the editor and the preview) on GTK
-4.24.1 and 4.22.4: no hang, no crash, no warning, no lost tab. The user's other symptom,
-a tab that seemed to land inside the destination's editor or preview, was a drop off the
-strip popping the tab out into a new window over it; a drop anywhere on another window
-now moves the tab there (TDD 7.6).
-
-**Not established**: what hangs. The font fallback warning is the only lead; it was not
-seen on the seat's machine, whose fonts differ. Next: the user's installed font list, and
-whether a hang recurs on the current build.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

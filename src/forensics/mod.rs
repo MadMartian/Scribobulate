@@ -51,15 +51,20 @@
 //!
 //! # Platform
 //!
-//! The fatal-signal half is `unix`-gated because POSIX signals do not exist
-//! elsewhere — the same "not applicable off unix" justification as `workaround.rs`,
-//! not "already dead" (TECH.md § platform-conditional code). Windows keeps the
-//! persistent log, the breadcrumb ring, panic reports and the next-launch notice;
-//! only the SIGSEGV report is missing, and a Win32 vectored-exception equivalent
-//! would be the way to add it.
+//! The native-crash half is the one part that differs by platform, because a native
+//! crash arrives differently: [`signal`] takes a POSIX fatal signal on unix, and
+//! [`exception`] takes an unhandled SEH exception or a CRT `abort()` on Windows, through
+//! the `platform::win32::crash` seam. Each is gated at its declaration as not applicable
+//! elsewhere — the same justification as `workaround.rs`, not "already dead" (TECH.md §
+//! platform-conditional code). Both write the same report to the same path, so the
+//! persistent log, the breadcrumb ring, panic reports and the next-launch notice are
+//! shared unchanged. What Windows cannot catch at all — `__fastfail`, which is how Rust's
+//! own `abort` ends a process — is listed in that seam's header.
 
+#[cfg(windows)]
+pub(crate) mod exception;
 pub(crate) mod identity;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) mod rawbuf;
 pub(crate) mod report;
 pub(crate) mod ring;
@@ -220,6 +225,10 @@ pub(crate) fn install(inner: env_logger::Logger) -> &'static sink::ForensicSink 
     #[cfg(unix)]
     if let Some(path) = report_path.as_deref() {
         signal::install(path, &header, &BREADCRUMBS);
+    }
+    #[cfg(windows)]
+    if let Some(path) = report_path.as_deref() {
+        exception::install(path, &header, &BREADCRUMBS);
     }
 
     // Leaked rather than boxed into `log`: the demotion bypass below needs a

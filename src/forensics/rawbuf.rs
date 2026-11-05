@@ -3,9 +3,10 @@
 //! `format!` allocates, and `malloc` is **not async-signal-safe**: a SIGSEGV can
 //! land while the allocator holds its own lock, and allocating from the handler
 //! then deadlocks — the process hangs instead of dying, and the report is never
-//! written. That is the failure this type exists to make unrepresentable. It is
-//! `unix`-gated because the fatal-signal handler is (see `signal.rs`); every other
-//! forensic path runs in ordinary context and uses `String` freely.
+//! written. That is the failure this type exists to make unrepresentable. Its two users
+//! are the native-crash writers, `signal.rs` on unix and `exception.rs` on Windows, which
+//! is the whole of its gate; every other forensic path runs in ordinary context and uses
+//! `String` freely.
 //!
 //! Writing past capacity **truncates** rather than erroring or growing. A crash
 //! report is best-effort by nature: a slightly clipped fault line is worth far more
