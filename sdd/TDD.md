@@ -1124,8 +1124,10 @@
 
 ### 7.9 Dragging a tab shows where it can be dropped
 - **Given** the user is dragging a tab
-- **When** the drag passes over another window's tab strip (or continues hovering its own, mid-reorder)
-- **Then** that strip visibly highlights (glows) for as long as the drag hovers there, and stops as soon as it leaves
+- **When** the drag passes anywhere over a Scribobulate window — its tab strip, editor, preview, sidebar or toolbar, its own window included
+- **Then** that window's tab strip visibly highlights (glows) for as long as the drag hovers over the window, and stops as soon as it leaves
+- **And when** something other than a Scribobulate tab is dragged over the window (a file, selected text)
+- **Then** the strip does not highlight
 
 ### 7.9a A dragged tab is represented by an image of itself under the pointer
 - **Given** the user has begun dragging a tab

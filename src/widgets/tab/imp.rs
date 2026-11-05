@@ -101,7 +101,7 @@ impl ObjectSubclass for TabBar {
     fn class_init(klass: &mut Self::Class) {
         // GTK-4.6 gotcha #5 (the retired tab-widget plan): `set_css_name` only in
         // `class_init`, never per-instance. Matches the retargeted
-        // `tabbar:drop(active)` CSS rule in `preview.rs`.
+        // `:drop(active)` glow rule in `preview.rs`.
         klass.set_css_name("tabbar");
     }
 }
@@ -362,7 +362,7 @@ impl WidgetImpl for TabBar {
     // separately — `add_tab` parents handles BEFORE the chevrons so the
     // chevrons are topmost for input, and `index_at` ignores gutter x — so
     // a bleeding handle's close button can no longer steal a chevron click.)
-    // NB: the widget's OWN css background/`:drop(active)` box-shadow is
+    // NB: the widget's OWN css background and drop-highlight box-shadow is
     // rendered by GTK's snapshot wrapper around this vfunc, not here, so
     // overriding snapshot does not drop it.
     fn snapshot(&self, snapshot: &gtk::Snapshot) {

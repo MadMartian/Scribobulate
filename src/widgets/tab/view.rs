@@ -324,7 +324,7 @@ impl TabView {
 
     /// The strip's own widget — attach the shared `GtkDragSource`/
     /// `GtkDropTarget` pair here (its CSS node name is `tabbar`, matching the
-    /// `tabbar:drop(active)` rule in `preview.rs`).
+    /// `:drop(active)` glow rule in `preview.rs`).
     pub(crate) fn bar_widget(&self) -> gtk::Widget {
         self.bar.clone().upcast()
     }

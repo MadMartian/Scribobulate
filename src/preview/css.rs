@@ -89,17 +89,22 @@ pub(crate) fn css() -> &'static str {
      /* widgets/tab: the custom TabBar (widgets/tab, css-name
         `tabbar`) replaced the GtkNotebook-based strip; its own
         GtkDragSource/GtkDropTarget pair (window/tabs/dnd.rs wire_tab_bar_dnd)
-        drives both in-strip reorder and cross-window move. GTK still
-        auto-toggles :drop(active) for us the whole time an eligible
-        (u64-payload) drag hovers over the bar — same zero-signal-wiring
-        highlight the GtkNotebook-hosted rule had, just retargeted to the new
-        node name. The flat background is a static fallback for when
-        gtk-enable-animations is off (the @keyframes rule already honors that
-        setting on its own). */
+        drives both in-strip reorder and cross-window move. The whole window
+        takes a dropped tab (wire_window_tab_drop), and GTK toggles
+        :drop(active) on the window for as long as a tab (the u64 payload, the
+        only one that target accepts) hovers anywhere over it, so the strip's
+        glow follows the window's state. But only one target is active at a
+        time: over the strip itself the strip's own target takes the drag and
+        :drop(active) moves to `tabbar`, off the window — measured on Windows,
+        the window-only rule glowed over the editor and went dark on the strip.
+        So both states light it. The flat background is a static fallback for
+        when gtk-enable-animations is off (the @keyframes rule already honors
+        that setting on its own). */
      @keyframes tab-drop-pulse { from { box-shadow: 0 0 4px 1px yellow; }
                                  to   { box-shadow: 0 0 12px 5px yellow; } }
-     tabbar:drop(active) { animation: tab-drop-pulse .7s ease-in-out infinite alternate;
-                           background-color: alpha(yellow, .25); }
+     window:drop(active) tabbar, tabbar:drop(active) {
+         animation: tab-drop-pulse .7s ease-in-out infinite alternate;
+         background-color: alpha(yellow, .25); }
      /* Per-tab handle chrome (widgets/tab §E/N1): reveal the close
         button on hover or while the tab is active, keep it invisible-but-
         allocated otherwise so the label doesn't reflow when it appears. */
@@ -598,6 +603,8 @@ mod tests {
             ".annotation-entry",
             "listview.outline",
             ".outline-h1",
+            "window:drop(active) tabbar",
+            // Over the strip the strip's own target is the active one, not the window's.
             "tabbar:drop(active)",
             "@keyframes tab-drop-pulse",
         ] {
