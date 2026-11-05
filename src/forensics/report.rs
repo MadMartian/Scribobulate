@@ -183,7 +183,7 @@ pub(crate) fn announce_unread_report(dir: &Path) {
     };
 
     log::warn!(
-        "a crash report from a previous run is unread: {} — it names the signal, \
+        "a crash report from a previous run is unread: {} — it names the fault, \
          the build, and the last {} things the application did before it died",
         dir.join(newest).display(),
         super::ring::CAPACITY
@@ -366,12 +366,33 @@ mod tests {
     /// path plus an explicit, greppable skip that names the rubric left unverified.
     #[test]
     fn a_crash_report_is_owner_only_even_when_it_already_exists() {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             crate::testsymlink::skipped(
                 "TDD 21.12 crash-report permissions",
-                "file modes are a unix concept; Windows owner-only is an ACL question                  and needs its own implementation",
+                "owner-only has no implementation on this platform",
             );
+        }
+        // Windows: owner-only is the state directory's protected DACL, which a report
+        // inherits (`platform::win32::privacy`). Same two-writer order as unix — the panic
+        // hook creates, the native-crash writer appends — and the second writer must not
+        // leave the report with an ACL of its own. `forensics::exception`'s death tests
+        // hold the same line for the file the crash handler itself creates.
+        #[cfg(windows)]
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let state = dir.path().join("state");
+            let path = state.join("crash.txt");
+            let ring = Ring::new();
+            let check = |when: &str| {
+                if let Err(why) = crate::platform::win32::inherits_only_from(&path, &state) {
+                    panic!("the report after the {when} write is not owner-only: {why}");
+                }
+            };
+            write_report(&path, "panic", "hdr\n", "fault", &ring, None).expect("first write");
+            check("creating");
+            write_report(&path, "exception", "hdr\n", "fault", &ring, None).expect("second write");
+            check("second");
         }
         #[cfg(unix)]
         {

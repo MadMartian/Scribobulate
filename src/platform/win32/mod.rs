@@ -21,6 +21,7 @@
 //! | [`frame`] | The app takes the **native Win32 frame** (`GTK_CSD=0`), so DWM owns the caption and the OS owns the maximize button. Two GTK repairs, one decision. |
 //! | [`appearance`] | GTK 4.22.4 does not read the Windows light/dark setting **at all**, so the desktop's lightness has no source here unless this supplies one. |
 //! | [`privacy`] | `std::fs` cannot express an owner-only directory on Windows, so the state directory would carry whatever ACL it inherited. |
+//! | [`crash`] | Windows has **no POSIX signals**: a native crash is an unhandled SEH exception or a CRT `abort()`, and without this only Windows Error Reporting sees it. |
 //! | [`process`] | Windows has no `/proc` and no `proc_pidpath`, so crash recovery cannot otherwise tell whether a snapshot's owner is still running. |
 //!
 //! Note that `frame` and `appearance` are two causes and not one, though they meet at
@@ -45,6 +46,7 @@
 //! stays satisfiable with no `#[allow]`.
 
 pub(crate) mod appearance;
+pub(crate) mod crash;
 pub(crate) mod frame;
 pub(crate) mod privacy;
 pub(crate) mod process;
@@ -60,7 +62,7 @@ pub(crate) use frame::{
 };
 pub(crate) use privacy::create_private_directory;
 #[cfg(test)]
-pub(crate) use privacy::directory_dacl_sddl;
+pub(crate) use privacy::{directory_dacl_sddl, inherits_only_from};
 pub(crate) use reduced_motion::{system_reduced_motion, watch_reduced_motion};
 
 use std::ffi::c_void;

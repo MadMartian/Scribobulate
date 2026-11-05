@@ -179,6 +179,50 @@ pub(crate) fn directory_dacl_sddl(dir: &std::path::Path) -> Option<String> {
     text
 }
 
+/// `Ok` if `file`'s DACL is exactly what it inherited from `dir` — the same principals,
+/// every ACE marked inherited, none of its own — and `dir` is protected. That is what
+/// "owner-only" means for a file in a private directory here (TDD 21.12 and 22's "the
+/// containing directory carries it"); a file in a permissive directory, or one given an
+/// explicit ACE, fails it.
+#[cfg(test)]
+pub(crate) fn inherits_only_from(
+    file: &std::path::Path,
+    dir: &std::path::Path,
+) -> Result<(), String> {
+    fn aces(sddl: &str) -> Vec<&str> {
+        sddl.split('(')
+            .skip(1)
+            .map(|ace| ace.trim_end_matches(')'))
+            .collect()
+    }
+    fn trustees(sddl: &str) -> Vec<&str> {
+        let mut found: Vec<&str> = aces(sddl)
+            .into_iter()
+            .map(|ace| ace.rsplit(';').next().unwrap_or(""))
+            .collect();
+        found.sort_unstable();
+        found
+    }
+    let dir_sddl = directory_dacl_sddl(dir).ok_or("the directory's DACL is unreadable")?;
+    let file_sddl = directory_dacl_sddl(file).ok_or("the file's DACL is unreadable")?;
+    if !dir_sddl.starts_with("D:P") {
+        return Err(format!("the directory is not protected: {dir_sddl}"));
+    }
+    if trustees(&file_sddl) != trustees(&dir_sddl) {
+        return Err(format!(
+            "principals differ: file {file_sddl}, directory {dir_sddl}"
+        ));
+    }
+    // An ACE's flags are its second field; `ID` marks it inherited.
+    if !aces(&file_sddl)
+        .iter()
+        .all(|ace| ace.split(';').nth(1).unwrap_or("").contains("ID"))
+    {
+        return Err(format!("the file carries an ACE of its own: {file_sddl}"));
+    }
+    Ok(())
+}
+
 // `CloseHandle` and `GetLastError` are not here: they have no cause of their own and
 // live in the parent module, which is why this block is the ones that do.
 #[link(name = "kernel32")]
