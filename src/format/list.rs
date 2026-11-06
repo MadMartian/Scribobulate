@@ -16,10 +16,6 @@ pub(super) fn bullet_marker(line: &str) -> Option<(char, usize)> {
     }
 }
 
-fn bullet_marker_len(line: &str) -> Option<usize> {
-    bullet_marker(line).map(|(_, len)| len)
-}
-
 /// A GFM task-list marker at the front of `line`: a bullet marker (`- `/`* `/`+ `,
 /// via [`bullet_marker`]) *immediately* followed by a checkbox — `[ ]`, `[x]`, or
 /// `[X]` — and a trailing space. Returns the total marker length in chars
@@ -53,8 +49,23 @@ pub(super) fn ordered_marker(line: &str) -> Option<(u64, char, usize)> {
     }
 }
 
-fn ordered_marker_len(line: &str) -> Option<usize> {
-    ordered_marker(line).map(|(_, _, len)| len)
+/// The three list kinds the toggle converts between.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListKind {
+    Bullet,
+    Ordered,
+    Task,
+}
+
+/// Which list item `line` opens, if any, and its marker length in chars. Task is
+/// tested before Bullet because every task marker is also a bullet marker
+/// ([`task_marker`]); classifying `- [ ] x` as a bullet is what once turned Bulleted
+/// List on a task item into `[ ] x`.
+fn list_marker(line: &str) -> Option<(ListKind, usize)> {
+    task_marker(line)
+        .map(|len| (ListKind::Task, len))
+        .or_else(|| bullet_marker(line).map(|(_, len)| (ListKind::Bullet, len)))
+        .or_else(|| ordered_marker(line).map(|(_, _, len)| (ListKind::Ordered, len)))
 }
 
 /// Strip a leading marker of `len` chars from `line` (chars, not bytes — markers are
@@ -67,56 +78,56 @@ fn strip_marker(line: &str, len: usize) -> String {
 // marker lands inside any blockquote the line sits in — `> - item`, never
 // `- > item` — and the toggle-off detectors recognise a marker behind a `> `.
 
-/// The one list toggle, parameterised by the two things the three kinds differ in.
+/// The one list toggle, parameterised by the kind it makes.
 ///
-/// **Three copies, six lines each, differing in exactly two tokens** — the detector and
-/// the prefix (QA round 5, L-2). They were not written as duplicates; an earlier rewrite
-/// converged them, and nothing then noticed they had become the same function. That is
-/// the ordinary way this happens: duplication introduced deliberately is reviewed,
-/// duplication arrived at by simplification is not.
+/// **One function, not three** (QA round 5, L-2): the shared part is a TOGGLE RULE, and
+/// a rule written three times has to be right three times with nothing to fail if it
+/// were changed in only two.
 ///
-/// It matters here beyond tidiness because the shared part is a TOGGLE RULE — "strip if
-/// the first line already has a marker, otherwise add one, and leave already-stripped
-/// lines alone". A change to that rule had to be made three times and be right three
-/// times, with nothing to fail if it were made twice.
-///
-/// `marker_len` detects an existing marker (and its length, for stripping); `prefix`
-/// builds the marker for line `i` of the selection — a function of the index only
-/// because ordered lists renumber from 1, which is the single reason this is not a
-/// `&str`.
+/// The rule: if the FIRST spanned line is already `kind`, the whole block is un-listed
+/// (every line loses whatever list marker it has). Otherwise every line becomes a
+/// `kind` item, and a line that is already a list item of ANOTHER kind has that marker
+/// REPLACED, not prefixed — Task List on `- a` gives `- [ ] a`, never `- [ ] - a`; the
+/// same holds for every pairing of the three kinds. `prefix` builds the marker for
+/// line `i`, a function of the index only because ordered lists renumber from 1.
 fn apply_list(
     chars: &[char],
     start: usize,
     end: usize,
-    marker_len: fn(&str) -> Option<usize>,
+    kind: ListKind,
     prefix: impl Fn(usize) -> String,
 ) -> Edit {
     let span = block_span(chars, start, end);
-    // Toggle direction is decided ONCE, from the FIRST line, and then applied to every
-    // line — so a selection whose first line is already a list un-lists the whole block
-    // rather than each line deciding for itself.
-    let toggle_off = marker_len(span.first_line().content).is_some();
+    // Direction is decided ONCE, from the first line, so a block is converted or
+    // un-listed as a whole rather than each line deciding for itself.
+    let toggle_off = matches!(list_marker(span.first_line().content), Some((k, _)) if k == kind);
 
-    text::map_content(&span, |i, content| match marker_len(content) {
-        Some(len) if toggle_off => strip_marker(content, len),
-        _ if toggle_off => content.to_string(),
-        _ => format!("{}{content}", prefix(i)),
+    text::map_content(&span, |i, content| {
+        let bare = match list_marker(content) {
+            Some((_, len)) => strip_marker(content, len),
+            None => content.to_string(),
+        };
+        if toggle_off {
+            bare
+        } else {
+            format!("{}{bare}", prefix(i))
+        }
     })
 }
 
 pub(super) fn apply_bulleted_list(chars: &[char], start: usize, end: usize) -> Edit {
-    apply_list(chars, start, end, bullet_marker_len, |_| "- ".to_string())
+    apply_list(chars, start, end, ListKind::Bullet, |_| "- ".to_string())
 }
 
 pub(super) fn apply_numbered_list(chars: &[char], start: usize, end: usize) -> Edit {
     // Renumber from 1 on toggle-on so a multi-line selection reads `1.`, `2.`, `3.`…
-    apply_list(chars, start, end, ordered_marker_len, |i| {
+    apply_list(chars, start, end, ListKind::Ordered, |i| {
         format!("{}. ", i + 1)
     })
 }
 
 pub(super) fn apply_task_list(chars: &[char], start: usize, end: usize) -> Edit {
-    apply_list(chars, start, end, task_marker, |_| "- [ ] ".to_string())
+    apply_list(chars, start, end, ListKind::Task, |_| "- [ ] ".to_string())
 }
 
 #[cfg(test)]
@@ -197,8 +208,54 @@ mod tests {
     #[test]
     fn task_list_is_not_toggled_off_by_a_bare_bullet() {
         // A bullet WITHOUT a checkbox is not a task item, so the first line drives
-        // toggle-ON: every line is prefixed (the existing bullet is kept verbatim).
+        // toggle-ON — and the bullet is replaced by the task marker, not kept.
         let (text, _s, _e) = applied(FormatCmd::TaskList, "- one", 0, 5);
-        assert_eq!(text, "- [ ] - one");
+        assert_eq!(text, "- [ ] one");
+    }
+
+    #[test]
+    fn every_list_kind_converts_every_other_kind_in_place() {
+        // Each (target, source) pairing replaces the marker rather than stacking one.
+        let cases = [
+            (FormatCmd::TaskList, "- one\n* two", "- [ ] one\n- [ ] two"),
+            (
+                FormatCmd::TaskList,
+                "1. one\n2) two",
+                "- [ ] one\n- [ ] two",
+            ),
+            (
+                FormatCmd::BulletedList,
+                "- [ ] one\n* [x] two",
+                "- one\n- two",
+            ),
+            (FormatCmd::BulletedList, "1. one\n2. two", "- one\n- two"),
+            (FormatCmd::NumberedList, "- one\n+ two", "1. one\n2. two"),
+            (
+                FormatCmd::NumberedList,
+                "- [x] one\n- [ ] two",
+                "1. one\n2. two",
+            ),
+        ];
+        for (cmd, src, want) in cases {
+            let len = src.chars().count();
+            let (text, _s, _e) = applied(cmd, src, 0, len);
+            assert_eq!(text, want, "{cmd:?} on {src:?}");
+        }
+    }
+
+    #[test]
+    fn conversion_keeps_the_quote_and_mixes_with_plain_lines() {
+        let (text, _s, _e) = applied(FormatCmd::TaskList, "> - one\n> two", 0, 13);
+        assert_eq!(text, "> - [ ] one\n> - [ ] two");
+        // A plain first line drives toggle-on; a later item of another kind converts.
+        let (text, _s, _e) = applied(FormatCmd::NumberedList, "one\n- two", 0, 9);
+        assert_eq!(text, "1. one\n2. two");
+    }
+
+    #[test]
+    fn toggle_off_strips_every_kind_of_marker_in_the_block() {
+        // The first line decides "un-list"; a mixed run is un-listed as a whole.
+        let (text, _s, _e) = applied(FormatCmd::BulletedList, "- one\n1. two\n- [x] three", 0, 23);
+        assert_eq!(text, "one\ntwo\nthree");
     }
 }

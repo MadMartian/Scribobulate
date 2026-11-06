@@ -1784,6 +1784,7 @@
 - **When** the user invokes Quote, Code Block, Bulleted List, Numbered List, Task List, or Horizontal Bar
 - **Then** Quote prefixes each spanned line with `> `, Code Block fences the spanned lines with ```` ``` ```` lines, Bulleted List prefixes each spanned line with `- `, Numbered List prefixes each spanned line with a `1. `, `2. `, `3. `… number sequence (renumbered from 1), Task List prefixes each spanned line with a GFM task marker `- [ ] `, and Horizontal Bar inserts a `---` rule on its own line
 - **And** Quote, Code Block, Bulleted List, Numbered List, and Task List toggle **off** when re-applied to already-formatted text (accepting any bullet marker `- `/`* `/`+ ` or ordered delimiter `.`/`)` across a mixed run; Task List additionally requires a checkbox `[ ]`/`[x]`/`[X]` after the bullet, so a bare bullet is **not** treated as a task item)
+- **And** applying one list kind to lines that are already a list of **another** kind converts them in place, for every pairing of bulleted, numbered and task: the old marker is replaced, never kept beside the new one (`- a` + Task List → `- [ ] a`, not `- [ ] - a`; `- [x] a` + Bulleted List → `- a`; `- a` + Numbered List → `1. a`); a block un-listed by toggle-off loses every list marker it carries, whatever its kind
 - **And** the preview renders the Bulleted/Numbered result as a real list, and the Task List result as real (read-only) checkboxes
 
 ### 10.6 Format commands require editor focus

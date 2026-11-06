@@ -25,7 +25,8 @@
 //! * **BulletedList / NumberedList / TaskList**: prefix every spanned line with a
 //!   list marker (`- ` for bulleted; `1. `, `2. `… — renumbered from 1 — for
 //!   numbered; `- [ ] ` for a GFM task/checkbox list), or strip the marker if the
-//!   first spanned line is already that kind of list item.
+//!   first spanned line is already that kind of list item.  A line that is a list item
+//!   of another kind is converted — its marker replaced, never stacked.
 //! * **Horizontal Rule**: insert a `---` thematic break on its own line.  This is
 //!   an insertion, not a wrap, so it has no toggle.
 //!
