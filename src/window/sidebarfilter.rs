@@ -1137,6 +1137,7 @@ mod gtk_integration_tests {
             focus_within(&window, &ch.outline_filter.entry)
         });
         // Close from inside the box, as Shift+F9 does there.
+        let _ = super::super::sidebar::take_reveal_trace();
         window
             .lookup_action(SidebarPaneKind::Outline.filter_action())
             .unwrap()
@@ -1149,18 +1150,51 @@ mod gtk_integration_tests {
             Some((target, true)),
             "the focus returns to the highlighted row, which stays the selected one"
         );
-        // The scroll's figures go in the message: this assertion has failed once on CI
-        // and never locally, and they say whether the reveal ran, ran against a stale
-        // list size, or was undone afterwards.
+        // Issue D: on CI this has failed three times with the list reading "value 0,
+        // upper 0, page 0" — never laid out when read, the focus already back on the
+        // right row. So wait for layout before judging the scroll, and say how long it
+        // took: a laid-out list still at the top is the product failing, not the test.
         let vadj = ch.outline_scroller.vadjustment();
-        assert!(
-            vadj.value() > 0.0,
-            "the highlighted row is scrolled into view, not the top of the list \
-             (value {}, upper {}, page {})",
-            vadj.value(),
-            vadj.upper(),
-            vadj.page_size()
-        );
+        let laid_out = || vadj.upper() > 0.0 && vadj.page_size() > 0.0;
+        let frame = || window.frame_clock().map_or(0, |c| c.frame_counter());
+        if !laid_out() {
+            let (t0, f0) = (glib::monotonic_time(), frame());
+            let landed =
+                crate::testpump::until_or_for(Clock::Frame, Duration::from_secs(5), laid_out);
+            println!(
+                "NOTE [TDD 20.25]: the outline list was not laid out when the focus returned; \
+                 {} after {} ms and {} frames",
+                if landed {
+                    "laid out"
+                } else {
+                    "still not laid out"
+                },
+                (glib::monotonic_time() - t0) / 1000,
+                frame() - f0
+            );
+        }
+        if vadj.value() <= 0.0 {
+            let first = (vadj.value(), vadj.upper(), vadj.page_size());
+            drain_for(Clock::Frame, Duration::from_secs(1));
+            let list = super::super::sidebar::list_view_of(&ch.outline_scroller);
+            panic!(
+                "the highlighted row is scrolled into view, not the top of the list \
+                 (value {}, upper {}, page {}; one second later value {}, upper {}, page {}; \
+                 scroller mapped {}, height {}, list height {:?}, section height {:?}; \
+                 trace: {:?})",
+                first.0,
+                first.1,
+                first.2,
+                vadj.value(),
+                vadj.upper(),
+                vadj.page_size(),
+                ch.outline_scroller.is_mapped(),
+                ch.outline_scroller.height(),
+                list.map(|l| l.height()),
+                ch.outline_scroller.parent().map(|p| p.height()),
+                super::super::sidebar::take_reveal_trace()
+            );
+        }
         assert_eq!(
             caret(),
             caret_before,

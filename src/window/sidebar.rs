@@ -19,6 +19,31 @@
 use gtk::glib;
 use gtk::prelude::*;
 
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+thread_local! {
+    /// What the deferred hand-back and the reveal did, in order, for the integration tests'
+    /// failure messages: which path the focus took, and what the scroller read at each
+    /// reveal attempt. The sidebar-filter focus test has failed on CI with a list that read
+    /// as never laid out, and could not show whether the reveal ran before layout and was
+    /// dropped or the test simply looked too early. Compiled only into test builds.
+    static REVEAL_TRACE: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+fn trace(event: impl FnOnce() -> String) {
+    REVEAL_TRACE.with(|t| t.borrow_mut().push(event()));
+}
+
+#[cfg(not(all(test, feature = "gtk-integration-tests")))]
+#[inline]
+fn trace(_event: impl FnOnce() -> String) {}
+
+/// Take and clear [`REVEAL_TRACE`].
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+pub(crate) fn take_reveal_trace() -> Vec<String> {
+    REVEAL_TRACE.with(|t| std::mem::take(&mut *t.borrow_mut()))
+}
+
 /// One built sidebar section's persistent handles.
 pub(crate) struct SidebarPane {
     /// The section container: `[ header ][ separator ][ filter bar ][ scroller ]`,
@@ -208,14 +233,17 @@ pub(crate) fn focus_selected_row_deferred(scroller: &gtk::ScrolledWindow) {
             .and_then(|m| m.downcast::<gtk::SingleSelection>().ok())
             .is_some_and(|sel| sel.selected() != gtk::INVALID_LIST_POSITION);
         if !has_selection {
+            trace(|| "hand-back: no selection, list focused".into());
             let _ = list_view.grab_focus();
             return;
         }
         reveal_selected_row(&scroller);
         let is_selected = |row: &gtk::Widget| row.state_flags().contains(gtk::StateFlags::SELECTED);
         if focus_row_widget_where(&list_view, is_selected) {
+            trace(|| "hand-back: row focused at once".into());
             return;
         }
+        trace(|| "hand-back: row not materialised, retrying per frame".into());
         // Each frame that still lacks the row asks again: a reveal of a far row lands on
         // an ESTIMATE of its offset, and the estimate improves as rows are laid out.
         // Weak: the tick is owned by the list, a descendant of this scroller, so a
@@ -233,6 +261,7 @@ pub(crate) fn focus_selected_row_deferred(scroller: &gtk::ScrolledWindow) {
                 }
             },
             |lv| {
+                trace(|| "hand-back: per-frame retry gave up, list focused".into());
                 let _ = lv.grab_focus();
             },
         );
@@ -337,6 +366,17 @@ fn reveal_selected_row_attempt(scroller: &gtk::ScrolledWindow, attempt: u8) {
         // Not laid out yet — common right after `set_child` on a tab switch.
         // Retry on later idles until the scroller has a real page_size (or we
         // exhaust the budget; an unmapped pane then simply stays put).
+        trace(|| {
+            format!(
+                "reveal attempt {attempt}: not laid out (page {page}, upper {upper}, mapped {}){}",
+                scroller.is_mapped(),
+                if attempt < REVEAL_LAYOUT_RETRIES {
+                    ""
+                } else {
+                    ", retries exhausted"
+                }
+            )
+        });
         if attempt < REVEAL_LAYOUT_RETRIES {
             let scroller = scroller.clone();
             glib::idle_add_local_once(move || {
@@ -350,6 +390,9 @@ fn reveal_selected_row_attempt(scroller: &gtk::ScrolledWindow, attempt: u8) {
     let row_bottom = row_top + row_h;
     let value = vadj.value();
     if row_top >= value && row_bottom <= value + page {
+        trace(|| {
+            format!("reveal attempt {attempt}: row already visible (value {value}, upper {upper}, page {page})")
+        });
         return; // already fully visible
     }
     // Minimum scroll: pin the row to the top edge if above, bottom edge if below.
@@ -359,5 +402,11 @@ fn reveal_selected_row_attempt(scroller: &gtk::ScrolledWindow, attempt: u8) {
         (row_bottom - page).max(0.0)
     };
     let max = (upper - page).max(0.0);
+    trace(|| {
+        format!(
+            "reveal attempt {attempt}: jumped {value} -> {} (upper {upper}, page {page})",
+            target.clamp(0.0, max)
+        )
+    });
     crate::saferizer::scrollpos::jump(&vadj, target.clamp(0.0, max));
 }

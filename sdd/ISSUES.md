@@ -315,6 +315,17 @@ and a close with animations off skipping the hand-back. Not established: the mec
 second Linux failure. `upper 0` and `page 0` say the list had never been allocated when the
 assertion read it, so the reveal had nothing to scroll; this is no longer Linux-only.
 
+**Recurred** (2026-11-06, GitHub CI run 42189755964 attempt 1, Linux coverage leg): "value 0,
+upper 0, page 0" again, the focus already back on the right row.
+
+**Mitigated** (2026-11-06): the test now waits up to 5 s for the list to be laid out before
+judging the scroll, and prints a `NOTE [TDD 20.25]` line with the wait in ms and frames when
+it had to. The wait is for layout only, so a laid-out list still at the top still fails. A
+failure now reports the scroll a second later, whether the scroller is mapped, the scroller,
+list and section heights, and a test-only trace of the hand-back path and each reveal
+attempt (`window::sidebar::take_reveal_trace`). Read the NOTE lines and any failure's trace
+first: they name the cause this entry still lacks.
+
 ## E. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 
 **Severity**: Low (the slider alone, occasionally, and the next scroll brings it back).
