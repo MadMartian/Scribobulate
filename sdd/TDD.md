@@ -1114,6 +1114,8 @@
 - **Given** a window has exactly one tab open
 - **When** that tab is dragged into another window or dragged onto the desktop
 - **Then** the now-empty source window closes automatically rather than being left open with nothing in it
+- **And** it closes only once the platform has finished with the drag, not when the tab leaves: until then it stays where it is, open and unresponsive to input, never hidden or minimised; a tab that reaches it in the meantime (a new document, an opened file) makes it responsive again and keeps it open
+- **And** a drag the platform reports as cancelled after a drop already took the tab leaves the tab where the drop put it, rather than also popping it out into a new window
 - **And given** a window has exactly one tab open
 - **Then** View ▸ Move Tab to New Window (menu item, toolbar button, and accelerator) is disabled — moving a window's only tab there would just leave an identical, empty-of-purpose window behind, so this specific path never arises through the command (TDD 15.4)
 

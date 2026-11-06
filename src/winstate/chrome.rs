@@ -310,6 +310,16 @@ pub(crate) struct WindowChrome {
     /// data-change event only marks this flag and defers the actual mutation to
     /// idle (out of any signal dispatch); see GTK4Rs/AP-76.
     pub(crate) documents_refresh_scheduled: Cell<bool>,
+    /// The drag this window's tab strip has in flight, held weakly: `Some` with a live
+    /// referent from `drag-begin` until the drag is over on every layer, which is not
+    /// `drag-end` — on Win32 a cancelled drag ends before `DoDragDrop` has returned, and
+    /// the window that owns the drag's capture must outlive that return (TDD 7.7).
+    /// `window::tabs::dnd::track_tab_drag` names the event that ends it on each path.
+    pub(crate) tab_drag: RefCell<Option<gtk::glib::WeakRef<gtk::gdk::Drag>>>,
+    /// The window lost its last tab while its own drag was still in flight, so it is
+    /// left open but insensitive until the drag lets go (TDD 7.7). A tab arriving in the
+    /// meantime clears it and gives the window back.
+    pub(crate) retiring: Cell<bool>,
 }
 
 impl WindowChrome {

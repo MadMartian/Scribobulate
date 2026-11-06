@@ -792,6 +792,8 @@ fn build_window_chrome_state(
         format_menu_pending: Cell::new(None),
         format_menu_refresh_scheduled: Cell::new(false),
         documents_refresh_scheduled: Cell::new(false),
+        tab_drag: RefCell::new(None),
+        retiring: Cell::new(false),
     })
 }
 

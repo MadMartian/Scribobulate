@@ -172,6 +172,12 @@ pub(crate) fn wire_tab_arrival(window: &ApplicationWindow, tab_view: &TabView) {
             let Some(dest_chrome) = winstate::chrome(&dest) else {
                 return;
             };
+            // A tab reaching a window that was waiting out its own drag with no tabs
+            // (`retire_or_close`) — a new document, an opened file, a drop — gives the
+            // window back rather than letting the drag's release close it over the tab.
+            if dest_chrome.retiring.replace(false) {
+                dest.set_sensitive(true);
+            }
             let Some(tab) = winstate::tab_by_content_box(child) else {
                 return;
             };
@@ -263,10 +269,10 @@ pub(crate) fn wire_tab_arrival(window: &ApplicationWindow, tab_view: &TabView) {
                     }
                 }
                 if let Some(src) = src_weak.and_then(|w| w.upgrade()) {
-                    // A window with zero tabs is never a
-                    // valid state — close it.
+                    // A window with zero tabs is never a valid state — close it, or,
+                    // while its own drag is still in flight, as soon as that drag lets go.
                     if winstate::tab_count(&src) == 0 {
-                        src.close();
+                        retire_or_close(&src);
                     } else {
                         update_window_title(&src);
                     }
@@ -324,8 +330,12 @@ pub(crate) fn wire_tab_bar_dnd(window: &ApplicationWindow, tab_view: &TabView) {
     }
     {
         let wtv = tab_view.downgrade();
+        let win = window.downgrade();
         let dragging = dragging.clone();
         source.connect_drag_begin(move |_src, drag| {
+            if let Some(w) = win.upgrade() {
+                track_tab_drag(&w, drag);
+            }
             let Some(tv) = wtv.upgrade() else { return };
             let Some(content) = dragging.borrow().clone() else {
                 return;
@@ -371,17 +381,26 @@ pub(crate) fn wire_tab_bar_dnd(window: &ApplicationWindow, tab_view: &TabView) {
         #[upgrade_or]
         false,
         move |_src, _drag, reason| {
+            let tab = dragging
+                .borrow()
+                .as_ref()
+                .and_then(winstate::tab_by_content_box);
+            // Whether a drop already took the tab. On Win32 a cancel can follow a drop
+            // that landed: `selected_action` is only set by an idle the drag thread
+            // queues, so a release that beats that idle cancels with NoTarget whatever
+            // the pointer is over (gdkdrag-win32.c `gdk_dnd_handle_button_event`).
+            let taken = tab
+                .as_ref()
+                .is_some_and(|t| winstate::chrome(&w).is_none_or(|c| !Rc::ptr_eq(&t.chrome(), &c)));
             log::info!(
-                "tab drag cancelled: reason {reason:?}, source window has {} tab(s)",
+                "tab drag cancelled: reason {reason:?}, source window has {} tab(s), \
+                 tab already taken by a drop: {taken}",
                 winstate::tab_count(&w)
             );
-            let Some(content) = dragging.borrow().clone() else {
-                return false;
-            };
-            if reason != gdk::DragCancelReason::NoTarget {
+            if reason != gdk::DragCancelReason::NoTarget || taken {
                 return false;
             }
-            let Some(tab) = winstate::tab_by_content_box(&content) else {
+            let Some(tab) = tab else {
                 return false;
             };
             let Some(app) = w.application() else {
@@ -394,7 +413,13 @@ pub(crate) fn wire_tab_bar_dnd(window: &ApplicationWindow, tab_view: &TabView) {
             // unhandled so GTK plays its normal snap-back animation instead
             // of claiming a detach that didn't happen. `w` is the window whose
             // tab bar started this drag, i.e. the source the pop-out inherits.
-            spawn_window_hosting_tab(&app, &w, &source_chrome.tabs, &tab.content_box).is_some()
+            let popped =
+                spawn_window_hosting_tab(&app, &w, &source_chrome.tabs, &tab.content_box).is_some();
+            // Never claimed handled on Win32: this return is `drag_end`'s success flag,
+            // and `gdk_win32_drag_drop_done(TRUE)` marks the drag DROPPED, so OLE's
+            // `QueryContinueDrag` answers DRAGDROP_S_DROP: OLE would finish as a drop a
+            // drag that found no target.
+            popped && !cfg!(windows)
         }
     ));
     bar.add_controller(source);
@@ -462,6 +487,104 @@ fn wire_window_tab_drop(window: &ApplicationWindow, tab_view: &TabView) {
             .is_ok_and(|raw| take_dropped_tab(&dest, &tv, winstate::TabId::from_raw(raw)))
     });
     window.add_controller(target);
+}
+
+/// Record `drag` as `window`'s tab drag in flight, and arrange for
+/// [`tab_drag_over`] to run once the drag is over everywhere, which is a different
+/// event on each path (GTK 4.6.9 x11, 4.24.1 win32 source):
+///
+/// - **A drop that landed: `dnd-finished`.** Safe on every backend: on Win32 it runs
+///   after `DoDragDrop` has returned. Waiting for the `GdkDrag` to finalize instead
+///   never ends on X11: the destination display's `current_drop` keeps the drop, and
+///   through it the drag, until the next drag enters a window (GTK4Rs/AP-376).
+/// - **A cancel, X11 and macOS: `cancel`.** The pointer grab there is not on the
+///   source window, so closing it is safe.
+/// - **A cancel, Win32: the `GdkDrag`'s last unref.** `cancel` (and so `drag-end`)
+///   runs from the button-release handler while `DoDragDrop` is still running, with
+///   the source window as OLE's capture window and a registered drop target;
+///   destroying it then is a use-after-free risk inside GTK. The last ref goes in an
+///   idle queued once `DoDragDrop` has returned (gdkdrag-win32.c
+///   `idropsource_release`).
+///
+/// `drag-end` is not the hook: it is `dnd-finished` and `cancel` glued together, Win32's
+/// early cancel included (GTK4Rs/AP-375). Each handler only queues work; the notify runs
+/// mid-finalize.
+fn track_tab_drag(window: &ApplicationWindow, drag: &gdk::Drag) {
+    let Some(chrome) = winstate::chrome(window) else {
+        return;
+    };
+    *chrome.tab_drag.borrow_mut() = Some(drag.downgrade());
+    let over = {
+        let win = window.downgrade();
+        let this = drag.downgrade();
+        move || {
+            let (win, this) = (win.clone(), this.clone());
+            glib::idle_add_local_once(move || {
+                if let Some(w) = win.upgrade() {
+                    tab_drag_over(&w, &this);
+                }
+            });
+        }
+    };
+    {
+        let over = over.clone();
+        drag.connect_dnd_finished(move |_| over());
+    }
+    #[cfg(not(windows))]
+    {
+        let over = over.clone();
+        drag.connect_cancel(move |_, _| over());
+    }
+    // Every platform, as the backstop for a drag that ends with neither signal. The
+    // handle is not kept: dropping a `WeakRefNotify` leaves the notify armed, and
+    // nothing needs to disarm it — what it acts on is held weakly.
+    let _armed = drag.add_weak_ref_notify_local(over);
+}
+
+/// Whether `chrome`'s window still has a tab drag the platform has not let go of.
+fn tab_drag_in_flight(chrome: &winstate::WindowChrome) -> bool {
+    chrome
+        .tab_drag
+        .borrow()
+        .as_ref()
+        .is_some_and(|d| d.upgrade().is_some())
+}
+
+/// `window` has just lost its last tab. Close it — unless its own tab drag is still
+/// in flight, in which case it stays open but insensitive (inert to the user, while
+/// its surface, capture and drop registration stay intact) until
+/// [`tab_drag_over`]. Not hidden or minimized: on Win32 both take the drag's
+/// capture window away mid-`DoDragDrop`, the same hazard as destroying it (GTK4Rs/AP-375).
+fn retire_or_close(window: &ApplicationWindow) {
+    match winstate::chrome(window) {
+        Some(chrome) if tab_drag_in_flight(&chrome) => {
+            chrome.retiring.set(true);
+            window.set_sensitive(false);
+        }
+        _ => window.close(),
+    }
+}
+
+/// A tab drag of `window`'s, `this`, is over. A window that retired while waiting for
+/// it closes now if it is still empty; one that a tab reached in the meantime was
+/// already given back by `wire_tab_arrival`. Runs once per path that reports the end,
+/// so it is idempotent; a later drag's record is left alone.
+fn tab_drag_over(window: &ApplicationWindow, this: &glib::WeakRef<gdk::Drag>) {
+    let Some(chrome) = winstate::chrome(window) else {
+        return;
+    };
+    let recorded = chrome.tab_drag.borrow().as_ref().and_then(|d| d.upgrade());
+    if recorded.is_none() || recorded == this.upgrade() {
+        chrome.tab_drag.replace(None);
+    }
+    if chrome.retiring.get() && !tab_drag_in_flight(&chrome) {
+        chrome.retiring.set(false);
+        if winstate::tab_count(window) == 0 {
+            window.close();
+        } else {
+            window.set_sensitive(true);
+        }
+    }
 }
 
 /// Take the dragged tab `id` into `dest`, whose strip is `tv`: the one drop decision the
@@ -834,6 +957,199 @@ mod gtk_integration_tests {
             &dest_tabs,
             winstate::TabId::from_raw(u64::MAX)
         ));
+
+        for w in app.windows() {
+            w.destroy();
+        }
+    }
+
+    /// Drain the default main context until it reports nothing pending.
+    fn pump() {
+        let ctx = glib::MainContext::default();
+        for _ in 0..200 {
+            if !ctx.iteration(false) {
+                break;
+            }
+        }
+    }
+
+    /// Whether this platform can host a drag a test begins itself — only X11 can
+    /// (GTK4Rs/AP-377). Win32's `gdk_drag_begin` hands the drag to `DoDragDrop` on the
+    /// drag thread, which only a real button release ends, and a drag left there is
+    /// still in GDK's DnD queue when later tests destroy their windows: that crashed the
+    /// test binary in gdkdrag-win32.c `process_dnd_queue` (measured: 2 of 13 runs, GTK
+    /// 4.24.1). On macOS 4.24 all three aborted the pipeline runner's test binary with
+    /// "Rust cannot catch foreign exceptions" — an Objective-C exception, inferred to
+    /// come from the `NSDraggingSession` that call starts with no mouse event behind it,
+    /// since the drag tests that begin no drag pass. The
+    /// real drags of tests/MANUAL-TEST.md 7.7w cover Win32.
+    fn synthetic_drags_unsupported() -> bool {
+        let unsupported = cfg!(any(windows, target_os = "macos"));
+        if unsupported {
+            println!("SKIPPED [TDD 7.7]: only X11 lets a test begin a drag of its own");
+        }
+        unsupported
+    }
+
+    /// Begin a real platform drag from `window`'s surface and record it as that
+    /// window's tab drag, as `connect_drag_begin` does.
+    fn begin_tab_drag(window: &ApplicationWindow) -> gdk::Drag {
+        let surface = window.surface().expect("a presented window has a surface");
+        let pointer = surface
+            .display()
+            .default_seat()
+            .and_then(|s| s.pointer())
+            .expect("the test display has a pointer");
+        let content = gdk::ContentProvider::for_value(&0u64.to_value());
+        let drag = gdk::Drag::begin(
+            &surface,
+            &pointer,
+            &content,
+            gdk::DragAction::MOVE,
+            0.0,
+            0.0,
+        )
+        .expect("the backend begins a drag");
+        track_tab_drag(window, &drag);
+        drag
+    }
+
+    /// **TDD 7.7, a window whose only tab leaves while its own drag is in flight.** It
+    /// stays open, insensitive, until the platform lets go of the drag, and only then
+    /// closes. On Win32 a cancelled drag's `drag-end` runs while `DoDragDrop` is still
+    /// running, with this window as OLE's capture and drop window, so closing it at the
+    /// tab's departure (as the arrival idle used to) destroyed it mid-drag.
+    /// Mutation-checked: closing in `retire_or_close` regardless of the drag fails the
+    /// "still open" assertion.
+    #[gtktest::test]
+    fn a_window_emptied_mid_drag_closes_only_once_the_drag_lets_go() {
+        if synthetic_drags_unsupported() {
+            return;
+        }
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.dndretire"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let source = crate::window::new_window(&app, "IT", "# One\n\nbody", None);
+        let dest = crate::window::new_window(&app, "IT", "# Two\n\nbody", None);
+        source.present();
+        pump();
+        let moving = state(&source).expect("source tab").id;
+        let dest_tabs = winstate::chrome(&dest).expect("dest chrome").tabs.clone();
+
+        let drag = begin_tab_drag(&source);
+        assert!(take_dropped_tab(&dest, &dest_tabs, moving));
+        pump();
+        let open = |w: &ApplicationWindow| app.windows().iter().any(|x| x == w);
+        assert_eq!(winstate::tab_count(&source), 0, "the tab left its source");
+        assert!(
+            open(&source),
+            "the emptied source stays open while its drag is live"
+        );
+        assert!(!source.is_sensitive(), "and is inert meanwhile");
+
+        // A cancelled drag's snap-back animation holds the backend's ref for a few
+        // frames, so the release is a wall-clock wait, not one drain.
+        drag.drop_done(false);
+        drop(drag);
+        crate::testpump::until(
+            crate::testpump::Clock::Frame,
+            "the emptied source to close once its drag lets go",
+            || !open(&source),
+        );
+        assert!(open(&dest), "the destination is untouched");
+
+        for w in app.windows() {
+            w.destroy();
+        }
+    }
+
+    /// TDD 7.7, the drop that LANDED: the window closes on `dnd-finished` even though the
+    /// drag object lives on. On X11 the destination display's `current_drop` keeps the
+    /// drag alive until the next drag enters a window, so waiting for its finalize left
+    /// the emptied source open and tabless for good (seen on the live desktop).
+    /// Mutation-checked: without the `dnd-finished` connection the window stays open.
+    #[gtktest::test]
+    fn a_window_emptied_by_a_landed_drop_closes_while_the_drag_lives_on() {
+        if synthetic_drags_unsupported() {
+            return;
+        }
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.dndfinished"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let source = crate::window::new_window(&app, "IT", "# One\n\nbody", None);
+        let dest = crate::window::new_window(&app, "IT", "# Two\n\nbody", None);
+        source.present();
+        pump();
+        let moving = state(&source).expect("source tab").id;
+        let dest_tabs = winstate::chrome(&dest).expect("dest chrome").tabs.clone();
+
+        // Held for the whole test, as `current_drop` holds it.
+        let drag = begin_tab_drag(&source);
+        assert!(take_dropped_tab(&dest, &dest_tabs, moving));
+        pump();
+        let open = |w: &ApplicationWindow| app.windows().iter().any(|x| x == w);
+        assert!(open(&source), "precondition: the source waits out its drag");
+
+        drag.emit_by_name::<()>("dnd-finished", &[]);
+        pump();
+        assert!(!open(&source), "the landed drop closes the emptied source");
+
+        drag.drop_done(true);
+        drop(drag);
+        for w in app.windows() {
+            w.destroy();
+        }
+    }
+
+    /// TDD 7.7's other half: a tab that reaches a retiring window before its drag lets
+    /// go — a new document opened into it, say — gives the window back, and the drag's
+    /// release does not close it over that tab.
+    #[gtktest::test]
+    fn a_tab_reaching_a_retiring_window_keeps_it() {
+        if synthetic_drags_unsupported() {
+            return;
+        }
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.dndunretire"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let source = crate::window::new_window(&app, "IT", "# One\n\nbody", None);
+        let dest = crate::window::new_window(&app, "IT", "# Two\n\nbody", None);
+        source.present();
+        pump();
+        let moving = state(&source).expect("source tab").id;
+        let dest_tabs = winstate::chrome(&dest).expect("dest chrome").tabs.clone();
+
+        let drag = begin_tab_drag(&source);
+        assert!(take_dropped_tab(&dest, &dest_tabs, moving));
+        pump();
+        assert!(
+            !source.is_sensitive(),
+            "precondition: the source is retiring"
+        );
+
+        crate::window::create_tab_in_window(&source, "# New\n", None, false, false)
+            .expect("a tab opens into the retiring window");
+        pump();
+        assert!(
+            source.is_sensitive(),
+            "the arriving tab gives the window back"
+        );
+
+        // Ended by `dnd-finished`: the end a landed drop reports.
+        drag.emit_by_name::<()>("dnd-finished", &[]);
+        pump();
+        let open = app.windows().iter().any(|x| x == &source);
+        assert!(open, "the drag's release leaves a window that has a tab");
+        assert!(source.is_sensitive());
 
         for w in app.windows() {
             w.destroy();
