@@ -57,7 +57,6 @@ described from a different vantage point.
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
-| H | Any | Production | On a dark desktop the comment field keeps a white background while its "Add a comment…" hint takes the dark theme's light ink, so the hint is invisible (1.09:1 contrast). Typed text reads fine | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 
 ## Closed issues
@@ -426,24 +425,6 @@ state behind for the next.
 **Next step**: have the Windows seat run the module in a loop under CPU load and log the
 editor's vadjustment value and upper across the park, as was done for the reading-position
 flake fixed by "Keep the reading position when a view switch comes before the editor has scrolled into place" (2026-10-11).
-
-## H. On a dark desktop the comment field's hint text is invisible
-
-**Severity**: Low (only the hint is unreadable; the field works and typed text is legible).
-
-**Observed** (2026-10-26). macOS, GTK 4.22.4, dark desktop: in the comment card that
-opens from **Annotate**, the field (`widgets/comment_entry.rs`, a `GtkTextView` in a
-framed `GtkScrolledWindow`, with a `dim-label` placeholder laid over it) is white while
-the card around it is dark. The placeholder "Add a comment…" measured 1.09:1 against it.
-Same on `master`, so it predates the card-pointer change. Reproduced on Linux, private
-Xvfb, GTK 4.6.9, `GTK_THEME=Adwaita:dark`: white field, near-invisible hint. Filed `Any`
-because nothing in the field's construction is platform-specific; Windows has not been
-driven.
-
-**Not established**: which rule paints the field white under a dark theme. The
-placeholder's ink follows the desktop theme, so either the field's fill or the hint's ink
-is coming from somewhere other than the desktop theme. Read the field's CSS node tree with
-the dark theme active before guessing.
 
 ## I. Closing a full-screen window logs a frame-clock critical on macOS
 

@@ -3069,6 +3069,7 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **And** Enter commits (17.43) and never inserts a line break, except while an input method is composing, where Enter confirms the composition as usual
 - **And** a line break that arrives by paste is committed as a single space, because the comment is stored inline in the document and a line break there would end a table row or split a list item
 - **And** the Create cards show their "Add a comment…" hint (17.17) over the empty field only
+- **And** the field takes the desktop's colours, light or dark, so its hint and the typed text are both legible on either
 - **And** Select All and Undo/Redo act on the field while it has focus, never on the document — including when the document has undo history of its own, where an Undo that reached the document would revert the reader's last edit, possibly a whole annotation
 
 ### 17.57 Edit replaces the comment in place

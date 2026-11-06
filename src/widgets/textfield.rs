@@ -43,6 +43,7 @@
 //! is a constructor taking a required name rather than a lint.
 
 use gtk::prelude::*;
+use sourceview::prelude::BufferExt as _;
 
 /// Wire the follow-ups every text field owes, whatever its concrete type.
 ///
@@ -114,7 +115,18 @@ pub(crate) fn named_text_area(accessible_name: &str, initial: &str) -> sourcevie
     view.set_accepts_tab(false);
     view.set_hexpand(true);
     view.set_vexpand(true);
-    // A text field, not a code pane: the prose face, and the entry frame's inset.
+    // A text field, not a code pane: the desktop theme's colours, not a source scheme.
+    // A `sourceview::Buffer` is born on GtkSourceView's default scheme, which is LIGHT
+    // whatever the desktop is, so on a dark desktop the field painted white with black
+    // text while every label beside it (its own placeholder included) took the theme's
+    // light ink. The editor answers that with `window::apply_editor_style_scheme` and a
+    // re-apply on every theme switch; a field has no syntax to colour, so it opts out
+    // instead and GTK's own `textview > text` rules paint it, live switches included
+    // (GTK4Rs/AP-378).
+    if let Ok(buf) = view.buffer().downcast::<sourceview::Buffer>() {
+        buf.set_style_scheme(None);
+    }
+    // The prose face, and the entry frame's inset.
     view.remove_css_class("monospace");
     view.set_left_margin(6);
     view.set_right_margin(6);
@@ -153,5 +165,30 @@ mod tests {
             "named_search_entry produced a field with no accessible name"
         );
         assert!(search.hexpands(), "a text field must fill its row");
+    }
+
+    /// The text area takes the desktop theme's colours, not a source style scheme.
+    ///
+    /// A `sourceview::Buffer` is born on a style scheme that is light whatever the
+    /// desktop is, so on a dark desktop the field painted white beneath a placeholder in
+    /// the theme's light ink, near invisible. The positive control proves that birth
+    /// scheme exists on this build, so the second assertion cannot pass because the
+    /// hazard went away by itself. The pixels are checked by hand (MANUAL-TEST 17.56):
+    /// pinning a dark theme here is process-wide state.
+    #[gtktest::test]
+    fn the_text_area_paints_with_the_desktop_theme_not_a_style_scheme() {
+        assert!(
+            sourceview::Buffer::new(None).style_scheme().is_some(),
+            "precondition: a fresh source buffer is born with a style scheme"
+        );
+        let area = named_text_area("Comment", "");
+        let buf = area
+            .buffer()
+            .downcast::<sourceview::Buffer>()
+            .expect("a source view's buffer is a source buffer");
+        assert!(
+            buf.style_scheme().is_none(),
+            "the text area kept a style scheme, which paints it light on a dark desktop"
+        );
     }
 }
