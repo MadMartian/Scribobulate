@@ -4060,9 +4060,10 @@ created by an act of navigation, and traversing history is not one of them.**
 
 ### 23.6 The browser's own inputs work
 - **Given** a window with history in both directions
-- **When** the reader presses Alt+Left / Alt+Right (Cmd+[ / Cmd+] on macOS — see below), or the dedicated Back / Forward keys a keyboard may carry (`XF86Back` / `XF86Forward`), or the two thumb buttons a mouse may carry (buttons 8 and 9)
+- **When** the reader presses Alt+Left / Alt+Right (Cmd+[ / Cmd+] on macOS — see below), or the dedicated Back / Forward keys a keyboard may carry (`XF86Back` / `XF86Forward`), or the two thumb buttons a mouse may carry (which GDK reports as buttons 8 and 9 on X11 and Wayland, and as 4 and 5 on Windows and macOS)
 - **Then** each drives the same navigation as the menu item — one action, several inputs, no per-input behaviour
 - **And** the keyboard bindings appear in the Keyboard Shortcuts window; the mouse buttons deliberately do not, that window describing keys
+- **And** after a thumb button, the pointer works as it does after any other click: the cursor over a link is the link cursor, and the first click on a link follows it. GTK keeps a pointer grab after a release of any button above 5, so the app releases it. Doing so does not change the keyboard focus, any selection in the editor or preview, or a selection in a table cell
 - **And** on macOS, Back/Forward's keyboard binding is Cmd+[ / Cmd+] — Safari and Finder's own spelling — rather than Alt+Left/Right: measured **on Quartz**, that keystroke was never actually reachable for Back/Forward from a focused editor to begin with there (`GtkSourceView`'s own `move-words` word-transposition binding wins the same key first — TDD §4.13; the opposite is measured on Win32 and X11, where this accelerator wins and `move-words` never fires, so the ordering is a property of the backend and not of the toolkit — ScrAP-311), but every native macOS text field still binds Option+Left/Option+Right to word navigation, and Back/Forward has no more business contesting that key than `move-words` does. `XF86Back`/`XF86Forward` and the two thumb buttons are unaffected — the same input on every platform
 
 ### 23.7 History is per window and never crosses between them

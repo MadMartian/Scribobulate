@@ -146,6 +146,7 @@ mod lifecycle;
 mod linknav;
 mod livepreview;
 mod navhistory;
+mod pointergrab;
 mod restore;
 mod sidebar;
 mod sidebarfilter;
@@ -590,6 +591,7 @@ fn build_window(
     // tab switch; the window's first document is seeded into the history by
     // `winstate::register` below, since no switch callback ever fires for it.
     register_nav_history_actions(&window);
+    pointergrab::release_stranded_pointer_grabs(&window);
     // ── Phase 4-5: first tab's editor + preview + per-tab wiring ──────────────
     // Assembled by the SHARED `assemble_tab_core` — byte-for-byte the same
     // orchestration every later tab runs in `window/tabs/create_tab_in_window`.

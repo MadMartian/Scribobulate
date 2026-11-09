@@ -28,11 +28,11 @@
 //! ## Why the mouse buttons are not accelerators
 //!
 //! A `GtkApplication` accelerator is a key combination; the browser Back/Forward
-//! thumb buttons are pointer buttons 8 and 9, which no accelerator string can
-//! express. They are therefore two `GtkGestureClick`s on the window that activate
-//! the same actions — which keeps the single-`GAction` contract intact (POLICY,
+//! thumb buttons are pointer buttons, which no accelerator string can express.
+//! They are therefore `GtkGestureClick`s on the window that activate the same
+//! actions — which keeps the single-`GAction` contract intact (POLICY,
 //! ScrAP-9): the buttons are an extra *input*, not a second implementation.
-//! Deliberately one gesture per button rather than one `set_button(0)` gesture
+//! Deliberately one gesture per button number rather than one `set_button(0)` gesture
 //! dispatching on `current_button()`: a button-0 gesture observes every press in
 //! the window, including the text panes' own selection presses, and the cheapest
 //! way to be certain it can never interfere with them is not to see them.
@@ -64,12 +64,21 @@ use crate::winstate::{
 use std::rc::Rc;
 use traverse::traverse;
 
-/// The pointer button a mouse's "back" thumb switch reports, and its sibling.
-/// Fixed by the X11/`libinput` button numbering the whole desktop shares, not by
-/// anything in this application — hence a named constant at its single use, not a
-/// configurable.
-const MOUSE_BUTTON_BACK: u32 = 8;
-const MOUSE_BUTTON_FORWARD: u32 = 9;
+/// The pointer buttons a mouse's "back" thumb switch reports, and its "forward"
+/// sibling's. GDK numbers the same physical buttons differently per backend:
+///
+/// - X11 and Wayland report 8 and 9. On X11 buttons 4–7 are the wheel and become
+///   scroll events (`gdkdevicemanager-xi2.c`), and on Wayland every button past
+///   the first three starts at 8 (`gdkdevice-wayland.c`), so 4 and 5 never arrive
+///   there as presses.
+/// - Win32 reports `XBUTTON1`/`XBUTTON2` as 4 and 5 (`gdkevents-win32.c`).
+/// - macOS reports `buttonNumber + 1`, and the thumb buttons are numbers 3 and 4
+///   (`gdkmacosdisplay-translate.c`), so 4 and 5 again.
+///
+/// Both numbers are bound on every platform: neither can mean anything else
+/// anywhere, and that keeps one binding table rather than one per platform.
+const MOUSE_BUTTONS_BACK: [u32; 2] = [4, 8];
+const MOUSE_BUTTONS_FORWARD: [u32; 2] = [5, 9];
 
 /// The `win.*` action name for each direction. One table so the registration, the
 /// sensitivity refresh, the mouse gestures, the menu model and the toolbar cannot
@@ -105,13 +114,12 @@ pub(super) fn register_nav_history_actions(window: &ApplicationWindow) {
     wire_mouse_buttons(window);
 }
 
-/// Attach the two thumb-button gestures. See the module doc for why these are
-/// gestures rather than accelerators, and why there are two.
+/// Attach the thumb-button gestures, one per button number. See the module doc for
+/// why these are gestures rather than accelerators, and why there is one per button.
 fn wire_mouse_buttons(window: &ApplicationWindow) {
-    for (dir, button) in [
-        (NavDir::Back, MOUSE_BUTTON_BACK),
-        (NavDir::Forward, MOUSE_BUTTON_FORWARD),
-    ] {
+    let back = MOUSE_BUTTONS_BACK.map(|b| (NavDir::Back, b));
+    let forward = MOUSE_BUTTONS_FORWARD.map(|b| (NavDir::Forward, b));
+    for (dir, button) in back.into_iter().chain(forward) {
         let gesture = gtk::GestureClick::new();
         gesture.set_button(button);
         // Capture phase: a thumb-button press anywhere in the window is a
@@ -204,7 +212,7 @@ mod gtk_integration_tests {
 
     /// TDD 23.6's mouse half — the thumb buttons are gestures, so what is
     /// assertable headlessly is that they resolve to the same actions the menu
-    /// uses (a synthetic button-8 press needs a real pointer device; the live
+    /// uses (a synthetic thumb-button press needs a real pointer device; the live
     /// check is `tests/MANUAL-TEST.md` §23). This is the GEP-12 lesson applied
     /// in advance: assert what the wiring IS, and leave the delivery to the live
     /// pass rather than to an input synthesiser that can fail silently.
@@ -231,8 +239,11 @@ mod gtk_integration_tests {
             .map(|g| g.button())
             .collect();
         assert!(
-            buttons.contains(&MOUSE_BUTTON_BACK) && buttons.contains(&MOUSE_BUTTON_FORWARD),
-            "both thumb-button gestures must be attached to the window (found {buttons:?})"
+            MOUSE_BUTTONS_BACK
+                .iter()
+                .chain(&MOUSE_BUTTONS_FORWARD)
+                .all(|b| buttons.contains(b)),
+            "every thumb-button gesture must be attached to the window (found {buttons:?})"
         );
 
         window.destroy();
