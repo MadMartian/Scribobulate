@@ -139,9 +139,9 @@ pub(crate) const TOOLTIP_HOVER_DRAIN: std::time::Duration = std::time::Duration:
 /// through the same affine, and giving them different origins leaves the first
 /// `child_origin.y - texture_origin.y` rows of every tile empty.
 ///
-/// **The repeat covers more than the rect, and a clip cuts it back.** From GTK 4.22 the
-/// Cairo renderer draws a repeat node strip by strip and stretches each strip to the
-/// bottom of whatever clip is in force (`gsk/gskrepeatnode.c`, `gsk_repeat_node_draw_repeat`,
+/// **The repeat covers more than the rect, and a clip cuts it back** (GTK4Rs/AP-380). From
+/// GTK 4.22 the Cairo renderer draws a repeat node strip by strip and stretches each
+/// strip to the bottom of whatever clip is in force (`gsk/gskrepeatnode.c`, `gsk_repeat_node_draw_repeat`,
 /// `end_y = MAX (...)`). Inside the node's own bounds that clip is the view, so a short
 /// bar that crosses a tile-grid line painted its stripes down to the bottom of the view
 /// (MEASURED on GTK 4.22.4, Windows and macOS; GTK 4.6.9 fills exactly the node's bounds
