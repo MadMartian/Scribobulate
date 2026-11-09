@@ -57,6 +57,7 @@ described from a different vantage point.
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
+| H | Mac | Production | A block quote followed by a `---` rule at the end of a document leaves its background painted past the rule and the document's end, and it changes as the touchpad scrolls past the end (Candy theme). Only seen on macOS so far | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 
 ## Closed issues
@@ -425,6 +426,26 @@ state behind for the next.
 **Next step**: have the Windows seat run the module in a loop under CPU load and log the
 editor's vadjustment value and upper across the park, as was done for the reading-position
 flake fixed by "Keep the reading position when a view switch comes before the editor has scrolled into place" (2026-10-11).
+
+## H. A block quote's background bleeds past the end of the document on macOS
+
+**Platform**: Mac (seen there; Linux and Windows not yet checked)
+**Scope**: Production
+**Severity**: Low (cosmetic, and only past the end of the document)
+
+**Seen**: a private document of the operator's on the Mac host (confidential: its name
+and path are not recorded here), Candy theme. It ends with a block quote, then a `---` rule. Past the rule and the end of the
+document, the block quote's background is still painted. A touchpad scroll past the end
+(macOS elastic overscroll, which bounces back on release) shifts and changes that area. A
+screenshot is in the Mac host's `Downloads` folder.
+
+**Suspected, not measured**: the area past the end is not repainted or cleared, so it still
+shows the block quote as painted while the view was higher up.
+
+**To resolve**: reproduce with a small synthetic document of the same shape. Ask the operator
+before opening the original. Then find out which painter draws the quote's background and how far it
+reaches. Then check Linux and Windows (Linux has no elastic overscroll; try scrolling to
+the end there and look for the same area).
 
 ## I. Closing a full-screen window logs a frame-clock critical on macOS
 
