@@ -6,9 +6,9 @@
 //! and GTK ends that grab on the release — but only when the release event's modifier
 //! state shows exactly one of `GDK_BUTTON1_MASK`..`GDK_BUTTON5_MASK` held
 //! (`gtkmain.c` `handle_pointing_event`, the `GDK_BUTTON_RELEASE` branch: GTK 4.6.9
-//! about line 1457, unchanged on upstream `main`). GDK has no mask bit for a button
-//! above 5, so the release of a mouse's thumb buttons (8 and 9 on X11 and Wayland)
-//! never matches, and the grab outlives the click.
+//! about line 1457, unchanged on upstream `main`). On X11 the thumb buttons are 8
+//! and 9, and the X11 backend copies only buttons 1–3 into that state, so their
+//! release shows none held, and the grab outlives the click.
 //!
 //! While it lasts, every motion and press goes to the grabbed widget instead of the
 //! widget under the pointer. Reported as: press the thumb Back button, the document
@@ -17,9 +17,11 @@
 //! release, which finally ends the grab, so the second click works. The toolbar's
 //! Back button never shows it because it is a button-1 click.
 //!
-//! On Windows and macOS GDK reports the thumb buttons as 4 and 5, which do have mask
-//! bits, so this repair has nothing to do there. It is shared code all the same: it
-//! keys on the button number, not on the platform.
+//! The other backends release it themselves. Wayland reports the thumb buttons as 8
+//! and 9 but sets `GDK_BUTTON4_MASK`/`GDK_BUTTON5_MASK` for them
+//! (`gdkdevice-wayland.c`, the button handler), and Windows and macOS report them as 4
+//! and 5. So the repair keys on what GTK's own test sees, a release of a button above 5
+//! with none of the five masks set, not on the platform, and does nothing elsewhere.
 //!
 //! ## The repair
 //!
@@ -46,9 +48,17 @@ use gtk::prelude::*;
 /// The highest pointer button GDK has a modifier mask for (`GDK_BUTTON5_MASK`).
 const LAST_MASKED_BUTTON: u32 = 5;
 
-/// Does the release of `button` leave GTK's implicit pointer grab in place?
-fn release_strands_grab(button: u32) -> bool {
-    button > LAST_MASKED_BUTTON
+/// Does the release of `button`, with `state` as its modifier state, leave GTK's
+/// implicit pointer grab in place where nothing else will clear it?
+///
+/// GTK clears the grab when exactly one of the five button masks is set. With none
+/// set, a release of a button above 5 strands it. With two or more set, another button
+/// is still held, and its own release clears the grab, so this one leaves it alone.
+fn release_strands_grab(button: u32, state: gtk::gdk::ModifierType) -> bool {
+    use gtk::gdk::ModifierType as M;
+    let buttons =
+        M::BUTTON1_MASK | M::BUTTON2_MASK | M::BUTTON3_MASK | M::BUTTON4_MASK | M::BUTTON5_MASK;
+    button > LAST_MASKED_BUTTON && !state.intersects(buttons)
 }
 
 /// Watch `window` for releases of buttons GTK cannot ungrab, and release the grab each
@@ -62,7 +72,7 @@ pub(super) fn release_stranded_pointer_grabs(window: &gtk::ApplicationWindow) {
         let stranded = event.event_type() == gtk::gdk::EventType::ButtonRelease
             && event
                 .downcast_ref::<gtk::gdk::ButtonEvent>()
-                .is_some_and(|b| release_strands_grab(b.button()));
+                .is_some_and(|b| release_strands_grab(b.button(), b.modifier_state()));
         if let (true, Some(window)) = (stranded, controller.widget()) {
             log::debug!("pointer grab: releasing the grab an extra mouse button left");
             // Not from inside the event's own propagation: the release is still on its
@@ -188,20 +198,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_buttons_without_a_mask_bit_strand_the_grab() {
+    fn only_a_release_gtk_cannot_clear_strands_the_grab() {
+        use gtk::gdk::ModifierType as M;
+        let none = M::empty();
         for button in 1..=LAST_MASKED_BUTTON {
             assert!(
-                !release_strands_grab(button),
+                !release_strands_grab(button, none),
                 "button {button} has a mask bit"
             );
         }
-        // The thumb buttons as X11 and Wayland report them, and the next ones up.
+        // X11: the thumb buttons, and the next ones up, release with no mask set.
         for button in [6, 7, 8, 9, 10] {
             assert!(
-                release_strands_grab(button),
-                "button {button} has no mask bit"
+                release_strands_grab(button, none),
+                "button {button} with no mask set"
             );
         }
+        // Wayland sets mask 4 or 5 for its 8 and 9, and GTK clears the grab itself.
+        assert!(!release_strands_grab(8, M::BUTTON4_MASK), "Wayland's 8");
+        assert!(!release_strands_grab(9, M::BUTTON5_MASK), "Wayland's 9");
+        // Another button still held: its own release clears the grab.
+        assert!(
+            !release_strands_grab(8, M::BUTTON1_MASK | M::BUTTON4_MASK),
+            "a button still held"
+        );
+        // Keyboard modifiers are not buttons.
+        assert!(
+            release_strands_grab(8, M::SHIFT_MASK | M::CONTROL_MASK),
+            "keyboard modifiers only"
+        );
     }
 }
 
