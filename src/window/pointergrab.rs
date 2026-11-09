@@ -1,4 +1,4 @@
-//! Releasing the pointer grab GTK leaves behind after an extra mouse button.
+//! Releasing the pointer grab GTK leaves behind after an extra mouse button (GTK4Rs/AP-379).
 //!
 //! ## The GTK defect
 //!
