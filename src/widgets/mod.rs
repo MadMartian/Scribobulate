@@ -139,6 +139,20 @@ pub(crate) const TOOLTIP_HOVER_DRAIN: std::time::Duration = std::time::Duration:
 /// through the same affine, and giving them different origins leaves the first
 /// `child_origin.y - texture_origin.y` rows of every tile empty.
 ///
+/// **The repeat covers more than the rect, and a clip cuts it back.** From GTK 4.22 the
+/// Cairo renderer draws a repeat node strip by strip and stretches each strip to the
+/// bottom of whatever clip is in force (`gsk/gskrepeatnode.c`, `gsk_repeat_node_draw_repeat`,
+/// `end_y = MAX (...)`). Inside the node's own bounds that clip is the view, so a short
+/// bar that crosses a tile-grid line painted its stripes down to the bottom of the view
+/// (MEASURED on GTK 4.22.4, Windows and macOS; GTK 4.6.9 fills exactly the node's bounds
+/// and never showed it). A clip pushed to the rect is NOT enough on its own: GTK emits no
+/// clip node when the clip contains the child's bounds (`gtksnapshot.c`, the
+/// `graphene_rect_contains_rect` early return), and a repeat node's bounds are the rect
+/// it was given. So the repeat is given the rect grown downward to the next grid line
+/// past it — always past it, so it is always strictly taller and the clip is always
+/// kept — and the clip is the rect. On GTK 4.6.9, where the fill is the repeat's own
+/// bounds, the clip is just as load-bearing: without it the whole grown area would paint.
+///
 /// A zero or negative dimension — on either the rect or the texture — paints NOTHING
 /// rather than asking GSK for a degenerate repeat node. Two of the three call sites had
 /// no such guard; folding it in here is what makes the omission unrepresentable.
@@ -158,8 +172,15 @@ pub(crate) fn tile_texture(
     // silently paints nothing once the two are 32768 px apart.
     let anchor_y = (rect.y() / th as f32).floor() * th as f32;
     let tile = gtk::graphene::Rect::new(rect.x(), anchor_y, tw as f32, th as f32);
-    snapshot.push_repeat(rect, Some(&tile));
+    // Grown to the first grid line strictly below the rect's bottom, so the clip below
+    // never contains it (see "The repeat covers more than the rect" above). Starting on
+    // the anchor keeps it within two tile rows of the rect, far from pixman's ceiling.
+    let below = ((rect.y() + rect.height()) / th as f32).floor() * th as f32 + th as f32;
+    let repeat = gtk::graphene::Rect::new(rect.x(), anchor_y, rect.width(), below - anchor_y);
+    snapshot.push_clip(rect);
+    snapshot.push_repeat(&repeat, Some(&tile));
     snapshot.append_texture(tex, &tile);
+    snapshot.pop();
     snapshot.pop();
 }
 
@@ -532,8 +553,11 @@ mod tile_tests {
             tile_texture(&snapshot, &rect, &t);
             let node = snapshot.to_node().expect("a real rect renders");
             let repeat = node
+                .downcast::<gtk::gsk::ClipNode>()
+                .expect("tile_texture emits a clip over the repeat")
+                .child()
                 .downcast::<gtk::gsk::RepeatNode>()
-                .expect("tile_texture emits a repeat node");
+                .expect("tile_texture emits a repeat node inside the clip");
             // The CHILD bounds of the repeat node, which is where the phase lives.
             let child = repeat.child_bounds();
             (child.x(), child.y())
@@ -558,6 +582,66 @@ mod tile_tests {
             rect.x(),
             "the tile grid must take x from the RECT: a 0 here samples the tile at \
              rect.x() % tile_w and slices the sprite down its left edge (got {x})"
+        );
+    }
+
+    /// **The tiles paint the rect and nothing outside it** (`tile_texture`'s docs, "The
+    /// repeat covers more than the rect").
+    ///
+    /// Drawn through Cairo directly (`RenderNode::draw`), the path the app's
+    /// `GSK_RENDERER=cairo` takes, onto a surface much taller than the rect, so the clip in
+    /// force around the node is the surface: the condition under which GTK 4.22's Cairo
+    /// repeat stretched each strip to the bottom of the view. The rect crosses a grid
+    /// line, which is what made the second strip.
+    ///
+    /// Mutation checks: without the clip, this fails on GTK 4.6.9 (Linux), which fills
+    /// the whole grown repeat. With the old body (a repeat over the rect alone, no clip)
+    /// it is expected to fail on GTK 4.22.4 (the Windows and macOS legs) and passes on
+    /// GTK 4.6.9, whose Cairo repeat never painted outside its own bounds.
+    #[gtktest::test]
+    fn the_tiles_paint_the_rect_and_nothing_outside_it() {
+        use gtk::prelude::SnapshotExt;
+        let bytes = gtk::glib::Bytes::from_owned(vec![0xffu8; 8 * 8 * 4]);
+        let t: gtk::gdk::Texture = gtk::glib::object::Cast::upcast(gtk::gdk::MemoryTexture::new(
+            8,
+            8,
+            gtk::gdk::MemoryFormat::R8g8b8a8,
+            &bytes,
+            8 * 4,
+        ));
+        // Rows 5..11 cross the grid line at 8.
+        let rect = graphene::Rect::new(4.0, 5.0, 20.0, 6.0);
+        let snapshot = gtk::Snapshot::new();
+        tile_texture(&snapshot, &rect, &t);
+        let node = snapshot.to_node().expect("a real rect renders");
+
+        let (w, h) = (32, 48);
+        let mut surface =
+            gtk::cairo::ImageSurface::create(gtk::cairo::Format::ARgb32, w, h).unwrap();
+        {
+            let cr = gtk::cairo::Context::new(&surface).unwrap();
+            node.draw(&cr);
+        }
+        surface.flush();
+        let stride = surface.stride() as usize;
+        let data = surface.data().unwrap();
+        let alpha = |x: i32, y: i32| data[y as usize * stride + x as usize * 4 + 3];
+        let mut outside = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let inside = (4..24).contains(&x) && (5..11).contains(&y);
+                if inside {
+                    assert_eq!(alpha(x, y), 0xff, "the rect is painted at ({x}, {y})");
+                } else if alpha(x, y) != 0 {
+                    outside.push((x, y));
+                }
+            }
+        }
+        assert!(
+            outside.is_empty(),
+            "nothing is painted outside the rect; {} pixels were, first {:?}",
+            outside.len(),
+            outside.first()
         );
     }
 

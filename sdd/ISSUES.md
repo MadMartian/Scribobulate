@@ -53,11 +53,11 @@ described from a different vantage point.
 | A | Windows, Mac | Production | No screen reader on Windows or macOS can read the app's accessible names: our GTK builds leave GTK's AccessKit accessibility backend off, so neither platform gets a tree to carry them. Linux/AT-SPI reads them | Medium |
 | B | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | C | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
-| D | Linux, Mac | Test | `window::sidebarfilter::gtk_integration_tests::closing_the_filter_returns_the_focus_to_the_highlighted_row` intermittently finds the list at its top instead of scrolled to the highlighted row (3 failures on CI: Linux twice, the second on 2026-10-29, and macOS once on 2026-10-29, both 2026-10-29 failures reading "value 0, upper 0, page 0"; passed on retry, and about 160 of 160 loaded runs locally) | Low |
+| D | Linux, Mac | Project | Closing the sidebar filter can leave the list at its top instead of scrolled to the highlighted row: the reveal retries a fixed number of times and gives up before GTK has laid the list out (seen 5 times on CI, Linux and macOS, never locally; cause read from the 2026-11-09 failure's trace) | Low |
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
-| H | Mac | Production | A block quote followed by a `---` rule at the end of a document leaves its background painted past the rule and the document's end, and it changes as the touchpad scrolls past the end (Candy theme). Only seen on macOS so far | Low |
+| H | Windows, Mac | Production | A block quote's tiled background (Candy theme) paints below the panel, over the `---` rule after it: GSK's Cairo repeat node draws outside its own bounds on GTK 4.22.4. Linux GTK 4.6.9 does not show it | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 
 ## Closed issues
@@ -326,6 +326,16 @@ list and section heights, and a test-only trace of the hand-back path and each r
 attempt (`window::sidebar::take_reveal_trace`). Read the NOTE lines and any failure's trace
 first: they name the cause this entry still lacks.
 
+**Recurred, with the cause** (2026-11-09, GitHub CI run 42696133289 attempt 1, Linux coverage
+leg, at `src/window/sidebarfilter.rs:1180`): the focus came back to the row at once, but all
+9 reveal attempts (0–8) found the list not laid out yet ("page 0, upper 0, mapped true") and
+the reveal gave up ("retries exhausted"). The list was laid out shortly after (value 0,
+upper 1220, page 273, then page 317 a second later). So the reveal's retry budget ran out
+before GTK laid the list out, and nothing tried again. This is a product path, not only the
+test: on a slow machine, closing the filter can leave the list at the top. The fix belongs
+in the reveal in `window::sidebar`: wait for the list's layout (its first size, or its
+adjustment's upper changing) rather than a fixed number of tries.
+
 ## E. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 
 **Severity**: Low (the slider alone, occasionally, and the next scroll brings it back).
@@ -427,11 +437,11 @@ state behind for the next.
 editor's vadjustment value and upper across the park, as was done for the reading-position
 flake fixed by "Keep the reading position when a view switch comes before the editor has scrolled into place" (2026-10-11).
 
-## H. A block quote's background bleeds past the end of the document on macOS
+## H. A block quote's tiled background paints below the quote on GTK 4.22
 
-**Platform**: Mac (seen there; Linux and Windows not yet checked)
+**Platform**: Windows, Mac (both GTK 4.22.4; Linux on GTK 4.6.9 checked and clean)
 **Scope**: Production
-**Severity**: Low (cosmetic, and only past the end of the document)
+**Severity**: Low (cosmetic)
 
 **Seen**: a private document of the operator's on the Mac host (confidential: its name
 and path are not recorded here), Candy theme. It ends with a block quote, then a `---` rule. Past the rule and the end of the
@@ -439,13 +449,31 @@ document, the block quote's background is still painted. A touchpad scroll past 
 (macOS elastic overscroll, which bounces back on release) shifts and changes that area. A
 screenshot is in the Mac host's `Downloads` folder.
 
-**Suspected, not measured**: the area past the end is not repainted or cleared, so it still
-shows the block quote as painted while the view was higher up.
+**Measured** (mac seat, 2026-11-09, GTK 4.22.4 Quartz, Retina scale 2, `GSK_RENDERER=cairo`):
+the trigger is the preview zoom (seen at 150% and 175%, clean at 100%), not the overscroll.
+Overscroll only adds GTK's edge shadow and a transient smear that a resize clears. The quote's
+shape: a list item with a block quote nested in it, then a blank line, then `---`.
+- The panel's rectangle is right: `codeview/quotes.rs` `visible_extents` → `draw_panel` →
+  `widgets::tile_texture` gets the same rect on every frame (42pt tall in the measured case).
+- With the tile replaced by `append_color` over the same rect, the fill is exactly the rect.
+  With the tile, the stripes cover about twice the rect's height. So the repeat node
+  (`push_repeat`) paints outside its own bounds.
+- `push_clip(rect)` around the repeat changes nothing (GTK drops a clip that contains its
+  child's declared bounds). A clip 0.5pt shorter than rect does confine it.
 
-**To resolve**: reproduce with a small synthetic document of the same shape. Ask the operator
-before opening the original. Then find out which painter draws the quote's background and how far it
-reaches. Then check Linux and Windows (Linux has no elastic overscroll; try scrolling to
-the end there and look for the same area).
+**Not reproduced on Linux** (2026-11-09, GTK 4.6.9, Xvfb, the same synthetic shape, Candy):
+clean at 150%, 175% and 200% zoom, at `GDK_SCALE` 1 and 2.
+
+**Reproduced on Windows** (windows seat, 2026-11-09, GTK 4.22.4, GDK-Win32, display scale 1,
+the same synthetic shape, Candy): at 100%, 150%, 175% and 200% zoom the stripes run below the
+panel and past the rule, down to the bottom of the view. So the zoom is not needed either,
+and neither is Quartz or a scale of 2: the defect follows the GTK version.
+
+**Fix, being ratified on Windows and macOS** (cause confirmed by the researcher from GTK
+4.22.4 source): in `widgets::tile_texture`, push a clip to the
+rect, then the repeat over the tile-grid-aligned superset of the rect, so the repeat's
+bounds are larger than the clip and GTK keeps the clip. Every tiled decoration goes through that function
+(quote panel, quote bar, heading band, sprite rule).
 
 ## I. Closing a full-screen window logs a frame-clock critical on macOS
 
