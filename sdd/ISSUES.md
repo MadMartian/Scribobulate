@@ -57,7 +57,6 @@ described from a different vantage point.
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
-| H | Windows, Mac | Production | A block quote's tiled background (Candy theme) paints below the panel, over the `---` rule after it: GSK's Cairo repeat node draws outside its own bounds on GTK 4.22.4. Linux GTK 4.6.9 does not show it | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 
 ## Closed issues
@@ -436,44 +435,6 @@ state behind for the next.
 **Next step**: have the Windows seat run the module in a loop under CPU load and log the
 editor's vadjustment value and upper across the park, as was done for the reading-position
 flake fixed by "Keep the reading position when a view switch comes before the editor has scrolled into place" (2026-10-11).
-
-## H. A block quote's tiled background paints below the quote on GTK 4.22
-
-**Platform**: Windows, Mac (both GTK 4.22.4; Linux on GTK 4.6.9 checked and clean)
-**Scope**: Production
-**Severity**: Low (cosmetic)
-
-**Seen**: a private document of the operator's on the Mac host (confidential: its name
-and path are not recorded here), Candy theme. It ends with a block quote, then a `---` rule. Past the rule and the end of the
-document, the block quote's background is still painted. A touchpad scroll past the end
-(macOS elastic overscroll, which bounces back on release) shifts and changes that area. A
-screenshot is in the Mac host's `Downloads` folder.
-
-**Measured** (mac seat, 2026-11-09, GTK 4.22.4 Quartz, Retina scale 2, `GSK_RENDERER=cairo`):
-the trigger is the preview zoom (seen at 150% and 175%, clean at 100%), not the overscroll.
-Overscroll only adds GTK's edge shadow and a transient smear that a resize clears. The quote's
-shape: a list item with a block quote nested in it, then a blank line, then `---`.
-- The panel's rectangle is right: `codeview/quotes.rs` `visible_extents` → `draw_panel` →
-  `widgets::tile_texture` gets the same rect on every frame (42pt tall in the measured case).
-- With the tile replaced by `append_color` over the same rect, the fill is exactly the rect.
-  With the tile, the stripes cover about twice the rect's height. So the repeat node
-  (`push_repeat`) paints outside its own bounds.
-- `push_clip(rect)` around the repeat changes nothing (GTK drops a clip that contains its
-  child's declared bounds). A clip 0.5pt shorter than rect does confine it.
-
-**Not reproduced on Linux** (2026-11-09, GTK 4.6.9, Xvfb, the same synthetic shape, Candy):
-clean at 150%, 175% and 200% zoom, at `GDK_SCALE` 1 and 2.
-
-**Reproduced on Windows** (windows seat, 2026-11-09, GTK 4.22.4, GDK-Win32, display scale 1,
-the same synthetic shape, Candy): at 100%, 150%, 175% and 200% zoom the stripes run below the
-panel and past the rule, down to the bottom of the view. So the zoom is not needed either,
-and neither is Quartz or a scale of 2: the defect follows the GTK version.
-
-**Fix, being ratified on Windows and macOS** (cause confirmed by the researcher from GTK
-4.22.4 source): in `widgets::tile_texture`, push a clip to the
-rect, then the repeat over the tile-grid-aligned superset of the rect, so the repeat's
-bounds are larger than the clip and GTK keeps the clip. Every tiled decoration goes through that function
-(quote panel, quote bar, heading band, sprite rule).
 
 ## I. Closing a full-screen window logs a frame-clock critical on macOS
 
