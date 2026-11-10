@@ -1942,7 +1942,7 @@
 - **And** existing nesting is preserved at every tier: an item carries everything nested under it, however many levels deep, and every descendant moves by the same amount, so the branch keeps its own structure and the items around it keep their levels
 - **And** the caret and the selection stay on the same characters, and each use is one undo step
 - **And** Increase Indent keeps the selection's shape: every selected item goes exactly one level deeper, selected siblings stay siblings, and no level is skipped. If any selected item cannot nest (it is the first item of its list), nothing moves
-- **And** Decrease Indent lifts each selected item on its own: an item at the margin is left as it is while the others are lifted, so pressing it repeatedly flattens the selection
+- **And** Decrease Indent lifts each selected item on its own: an item at the margin is left as it is while the others are lifted. While every selected item can still move out, the selection keeps its shape; once its outermost items reach the margin they stay there while the deeper ones keep moving out, so repeated presses bring the whole selection to the margin
 - **And** lines in the selection that are not list items are never changed
 - **And** Tab and Shift+Tab act only on a list item: anywhere else they do what they did before, and they never leave a stray tab inside a list item
 
