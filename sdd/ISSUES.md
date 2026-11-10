@@ -57,6 +57,7 @@ described from a different vantage point.
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
+| H | Windows | Test | `forensics::exception::tests::a_stack_overflow_on_a_thread_rust_did_not_start_is_reported` failed once on Windows CI: its UNARMED control child died with an access violation (0xc0000005) instead of a stack overflow (0xc00000fd), so the armed-versus-unarmed comparison failed | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 
 ## Closed issues
@@ -435,6 +436,29 @@ state behind for the next.
 **Next step**: have the Windows seat run the module in a loop under CPU load and log the
 editor's vadjustment value and upper across the park, as was done for the reading-position
 flake fixed by "Keep the reading position when a view switch comes before the editor has scrolled into place" (2026-10-11).
+
+## H. The raw-thread stack-overflow crash test sometimes dies differently on Windows CI
+
+**Platform**: Windows
+**Scope**: Test
+**Severity**: Low (the test, not the crash report: the armed child died as expected)
+
+**Observed** (2026-11-09, GitHub CI run 42716880475 attempt 1, Windows `execute` leg,
+step 4): `forensics::exception::tests::a_stack_overflow_on_a_thread_rust_did_not_start_is_reported`
+failed at `src/forensics/exception/tests.rs` `assert_a_reported_death`, "arming the handler
+changed how the process dies — armed exited 0xc00000fd, unarmed 0xc0000005". The ARMED child
+died of the stack overflow it was built to hit. The UNARMED control child, which should
+die the same way, died of an access violation. The commit under test changed only tile
+drawing, which neither child runs. A rerun of the job is the next data point.
+
+**Suspected, not measured**: on a thread Rust did not start, Windows reports a stack
+overflow only while the guard page can still be committed; a second fault past it is an
+access violation. If the control child's recursion sometimes overshoots the guard page in
+one step, the control dies of 0xc0000005. The test assumes the unarmed death code is fixed.
+
+**To resolve**: have the `windows` seat run the test in a loop to get a failure rate, and
+read how the control child recurses (`Fault::RawThreadStackOverflow`). If the overshoot is
+real, make the recursion touch every page, or accept either code for the control.
 
 ## I. Closing a full-screen window logs a frame-clock critical on macOS
 
