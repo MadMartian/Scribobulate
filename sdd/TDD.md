@@ -11,7 +11,7 @@
 | 7 | Window & layout | 7.0b – 7.25 |
 | 8 | Single-instance lifecycle | 8.1 – 8.8 |
 | 9 | Menu bar, toolbar, and actions | 9.1 – 9.40 |
-| 10 | Markdown formatting commands | 10.1 – 10.20 |
+| 10 | Markdown formatting commands | 10.1 – 10.22 |
 | 11 | Find & replace | 11.1 – 11.19 |
 | 12 | Document outline | 12.1 – 12.29 |
 | 13 | Preview zoom | 13.1 – 13.12 |
@@ -1756,8 +1756,9 @@
 > parameterised `win.format` action that wraps the editor selection (or caret) in
 > Markdown markup. The command set is Bold, Italic, Heading 1–6, Strikethrough,
 > Highlight (`==mark==`), Code Span, Superscript, Subscript, Code Block, Quote,
-> Bulleted List, Numbered List, Task List, and Horizontal Bar. Lists and blockquotes additionally
-> auto-continue on Enter, and a lone code fence auto-closes (10.13–10.14).
+> Bulleted List, Numbered List, Task List, Increase Indent, Decrease Indent, and Horizontal Bar.
+> Lists and blockquotes additionally auto-continue on Enter, a lone code fence auto-closes
+> (10.13–10.14), and Tab / Shift+Tab nest and un-nest list items (10.21).
 
 ### 10.1 An inline command wraps the selection
 - **Given** edit or split mode with text selected in the editor
@@ -1932,6 +1933,24 @@
 - **And** Quote itself is unaffected: it still prefixes each spanned line with `> `, adding a nesting level where a line is already quoted, and removing exactly one level when toggled off
 - **And** a selection spanning quoted and unquoted lines formats each line in place — the unquoted lines gain no quote marker and the quoted ones keep theirs
 - **And** a list marker is *not* treated as a container: Heading on `- item` still yields `## - item`
+
+### 10.21 Indent and Decrease Indent nest and un-nest list items
+- **Given** the caret on a list item, or a selection touching list items, in the editor — bulleted, numbered or task, at any depth, inside a blockquote or not
+- **When** the user invokes Increase Indent or Decrease Indent from the Format menu, the toolbar, the caret overlay or its accelerator, or presses Tab or Shift+Tab
+- **Then** Increase Indent nests each item under the item above it at the same level, so the preview shows it one level deeper, and Decrease Indent lifts it to its parent's level, so the preview shows it one level shallower
+- **And** each item keeps its kind and its marker: a bullet keeps its character, a task keeps its box and its tick; a numbered item takes the number that continues the list it joins, or starts it at 1
+- **And** existing nesting is preserved at every tier: an item carries everything nested under it, however many levels deep, and every descendant moves by the same amount, so the branch keeps its own structure and the items around it keep their levels
+- **And** the caret and the selection stay on the same characters, and each use is one undo step
+- **And** an item that cannot move that way (the first item of a list on Increase, an item at the margin on Decrease) is left as it is; lines in the selection that are not list items are never changed
+- **And** Tab and Shift+Tab act only on a list item: anywhere else they do what they did before, and they never leave a stray tab inside a list item
+
+### 10.22 Changing a list's kind keeps its nesting
+- **Given** list items at more than one level of nesting
+- **When** the user invokes Bulleted List, Numbered List or Task List on them
+- **Then** every item keeps its level: only its marker changes, and the preview shows the same tree with the new kind
+- **And** an item's children stay under it even when the new marker is wider or narrower than the old, whether or not the selection reaches them
+- **And** a numbered conversion counts each nested list from 1, apart from the list it sits in
+- **And** toggling a nested item off removes its marker but keeps its indentation
 
 ---
 

@@ -300,7 +300,8 @@ recurring is promoted into a type or choke point that makes the wrong call impos
 
 A change in a [CAM](CAM.md) category — commands, rendering features, views derived from
 the document, anything holding a position in it, document I/O, anything wired to a signal
-that fires continuously, a setting offered on more than one surface — accounts for every
+that fires continuously, a setting offered on more than one surface, an edit that rewrites
+list items — accounts for every
 applicable cell of that matrix, and derives its manual-test checks from them.  It is mandatory to ensure CAM consistency whenever making
 functional modifications and/or feature additions.  Failure to do this can result in:
 - Stale code paths

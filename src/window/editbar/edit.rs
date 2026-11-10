@@ -8,7 +8,7 @@ use super::super::*;
 /// select its post-edit range. Shared by the inline format commands and the Tier-2
 /// dialog insertions (Insert Link / Image / Table). GtkTextBuffer offsets are char
 /// offsets, matching the pure core.
-fn apply_edit(buf: &sourceview::Buffer, edit: &format::Edit) {
+pub(super) fn apply_edit(buf: &sourceview::Buffer, edit: &format::Edit) {
     {
         // One discrete undo step with the redo-merge barrier flushed first
         // (`window::undo::UndoGroup`) — scoped so it closes before the
@@ -47,7 +47,11 @@ pub(crate) fn apply_format(st: &crate::winstate::TabState, cmd: FormatCmd) {
     let (sel_start, sel_end, _) = selection_range_and_text(buf);
     let text = st.editor_text();
     let edit = format::apply(cmd, &text, sel_start, sel_end);
-    apply_edit(buf, &edit);
+    // Indent/Dedent off a list item changes nothing; an empty user action would
+    // still cut an undo step and mark the tab modified.
+    if !edit.is_noop() {
+        apply_edit(buf, &edit);
+    }
 }
 
 /// Replace the editor's `[start, end)` with `markup` as one undo step (caret at the

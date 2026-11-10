@@ -38,7 +38,8 @@ themselves.
 | 9 | Document-Identity CAM | State keyed on a document's PATH, and the events that change it |
 | 10 | Hot-path CAM | Handlers on a signal that fires continuously, whose cost is invisible on a small document |
 | 11 | Multi-surface setting CAM | A setting the reader can change from more than one surface (menu bar, a context menu, a persistent control), and every member and rule it must carry to each |
-| 12 | Granted CAM exceptions | Operator-approved deviations, recorded so they are not re-litigated |
+| 12 | List-structure CAM | An edit that rewrites list items' markers or indentation, and the nesting, kind and position it must keep |
+| 13 | Granted CAM exceptions | Operator-approved deviations, recorded so they are not re-litigated |
 
 ---
 
@@ -154,7 +155,10 @@ primarily unit-tested there; the CAM's manual-test obligation is that the toggle
 holds *from each surface* (menu / toolbar / overlay), not only in the unit layer.
 
 A pure-insertion action (Insert Link/Image/Table, Horizontal Rule) has no reverse
-and is exempt from all three. **Active-state indication** — showing whether a
+and is exempt from all three. So are Increase and Decrease Indent: neither undoes
+itself, each is the other's reverse, and their completeness obligations are the
+[List-structure CAM](#list-structure-cam--edits-that-rewrite-list-items)'s.
+**Active-state indication** — showing whether a
 toggleable is currently *on* at the caret (a pressed toolbar button, a checked menu
 item) — is deliberately **out of scope**: `win.format` is stateless and the format
 toolbar buttons are plain buttons, so there is no active state to keep in sync.
@@ -1139,6 +1143,33 @@ Annotations panes (View menu, toolbar, the pane's own close button), Show Unsafe
 a stateless shim rather than the setting's own action — a row 2 question to settle when it
 is swept), the split arrangement (View menu, toolbar) and the find options (Edit menu, find
 bar). A change to any of them sweeps it against this matrix in that change.
+
+## List-structure CAM — edits that rewrite list items
+
+A **list-structure edit** rewrites a list item's marker or its indentation: Bulleted,
+Numbered and Task List, Increase and Decrease Indent (and Tab / Shift+Tab), and the
+Enter continuation. Markdown keeps a list's tree in whitespace: a line is a child of
+an item only while it reaches that item's **content column** (`- ` → 2, `1. ` → 3,
+`10. ` → 4). So an edit can look right on the line it changed and still have broken a
+line it never touched — a child left short of its parent's new column becomes a
+sibling, or a separate list, and the editor shows nothing wrong. Each row is such a
+latent gap; the happy path of every edit below hides it.
+
+| # | Obligation | Why it is latent | Anchor |
+|---|---|---|---|
+| 1 | **Nesting survives.** Every line keeps its parent: when an item's content column moves (a wider or narrower marker, an indent, a dedent), everything under it moves by the same amount, whether or not the selection reaches it. | Only the edited line is looked at; the child below it renders one level out. | `format::indent` (`carry_children`, the subtree move); TDD 10.21, 10.22 |
+| 2 | **Kind and marker survive what does not change them.** An indent keeps the bullet character, a task keeps its box and its tick, a numbered item keeps its delimiter. | A rebuilt marker defaults to `- `, and every test written with `- ` passes. | TDD 10.21 |
+| 3 | **Numbering follows the level.** A numbered item that joins or starts a list takes the number that continues it or `1`; a conversion counts each nested list apart from its parent's. | CommonMark starts a list at its FIRST item's number, so a wrong number shows only in the preview. | TDD 10.21, 10.22 |
+| 4 | **Every context.** Top level and nested; inside a blockquote, measured after the quote's prefix and never crossing into a different quote depth; tab-indented lines (a tab reaches the next multiple of four columns). | Each context is a different parse; one that was never tried simply does the wrong thing. | `format::text`'s container-prefix seam; TDD 10.20 |
+| 5 | **The caret and selection stay on their characters**, and the edit is one undo step. | A whole-line rewrite drops the caret at the line start, which a test that checks only the text never sees. | `format::indent` caret tests; TDD 10.21 |
+| 6 | **A key that edits only on a list falls through everywhere else.** Tab off a list item still types a tab or moves focus; on a list item it is claimed even when nothing can move, so it never drops a stray tab into the item. | Taking the key always works on a list and quietly breaks focus traversal and plain tabs. | `editbar::listindent`; TDD 10.21 |
+
+Back-sweep when this matrix was added (2026-11-09): Bulleted, Numbered and Task List
+broke rows 1 and 3 on nested items (`  - b` became `1.   - b`) and were fixed in the
+change that added the matrix. The Enter continuation already keeps indentation, quote
+prefix and delimiter (rows 2, 4) and moves no other line, so rows 1, 3 and 5 do not
+reach it. The preview's checkbox click rewrites only the box's character. Quote rewrites
+the container prefix and never the indentation behind it.
 
 ## Granted CAM exceptions
 

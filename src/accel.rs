@@ -116,7 +116,7 @@ pub(crate) const fn host() -> Platform {
 /// own binding happened to win the contest first. `XF86Back`/`XF86Forward` and the
 /// two mouse thumb buttons are unaffected (TDD §23.6 declares them platform-neutral
 /// aliases already).
-const MAC_RESERVED: [(&str, &str); 4] = [
+const MAC_RESERVED: [(&str, &str); 6] = [
     // Cmd+H hides the application on every Mac. Find & Replace moves to the
     // macOS convention for it, Cmd+Option+F.
     ("<Primary>h", "<Meta><Alt>f"),
@@ -127,6 +127,13 @@ const MAC_RESERVED: [(&str, &str); 4] = [
     ("<Alt>Left", "<Meta>bracketleft"),
     // Frees Option+Right for the editor's own word-navigation (`macwordnav`).
     ("<Alt>Right", "<Meta>bracketright"),
+    // Increase / Decrease Indent declare Ctrl+] / Ctrl+[, which on a Mac would be
+    // Cmd+] / Cmd+[ — Back/Forward's keys just above. They take Cmd+Ctrl instead:
+    // Option or Shift on a bracket changes the character typed, which GDK's matcher
+    // does not see through (GTK4Rs/AP-51). Tab / Shift+Tab on a list item, the
+    // macOS convention for list levels, works there as everywhere.
+    ("<Primary>bracketright", "<Meta><Control>bracketright"),
+    ("<Primary>bracketleft", "<Meta><Control>bracketleft"),
 ];
 
 /// `accel` as `platform` spells it. Borrowed unchanged whenever nothing moves,

@@ -9,6 +9,8 @@
 //!     continuation + code-fence auto-close, mapping `format::*` to buffer edits;
 //!     driven by a capture-phase key controller, never an `insert-text` hook —
 //!     GTK4Rs/AP-73)
+//!   - [`listindent`] — Tab / Shift+Tab on a list item (`wire_list_indent_keys`), the
+//!     keyboard face of Increase / Decrease Indent
 //!   - [`dialog`]    — the modal `input_form` + file-chooser Browse (`BrowseSpec`)
 //!   - [`insert`]    — the Tier-2 commands (`insert_link`/`insert_image`/
 //!     `insert_table`) and `go_to_line`
@@ -26,6 +28,7 @@ mod edit;
 mod focusgate;
 mod formatbar;
 mod insert;
+mod listindent;
 mod newline;
 mod overlay;
 mod relabel;
@@ -50,6 +53,7 @@ pub(crate) use edit::apply_format;
 pub(crate) use focusgate::{setup_editor_focus_gate, sync_gate_to_pane_focus};
 pub(crate) use formatbar::{build_format_bar, format_items};
 pub(crate) use insert::{go_to_line, insert_image, insert_link, insert_table};
+pub(crate) use listindent::wire_list_indent_keys;
 pub(crate) use newline::wire_newline_edits;
 pub(crate) use overlay::{build_format_overlay, wire_editor_format_overlay};
 pub(crate) use relabel::{resync_format_edit_surfaces, update_format_edit_surfaces};

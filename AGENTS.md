@@ -39,8 +39,9 @@ Read all of the above, plus:
 - [`sdd/CAM.md`](sdd/CAM.md) — the change accountability matrices POLICY makes binding. Its
   opening lists the kinds of change each matrix covers; check it before any change to
   commands, rendering, derived views, positions held in the document, document I/O,
-  status notices, handlers on continuously firing signals, or a setting offered on more
-  than one surface (a menu and a context menu, say).
+  status notices, handlers on continuously firing signals, a setting offered on more
+  than one surface (a menu and a context menu, say), or an edit that rewrites list
+  items' markers or indentation.
 - [`sdd/SCHEMA.md`](sdd/SCHEMA.md) — exact shapes of what crosses the app's boundaries.
 - [`sdd/ANTI-PATTERNS.md`](sdd/ANTI-PATTERNS.md) — lessons from past mistakes. A register:
   read its table of contents, then only the matching entries; scan it before

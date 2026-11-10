@@ -27,6 +27,11 @@
 //!   numbered; `- [ ] ` for a GFM task/checkbox list), or strip the marker if the
 //!   first spanned line is already that kind of list item.  A line that is a list item
 //!   of another kind is converted — its marker replaced, never stacked.
+//! * **Indent / Dedent**: nest each list item the selection touches under the item
+//!   above it, or lift it to its parent's level, carrying its subtree and keeping
+//!   its marker kind (see [`indent`]). Not a toggle: the two are each other's
+//!   reverse. Lines that are not list items are left alone, and a span with no item
+//!   in it is not changed at all.
 //! * **Horizontal Rule**: insert a `---` thematic break on its own line.  This is
 //!   an insertion, not a wrap, so it has no toggle.
 //!
@@ -55,6 +60,8 @@
 //! * [`quote`] — blockquote prefix/toggle (and the shared `quote_prefix` parser).
 //! * [`list`] — bulleted and numbered list prefix/toggle (and the shared bullet /
 //!   ordered marker parsers).
+//! * [`indent`] — list-item indent / dedent (`list_indent`), shared by the two
+//!   format commands and the editor's Tab / Shift+Tab.
 //! * [`codeblock`] — fenced-code-block wrap/unwrap plus the Enter-convenience
 //!   `code_fence_close` (with the open-fence walker `inside_fenced_block`).
 //! * [`hr`] — thematic-break insertion.
@@ -71,6 +78,7 @@ mod codeblock;
 mod continuation;
 mod heading;
 mod hr;
+mod indent;
 mod inline;
 mod insert;
 mod list;
@@ -79,6 +87,7 @@ mod text;
 
 pub(crate) use codeblock::code_fence_close;
 pub(crate) use continuation::{line_continuation, LineContinuation};
+pub(crate) use indent::{list_indent, IndentDir, ListIndent};
 pub(crate) use insert::{
     image_markup, link_markup, link_target_at, parse_image, parse_link, table_markup,
 };
@@ -100,6 +109,8 @@ pub(crate) enum FormatCmd {
     BulletedList,
     NumberedList,
     TaskList,
+    Indent,
+    Dedent,
     HorizontalRule,
 }
 
@@ -120,6 +131,8 @@ impl FormatCmd {
             "bulleted-list" => FormatCmd::BulletedList,
             "numbered-list" => FormatCmd::NumberedList,
             "task-list" => FormatCmd::TaskList,
+            "indent" => FormatCmd::Indent,
+            "dedent" => FormatCmd::Dedent,
             "hr" => FormatCmd::HorizontalRule,
             _ => match target.strip_prefix('h').and_then(|n| n.parse::<u8>().ok()) {
                 Some(n @ 1..=6) => FormatCmd::Heading(n),
@@ -161,6 +174,14 @@ pub(crate) struct Edit {
     pub(crate) sel_end: usize,
 }
 
+impl Edit {
+    /// An edit that changes nothing — an empty splice. The window layer skips
+    /// these so a command that does not apply leaves no undo step behind.
+    pub(crate) fn is_noop(&self) -> bool {
+        self.start == self.end && self.replacement.is_empty()
+    }
+}
+
 /// Compute the [`Edit`] for `cmd` over `text` with the selection `[sel_start,
 /// sel_end)` (char offsets; order-insensitive — a reversed range is normalised).
 pub(crate) fn apply(cmd: FormatCmd, text: &str, sel_start: usize, sel_end: usize) -> Edit {
@@ -189,6 +210,24 @@ pub(crate) fn apply(cmd: FormatCmd, text: &str, sel_start: usize, sel_end: usize
         FormatCmd::BulletedList => list::apply_bulleted_list(&chars, start, end),
         FormatCmd::NumberedList => list::apply_numbered_list(&chars, start, end),
         FormatCmd::TaskList => list::apply_task_list(&chars, start, end),
+        FormatCmd::Indent | FormatCmd::Dedent => {
+            let dir = if cmd == FormatCmd::Indent {
+                IndentDir::In
+            } else {
+                IndentDir::Out
+            };
+            match list_indent(text, sel_start, sel_end, dir) {
+                ListIndent::Changed(edit) => edit,
+                // Nothing to move: an empty splice that keeps the selection as it was.
+                ListIndent::NotAList | ListIndent::Unchanged => Edit {
+                    start,
+                    end: start,
+                    replacement: String::new(),
+                    sel_start,
+                    sel_end,
+                },
+            }
+        }
         FormatCmd::HorizontalRule => hr::apply_hr(&chars, start, end),
     }
 }
@@ -233,6 +272,8 @@ mod tests {
             FormatCmd::from_target("task-list"),
             Some(FormatCmd::TaskList)
         );
+        assert_eq!(FormatCmd::from_target("indent"), Some(FormatCmd::Indent));
+        assert_eq!(FormatCmd::from_target("dedent"), Some(FormatCmd::Dedent));
         assert_eq!(FormatCmd::from_target("sup"), Some(FormatCmd::Superscript));
         assert_eq!(FormatCmd::from_target("sub"), Some(FormatCmd::Subscript));
         assert_eq!(
@@ -244,6 +285,21 @@ mod tests {
         assert_eq!(FormatCmd::from_target("h0"), None);
         assert_eq!(FormatCmd::from_target("h7"), None);
         assert_eq!(FormatCmd::from_target("nope"), None);
+    }
+
+    #[test]
+    fn indent_and_dedent_round_trip_and_leave_a_plain_line_alone() {
+        let (text, _s, _e) = applied(FormatCmd::Indent, "- a\n- b", 6, 6);
+        assert_eq!(text, "- a\n  - b");
+        let (text, _s, _e) = applied(FormatCmd::Dedent, &text, 8, 8);
+        assert_eq!(text, "- a\n- b");
+        let edit = apply(FormatCmd::Indent, "plain", 4, 2);
+        assert!(edit.is_noop(), "a plain line is not touched: {edit:?}");
+        assert_eq!(
+            (edit.sel_start, edit.sel_end),
+            (4, 2),
+            "selection kept as given"
+        );
     }
 
     #[test]

@@ -185,6 +185,9 @@ pub(crate) fn build_tab_editor(md: &str) -> (sourceview::Buffer, sourceview::Vie
     // `insert-text` hook could not tell Enter from one run of a paste, and silently
     // ate the tail of pasted text (see `wire_newline_edits`).
     wire_newline_edits(&sv_view);
+    // Tab / Shift+Tab on a list item: Increase / Decrease Indent. Every other Tab is
+    // left to the editor (see `wire_list_indent_keys`).
+    wire_list_indent_keys(&sv_view);
 
     // What this editor puts ON a clipboard: plain text, never a rich `GtkTextBuffer`
     // (`crate::clipboard`). This is what keeps a same-application paste to a SINGLE

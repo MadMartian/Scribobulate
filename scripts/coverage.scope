@@ -104,6 +104,7 @@ src/format/codeblock.rs
 src/format/continuation.rs
 src/format/heading.rs
 src/format/hr.rs
+src/format/indent.rs
 src/format/inline.rs
 src/format/insert.rs
 src/format/list.rs

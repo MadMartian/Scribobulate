@@ -164,6 +164,10 @@ pub(crate) enum Icon {
     FormatListUnordered,
     /// Format ▸ Numbered List.
     FormatListOrdered,
+    /// Format ▸ Increase Indent.
+    FormatIndentMore,
+    /// Format ▸ Decrease Indent.
+    FormatIndentLess,
     /// Format ▸ Insert Image.
     InsertImage,
     /// Format ▸ Insert Table.
@@ -253,6 +257,8 @@ impl Icon {
             Icon::FormatTextSubscript => "format-text-subscript-symbolic",
             Icon::FormatListUnordered => "format-list-unordered-symbolic",
             Icon::FormatListOrdered => "format-list-ordered-symbolic",
+            Icon::FormatIndentMore => "format-indent-more-symbolic",
+            Icon::FormatIndentLess => "format-indent-less-symbolic",
             Icon::InsertImage => "insert-image-symbolic",
             Icon::ViewGrid => "view-grid-symbolic",
             Icon::MediaPlaybackPause => "media-playback-pause-symbolic",
@@ -350,7 +356,9 @@ impl Icon {
             Icon::FormatTextSuperscript => Some(Icon::FormatTextSubscript),
             Icon::FormatTextSubscript => Some(Icon::FormatListUnordered),
             Icon::FormatListUnordered => Some(Icon::FormatListOrdered),
-            Icon::FormatListOrdered => Some(Icon::InsertImage),
+            Icon::FormatListOrdered => Some(Icon::FormatIndentMore),
+            Icon::FormatIndentMore => Some(Icon::FormatIndentLess),
+            Icon::FormatIndentLess => Some(Icon::InsertImage),
             Icon::InsertImage => Some(Icon::ViewGrid),
             Icon::ViewGrid => Some(Icon::MediaPlaybackPause),
             Icon::MediaPlaybackPause => None,
@@ -387,8 +395,8 @@ impl Icon {
     /// used without a fallback (the File ▸ Load Unsafe Linked Documents toolbar
     /// toggle).
     ///
-    /// **`GlyphFallback`** — the nine `FmtCmd`-only icons (Format toolbar:
-    /// bold/italic/strike/super/sub, the two list icons, insert-image, insert-table).
+    /// **`GlyphFallback`** — the eleven `FmtCmd`-only icons (Format toolbar:
+    /// bold/italic/strike/super/sub, the two list icons, the two indent icons, insert-image, insert-table).
     /// `format_button` verifies each with its own `has_icon` check and falls back to a
     /// short glyph, so a non-resolving format icon degrades gracefully instead of
     /// showing a placeholder. Four of them (super/subscript, the two lists)
@@ -447,6 +455,8 @@ impl Icon {
             | Icon::FormatTextSubscript
             | Icon::FormatListUnordered
             | Icon::FormatListOrdered
+            | Icon::FormatIndentMore
+            | Icon::FormatIndentLess
             | Icon::InsertImage
             | Icon::ViewGrid => Resolution::GlyphFallback,
         }

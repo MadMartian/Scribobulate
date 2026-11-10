@@ -438,7 +438,7 @@ pub(crate) struct FmtCmd {
     pub(crate) accel: &'static str,
 }
 
-pub(crate) const FORMAT_CMDS: [FmtCmd; 16] = [
+pub(crate) const FORMAT_CMDS: [FmtCmd; 18] = [
     FmtCmd {
         target: "bold",
         group: FormatGroup::Text,
@@ -567,6 +567,28 @@ pub(crate) const FORMAT_CMDS: [FmtCmd; 16] = [
         glyph: "☑",
         accel: "<Primary><Alt>c",
     },
+    // List nesting. Ctrl+] / Ctrl+[ is the indent pair of VS Code and Google Docs; on
+    // macOS Cmd+] / Cmd+[ already belongs to Back/Forward (`accel::MAC_RESERVED`), so
+    // it moves there. Tab / Shift+Tab on a list item does the same in the editor
+    // (`editbar::listindent`) — a key the editor takes only on a list line, so it
+    // cannot be an application accelerator. Breeze and Adwaita both ship
+    // format-indent-{more,less}-symbolic; the arrow glyphs cover any theme that does not.
+    FmtCmd {
+        target: "indent",
+        group: FormatGroup::Block,
+        label: "Increase Indent",
+        icon: Some(Icon::FormatIndentMore),
+        glyph: "⇥",
+        accel: "<Primary>bracketright",
+    },
+    FmtCmd {
+        target: "dedent",
+        group: FormatGroup::Block,
+        label: "Decrease Indent",
+        icon: Some(Icon::FormatIndentLess),
+        glyph: "⇤",
+        accel: "<Primary>bracketleft",
+    },
     FmtCmd {
         target: "hr",
         group: FormatGroup::Block,
@@ -606,6 +628,38 @@ pub(crate) const FORMAT_CMDS: [FmtCmd; 16] = [
         // is already claimed by the operator's window manager (spawns a new
         // terminal); confirmed unused in FORMAT_CMDS/EDIT_CMDS.
         accel: "<Primary><Shift>t",
+    },
+];
+
+/// A key the EDITOR takes for a Format command only in some places, so it cannot be
+/// an application accelerator (it would steal the key everywhere else). It is
+/// advertised in the Keyboard Shortcuts window beside the command's accelerator,
+/// with `context` saying where it works; `editbar::listindent` is the handler, and
+/// its tests hold the handler to this table.
+pub(crate) struct EditorKey {
+    /// The `win.format` target the key performs.
+    pub(crate) target: &'static str,
+    /// The row title in the Keyboard Shortcuts window.
+    pub(crate) label: &'static str,
+    /// The key, as a declared accelerator string.
+    pub(crate) accel: &'static str,
+    /// Where the key does this.
+    pub(crate) context: &'static str,
+}
+
+/// Tab / Shift+Tab on a list item: Increase / Decrease Indent.
+pub(crate) const EDITOR_KEYS: [EditorKey; 2] = [
+    EditorKey {
+        target: "indent",
+        label: "Indent List Item",
+        accel: "Tab",
+        context: "On a list item",
+    },
+    EditorKey {
+        target: "dedent",
+        label: "Dedent List Item",
+        accel: "<Shift>Tab",
+        context: "On a list item",
     },
 ];
 

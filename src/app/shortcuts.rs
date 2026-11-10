@@ -32,7 +32,7 @@
 //! `register_accelerators` binds equals what this window displays.
 
 use crate::app::commands::FormatGroup;
-use crate::app::{EDIT_CMDS, FILE_CMDS, FORMAT_CMDS, INLINE_ACCEL_CMDS, VIEW_CMDS};
+use crate::app::{EDITOR_KEYS, EDIT_CMDS, FILE_CMDS, FORMAT_CMDS, INLINE_ACCEL_CMDS, VIEW_CMDS};
 
 /// Escape the five XML predefined entities so a label or accelerator (which
 /// contains `<`/`>`, e.g. `<Primary>o`) is safe to embed in the interface XML.
@@ -109,15 +109,21 @@ const POINTER_CMDS: &[PointerCmd] = &[PointerCmd {
 /// accelerator row — the explicit setter controls its visibility on its own and is
 /// conditioned on nothing (`:132-133`, `:201`).
 fn pointer_shortcut_xml(cmd: &PointerCmd) -> String {
+    subtitled_shortcut_xml(cmd.label, cmd.accel, cmd.subtitle)
+}
+
+/// An accelerator row with a subtitle: a [`PointerCmd`], or an
+/// [`crate::app::EDITOR_KEYS`] key whose subtitle says where it works.
+fn subtitled_shortcut_xml(label: &str, accel: &str, subtitle: &str) -> String {
     format!(
         "<child><object class=\"GtkShortcutsShortcut\">\
            <property name=\"title\">{}</property>\
            <property name=\"accelerator\">{}</property>\
            <property name=\"subtitle\">{}</property>\
          </object></child>",
-        xml_escape(cmd.label),
-        xml_escape(&crate::accel::for_host(cmd.accel)),
-        xml_escape(cmd.subtitle),
+        xml_escape(label),
+        xml_escape(&crate::accel::for_host(accel)),
+        xml_escape(subtitle),
     )
 }
 
@@ -191,10 +197,18 @@ fn group_rows(
     // styles, blocks, headings, insertions — by each command's own `group`, so a new
     // FORMAT_CMDS entry lands in exactly one.
     let format_group = |group: FormatGroup| -> Vec<String> {
+        let editor_keys = EDITOR_KEYS.iter().filter(|k| {
+            FORMAT_CMDS
+                .iter()
+                .any(|c| c.target == k.target && c.group == group)
+        });
         FORMAT_CMDS
             .iter()
             .filter(|c| !c.accel.is_empty() && c.group == group)
             .map(|c| shortcut_xml(c.label, c.accel))
+            // After the group's accelerators: a key that works only in one place
+            // is a footnote to them, like a pointer gesture.
+            .chain(editor_keys.map(|k| subtitled_shortcut_xml(k.label, k.accel, k.context)))
             .collect()
     };
     // The six heading accelerators are registered by setup.rs in a `1..=6` loop
@@ -315,6 +329,27 @@ mod tests {
                 1,
                 "{:?} listed wrongly",
                 c.label
+            );
+        }
+    }
+
+    /// Every editor-only key is shown, with where it works.
+    /// MUTATION-CHECKED: dropping the `editor_keys` chain in `group_rows` fails it.
+    #[test]
+    fn every_editor_key_is_displayed_with_its_context() {
+        let xml = interface_xml();
+        for k in EDITOR_KEYS.iter() {
+            for part in [k.label, k.context] {
+                assert!(
+                    xml.contains(&xml_escape(part)),
+                    "EDITOR_KEYS {:?} is missing {part:?}",
+                    k.label
+                );
+            }
+            assert!(
+                FORMAT_CMDS.iter().any(|c| c.target == k.target),
+                "EDITOR_KEYS {:?} names no Format command",
+                k.label
             );
         }
     }

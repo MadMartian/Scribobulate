@@ -52,6 +52,7 @@ const MENU_MNEMONICS: &[(&str, &str)] = &[
     ("Code Block", "Code Bl_ock"), ("Quote", "_Quote"),
     ("Bulleted List", "Bull_eted List"), ("Numbered List", "_Numbered List"),
     ("Task List", "Tas_k List"), ("Horizontal Bar", "Hori_zontal Bar"),
+    ("Increase Indent", "Inc_rease Indent"), ("Decrease Indent", "_Decrease Indent"),
     ("Insert Link…", "Insert _Link…"), ("Edit Link…", "Edit _Link…"),
     ("Insert Image…", "Insert I_mage…"), ("Edit Image…", "Edit I_mage…"),
     ("Insert Table…", "Insert _Table…"),

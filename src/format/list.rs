@@ -2,6 +2,7 @@
 //! ([`bullet_marker`], [`ordered_marker`]) shared with [`super::continuation`].
 //! See [`super`] for the toggle / renumber rules.
 
+use super::indent::carry_children;
 use super::text::{self, block_span};
 use super::Edit;
 
@@ -78,6 +79,14 @@ fn strip_marker(line: &str, len: usize) -> String {
 // marker lands inside any blockquote the line sits in — `> - item`, never
 // `- > item` — and the toggle-off detectors recognise a marker behind a `> `.
 
+/// A line's leading indentation (spaces and tabs) and the rest. The indentation is
+/// the item's NESTING, which a kind change must keep: Numbered List on `  - b` gives
+/// `  1. b`, never `1.   - b`.
+fn split_indent(content: &str) -> (&str, &str) {
+    let n = content.len() - content.trim_start_matches([' ', '\t']).len();
+    content.split_at(n)
+}
+
 /// The one list toggle, parameterised by the kind it makes.
 ///
 /// **One function, not three** (QA round 5, L-2): the shared part is a TOGGLE RULE, and
@@ -88,8 +97,16 @@ fn strip_marker(line: &str, len: usize) -> String {
 /// (every line loses whatever list marker it has). Otherwise every line becomes a
 /// `kind` item, and a line that is already a list item of ANOTHER kind has that marker
 /// REPLACED, not prefixed — Task List on `- a` gives `- [ ] a`, never `- [ ] - a`; the
-/// same holds for every pairing of the three kinds. `prefix` builds the marker for
-/// line `i`, a function of the index only because ordered lists renumber from 1.
+/// same holds for every pairing of the three kinds. Either way each line keeps its
+/// indentation, so nesting survives both a kind change and an un-list.
+///
+/// A conversion also carries the items' children (see [`carry_children`]): a marker
+/// of a different width moves the column children nest at, so they move with it,
+/// whether or not the selection reaches them. An un-list moves nothing.
+///
+/// `prefix` builds the marker from the line's ordinal AT ITS OWN LEVEL, because
+/// ordered lists renumber from 1: a nested run is a list of its own, counted apart
+/// from its parent's, and a parent-level line resumes its own count.
 fn apply_list(
     chars: &[char],
     start: usize,
@@ -100,19 +117,63 @@ fn apply_list(
     let span = block_span(chars, start, end);
     // Direction is decided ONCE, from the first line, so a block is converted or
     // un-listed as a whole rather than each line deciding for itself.
-    let toggle_off = matches!(list_marker(span.first_line().content), Some((k, _)) if k == kind);
+    let (_, first) = split_indent(span.first_line().content);
+    let toggle_off = matches!(list_marker(first), Some((k, _)) if k == kind);
 
-    text::map_content(&span, |i, content| {
-        let bare = match list_marker(content) {
-            Some((_, len)) => strip_marker(content, len),
-            None => content.to_string(),
+    // (indentation, count so far) per open level, shallowest first.
+    let mut levels: Vec<(usize, usize)> = Vec::new();
+    let edit = text::map_content(&span, |_, content| {
+        let (indent, rest) = split_indent(content);
+        let bare = match list_marker(rest) {
+            Some((_, len)) => strip_marker(rest, len),
+            None => rest.to_string(),
         };
         if toggle_off {
-            bare
-        } else {
-            format!("{}{bare}", prefix(i))
+            return format!("{indent}{bare}");
         }
-    })
+        let width = indent.chars().count();
+        levels.retain(|&(w, _)| w <= width);
+        let ordinal = match levels.last_mut() {
+            Some((w, n)) if *w == width => {
+                *n += 1;
+                *n
+            }
+            _ => {
+                levels.push((width, 0));
+                0
+            }
+        };
+        format!("{indent}{}{bare}", prefix(ordinal))
+    });
+    if toggle_off {
+        edit
+    } else {
+        carry_nesting(chars, edit)
+    }
+}
+
+/// Extend a line-for-line list conversion so every child keeps its parent (see
+/// [`carry_children`]). The selection still covers exactly the converted lines.
+fn carry_nesting(chars: &[char], edit: Edit) -> Edit {
+    let text: String = chars.iter().collect();
+    let old_rows: Vec<&str> = text.split('\n').collect();
+    let first = chars[..edit.start].iter().filter(|&&c| c == '\n').count();
+    let mut new_rows: Vec<String> = old_rows.iter().map(|r| (*r).to_string()).collect();
+    let mut last = first;
+    for (k, row) in edit.replacement.split('\n').enumerate() {
+        last = first + k;
+        new_rows[last] = row.to_string();
+    }
+    let touched = carry_children(&old_rows, &mut new_rows, first, last);
+    let count = |rows: &[String]| rows.join("\n").chars().count();
+    let old_len = old_rows[first..=touched].join("\n").chars().count();
+    Edit {
+        start: edit.start,
+        end: edit.start + old_len,
+        replacement: new_rows[first..=touched].join("\n"),
+        sel_start: edit.start,
+        sel_end: edit.start + count(&new_rows[first..=last]),
+    }
 }
 
 pub(super) fn apply_bulleted_list(chars: &[char], start: usize, end: usize) -> Edit {
@@ -250,6 +311,45 @@ mod tests {
         // A plain first line drives toggle-on; a later item of another kind converts.
         let (text, _s, _e) = applied(FormatCmd::NumberedList, "one\n- two", 0, 9);
         assert_eq!(text, "1. one\n2. two");
+    }
+
+    #[test]
+    fn a_kind_change_keeps_every_items_nesting() {
+        let src = "- a\n  - b\n    - c\n- d";
+        let len = src.chars().count();
+        let (text, _s, _e) = applied(FormatCmd::NumberedList, src, 0, len);
+        assert_eq!(
+            text, "1. a\n   1. b\n      1. c\n2. d",
+            "each level counts apart, and each child moves to its parent's new text column"
+        );
+        // And back: the narrower marker pulls the children in with it.
+        let len = text.chars().count();
+        let (back, _s, _e) = applied(FormatCmd::BulletedList, &text, 0, len);
+        assert_eq!(back, src);
+        let (text, _s, _e) = applied(FormatCmd::TaskList, "- a\n\t* b", 0, 9);
+        assert_eq!(text, "- [ ] a\n\t- [ ] b", "a tab indent is kept verbatim");
+        // A nested item alone: the caret on `  - b` converts it in place.
+        let (text, _s, _e) = applied(FormatCmd::NumberedList, "- a\n  - b", 8, 8);
+        assert_eq!(text, "- a\n  1. b");
+        // A parent alone: its unselected child still follows it.
+        let (text, s, e) = applied(FormatCmd::NumberedList, "- a\n  - b\nc", 1, 1);
+        assert_eq!(text, "1. a\n   - b\nc");
+        assert_eq!(
+            (s, e),
+            (0, 4),
+            "the selection covers the converted line only"
+        );
+        // A task's checkbox sits in its content, so Task List moves nothing.
+        let (text, _s, _e) = applied(FormatCmd::TaskList, "- a\n  - b", 1, 1);
+        assert_eq!(text, "- [ ] a\n  - b");
+        let (text, _s, _e) = applied(FormatCmd::BulletedList, "> - a\n>   1. b", 13, 13);
+        assert_eq!(text, "> - a\n>   - b", "nesting inside a quote is kept too");
+    }
+
+    #[test]
+    fn un_listing_a_nested_item_keeps_its_indentation() {
+        let (text, _s, _e) = applied(FormatCmd::BulletedList, "- a\n  - b", 8, 8);
+        assert_eq!(text, "- a\n  b");
     }
 
     #[test]
