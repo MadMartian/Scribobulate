@@ -10,7 +10,9 @@
 //! the proof of "termination unchanged" (TDD 21.4, GEP-35): the unarmed child is the
 //! control, so the expected code is measured rather than written down from memory. The
 //! code each test also names is a second, independent pin — it fails if Windows itself
-//! ever starts ending one of these deaths differently.
+//! ever starts ending one of these deaths differently. One death is exempt from the
+//! agreement, because Windows itself does not end it the same way every time: see
+//! [`a_stack_overflow_on_a_thread_rust_did_not_start_is_reported`].
 //!
 //! **The exit code alone does not prove WER still gets the crash**, and that was
 //! measured, not reasoned: a filter mutated to end the process itself
@@ -239,6 +241,9 @@ fn die(fault: Fault, armed: bool, report: &Path) -> Death {
 /// What a test expects of one death.
 struct Expect {
     code: u32,
+    /// A second code Windows itself may end this death with, in either child on its own.
+    /// When set, each child must die of one of the two and the two need not agree.
+    also: Option<u32>,
     /// Lines the report must contain, beyond the ones every report carries.
     lines: &'static [&'static str],
     /// A module the instruction pointer, or for `abort()` some backtrace frame, falls in;
@@ -266,16 +271,28 @@ fn assert_a_reported_death(fault: Fault, expect: Expect) -> String {
             death.stderr
         );
     }
-    assert_eq!(
-        armed.code, control.code,
-        "{name}: arming the handler changed how the process dies — armed exited \
-         {:#010x}, unarmed {:#010x}",
-        armed.code, control.code
-    );
-    assert_eq!(
-        control.code, expect.code,
-        "{name}: Windows ends this death differently than this test was written against"
-    );
+    if let Some(also) = expect.also {
+        for (which, death) in [("control", &control), ("armed", &armed)] {
+            assert!(
+                death.code == expect.code || death.code == also,
+                "{name}: the {which} child exited {:#010x}; Windows ends this death with \
+                 {:#010x} or {also:#010x}",
+                death.code,
+                expect.code
+            );
+        }
+    } else {
+        assert_eq!(
+            armed.code, control.code,
+            "{name}: arming the handler changed how the process dies — armed exited \
+             {:#010x}, unarmed {:#010x}",
+            armed.code, control.code
+        );
+        assert_eq!(
+            control.code, expect.code,
+            "{name}: Windows ends this death differently than this test was written against"
+        );
+    }
     assert!(control.report.is_none(), "an unarmed child wrote a report");
 
     let text = armed.report.unwrap_or_else(|| {
@@ -353,6 +370,7 @@ fn an_access_violation_is_reported_and_still_kills_the_process() {
         Fault::AccessViolation,
         Expect {
             code: 0xC000_0005,
+            also: None,
             lines: &[
                 "exception: EXCEPTION_ACCESS_VIOLATION (0xc0000005)",
                 "kind: exception",
@@ -370,6 +388,7 @@ fn an_illegal_instruction_is_reported_and_still_kills_the_process() {
         Fault::IllegalInstruction,
         Expect {
             code: 0xC000_001D,
+            also: None,
             lines: &["exception: EXCEPTION_ILLEGAL_INSTRUCTION (0xc000001d)"],
             module: None,
         },
@@ -382,6 +401,7 @@ fn a_breakpoint_is_reported_and_still_kills_the_process() {
         Fault::Breakpoint,
         Expect {
             code: 0x8000_0003,
+            also: None,
             lines: &["exception: EXCEPTION_BREAKPOINT (0x80000003)"],
             module: None,
         },
@@ -395,6 +415,7 @@ fn a_stack_overflow_is_reported_and_still_kills_the_process() {
         Fault::StackOverflow,
         Expect {
             code: 0xC000_00FD,
+            also: None,
             lines: &["exception: EXCEPTION_STACK_OVERFLOW (0xc00000fd)"],
             module: None,
         },
@@ -403,12 +424,24 @@ fn a_stack_overflow_is_reported_and_still_kills_the_process() {
 
 /// The case the report's stack budget is set by: a thread with no guarantee beyond the
 /// system's own, as GLib's workers are. MEASURED ~11.7 KiB free when the filter runs.
+///
+/// **Either child may die of an access violation instead**, so the two codes are not
+/// compared. Once the stack has overflowed, Windows' own dispatch and unhandled-exception
+/// path run in what little stack the thread has left; a second fault there ends the
+/// process with `0xc0000005`. Seen once on CI, in the UNARMED control. MEASURED on
+/// 19045 (debug build): that path has ~5.5 KiB to spare, and taking ~6 KiB of it flips
+/// the death to `0xc0000005` whether WER runs or not. `recurse`'s frames are ~1.1 KiB,
+/// so the recursion cannot skip the guard page; touching every page would change nothing.
+/// Inferred, not measured: our filter has returned before Windows' path goes on, so it
+/// cannot take that stack. The report checks carry this test instead: a filter that ran
+/// out of stack mid-report leaves an incomplete report and fails them.
 #[test]
 fn a_stack_overflow_on_a_thread_rust_did_not_start_is_reported() {
     assert_a_reported_death(
         Fault::RawThreadStackOverflow,
         Expect {
             code: 0xC000_00FD,
+            also: Some(0xC000_0005),
             lines: &["exception: EXCEPTION_STACK_OVERFLOW (0xc00000fd)"],
             module: None,
         },
@@ -421,6 +454,7 @@ fn a_fault_on_a_thread_rust_did_not_start_is_reported() {
         Fault::RawThreadAccessViolation,
         Expect {
             code: 0xC000_0005,
+            also: None,
             lines: &["exception: EXCEPTION_ACCESS_VIOLATION (0xc0000005)"],
             module: None,
         },
@@ -440,6 +474,7 @@ fn a_fault_inside_a_gtk_stack_dll_is_reported_against_that_dll() {
         Fault::AccessViolationInGlib,
         Expect {
             code: 0xC000_0005,
+            also: None,
             lines: &[
                 "exception: EXCEPTION_ACCESS_VIOLATION (0xc0000005)",
                 "access: read",
@@ -456,6 +491,7 @@ fn abort_is_reported_and_still_fails_fast() {
         Fault::Abort,
         Expect {
             code: FAST_FAIL,
+            also: None,
             lines: &["signal: SIGABRT (22), from abort()", "kind: signal"],
             module: Some("ucrtbase.dll"),
         },
@@ -472,6 +508,7 @@ fn a_glib_fatal_message_is_reported_and_still_fails_fast() {
         Fault::GlibFatalMessage,
         Expect {
             code: FAST_FAIL,
+            also: None,
             lines: &["signal: SIGABRT (22), from abort()"],
             module: Some("glib-2.0-0.dll"),
         },
