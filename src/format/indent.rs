@@ -221,6 +221,36 @@ fn target_column(lines: &[Line], i: usize, dir: IndentDir) -> Option<usize> {
     }
 }
 
+/// Where each item Increase Indent moves goes, decided before anything moves, or
+/// `None` when the selection cannot move as a whole (TDD 10.21).
+///
+/// **The selection keeps its shape.** Its roots — the selected items not nested
+/// under another selected item — each go one level deeper, and everything under
+/// them rides along. A root nests under its previous sibling; a root whose previous
+/// sibling is itself a selected root joins that sibling's new level, so selected
+/// siblings stay siblings. If any root has nothing to nest under (the first item of
+/// its list), nothing moves at all. Judged item by item instead, the first sibling
+/// stays and the rest nest under it, which reshapes the selection (MEASURED: `- b`,
+/// `- c` under `1. x` indented twice left `b` where it was and pushed `c` under it).
+fn indent_plan(lines: &[Line], first_row: usize, last_row: usize) -> Option<Vec<(usize, usize)>> {
+    let mut plan: Vec<(usize, usize)> = Vec::new();
+    let mut covered = first_row;
+    for i in first_row..=last_row {
+        if i < covered || lines[i].marker.is_none() {
+            continue;
+        }
+        covered = subtree_end(lines, i);
+        let indent = lines[i].indent;
+        let sib = item_above(lines, i, indent).filter(|&j| lines[j].indent == indent)?;
+        let to = match plan.iter().find(|&&(r, _)| r == sib) {
+            Some(&(_, to)) => to,
+            None => indent + lines[sib].marker.map_or(0, |m| m.width),
+        };
+        plan.push((i, to));
+    }
+    Some(plan)
+}
+
 /// Move item `i` (and its subtree) to column `to`, recording each touched line.
 fn move_item(lines: &mut [Line], moved: &mut [Option<Moved>], i: usize, to: usize) {
     let end = subtree_end(lines, i);
@@ -368,12 +398,26 @@ pub(crate) fn list_indent(
     }
 
     let mut moved: Vec<Option<Moved>> = vec![None; lines.len()];
-    for i in first_row..=last_row {
-        if lines[i].marker.is_none() || moved[i].is_some() {
-            continue;
+    match dir {
+        IndentDir::In => {
+            let Some(plan) = indent_plan(&lines, first_row, last_row) else {
+                return ListIndent::Unchanged;
+            };
+            for (i, to) in plan {
+                move_item(&mut lines, &mut moved, i, to);
+            }
         }
-        if let Some(to) = target_column(&lines, i, dir) {
-            move_item(&mut lines, &mut moved, i, to);
+        // Each item on its own: dedenting again and again flattens the selection,
+        // which is what the operator asked of it (TDD 10.21).
+        IndentDir::Out => {
+            for i in first_row..=last_row {
+                if lines[i].marker.is_none() || moved[i].is_some() {
+                    continue;
+                }
+                if let Some(to) = target_column(&lines, i, dir) {
+                    move_item(&mut lines, &mut moved, i, to);
+                }
+            }
         }
     }
 
@@ -563,7 +607,54 @@ mod tests {
     #[test]
     fn non_items_in_the_selection_stay_put() {
         let src = "- a\n- b\ntext";
-        assert_eq!(indent(src, 0, src.chars().count()), "- a\n  - b\ntext");
+        let s = at(src, "- b");
+        assert_eq!(indent(src, s, src.chars().count()), "- a\n  - b\ntext");
+    }
+
+    /// The operator's case: two bullets under a numbered item, indented twice. The
+    /// first press nests both; on the second the first is the first item of its list
+    /// and cannot nest, so neither moves rather than the second nesting under it.
+    #[test]
+    fn a_selection_moves_as_a_whole_or_not_at_all() {
+        let src = "1. x\n- b\n- c";
+        let (s, e) = (at(src, "- b"), src.chars().count());
+        let once = indent(src, s, e);
+        assert_eq!(once, "1. x\n   - b\n   - c");
+        let (s, e) = (at(&once, "- b"), once.chars().count());
+        assert_eq!(
+            list_indent(&once, s, e, IndentDir::In),
+            ListIndent::Unchanged
+        );
+        let src = "- a\n- b\ntext";
+        assert_eq!(
+            list_indent(src, 0, src.chars().count(), IndentDir::In),
+            ListIndent::Unchanged,
+            "a selection starting on a list's first item does not move"
+        );
+    }
+
+    /// Selected items at different levels each go one level deeper, so the
+    /// selection's own hierarchy survives; numbering follows each new level.
+    #[test]
+    fn indent_keeps_the_selections_relative_hierarchy() {
+        let src = "- a\n- b\n  - c\n- d\n- e";
+        let (s, e) = (at(src, "- b"), at(src, "- e") + 3);
+        assert_eq!(indent(src, s, e), "- a\n  - b\n    - c\n  - d\n  - e");
+        let src = "1. a\n2. b\n3. c";
+        let (s, e) = (at(src, "2."), src.chars().count());
+        assert_eq!(indent(src, s, e), "1. a\n   1. b\n   2. c");
+    }
+
+    /// Only Increase Indent keeps the shape: Decrease Indent lifts each item on
+    /// its own, so pressing it again and again flattens the selection.
+    #[test]
+    fn dedent_repeatedly_flattens_the_selection() {
+        let src = "- a\n  - b\n    - c";
+        let (s, e) = (at(src, "- b"), src.chars().count());
+        let once = dedent(src, s, e);
+        assert_eq!(once, "- a\n- b\n  - c");
+        let (s, e) = (at(&once, "- b"), once.chars().count());
+        assert_eq!(dedent(&once, s, e), "- a\n- b\n- c");
     }
 
     #[test]

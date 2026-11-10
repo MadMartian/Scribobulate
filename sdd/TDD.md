@@ -1941,7 +1941,9 @@
 - **And** each item keeps its kind and its marker: a bullet keeps its character, a task keeps its box and its tick; a numbered item takes the number that continues the list it joins, or starts it at 1
 - **And** existing nesting is preserved at every tier: an item carries everything nested under it, however many levels deep, and every descendant moves by the same amount, so the branch keeps its own structure and the items around it keep their levels
 - **And** the caret and the selection stay on the same characters, and each use is one undo step
-- **And** an item that cannot move that way (the first item of a list on Increase, an item at the margin on Decrease) is left as it is; lines in the selection that are not list items are never changed
+- **And** Increase Indent keeps the selection's shape: every selected item goes exactly one level deeper, selected siblings stay siblings, and no level is skipped. If any selected item cannot nest (it is the first item of its list), nothing moves
+- **And** Decrease Indent lifts each selected item on its own: an item at the margin is left as it is while the others are lifted, so pressing it repeatedly flattens the selection
+- **And** lines in the selection that are not list items are never changed
 - **And** Tab and Shift+Tab act only on a list item: anywhere else they do what they did before, and they never leave a stray tab inside a list item
 
 ### 10.22 Changing a list's kind keeps its nesting
