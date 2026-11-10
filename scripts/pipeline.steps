@@ -456,6 +456,34 @@ cmd.macos   references  cargo xtask lint-references && scripts/git-hooks/pre-pus
 cmd.windows references  cargo xtask lint-references && "%SCRIB_BASH%" scripts/git-hooks/pre-push --self-test
 
 # ---------------------------------------------------------------------------
+# Step 8b — licences and advisories over the shipped dependency graph
+#
+# Three facts in one verdict, all drawn from Cargo.lock: every shipped crate's licence
+# is on deny.toml's allowlist, every RustSec advisory is satisfied or waived there, and
+# the committed crate-notice section (notices/50-crates.md, which build.rs folds into
+# THIRD-PARTY-LICENSES.md) matches what cargo-about generates now. scripts/licences.sh
+# owns all three and says which failed; `--update` is the one way the section is written.
+#
+# LINUX ONLY, PERMANENTLY. The graph is the three RELEASE TARGETS, fixed in deny.toml
+# and about.toml, not the host's -- so the result is the same on every platform and
+# running it on three is running it three times (the same reason coverage is Linux's;
+# POLICY § Build pipeline, "Linux is the canonical platform for the gates"). This is not
+# a tooling gap: both tools build on macOS and Windows and the declaration would not
+# change if they were installed there.
+#
+# A red here before a release is the EXPECTED state of RELEASE.md gate 2: an advisory
+# that is neither fixed nor waived is a failed gate, and the waiver is an ISSUES.md
+# entry cited from deny.toml's ignore list, never a silent suppression.
+# ---------------------------------------------------------------------------
+step   8b  licences
+intent licences  Every shipped crate's licence is allowed, every advisory against Cargo.lock is satisfied or waived, and the committed crate notices match Cargo.lock
+verdict licences  exit
+class  licences  required
+cmd.linux   licences  scripts/licences.sh
+na.macos    licences  permanent  The check draws the three-target shipped graph from Cargo.lock and deny.toml/about.toml, so its result does not vary by host; Linux runs it and a second run here would only repeat it.
+na.windows  licences  permanent  The check draws the three-target shipped graph from Cargo.lock and deny.toml/about.toml, so its result does not vary by host; Linux runs it and a second run here would only repeat it.
+
+# ---------------------------------------------------------------------------
 # Step 9 — the installer artefact
 #
 # ONE step, not a bundle/installer pair. Windows and macOS do stage-then-wrap in two

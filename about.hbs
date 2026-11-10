@@ -1,0 +1,24 @@
+# Rust Crates
+
+Scribobulate statically links the Rust crates below. Each licence text is reproduced
+once, followed by the crates distributed under it, as those licences require. Generated
+by `cargo about` from `Cargo.lock` for the shipped dependency graph (`about.toml`).
+
+{{#each licenses}}
+## {{{name}}}
+
+Used by:
+{{#each used_by}}
+- `{{crate.name}}` {{crate.version}}{{#if crate.repository}} — <{{crate.repository}}>{{/if}}
+{{/each}}
+
+<details>
+<summary>{{id}} licence text</summary>
+
+````text
+{{{text}}}
+````
+
+</details>
+
+{{/each}}

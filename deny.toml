@@ -1,0 +1,76 @@
+# cargo-deny: the licence allowlist and the RustSec advisory check over what SHIPS.
+#
+# Run: `cargo deny check licenses advisories`. RELEASE.md gates 2 and 6 cite it; it is
+# the mechanical half of the third-party attribution sweep (POLICY § Third-party
+# attribution). The other half — which notice text is REPRODUCED for each crate — is
+# cargo-about's (about.toml), and the determination of which licence covers a bundled
+# non-Rust binary is a person's (packaging/*/verify-licenses.*), not either tool's.
+#
+# THE GRAPH IS THE SHIPPED GRAPH. The three release targets, default features, no
+# dev-dependencies: a licence obligation attaches to what a user receives, and the
+# `gtk-integration-tests` / `memory-gates` features and the test crates behind them are
+# never in an artefact. Widening this to `all-features` would make the allowlist police
+# code nobody redistributes and the notices attribute crates nobody ships — the same
+# false statement the macOS verify gate exists to refuse in the other direction.
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]
+all-features = false
+no-default-features = false
+exclude-dev = true
+
+[output]
+feature-depth = 1
+
+[advisories]
+# Every advisory is `satisfied` or `waived`; a waiver is an ISSUES.md entry and goes
+# here with its letter so the suppression and the record cannot drift apart.
+ignore = [
+]
+
+[licenses]
+# Permissive, attribution-only licences. An OR expression elects the first of these it
+# contains, so a crate offering `MIT OR LGPL-2.1-or-later` is taken under MIT and no
+# copyleft option is ever elected by omission.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+exceptions = [
+]
+
+# `sourceview5` declares no `license` field. cargo-deny reads the crate's LICENSE file
+# instead and recognises the MIT text above the confidence threshold, so no
+# clarification is written: one would restate what the tool already proves, and a
+# clarification's file hash is not checked by this version, so it would pin nothing.
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

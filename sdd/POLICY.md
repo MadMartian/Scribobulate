@@ -85,6 +85,13 @@ No artefact is signed with a trusted identity yet; obtaining one is the operator
 decision. Until then the tool that builds an artefact announces the limitation on
 success, and that announcement is removed in the same change that introduces signing.
 
+## Releases
+
+A release is cut only by the procedure in [RELEASE.md](RELEASE.md): one commit on
+`master`, gated on all three platforms, packaged by the GitHub workflow on publish. No
+artefact built on a developer machine is published, and no gate there is skipped
+without the operator recording why.
+
 ## Testing
 
 ### Unit tests

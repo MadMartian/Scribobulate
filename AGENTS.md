@@ -58,6 +58,10 @@ Read all of the above, plus:
   read its table of contents, then the matching entry. (Open vulnerabilities are ISSUES.)
 - [`sdd/PLAN.accessibility.md`](sdd/PLAN.accessibility.md) — before adding accessibility
   markup beyond a control name.
+- [`sdd/RELEASE.md`](sdd/RELEASE.md) — the gated procedure for cutting a release; read
+  before bumping the version, tagging, or touching a GitHub release.
+- [`sdd/PLAN.distribution.md`](sdd/PLAN.distribution.md) — before adding a distribution
+  channel (Homebrew, winget, Flathub, a package repository) or a step that feeds one.
 - [`sdd/PLAN.profiling.md`](sdd/PLAN.profiling.md) — before profiling, proposing a
   performance gate, or reaching for a GTK debug channel.
 

@@ -268,6 +268,19 @@ jobs:
         if: steps.llvmcov.outputs.cache-hit != 'true'
         run: cargo install cargo-llvm-cov --locked
 
+      # Step 8b's two tools, cached the same way for the same reason. cargo-about's
+      # binary is behind its `cli` feature; cargo-deny has no such feature and ignores it.
+      - uses: actions/cache@v4
+        id: licencetools
+        with:
+          path: |
+            ~/.cargo/bin/cargo-deny
+            ~/.cargo/bin/cargo-about
+          key: cargo-licence-tools-${{ runner.os }}-v1
+      - name: Install cargo-deny and cargo-about
+        if: steps.licencetools.outputs.cache-hit != 'true'
+        run: cargo install cargo-deny cargo-about --locked --features cli
+
       # The gate. No step is named here; the runner derives them from the contract --
       # `--package` is the runner's own opt-in flag for the `packaging`-class step, not a
       # step name, so the derivation rule holds.
