@@ -65,33 +65,118 @@ pub(super) fn traverse(window: &ApplicationWindow, dir: NavDir) {
     refresh_nav_history_actions(window);
 }
 
-/// Put `tab`'s preview back at `spot`, the position half of a traversal.
+/// Put `tab` back at `spot`, the position half of a traversal, in whichever pane the
+/// tab is showing now — which need not be the pane the spot was recorded in (TDD
+/// 23.15).
 ///
 /// `None` — every entry a plain tab switch created — deliberately scrolls
 /// nothing: TDD 23.1 is that traversing between documents leaves each one's own
 /// reading position alone, and 23.14 degrades a stale heading to exactly this so
 /// the same rule covers it.
 ///
-/// Both restores are the seams the forward navigation already uses, so a
-/// traversal is exactly as validation-safe as the click that recorded it
-/// (GTK4Rs/AP-22 / GTK4Rs/AP-260 are handled inside them) — never a hand-rolled
-/// adjustment write.
+/// Every restore goes through a `panescroll` route, the seams the forward
+/// navigation already uses, so a traversal is exactly as validation-safe as the
+/// click that recorded it (GTK4Rs/AP-22 / GTK4Rs/AP-260 are handled inside them) —
+/// never a hand-rolled adjustment write.
 pub(super) fn restore_place(tab: &Rc<TabState>, spot: Option<&NavSpot>) {
     let Some(spot) = spot else {
         return;
     };
+    if tab.view_mode.get() == crate::winstate::ViewMode::Edit {
+        restore_in_editor(tab, spot);
+        return;
+    }
     // The preview leads the split sync for this jump, exactly as an outline activation
     // does: otherwise the sync treats the editor as driver and projects editor→preview
     // on the next tick, undoing the traversal. Both routes take the lead themselves.
-    // A tab with no preview (Edit mode) scrolls nothing.
     match spot {
         NavSpot::Heading(slug) => {
             crate::window::panescroll::preview_to_fragment(tab, slug);
         }
-        NavSpot::Line(line) => {
+        NavSpot::Line(line, _) => {
             crate::window::panescroll::preview_to_line(tab, *line);
         }
+        NavSpot::Editor { top, .. } => {
+            if let Some(line) = preview_line_for_editor_line(tab, *top) {
+                crate::window::panescroll::preview_to_line(tab, line);
+            }
+        }
     }
+}
+
+/// [`restore_place`] in the editor-only view: the editor is the only pane, so every
+/// spot lands there, and the caret moves with it as an outline activation moves it
+/// (the outline's highlight follows the caret here, TDD 12.14).
+fn restore_in_editor(tab: &Rc<TabState>, spot: &NavSpot) {
+    let text = tab.editor_text();
+    let buf = &tab.editor_buf;
+    match spot {
+        NavSpot::Heading(slug) => {
+            // The source's own anchors: the preview that recorded the slug is gone.
+            let anchors = crate::outline::source_anchor_map(&text);
+            if let Some((_, offset)) = anchors.resolve(slug) {
+                crate::window::outline_nav::scroll_editor_to_offset(tab, offset);
+            }
+        }
+        NavSpot::Line(_, at) => {
+            let line = buf
+                .iter_at_offset(crate::readingpos::to_editor_char(&text, *at))
+                .line();
+            place_caret(buf, line, 0);
+            crate::window::panescroll::editor_to_line(tab, line);
+        }
+        NavSpot::Editor {
+            top,
+            caret_line,
+            caret_col,
+        } => {
+            place_caret(buf, *caret_line, *caret_col);
+            crate::window::panescroll::editor_to_line(tab, *top);
+        }
+    }
+}
+
+/// Put the caret at `line`, `col`, clamped into the text as it is now: a line past
+/// the end lands on the last line, a column past the line's end at its end
+/// (Document-Reference CAM row 5's bargain — a drifted position mis-places, it
+/// never acts on the wrong text).
+fn place_caret(buf: &impl IsA<gtk::TextBuffer>, line: i32, col: i32) {
+    let line = line.clamp(0, (buf.line_count() - 1).max(0));
+    let caret = buf
+        .iter_at_line_offset(line, col.max(0))
+        .or_else(|| {
+            buf.iter_at_line(line).map(|mut it| {
+                if !it.ends_line() {
+                    it.forward_to_line_end();
+                }
+                it
+            })
+        })
+        .unwrap_or_else(|| buf.end_iter());
+    buf.place_cursor(&caret);
+}
+
+/// The preview line showing the same place as editor `line`, through the render's
+/// waypoint map — the conversion a view-mode switch makes (`readingpos`). `None`
+/// when the preview carries no render yet.
+fn preview_line_for_editor_line(tab: &TabState, line: i32) -> Option<i32> {
+    let start = tab.editor_buf.iter_at_line(line)?.offset();
+    let pos = crate::readingpos::from_editor_char(&tab.editor_text(), start);
+    let view = tab
+        .split
+        .preview_scroller()?
+        .child()?
+        .downcast::<crate::codeview::CodePreviewView>()
+        .ok()?;
+    let rd = crate::preview::scrib_render_data(&view)?;
+    let rd = rd.borrow();
+    let buf_char = crate::readingpos::reading_to_preview_char(
+        &rd.source_map_inv,
+        &rd.shifts,
+        &rd.original_owned,
+        pos,
+    );
+    Some(view.buffer().iter_at_offset(buf_char).line())
 }
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]

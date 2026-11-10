@@ -301,7 +301,11 @@ mod tests {
     fn a_stale_heading_in_another_document_degrades_but_stays_a_destination() {
         let mut h = history_of(&[1]);
         h.record(tab(2));
-        h.record_jump(tab(2), Some(NavSpot::Line(8)), heading("gone"));
+        h.record_jump(
+            tab(2),
+            Some(NavSpot::Line(8, crate::readingpos::DocPosition::start())),
+            heading("gone"),
+        );
         h.record(tab(3));
 
         h.degrade_stale_headings(tab(2), |slug| slug != "gone");
@@ -309,7 +313,15 @@ mod tests {
         assert_eq!(
             h.snapshot(),
             (
-                vec![(1, None), (2, Some(NavSpot::Line(8))), (2, None), (3, None),],
+                vec![
+                    (1, None),
+                    (
+                        2,
+                        Some(NavSpot::Line(8, crate::readingpos::DocPosition::start()))
+                    ),
+                    (2, None),
+                    (3, None),
+                ],
                 Some(3)
             ),
             "the entry keeps naming document 2 — only the position inside it is lost"

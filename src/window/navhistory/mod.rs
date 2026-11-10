@@ -49,6 +49,8 @@
 //! `winstate::navhistory::decide`, where they are decidable from plain data and
 //! unit-tested; this tree is deliberately left holding only the widget calls.
 
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod editview_tests;
 mod record;
 #[cfg(all(test, feature = "gtk-integration-tests"))]
 mod testkit;
@@ -177,6 +179,23 @@ fn wire_mouse_buttons(window: &ApplicationWindow) {
 /// discouraged but non-compiling.
 fn reconcile_nav_history_headings(window: &ApplicationWindow) {
     for tab in winstate::tabs_for_window(window) {
+        if tab.view_mode.get() == crate::winstate::ViewMode::Edit {
+            // No preview to ask: the source's own anchors answer instead (TDD 23.15).
+            // Not while the document is still loading, whose empty editor would say
+            // it has no headings at all — the same `None`-is-not-empty rule the
+            // preview's answer keeps. Parsed only if this tab has a heading entry to
+            // check.
+            if tab.loading.get() {
+                continue;
+            }
+            let slugs = std::cell::OnceCell::new();
+            nav_degrade_stale_headings(tab.id, |slug| {
+                slugs
+                    .get_or_init(|| crate::outline::source_anchor_map(&tab.editor_text()).slugs())
+                    .contains(slug)
+            });
+            continue;
+        }
         let Some(slugs) = tab
             .split
             .preview_scroller()

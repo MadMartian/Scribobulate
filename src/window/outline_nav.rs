@@ -305,7 +305,11 @@ fn resolve_heading(
 /// durable, so `record_outline_activation` re-finds the heading by path in the
 /// render's own source instead. The editor caret wants the LIVE offset, which is what
 /// `resolve_heading` answers.
-fn navigate_to_heading(window: &ApplicationWindow, path: &HeadingPath, row_index: usize) {
+pub(super) fn navigate_to_heading(
+    window: &ApplicationWindow,
+    path: &HeadingPath,
+    row_index: usize,
+) {
     let Some(st) = state(window) else { return };
     // Resolved against the live document, never against the row's build-time offsets.
     let Some((_live_index, src_offset)) = resolve_heading(window, &st, path) else {
@@ -317,17 +321,10 @@ fn navigate_to_heading(window: &ApplicationWindow, path: &HeadingPath, row_index
     };
     // Activating an outline row is a navigation to a section of the document
     // already being read, exactly as a TOC link is, so it is history-bearing on
-    // the same terms (TDD 23.11). Recorded BEFORE the scroll, because the
-    // departure spot is the reader's live position and the scroll overwrites the
-    // view's tracked reading line with its own target.
-    //
-    // Only for the two modes that actually move the PREVIEW: pure-edit mode moves
-    // the editor caret instead, and a `NavSpot` describes a preview reading
-    // position, so recording there would create an entry no traversal could
-    // honour.
-    if matches!(current_mode(window), ViewMode::Preview | ViewMode::Split) {
-        record_outline_activation(window, &st, path);
-    }
+    // the same terms (TDD 23.11), in every view (23.15). Recorded BEFORE the
+    // scroll, because the departure spot is the reader's live position and the
+    // scroll overwrites it with its own target.
+    record_outline_activation(window, &st, path);
     match current_mode(window) {
         // The editor↔preview sync normally treats the editor as driver and projects
         // editor→preview every frame, so in Split a preview-only jump is undone on the
@@ -382,7 +379,20 @@ fn scroll_preview_to_heading_revealing(
 /// A heading that render did not produce, or one hidden inside a collapsed block,
 /// records nothing, which degrades the entry to "just this document" rather than
 /// pointing it somewhere wrong (TDD 23.14).
+///
+/// In the editor-only view there is no render, so the slug comes from the source's own
+/// headings through the same slugger (`outline::source_slug_for_path`, TDD 23.15).
 fn record_outline_activation(window: &ApplicationWindow, st: &Rc<TabState>, path: &HeadingPath) {
+    if current_mode(window) == ViewMode::Edit {
+        if let Some(slug) = crate::outline::source_slug_for_path(&st.editor_text(), path) {
+            crate::window::record_in_document_jump(
+                window,
+                st,
+                crate::winstate::NavSpot::Heading(slug),
+            );
+        }
+        return;
+    }
     let Some(sw) = st.split.preview_scroller() else {
         return;
     };

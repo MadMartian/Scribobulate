@@ -42,24 +42,24 @@ pub(crate) fn traversal_to(place: &NavPlace, active: Option<TabId>) -> Traversal
 }
 
 /// Decide what to stamp onto the entry the reader is leaving, when they navigate
-/// within the document `tab` (TDD 23.12).
+/// within the document `tab` (TDD 23.12, and 23.15 in the editor-only view).
 ///
-/// Normally the reader's live position, so Back returns to where they acted from
-/// rather than to whatever that entry was originally created for. The exception
+/// Normally `here`, the reader's live position, so Back returns to where they acted
+/// from rather than to whatever that entry was originally created for. The exception
 /// is worth the branch: when the entry already names a heading in this same
 /// document and the reader has not moved off it, stamping would replace a
-/// re-establishable slug with a bare line describing the *same* position — all
+/// re-establishable slug with a bare position describing the *same* place — all
 /// cost, no gain (the Document-Reference CAM's "carry something that can be
 /// re-established"). `None` then means "leave that entry's spot alone".
 ///
-/// `resolve_heading` answers where a slug currently sits, and is injected for the
-/// same reason `degrade_stale_headings` injects its predicate: the answer lives
-/// in a rendered view, and taking it as a parameter is what makes this decidable
-/// from data.
+/// `resolve_heading` answers which line a slug currently sits on, in the same pane
+/// `here` was read from, and is injected for the same reason
+/// `degrade_stale_headings` injects its predicate: the answer lives in a live view,
+/// and taking it as a parameter is what makes this decidable from data.
 pub(crate) fn departure_stamp(
     current: Option<&NavPlace>,
     tab: TabId,
-    reading_line: i32,
+    here: NavSpot,
     resolve_heading: impl Fn(&str) -> Option<i32>,
 ) -> Option<NavSpot> {
     if let Some(NavPlace {
@@ -67,11 +67,14 @@ pub(crate) fn departure_stamp(
         spot: Some(NavSpot::Heading(slug)),
     }) = current
     {
-        if *current_tab == tab && resolve_heading(slug) == Some(reading_line) {
+        if *current_tab == tab
+            && here.top_line().is_some()
+            && resolve_heading(slug) == here.top_line()
+        {
             return None;
         }
     }
-    Some(NavSpot::Line(reading_line))
+    Some(here)
 }
 
 #[cfg(test)]
@@ -80,6 +83,11 @@ mod tests {
 
     fn tab(n: u64) -> TabId {
         TabId::from_raw(n)
+    }
+
+    /// A preview reading position; its source half plays no part in these decisions.
+    fn line(n: i32) -> NavSpot {
+        NavSpot::Line(n, crate::readingpos::DocPosition::start())
     }
 
     fn at_heading(t: u64, slug: &str) -> NavPlace {
@@ -147,8 +155,13 @@ mod tests {
     #[test]
     fn the_departure_is_normally_the_readers_live_line() {
         assert_eq!(
-            departure_stamp(Some(&NavPlace::whole(tab(1))), tab(1), 42, resolver("x", 7)),
-            Some(NavSpot::Line(42))
+            departure_stamp(
+                Some(&NavPlace::whole(tab(1))),
+                tab(1),
+                line(42),
+                resolver("x", 7)
+            ),
+            Some(line(42))
         );
     }
 
@@ -161,7 +174,7 @@ mod tests {
             departure_stamp(
                 Some(&at_heading(1, "intro")),
                 tab(1),
-                7,
+                line(7),
                 resolver("intro", 7)
             ),
             None
@@ -175,10 +188,10 @@ mod tests {
             departure_stamp(
                 Some(&at_heading(1, "intro")),
                 tab(1),
-                80,
+                line(80),
                 resolver("intro", 7)
             ),
-            Some(NavSpot::Line(80))
+            Some(line(80))
         );
     }
 
@@ -190,10 +203,10 @@ mod tests {
             departure_stamp(
                 Some(&at_heading(2, "intro")),
                 tab(1),
-                7,
+                line(7),
                 resolver("intro", 7)
             ),
-            Some(NavSpot::Line(7))
+            Some(line(7))
         );
     }
 
@@ -205,10 +218,10 @@ mod tests {
             departure_stamp(
                 Some(&at_heading(1, "gone")),
                 tab(1),
-                7,
+                line(7),
                 resolver("intro", 7)
             ),
-            Some(NavSpot::Line(7))
+            Some(line(7))
         );
     }
 
@@ -217,11 +230,11 @@ mod tests {
     fn an_entry_naming_a_line_always_takes_the_fresh_stamp() {
         let place = NavPlace {
             tab: tab(1),
-            spot: Some(NavSpot::Line(7)),
+            spot: Some(line(7)),
         };
         assert_eq!(
-            departure_stamp(Some(&place), tab(1), 7, resolver("intro", 7)),
-            Some(NavSpot::Line(7))
+            departure_stamp(Some(&place), tab(1), line(7), resolver("intro", 7)),
+            Some(line(7))
         );
     }
 
@@ -229,8 +242,28 @@ mod tests {
     #[test]
     fn an_empty_history_takes_the_fresh_stamp() {
         assert_eq!(
-            departure_stamp(None, tab(1), 5, resolver("intro", 5)),
-            Some(NavSpot::Line(5))
+            departure_stamp(None, tab(1), line(5), resolver("intro", 5)),
+            Some(line(5))
+        );
+    }
+
+    /// The editor-only view's position stamps the same way: kept off a heading the
+    /// reader still sits on, stamped once they have moved.
+    #[test]
+    fn an_editor_position_follows_the_same_rule() {
+        let editor = |top| NavSpot::Editor {
+            top,
+            caret_line: top,
+            caret_col: 0,
+        };
+        let on = at_heading(1, "intro");
+        assert_eq!(
+            departure_stamp(Some(&on), tab(1), editor(7), resolver("intro", 7)),
+            None
+        );
+        assert_eq!(
+            departure_stamp(Some(&on), tab(1), editor(9), resolver("intro", 7)),
+            Some(editor(9))
         );
     }
 }

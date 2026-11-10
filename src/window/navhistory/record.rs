@@ -43,13 +43,61 @@ pub(crate) fn record_in_document_jump(window: &ApplicationWindow, tab: &Rc<TabSt
 /// re-established") — the two describe the same position, and only one of them
 /// survives an edit.
 fn departure_spot(window: &ApplicationWindow, tab: &Rc<TabState>) -> Option<NavSpot> {
-    let sw = tab.split.preview_scroller()?;
-    let line = crate::preview::preview_top_line(&sw)?;
     // Two live observations — where the reader is, and where a slug sits — then
     // the decision itself is `winstate::departure_stamp`, unit-tested over both.
-    departure_stamp(nav_current(window).as_ref(), tab.id, line, |slug| {
+    // Each read from the pane the reader is reading: the editor in the editor-only
+    // view (TDD 23.15), the preview otherwise.
+    let current = nav_current(window);
+    if tab.view_mode.get() == crate::winstate::ViewMode::Edit {
+        let text = tab.editor_text();
+        let anchors = crate::outline::source_anchor_map(&text);
+        let line_of = |offset: crate::span::OriginalByteOffset| {
+            let char_off = crate::readingpos::byte_to_char(&text, offset.raw());
+            tab.editor_buf.iter_at_offset(char_off).line()
+        };
+        return departure_stamp(current.as_ref(), tab.id, editor_spot(tab), |slug| {
+            anchors.resolve(slug).map(|(_, offset)| line_of(offset))
+        });
+    }
+    let sw = tab.split.preview_scroller()?;
+    let line = crate::preview::preview_top_line(&sw)?;
+    let here = NavSpot::Line(line, preview_line_source(&sw, line));
+    departure_stamp(current.as_ref(), tab.id, here, |slug| {
         crate::preview::preview_heading_line(&sw, slug)
     })
+}
+
+/// Where the reader is in the editor: its top line and its caret.
+fn editor_spot(tab: &TabState) -> NavSpot {
+    let buf = &tab.editor_buf;
+    let caret = buf.iter_at_mark(&buf.get_insert());
+    let top = crate::saferizer::viewport::ViewportTopIter::top_offset(&tab.editor);
+    NavSpot::Editor {
+        top: buf.iter_at_offset(top).line(),
+        caret_line: caret.line(),
+        caret_col: caret.line_offset(),
+    }
+}
+
+/// The source position of preview buffer `line`, read now, while the render that
+/// laid it out still exists — the editor-only view throws the preview away, and a
+/// traversal made there needs this to open the editor at the same place (TDD 23.15).
+/// The document's start when the preview carries no render, which only a preview
+/// still being built can.
+fn preview_line_source(sw: &gtk::ScrolledWindow, line: i32) -> crate::readingpos::DocPosition {
+    sw.child()
+        .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
+        .and_then(|view| {
+            let rd = crate::preview::scrib_render_data(&view)?;
+            let rd = rd.borrow();
+            let buf_char = view.buffer().iter_at_line(line)?.offset();
+            Some(crate::readingpos::from_preview_char(
+                &rd.source_map,
+                &rd.shifts,
+                buf_char,
+            ))
+        })
+        .unwrap_or_else(crate::readingpos::DocPosition::start)
 }
 
 #[cfg(all(test, feature = "gtk-integration-tests"))]

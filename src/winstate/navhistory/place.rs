@@ -10,21 +10,53 @@
 //!   CAM's "carry something that can be re-established" — an edit or a reload
 //!   between the jump and the Back press still lands on the right heading rather
 //!   than on whatever text has drifted into that offset.
-//! * [`NavSpot::Line`] carries a top-of-viewport buffer line, because an
-//!   arbitrary scroll position offers no stronger handle. It takes the
-//!   Document-Reference CAM row 5 bargain: it can drift under an edit, and drift
-//!   mis-positions the viewport only.
+//! * [`NavSpot::Line`] and [`NavSpot::Editor`] carry a reading position, because
+//!   an arbitrary scroll position offers no stronger handle. They take the
+//!   Document-Reference CAM row 5 bargain: they can drift under an edit, and drift
+//!   mis-positions the viewport (and, for the editor, the caret) only.
+//!
+//! **Every spot can be honoured in every view mode** (TDD 23.15), because the pane
+//! that recorded it may be gone by the time it is traversed: the editor-only view has
+//! no preview, and the preview is rebuilt on every entry into a view that shows it. A
+//! heading is resolved by its slug in either pane. A reading position recorded in the
+//! preview also carries the same place in the source, captured while the preview
+//! still existed, for the editor to open at. One recorded in the editor needs nothing
+//! extra: the editor exists in every mode, and its lines are the source's own.
 
+use crate::readingpos::DocPosition;
 use crate::winstate::TabId;
 
 /// Where inside a document a history entry points. See the module doc for why
-/// the two variants are different strengths of reference.
+/// the variants are different strengths of reference.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum NavSpot {
     /// A heading's anchor slug, re-resolved against the tab's live heading map.
     Heading(String),
-    /// A top-of-viewport buffer line.
-    Line(i32),
+    /// A position read in the preview: its top-of-viewport buffer line, and the
+    /// same place as a position in the source, for a traversal that finds the
+    /// editor-only view showing.
+    Line(i32, DocPosition),
+    /// A position read in the editor-only view: the source line at the top of the
+    /// viewport, and the caret's line and column. Lines rather than offsets, as
+    /// `scrollsync::EditorPlace` holds them: a line clamps harmlessly when the text
+    /// got shorter.
+    Editor {
+        top: i32,
+        caret_line: i32,
+        caret_col: i32,
+    },
+}
+
+impl NavSpot {
+    /// The line at the top of the viewport this spot was read from, in that pane's
+    /// own buffer; `None` for a heading, which is not a reading position.
+    pub(crate) fn top_line(&self) -> Option<i32> {
+        match self {
+            NavSpot::Heading(_) => None,
+            NavSpot::Line(line, _) => Some(*line),
+            NavSpot::Editor { top, .. } => Some(*top),
+        }
+    }
 }
 
 /// One visited place: a document, and optionally where inside it.

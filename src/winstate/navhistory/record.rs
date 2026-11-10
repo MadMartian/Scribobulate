@@ -128,7 +128,11 @@ mod tests {
     #[test]
     fn an_idempotent_switch_does_not_erase_the_readers_place_in_the_document() {
         let mut h = history_of(&[1]);
-        h.record_jump(tab(1), Some(NavSpot::Line(40)), heading("intro"));
+        h.record_jump(
+            tab(1),
+            Some(NavSpot::Line(40, crate::readingpos::DocPosition::start())),
+            heading("intro"),
+        );
         h.record(tab(1));
         assert_eq!(
             h.current(),
@@ -157,13 +161,20 @@ mod tests {
         let mut h = history_of(&[1]);
         assert!(!h.can(NavDir::Back), "precondition: nothing to go back to");
 
-        h.record_jump(tab(1), Some(NavSpot::Line(12)), heading("stem-repair"));
+        h.record_jump(
+            tab(1),
+            Some(NavSpot::Line(12, crate::readingpos::DocPosition::start())),
+            heading("stem-repair"),
+        );
 
         assert_eq!(
             h.snapshot(),
             (
                 vec![
-                    (1, Some(NavSpot::Line(12))),
+                    (
+                        1,
+                        Some(NavSpot::Line(12, crate::readingpos::DocPosition::start()))
+                    ),
                     (1, Some(heading("stem-repair"))),
                 ],
                 Some(1)
@@ -179,7 +190,7 @@ mod tests {
             h.step(NavDir::Back),
             Some(NavPlace {
                 tab: tab(1),
-                spot: Some(NavSpot::Line(12)),
+                spot: Some(NavSpot::Line(12, crate::readingpos::DocPosition::start())),
             })
         );
         assert_eq!(
@@ -198,13 +209,20 @@ mod tests {
     #[test]
     fn a_jump_made_without_moving_keeps_the_stronger_reference() {
         let mut h = history_of(&[1]);
-        h.record_jump(tab(1), Some(NavSpot::Line(4)), heading("one"));
+        h.record_jump(
+            tab(1),
+            Some(NavSpot::Line(4, crate::readingpos::DocPosition::start())),
+            heading("one"),
+        );
         h.record_jump(tab(1), None, heading("two"));
         assert_eq!(
             h.snapshot(),
             (
                 vec![
-                    (1, Some(NavSpot::Line(4))),
+                    (
+                        1,
+                        Some(NavSpot::Line(4, crate::readingpos::DocPosition::start()))
+                    ),
                     (1, Some(heading("one"))),
                     (1, Some(heading("two"))),
                 ],
@@ -220,9 +238,17 @@ mod tests {
     #[test]
     fn re_following_the_link_to_the_current_place_is_not_a_navigation() {
         let mut h = history_of(&[1]);
-        h.record_jump(tab(1), Some(NavSpot::Line(3)), heading("here"));
+        h.record_jump(
+            tab(1),
+            Some(NavSpot::Line(3, crate::readingpos::DocPosition::start())),
+            heading("here"),
+        );
         let before = h.snapshot();
-        h.record_jump(tab(1), Some(NavSpot::Line(9)), heading("here"));
+        h.record_jump(
+            tab(1),
+            Some(NavSpot::Line(9, crate::readingpos::DocPosition::start())),
+            heading("here"),
+        );
         assert_eq!(
             h.snapshot(),
             before,
@@ -235,17 +261,31 @@ mod tests {
     #[test]
     fn document_switches_and_in_document_jumps_interleave() {
         let mut h = history_of(&[1]);
-        h.record_jump(tab(1), Some(NavSpot::Line(6)), heading("toc-target"));
+        h.record_jump(
+            tab(1),
+            Some(NavSpot::Line(6, crate::readingpos::DocPosition::start())),
+            heading("toc-target"),
+        );
         h.record(tab(2));
-        h.record_jump(tab(2), Some(NavSpot::Line(2)), heading("other-doc"));
+        h.record_jump(
+            tab(2),
+            Some(NavSpot::Line(2, crate::readingpos::DocPosition::start())),
+            heading("other-doc"),
+        );
 
         assert_eq!(
             h.snapshot(),
             (
                 vec![
-                    (1, Some(NavSpot::Line(6))),
+                    (
+                        1,
+                        Some(NavSpot::Line(6, crate::readingpos::DocPosition::start()))
+                    ),
                     (1, Some(heading("toc-target"))),
-                    (2, Some(NavSpot::Line(2))),
+                    (
+                        2,
+                        Some(NavSpot::Line(2, crate::readingpos::DocPosition::start()))
+                    ),
                     (2, Some(heading("other-doc"))),
                 ],
                 Some(3)
@@ -257,7 +297,7 @@ mod tests {
             h.step(NavDir::Back),
             Some(NavPlace {
                 tab: tab(1),
-                spot: Some(NavSpot::Line(6)),
+                spot: Some(NavSpot::Line(6, crate::readingpos::DocPosition::start())),
             })
         );
     }
@@ -268,7 +308,11 @@ mod tests {
     fn a_jump_truncates_the_forward_trail_too() {
         let mut h = history_of(&[1, 2, 3]);
         h.step(NavDir::Back);
-        h.record_jump(tab(2), Some(NavSpot::Line(5)), heading("elsewhere"));
+        h.record_jump(
+            tab(2),
+            Some(NavSpot::Line(5, crate::readingpos::DocPosition::start())),
+            heading("elsewhere"),
+        );
         assert_eq!(docs(&h), (vec![1, 2, 2], Some(2)));
         assert!(!h.can(NavDir::Forward));
     }
@@ -280,7 +324,11 @@ mod tests {
     fn a_suppressed_scope_swallows_a_within_document_jump_too() {
         let mut h = history_of(&[1]);
         h.suppress();
-        h.record_jump(tab(1), Some(NavSpot::Line(30)), heading("swept-past"));
+        h.record_jump(
+            tab(1),
+            Some(NavSpot::Line(30, crate::readingpos::DocPosition::start())),
+            heading("swept-past"),
+        );
         h.unsuppress();
         assert_eq!(h.snapshot(), (vec![(1, None)], Some(0)));
         assert!(!h.can(NavDir::Back) && !h.can(NavDir::Forward));

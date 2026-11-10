@@ -37,6 +37,8 @@
 //!   `preview::restore_preview_scroll_to_line` is banned in `clippy.toml`, because the
 //!   same call also restores a reading position, which must NOT lead (see below). Its
 //!   restoring callers carry an `#[expect]` saying so.
+//! - [`editor_to_line`] is its editor twin: Back/Forward to a place recorded in, or
+//!   restored into, the editor-only view (TDD 23.15).
 //! - [`lead`] is for a navigation whose scroll goes through a seam this module does
 //!   not wrap.
 //!
@@ -103,6 +105,17 @@ pub(crate) fn preview_to_line(st: &TabState, line: i32) -> bool {
     )]
     crate::preview::restore_preview_scroll_to_line(&sw, line);
     true
+}
+
+/// Scroll the editor to buffer `line` at the top, with the editor leading the split
+/// sync — the editor counterpart of [`preview_to_line`] (TDD 23.15).
+pub(crate) fn editor_to_line(st: &TabState, line: i32) {
+    lead(st, ScrollDriver::Editor);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the sanctioned route: the editor was made to lead the split sync on the line above (ScrAP-361)"
+    )]
+    crate::preview::restore_preview_scroll_to_line(&st.split.editor_scroller(), line);
 }
 
 /// Scroll the preview `view` to buffer `offset`, with the preview leading the split sync

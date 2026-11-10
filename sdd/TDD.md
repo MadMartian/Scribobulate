@@ -24,7 +24,7 @@
 | 20 | Annotations viewer | 20.1 – 20.25 |
 | 21 | Crash forensics | 21.1 – 21.12 |
 | 22 | Crash recovery (swap files) | 22.1 – 22.18 |
-| 23 | Back / Forward navigation history | 23.1 – 23.14 |
+| 23 | Back / Forward navigation history | 23.1 – 23.15 |
 | 24 | Renaming an open document | 24.1 – 24.14 |
 | 25 | Exporting a document | 25.1 – 25.24 |
 | 26 | Self-contained macOS bundle | 26.1 – 26.11 |
@@ -4113,7 +4113,7 @@ created by an act of navigation, and traversing history is not one of them.**
 - **When** the reader follows one of those links, or activates an outline row, while that document is already the active one
 - **Then** the preview scrolls to that heading **and** a history entry is recorded: Back becomes available even though the active document never changed, and the tab strip's selection never moves
 - **And** the same holds for the *arrival* of a cross-document fragment link (§19.10): the target document is recorded with the heading it was opened at, so Forward re-lands on the heading rather than on wherever that tab happened to be sitting
-- **And** the viewport movements that are **not** navigations record nothing — find-next, the split-pane scroll sync, the reading-position restores of the [Reading-Position Preservation CAM](CAM.md#reading-position-preservation-cam--events-that-perturb-a-text-pane-viewport), and an outline activation in pure-edit mode (which moves the editor caret, not the preview)
+- **And** the viewport movements that are **not** navigations record nothing — find-next, the split-pane scroll sync, and the reading-position restores of the [Reading-Position Preservation CAM](CAM.md#reading-position-preservation-cam--events-that-perturb-a-text-pane-viewport). An outline activation is a navigation in every view; 23.15 covers the editor-only view
 
 ### 23.12 Back returns to where the link was followed from
 - **Given** the reader followed such a link
@@ -4135,6 +4135,16 @@ created by an act of navigation, and traversing history is not one of them.**
 - **Then** an entry whose heading is gone falls back to naming *just that document*: the traversal still activates it and leaves its viewport exactly where the reader left it — the same silent outcome §19.12 gives a link whose fragment matches nothing, never a jump to the top, which would destroy a reading position the reader never offered up
 - **And** an entry that falls back to the document the reader is *already* on is not a stop at all — the traversal continues to the next place, and Back reports itself insensitive rather than remaining available with nothing perceptible behind it
 - **And** the commands' sensitivity always agrees with what a traversal will actually do: Back is never reported available on the strength of an entry that has already gone stale, whichever way the document was rebuilt — an in-place re-render or a wholesale one (23.5)
+
+### 23.15 Back and Forward work in the editor-only view
+- **Given** the editor-only view
+- **When** the reader activates an outline row
+- **Then** the caret moves to that heading, a history entry is recorded, and Back becomes available
+- **And** Back returns the editor to where the reader was when they clicked: the same text at the top of the editor, and the caret where it was; Forward returns to the heading. Neither press edits the document, adds an undo step, or records history of its own (23.3)
+- **And** that holds when the reader clicked from the top of the document: Back scrolls back up to it (GEP-53)
+- **And** activating the heading the caret is already on adds no entry
+- **And** an entry is honoured in whichever view is showing when it is traversed: a heading entry lands on that heading; a position recorded in the editor opens the preview at the same place in the document, and a position recorded in the preview opens the editor at it — the carry-over a view switch already makes
+- **And** a heading the document no longer has is handled as in 23.14 in every view, judged in the editor-only view against the document's own text
 
 ## 24. Renaming an open document
 

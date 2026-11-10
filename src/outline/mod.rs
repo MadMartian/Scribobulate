@@ -241,8 +241,72 @@ pub(crate) fn extract_headings(md: &str) -> Vec<Heading> {
 /// the number of headings before it. One walk, so an anchor's heading ordinal is an
 /// index into the returned list.
 fn walk_headings(md: &str) -> (Vec<Heading>, Vec<crate::anchors::NamedAnchor<usize>>) {
+    use crate::anchors::{AnchorTarget, NamedAnchor};
+    let (headings, named) = walk_headings_sited(md);
+    let named = named
+        .into_iter()
+        .map(|a| NamedAnchor {
+            name: a.name,
+            target: match a.target {
+                AnchorTarget::Heading(i) => AnchorTarget::Heading(i),
+                AnchorTarget::Bare((before, _)) => AnchorTarget::Bare(before),
+            },
+        })
+        .collect();
+    (headings, named)
+}
+
+/// Where each name a link can use lands in `md`'s ORIGINAL source: every heading's
+/// slugs at its `#`, and every bare anchor at its tag. The same resolution the preview
+/// makes against its render (`RenderData::heading_map`), made from the source alone —
+/// for the editor-only view, which has no render to ask (TDD 23.15).
+///
+/// Built from the one heading walk and the one slugger the outline, the preview and the
+/// export share, so a slug recorded from the preview resolves here to the same heading.
+pub(crate) fn source_anchor_map(md: &str) -> crate::anchors::HeadingAnchors<OriginalByteOffset> {
+    use crate::anchors::{AnchorTarget, HeadingAnchors, HeadingSlugger, NamedAnchor};
+    let (headings, named) = walk_headings_sited(md);
+    let mut slugger = HeadingSlugger::default();
+    let sited: Vec<_> = headings
+        .iter()
+        .map(|h| (slugger.next(&h.text), h.src_offset))
+        .collect();
+    let named = named.into_iter().map(|a| NamedAnchor {
+        name: a.name,
+        target: match a.target {
+            AnchorTarget::Heading(i) => AnchorTarget::Heading(i),
+            AnchorTarget::Bare((_, at)) => AnchorTarget::Bare(at),
+        },
+    });
+    HeadingAnchors::new(sited, named)
+}
+
+/// The canonical slug of the heading at `path` in `md` — the name a history entry
+/// records for an outline activation made where no render exists (TDD 23.15). `None`
+/// when no heading has that path.
+pub(crate) fn source_slug_for_path(md: &str, path: &expansion::HeadingPath) -> Option<String> {
+    let headings = extract_headings(md);
+    let index = expansion::paths_in_document_order(&build_tree(&headings))
+        .iter()
+        .position(|p| p == path)?;
+    let mut slugger = crate::anchors::HeadingSlugger::default();
+    headings
+        .iter()
+        .map(|h| slugger.next(&h.text).slug)
+        .nth(index)
+}
+
+/// [`walk_headings`] with each bare anchor also placed in the ORIGINAL source: its
+/// position is `(headings before it, the byte its tag starts at)`.
+#[allow(clippy::type_complexity)]
+fn walk_headings_sited(
+    md: &str,
+) -> (
+    Vec<Heading>,
+    Vec<crate::anchors::NamedAnchor<(usize, OriginalByteOffset)>>,
+) {
     let mut headings: Vec<Heading> = Vec::new();
-    let mut named = crate::anchors::NamedAnchorWalk::<usize>::default();
+    let mut named = crate::anchors::NamedAnchorWalk::<(usize, OriginalByteOffset)>::default();
     // While inside a heading: (level, source-start offset, accumulated text).
     let mut current: Option<(u8, usize, String)> = None;
 
@@ -279,7 +343,16 @@ fn walk_headings(md: &str) -> (Vec<Heading>, Vec<crate::anchors::NamedAnchor<usi
     // Front matter omitted: it declares no heading, and the parser's reading of its
     // closing fence as a setext underline used to list the whole block as an H2 here.
     for (ev, range) in frontmatter::events(md, frontmatter::Show::Omitted) {
-        named.observe(&ev, headings.len());
+        named.observe(
+            &ev,
+            (
+                headings.len(),
+                crate::annotate::cleaned_to_original(
+                    &extraction.shifts,
+                    CleanedByteOffset::new(range.start),
+                ),
+            ),
+        );
         match ev {
             Event::Start(Tag::Heading { level, .. }) => {
                 current = Some((level_to_u8(level), range.start, String::new()));
@@ -670,6 +743,66 @@ mod section_entry_tests {
         assert_eq!(
             texts(with),
             plain.into_iter().map(|h| h.text).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The source-side resolution the editor-only view's Back/Forward uses (TDD 23.15).
+#[cfg(test)]
+mod source_anchor_tests {
+    use super::expansion::paths_in_document_order;
+    use super::{build_tree, extract_headings, source_anchor_map, source_slug_for_path};
+
+    fn at(md: &str, fragment: &str) -> Option<usize> {
+        source_anchor_map(md)
+            .resolve(fragment)
+            .map(|(_, offset)| offset.raw())
+    }
+
+    #[test]
+    fn a_slug_resolves_to_its_headings_hash() {
+        let md = "# Intro\n\ntext\n\n## Next Part\n";
+        assert_eq!(at(md, "intro"), Some(0));
+        assert_eq!(at(md, "next-part"), md.find("## Next"));
+        assert_eq!(at(md, "missing"), None);
+    }
+
+    /// Numbered as the preview numbers them, so a slug the preview recorded for the
+    /// second `Example` lands on the second here.
+    #[test]
+    fn repeated_titles_take_the_previews_numbering() {
+        let md = "# Example\n\n# Example\n";
+        assert_eq!(at(md, "example"), Some(0));
+        assert_eq!(at(md, "example-1"), md.rfind("# Example"));
+    }
+
+    /// A bare anchor is a place of its own, and it is placed at its tag in the
+    /// source rather than at the heading before it.
+    #[test]
+    fn a_bare_anchor_resolves_to_its_own_tag() {
+        let md = "# Top\n\npara\n\n<a id=\"here\"></a>\n\nmore\n";
+        assert_eq!(at(md, "here"), md.find("<a id"));
+    }
+
+    /// CriticMarkup is lifted before the walk, and the offsets are carried back to
+    /// the ORIGINAL source the editor holds.
+    #[test]
+    fn offsets_are_in_the_original_source_past_any_annotation() {
+        let md = "{>>note<<} lead\n\n# Heading\n";
+        assert_eq!(at(md, "heading"), md.find("# Heading"));
+    }
+
+    #[test]
+    fn a_path_names_its_own_headings_slug() {
+        let md = "# A\n## Example\n# B\n## Example\n";
+        let paths = paths_in_document_order(&build_tree(&extract_headings(md)));
+        assert_eq!(
+            source_slug_for_path(md, &paths[1]).as_deref(),
+            Some("example")
+        );
+        assert_eq!(
+            source_slug_for_path(md, &paths[3]).as_deref(),
+            Some("example-1")
         );
     }
 }
