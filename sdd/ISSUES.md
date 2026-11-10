@@ -53,7 +53,6 @@ described from a different vantage point.
 | A | Windows, Mac | Production | No screen reader on Windows or macOS can read the app's accessible names: our GTK builds leave GTK's AccessKit accessibility backend off, so neither platform gets a tree to carry them. Linux/AT-SPI reads them | Medium |
 | B | Mac | Upstream | macOS only: every native file-chooser invocation (Open, Save, Export) grows RSS by ~1.1 MB and does not give it back. Roughly four fifths is AppKit's own price for presenting an `NSSavePanel` — reproduced with no GTK in the process — with about a fifth GTK-attributable. Caching the panel upstream would recover ~95% | Medium |
 | C | Any | Production | The preview's Annotate bubble sits over the line above a selection, so a click there lands on the bubble: the first click of a double- or triple-click opens the comment card, the next press closes it, and the reader gets a single click | Low |
-| D | Linux, Mac | Project | Closing the sidebar filter can leave the list at its top instead of scrolled to the highlighted row: the reveal retries a fixed number of times and gives up before GTK has laid the list out (seen 5 times on CI, Linux and macOS, never locally; cause read from the 2026-11-09 failure's trace) | Low |
 | E | Windows | Upstream | After an edit the editor's scrollbar slider is sometimes not drawn until the next scroll (2 of 40 Enters); a GTK defect still open upstream | Low |
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
@@ -288,53 +287,6 @@ Windows have not been driven.
 **Decision** (operator, 2026-10-24): accepted, no remedy scheduled. The reader can dismiss
 the bubble by clicking elsewhere first. Not taken: placing the bubble clear of text (in the
 margin or below the selection), which changes a placement other features and tests rely on.
-
-## D. The sidebar-filter focus test sometimes finds the list unscrolled
-
-**Severity**: Low (a test-only intermittent; no product symptom has been seen).
-
-**Observed** (2026-10-24, GitHub CI, Linux coverage leg, step 5c, run 40101250787 attempt 1
-on the commit "Offer the View ▸ Toolbar toggles from a right-click on the toolbar…", 2026-10-24): `closing_the_filter_returns_the_focus_to_the_highlighted_row` failed at
-`src/window/sidebarfilter.rs:1113`, "the highlighted row is scrolled into view, not the top
-of the list". Attempt 2 of the same run passed; so did the same commit inside run
-40102254669 and 6 of 6 local runs. Windows and macOS legs passed both times.
-
-**Not reproduced locally** (2026-10-24, Linux, GTK 4.6.9, instrumented build, private
-Xvfb): about 160 runs under heavy parallel load, and 3 runs with animations off, all
-passed. In each, the list was already laid out when the row was revealed and the scroll
-landed near 900. Ruled out by those runs: a stale list size at the moment of the scroll,
-and a close with animations off skipping the hand-back. Not established: the mechanism.
-
-**Mitigation options**:
-- The assertion's message now carries the list's scroll value, upper and page size. If
-  it recurs, read them first: they say whether the reveal ran, ran against a stale size,
-  or was undone afterwards. Change no product code before that.
-
-**Recurred** (2026-10-29, GitHub CI run 40960989179, macOS leg, GTK 4.24.1, at
-`src/window/sidebarfilter.rs:1156`): "value 0, upper 0, page 0", the same reading as the
-second Linux failure. `upper 0` and `page 0` say the list had never been allocated when the
-assertion read it, so the reveal had nothing to scroll; this is no longer Linux-only.
-
-**Recurred** (2026-11-06, GitHub CI run 42189755964 attempt 1, Linux coverage leg): "value 0,
-upper 0, page 0" again, the focus already back on the right row.
-
-**Mitigated** (2026-11-06): the test now waits up to 5 s for the list to be laid out before
-judging the scroll, and prints a `NOTE [TDD 20.25]` line with the wait in ms and frames when
-it had to. The wait is for layout only, so a laid-out list still at the top still fails. A
-failure now reports the scroll a second later, whether the scroller is mapped, the scroller,
-list and section heights, and a test-only trace of the hand-back path and each reveal
-attempt (`window::sidebar::take_reveal_trace`). Read the NOTE lines and any failure's trace
-first: they name the cause this entry still lacks.
-
-**Recurred, with the cause** (2026-11-09, GitHub CI run 42696133289 attempt 1, Linux coverage
-leg, at `src/window/sidebarfilter.rs:1180`): the focus came back to the row at once, but all
-9 reveal attempts (0–8) found the list not laid out yet ("page 0, upper 0, mapped true") and
-the reveal gave up ("retries exhausted"). The list was laid out shortly after (value 0,
-upper 1220, page 273, then page 317 a second later). So the reveal's retry budget ran out
-before GTK laid the list out, and nothing tried again. This is a product path, not only the
-test: on a slow machine, closing the filter can leave the list at the top. The fix belongs
-in the reveal in `window::sidebar`: wait for the list's layout (its first size, or its
-adjustment's upper changing) rather than a fixed number of tries.
 
 ## E. On Windows the editor's scrollbar slider sometimes goes missing after an edit
 

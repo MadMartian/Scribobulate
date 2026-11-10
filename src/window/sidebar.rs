@@ -23,7 +23,7 @@ use gtk::prelude::*;
 thread_local! {
     /// What the deferred hand-back and the reveal did, in order, for the integration tests'
     /// failure messages: which path the focus took, and what the scroller read at each
-    /// reveal attempt. The sidebar-filter focus test has failed on CI with a list that read
+    /// reveal. The sidebar-filter focus test has failed on CI with a list that read
     /// as never laid out, and could not show whether the reveal ran before layout and was
     /// dropped or the test simply looked too early. Compiled only into test builds.
     static REVEAL_TRACE: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -323,17 +323,80 @@ fn focus_row_on_frames(
 /// has no size record yet (`get_allocation_along` fails — common on a fresh
 /// ListView right after a child swap). Falls back to a uniform-height estimate on
 /// the scroller's vadjustment. When the scroller is not yet laid out
-/// (`page_size == 0`), retries on subsequent idles (bounded) so a tab-switch
-/// reveal that races the first allocate still lands. `ListView::scroll_to` is
+/// (`page_size == 0`), waits for its layout ([`reveal_after_layout`]) so a reveal that
+/// races the first allocate still lands. `ListView::scroll_to` is
 /// 4.12+ only (GTK4Rs/AP-143 / GTK4Rs/AP-114). Does not change the selection, so
 /// outline spy guards (GTK4Rs/AP-112) stay quiet.
 pub(crate) fn reveal_selected_row(scroller: &gtk::ScrolledWindow) {
-    reveal_selected_row_attempt(scroller, 0);
+    reveal_selected_row_now(scroller, "reveal");
 }
 
-const REVEAL_LAYOUT_RETRIES: u8 = 8;
+thread_local! {
+    /// The scrollers (and the adjustment each waits on) with a reveal parked until their
+    /// list is first laid out. One entry per scroller, so the per-frame retries of a
+    /// hand-back park one wait, not one per frame. Keyed by scroller (GTK4Rs/AP-332): two
+    /// panes waiting at once must not displace each other.
+    static AWAITING_LAYOUT: std::cell::RefCell<
+        Vec<(glib::WeakRef<gtk::ScrolledWindow>, glib::WeakRef<gtk::Adjustment>)>,
+    > = const { std::cell::RefCell::new(Vec::new()) };
+}
 
-fn reveal_selected_row_attempt(scroller: &gtk::ScrolledWindow, attempt: u8) {
+/// Run the reveal again once `scroller`'s list has a size.
+///
+/// Issue D: this used to retry on a fixed number of idles, and on a loaded machine all of
+/// them ran before GTK laid the list out, so the reveal gave up and the list stayed at the
+/// top. Layout runs on the frame clock, not on idles (GTK4Rs/AP-261), and no count of
+/// either is a bound on when it comes. So wait for the event itself: the vadjustment's
+/// `changed`, which `gtk_adjustment_configure` emits when the list's allocation gives it a
+/// page and an upper. The reveal then runs on the next idle, not inside that emission,
+/// because the emission is in the middle of the list's `size_allocate` and the reveal
+/// writes the adjustment and activates a list action. A pane that is hidden waits until it
+/// is shown and laid out, and reveals then.
+fn reveal_after_layout(scroller: &gtk::ScrolledWindow, vadj: &gtk::Adjustment) {
+    let parked = AWAITING_LAYOUT.with(|w| {
+        let mut w = w.borrow_mut();
+        w.retain(|(s, a)| s.upgrade().is_some() && a.upgrade().is_some());
+        if w.iter().any(|(s, a)| {
+            s.upgrade().as_ref() == Some(scroller) && a.upgrade().as_ref() == Some(vadj)
+        }) {
+            return true;
+        }
+        w.push((scroller.downgrade(), vadj.downgrade()));
+        false
+    });
+    if parked {
+        trace(|| "reveal: not laid out, a wait is already parked".into());
+        return;
+    }
+    trace(|| "reveal: not laid out, waiting for layout".into());
+    // Weak: the adjustment belongs to the scroller, so a strong capture would keep the
+    // scroller alive from its own adjustment's handler (GTK4Rs/AP-63).
+    let weak = scroller.downgrade();
+    let handler: std::rc::Rc<std::cell::Cell<Option<glib::SignalHandlerId>>> =
+        std::rc::Rc::default();
+    let own = std::rc::Rc::clone(&handler);
+    let id = vadj.connect_changed(move |adj| {
+        if adj.page_size() <= 0.0 || adj.upper() <= 0.0 {
+            return;
+        }
+        if let Some(id) = own.take() {
+            adj.disconnect(id);
+        }
+        AWAITING_LAYOUT.with(|w| {
+            w.borrow_mut()
+                .retain(|(_, a)| a.upgrade().is_some_and(|a| &a != adj));
+        });
+        let Some(scroller) = weak.upgrade() else {
+            return;
+        };
+        glib::idle_add_local_once(move || {
+            reveal_selected_row_now(&scroller, "reveal after layout");
+        });
+    });
+    handler.set(Some(id));
+}
+
+fn reveal_selected_row_now(scroller: &gtk::ScrolledWindow, which: &'static str) {
     let Some(list_view) = list_view_of(scroller) else {
         return;
     };
@@ -363,26 +426,15 @@ fn reveal_selected_row_attempt(scroller: &gtk::ScrolledWindow, attempt: u8) {
     let page = vadj.page_size();
     let upper = vadj.upper();
     if page <= 0.0 || upper <= 0.0 {
-        // Not laid out yet — common right after `set_child` on a tab switch.
-        // Retry on later idles until the scroller has a real page_size (or we
-        // exhaust the budget; an unmapped pane then simply stays put).
+        // Not laid out yet — common right after `set_child` on a tab switch, or a pane
+        // shown this turn.
         trace(|| {
             format!(
-                "reveal attempt {attempt}: not laid out (page {page}, upper {upper}, mapped {}){}",
-                scroller.is_mapped(),
-                if attempt < REVEAL_LAYOUT_RETRIES {
-                    ""
-                } else {
-                    ", retries exhausted"
-                }
+                "{which}: not laid out (page {page}, upper {upper}, mapped {})",
+                scroller.is_mapped()
             )
         });
-        if attempt < REVEAL_LAYOUT_RETRIES {
-            let scroller = scroller.clone();
-            glib::idle_add_local_once(move || {
-                reveal_selected_row_attempt(&scroller, attempt + 1);
-            });
-        }
+        reveal_after_layout(scroller, &vadj);
         return;
     }
     let row_h = upper / f64::from(n);
@@ -391,7 +443,7 @@ fn reveal_selected_row_attempt(scroller: &gtk::ScrolledWindow, attempt: u8) {
     let value = vadj.value();
     if row_top >= value && row_bottom <= value + page {
         trace(|| {
-            format!("reveal attempt {attempt}: row already visible (value {value}, upper {upper}, page {page})")
+            format!("{which}: row already visible (value {value}, upper {upper}, page {page})")
         });
         return; // already fully visible
     }
@@ -404,9 +456,99 @@ fn reveal_selected_row_attempt(scroller: &gtk::ScrolledWindow, attempt: u8) {
     let max = (upper - page).max(0.0);
     trace(|| {
         format!(
-            "reveal attempt {attempt}: jumped {value} -> {} (upper {upper}, page {page})",
+            "{which}: jumped {value} -> {} (upper {upper}, page {page})",
             target.clamp(0.0, max)
         )
     });
     crate::saferizer::scrollpos::jump(&vadj, target.clamp(0.0, max));
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+    use crate::testpump::{until, until_or_for, Clock};
+    use std::time::Duration;
+
+    /// A sidebar-like scroller holding a 200-row list with row 150 selected.
+    fn scroller_with_far_selection() -> gtk::ScrolledWindow {
+        let rows: Vec<String> = (0..200).map(|n| format!("Row {n}")).collect();
+        let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        let sel = gtk::SingleSelection::new(Some(gtk::StringList::new(&rows)));
+        sel.set_autoselect(false);
+        sel.set_selected(150);
+        let factory = gtk::SignalListItemFactory::new();
+        factory.connect_setup(|_, item| {
+            if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
+                item.set_child(Some(&gtk::Label::new(None)));
+            }
+        });
+        factory.connect_bind(|_, item| {
+            let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let text = item
+                .item()
+                .and_downcast::<gtk::StringObject>()
+                .map(|s| s.string());
+            if let (Some(label), Some(text)) = (item.child().and_downcast::<gtk::Label>(), text) {
+                label.set_text(&text);
+            }
+        });
+        let list = gtk::ListView::new(Some(sel), Some(factory));
+        gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .child(&list)
+            .build()
+    }
+
+    /// Issue D. A reveal asked for before the list is laid out still lands, however long the
+    /// layout takes: the reveal is asked for while the scroller is in no window at all, the
+    /// loop runs well past the eight idles the old fixed retry budget allowed, and only then
+    /// does the list get a window and a size. Mutation guard: restore a bounded retry in
+    /// place of `reveal_after_layout` and the list stays at the top.
+    #[gtktest::test]
+    fn a_reveal_requested_before_layout_lands_when_the_list_is_laid_out() {
+        let scroller = scroller_with_far_selection();
+        reveal_selected_row(&scroller);
+        reveal_selected_row(&scroller);
+        // Let every default-priority idle chain finish — the old retries were one — by
+        // waiting for a LOW-priority idle, which runs only once none of them is pending. A
+        // fixed span is not enough: on macOS the drain did not reach the retries at all.
+        let drained = std::rc::Rc::new(std::cell::Cell::new(false));
+        let mark = std::rc::Rc::clone(&drained);
+        glib::idle_add_local_full(glib::Priority::LOW, move || {
+            mark.set(true);
+            glib::ControlFlow::Break
+        });
+        until(
+            Clock::Idle,
+            "every default-priority idle to have run",
+            || drained.get(),
+        );
+        let vadj = scroller.vadjustment();
+        assert_eq!(
+            (vadj.page_size(), vadj.upper()),
+            (0.0, 0.0),
+            "the list is still unlaid out after the drain, as the test needs"
+        );
+
+        let window = gtk::Window::builder()
+            .default_width(300)
+            .default_height(300)
+            .child(&scroller)
+            .build();
+        window.present();
+        until(Clock::Frame, "the list to be laid out", || {
+            vadj.page_size() > 0.0 && vadj.upper() > 0.0
+        });
+        let revealed = until_or_for(Clock::Frame, Duration::from_secs(2), || vadj.value() > 0.0);
+        let (value, upper, page) = (vadj.value(), vadj.upper(), vadj.page_size());
+        window.destroy();
+        assert!(
+            revealed,
+            "the far selected row is scrolled into view once the list is laid out \
+             (value {value}, upper {upper}, page {page}; trace: {:?})",
+            take_reveal_trace()
+        );
+    }
 }
