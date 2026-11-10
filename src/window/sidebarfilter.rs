@@ -1173,9 +1173,13 @@ mod gtk_integration_tests {
                 frame() - f0
             );
         }
+        // A reveal that had to wait for the layout runs on the idle after it, so give it
+        // that turn (bounded) before judging.
+        let first = (vadj.value(), vadj.upper(), vadj.page_size());
+        let _ = crate::testpump::until_or_for(Clock::Frame, Duration::from_secs(1), || {
+            vadj.value() > 0.0
+        });
         if vadj.value() <= 0.0 {
-            let first = (vadj.value(), vadj.upper(), vadj.page_size());
-            drain_for(Clock::Frame, Duration::from_secs(1));
             let list = super::super::sidebar::list_view_of(&ch.outline_scroller);
             panic!(
                 "the highlighted row is scrolled into view, not the top of the list \
