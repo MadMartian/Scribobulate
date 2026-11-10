@@ -3864,6 +3864,7 @@ appearance that predates the feature; `Sepia` is the book-like reading theme.
 - **Then** a crash report file exists whose first lines name the signal or exception code, the faulting address, the faulting instruction pointer with the module and offset it falls in, and 21.1's build identity
 - **And** the process still terminates as it would have without the handler — on unix from that same signal, on Windows with the same exit code and still delivered to Windows Error Reporting; the handler reports and hands the fault on, it never swallows the fault or changes the exit status
 - **And** an exception something goes on to handle writes no report
+- **And** the one exception to "the same exit code" is a stack overflow on a Windows thread with no stack guarantee beyond the system's own (as GLib's workers are): after the overflow, Windows' own unhandled-exception path runs in the little stack left and can fault again, ending the process with an access violation (`0xc0000005`) instead of `0xc00000fd`, with or without the handler. Either code is the same death; the report, written before Windows' path runs, still names the stack overflow
 - **And** a death no handler can run for (Windows `__fastfail`, how Rust's own abort ends a process) is named in the code as uncaught, not claimed covered; a panic ending that way has already written 21.7's report
 
 ### 21.5 A crash report says what the application was doing
