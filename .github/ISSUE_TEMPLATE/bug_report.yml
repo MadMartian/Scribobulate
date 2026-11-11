@@ -63,7 +63,7 @@ body:
     attributes:
       label: Scribobulate version
       description: Help ▸ About shows it.
-      placeholder: "0.1.0"
+      placeholder: "1.0.0"
     validations:
       required: true
 

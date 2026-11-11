@@ -69,6 +69,7 @@ reused — unlike the letters above, which are positional and get reclaimed.
 | CLSD-01 | Any | Upstream | Tables are selection islands; cells are individually selectable but not part of the continuous buffer |
 | CLSD-02 | Any | Upstream | A paragraph that mixes fonts (any inline-code span) can lay out a few pixels wider than the wrap width it was given, summoning the preview's Automatic horizontal scrollbar and intermittently blanking the pane until a resize |
 | CLSD-04 | Mac | Upstream | In fullscreen, a click issued while the transition animation is still running is never delivered — AppKit blocks input for its own ~250-500ms window, in any Cocoa application. Not ours to fix, and not GTK's |
+| CLSD-05 | Any | Upstream | Syntax highlighting depends on `bincode` 1.3, which RustSec marks unmaintained (RUSTSEC-2025-0141, informational): `syntect` reads its compiled-in syntax and theme dumps with it and no syntect release is off it. Waived in `deny.toml`; the data is never a user's file |
 
 
 ## CLSD-01. Tables are selection islands
@@ -539,3 +540,39 @@ constant. Returning to a fullscreen Space from another application is also clean
 **Linux and Windows have not been checked**, so the `Mac` narrowing is provisional — the
 register's rule is that behaviour seen on one platform is not platform-specific until a
 peer seat looks.
+
+## CLSD-05. Syntax highlighting depends on `bincode` 1.3, which RustSec marks unmaintained
+
+**Status**: Closed (the fix is syntect's to make, not ours; there is nothing to patch —
+the advisory is informational, the crate is finished, and the only bytes it decodes are
+compiled into the executable).
+
+`syntect` 5.3.0 — the latest release, 2025-09-27 — deserialises its bundled syntax and
+theme dumps with `bincode` 1.3.3 behind its `dump-load` feature, which this application
+needs: every syntax set it highlights with (`syntect`'s own and `two-face`'s) is a
+prebuilt dump embedded in the binary. RustSec advisory
+[RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141) (2025-12-16) is
+*informational: unmaintained* — the bincode team has ceased development and states that
+1.3.3 is complete and needs no updates. There is no vulnerability and no patched version.
+
+**Upstream**: [trishume/syntect#623](https://github.com/trishume/syntect/issues/623)
+"`bincode` is unmaintained" (open, last activity 2026-04-04, checked 2026-11-10) and
+[#606](https://github.com/trishume/syntect/issues/606) "Replacement for bincode as a
+dep?" (open). Linked by the advisory's own package name and `cargo tree -i bincode`,
+which shows `syntect` as its only dependant. The fix is syntect's: a release whose dump
+format uses a maintained codec.
+
+**Exposure**: none from a user's document. The only bytes `bincode` ever decodes here
+are the dumps compiled into the executable; a document, image or theme file never
+reaches it. The release procedure records this as a waiver (`deny.toml`'s ignore entry
+cites this number) so the advisory check stays green on purpose rather than by
+suppression.
+
+**Why it's closed**: every exit runs through syntect. Replacing bincode ourselves means
+forking syntect or regenerating its dump format with another codec — a maintained copy
+of an upstream crate, which is a different project. Dropping `dump-load` means compiling
+the syntax definitions at start-up (`yaml-load`), which brings back the `yaml-rust`
+advisory the shipped graph was just cleared of and costs seconds per launch. Leaving
+syntax highlighting out is not the product. With no vulnerability to patch, waiting on
+upstream costs nothing. When a syntect release is off bincode 1, take it and delete this
+entry and the `deny.toml` ignore in the same change.

@@ -174,8 +174,8 @@ see Help ▸ Keyboard Shortcuts in the app for the exact mapping.)*
 Install the package — no Rust toolchain, no development libraries:
 
 ```bash
-sudo apt install ./scribobulate_0.1.0_amd64.deb     # Debian, Ubuntu
-sudo dnf install ./scribobulate-0.1.0-1.x86_64.rpm  # Fedora, RHEL
+sudo apt install ./scribobulate_1.0.0_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./scribobulate-1.0.0-1.x86_64.rpm  # Fedora, RHEL
 ```
 
 Or build from source, which is what you want if you intend to change it:

@@ -170,6 +170,21 @@ Platform-specific notes that shape the architecture:
   reusable copy by giving it its own ID (`com.extollit.scribobulate.<name>`), and
   its own state folder, program name and title suffix with it (`instance.rs`). On
   macOS the rendezvous files carry a short tag of the name.
+- **Dependencies ↔ Distribution (third-party notices)**: the licence notices the
+  shipped dependencies require reach the user through one file,
+  `THIRD-PARTY-LICENSES.md` at the repository root, which the About dialog names and
+  every platform's packaging stages into its artefact. The file is **derived and
+  unversioned**: `build.rs` writes it on every build by concatenating the **notice
+  sections** in `notices/*.md` — hand-authored, versioned, one file per section,
+  emitted in filename order, so a numeric prefix is the section order — and appending
+  the grammar licences `two-face` reports for the syntax set actually linked.
+  `src/notices.rs` is the test that the output carries both halves. What the file may
+  contain is bounded by the same graph the release tooling draws: `deny.toml` is the
+  licence allowlist and advisory check over the shipped dependency graph (three
+  release targets, default features, no dev-dependencies), and `about.toml` with
+  `about.hbs` generates the Rust-crate attributions from that graph. A bundled
+  non-Rust runtime (macOS, Windows) is attributed by its packaging's own manifest and
+  verify script, outside this path.
 
 Commands and their parameters, the annotation storage format, and the
 reading-theme file contract are specified in [SCHEMA.md](SCHEMA.md).
@@ -211,7 +226,7 @@ reader who needs the mechanism is already looking.
 | `logging.rs`, `logrepeat.rs`, `forensics/` | Diagnostics: the single logging sink with the glib bridge, collapsing runs of identical records before they reach anything; and crash forensics — the persistent log, identity stamp, breadcrumb ring and crash report the application leaves in the state directory. The artefacts and the constraints on the crash path are in `forensics/`'s header; call-site rules in POLICY § Logging. |
 | `saferizer/` | Typed seams that promote GTK's prose-only runtime contracts to compile-time ones: popover anchors, self-drawn click activation, scroll-position writes, and the document monitor. |
 | `a11y.rs` | Accessible naming — the one place a control's accessible name and tooltip are set together. Structural accessibility is [PLAN.accessibility.md](PLAN.accessibility.md). |
-| `gtk_suite.rs`, `suite_registry.rs`, `gtktest/`, `gtk_log_harness.rs`, `testsymlink.rs`, `xtask/`, `build.rs` | Build and test infrastructure: the second crate root that runs GTK test bodies on the main thread, one process per module; the attribute that registers a body with both harnesses; the harnesses' collapsing log writer; the symlink fixture; the lint gates (`cargo xtask lint-references`); and the build script (crate versions, the icon `GResource`, Win32 resources). |
+| `gtk_suite.rs`, `suite_registry.rs`, `gtktest/`, `gtk_log_harness.rs`, `testsymlink.rs`, `xtask/`, `build.rs` | Build and test infrastructure: the second crate root that runs GTK test bodies on the main thread, one process per module; the attribute that registers a body with both harnesses; the harnesses' collapsing log writer; the symlink fixture; the lint gates (`cargo xtask lint-references`); and the build script (crate versions, the icon `GResource`, Win32 resources, the third-party notices file). |
 
 ## Concurrency model
 

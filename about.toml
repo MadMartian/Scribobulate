@@ -1,0 +1,34 @@
+# cargo-about: generates the Rust-crate section of THIRD-PARTY-LICENSES.md.
+#
+# Run: `cargo about generate about.hbs -o <output>`. The graph is the SHIPPED graph, the
+# same one deny.toml draws (three release targets, default features, no dev-deps), for
+# the same reason: a notice attributes what a user receives. `accepted` mirrors
+# deny.toml's allowlist; cargo-about elects the first accepted licence of an OR
+# expression, so the two lists must agree or one tool will elect what the other rejects.
+
+accepted = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]
+ignore-build-dependencies = false
+ignore-dev-dependencies = true
+ignore-transitive-dependencies = false
+
+# The crate's own workspace members are not third parties.
+private = { ignore = true }
