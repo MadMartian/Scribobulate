@@ -78,6 +78,9 @@ Its shape:
   justification, the 👍 or 👎), with the date. An agent writes the item and the
   material the operator decides on; it never writes the operator's verdict for them,
   and "the operator agreed" in a chat is not a verdict until it is in this file. The
+  operator's natural way to write it is a CriticMarkup annotation on the item; the
+  agent then resolves the annotation into a plain quotation on the item with the
+  date, so the record reads clean once the file is handed on. The
   👨‍✈️ items are gate 2's waivers, gate 3's deferrals, gate 6's licence
   election, gate 8's 👍, gate 11's review of the release body and gate 12's publish.
 - A target that moves (gate 4's rule) is recorded as an event — old hash, new hash,
