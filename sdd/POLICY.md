@@ -332,7 +332,8 @@ Never fast-forward or cherry-pick part of it. Sharing a subsystem does not make 
 not fit one commit is more than one batch.
 
 - Work happens on a branch — `feature/<name>`, `bug/<name>`, or `mitigations` for
-  unrelated small tasks — never directly on `master`.
+  unrelated small tasks — never directly on `master`. A release is prepared on
+  `release/<version>` under [RELEASE.md](RELEASE.md)'s rules.
 - Merge a branch to `master` only once the GitHub pipeline has passed on it in full.
   Every push triggers it. When a commit needs fixing, amend it and force-push the branch
   rather than stacking follow-up commits, so each commit on `master` is one that passed.

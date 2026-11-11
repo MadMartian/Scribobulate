@@ -12,9 +12,10 @@ gates 2 and 6 is configured; its pipeline step is not yet delivered.
 
 ## Shape of a release
 
-- A release is one commit on `master` — the **target commit** — that has already passed
-  the GitHub pipeline on all three platforms *as that commit*, not as an ancestor of a
-  branch that later passed.
+- A release is one commit — the **target commit**, the head of the release branch
+  (next section) — that has already passed the GitHub pipeline on all three platforms
+  *as that commit*, not as an ancestor of a branch that later passed. It becomes an
+  ancestor of `master` when the branch is merged back after publishing.
 - The version has one owner, `[package] version` in `Cargo.toml`; every installer, the
   macOS `Info.plist`, the man pages and the Windows setup read it from there (POLICY
   § Build pipeline, "A number has one owner"). The tag and the release title repeat it;
@@ -30,6 +31,48 @@ gates 2 and 6 is configured; its pipeline step is not yet delivered.
 - Artefacts are unsigned (POLICY § Artefact signing). Every release says so in its notes,
   with what the platform will show the user (Gatekeeper on macOS, SmartScreen on
   Windows), until the change that introduces signing removes the sentence.
+
+## The release branch
+
+A release is prepared on a branch, `release/<version>`, cut from the `master` commit
+the release is meant to be, and the tag is placed on that branch's head. The branch is
+what lets a release be prepared while work on `master` goes on, and what lets a fix the
+release needs be taken without taking everything `master` has gained since the cut.
+
+- **Cut** the branch from `master` before working gate 1, and name it in the release
+  record's header. Everything readiness produces — the version bump if gate 1 needs one,
+  a register entry filed from a finding, a correction to this procedure, the change log
+  of gate 11 — is committed on it, by POLICY's branch rules (work on a `bug/` or
+  `feature/` branch cut *from the release branch*, pipeline green, merge in). Nothing
+  readiness produces goes to `master` directly.
+- **A fix the release needs** lands on the release branch *and* on `master`, as soon as
+  it is green: merge its branch into `release/<version>`, then merge it into `master` by
+  the usual rule. `master` must not wait for the release to learn of a defect its own
+  head carries, and a fix that reached only the release branch is lost to the next
+  release the moment the branch is deleted. Whether a defect found during readiness is a
+  fix the release needs or a deferral is gate 3's decision, recorded there.
+- **Every commit on the branch moves the target.** The head is the target, so a fix —
+  or a register entry — re-stamps the record's header and unticks gate 4 onward (the
+  checklist's rule). A commit that touches no build input (only `sdd/`, `docs/`,
+  `CHANGELOG.md`) still needs gate 4's run on the new head, which the push gives for
+  free; whether gates 5–9 are re-done for it is the question below.
+- **The branch lives until the release is published.** After gate 12 it is merged back
+  into `master` (gate 13, before the version bump, so the tagged commit is an ancestor
+  of `master` and the bump does not conflict with it) and then deleted, local and
+  remote. A release branch left behind after its release is a stale branch like any
+  other.
+- **Nothing on `master` is cherry-picked onto the branch.** A change `master` gained
+  after the cut that the release turns out to need is a fix the release needs — it goes
+  through the bullet above from its own branch, not by picking a commit out of
+  `master`'s history (POLICY § Version control: never cherry-pick part of a batch).
+
+{==Open question: a commit on the release branch that touches no build input — a
+register entry, a correction to this file, the change log — moves the target hash but
+not the artefacts. Proposed: gate 4 re-runs by itself on the push; gates 5–9 stand on
+the evidence already recorded if the dry-run artefacts' build inputs are unchanged
+(`git diff --stat <old> <new> -- . ':!sdd' ':!docs' ':!CHANGELOG.md'` is empty), and
+the record says so against the moved target. Otherwise every such commit costs a new
+dry run and a new manual-test pass for nothing the user receives.==}
 
 ## Decisions
 
@@ -66,8 +109,9 @@ picks the release up by copying it.
 
 Its shape:
 
-- A header naming the version, the target commit hash once chosen (blank until gate
-  4, re-stamped whenever the target moves), and who holds the release.
+- A header naming the version, the release branch, the target commit hash once chosen
+  (blank until gate 4, re-stamped whenever the target moves), and who holds the
+  release.
 - One section per gate, in the order below, each a Markdown task list (`- [ ]`) with
   one item per bullet of that gate, and one item for the gate's **Proof**.
 - A ticked item carries its evidence inline — the run URL, the command output's
@@ -83,8 +127,8 @@ Its shape:
   date, so the record reads clean once the file is handed on. The
   👨‍✈️ items are gate 2's waivers, gate 3's deferrals, gate 6's licence
   election, gate 8's 👍, gate 11's review of the release body and gate 12's publish.
-- A target that moves (gate 4's rule) is recorded as an event — old hash, new hash,
-  why — and every item from gate 4 on is unticked.
+- A target that moves (every commit on the release branch moves it) is recorded as
+  an event — old hash, new hash, why — and every item from gate 4 on is unticked.
 
 Whoever picks the release up — a later session, another seat, another person —
 reads this file first and resumes at the first unticked item; nothing before it is
@@ -101,9 +145,9 @@ decision the operator records, not one an agent makes.
 
 - `Cargo.toml` already carries the next patch version from the previous release's gate
   13 (the first release: `1.0.0`). Confirm it is the version being released; if this
-  release is a minor or major step instead, bump it on a branch, commit, let the
-  pipeline pass, merge to `master` by the usual rule (POLICY § Version control).
-  `Cargo.lock` carries the bump too.
+  release is a minor or major step instead, bump it on a branch cut from the release
+  branch, commit, let the pipeline pass, merge it into the release branch and into
+  `master` (The release branch, above). `Cargo.lock` carries the bump too.
 - **Proof:** the target commit's `Cargo.toml` shows the release version; nothing else in
   the tree spells that version out (`grep` the old version across the repository; a hit
   outside `Cargo.lock` and `CHANGELOG.md` is a second owner to remove).
@@ -154,7 +198,8 @@ decision the operator records, not one an agent makes.
 
 ### 4. The pipeline on the target commit
 
-- The GitHub pipeline is green on the target commit itself, every platform, no step
+- The target is the release branch's head. The GitHub pipeline is green on that commit
+  itself, every platform, no step
   skipped or declared non-applicable that is not declared so permanently in
   `scripts/pipeline.steps`.
 - **Proof:** the run's URL, and the commit hash it reports is the target.
@@ -290,9 +335,14 @@ On each platform, from the gate-5 artefact, by the platform procedure in MANUAL-
 - Re-open `README.md`'s download links in a browser; they resolve to the release.
 - Any channel PLAN.distribution.md has delivered is updated from the published assets —
   never from local builds.
-- Bump `[package] version` in `Cargo.toml` to the next patch version (`1.0.0` →
-  `1.0.1`) and merge it by the usual rule, so no commit after the tag ever reports the
-  released version. A later minor or major step overrides it at the next gate 1.
+- Merge `release/<version>` into `master` — a merge commit, so the tagged head stays
+  reachable as itself — and delete the branch, local and remote. Every fix it carries is
+  already on `master` by the release-branch rule; this merge brings the rest (the
+  change log, register entries, procedure corrections).
+- Then bump `[package] version` in `Cargo.toml` to the next patch version (`1.0.0` →
+  `1.0.1`) on a branch and merge it by the usual rule, so no commit after the tag ever
+  reports the released version. A later minor or major step overrides it at the next
+  gate 1.
 - Open `ISSUES.md` and remove nothing: a release does not close an issue, a fix does.
 
 ## What is deliberately not a gate
