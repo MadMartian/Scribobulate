@@ -18,7 +18,7 @@ default-members = [".", "xtask", "richimg", "winplace"]
 
 [package]
 name = "scribobulate"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "A native Linux Markdown viewer/editor that renders on the CPU with live reload"
 license = "Apache-2.0"

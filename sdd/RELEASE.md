@@ -33,7 +33,7 @@ gates 2 and 6 is configured; its pipeline step is not yet delivered.
 
 ## Decisions
 
-- The tag is `v<version>` (`v0.1.0`).
+- The tag is `v<version>` (`v1.0.0`).
 - The change log is a committed `CHANGELOG.md`; the release body is copied from it.
 - `Cargo.toml` is bumped to the next patch version in the release's wake (gate 13).
 - Manual-test evidence is never published. `tests/reports/` is git-ignored by design
@@ -97,7 +97,7 @@ decision the operator records, not one an agent makes.
 ### 1. Version
 
 - `Cargo.toml` already carries the next patch version from the previous release's gate
-  13 (the first release: `0.1.0`). Confirm it is the version being released; if this
+  13 (the first release: `1.0.0`). Confirm it is the version being released; if this
   release is a minor or major step instead, bump it on a branch, commit, let the
   pipeline pass, merge to `master` by the usual rule (POLICY § Version control).
   `Cargo.lock` carries the bump too.
@@ -287,8 +287,8 @@ On each platform, from the gate-5 artefact, by the platform procedure in MANUAL-
 - Re-open `README.md`'s download links in a browser; they resolve to the release.
 - Any channel PLAN.distribution.md has delivered is updated from the published assets —
   never from local builds.
-- Bump `[package] version` in `Cargo.toml` to the next patch version (`0.1.0` →
-  `0.1.1`) and merge it by the usual rule, so no commit after the tag ever reports the
+- Bump `[package] version` in `Cargo.toml` to the next patch version (`1.0.0` →
+  `1.0.1`) and merge it by the usual rule, so no commit after the tag ever reports the
   released version. A later minor or major step overrides it at the next gate 1.
 - Open `ISSUES.md` and remove nothing: a release does not close an issue, a fix does.
 
