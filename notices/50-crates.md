@@ -785,7 +785,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## Community Data License Agreement Permissive 2.0
 
 Used by:
-- `webpki-roots` 1.0.9 — <https://github.com/rustls/webpki-roots>
+- `webpki-roots` 1.0.12 — <https://github.com/rustls/webpki-roots>
 
 <details>
 <summary>CDLA-Permissive-2.0 licence text</summary>
@@ -1714,7 +1714,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ## ISC License
 
 Used by:
-- `rustls-webpki` 0.103.14 — <https://github.com/rustls/webpki>
+- `rustls-webpki` 0.103.16 — <https://github.com/rustls/webpki>
 
 <details>
 <summary>ISC licence text</summary>
@@ -1986,38 +1986,6 @@ THE SOFTWARE.
 ## MIT License
 
 Used by:
-- `plist` 1.9.0 — <https://github.com/ebarnard/rust-plist/>
-
-<details>
-<summary>MIT licence text</summary>
-
-````text
-Copyright (c) 2015 Edward Barnard
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-````
-
-</details>
-
-## MIT License
-
-Used by:
 - `winreg` 0.56.0 — <https://github.com/gentoo90/winreg-rs>
 
 <details>
@@ -2052,7 +2020,6 @@ THE SOFTWARE.
 
 Used by:
 - `heck` 0.5.0 — <https://github.com/withoutboats/heck>
-- `linked-hash-map` 0.5.6 — <https://github.com/contain-rs/linked-hash-map>
 - `unicode-width` 0.2.2 — <https://github.com/unicode-rs/unicode-width>
 
 <details>
@@ -2957,39 +2924,6 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License
 
 Used by:
-- `powerfmt` 0.2.0 — <https://github.com/jhpratt/powerfmt>
-
-<details>
-<summary>MIT licence text</summary>
-
-````text
-Copyright (c) 2023 Jacob Pratt et al.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-````
-
-</details>
-
-## MIT License
-
-Used by:
 - `bit-set` 0.8.0 — <https://github.com/contain-rs/bit-set>
 - `bit-vec` 0.8.0 — <https://github.com/contain-rs/bit-vec>
 
@@ -3030,39 +2964,6 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License
 
 Used by:
-- `deranged` 0.5.8 — <https://github.com/jhpratt/deranged>
-
-<details>
-<summary>MIT licence text</summary>
-
-````text
-Copyright (c) 2024 Jacob Pratt et al.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-````
-
-</details>
-
-## MIT License
-
-Used by:
 - `anstream` 1.0.0 — <https://github.com/rust-cli/anstyle.git>
 - `anstyle-parse` 1.0.0 — <https://github.com/rust-cli/anstyle.git>
 - `anstyle-query` 1.1.5 — <https://github.com/rust-cli/anstyle.git>
@@ -3089,73 +2990,6 @@ Used by:
 
 ````text
 Copyright (c) Individual contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-````
-
-</details>
-
-## MIT License
-
-Used by:
-- `num-conv` 0.2.2 — <https://github.com/jhpratt/num-conv>
-
-<details>
-<summary>MIT licence text</summary>
-
-````text
-Copyright (c) Jacob Pratt
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-````
-
-</details>
-
-## MIT License
-
-Used by:
-- `time-core` 0.1.9 — <https://github.com/time-rs/time>
-- `time` 0.3.51 — <https://github.com/time-rs/time>
-
-<details>
-<summary>MIT licence text</summary>
-
-````text
-Copyright (c) Jacob Pratt et al.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -3689,14 +3523,12 @@ Used by:
 - `serde` 1.0.228 — <https://github.com/serde-rs/serde>
 - `serde_core` 1.0.228 — <https://github.com/serde-rs/serde>
 - `serde_derive` 1.0.228 — <https://github.com/serde-rs/serde>
-- `serde_json` 1.0.150 — <https://github.com/serde-rs/json>
 - `syn` 2.0.118 — <https://github.com/dtolnay/syn>
 - `system-deps` 7.0.8 — <https://github.com/gdesmott/system-deps>
 - `thiserror-impl` 2.0.18 — <https://github.com/dtolnay/thiserror>
 - `thiserror` 2.0.18 — <https://github.com/dtolnay/thiserror>
 - `unicode-ident` 1.0.24 — <https://github.com/dtolnay/unicode-ident>
 - `utf8-zero` 0.8.1 — <https://github.com/algesten/utf8-zero>
-- `zmij` 1.0.21 — <https://github.com/dtolnay/zmij>
 
 <details>
 <summary>MIT licence text</summary>
@@ -3823,7 +3655,7 @@ SOFTWARE.
 
 Used by:
 - `pulldown-cmark-escape` 0.11.0 — <https://github.com/raphlinus/pulldown-cmark>
-- `pulldown-cmark` 0.13.4 — <https://github.com/raphlinus/pulldown-cmark>
+- `pulldown-cmark` 0.13.6 — <https://github.com/raphlinus/pulldown-cmark>
 
 <details>
 <summary>MIT licence text</summary>
@@ -3893,41 +3725,6 @@ THE SOFTWARE.
 ## MIT License
 
 Used by:
-- `base64` 0.22.1 — <https://github.com/marshallpierce/rust-base64>
-
-<details>
-<summary>MIT licence text</summary>
-
-````text
-The MIT License (MIT)
-
-Copyright (c) 2015 Alice Maz
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-
-````
-
-</details>
-
-## MIT License
-
-Used by:
 - `aho-corasick` 1.1.4 — <https://github.com/BurntSushi/aho-corasick>
 - `byteorder-lite` 0.1.0 — <https://github.com/image-rs/byteorder-lite>
 - `jiff` 0.2.29 — <https://github.com/BurntSushi/jiff>
@@ -3959,41 +3756,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-
-````
-
-</details>
-
-## MIT License
-
-Used by:
-- `yaml-rust` 0.4.5 — <https://github.com/chyh1990/yaml-rust>
-
-<details>
-<summary>MIT licence text</summary>
-
-````text
-The MIT License (MIT)
-
-Copyright (c) 2015 Chen Yuheng
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 ````
 
@@ -4274,43 +4036,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-````
-
-</details>
-
-## MIT License
-
-Used by:
-- `quick-xml` 0.39.4 — <https://github.com/tafia/quick-xml>
-
-<details>
-<summary>MIT licence text</summary>
-
-````text
-The MIT License (MIT)
-
-Copyright (c) 2016 Johann Tuffe
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
 
 ````
 

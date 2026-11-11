@@ -57,6 +57,7 @@ described from a different vantage point.
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
+| J | Any | Upstream | Syntax highlighting depends on `bincode` 1.3, which RustSec marks unmaintained (RUSTSEC-2025-0141): `syntect` 5.3 reads its compiled-in syntax and theme dumps with it and no syntect release is off it. Waived in `deny.toml` for release; the data is never a user's file | Low |
 
 ## Closed issues
 
@@ -419,6 +420,37 @@ is not ruled out.
 **Fix**: upstream, a destroyed-surface guard in `windowDidResize:`. An app-side workaround
 (leaving full screen before closing) would add AppKit's exit animation to every close of a
 full-screen window, a visible cost for a log line; it has not been tried.
+
+## J. Syntax highlighting depends on `bincode` 1.3, which RustSec marks unmaintained
+
+**Severity**: Low (an informational advisory; the crate is used on data compiled into the binary).
+
+`syntect` 5.3.0 — the latest release, 2025-09-27 — deserialises its bundled syntax and
+theme dumps with `bincode` 1.3.3 behind its `dump-load` feature, which this application
+needs: every syntax set it highlights with (`syntect`'s own and `two-face`'s) is a
+prebuilt dump embedded in the binary. RustSec advisory
+[RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141) (2025-12-16) is
+*informational: unmaintained* — the bincode team has ceased development and states that
+1.3.3 is complete and needs no updates. There is no vulnerability and no patched version.
+
+**Upstream**: [trishume/syntect#623](https://github.com/trishume/syntect/issues/623)
+"`bincode` is unmaintained" (open, last activity 2026-04-04, checked 2026-11-10) and
+[#606](https://github.com/trishume/syntect/issues/606) "Replacement for bincode as a
+dep?" (open). Linked by the advisory's own package name and `cargo tree -i bincode`,
+which shows `syntect` as its only dependant. The fix is syntect's: a release whose dump
+format uses a maintained codec.
+
+**Exposure**: none from a user's document. The only bytes `bincode` ever decodes here
+are the dumps compiled into the executable; a document, image or theme file never
+reaches it. The release procedure records this as a waiver (`deny.toml`'s ignore entry
+cites this letter) so the advisory check stays green on purpose rather than by
+suppression.
+
+**Mitigation options**:
+- Take the syntect release that drops bincode 1 when it exists, and delete this entry
+  and the `deny.toml` ignore in the same change.
+- Accept the limitation: keep the waiver, re-check the upstream issues at each release
+  (RELEASE.md gate 2).
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

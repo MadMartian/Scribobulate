@@ -30,6 +30,10 @@ feature-depth = 1
 # Every advisory is `satisfied` or `waived`; a waiver is an ISSUES.md entry and goes
 # here with its letter so the suppression and the record cannot drift apart.
 ignore = [
+    # ISSUES.md J — syntect 5.3 reads its own bundled syntax and theme dumps with
+    # bincode 1.3; the data is compiled into the binary, never read from a user's file,
+    # and no syntect release is off bincode 1 yet. Retire with the syntect that is.
+    { id = "RUSTSEC-2025-0141", reason = "ISSUES.md J: bincode 1 deserialises only syntect's compiled-in dumps" },
 ]
 
 [licenses]

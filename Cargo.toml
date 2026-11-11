@@ -73,7 +73,12 @@ glib = { version = "0.21", features = ["log"] }
 pangocairo = "0.21"
 pulldown-cmark = "0.13"
 serde = { version = "1", features = ["derive"] }
-syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+# Not `default-fancy`: that bundle also switches on `yaml-load`, `plist-load`, `html`
+# and `dump-create`, loaders and writers this application never calls (every syntax
+# and theme arrives as a prebuilt dump), and the first two pull `yaml-rust`
+# (unmaintained, RUSTSEC-2024-0320) and `plist`/`quick-xml` into the shipped graph for
+# nothing. These five are what `two-face` and the renderer actually use.
+syntect = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "default-themes", "dump-load", "regex-fancy"] }
 toml = "0.8"
 # Secure image-src containment + Browse→relative path math (researcher-sourced):
 # dunce::canonicalize resolves symlinks/`..` and strips Windows \\?\ verbatim;
