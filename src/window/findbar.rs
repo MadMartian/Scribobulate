@@ -918,5 +918,15 @@ pub(crate) fn refresh_preview_find_highlight(window: &ApplicationWindow) {
     // seat ratifying the match-options batch; the bug is one arm short, not one signal
     // missed, which is why the fix routes the whole refresh rather than adding a second
     // call beside it.
+    //
+    // **The query did not change, so the reader's place survives.** `refresh_find` starts
+    // the search over, which every one of these boundaries used to inherit: a fold splice
+    // dropped "28 of 37" to "37 matches" and the next Find Next went to the top (TDD
+    // 11.12). The cursor is taken before and put back after, re-found in the new list.
+    let held = st.find_cursor.get();
     refresh_find(window, &st);
+    if let FindTarget::Preview(view) = find_target(window) {
+        let query = chrome.find_entry.text();
+        crate::window::find::carry_preview_cursor(window, &st, &view, query.as_str(), held);
+    }
 }
