@@ -58,6 +58,7 @@ described from a different vantage point.
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
 | K | Mac | Test | A view-mode round-trip test in `window::scrollsync` once crashed the GTK suite on macOS CI with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV; the same tree passed macOS twice before and on re-run | Low |
+| L | Any | Production | A highlight with no comment, `{==text==}` on its own, is valid CriticMarkup but the app treats it as not an annotation: it is left out of the annotations sidebar by design and the reader does not get a highlight with its markup hidden | Low |
 
 ## Closed issues
 
@@ -446,6 +447,26 @@ report from Linux or Windows CI.
 `G_DEBUG=fatal-criticals` so the first critical gives a backtrace naming the holder; if it
 points at a closure or idle captured across a pane rebuild, that is an application defect
 (CAM § handlers on continuously firing signals) and this entry becomes Production scope.
+
+## L. A highlight with no comment is valid CriticMarkup and is not treated as an annotation
+
+**Severity**: Low (a reader can still see the text; the markup is in the way).
+
+CriticMarkup's highlight is `{==text==}`; the specification pairs it with a comment
+(`{==text==}{>>comment<<}`) as the usual shape, and every implementation that renders
+CriticMarkup (MultiMarkdown, Marked) renders the bare form as a highlight (`<mark>`) on
+its own. Scribobulate's contract covers only the pair: TDD 17.1 renders a highlighted
+claim *with its comment*, and `annotations::extract_entries` deliberately skips a bare
+highlight (`a_bare_highlight_is_not_listed`), so it never reaches the annotations
+sidebar. Found 2026-11-12 when an agent wrote questions as bare highlights for the
+operator to answer in the app and the operator could not find them.
+
+**Mitigation options**:
+- Render a bare highlight as a highlight with its delimiters hidden (17.1's treatment
+  without the comment card), and list it in the sidebar as a highlight with an empty
+  comment, so Reply attaches `{>>…<<}` to it. Needs a TDD §17 rubric for the bare form.
+- Render it as a highlight only, leave it out of the sidebar, and say so in §17.
+- Accept the limitation: write the pair; the agent instruction now says so.
 
 ## CLSD-02. A paragraph that mixes fonts lays out wider than the wrap width it was given
 

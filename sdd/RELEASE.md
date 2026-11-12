@@ -6,9 +6,9 @@ three platforms, and each gate exists because a green run somewhere else does no
 that claim. The rules it rests on live in [POLICY.md](POLICY.md); this document adds no
 rule, it orders the ones that bear on publishing.
 
-**Status: draft, awaiting its first dry run.** The gates and the decisions they rest on
-are settled; the dry run is what hardens them. The licence and advisory tooling of
-gates 2 and 6 is configured; its pipeline step is not yet delivered.
+**Status: under its first dry run (1.0.0).** The gates and the decisions they rest on
+are settled; the dry run is what hardens them, and its findings are folded in as they
+surface.
 
 ## Shape of a release
 
@@ -72,7 +72,7 @@ not the artefacts. Proposed: gate 4 re-runs by itself on the push; gates 5–9 s
 the evidence already recorded if the dry-run artefacts' build inputs are unchanged
 (`git diff --stat <old> <new> -- . ':!sdd' ':!docs' ':!CHANGELOG.md'` is empty), and
 the record says so against the moved target. Otherwise every such commit costs a new
-dry run and a new manual-test pass for nothing the user receives.==}
+dry run and a new manual-test pass for nothing the user receives.==}{>>Captain: your answer here<<}
 
 ## Decisions
 
@@ -228,8 +228,9 @@ Every published artefact carries the notices its dependencies require (POLICY
   sweep that catches one that slipped. **Decided:** this sweep is tooled, not done by
   hand — `cargo deny check licenses` holds the allowlist and `cargo about` generates the
   crate notices into `notices/50-crates.md`, which `build.rs` already consumes. Both
-  are configured (`deny.toml`, `about.toml`, `about.hbs`) and run by hand at this gate
-  until the pipeline step that runs them lands.
+  are configured (`deny.toml`, `about.toml`, `about.hbs`) and pipeline step 8b
+  (`scripts/licences.sh`) runs them on every push, so gate 4's green run on the target
+  is this layer's proof; run the script by hand only to read its output.
 - **Bundled runtimes.** macOS and Windows redistribute GTK and its dependencies.
   `packaging/macos/verify-licenses.sh` and `packaging/windows/verify-licenses.ps1` prove
   the notices are *staged*; they do not and cannot prove *which licence covers which
@@ -237,8 +238,13 @@ Every published artefact carries the notices its dependencies require (POLICY
   person reads each manifest row (`packaging/macos/license-anchors.txt`,
   `packaging/windows/licenses.psd1`) and confirms the election is still right for the
   binary actually shipped (the worked example is gettext: LGPL for the shipped libintl,
-  not GPL for the tools). Linux bundles nothing; its `.deb` copyright file and `.rpm`
-  spec licence tag name the project's own licence only.
+  not GPL for the tools). An election the bundle must make — `lzo`, plain GPL with
+  no alternative, taken under GPL-3.0 as the version coherent with Apache-2.0 — is
+  recorded by `stage-licenses.sh` as `ELECTION.txt` beside the formula's texts, with the
+  Corresponding Source offer. Linux bundles nothing; its `.deb` copyright stanza and
+  `.rpm` spec licence tag name every licence family the binary carries (the project's,
+  the grammars' and the crates'), and `scripts/licences.sh` fails when the crate notices
+  gain a family those lines do not name.
 - **The About dialog's claim.** It says the notices are in the distribution. Install each
   artefact (gate 9) and find them where it says they are.
 - **Proof:** the two verify scripts' output from the dry-run artefacts, and a line in the

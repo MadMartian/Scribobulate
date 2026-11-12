@@ -56,13 +56,17 @@ License: Apache-2.0
 
 Files: usr/bin/$PKG
 Copyright: $(date +%Y) extollIT Enterprises <sales@extollit.com>
- and the copyright holders of the bundled syntax-highlighting grammars
-License: Apache-2.0 and MIT and BSD-2-Clause and BSD-3-Clause
+ and the copyright holders of the bundled syntax-highlighting grammars and of
+ the Rust crates statically linked into the binary
+License: Apache-2.0 and MIT and MIT-0 and BSD-2-Clause and BSD-3-Clause and ISC and Unicode-3.0 and CDLA-Permissive-2.0
  The binary statically links syntax-highlighting grammar definitions obtained
- through the two-face crate (the syntect assets used by bat). Those grammars
- carry their own permissive upstream licences, all of which require their
- notices to accompany a binary distribution. The verbatim notices are shipped
- in /usr/share/doc/$PKG/THIRD-PARTY-LICENSES.md.
+ through the two-face crate (the syntect assets used by bat) and the Rust
+ crates it is built from. Those carry their own permissive upstream licences,
+ all of which require their notices to accompany a binary distribution. The
+ verbatim notices are shipped in /usr/share/doc/$PKG/THIRD-PARTY-LICENSES.md.
+ The licence list above is checked by scripts/licences.sh (pipeline step 8b)
+ against the crate notices, so a crate under a new licence fails the pipeline
+ until this line names it.
  .
  On Debian systems the full text of the Apache License version 2.0 can be
  found in /usr/share/common-licenses/Apache-2.0

@@ -98,7 +98,10 @@ Name:           $PKG
 Version:        $VERSION
 Release:        1
 Summary:        Native Markdown viewer and editor that renders on the CPU
-License:        Apache-2.0
+# Every licence family the binary carries: the project's, the grammars' and the
+# statically linked crates'. scripts/licences.sh (pipeline step 8b) fails when the crate
+# notices carry a family this line does not name.
+License:        Apache-2.0 AND MIT AND MIT-0 AND BSD-2-Clause AND BSD-3-Clause AND ISC AND Unicode-3.0 AND CDLA-Permissive-2.0
 BuildArch:      $ARCH
 
 Requires:       gtk4 >= 4.6
