@@ -890,6 +890,7 @@ fn xx_display_maps_document_annotation_to_cell_local_markup() {
         ann.cleaned_content.start.raw(),
         ann.cleaned_content.end.raw(),
         content_evs,
+        &crate::renderer::BlockScripts::scan(&ext.cleaned),
     );
     assert_eq!(local, vec![(13, 17)], "cell-local char range of \"flat\"");
 
@@ -936,6 +937,7 @@ fn xx_display_maps_bold_cell_claim_char_precisely() {
         ann.cleaned_content.start.raw(),
         ann.cleaned_content.end.raw(),
         content_evs,
+        &crate::renderer::BlockScripts::scan(&ext.cleaned),
     );
     // "flat" is the rendered bold content — local range should cover those chars.
     let flat_a = plain_off(plain, "flat") as usize;

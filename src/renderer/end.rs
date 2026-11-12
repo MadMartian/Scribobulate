@@ -192,6 +192,7 @@ impl Renderer {
                             &ts.cell_plain,
                             &ts.cell_content_evs,
                             &self.cleaned,
+                            &self.scripts,
                             &self.ann_highlights,
                             &self.theme,
                         );

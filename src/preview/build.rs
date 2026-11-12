@@ -800,7 +800,8 @@ pub(super) fn build_products(buf: &TextBuffer, prepared: &Prepared<'_>) -> Rende
 
     // Paint the CriticMarkup highlight tag over each annotated claim's exact
     // characters (cleaned coords → buffer chars via the per-event records).
-    let highlight_ranges = apply_highlight_tags(&buf, md, &extraction.annotations, &hl_evs);
+    let highlight_ranges =
+        apply_highlight_tags(&buf, md, &r.scripts, &extraction.annotations, &hl_evs);
     // One right-margin marker per annotation that carries a comment.
     // Markers pair with cell labels later (cell-marker pairing) once widgets exist.
     let markers = build_markers(raw_src, md, &extraction.annotations, &hl_evs);
@@ -979,10 +980,11 @@ fn cleaned_offset_to_buf(x: usize, cleaned: &str, hl_evs: &[(usize, usize, i32, 
 fn apply_highlight_tags(
     buf: &TextBuffer,
     cleaned: &str,
+    scripts: &crate::renderer::BlockScripts,
     annotations: &[crate::annotate::Annotation],
     hl_evs: &[(usize, usize, i32, i32)],
 ) -> Vec<crate::span::BufferSpan> {
-    let ranges = collect_highlight_ranges(cleaned, annotations, hl_evs);
+    let ranges = collect_highlight_ranges(cleaned, scripts, annotations, hl_evs);
     if let Some(tag) = buf.tag_table().lookup("annotation-highlight") {
         for &span in &ranges {
             let (from, to) = (span.start, span.end);
@@ -999,6 +1001,7 @@ fn apply_highlight_tags(
 /// invariant under an annotation add/remove, so only the tags/markers change).
 fn collect_highlight_ranges(
     cleaned: &str,
+    scripts: &crate::renderer::BlockScripts,
     annotations: &[crate::annotate::Annotation],
     hl_evs: &[(usize, usize, i32, i32)],
 ) -> Vec<crate::span::BufferSpan> {
@@ -1012,6 +1015,7 @@ fn collect_highlight_ranges(
             ann.cleaned_content.start.raw(),
             ann.cleaned_content.end.raw(),
             hl_evs,
+            scripts,
         ));
     }
     ranges
@@ -1030,8 +1034,9 @@ fn highlight_tag_ranges(
     hs: usize,
     he: usize,
     hl_evs: &[(usize, usize, i32, i32)],
+    scripts: &crate::renderer::BlockScripts,
 ) -> Vec<crate::span::BufferSpan> {
-    crate::annotate::map_cleaned_highlight_to_local(cleaned, hs, he, hl_evs)
+    crate::annotate::map_cleaned_highlight_to_local(cleaned, hs, he, hl_evs, scripts)
         .into_iter()
         .map(|(from, to)| crate::span::BufferSpan::new(from, to))
         .collect()
@@ -1150,6 +1155,23 @@ mod pure_tests {
     use super::*;
     use crate::annotate::{AnnKind, Annotation};
     use crate::span::BufferSpan;
+
+    /// Hand-built event records no parse produced: an empty script table makes each
+    /// run fall back to its standalone segmentation.
+    fn highlight_tag_ranges(
+        cleaned: &str,
+        hs: usize,
+        he: usize,
+        hl_evs: &[(usize, usize, i32, i32)],
+    ) -> Vec<BufferSpan> {
+        super::highlight_tag_ranges(
+            cleaned,
+            hs,
+            he,
+            hl_evs,
+            &crate::renderer::BlockScripts::default(),
+        )
+    }
 
     #[test]
     fn highlight_ranges_map_a_claim_char_precisely_within_one_event() {
@@ -2218,6 +2240,32 @@ mod gtk_integration_tests {
                 "{md:?}: the char AFTER the claim must not be highlighted (text {text:?})"
             );
         }
+    }
+
+    /// MANUAL-TEST 10.10b: a claim over a `~~` fence that WRAPS other inline markup —
+    /// the fence's two halves arrive in different pulldown `Text` events, so a
+    /// per-event scan sees an unmatched `~~` in each and used to tag both whole
+    /// events, washing the prose on either side of `a bold b`.
+    #[gtktest::test]
+    fn criticmarkup_highlight_is_exact_on_a_fence_wrapping_markup() {
+        let md = "Fence wrapping markup: {==~~a **bold** b~~==}{>>xnote<<} must strike ALL of \"a bold b\".";
+        let products = build_render_products(md, None, 1.0, false);
+        let text = buffer_slice(&products.buf);
+        let chars: Vec<char> = text.chars().collect();
+        let tagged: String = products
+            .highlight_ranges
+            .iter()
+            .flat_map(|span| chars[span.start as usize..span.end as usize].iter())
+            .collect();
+        assert_eq!(tagged, "a bold b", "buffer {text:?}");
+        let at = char_off(&text, "a bold b");
+        let tag = products
+            .buf
+            .tag_table()
+            .lookup("annotation-highlight")
+            .expect("highlight tag exists");
+        assert!(!products.buf.iter_at_offset(at - 1).has_tag(&tag));
+        assert!(!products.buf.iter_at_offset(at + 8).has_tag(&tag));
     }
 
     /// Adding an annotation refreshes the highlight tags + markers IN PLACE on the live
