@@ -66,13 +66,46 @@ release needs be taken without taking everything `master` has gained since the c
   through the bullet above from its own branch, not by picking a commit out of
   `master`'s history (POLICY § Version control: never cherry-pick part of a batch).
 
-{==Open question: a commit on the release branch that touches no build input — a
-register entry, a correction to this file, the change log — moves the target hash but
-not the artefacts. Proposed: gate 4 re-runs by itself on the push; gates 5–9 stand on
-the evidence already recorded if the dry-run artefacts' build inputs are unchanged
-(`git diff --stat <old> <new> -- . ':!sdd' ':!docs' ':!CHANGELOG.md'` is empty), and
-the record says so against the moved target. Otherwise every such commit costs a new
-dry run and a new manual-test pass for nothing the user receives.==}{>>Captain: your answer here<<}
+- **A build-neutral commit does not re-run the artefact gates.** A commit on the
+  release branch that touches no build input — a register entry, a correction to this
+  file, the change log — moves the target hash but not the artefacts. Gate 4 re-runs
+  by itself on the push, and with it gates 2 and 6's automated halves (step 8b runs on
+  every push, and that is wanted: `Cargo.lock` pins what a dependency *is*, but the
+  advisory database and the licence detection can change under an unchanged lock).
+  Gates 5, 7, 8 and 9 stand on the evidence already recorded when
+  `git diff --stat <old> <new> -- . ':!sdd' ':!docs' ':!CHANGELOG.md'` is empty, and
+  the record says so against the moved target. (Decided 2026-11-12.)
+
+## Release kinds
+
+POLICY § Version numbers makes the version say what kind of release this is, so the
+kind is read, not decided: compare `[package] version` on the release branch with the
+last tag. **PATCH only** (`v1.0.0` → `1.0.1`) is a patch release — bug fixes, no
+rubric added or rewritten. **MINOR or MAJOR** moved — a feature release. The record's
+header names the kind, and gate 1 checks the reading against the change list (a rubric
+added since the tag under a patch number is a version bump owed, not a patch release).
+
+A **feature release** runs every gate below in full.
+
+A **patch release** runs every gate, but four of them smaller, because what a patch
+can change is bounded by what its fixes touched — and each gate says what "touched"
+means so the reduction is read off the diff, not argued:
+
+- **Gate 7 (footprint)**: skipped unless the diff since the last tag touches a
+  rendering dependency, a rendering path, the process model or how the renderer is
+  selected (POLICY § Footprint verification's own trigger list); the record cites the
+  diff and the tag's readings stand.
+- **Gate 8 (manual testing)**: not a full pass. On each platform: `tests/MANUAL-TEST.md`
+  §A, plus every item of every section whose rubric a fix cites (each fix names the
+  rubric it makes hold — that is what makes it a patch), plus the items of any section
+  the diff touches by module (TECH.md's module map says which). The report lists the
+  items run and why; the operator's 👍 is still the proof.
+- **Gate 9 (install, launch, uninstall)**: full on a platform whose packaging the diff
+  touches; on the others, install the artefact, launch it, open a document, read the
+  version in About, quit.
+- **Gate 10 (documentation)**: `cargo xtask lint-references` and the README's install
+  examples carry the new version; the status banner and AI-DILIGENCE figures stand.
+
 
 ## Decisions
 
@@ -109,9 +142,9 @@ picks the release up by copying it.
 
 Its shape:
 
-- A header naming the version, the release branch, the target commit hash once chosen
-  (blank until gate 4, re-stamped whenever the target moves), and who holds the
-  release.
+- A header naming the version, the release kind (patch or feature — Release kinds,
+  above), the release branch, the target commit hash once chosen (blank until gate 4,
+  re-stamped whenever the target moves), and who holds the release.
 - One section per gate, in the order below, each a Markdown task list (`- [ ]`) with
   one item per bullet of that gate, and one item for the gate's **Proof**.
 - A ticked item carries its evidence inline — the run URL, the command output's
@@ -143,11 +176,14 @@ decision the operator records, not one an agent makes.
 
 ### 1. Version
 
-- `Cargo.toml` already carries the next patch version from the previous release's gate
-  13 (the first release: `1.0.0`). Confirm it is the version being released; if this
-  release is a minor or major step instead, bump it on a branch cut from the release
-  branch, commit, let the pipeline pass, merge it into the release branch and into
-  `master` (The release branch, above). `Cargo.lock` carries the bump too.
+- `Cargo.toml` already carries the version being released: the next patch number from
+  the previous release's gate 13, or the MINOR/MAJOR step the feature work bumped it to
+  when it landed (POLICY § Version numbers; the first release: `1.0.0`). Confirm it
+  against the change list since the last tag — a rubric added or rewritten under a
+  patch number means a bump is owed: make it on a branch cut from the release branch,
+  commit, let the pipeline pass, merge it into the release branch and into `master`
+  (The release branch, above). `Cargo.lock` carries the bump too. Record the release
+  kind (Release kinds, above) in the record's header.
 - **Proof:** the target commit's `Cargo.toml` shows the release version; nothing else in
   the tree spells that version out (`grep` the old version across the repository; a hit
   outside `Cargo.lock` and `CHANGELOG.md` is a second owner to remove).
