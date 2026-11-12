@@ -200,20 +200,38 @@ pub(super) fn add_about_action(app: &Application) {
                 .modal(true)
                 .build();
 
-            // Attribution for bundled third-party components. The syntax-highlighting
-            // grammars are compiled into the binary via the `two-face` crate (bat's
-            // syntect assets); their upstream licenses (MIT/Apache-2.0/BSD-2/3-Clause)
-            // are all permissive but REQUIRE the copyright + licence notice to travel
-            // with a binary distribution. The full verbatim notices ship as
-            // THIRD-PARTY-LICENSES.md (generated from `two_face::acknowledgement`);
-            // this credit section is the in-app surface of that obligation. Plain text
-            // only — a `<...>` here would be mis-parsed as a mailto: link (GTK4Rs/AP-50).
+            // Attribution for bundled third-party components, in three layers: the
+            // syntax-highlighting grammars compiled in via `two-face` (bat's syntect
+            // assets), every Rust crate statically linked into the binary, and on macOS
+            // and Windows the GTK runtime the installer redistributes. All carry licences
+            // that REQUIRE the copyright + licence notice to travel with a binary
+            // distribution; the verbatim notices ship as THIRD-PARTY-LICENSES.md
+            // (`build.rs` from `notices/`) and, for the runtime, as one directory per
+            // library. This credit section is the in-app surface of that obligation, and
+            // it NAMES WHERE THE FILES ARE on every platform: the 1.0.0 release dry run
+            // found "in the distribution" told a macOS or Linux reader nothing they could
+            // open (sdd/TDD.md 9.18). STRING LITERALS ONLY, one section, every platform's
+            // path in one line: `cargo xtask lint-references` check 17 reads these
+            // literals and requires the man page's CREDITS section to say the same, so a
+            // per-platform `cfg!` would hide text from the gate. SHORT LINES: each line
+            // is its own unwrapping GtkLabel, and one 200-character line grew the dialog
+            // to 1282 pt and off the screen (Mac seat, 2026-11-12). Plain text only — a
+            // `<...>` here would be mis-parsed as a mailto: link (GTK4Rs/AP-50).
             dialog.add_credit_section(
                 "Bundled open-source components",
                 &[
-                    "Syntax-highlighting grammars — via two-face (bat / syntect assets)",
-                    "Licensed MIT, Apache-2.0, BSD-2-Clause, and BSD-3-Clause",
-                    "Full notices: THIRD-PARTY-LICENSES.md (in the distribution)",
+                    "Syntax-highlighting grammars — via two-face (bat / syntect assets),",
+                    "licensed MIT, Apache-2.0, BSD-2-Clause and BSD-3-Clause",
+                    "Every Rust crate statically linked into the program,",
+                    "each with its own notice",
+                    "The GTK runtime bundled on macOS and Windows",
+                    "(GLib, cairo, Pango, librsvg and more), one notice folder per library:",
+                    "macOS: Scribobulate.app/Contents/Resources/licenses",
+                    "Windows: share/licenses in the installation folder",
+                    "Full notices: THIRD-PARTY-LICENSES.md —",
+                    "Linux: /usr/share/doc/scribobulate",
+                    "macOS: Scribobulate.app/Contents/Resources (Show Package Contents)",
+                    "Windows: the installation folder",
                 ],
             );
 

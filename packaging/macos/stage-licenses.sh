@@ -86,6 +86,26 @@ is_history() {
 
 printf 'formula\tspdx_declared\tdetermination\tstaged_files\n' > "$MANIFEST"
 
+# A LICENCE ELECTION is the one thing this script adds beyond upstream's own files, and
+# it is a DECISION RECORDED AS DATA, not a derivation (the header's rule stands): where
+# the declared expression leaves the distributor a choice, or leaves only a copyleft
+# licence whose "or later" clause is what makes the bundle coherent, the choice and its
+# reasons are written beside the texts it elects from, as ELECTION.txt, listed in the
+# manifest's staged files like any other. GPL-family terms also require an offer of
+# Corresponding Source for the library as built, so the election carries the URLs.
+# $1 = formula, $2 = the version the Cellar holds. Returns 1 for a formula with no
+# election, which is every formula but the ones named here.
+election_for() {
+    case "$1" in
+        lzo) printf '%s\n' \
+            "Elected licence: GPL-3.0-or-later" \
+            "Declared by upstream: GPL-2.0-or-later (no LGPL or permissive alternative)" \
+            "Why: Scribobulate is Apache-2.0, which is compatible with GPL-3.0 and not with GPL-2.0. liblzo2 is loaded at every launch through Homebrew's libgtk-4 -> libcairo-script-interpreter -> liblzo2; nothing in Scribobulate calls it." \
+            "Corresponding Source for lzo $2: https://www.oberhumer.com/opensource/lzo/download/lzo-$2.tar.gz (project page https://www.oberhumer.com/opensource/lzo/), built by Homebrew's formula https://github.com/Homebrew/homebrew-core/blob/HEAD/Formula/l/lzo.rb" ;;
+        *) return 1 ;;
+    esac
+}
+
 declare -a SEEN=()
 count=0
 # Listed through rpath.sh, which fails closed, never `< <(find …)`, which loses the exit
@@ -116,6 +136,13 @@ while IFS= read -r obj; do
         staged="${staged:+$staged,}$base"
     done
     [ -n "$staged" ] || { echo "error: $formula staged no files from $root" >&2; exit 1; }
+
+    # The Cellar directory the opt symlink resolves to is named by the version.
+    version="$(basename "$(cd "$root" && pwd -P)")"
+    if election="$(election_for "$formula" "$version")"; then
+        printf '%s\n' "$election" > "$DEST/$formula/ELECTION.txt"
+        staged="$staged,ELECTION.txt"
+    fi
 
     # The declared expression, verbatim from Homebrew's own SBOM. Recorded as evidence of
     # what upstream says, never as our determination of what covers the binary.
