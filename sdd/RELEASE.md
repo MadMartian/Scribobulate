@@ -196,7 +196,10 @@ decision the operator records, not one an agent makes.
   connects to nothing that needs one).
   Every open alert ends in one of two states before the gate passes:
   - **satisfied** — fixed on the target commit, or the alert dismissed on GitHub with a
-    reason that is true (false positive, not reachable, not shipped);
+    reason that is true (false positive, not reachable, not shipped). A fix is not only
+    an upgrade: the cheapest route is often to **change the dependency's shape** — narrow
+    a feature set so the vulnerable crate leaves the graph (the 1.0.0 dry run cleared
+    three advisories at once by dropping `syntect` loaders the app never used);
   - **waived** — carried into the release with a written justification: why it does
     not affect a user of this release, and what retires it. A waiver is an ISSUES.md
     entry (so it is tracked) and a line in the release notes' Known issues (so the user
@@ -228,7 +231,11 @@ decision the operator records, not one an agent makes.
   mechanically — a low-severity issue in a headline feature may block, a high one in a
   path no user reaches may not. An agent proposes the split; the operator ratifies it.
 - Closed (`CLSD-`) entries are limitations, already settled; they appear in Known issues
-  when a user can meet them, and need no new decision.
+  when a user can meet them, and need no new decision. A `Test`-scope entry (the
+  register's own scope column) is deferred without a user-facing line: no user meets it.
+- An entry filed from a CI flake records the runner's toolchain (the macOS runner's
+  Homebrew GTK is not pinned); a local 0-of-N measured on a different version is weaker
+  evidence than it reads, and the same version makes it like-for-like.
 - **Proof:** the list of deferred letters with their justifications, in the release
   record.
 
@@ -242,8 +249,19 @@ decision the operator records, not one an agent makes.
 
 ### 5. Packaging dry run
 
-- Dispatch the workflow on the target commit with `package: true`. Download the three
-  artefacts: Linux `.deb` and `.rpm`, macOS `.dmg`, Windows `-setup.exe`.
+- Dispatch the workflow on the target commit with `package: true` — **after** gate 4's
+  run on that ref has finished, never beside it: the workflow's concurrency group is per
+  ref with cancel-in-progress, so a dispatch while a push run (or a re-run of its failed
+  job) is in flight cancels one of the two. Download the three artefacts: Linux `.deb`
+  and `.rpm`, macOS `.dmg`, Windows `-setup.exe`.
+- A red dry run on a tree the push pipeline already passed is usually a flake: re-run
+  the failed job, and file the flake in ISSUES.md before moving on — gate 3 then has a
+  new letter to decide. A red that reproduces is a fix the release needs.
+- Stage the downloaded artefacts, with a `SHA256SUMS.txt` beside them, where every seat
+  can reach them without GitHub credentials (`../Scribobulate-artefacts/<version>/`
+  beside the tree, which the Windows VM sees through its shared folder) — the sums file
+  lists bare filenames, since the staging directory is flat — and have each seat verify
+  the sum before using one.
 - These artefacts — not a `cargo build` on a developer machine — are what gates 6–9 are
   run against. A dev build proves the code; the release proves the installer.
 - **Proof:** the run's URL; each artefact's name carries the release version and its
