@@ -57,7 +57,7 @@ described from a different vantage point.
 | F | Linux | Upstream | A crafted SVG can corrupt memory: Linux decodes SVG through the distribution's librsvg, which predates the fix for a published use-after-free (CVE-2026-96889, fixed in 2.63.2), and refuses any SVG that may use XInclude before librsvg sees it until the librsvg it loads carries the fix. Windows and the macOS bundle carry 2.63.2, and their builds fail below it | High |
 | G | Windows, Mac | Test | Two split-mode live-reload tests in `window::outline_reload_tests` intermittently fail on Windows CI because the editor is not where the test parked it (top line 0, or 70 where >100 is required) | Low |
 | I | Mac | Upstream | Closing a full-screen window (Exit or ⌘W) logs `Gdk-CRITICAL gdk_surface_request_layout: assertion 'frame_clock' failed` once: AppKit's exit-full-screen transition resizes the already-destroyed surface, and GDK's resize handler does not check for that; no visible effect | Low |
-| K | Mac | Test | A view-mode round-trip test in `window::scrollsync` once crashed the GTK suite on macOS CI with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV; the same tree passed macOS twice before and on re-run | Low |
+| K | Mac | Test | The GTK suite on macOS CI intermittently dies with `GLib-GObject-CRITICAL object_ref: assertion '!object_already_finalized' failed` then SIGSEGV — twice in six runs on near-identical trees, in two unrelated `window::` tests; green on re-run each time; 0 of 43 locally on the same GTK 4.24.1 | Medium |
 | L | Any | Production | A highlight with no comment, `{==text==}` on its own, is valid CriticMarkup but the app treats it as not an annotation: it is left out of the annotations sidebar by design and the reader does not get a highlight with its markup hidden | Low |
 
 ## Closed issues
@@ -423,10 +423,11 @@ is not ruled out.
 (leaving full screen before closing) would add AppKit's exit animation to every close of a
 full-screen window, a visible cost for a log line; it has not been tried.
 
-## K. A view-mode round-trip test once crashed the GTK suite on macOS CI with a finalized-object ref
+## K. The GTK suite on macOS CI intermittently dies on a finalized-object ref
 
-**Severity**: Low (test-only so far; seen once; the same commit passed macOS in the runs
-before and after).
+**Severity**: Medium (test-only, but two of six macOS CI runs on near-identical trees; each
+costs a re-run of the gate, and a release gate that goes red one time in three is a
+gate nobody trusts).
 
 **Symptom**: on macOS CI, packaging dry run 42970152472 on the merge of
 `feature/release-procedure` (2026-11-11), in
@@ -436,6 +437,13 @@ then `FAILED (killed by signal 11)`. The test immediately before it in the same 
 `repeated_edit_round_trips_do_not_walk_the_reading_position_either`, logged
 `gdk_frame_timings_presented() called on skipped frame` and passed. 798 other tests passed.
 
+**Second sighting** (2026-11-12, push run 43137305088 on the release branch after the
+notices fixes): `gtk_suite::window::livepreview::gtk_integration_tests::a_control_whose_identity_the_document_repeats_toggles_neither_block`,
+same critical, same signal, 798 others passed; green on re-run. Two unrelated tests, so
+the holder is not in either test — it is in what both exercise: a window built, driven
+and torn down inside one process that has already done the same ~400 times. The runner's
+GTK is Homebrew 4.24.1, the same version the Mac seat's 0-of-43 was measured on.
+
 **What is known**: the same tree passed macOS in push run 42966560560 minutes earlier and in
 42963000129 (the branch head it merged, identical tree) before that, so it is intermittent. A finalized-object
 `ref` followed by a segfault is a dangling GObject pointer, not a timing miss: something in the
@@ -443,10 +451,12 @@ window-mode round trip (`round_trip(&window, "split")` — the split pane mounte
 four times) still holds a widget the previous trip finalised. Not reproduced anywhere else; no
 report from Linux or Windows CI.
 
-**Next step**: have the Mac seat loop the `scrollsync` module under CPU load with
-`G_DEBUG=fatal-criticals` so the first critical gives a backtrace naming the holder; if it
-points at a closure or idle captured across a pane rebuild, that is an application defect
-(CAM § handlers on continuously firing signals) and this entry becomes Production scope.
+**Next step**: the Mac seat looped the `scrollsync` module ×40 and the `window::` group ×3
+under load with `G_DEBUG=fatal-criticals` and `MallocScribble=1`: 0 of 43. Next is the
+whole `gtk_suite` binary in CI's order, under load, with `MallocScribble=1`, until the
+critical fires and names the holder; if it points at a closure or idle captured across a
+window teardown, that is an application defect (CAM § handlers on continuously firing
+signals) and this entry becomes Production scope.
 
 ## L. A highlight with no comment is valid CriticMarkup and is not treated as an annotation
 
