@@ -168,8 +168,11 @@ pub(super) fn add_about_action(app: &Application) {
             // default web browser.  Do NOT use "Name <url>" in .authors() for a
             // website URL — GTK treats the <...> portion as a mailto: address
             // regardless of whether it starts with https:// (GTK4Rs/AP-50).
-            // license_type stays on About — it is the only way to surface the
-            // auto-rendered full Apache 2 text via the License button.
+            // license_type puts "See the Apache License, Version 2.0 for details" on the
+            // About page with the licence name as a link. That link is the whole
+            // affordance: GTK4 shows a License page only for a CUSTOM licence text
+            // (gtkaboutdialog.c, update_license_button_visibility), never for a known
+            // type — there is no License button to look for (TDD 9.18).
             let dialog = AboutDialog::builder()
                 .program_name("Scribobulate")
                 .version(env!("CARGO_PKG_VERSION"))
@@ -194,6 +197,7 @@ pub(super) fn add_about_action(app: &Application) {
                 // GTK's mailto: parser whatever its scheme — GTK4Rs/AP-50.)
                 .website("https://github.com/MadMartian/Scribobulate")
                 .website_label("Scribobulate on GitHub")
+                .copyright("© 2026 extollIT Enterprises")
                 .authors(vec!["© 2026 extollIT Enterprises".to_string()])
                 .logo_icon_name(crate::icons::Icon::App.name())
                 .system_information(system_info)
