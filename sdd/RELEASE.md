@@ -259,8 +259,9 @@ decision the operator records, not one an agent makes.
   new letter to decide. A red that reproduces is a fix the release needs.
 - Stage the downloaded artefacts, with a `SHA256SUMS.txt` beside them, where every seat
   can reach them without GitHub credentials (`../Scribobulate-artefacts/<version>/`
-  beside the tree, which the Windows VM sees through its shared folder), and have each
-  seat verify the sum before using one.
+  beside the tree, which the Windows VM sees through its shared folder) — the sums file
+  lists bare filenames, since the staging directory is flat — and have each seat verify
+  the sum before using one.
 - These artefacts — not a `cargo build` on a developer machine — are what gates 6–9 are
   run against. A dev build proves the code; the release proves the installer.
 - **Proof:** the run's URL; each artefact's name carries the release version and its
