@@ -33,10 +33,13 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
     let cleaned = extraction.cleaned.as_str();
 
     // One block-scope scan of the same cleaned text the walk below parses, so the
-    // export segments every tight construct exactly as the preview does.
+    // export segments every tight construct exactly as the preview does — and the
+    // claim mapper below reads the same table, so a fence split across events places
+    // a claim the way the walk rendered it.
+    let scripts = crate::renderer::BlockScripts::scan(cleaned);
     let mut builder = Builder::new(
         opts,
-        crate::renderer::BlockScripts::scan(cleaned),
+        scripts.clone(),
         crate::renderer::disclosure::scan_document(cleaned, frontmatter::Show::Omitted),
     );
     // Front matter omitted: it is the document's metadata, not its content, and an
@@ -64,7 +67,8 @@ pub(crate) fn build(source: &str, opts: &RenderOptions) -> ExportDoc {
         // The SAME mapper the preview places its claim highlight with, so the extent
         // obligation (Document Rendering CAM row 3) is satisfied by one implementation
         // rather than two that agree today.
-        for range in crate::annotate::map_cleaned_highlight_to_local(cleaned, hs, he, &content_evs)
+        for range in
+            crate::annotate::map_cleaned_highlight_to_local(cleaned, hs, he, &content_evs, &scripts)
         {
             mark_claim(&mut doc.blocks, idx, range);
         }
@@ -790,6 +794,42 @@ mod export_doc_tests {
         let text = text_of(&doc);
         assert!(!text.contains("{==") && !text.contains("<<"), "{text:?}");
         assert!(text.contains("The sky is green today."), "{text:?}");
+    }
+
+    /// MANUAL-TEST 10.10b: a claim over a `~~` fence that WRAPS other inline markup.
+    /// pulldown splits the fence across three `Text` events (`"…~~a "`, `"bold"`,
+    /// `" b~~ …"`), so neither half sees its partner when scanned alone; the claim
+    /// must still cover exactly the rendered `a bold b`, never the prose either side.
+    #[test]
+    fn a_claim_on_a_fence_wrapping_markup_is_marked_over_its_content_only() {
+        let doc = doc_of(
+            "Fence wrapping markup: {==~~a **bold** b~~==}{>>xnote<<} must strike ALL of \"a bold b\".\n",
+        );
+        assert_eq!(doc.annotations.len(), 1);
+        let mut claimed = String::new();
+        for_each_claim(&doc.blocks, 0, &mut |inner| {
+            claimed.push_str(&crate::export::plain_text(inner))
+        });
+        assert_eq!(claimed, "a bold b");
+        // The comment rides the tail fragment, which must be the claim's own last
+        // fragment — the HTML's aside and the PDF's `[note]` sit right after `b`.
+        let theme = crate::theme::active();
+        let ink = gtk::gdk::RGBA::BLACK;
+        let palette = crate::palette::Palette::from_base(
+            gtk::gdk::RGBA::WHITE,
+            ink,
+            ink,
+            gtk::gdk::RGBA::new(0.2, 0.5, 0.9, 1.0),
+            &theme,
+        );
+        let html = crate::export::html::render(&doc, &palette, &theme);
+        let tail = html.find("id=\"claim-1\"").expect("tail fragment");
+        let after_tail = &html[tail..];
+        let aside = after_tail.find("<aside").expect("aside");
+        assert!(
+            !after_tail[..aside].contains("must"),
+            "the comment must follow `b`, not the prose after the fence: {after_tail:?}"
+        );
     }
 
     #[test]
