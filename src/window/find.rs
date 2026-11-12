@@ -19,8 +19,14 @@ mod bartests;
 /// subject is offset arithmetic across two coordinate systems, which is exactly the
 /// kind of decision that is cheap to unit-test and expensive to debug on screen.
 mod bodytext;
+/// Find Next keeps its place across a fold splice (TDD 11.12).
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod foldtests;
 /// The two fields' committed-entry histories. Pure, and persisted with the tab.
 mod history;
+/// Where the find cursor's preview hit sits, held against the render's source map so a
+/// fold splice or a re-render cannot move it. Pure.
+mod hitanchor;
 /// The one matcher every preview text is searched with. GTK-free, and measured against
 /// the editor's engine by [`parity`].
 mod matcher;
@@ -46,6 +52,7 @@ mod testkit;
 
 use crate::widgets::table::cellattrs;
 pub(crate) use history::{row_label, FindHistory};
+use hitanchor::HitAnchor;
 use matcher::Matcher;
 pub(crate) use matcher::{configure_engine_options, configure_engine_query};
 pub(crate) use options::FindOptions;
@@ -169,7 +176,11 @@ pub(crate) enum FindCursor {
     /// 1-based index into the editor `GtkSourceSearchContext`'s occurrence list.
     Editor(i32),
     /// A hit in the preview's unified body+cell list: its 1-based ordinal, **and the
-    /// buffer position it landed on**.
+    /// position it landed on**, held against the render's source map ([`HitAnchor`]).
+    ///
+    /// Not a bare buffer offset: a fold splice rewrites the buffer above the hit and
+    /// moves every offset below it while the source stands still, so an offset held
+    /// across it names a different place in the rebuilt list (TDD 11.12).
     ///
     /// The position is the identity and the ordinal is only what the reader is shown.
     /// An ordinal alone is a positional index into a collection this code rebuilds
@@ -186,7 +197,7 @@ pub(crate) enum FindCursor {
     /// the position names the group and the ordinal picks within it. A rebuild that adds
     /// a match earlier in the same table can therefore resume one hit early. Closing that
     /// needs a stable per-cell key (row, column, byte offset) carried by the hit.
-    Preview { ordinal: i32, at: i32 },
+    Preview { ordinal: i32, at: HitAnchor },
 }
 
 impl FindCursor {
@@ -1150,7 +1161,9 @@ fn preview_find_step(
                 // to the first preview hit, rather than being taken as a position in a list it
                 // was never an index into.
                 let cur = match st.find_cursor.get() {
-                    FindCursor::Preview { ordinal, at } => resume_ordinal(hits, ordinal, at),
+                    FindCursor::Preview { ordinal, at } => {
+                        resume_ordinal(hits, ordinal, resolve_hit_anchor(view, at))
+                    }
                     FindCursor::None | FindCursor::Editor(_) => 0,
                 }
                 .clamp(0, total);
@@ -1276,10 +1289,81 @@ fn land_on_hit(
     scroll_to_preview_hit(st, view, &hits[idx]);
     st.find_cursor.set(FindCursor::Preview {
         ordinal: next,
-        at: preview_hit_position(&hits[idx]),
+        at: hit_anchor(view, preview_hit_position(&hits[idx])),
     });
     set_match_label(&st.chrome().match_count_label, next, hits.len() as i32);
     None
+}
+
+/// Anchor the preview buffer offset `buf_char` against `view`'s current source map.
+/// With no render data (nothing rendered yet) the anchor is the offset itself.
+fn hit_anchor(view: &CodePreviewView, buf_char: i32) -> HitAnchor {
+    match crate::preview::scrib_render_data(view) {
+        Some(rd) => HitAnchor::at(&rd.borrow().source_map, buf_char),
+        None => HitAnchor::at(&[], buf_char),
+    }
+}
+
+/// The preview buffer offset `at` names in `view`'s current render.
+pub(super) fn resolve_hit_anchor(view: &CodePreviewView, at: HitAnchor) -> i32 {
+    match crate::preview::scrib_render_data(view) {
+        Some(rd) => at.resolve(&rd.borrow().source_map),
+        None => at.resolve(&[]),
+    }
+}
+
+/// Put the cursor a boundary refresh just dropped back on the list that refresh built
+/// (TDD 11.12).
+///
+/// [`resync_preview_find`] starts the search over — right for a new query, wrong for a
+/// boundary that only rebuilt the hit list under an unchanged one: a fold splice, a
+/// theme or zoom re-render, a reload. The held hit is re-found by its position
+/// ([`resume_ordinal`]). If it is still there it is marked current again and the readout
+/// names it; nothing scrolls, because the reader did not move. If it is gone the readout
+/// stays a bare count and the cursor keeps where it was, so Find Next goes to the first
+/// match after it rather than to the top.
+pub(super) fn carry_preview_cursor(
+    window: &ApplicationWindow,
+    st: &Rc<TabState>,
+    view: &CodePreviewView,
+    query: &str,
+    held: FindCursor,
+) {
+    let FindCursor::Preview { ordinal, at } = held else {
+        return;
+    };
+    let resolved = resolve_hit_anchor(view, at);
+    let scope = preview_scope_for(window, st, view);
+    let carried = st.preview_find.with_hits(
+        view,
+        query,
+        st.find_options.get(),
+        scope,
+        |targets, hits| {
+            let cur = resume_ordinal(hits, ordinal, resolved);
+            let same = cur
+                .checked_sub(1)
+                .and_then(|i| hits.get(i as usize))
+                .filter(|h| !matches!(h, PreviewHit::Hidden { .. }))
+                .filter(|h| preview_hit_position(h) == resolved);
+            match same {
+                Some(hit) => {
+                    apply_preview_highlights(view, targets, hits, cur as usize);
+                    set_match_label(&st.chrome().match_count_label, cur, hits.len() as i32);
+                    FindCursor::Preview {
+                        ordinal: cur,
+                        at: hit_anchor(view, preview_hit_position(hit)),
+                    }
+                }
+                None => FindCursor::Preview { ordinal: cur, at },
+            }
+        },
+    );
+    // A pattern that no longer compiles has no list to resume in; the refresh already
+    // said so in the readout.
+    if let Ok(cursor) = carried {
+        st.find_cursor.set(cursor);
+    }
 }
 
 /// Expand the collapsed block [`land_on_hit`] redirected to, and resume the search
@@ -1970,7 +2054,7 @@ mod tests {
         assert_eq!(FindCursor::Editor(7).editor_index(), 7);
         let preview = FindCursor::Preview {
             ordinal: 3,
-            at: 120,
+            at: super::HitAnchor::at(&[], 120),
         };
         assert_eq!(preview.editor_index(), 0);
         assert_eq!(FindCursor::None.editor_index(), 0);
