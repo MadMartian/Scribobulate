@@ -229,7 +229,10 @@ pub(crate) fn apply_annotation_edit(buf: &gtk::TextBuffer, edit: AnnotationEdit)
     if new == old {
         return;
     }
-    splice_minimal(buf, &old, &new);
+    // Every arm above differs from `old` only in CriticMarkup or by a same-length
+    // substitution, so no fold key moves: say so, or the split-mode `changed` handler
+    // clears the reader's collapsed blocks as if they had typed (TDD 2.26m).
+    crate::fold::with_keys_unmoved(|| splice_minimal(buf, &old, &new));
 }
 
 /// Re-render the preview so a just-applied annotation (create / edit / remove)

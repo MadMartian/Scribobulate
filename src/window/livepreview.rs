@@ -41,7 +41,11 @@ pub(super) fn wire_live_preview(content_box: &gtk::Box, buffer: &sourceview::Buf
         //
         // On the FIRING tab, by its own mode: the window's active tab is a different
         // document whenever a background tab's buffer is filled.
-        if tab.view_mode.get() == crate::winstate::ViewMode::Split {
+        //
+        // Unless the edit itself said it moves no key — an annotation's splice, which
+        // changes the raw text and not the cleaned text the keys index (`fold`'s module
+        // doc; TDD 2.26m's CriticMarkup clause).
+        if tab.view_mode.get() == crate::winstate::ViewMode::Split && !crate::fold::keys_unmoved() {
             tab.note_source_offsets_moved();
         }
 
@@ -434,6 +438,93 @@ mod gtk_integration_tests {
             collapsed,
             "a flush that changed nothing the preview is rendered from kept the \
              reader's collapsed blocks"
+        );
+    }
+
+    /// **TDD 2.26m's third clause — an annotation in split mode keeps the reader's
+    /// collapsed blocks.**
+    ///
+    /// The real annotation path, not the refresh the table above drives: the card's Save
+    /// splices CriticMarkup into the EDITOR buffer (`annotate::apply_annotation_edit`),
+    /// and in split mode that buffer's `changed` is what clears the fold map. The rubric
+    /// says a flush whose text differs only in CriticMarkup moves no fold key, because
+    /// the delimiters are extracted before the walk that mints one — so the map must
+    /// survive this edit as it survives a save. Found by the 1.0.0 Windows manual pass
+    /// (MANUAL-TEST 2.26m, annotation leg); this is its cross-platform reproduction.
+    #[gtktest::test]
+    fn an_annotation_in_split_mode_keeps_every_collapsed_block() {
+        use crate::fold::FoldState;
+
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.foldannotate"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+
+        const DOC: &str =
+            "Lead paragraph.\n\n<details open>\n<summary>One</summary>\n\nBody one.\n\n</details>\n";
+        let window = crate::window::new_window(&app, "IT-foldannotate", DOC, None);
+        change_action_state(&window, "view-mode", &"split".to_variant());
+        let st = state(&window).expect("state registered after new_window");
+
+        let mut at = st.editor_buf.start_iter();
+        st.editor_buf.insert(&mut at, "x");
+        let text = st.editor_text();
+        rerender_split_preview_driven_by_editor(&window, &text);
+        let toggle = control(&st).expect("the render emitted a control");
+        toggle.set_active(!toggle.is_active());
+        crate::testpump::until(crate::testpump::Clock::Idle, "the toggle's idle", || {
+            *st.folds.borrow() != FoldState::default()
+        });
+        let collapsed = st.folds.borrow().clone();
+        assert_ne!(
+            collapsed,
+            FoldState::default(),
+            "precondition: the reader has a collapsed block to lose"
+        );
+
+        // The comment card's Save: a highlight over "Lead" in the lead paragraph, above
+        // the disclosure, so every byte of the block moves in the raw text and none in
+        // the CriticMarkup-stripped text the keys are measured in.
+        let source = st.editor_text();
+        let range = source
+            .find("Lead")
+            .map(|s| s..s + "Lead".len())
+            .expect("the lead word");
+        super::super::annotate::apply_annotation_edit(
+            st.editor_buf.upcast_ref(),
+            crate::codeview::AnnotationEdit::Create(crate::codeview::CreateAnnotation::Highlight {
+                target: crate::docref::AnchoredSpan::capture_in_context(
+                    &source,
+                    range,
+                    crate::docref::Ambiguity::Nearest,
+                )
+                .expect("a valid range over the source"),
+                comment: "note".into(),
+            }),
+        );
+        assert!(
+            st.editor_text().contains("{==Lead==}{>>note<<}"),
+            "precondition: the annotation was written into the editor buffer"
+        );
+
+        assert_eq!(
+            *st.folds.borrow(),
+            collapsed,
+            "an edit that differs only in CriticMarkup kept the reader's collapsed blocks"
+        );
+
+        // And the kept key still names its block: the refresh the card's Save drives
+        // (`refresh_preview_after_annotation`) renders with the map as it stands, and
+        // the block the reader collapsed comes back collapsed.
+        let was_collapsed = toggle.is_active();
+        crate::window::rerender_preview_from_live_edit(&window);
+        let after = control(&st).expect("the refresh left a control on screen");
+        assert_eq!(
+            after.is_active(),
+            was_collapsed,
+            "the block the reader collapsed is still collapsed after the annotation's refresh"
         );
     }
 
