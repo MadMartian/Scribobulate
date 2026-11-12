@@ -339,6 +339,29 @@ not fit one commit is more than one batch.
   rather than stacking follow-up commits, so each commit on `master` is one that passed.
 - When merging a branch to master, just do a fast-forward merge if there's only one commit on the branch
 
+### Version numbers
+
+`[package] version` in `Cargo.toml` is `MAJOR.MINOR.PATCH`, and the number says what
+kind of release the tree is heading for:
+
+- **PATCH** is where bug fixes land. After a release, gate 13 of [RELEASE.md](RELEASE.md)
+  sets the next patch number, and every fix that makes an existing TDD rubric hold lands
+  under it unchanged — the tree stays one patch above the last release until something
+  else moves it.
+- **MINOR** moves the moment a change **alters the user experience** — a new command,
+  surface, file format or setting, or behaviour a user would notice; the tell is a TDD
+  rubric added or rewritten rather than made to hold. The change that introduces the
+  feature bumps MINOR and resets PATCH to 0 in the same commit, so master never carries a
+  feature under a patch number. A minor release takes RELEASE.md's full procedure; a
+  patch release takes its reduced one (RELEASE.md § Release kinds).
+- **MAJOR** moves on a break the user has to act on or re-learn: a document, settings
+  or session file the previous release wrote that this one no longer reads; a command
+  or keystroke removed; or a change that radically alters the application's shape — tabs
+  or toolbars removed, windows re-oriented, themes discarded, a surface taken away or a
+  great deal added on top — anything that could alienate a user of the previous release
+  through loss of familiarity. The operator may also rule a release MAJOR outright; that
+  ruling is recorded in the release record and needs no other justification.
+
 ## SDD register writes
 
 - A lesson learned the hard way on this project is recorded in ANTI-PATTERNS.md when it
