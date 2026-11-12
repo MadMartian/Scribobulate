@@ -84,6 +84,11 @@ UninstallDisplayIcon={app}\bin\{#AppExeName}
 ; Without this, Programs and Features lists "Scribobulate version 0.1.0" — the
 ; version is already its own column there, so the name should just be the name.
 UninstallDisplayName={#AppName}
+; Stamp installed files in UTC. Inno's default writes the build machine's wall clock
+; as the target's local time, so a CI build at 09:57Z lands on a UTC-7 machine with an
+; mtime seven hours in the future, and mtime-based tools (backup, robocopy /XO) treat
+; a fresh install as newer than anything the user does to it until then.
+TimeStampsInUTC=yes
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
