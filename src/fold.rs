@@ -59,6 +59,17 @@
 //! mode it is `tab.source`, so `TabState::set_source` clears. `note_source_offsets_moved`
 //! is the single method both call.
 //!
+//! **One edit moves the text without moving a key.** A key is an offset into the
+//! *cleaned* source — CriticMarkup delimiters and comments are extracted before the walk
+//! that mints it (CAM Document-Reference row 11) — so an edit that differs only in
+//! CriticMarkup (the comment card's Save, an annotation removed or re-worded, a task
+//! checkbox's one-byte flip) leaves every key naming the block it was minted for. In
+//! split mode that edit still lands in the editor buffer and still fires its `changed`,
+//! which cannot tell it from typing; the mutation says so itself instead, by running
+//! its splice under [`with_keys_unmoved`], and the handler asks [`keys_unmoved`] before
+//! clearing. Found on the 1.0.0 manual pass (TDD 2.26m, annotation leg): the reader
+//! annotated a paragraph and every collapsed block popped open.
+//!
 //! Getting that predicate wrong in either direction is a defect with a report attached.
 //! Too narrow: the split-mode live edit called nothing at all, so a key that no longer
 //! named the block it was minted for either reverted a collapsed block mid-typing or,
@@ -73,7 +84,32 @@
 //! moved still toggles it. That is a narrower question than persisting the whole map
 //! across an arbitrary edit, which is the one this module declines above.
 
+use std::cell::Cell;
 use std::collections::HashSet;
+
+thread_local! {
+    /// Set for the dynamic extent of an edit that changes the source without moving a
+    /// fold key (module doc, "One edit moves the text without moving a key"). A
+    /// thread-local rather than a field: the edit's only handle is the buffer, and the
+    /// `changed` it provokes runs synchronously inside the splice, on this thread.
+    static KEYS_UNMOVED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Run an edit whose text differs from the previous source only in CriticMarkup (or in
+/// a same-length substitution), so that the split-mode `changed` handler keeps the fold
+/// map instead of clearing it. The flag is restored on the way out, nested or not.
+pub(crate) fn with_keys_unmoved<R>(edit: impl FnOnce() -> R) -> R {
+    let outer = KEYS_UNMOVED.with(|f| f.replace(true));
+    let out = edit();
+    KEYS_UNMOVED.with(|f| f.set(outer));
+    out
+}
+
+/// Whether the edit currently being applied declared, via [`with_keys_unmoved`], that
+/// it moves no fold key. False outside any such edit — a keystroke, a reload, a paste.
+pub(crate) fn keys_unmoved() -> bool {
+    KEYS_UNMOVED.with(|f| f.get())
+}
 
 /// A disclosure block's identity: the source byte offset at which its opening
 /// raw-HTML block begins.
