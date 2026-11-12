@@ -217,8 +217,12 @@ pub(crate) fn scan(md: &str) -> Option<Frontmatter> {
 /// Shaped to match what pulldown-cmark emits for the same Markdown written by hand —
 /// verified against the parser rather than assumed: a raw-HTML block is a
 /// `Start(HtmlBlock)`/`Html`/`End(HtmlBlock)` trio, and a fenced code block is a
-/// `Start`/one `Text` carrying the whole body/`End`. The renderer therefore needs no
-/// front-matter branch at all.
+/// `Start`, one `Text` per line **and one `Text("\n")` per line ending** (MEASURED
+/// pulldown-cmark 0.13.4; the ending's range is two bytes under CRLF and the `\r` is in
+/// no event's text), then `End`. The renderer therefore needs no front-matter branch at
+/// all — and the body is split here exactly as pulldown splits it, because handing it
+/// over as one `Text` put a Windows document's carriage returns on the page as extra
+/// line breaks (TDD 2.27 under CRLF, the 1.0.0 manual pass).
 fn disclosure_events<'a>(md: &'a str, fm: &Frontmatter) -> Vec<(Event<'a>, Range<usize>)> {
     let Frontmatter {
         flavour,
@@ -226,7 +230,7 @@ fn disclosure_events<'a>(md: &'a str, fm: &Frontmatter) -> Vec<(Event<'a>, Range
         body,
         close,
     } = fm;
-    vec![
+    let mut events = vec![
         (Event::Start(Tag::HtmlBlock), open.clone()),
         (Event::Html(CowStr::Borrowed(OPEN_HTML)), open.clone()),
         (Event::End(TagEnd::HtmlBlock), open.clone()),
@@ -236,15 +240,22 @@ fn disclosure_events<'a>(md: &'a str, fm: &Frontmatter) -> Vec<(Event<'a>, Range
             )))),
             body.clone(),
         ),
-        (
-            Event::Text(CowStr::Borrowed(&md[body.clone()])),
-            body.clone(),
-        ),
+    ];
+    for (content, line) in lines_with_ranges(&md[body.clone()]) {
+        let start = body.start + line.start;
+        let ending = start + content.len()..body.start + line.end;
+        events.push((Event::Text(CowStr::Borrowed(content)), start..ending.start));
+        if !ending.is_empty() {
+            events.push((Event::Text(CowStr::Borrowed("\n")), ending));
+        }
+    }
+    events.extend([
         (Event::End(TagEnd::CodeBlock), body.clone()),
         (Event::Start(Tag::HtmlBlock), close.clone()),
         (Event::Html(CowStr::Borrowed(CLOSE_HTML)), close.clone()),
         (Event::End(TagEnd::HtmlBlock), close.clone()),
-    ]
+    ]);
+    events
 }
 
 /// **The walk seam.** Parse `md` — which the caller has already normalised and cleaned
@@ -375,9 +386,10 @@ mod tests {
     #[test]
     fn as_disclosure_yields_a_details_wrapping_a_fenced_code_block() {
         let evs: Vec<_> = events(DEV_MD, Show::AsDisclosure).collect();
+        let n = disclosure_events(DEV_MD, &scan(DEV_MD).expect("front matter")).len();
         let kinds: Vec<String> = evs
             .iter()
-            .take(9)
+            .take(n)
             .map(|(ev, _)| format!("{ev:?}"))
             .collect();
         assert!(kinds[1].contains("<details><summary>Frontmatter</summary>"));
@@ -385,51 +397,88 @@ mod tests {
             evs[3].0,
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_)))
         ));
-        match &evs[4].0 {
-            Event::Text(t) => assert_eq!(&**t, "name: dev\nmodel: opus\n"),
-            other => panic!("expected the body as one Text event, got {other:?}"),
-        }
-        assert!(kinds[7].contains("</details>"));
+        // The body as pulldown would report it: a line, its ending, a line, its ending.
+        let body: Vec<&str> = evs[4..n - 4]
+            .iter()
+            .map(|(ev, _)| match ev {
+                Event::Text(t) => &**t,
+                other => panic!("expected a Text event in the body, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(body, vec!["name: dev", "\n", "model: opus", "\n"]);
+        assert!(kinds[n - 2].contains("</details>"));
         // And the document below it follows, unshifted.
-        let (heading, range) = &evs[9];
+        let (heading, range) = &evs[n];
         assert!(matches!(heading, Event::Start(Tag::Heading { .. })));
         assert_eq!(&DEV_MD[range.clone()], "# Role\n");
     }
 
-    /// The nine synthetic events cover the block's bytes once each, in order — the
-    /// property a copy across the rendered block reproduces the author's text by.
+    /// The synthetic events cover the block's bytes once each, in order — the property
+    /// a copy across the rendered block reproduces the author's text by: the three
+    /// constructs tile the block, and the body's line events tile the body.
     #[test]
     fn the_synthetic_events_tile_the_block_exactly() {
-        let fm = scan(DEV_MD).expect("front matter");
-        let evs = disclosure_events(DEV_MD, &fm);
-        assert_eq!(evs.len(), 9);
-        // A construct's events share ONE range (pulldown reports the whole construct on
-        // its Start, its Html/Text and its End alike), so the tiling is over the
-        // DISTINCT ranges in document order.
-        let mut distinct: Vec<Range<usize>> = Vec::new();
-        for (_, range) in &evs {
-            if distinct.last() != Some(range) {
-                distinct.push(range.clone());
+        for md in [
+            DEV_MD,
+            "---\r\nname: dev\r\nmodel: opus\r\n---\r\n\r\n# Role\r\n",
+        ] {
+            let fm = scan(md).expect("front matter");
+            let evs = disclosure_events(md, &fm);
+            // A construct's events share ONE range (pulldown reports the whole construct
+            // on its Start, its Html/Text and its End alike).
+            for (ev, range) in &evs[..4] {
+                assert_eq!(
+                    range,
+                    if matches!(ev, Event::Start(Tag::CodeBlock(_))) {
+                        &fm.body
+                    } else {
+                        &fm.open
+                    }
+                );
             }
+            let n = evs.len();
+            assert_eq!(
+                evs[n - 4].1,
+                fm.body,
+                "End(CodeBlock) carries the body's range"
+            );
+            for (_, range) in &evs[n - 3..] {
+                assert_eq!(range, &fm.close);
+            }
+            assert_eq!(fm.open.end, fm.body.start);
+            assert_eq!(fm.body.end, fm.close.start);
+            assert_eq!(
+                fm.close.end,
+                fm.end(),
+                "the events stop where the block does"
+            );
+            // The line events tile the body, carry no carriage return, and every ending
+            // is reported as "\n" over the bytes it occupies — two under CRLF.
+            let mut at = fm.body.start;
+            for (ev, range) in &evs[4..n - 4] {
+                assert_eq!(range.start, at, "a gap or an overlap in the body's tiling");
+                at = range.end;
+                let Event::Text(t) = ev else {
+                    panic!("a body event that is not Text: {ev:?}")
+                };
+                assert!(!t.contains('\r'), "a carriage return in {t:?}");
+                if &**t == "\n" {
+                    assert!(matches!(&md[range.clone()], "\n" | "\r\n"));
+                } else {
+                    assert_eq!(&**t, &md[range.clone()]);
+                }
+            }
+            assert_eq!(at, fm.body.end, "the line events stop where the body does");
         }
-        assert_eq!(
-            distinct,
-            vec![fm.open.clone(), fm.body.clone(), fm.close.clone()]
-        );
-        let mut at = 0usize;
-        for range in &distinct {
-            assert_eq!(range.start, at, "a gap or an overlap in the tiling");
-            at = range.end;
-        }
-        assert_eq!(at, fm.end(), "the events stop where the block does");
     }
 
     /// Both modes agree about everything below the block — which is what lets the
     /// preview and the export disagree about the block alone.
     #[test]
     fn the_two_modes_agree_about_the_document_below_the_block() {
+        let n = disclosure_events(DEV_MD, &scan(DEV_MD).expect("front matter")).len();
         let shown: Vec<_> = events(DEV_MD, Show::AsDisclosure)
-            .skip(9)
+            .skip(n)
             .map(|(ev, r)| (format!("{ev:?}"), r))
             .collect();
         let omitted: Vec<_> = events(DEV_MD, Show::Omitted)

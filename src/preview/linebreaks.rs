@@ -152,3 +152,53 @@ fn the_crlf_fixture_renders_its_soft_break_as_a_space() {
         "rendered {text:?}"
     );
 }
+
+/// Front matter under CRLF renders as it does under LF, in both folds: the synthetic
+/// disclosure hands the renderer the body as ONE `Text` event with its line endings
+/// inside it, where pulldown would have split each ending into its own event, so this is
+/// the one code block whose carriage returns reach the code renderer unsplit. Found on
+/// the 1.0.0 Windows manual pass (MANUAL-TEST 2.27, the TOML fixture through a CRLF
+/// checkout): every line break in the expanded block was doubled.
+#[gtktest::test]
+fn crlf_front_matter_renders_as_lf_front_matter_does() {
+    use gtk::prelude::TextBufferExt;
+    let render_with = |md: &str, folds: &crate::fold::FoldState| {
+        let products = super::build::build_render_products_with_theme(
+            None,
+            md,
+            None,
+            1.0,
+            false,
+            crate::theme::active(),
+            folds,
+        );
+        let buf = &products.buf;
+        buf.slice(&buf.start_iter(), &buf.end_iter(), true)
+            .to_string()
+    };
+    for (lf, crlf) in [
+        (
+            "+++\ntitle = \"Post\"\ndate = 2026-01-01\n+++\n\n# Heading\n\nBody.\n",
+            "+++\r\ntitle = \"Post\"\r\ndate = 2026-01-01\r\n+++\r\n\r\n# Heading\r\n\r\nBody.\r\n",
+        ),
+        (
+            "---\nname: dev\nrole: tester\n---\n\n# Heading\n\nBody.\n",
+            "---\r\nname: dev\r\nrole: tester\r\n---\r\n\r\n# Heading\r\n\r\nBody.\r\n",
+        ),
+    ] {
+        let mut expanded = crate::fold::FoldState::default();
+        expanded.toggle(crate::fold::FoldKey::from_source_offset(0));
+        for (name, folds) in [
+            ("collapsed", crate::fold::FoldState::default()),
+            ("expanded", expanded),
+        ] {
+            let a = render_with(lf, &folds);
+            let b = render_with(crlf, &folds);
+            assert!(!b.contains('\r'), "{name}: a CR reached the page: {b:?}");
+            assert_eq!(
+                a, b,
+                "{name}: CRLF front matter renders as LF front matter does"
+            );
+        }
+    }
+}
