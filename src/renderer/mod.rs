@@ -61,7 +61,7 @@ pub(crate) mod start;
 pub(crate) use image::image_placeholder_tooltip;
 pub(crate) use normalize::{md_options, NormalizedMd};
 pub(crate) use picture::{scan_image_tags, ImgTag};
-pub(crate) use scan::{scan_script_spans, Script, ScriptSpan};
+pub(crate) use scan::Script;
 pub(crate) use segments::{is_inline_tag, is_inline_tag_end, segments_of, BlockScripts, Seg};
 
 // ── table-cell annotation markup (table-cell annotation display path) ───────────────────────
@@ -1288,6 +1288,7 @@ impl Renderer {
         plain: &str,
         content_evs: &[(usize, usize, i32, i32)],
         cleaned: &str,
+        scripts: &BlockScripts,
         ann_highlights: &[(usize, usize)],
         theme: &crate::theme::Theme,
     ) -> String {
@@ -1296,9 +1297,13 @@ impl Renderer {
         }
         let mut local: Vec<(usize, usize)> = Vec::new();
         for &(hs, he) in ann_highlights {
-            for (a, b) in
-                crate::annotate::map_cleaned_highlight_to_local(cleaned, hs, he, content_evs)
-            {
+            for (a, b) in crate::annotate::map_cleaned_highlight_to_local(
+                cleaned,
+                hs,
+                he,
+                content_evs,
+                scripts,
+            ) {
                 if a < b {
                     local.push((a as usize, b as usize));
                 }

@@ -234,6 +234,7 @@ src/widgets/textfield.rs
 src/widgets/wrapbox.rs
 src/window/find/bodytext.rs
 src/window/find/history.rs
+src/window/find/hitanchor.rs
 src/window/find/matcher.rs
 src/window/find/options.rs
 src/window/find/plan.rs

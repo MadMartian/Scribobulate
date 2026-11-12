@@ -32,8 +32,9 @@
 //!   its marker kind (see [`indent`]). Not a toggle: the two are each other's
 //!   reverse. Lines that are not list items are left alone, and a span with no item
 //!   in it is not changed at all.
-//! * **Horizontal Rule**: insert a `---` thematic break on its own line.  This is
-//!   an insertion, not a wrap, so it has no toggle.
+//! * **Horizontal Rule**: insert a `---` thematic break on its own line, with a
+//!   blank line above it whenever the line above holds text (`text\n---` is a setext
+//!   H2 underline, not a rule).  This is an insertion, not a wrap, so it has no toggle.
 //!
 //! ## Block commands inside a container
 //!

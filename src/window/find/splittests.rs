@@ -142,6 +142,7 @@ fn find_in_split_searches_and_scrolls_the_focused_preview() {
                 st.find_cursor.get()
             );
         };
+        let at = super::resolve_hit_anchor(&view, at);
         assert_eq!(ordinal, step, "Next advances one match at a time");
         crate::testpump::until_for(
             crate::testpump::Clock::Frame,
@@ -340,6 +341,7 @@ fn find_in_the_preview_takes_the_lead_from_a_wheeled_editor() {
     let FindCursor::Preview { at, .. } = st.find_cursor.get() else {
         panic!("precondition: Find stepped the focused preview");
     };
+    let at = super::resolve_hit_anchor(&view, at);
     assert_eq!(
         st.scroll.driver.get(),
         crate::winstate::ScrollDriver::Preview,
@@ -383,6 +385,7 @@ fn find_in_the_preview_takes_the_lead_from_a_wheeled_editor_for_a_cell_hit() {
     let FindCursor::Preview { at, .. } = st.find_cursor.get() else {
         panic!("precondition: Find stepped the focused preview");
     };
+    let at = super::resolve_hit_anchor(&view, at);
     assert!(
         view.buffer().iter_at_offset(at).child_anchor().is_some(),
         "precondition: the hit is in a table cell, so the cell route scrolled to it"

@@ -38,32 +38,23 @@ pub(crate) use written::holds_block_break;
 
 /// Chars of `run[..upto]` that survive into the rendered buffer: everything except
 /// the **delimiters** of the tight constructs the renderer strips (`==mark==`,
-/// `~~strike~~`, `^sup^`, `~sub~` — `spans` comes from
-/// [`crate::renderer::scan_script_spans`], the single definition of those). The
-/// content between a construct's markers is kept and stays 1:1, so it maps
-/// char-precisely; only the markers vanish.
+/// `~~strike~~`, `^sup^`, `~sub~`). `segs` is the run's segmentation from
+/// [`crate::renderer::BlockScripts`] — the block-scope one the renderer cuts runs
+/// with, so a fence whose two halves sit in different events is seen exactly as the
+/// renderer sees it. Content between markers stays 1:1 and maps char-precisely; only
+/// the markers vanish.
 ///
 /// An `upto` landing inside a delimiter run clamps to the last kept char before it,
 /// which is what a claim boundary sitting on a marker means — the marker is not in
 /// the buffer, so there is no position "inside" it to point at.
-fn kept_chars(run: &str, spans: &[crate::renderer::ScriptSpan], upto: usize) -> i32 {
-    let mut kept = 0i32;
-    let mut at = 0usize; // byte cursor: start of the not-yet-counted plain text
-    for sp in spans {
-        if upto <= sp.outer.start {
-            break;
-        }
-        kept += run[at..sp.outer.start].chars().count() as i32; // plain text, 1:1
-        if upto <= sp.inner.start {
-            return kept; // inside the OPENING delimiter — dropped
-        }
-        kept += run[sp.inner.start..sp.inner.end.min(upto)].chars().count() as i32; // content, 1:1
-        if upto <= sp.outer.end {
-            return kept; // inside the content (already counted) or the CLOSING delimiter
-        }
-        at = sp.outer.end;
-    }
-    kept + run[at..upto].chars().count() as i32
+fn kept_chars(run: &str, segs: &[crate::renderer::Seg], upto: usize) -> i32 {
+    segs.iter()
+        .filter(|seg| !seg.marker && seg.range.start < upto)
+        .map(|seg| {
+            run.get(seg.range.start..seg.range.end.min(upto))
+                .map_or(0, |t| t.chars().count() as i32)
+        })
+        .sum()
 }
 
 /// Map a cleaned-source highlight span `[hs, he)` onto **cell-local** (or buffer-local)
@@ -79,7 +70,7 @@ fn kept_chars(run: &str, spans: &[crate::renderer::ScriptSpan], upto: usize) -> 
 /// changed in a way we *cannot* account for is tagged whole, never split mid-glyph.
 /// The accounting is `kept_chars`: a construct's delimiters are dropped, everything
 /// else is 1:1. So the precise path covers both a plain 1:1 run (no constructs —
-/// `spans` empty, `kept == run chars`) and a **marker-stripped** run
+/// no marker segments, `kept == run chars`) and a **marker-stripped** run
 /// (`a ==mark== b` → `a mark b`), which is mappable precisely *because* the marker
 /// positions are known exactly.
 ///
@@ -94,6 +85,7 @@ pub(crate) fn map_cleaned_highlight_to_local(
     hs: usize,
     he: usize,
     content_evs: &[(usize, usize, i32, i32)],
+    scripts: &crate::renderer::BlockScripts,
 ) -> Vec<(i32, i32)> {
     let mut out = Vec::new();
     for &(s, e, before, after) in content_evs {
@@ -107,11 +99,19 @@ pub(crate) fn map_cleaned_highlight_to_local(
         }
         let run = &cleaned[s..e];
         let buf_len = (after - before) as usize;
-        let spans = crate::renderer::scan_script_spans(run);
-        if kept_chars(run, &spans, run.len()) as usize == buf_len {
+        // The BLOCK-scope segmentation, keyed by the event's source start — never a
+        // scan of `run` alone, which cannot see a fence whose partner sits in another
+        // event (`~~a **bold** b~~`): it counted both halves' `~~` as kept text, failed
+        // the length check below, and tagged each WHOLE event, washing the prose either
+        // side of the claim (MANUAL-TEST 10.10b). Segments index the event's RENDERED
+        // text, so they apply to `run` only when they span it exactly; the kept-count
+        // check then confirms the 1:1 correspondence.
+        let segs = scripts.segments(s, run);
+        let spans_run = segs.last().is_some_and(|seg| seg.range.end == run.len());
+        if spans_run && kept_chars(run, &segs, run.len()) as usize == buf_len {
             out.push((
-                before + kept_chars(run, &spans, ov_s - s),
-                before + kept_chars(run, &spans, ov_e - s),
+                before + kept_chars(run, &segs, ov_s - s),
+                before + kept_chars(run, &segs, ov_e - s),
             ));
         } else {
             out.push((before, after));
@@ -122,7 +122,49 @@ pub(crate) fn map_cleaned_highlight_to_local(
 
 #[cfg(test)]
 mod highlight_map_tests {
-    use super::map_cleaned_highlight_to_local as map;
+    use super::map_cleaned_highlight_to_local;
+    use crate::renderer::BlockScripts;
+
+    /// The mapper over HAND-BUILT event records, which no parse produced: an empty
+    /// table makes every run fall back to its standalone segmentation, so these cases
+    /// exercise the per-run accounting alone.
+    fn map(
+        cleaned: &str,
+        hs: usize,
+        he: usize,
+        evs: &[(usize, usize, i32, i32)],
+    ) -> Vec<(i32, i32)> {
+        map_cleaned_highlight_to_local(cleaned, hs, he, evs, &BlockScripts::default())
+    }
+
+    /// MANUAL-TEST 10.10b's fixture line. pulldown splits the fence into three `Text`
+    /// events — `"Fence wrapping markup: ~~a "`, `"bold"` (inside `Strong`) and
+    /// `" b~~ must"` — so neither `~~` has its partner in its own run. The claim (the
+    /// whole fence, as the balancer widens it) must map onto `a bold b` and nothing
+    /// else; scanning each run alone tagged the first and last events whole.
+    #[test]
+    fn a_claim_on_a_fence_split_across_events_maps_to_its_content_only() {
+        let cleaned = "Fence wrapping markup: ~~a **bold** b~~ must";
+        let scripts = BlockScripts::scan(cleaned);
+        // Events (source → buffer): `Fence wrapping markup: ~~a ` 0..27 → 0..25,
+        // `bold` 29..33 → 25..29, ` b~~ must` 35..44 → 29..36.
+        let evs = [
+            (0usize, 27usize, 0i32, 25i32),
+            (29, 33, 25, 29),
+            (35, 44, 29, 36),
+        ];
+        let (hs, he) = (cleaned.find("~~").unwrap(), cleaned.find(" must").unwrap());
+        assert_eq!(
+            map_cleaned_highlight_to_local(cleaned, hs, he, &evs, &scripts),
+            vec![(23, 25), (25, 29), (29, 31)]
+        );
+        // And a claim on plain prose beside the fence stays exact too.
+        let must = cleaned.find("must").unwrap();
+        assert_eq!(
+            map_cleaned_highlight_to_local(cleaned, must, cleaned.len(), &evs, &scripts),
+            vec![(32, 36)]
+        );
+    }
 
     /// `a ==mark== b` (12 cleaned chars) renders as `a mark b` (8 buffer chars) —
     /// one content event whose length the scanner changed by stripping the `==` pairs.
