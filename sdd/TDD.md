@@ -4028,6 +4028,7 @@ buffer holds the only copy.
 - **When** the application dies uncleanly and restarts
 - **Then** both sets of edits are recoverable — neither overwrote the other's recovery data
 - **And** they are recovered into *separate* tabs: two unsaved buffers for one path are two documents, so the second must never be applied over the first (22.17's correlation by path stops at the first tab it claims)
+- **And** this holds on a bare relaunch whose restored session already carries one of the two in a tab, whichever order the recovery data is found in: the restored one comes back in that tab, the other in a tab of its own, and neither is left unreachable
 
 ### 22.17 Reopening the crashed document by name recovers into that tab, not a second one
 - **Given** an unclean exit left unsaved work in a document
