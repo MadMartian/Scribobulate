@@ -160,6 +160,10 @@ pub(crate) fn normalize_lone_cr(text: &str) -> Cow<'_, str> {
 /// front of the `\n` it pairs with. Judged on the text alone, that `\r` looked lone and
 /// became a `\n` — `"# line\r"` + `"\n"` turned into `"# line\n\n"`: the line lost its
 /// CRLF and the document gained a blank line (TDD 10.5).
+///
+/// Keeping the bytes right is only half of it: a kept trailing `\r` must reach the
+/// buffer in the same insertion as its `\n`, or the buffer counts a line the bytes do
+/// not hold. The insert hook does that through `absorb_following_lf`.
 pub(crate) fn repair_insertion(text: &str, followed_by_lf: bool) -> Cow<'_, str> {
     match text.strip_suffix('\r') {
         Some(head) if followed_by_lf => match normalize_lone_cr(head) {
@@ -345,14 +349,41 @@ fn wire_paste_normalization(buffer: &sourceview::Buffer) {
         if in_repair.get() {
             return;
         }
-        let Cow::Owned(repaired) = repair_insertion(text, iter.char() == '\n') else {
+        let followed_by_lf = iter.char() == '\n';
+        let repaired = repair_insertion(text, followed_by_lf);
+        let completes_crlf = followed_by_lf && repaired.ends_with('\r');
+        if !completes_crlf && matches!(repaired, Cow::Borrowed(_)) {
             return;
-        };
+        }
         glib::signal::signal_stop_emission_by_name(buf, "insert-text");
         in_repair.set(true);
-        buf.insert(iter, &repaired);
+        if completes_crlf {
+            absorb_following_lf(buf, iter, &repaired);
+        } else {
+            buf.insert(iter, &repaired);
+        }
         in_repair.set(false);
     });
+}
+
+/// Insert `text`, which ends in the `\r` of a CRLF whose `\n` is the buffer character
+/// at `iter`, as ONE insertion that carries the `\n` with it.
+///
+/// GtkTextBuffer breaks lines as each insertion arrives and never re-joins across two:
+/// a `\r` inserted in front of a `\n` already in the buffer ends a line by itself, and
+/// the `\n` then ends a second, empty one. The bytes read back `\r\n`, so the file
+/// saves clean — but the editor has a line the document does not, and Ctrl+End, Down
+/// and Go To Line all count it (TDD 10.5; MEASURED — a caret-only Heading on line 1 of
+/// a 16-line CRLF document left the editor at 17 lines). Taking the `\n` out and
+/// putting it back inside the same insertion lets the buffer see the pair whole. One
+/// [`UndoGroup`](crate::window::undo::UndoGroup), so a bare programmatic insertion
+/// stays one undo step; inside a caller's own group it nests.
+fn absorb_following_lf(buf: &sourceview::Buffer, iter: &mut gtk::TextIter, text: &str) {
+    let _grp = crate::window::undo::UndoGroup::new(buf);
+    let mut lf_end = *iter;
+    lf_end.forward_char();
+    buf.delete(iter, &mut lf_end);
+    buf.insert(iter, &format!("{text}\n"));
 }
 
 #[cfg(test)]
