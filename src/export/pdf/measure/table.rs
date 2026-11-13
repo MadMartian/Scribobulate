@@ -302,14 +302,13 @@ impl Layouter<'_> {
             let drawn = laid
                 .iter()
                 .zip(&slice.lines)
-                .map(|((column, _layout, lines), range)| TableCell {
-                    #[cfg(test)]
-                    layout: _layout.clone(),
+                .map(|((column, layout, lines), range)| TableCell {
+                    layout: layout.clone(),
                     column: *column,
                     lines: lines[range.clone()]
                         .iter()
                         .map(|l| CellInkLine {
-                            line: l.line.clone(),
+                            index: l.index,
                             x: l.x,
                             baseline: pad_top + l.baseline - slice.top,
                         })
@@ -351,10 +350,13 @@ impl Layouter<'_> {
     }
 }
 
-/// One measured line of a cell: where it sits, and what draws it.
+/// One measured line of a cell: where it sits, and which line of the layout draws it.
+///
+/// An index, never a `pango::LayoutLine`: a line outlives nothing — its layout must be
+/// alive when it is drawn or it reaches cairo without its text (see `TableCell::layout`).
 struct MeasuredLine {
     span: pdftable::CellLine,
-    line: pango::LayoutLine,
+    index: i32,
     x: f64,
     baseline: f64,
 }
@@ -363,23 +365,23 @@ struct MeasuredLine {
 fn cell_lines(layout: &pango::Layout) -> Vec<MeasuredLine> {
     let mut lines = Vec::new();
     let mut iter = layout.iter();
+    let mut index = 0_i32;
     loop {
         let (_ink, logical) = iter.line_extents();
-        if let Some(line) = iter.line_readonly() {
-            let top = pango_to_pt(logical.y());
-            lines.push(MeasuredLine {
-                span: pdftable::CellLine {
-                    top,
-                    bottom: top + pango_to_pt(logical.height()),
-                },
-                line,
-                x: pango_to_pt(logical.x()),
-                baseline: pango_to_pt(iter.baseline()),
-            });
-        }
+        let top = pango_to_pt(logical.y());
+        lines.push(MeasuredLine {
+            span: pdftable::CellLine {
+                top,
+                bottom: top + pango_to_pt(logical.height()),
+            },
+            index,
+            x: pango_to_pt(logical.x()),
+            baseline: pango_to_pt(iter.baseline()),
+        });
         if !iter.next_line() {
             break;
         }
+        index += 1;
     }
     lines
 }

@@ -88,7 +88,10 @@ pub(crate) async fn recover_after_restore(app: &Application) {
     // path fallback must never be offered one of these — see its doc comment; a second
     // snapshot naming the same file is a second unsaved buffer, and letting it adopt the
     // tab the first was just applied to would overwrite recovered work with recovered
-    // work.
+    // work. EVERY arm that puts a snapshot in a tab claims it, including the one that
+    // opens a brand-new tab: on a launch with no session the first snapshot for a file
+    // opens that file's only tab, and unclaimed, the second found it by path and was
+    // applied over it (TDD 22.16).
     let mut claimed: Vec<swapfile::DocId> = Vec::new();
 
     for swap in found {
@@ -121,6 +124,9 @@ pub(crate) async fn recover_after_restore(app: &Application) {
                 }
             }
             SwapDisposition::ReopenFile(_) | SwapDisposition::ReopenUntitled => {
+                // The new tab adopts the snapshot's id (see `reopen_recovered`), so that
+                // is the identity a later path match would find it under.
+                claimed.push(swap.header.doc_id.clone());
                 if let Some(window) = reopen_recovered(app, &swap).await {
                     note_recovery(&mut per_window, window);
                 }

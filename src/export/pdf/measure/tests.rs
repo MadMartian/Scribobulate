@@ -1076,8 +1076,9 @@ fn a_table_row_taller_than_a_page_is_cut_at_lines_and_draws_every_word_once() {
             for cell in cells.iter().filter(|c| c.column == 1) {
                 let text = cell.layout.text();
                 for ink in &cell.lines {
-                    let start = ink.line.start_index() as usize;
-                    let end = start + ink.line.length() as usize;
+                    let line = cell.layout.line_readonly(ink.index).expect("cell line");
+                    let start = line.start_index() as usize;
+                    let end = start + line.length() as usize;
                     drawn.extend(text[start..end].split_whitespace().map(str::to_owned));
                 }
             }

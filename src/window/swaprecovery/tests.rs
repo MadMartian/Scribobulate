@@ -572,6 +572,65 @@ fn both_snapshots_get_tabs_when_the_session_restored_the_second_ones_identity() 
     );
 }
 
+/// **TDD 22.16 on a bare relaunch with no session at all**: nothing restored the shared
+/// file, so neither snapshot matches a tab by identity, and each must still open a tab of
+/// its own.
+///
+/// The case the two tests above do not reach. There the file already has a tab when the
+/// pass starts; here the only tab is an unrelated untitled one (the welcome tab a
+/// session-less launch shows), so the FIRST snapshot opens the file's tab itself. The
+/// path fallback then found that brand-new tab for the SECOND snapshot, which was never
+/// recorded as claimed, and applied the second over the first: one tab showing whichever
+/// edit landed last, the other edit gone, and the status bar still counting two
+/// recoveries. Scan order does not matter — either snapshot going first loses the other.
+///
+/// Mutation: drop the claim in `recover_after_restore`'s reopen arm and the tab count
+/// comes back one short, with only one of the two texts present.
+#[gtktest::test]
+fn each_snapshot_opens_its_own_tab_when_no_session_restored_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::session::with_state_home_for_test(dir.path(), || {
+        let app =
+            super::super::gtk_integration_tests::test_app("com.extollit.scribobulate.it.rec15c");
+        let doc = dir.path().join("shared.md");
+        std::fs::write(&doc, "on disk").unwrap();
+
+        let win = new_window(&app, "IT", "welcome", None);
+        let before = winstate::tabs_for_window(&win).len();
+
+        seed_swap(
+            dir.path(),
+            &header(DocId::generate(), Some(&doc), b"on disk"),
+            "work from instance one",
+        );
+        seed_swap(
+            dir.path(),
+            &header(DocId::generate(), Some(&doc), b"on disk"),
+            "work from instance two",
+        );
+
+        gtk::glib::MainContext::default().block_on(recover_after_restore(&app));
+
+        let texts: Vec<String> = winstate::tabs_for_window(&win)
+            .iter()
+            .map(|t| t.editor_text())
+            .collect();
+        assert_eq!(
+            winstate::tabs_for_window(&win).len(),
+            before + 2,
+            "each snapshot opens a tab of its own: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "work from instance one"),
+            "neither buffer may be overwritten: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "work from instance two"),
+            "neither buffer may be overwritten: {texts:?}"
+        );
+    });
+}
+
 /// TDD 22.10: an unrelated file in the recovery location is neither parsed nor
 /// removed.
 ///

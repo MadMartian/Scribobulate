@@ -357,6 +357,83 @@ mod export_destination_tests {
         assert_eq!(count, WORDS, "a word of the cell was drawn more than once");
     }
 
+    /// **TDD 25.18** — a table cell's text reaches cairo WITH its UTF-8, as body text does.
+    ///
+    /// A cell line drawn from a `pango::LayoutLine` whose layout has been finalized hands
+    /// cairo glyphs and no text: Pango NULLs `line->layout` when the layout dies, and
+    /// `pango_renderer_draw_layout_line` then has nothing to pass on. The page looks
+    /// right. On macOS every cell character extracted as U+FFFD, because Quartz cannot
+    /// map a glyph back to a character. On Linux cairo's FreeType backend reverse-maps
+    /// each glyph through the font's cmap, so plain letters still extract — which is why
+    /// the defect was invisible here — but a LIGATURE glyph has no single character to
+    /// map to, and comes back as its presentation form: `office` extracts as `o` U+FB03
+    /// `ce`. Only the cluster text cairo receives with the glyphs restores `ffi`.
+    ///
+    /// So the fixture's cell carries ligatures, and the assertion is the 25.18 one:
+    /// the cell's line extracts byte-exact. Mutation-checked: drawing the cell from lines
+    /// whose layout has been dropped turns this red with exactly the U+FB0x forms.
+    #[gtktest::test]
+    fn a_table_cell_with_ligatures_extracts_byte_exact_like_body_text() {
+        const CELL: &str = "office fifty | waffle flow";
+        let Some(pdftotext) = pdftotext() else {
+            println!("SKIPPED [TDD 25.18]: no `pdftotext` on this host to read the text layer");
+            return;
+        };
+        let theme = crate::theme::Themes::builtin().resolve(crate::theme::SYSTEM_ID);
+        if !body_face_ligates(&theme, "office") {
+            // Not a skip: the assertion below still holds the cell to byte-exact text,
+            // which on a platform that cannot reverse-map glyphs discriminates anyway.
+            println!(
+                "NOTE [TDD 25.18]: this host's body face forms no `ffi` ligature, so on \
+                 Linux the check below cannot tell a cell drawn without its text"
+            );
+        }
+        let md = format!("Body text first.\n\n| A | B |\n|---|---|\n| {CELL} |\n");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("cells.pdf");
+        export_markdown(&md, &path);
+
+        let out = std::process::Command::new(pdftotext)
+            .args(["-enc", "UTF-8", "-raw"])
+            .arg(&path)
+            .arg("-")
+            .output()
+            .expect("run pdftotext");
+        let text = String::from_utf8_lossy(&out.stdout);
+        let want = CELL.replace(" | ", " ");
+        // poppler 26.08 (Homebrew) appends the page-break form feed to the page's LAST
+        // text line rather than on a line of its own, so the cell row carries a trailing
+        // `\u{c}` when it ends the page; strip it, it is page structure, not cell text.
+        assert!(
+            text.lines().any(|l| l.trim_end_matches('\u{c}') == want),
+            "the cell row must extract byte-exact as {want:?}; got:\n{text:?}"
+        );
+    }
+
+    /// Whether the theme's body face, shaped by Pango as the export shapes it, turns
+    /// `word` into fewer glyphs than it has characters — i.e. forms a ligature.
+    fn body_face_ligates(theme: &crate::theme::Theme, word: &str) -> bool {
+        use pangocairo::prelude::FontMapExt;
+        let ctx = pangocairo::FontMap::default().create_context();
+        let layout = gtk::pango::Layout::new(&ctx);
+        let mut desc = gtk::pango::FontDescription::new();
+        if let Some(family) = theme.font_family.as_ref() {
+            desc.set_family(&family.pango_family());
+        }
+        layout.set_font_description(Some(&desc));
+        layout.set_text(word);
+        let glyphs: i32 = layout
+            .line_readonly(0)
+            .map(|line| {
+                line.runs()
+                    .iter()
+                    .map(|run| run.glyph_string().num_glyphs())
+                    .sum()
+            })
+            .unwrap_or(0);
+        (glyphs as usize) < word.chars().count()
+    }
+
     /// `pdftotext`, where the host has it.
     fn pdftotext() -> Option<&'static str> {
         std::process::Command::new("pdftotext")
