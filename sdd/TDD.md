@@ -433,6 +433,7 @@
 - **When** the body is shown
 - **Then** each construct renders exactly as the same construct renders at top level — the body is ordinary document content, not literal text and not a reduced subset
 - **And** a disclosure nested **inside** a container — a blockquote or a list item — renders and toggles there exactly as it does at top level
+- **And** after the block is collapsed and expanded again its body is decorated exactly as a full render decorates it — an annotation's highlight over a claim in the body included, not only the claim's text
 
 ### 2.26d A malformed disclosure degrades predictably
 - **Given** a `<details>` with no `<summary>`, or whose body is not separated by the blank lines CommonMark requires, or which is never closed
