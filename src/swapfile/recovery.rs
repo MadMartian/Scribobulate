@@ -88,6 +88,8 @@ pub(crate) enum SwapDisposition {
 ///   the tab the first just recovered into would silently overwrite recovered work with
 ///   other recovered work, which is worse than the duplicate tab this rule exists to
 ///   remove. With the tab withheld, the second correctly falls through and opens its own.
+///   "Recovered into" includes a tab the first snapshot *opened* this pass, not only one
+///   it was applied to: with no session, that new tab is the file's only one.
 /// * **Untitled snapshots are excluded here by construction** — they name no file, so
 ///   there is nothing to match, and inferring one from a coincidence of emptiness would
 ///   merge unrelated buffers.
