@@ -20,7 +20,7 @@ use super::super::decide::table_column_count;
 use super::super::geometry::{pango_to_pt, px_to_pt};
 use super::super::pdftable;
 use super::super::{
-    CellWidths, LayoutSpec, LineKind, QuoteRef, TableCell, BASE_PT, BLOCK_GAP_PT,
+    CellInkLine, CellWidths, LayoutSpec, LineKind, QuoteRef, TableCell, BASE_PT, BLOCK_GAP_PT,
     PANGO_WEIGHT_NORMAL,
 };
 use super::Layouter;
@@ -77,7 +77,9 @@ impl RowKind {
 
 impl Layouter<'_> {
     /// A table is laid out one **row** at a time on a measured column grid, each row an
-    /// indivisible fragment, so a page break falls between rows and never through one.
+    /// indivisible fragment, so a page break falls between rows and never through one —
+    /// except a row taller than a page, which is cut at a line boundary rather than run
+    /// off the page's foot (see `table_row`).
     ///
     /// The geometry decision — how wide each column is, and whether the table must be
     /// scaled at all — belongs to [`pdftable::fit`] and is settled by unit test. What
@@ -247,7 +249,9 @@ impl Layouter<'_> {
     }
 
     /// Build and push one row: every cell laid out in its column, the row's height the
-    /// tallest of them, and the whole thing **one** fragment.
+    /// tallest of them, and the whole thing **one** fragment — unless it is taller than
+    /// a page, in which case it is one fragment per piece [`pdftable::split_row`] cuts
+    /// it into, at line boundaries only.
     fn table_row(
         &mut self,
         cells: &[String],
@@ -258,7 +262,7 @@ impl Layouter<'_> {
         kind: RowKind,
     ) {
         let TableGeometry { grid, chrome } = geometry;
-        let mut drawn = Vec::with_capacity(cells.len());
+        let mut laid = Vec::with_capacity(cells.len());
         let mut text_height = 0.0_f64;
         for (index, markup) in cells.iter().enumerate() {
             let Some(column) = grid.columns.get(index) else {
@@ -274,36 +278,110 @@ impl Layouter<'_> {
             if height > text_height {
                 text_height = height;
             }
-            drawn.push(TableCell {
-                layout,
-                column: index,
-            });
+            let lines = cell_lines(&layout);
+            laid.push((index, layout, lines));
         }
 
-        // The row's box is the tallest cell plus this theme's vertical padding; the
-        // fragment the paginator sees is that box at the grid's scale, so what it
-        // reserves and what gets drawn are the same number by construction.
-        let box_height = text_height + chrome.padding_v * 2.0;
-        self.push_line(
-            LineKind::TableRow {
-                cells: drawn,
-                columns: grid.columns.clone(),
-                chrome: *chrome,
-                scale: grid.scale,
-                box_height,
-                is_head: kind.is_head(),
-            },
-            Fragment {
-                space_after: 0.0,
-                height: box_height * grid.scale,
-                space_before: if kind.is_head() { BLOCK_GAP_PT } else { 0.0 },
-                keep_with_next: kind.keep_with_next(),
-            },
-            indent,
-            box_height * grid.scale,
-            quote,
-        );
+        // How much TEXT one page holds, in the row's unscaled points: the page less the
+        // padding every piece's box carries above and below its text.
+        let scale = if grid.scale > 0.0 { grid.scale } else { 1.0 };
+        let budget = self.max_height_pt / scale - chrome.padding_v * 2.0;
+        let geometry_only: Vec<Vec<pdftable::CellLine>> = laid
+            .iter()
+            .map(|(_, _, lines)| lines.iter().map(|l| l.span).collect())
+            .collect();
+        let slices = pdftable::split_row(&geometry_only, text_height, budget);
+        let last = slices.len().saturating_sub(1);
+
+        for (piece, slice) in slices.iter().enumerate() {
+            // The row's padding belongs to its two ends, not to every piece: a piece
+            // padded top and bottom would open a gap between every pair of lines of a
+            // cut cell.
+            let pad_top = if piece == 0 { chrome.padding_v } else { 0.0 };
+            let pad_bottom = if piece == last { chrome.padding_v } else { 0.0 };
+            let drawn = laid
+                .iter()
+                .zip(&slice.lines)
+                .map(|((column, _layout, lines), range)| TableCell {
+                    #[cfg(test)]
+                    layout: _layout.clone(),
+                    column: *column,
+                    lines: lines[range.clone()]
+                        .iter()
+                        .map(|l| CellInkLine {
+                            line: l.line.clone(),
+                            x: l.x,
+                            baseline: pad_top + l.baseline - slice.top,
+                        })
+                        .collect(),
+                })
+                .collect();
+            // The row's box is the piece's text plus this theme's vertical padding; the
+            // fragment the paginator sees is that box at the grid's scale, so what it
+            // reserves and what gets drawn are the same number by construction.
+            let box_height = pad_top + slice.bottom - slice.top + pad_bottom;
+            self.push_line(
+                LineKind::TableRow {
+                    cells: drawn,
+                    columns: grid.columns.clone(),
+                    chrome: *chrome,
+                    scale: grid.scale,
+                    box_height,
+                    is_head: kind.is_head(),
+                    opens: piece == 0,
+                    closes: piece == last,
+                },
+                Fragment {
+                    space_after: 0.0,
+                    height: box_height * grid.scale,
+                    // The gap above a table belongs to its first piece only; a header's
+                    // company with the first body row, to its last.
+                    space_before: if kind.is_head() && piece == 0 {
+                        BLOCK_GAP_PT
+                    } else {
+                        0.0
+                    },
+                    keep_with_next: kind.keep_with_next() && piece == last,
+                },
+                indent,
+                box_height * grid.scale,
+                quote,
+            );
+        }
     }
+}
+
+/// One measured line of a cell: where it sits, and what draws it.
+struct MeasuredLine {
+    span: pdftable::CellLine,
+    line: pango::LayoutLine,
+    x: f64,
+    baseline: f64,
+}
+
+/// Every line of `layout`, top to bottom, in points from the top of the layout.
+fn cell_lines(layout: &pango::Layout) -> Vec<MeasuredLine> {
+    let mut lines = Vec::new();
+    let mut iter = layout.iter();
+    loop {
+        let (_ink, logical) = iter.line_extents();
+        if let Some(line) = iter.line_readonly() {
+            let top = pango_to_pt(logical.y());
+            lines.push(MeasuredLine {
+                span: pdftable::CellLine {
+                    top,
+                    bottom: top + pango_to_pt(logical.height()),
+                },
+                line,
+                x: pango_to_pt(logical.x()),
+                baseline: pango_to_pt(iter.baseline()),
+            });
+        }
+        if !iter.next_line() {
+            break;
+        }
+    }
+    lines
 }
 
 #[cfg(test)]

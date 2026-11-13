@@ -16,6 +16,11 @@
 //! alone on its own page and allowed to overflow, because the alternative — dropping it
 //! — loses content silently, and the alternative to *that* is a line-splitting engine,
 //! which is the scope creep the plan bounds.
+//!
+//! That overflow is only harmless for a single line, which overruns by a few points. A
+//! table row taller than a page would overrun by most of its cell and be clipped by the
+//! media box, so the measurement pass never hands one over whole: it cuts it into
+//! line-boundary pieces first (`pdftable::split_row`).
 
 use std::ops::Range;
 
