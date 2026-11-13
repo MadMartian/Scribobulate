@@ -1016,8 +1016,9 @@ fn every_row_of_a_table_shares_one_column_grid() {
 
 #[test]
 fn a_table_row_is_exactly_one_indivisible_fragment() {
-    // TDD 25.16 for tables: one row is one fragment, so a page break can only ever
-    // fall BETWEEN rows. A wrapped cell must not become a second fragment.
+    // TDD 25.16 for tables: a row that fits a page is one fragment, so a page break can
+    // only ever fall BETWEEN rows. A wrapped cell must not become a second fragment —
+    // only a row taller than a page is cut (TDD 25.17).
     let wide = "| A | B |\n|---|---|\n| short | ".to_string()
         + &"a long sentence that has to wrap several times ".repeat(6)
         + "|\n";
@@ -1037,6 +1038,58 @@ fn a_table_row_is_exactly_one_indivisible_fragment() {
         laid.fragments.len(),
         laid.lines.len(),
         "fragments and lines must stay index-parallel"
+    );
+}
+
+#[test]
+fn a_table_row_taller_than_a_page_is_cut_at_lines_and_draws_every_word_once() {
+    // TDD 25.16 / 25.17: the 900-word cell used to be one fragment taller than the page,
+    // run off its foot, so `word397..` never reached the PDF. Display-free, so it guards
+    // every platform — the artefact-level twin in `window::export_pdf` needs `pdftotext`.
+    const WORDS: usize = 900;
+    let words: Vec<String> = (0..WORDS).map(|i| format!("word{i}")).collect();
+    let md = format!("| A | B |\n|---|---|\n| short | {} |\n", words.join(" "));
+    let laid = lay_out(
+        &doc::build(&md, &RenderOptions::default()),
+        &ctx(),
+        PAGE_WIDTH_PT,
+        PAGE_HEIGHT_PT,
+        &theme(),
+    );
+    assert_eq!(laid.fragments.len(), laid.lines.len());
+    for f in &laid.fragments {
+        assert!(
+            f.height <= PAGE_HEIGHT_PT,
+            "a fragment of {} pt cannot fit a {PAGE_HEIGHT_PT} pt page",
+            f.height
+        );
+    }
+    // The words every piece DRAWS, read from the very lines the ink pass shows.
+    let mut drawn = Vec::new();
+    for line in &laid.lines {
+        if let super::LineKind::TableRow {
+            cells,
+            is_head: false,
+            ..
+        } = &line.kind
+        {
+            for cell in cells.iter().filter(|c| c.column == 1) {
+                let text = cell.layout.text();
+                for ink in &cell.lines {
+                    let start = ink.line.start_index() as usize;
+                    let end = start + ink.line.length() as usize;
+                    drawn.extend(text[start..end].split_whitespace().map(str::to_owned));
+                }
+            }
+        }
+    }
+    assert_eq!(
+        drawn, words,
+        "the cut cell lost, doubled or reordered a word"
+    );
+    assert!(
+        table_rows(&laid).len() > 2,
+        "the oversized row should have been cut into pieces"
     );
 }
 

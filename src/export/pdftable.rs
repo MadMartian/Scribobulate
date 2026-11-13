@@ -330,6 +330,296 @@ fn distribute(wants: &[ColumnWant], floor: &[f64], available: f64) -> Vec<f64> {
     widths
 }
 
+/// One laid-out line of a cell, in the row's unscaled text coordinates (points from the
+/// top of the cell's text, padding excluded).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CellLine {
+    pub(crate) top: f64,
+    pub(crate) bottom: f64,
+}
+
+/// One piece of a table row, as drawn on one page.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RowSlice {
+    /// Where this piece starts and ends, in the row's text coordinates. The piece's box
+    /// is `bottom - top` tall plus the row's vertical padding.
+    pub(crate) top: f64,
+    pub(crate) bottom: f64,
+    /// Per cell, the lines of that cell this piece draws — index ranges into the cell's
+    /// own lines, in the order the cells were given.
+    pub(crate) lines: Vec<std::ops::Range<usize>>,
+}
+
+/// Cut a table row too tall for a page into pieces, **only ever at a line boundary**
+/// (TDD 25.16, 25.17).
+///
+/// `cells` holds each cell's lines top to bottom; `text_height` is the tallest cell's
+/// height; `budget` is how much text one page holds once the row's padding is taken off,
+/// all in the row's unscaled points. A row that fits — the ordinary case — comes back as
+/// ONE slice holding every line, so a row is still one indivisible fragment whenever it
+/// can be.
+///
+/// # Why a row is cut at all
+///
+/// A row used to be indivisible, and a row taller than a page was given a page of its
+/// own and run off the foot of it: a 900-word cell kept its first 397 words and the rest
+/// of the cell was silently gone. The paginator's "overflow rather than drop" rule does
+/// not save a row, because what overflows a page is clipped by the media box — for one
+/// line of text that is a few points, for a row it is most of the cell.
+///
+/// # Where it is cut
+///
+/// At **every** height where no line of any cell is straddled, not at the last one a page
+/// could hold. The paginator then packs the pieces exactly as it packs a paragraph's
+/// lines, so the row starts in whatever room the page above has left, beside its header,
+/// instead of leaving that room blank and the header stranded.
+///
+/// Two cells whose lines never line up (different line heights in each) may share no
+/// such height for longer than a page. There the cut falls at the last line top that
+/// fits, in whichever cell has it; a line of another cell straddling that cut is drawn
+/// whole in the piece above, a little past its box, rather than halved or lost. A single
+/// line taller than the whole budget is a piece of its own, as a lone over-tall line of
+/// prose is.
+///
+/// Every line belongs to exactly one slice — the one its top falls in. That totality is
+/// what the tests assert, from the result.
+pub(crate) fn split_row(cells: &[Vec<CellLine>], text_height: f64, budget: f64) -> Vec<RowSlice> {
+    let mut cuts: Vec<f64> = Vec::new();
+    // A non-positive budget (a page shorter than the row's own padding) cannot be cut
+    // for; the row is left whole, which is what it was before cutting existed.
+    if budget > 0.0 && text_height > budget {
+        let mut start = 0.0_f64;
+        // The latest line top since `start` that a page could still reach.
+        let mut last_fit: Option<f64> = None;
+        for (y, shared) in line_tops(cells, text_height) {
+            if y - start > budget {
+                if let Some(top) = last_fit.take() {
+                    cuts.push(top);
+                    start = top;
+                }
+                if y - start > budget {
+                    // Nothing between: the piece above is one over-tall line.
+                    cuts.push(y);
+                    start = y;
+                    continue;
+                }
+            }
+            if shared {
+                cuts.push(y);
+                start = y;
+                last_fit = None;
+            } else {
+                last_fit = Some(y);
+            }
+        }
+        if text_height - start > budget {
+            if let Some(top) = last_fit {
+                cuts.push(top);
+            }
+        }
+    }
+
+    let bounds: Vec<f64> = std::iter::once(0.0)
+        .chain(cuts.iter().copied())
+        .chain(std::iter::once(text_height))
+        .collect();
+    let last = bounds.len() - 2;
+    bounds
+        .windows(2)
+        .enumerate()
+        .map(|(index, pair)| {
+            let (top, bottom) = (pair[0], pair[1]);
+            let lines = cells
+                .iter()
+                .map(|lines| {
+                    let first = lines.iter().position(|l| l.top >= top);
+                    let past = if index == last {
+                        lines.len()
+                    } else {
+                        lines
+                            .iter()
+                            .position(|l| l.top >= bottom)
+                            .unwrap_or(lines.len())
+                    };
+                    match first {
+                        Some(first) if first < past => first..past,
+                        _ => past..past,
+                    }
+                })
+                .collect();
+            RowSlice { top, bottom, lines }
+        })
+        .collect()
+}
+
+/// Every distinct line top inside the row, ascending, each paired with whether it is
+/// SHARED — a height no line of any cell straddles, where every cell can break at once.
+///
+/// One sweep rather than a straddle test per top: a top is shared exactly when no line
+/// that started above it reaches past it, which is the running maximum of the bottoms
+/// seen so far. Linear after the sort, so a cell of thousands of lines costs nothing a
+/// paragraph of them would not (TDD 25.22).
+fn line_tops(cells: &[Vec<CellLine>], text_height: f64) -> Vec<(f64, bool)> {
+    let mut all: Vec<CellLine> = cells.iter().flatten().copied().collect();
+    all.sort_by(|a, b| a.top.total_cmp(&b.top));
+    let mut tops: Vec<(f64, bool)> = Vec::new();
+    let mut reach = 0.0_f64;
+    for line in &all {
+        if line.top > 0.0 && line.top < text_height {
+            let shared = reach <= line.top;
+            match tops.last_mut() {
+                Some((y, _)) if *y == line.top => {}
+                _ => tops.push((line.top, shared)),
+            }
+        }
+        reach = reach.max(line.bottom);
+    }
+    tops
+}
+
+#[cfg(test)]
+mod row_split_tests {
+    use super::*;
+
+    /// A cell of `count` lines of `height` each, stacked from the top.
+    fn cell(count: usize, height: f64) -> Vec<CellLine> {
+        (0..count)
+            .map(|i| CellLine {
+                top: i as f64 * height,
+                bottom: (i + 1) as f64 * height,
+            })
+            .collect()
+    }
+
+    /// Every line of every cell lands in exactly one slice, in order — asserted from the
+    /// RESULT, so it survives a change to how the cut is chosen.
+    fn assert_total(cells: &[Vec<CellLine>], slices: &[RowSlice]) {
+        for (c, lines) in cells.iter().enumerate() {
+            let covered: Vec<usize> = slices.iter().flat_map(|s| s.lines[c].clone()).collect();
+            assert_eq!(
+                covered,
+                (0..lines.len()).collect::<Vec<_>>(),
+                "cell {c} lost, doubled or reordered a line: {slices:?}"
+            );
+        }
+    }
+
+    /// No line is cut: every line a slice draws lies inside that slice.
+    fn assert_no_line_cut(cells: &[Vec<CellLine>], slices: &[RowSlice], budget: f64) {
+        for s in slices {
+            assert!(
+                s.bottom - s.top <= budget || s.lines.iter().map(|r| r.len()).sum::<usize>() == 1,
+                "slice {s:?} is taller than the budget {budget}"
+            );
+            for (c, range) in s.lines.iter().enumerate() {
+                for l in &cells[c][range.clone()] {
+                    assert!(
+                        l.top >= s.top && l.bottom <= s.bottom,
+                        "line {l:?} of cell {c} straddles slice {s:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_row_that_fits_is_one_slice_holding_every_line() {
+        let cells = vec![cell(3, 10.0), cell(5, 10.0)];
+        let slices = split_row(&cells, 50.0, 100.0);
+        assert_eq!(slices.len(), 1);
+        assert_eq!(slices[0].lines, vec![0..3, 0..5]);
+        assert_eq!((slices[0].top, slices[0].bottom), (0.0, 50.0));
+    }
+
+    #[test]
+    fn a_row_taller_than_the_budget_is_cut_into_pieces_that_lose_nothing() {
+        // The defect: 90 lines in a 25-line page. Every line must come out somewhere.
+        let cells = vec![cell(1, 10.0), cell(90, 10.0)];
+        let slices = split_row(&cells, 900.0, 250.0);
+        // One piece per line: every line top is a height both cells can break at, so the
+        // paginator gets the finest grain it can pack.
+        assert_eq!(slices.len(), 90, "{slices:?}");
+        assert_total(&cells, &slices);
+        assert_no_line_cut(&cells, &slices, 250.0);
+        assert_eq!(
+            slices[0].lines[0],
+            0..1,
+            "the short cell sits in the first piece"
+        );
+        assert!(slices[1].lines[0].is_empty(), "and nowhere else");
+    }
+
+    #[test]
+    fn cells_with_different_line_pitches_are_cut_where_neither_is_halved() {
+        // 10pt lines beside 14pt lines share a break height only every 70pt, so that is
+        // where they are cut — never at 10, 14, 20 or 28, where one cell's line would
+        // be halved.
+        let cells = vec![cell(40, 10.0), cell(30, 14.0)];
+        let slices = split_row(&cells, 420.0, 100.0);
+        assert_total(&cells, &slices);
+        assert_no_line_cut(&cells, &slices, 100.0);
+        assert_eq!(slices[0].bottom, 70.0, "{slices:?}");
+        // Five more at 70 apart, then 406 — past the 10pt cell's last line, so every
+        // later 14pt line top is a break both cells can take.
+        assert_eq!(slices.len(), 7, "{slices:?}");
+    }
+
+    #[test]
+    fn a_single_line_taller_than_the_budget_is_kept_whole_rather_than_halved() {
+        let cells = vec![vec![
+            CellLine {
+                top: 0.0,
+                bottom: 10.0,
+            },
+            CellLine {
+                top: 10.0,
+                bottom: 300.0,
+            },
+            CellLine {
+                top: 300.0,
+                bottom: 310.0,
+            },
+        ]];
+        let slices = split_row(&cells, 310.0, 100.0);
+        assert_total(&cells, &slices);
+        assert_no_line_cut(&cells, &slices, 100.0);
+        assert_eq!(
+            slices[1].lines[0],
+            1..2,
+            "the tall line stands alone: {slices:?}"
+        );
+    }
+
+    #[test]
+    fn cells_that_never_line_up_are_still_cut_and_lose_nothing() {
+        // 10pt beside 10.3pt lines share no break height for far longer than a page,
+        // so the cut falls at the last line top that fits rather than not at all.
+        let cells = vec![cell(100, 10.0), cell(97, 10.3)];
+        let slices = split_row(&cells, 1000.0, 100.0);
+        assert_total(&cells, &slices);
+        assert!(slices.len() >= 10, "{slices:?}");
+        for s in &slices {
+            assert!(s.bottom - s.top <= 100.0, "an over-budget piece: {s:?}");
+        }
+    }
+
+    #[test]
+    fn a_line_shared_by_two_cells_is_one_cut_not_two() {
+        let cells = vec![cell(30, 10.0), cell(30, 10.0)];
+        let slices = split_row(&cells, 300.0, 100.0);
+        assert_total(&cells, &slices);
+        assert_eq!(slices.len(), 30, "{slices:?}");
+    }
+
+    #[test]
+    fn a_non_positive_budget_leaves_the_row_whole() {
+        let cells = vec![cell(10, 10.0)];
+        let slices = split_row(&cells, 100.0, 0.0);
+        assert_eq!(slices.len(), 1);
+        assert_total(&cells, &slices);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

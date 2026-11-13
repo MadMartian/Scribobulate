@@ -305,6 +305,118 @@ mod export_destination_tests {
         );
     }
 
+    /// **TDD 25.16 / 25.17** — a table row taller than a page loses nothing.
+    ///
+    /// The row used to be one indivisible fragment, so the paginator gave it a page of
+    /// its own and the draw pass ran it off the bottom of that page: a 900-word cell kept
+    /// `word0..word396` and the rest of the cell was silently gone. Asserted from the
+    /// artefact's TEXT LAYER, through a real `GtkPrintOperation` driven by
+    /// `Paged::prepare` exactly as `export_pdf` drives it — a layout-level assertion
+    /// cannot see ink that lands below the media box.
+    #[gtktest::test]
+    fn a_table_row_taller_than_a_page_exports_every_word_of_its_cell() {
+        const WORDS: usize = 900;
+        let Some(pdftotext) = pdftotext() else {
+            println!("SKIPPED [TDD 25.16]: no `pdftotext` on this host to read the text layer");
+            return;
+        };
+        let words: Vec<String> = (0..WORDS).map(|i| format!("word{i}")).collect();
+        let md = format!("| A | B |\n|---|---|\n| short | {} |\n", words.join(" "));
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("tall-row.pdf");
+        let pages = export_markdown(&md, &path);
+        assert!(
+            pages > 1,
+            "the fixture must be taller than one page, got {pages}"
+        );
+
+        let out = std::process::Command::new(pdftotext)
+            .args(["-enc", "UTF-8", "-raw"])
+            .arg(&path)
+            .arg("-")
+            .output()
+            .expect("run pdftotext");
+        let text = String::from_utf8_lossy(&out.stdout);
+        let found: std::collections::HashSet<&str> = text.split_whitespace().collect();
+        let missing: Vec<&String> = words
+            .iter()
+            .filter(|w| !found.contains(w.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{} of {WORDS} words of the cell never reached the PDF (first missing: {:?})",
+            missing.len(),
+            missing.first()
+        );
+        // Each word once: a slice drawn on two pages would satisfy "present" while
+        // doubling the reader's copy-paste.
+        let count = text
+            .split_whitespace()
+            .filter(|w| w.starts_with("word"))
+            .count();
+        assert_eq!(count, WORDS, "a word of the cell was drawn more than once");
+    }
+
+    /// `pdftotext`, where the host has it.
+    fn pdftotext() -> Option<&'static str> {
+        std::process::Command::new("pdftotext")
+            .arg("-v")
+            .output()
+            .ok()
+            .map(|_| "pdftotext")
+    }
+
+    /// Export `md` to `path` through the production stages — `Paged::prepare` in
+    /// `begin-print`, `Paged::draw` per page, the System theme on paper — and return how
+    /// many pages were drawn.
+    fn export_markdown(md: &str, path: &std::path::Path) -> usize {
+        const MARGIN_PT: f64 = super::MARGIN_PT;
+        let theme = Rc::new(crate::theme::Themes::builtin().resolve(crate::theme::SYSTEM_ID));
+        let palette = crate::palette::Palette::for_paper(&theme);
+        let doc = crate::export::doc::build(md, &crate::export::RenderOptions::default());
+        let op = PrintOperation::new();
+        op.set_export_filename(path);
+        op.set_unit(gtk::Unit::Points);
+        let paged: Rc<std::cell::RefCell<Option<crate::export::pdf::Paged>>> =
+            Rc::new(std::cell::RefCell::new(None));
+        let drawn = Rc::new(crate::export::pdf::PageTally::default());
+        op.connect_begin_print({
+            let paged = Rc::clone(&paged);
+            let theme = Rc::clone(&theme);
+            move |op, ctx| {
+                let p = crate::export::pdf::Paged::prepare(
+                    &doc,
+                    &ctx.create_pango_context(),
+                    ctx.width() - MARGIN_PT * 2.0,
+                    ctx.height() - MARGIN_PT * 2.0,
+                    Rc::clone(&theme),
+                    MARGIN_PT,
+                );
+                op.set_n_pages(p.page_count() as i32);
+                *paged.borrow_mut() = Some(p);
+            }
+        });
+        op.connect_draw_page({
+            let paged = Rc::clone(&paged);
+            let drawn = Rc::clone(&drawn);
+            move |_op, ctx, page| {
+                let paged = paged.borrow();
+                let Some(p) = paged.as_ref() else { return };
+                if let Some(proof) = p.draw(&ctx.cairo_context(), page as usize, &palette) {
+                    drawn.record(proof);
+                }
+            }
+        });
+        let result = op.run(PrintOperationAction::Export, None::<&gtk::Window>);
+        let expected = op.n_pages().max(0) as usize;
+        assert_eq!(
+            finish(result, drawn.count(), expected),
+            Outcome::Promote,
+            "the export must complete"
+        );
+        drawn.count()
+    }
+
     /// Render `pages` pages of trivial content to `path`, cancelling after
     /// `cancel_after` pages when given. Returns how many pages were drawn.
     fn write_pdf(path: &std::path::Path, pages: i32, cancel_after: Option<usize>) -> usize {

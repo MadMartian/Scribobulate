@@ -545,6 +545,8 @@ pub(crate) fn draw_page(
                 scale,
                 box_height,
                 is_head,
+                opens,
+                closes,
             } => {
                 draw_table_row(
                     cr,
@@ -556,6 +558,10 @@ pub(crate) fn draw_page(
                         box_height: *box_height,
                         is_head: *is_head,
                         head_fg: theme.table_head_fg,
+                        // A piece of a cut row closes its box at a page edge as well as
+                        // at the row's own ends, so a continuation is never open-ended.
+                        top_edge: *opens || i == 0,
+                        bottom_edge: *closes || idx + 1 == range.end,
                     },
                     margin_pt + line.indent,
                     y,
@@ -601,6 +607,10 @@ struct TableRowInk<'a> {
     /// The theme's resolved header ink, or `None` where neither `table_head_fg` nor
     /// `heading_color` is stated.
     head_fg: Option<gtk::gdk::RGBA>,
+    /// Whether to rule the box's top / bottom edge. Only a piece of a row cut across
+    /// pages ever omits one — where it joins a sibling piece on the same page.
+    top_edge: bool,
+    bottom_edge: bool,
 }
 
 /// Draw one table row with its cell borders, header fill and text.
@@ -692,19 +702,41 @@ fn draw_table_row(
     // One stroked box per cell. Adjacent cells share an edge, so a reader sees a
     // continuous rule rather than a double line — the `border-collapse` the HTML sink
     // asks for, expressed in the only way a page has.
+    //
+    // An omitted edge is stroked OUTSIDE the box and clipped away, rather than the box
+    // being drawn as separate segments: the sides then run flush into the sibling
+    // piece's, with the same joins a whole box has, and a row that fits — both edges —
+    // draws exactly the rectangle it always did.
     if row.chrome.border > 0.0 {
+        cr.save().ok();
         set_ink(cr, border_rgba);
         cr.set_line_width(row.chrome.border);
         let inset = row.chrome.border / 2.0;
+        let above = if row.top_edge {
+            inset
+        } else {
+            -row.chrome.border
+        };
+        let below = if row.bottom_edge {
+            row.box_height - inset
+        } else {
+            row.box_height + row.chrome.border
+        };
+        if !(row.top_edge && row.bottom_edge) {
+            let width = row.columns.last().map_or(0.0, |c| c.x + c.box_width);
+            cr.rectangle(0.0, 0.0, width, row.box_height);
+            cr.clip();
+        }
         for column in row.columns {
             cr.rectangle(
                 column.x + inset,
-                inset,
+                above,
                 (column.box_width - row.chrome.border).max(0.0),
-                (row.box_height - row.chrome.border).max(0.0),
+                (below - above).max(0.0),
             );
         }
         cr.stroke().ok();
+        cr.restore().ok();
     }
 
     set_ink(cr, head_fg);
@@ -712,14 +744,16 @@ fn draw_table_row(
         let Some(column) = row.columns.get(cell.column) else {
             continue;
         };
-        cr.move_to(
-            column.x + row.chrome.border + row.chrome.padding_h,
-            row.chrome.padding_v,
-        );
-        // `show_layout` walks the layout's own lines and hands cairo UTF-8 with
-        // clusters, exactly as `show_layout_line` does for body text — a wrapped cell
-        // must stay searchable and selectable like everything else (TDD 25.18).
-        pangocairo::functions::show_layout(cr, &cell.layout);
+        let left = column.x + row.chrome.border + row.chrome.padding_h;
+        // Line by line, and only the lines this row (or this piece of a row cut across
+        // pages) owns: a whole-layout `show_layout` would draw a piece's neighbours too,
+        // off the page's foot, and put their words into the text layer once per page.
+        // `show_layout_line` hands cairo UTF-8 with clusters exactly as `show_layout`
+        // does, so a wrapped cell stays searchable and selectable (TDD 25.18).
+        for ink in &cell.lines {
+            cr.move_to(left + ink.x, ink.baseline);
+            pangocairo::functions::show_layout_line(cr, &ink.line);
+        }
     }
     cr.restore().ok();
 }

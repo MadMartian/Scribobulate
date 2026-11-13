@@ -210,9 +210,11 @@ enum LineKind {
     },
     /// One row of a table, on the column grid its whole table shares.
     ///
-    /// A row is a single line — and therefore a single [`Fragment`] — precisely so
-    /// that "a page break falls between rows and never through one" is structural
-    /// rather than a rule someone has to remember (TDD 25.16).
+    /// A row that fits a page is a single line — and therefore a single [`Fragment`] —
+    /// so a page break falls between rows and never through one. A row TALLER than a
+    /// page is one line per piece [`pdftable::split_row`] cut it into, each cut at a
+    /// line boundary of every cell, so its text is never halved and never dropped
+    /// (TDD 25.16, 25.17).
     TableRow {
         cells: Vec<TableCell>,
         /// The whole table's column geometry, in unscaled points.
@@ -223,6 +225,11 @@ enum LineKind {
         /// The row's height in unscaled points, padding included.
         box_height: f64,
         is_head: bool,
+        /// Whether this is the first / last piece of its row. Both `true` for a row that
+        /// fits a page; a piece of a cut row draws no border where it joins a sibling on
+        /// the same page, so the row still reads as one box.
+        opens: bool,
+        closes: bool,
     },
 }
 
@@ -247,11 +254,32 @@ struct LayoutSpec {
     align: pango::Alignment,
 }
 
-/// One cell of a laid-out table row.
+/// One cell of a laid-out table row — or of the PIECE of one a page draws, when the row
+/// was too tall for a page and [`pdftable::split_row`] cut it.
 struct TableCell {
+    /// The whole cell's layout — test-only, for the tests that read what a cell's RUNS
+    /// carry. The ink pass draws [`TableCell::lines`], never this.
+    #[cfg(test)]
     layout: pango::Layout,
     /// Which column of the row's grid this cell occupies.
     column: usize,
+    /// The lines of `layout` this row (or piece) draws, each already positioned in the
+    /// piece's own text coordinates. Drawn line by line rather than with
+    /// `show_layout`, because a piece draws only some of the cell's lines — and a
+    /// whole layout drawn under a clip would still put every word into the text layer,
+    /// once per page it was drawn on.
+    lines: Vec<CellInkLine>,
+}
+
+/// One line of a cell, ready for `show_layout_line`.
+struct CellInkLine {
+    line: pango::LayoutLine,
+    /// Left edge of the line within the cell's text box, in points — non-zero for a
+    /// centred or right-aligned column, which `show_layout_line` does not apply itself.
+    x: f64,
+    /// Baseline from the top of the piece's BOX, in points — the row's top padding
+    /// already included where this piece carries it (only a row's first piece does).
+    baseline: f64,
 }
 
 impl TableCell {
