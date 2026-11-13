@@ -33,7 +33,9 @@
 //! surviving copy of the user's work, and a human can still read it.
 
 use super::*;
-use crate::swapfile::recovery::{baseline_is_current, disposition, holds_nothing_new};
+use crate::swapfile::recovery::{
+    baseline_is_current, disposition, holds_nothing_new, identity_matches_first,
+};
 use crate::swapfile::{self, SwapDecodeError, SwapDisposition, SwapHeader};
 
 /// One snapshot that survived the scan, with the file it came from.
@@ -60,7 +62,7 @@ struct FoundSwap {
 /// they are ours, they are small, they live in the state directory, and their
 /// contents decide whether this pass does anything at all.
 pub(crate) async fn recover_after_restore(app: &Application) {
-    let found = scan_swap_directory();
+    let mut found = scan_swap_directory();
     if found.is_empty() {
         return;
     }
@@ -73,6 +75,9 @@ pub(crate) async fn recover_after_restore(app: &Application) {
         .flat_map(|w| winstate::tabs_for_window(&w))
         .map(|t| t.doc_id())
         .collect();
+    // Before any path match can adopt (and so re-file) a tab another snapshot owns by
+    // identity — see `identity_matches_first` (TDD 22.16).
+    identity_matches_first(&mut found, &restored, |s| &s.header.doc_id);
 
     // Recovered tabs per window, so each window can report its own count. Kept as a
     // count rather than a list because that is all the status message needs, and a list

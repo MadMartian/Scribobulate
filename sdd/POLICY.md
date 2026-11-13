@@ -133,6 +133,7 @@ render-free-measure, which a correct implementation cannot pass.
 
 ### Manual integration testing
 
+- Unless otherwise specified in `tests/MANUAL-TEST.md`, manual agent-driven integration testing must always be driven under a Sonnet (or equivalent) sub-agent as this is an expensive workflow.
 - Integration tests trace back to TDD rubrics; one that maps to no rubric is probably a
   unit test.
 - **Every fix or behaviour change is proved against the running app** — per fix, by

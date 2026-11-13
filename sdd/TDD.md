@@ -1788,6 +1788,7 @@
 - **And** Quote, Code Block, Bulleted List, Numbered List, and Task List toggle **off** when re-applied to already-formatted text (accepting any bullet marker `- `/`* `/`+ ` or ordered delimiter `.`/`)` across a mixed run; Task List additionally requires a checkbox `[ ]`/`[x]`/`[X]` after the bullet, so a bare bullet is **not** treated as a task item)
 - **And** applying one list kind to lines that are already a list of **another** kind converts them in place, for every pairing of bulleted, numbered and task: the old marker is replaced, never kept beside the new one (`- a` + Task List → `- [ ] a`, not `- [ ] - a`; `- [x] a` + Bulleted List → `- a`; `- a` + Numbered List → `1. a`); a block un-listed by toggle-off loses every list marker it carries, whatever its kind
 - **And** the preview renders the Bulleted/Numbered result as a real list, and the Task List result as real (read-only) checkboxes
+- **And** every block command — these, Heading (10.4) and Increase / Decrease Indent (10.21) — keeps the document's line endings: on a CRLF document each line it rewrites or adds ends in CRLF, no blank line appears, and a mixed document keeps each line's own ending
 
 ### 10.6 Format commands require editor focus
 - **Given** preview mode, or any state where the editor pane does not hold keyboard focus
@@ -4028,6 +4029,7 @@ buffer holds the only copy.
 - **When** the application dies uncleanly and restarts
 - **Then** both sets of edits are recoverable — neither overwrote the other's recovery data
 - **And** they are recovered into *separate* tabs: two unsaved buffers for one path are two documents, so the second must never be applied over the first (22.17's correlation by path stops at the first tab it claims)
+- **And** this holds on a bare relaunch whose restored session already carries one of the two in a tab, whichever order the recovery data is found in: the restored one comes back in that tab, the other in a tab of its own, and neither is left unreachable
 
 ### 22.17 Reopening the crashed document by name recovers into that tab, not a second one
 - **Given** an unclean exit left unsaved work in a document
@@ -4359,6 +4361,7 @@ up doing.
 - **Given** a document long enough to paginate
 - **When** it is exported to PDF
 - **Then** no line of text is divided across a page boundary — a line falls wholly on one page or wholly on the next
+- **And** no content is dropped at a page boundary: a block taller than a page — a table row whose cell wraps to more lines than a page holds — continues onto the following pages rather than running off the foot of one (25.17)
 
 ### 25.17 A table too wide for the page wraps, then scales — never clips
 - **Given** a table wider than the printable width of the page
@@ -4366,7 +4369,8 @@ up doing.
 - **Then** the table is contained within the printable width — **never clipped at the margin, never reflowed into a different table**
 - **And** *reflowed into a different table* means a change to the table's **structure**: a column dropped, merged, split, reordered, or degraded into prose or a list. **The column count is the invariant.** Wrapping a cell's text onto more lines *inside its own column* is not a reflow — the table a reader sees has the same columns in the same order, and every cell is still in the cell it belongs to
 - **And** the two remedies apply **in that order**: a table that cannot fit at its natural widths has its columns narrowed and its cells wrapped; **only** a table that still overflows once every column is at its own minimum content width (its longest unbreakable word) is uniformly scaled. Wrapping is preferred because it costs a reader nothing, where scaling costs legibility — so a table that could have wrapped must never be found scaled
-- **And** each row is one indivisible fragment, so 25.16's page-break rule holds for tables: a break falls **between** rows and never through one, however many lines a row's tallest cell wraps to
+- **And** a row that fits on a page is one indivisible fragment, so 25.16's page-break rule holds for tables: a break falls **between** rows and never through one, however many lines a row's tallest cell wraps to
+- **And** a row **taller than a page** is cut across pages **only at a line boundary of every cell**, never through a line, and loses nothing: every word of every cell appears in the PDF exactly once. Each piece's cell borders close at the page edge; between pieces on the same page no border is drawn, so the row still reads as one box. The header row is not repeated on the continuation page
 - *(Ordering ratified by the operator 2026-08-20, replacing the unauthored "bound on how far scaling may go": the bound is no longer needed as a number, because scaling is now the last resort rather than the first response, and the regime that reaches it is one no wrapping could have saved. Automated in `export::pdftable`'s unit tests and `export::pdf`'s layout tests; driven end-to-end per MANUAL-TEST 25.17.)*
 
 ### 25.18 Text round-trips out of the PDF byte-exact

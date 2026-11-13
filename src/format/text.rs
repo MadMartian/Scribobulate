@@ -51,6 +51,34 @@ pub(super) fn line_end_of(chars: &[char], pos: usize) -> usize {
     i
 }
 
+/// The line terminator a line the formatter ADDS should use beside the line holding
+/// `pos`: `"\r\n"` when that line ends in CRLF (or, being the last line and
+/// unterminated, the line above it does), else `"\n"`. Line endings belong to the
+/// document (POLICY § Cross-platform by default), so an added line copies its
+/// neighbour's rather than leaving a CRLF document mixed.
+pub(super) fn eol_at(chars: &[char], pos: usize) -> &'static str {
+    let end = line_end_of(chars, pos);
+    let terminator = if end < chars.len() {
+        Some(end)
+    } else {
+        line_start_of(chars, pos).checked_sub(1)
+    };
+    match terminator {
+        Some(lf) if lf > 0 && chars[lf - 1] == '\r' => "\r\n",
+        _ => "\n",
+    }
+}
+
+/// Whether `pos` sits at the end of its line's content: before its `\n`, before
+/// the `\r` of its CRLF, or at the end of the text.
+pub(super) fn at_line_end(chars: &[char], pos: usize) -> bool {
+    match chars.get(pos) {
+        None | Some('\n') => true,
+        Some('\r') => chars.get(pos + 1) == Some(&'\n'),
+        Some(_) => false,
+    }
+}
+
 /// When a selection ends exactly past a newline, don't drag the following line
 /// into a block transform.
 pub(super) fn trim_trailing_newline(chars: &[char], start: usize, end: usize) -> usize {

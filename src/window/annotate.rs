@@ -548,6 +548,161 @@ mod gtk_integration_tests {
         window.destroy();
     }
 
+    /// A preview-only window over a 400-paragraph document with the editor caret parked
+    /// at the document's END (where an earlier edit left it), and paragraph 200
+    /// annotated from the preview, re-rendered as the preview's Annotate flow does.
+    fn annotated_mid_document_with_the_caret_at_the_end(
+        id: &str,
+    ) -> (ApplicationWindow, std::rc::Rc<crate::winstate::TabState>) {
+        use gtk::prelude::*;
+        let app = gtk::Application::new(
+            Some(&format!(
+                "com.extollit.scribobulate.integrationtest.annotate.undoreveal.{id}"
+            )),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register before building a window");
+        let doc: String = (1..=400).map(|n| format!("line {n}\n\n")).collect();
+        let window = crate::window::new_window(&app, "IT", &doc, None);
+        window.set_default_size(700, 400);
+        window.present();
+        crate::testpump::until(crate::testpump::Clock::Idle, "toplevel to map", || {
+            window.is_mapped()
+        });
+        let st = state(&window).expect("state after new_window");
+        change_action_state(&window, "view-mode", &"preview".to_variant());
+        st.editor_buf.place_cursor(&st.editor_buf.end_iter());
+
+        let buf: gtk::TextBuffer = st.editor_buf.clone().upcast();
+        let source = text_of(&buf);
+        let at = source.find("line 200\n").expect("paragraph 200");
+        apply_annotation_edit(&buf, highlight_in(&source, at..at + 8, "mid"));
+        refresh_preview_after_annotation(&preview_of(&st));
+        assert_eq!(
+            st.editor_buf
+                .iter_at_mark(&st.editor_buf.get_insert())
+                .offset(),
+            st.editor_buf.end_iter().offset(),
+            "precondition: the editor caret is still at the document's end"
+        );
+        (window, st)
+    }
+
+    /// The preview pane, looked up afresh: a re-render may replace what it shows.
+    fn preview_of(st: &crate::winstate::TabState) -> crate::codeview::CodePreviewView {
+        use gtk::prelude::*;
+        st.split
+            .preview_scroller()
+            .and_then(|sw| sw.child())
+            .and_then(|c| c.downcast::<crate::codeview::CodePreviewView>().ok())
+            .expect("the preview view")
+    }
+
+    /// The preview line paragraph 200 sits on, in the preview as it is rendered now.
+    fn paragraph_200_line(preview: &crate::codeview::CodePreviewView) -> i32 {
+        use gtk::prelude::*;
+        preview
+            .buffer()
+            .start_iter()
+            .forward_search("line 200", gtk::TextSearchFlags::empty(), None)
+            .map(|(start, _)| start.line())
+            .expect("paragraph 200 in the preview")
+    }
+
+    /// Wait for the preview's scroll position to stop moving.
+    fn settle(preview: &crate::codeview::CodePreviewView, what: &str) {
+        use gtk::prelude::*;
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_millis(800),
+        );
+        let settled = crate::testpump::until_stable(
+            crate::testpump::Clock::Frame,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_millis(300),
+            || preview.vadjustment().map(|a| a.value() as i64),
+        );
+        assert!(settled.converged, "{what} to settle");
+    }
+
+    /// TDD 9.16, manual check 9.16c: undoing an annotation made from the preview
+    /// reveals the ANNOTATION, never the editor caret. The caret sits at the document's
+    /// end, the reader is at the top, and the annotation is mid-document; the undo must
+    /// bring paragraph 200 on screen. Before the fix the reveal followed the caret, which
+    /// the undo puts back where it was when the annotation was recorded, and the preview
+    /// went to the end. Mutation: answering `None` from `first_changed_char` (the caret
+    /// fallback) fails here.
+    #[gtktest::test]
+    fn undoing_an_annotation_in_preview_mode_reveals_the_annotation_not_the_caret() {
+        use gtk::prelude::*;
+        let (window, st) = annotated_mid_document_with_the_caret_at_the_end("offscreen");
+        let preview = preview_of(&st);
+        settle(&preview, "the re-rendered preview");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture positioning the view as a precondition, not a navigation"
+        )]
+        preview.scroll_to_buffer_offset(0);
+        crate::testpump::until(
+            crate::testpump::Clock::Frame,
+            "precondition: the preview at the top",
+            || preview.visible_rect().y() == 0,
+        );
+
+        window.lookup_action("undo").unwrap().activate(None);
+        settle(&preview, "the preview after undo");
+        let line = paragraph_200_line(&preview);
+        let (top, bottom) = super::super::panescroll::preview_lines_on_screen(&st)
+            .expect("the preview is on screen");
+        assert!(
+            (top..=bottom).contains(&line),
+            "undo must reveal the undone annotation (preview line {line}); \
+             lines {top}..={bottom} are on screen"
+        );
+        window.destroy();
+    }
+
+    /// The reported scenario of 9.16c: the reader annotates a paragraph ON SCREEN, so
+    /// an undo has nothing to reveal and the preview must hold where it is, rather
+    /// than jumping to the document's end where the editor caret sits.
+    #[gtktest::test]
+    fn undoing_an_on_screen_annotation_in_preview_mode_holds_the_preview() {
+        use gtk::prelude::*;
+        let (window, st) = annotated_mid_document_with_the_caret_at_the_end("onscreen");
+        let preview = preview_of(&st);
+        settle(&preview, "the re-rendered preview");
+        let mut park = preview
+            .buffer()
+            .iter_at_line(paragraph_200_line(&preview))
+            .expect("paragraph 200's line");
+        park.backward_lines(4);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test fixture positioning the view as a precondition, not a navigation"
+        )]
+        preview.scroll_to_buffer_offset(park.offset());
+        settle(&preview, "the parking scroll");
+        let (top, bottom) = super::super::panescroll::preview_lines_on_screen(&st)
+            .expect("the preview is on screen");
+        let line = paragraph_200_line(&preview);
+        assert!(
+            top < line && line <= bottom,
+            "precondition: the annotation (line {line}) on screen; lines {top}..={bottom} are"
+        );
+
+        window.lookup_action("undo").unwrap().activate(None);
+        settle(&preview, "the preview after undo");
+        let (now_top, _) = super::super::panescroll::preview_lines_on_screen(&st)
+            .expect("the preview is on screen");
+        assert!(
+            now_top.abs_diff(top) <= 1,
+            "the undone annotation was on screen, so the preview must hold; its top line \
+             went from {top} to {now_top}"
+        );
+        window.destroy();
+    }
+
     #[gtktest::test]
     fn redo_then_new_annotation_are_two_independent_undo_steps() {
         // Repro of the reported bug: annotate, undo, redo, annotate again — then a
