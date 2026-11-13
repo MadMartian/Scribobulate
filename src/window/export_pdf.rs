@@ -401,8 +401,11 @@ mod export_destination_tests {
             .expect("run pdftotext");
         let text = String::from_utf8_lossy(&out.stdout);
         let want = CELL.replace(" | ", " ");
+        // poppler 26.08 (Homebrew) appends the page-break form feed to the page's LAST
+        // text line rather than on a line of its own, so the cell row carries a trailing
+        // `\u{c}` when it ends the page; strip it, it is page structure, not cell text.
         assert!(
-            text.lines().any(|l| l == want),
+            text.lines().any(|l| l.trim_end_matches('\u{c}') == want),
             "the cell row must extract byte-exact as {want:?}; got:\n{text:?}"
         );
     }
