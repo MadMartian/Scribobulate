@@ -156,3 +156,113 @@ mod gtk_integration_tests {
         );
     }
 }
+
+/// TDD 10.5: a block command on a CRLF document gives exactly the result it gives on
+/// the LF twin, with every line ending CRLF — through the REAL editor buffer
+/// (`lineendings::new_editor_buffer`, whose lone-CR repair hook sees every spliced
+/// replacement), because the pure core alone cannot see what that hook does.
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod line_ending_tests {
+    use super::*;
+
+    /// Every block command — the in-place rewrites, the line-adding ones and the two
+    /// list-structure edits.
+    const BLOCK_CMDS: [FormatCmd; 10] = [
+        FormatCmd::Heading(1),
+        FormatCmd::Heading(3),
+        FormatCmd::Quote,
+        FormatCmd::BulletedList,
+        FormatCmd::NumberedList,
+        FormatCmd::TaskList,
+        FormatCmd::CodeBlock,
+        FormatCmd::HorizontalRule,
+        FormatCmd::Indent,
+        FormatCmd::Dedent,
+    ];
+
+    /// LF documents, each probed with the caret on line 2 and with a selection over
+    /// lines 2–3. Includes a nested list (so Indent / Dedent and a list conversion
+    /// carry a subtree) and a document already formatted (so each command also
+    /// toggles off).
+    const LF_DOCS: [&str; 4] = [
+        "first line\nsecond line here\nthird\nfourth\n",
+        "- a\n- b\n  - c\n- d\n",
+        "# a\n# b\n> c\nd",
+        "```\ncode\n```\n",
+    ];
+
+    /// An armed editor buffer holding `text` as a non-undoable baseline.
+    fn armed_buf(text: &str) -> sourceview::Buffer {
+        let b = crate::lineendings::new_editor_buffer();
+        b.set_enable_undo(true);
+        b.begin_irreversible_action();
+        b.set_text(text);
+        b.end_irreversible_action();
+        b
+    }
+
+    fn text_of(b: &sourceview::Buffer) -> String {
+        crate::saferizer::BufferText::of(b).into_string()
+    }
+
+    /// Apply `cmd` over the selection of `line` (0-based), `extend` lines further.
+    fn run(doc: &str, cmd: FormatCmd, line: usize, extend: usize) -> String {
+        // One character into line `l`, or its start when it is empty — never between
+        // a CRLF's two halves, where no caret can sit.
+        let offset = |l: usize| -> usize {
+            let mut rows = doc.split_inclusive('\n');
+            let before: usize = rows.by_ref().take(l).map(|r| r.chars().count()).sum();
+            let row = rows.next().unwrap_or("");
+            before + usize::from(!row.trim_end_matches(['\r', '\n']).is_empty())
+        };
+        let buf = armed_buf(doc);
+        let edit = format::apply(cmd, doc, offset(line), offset(line + extend));
+        apply_edit(&buf, &edit);
+        text_of(&buf)
+    }
+
+    #[gtktest::test]
+    fn every_block_command_on_a_crlf_document_matches_its_lf_twin() {
+        for lf in LF_DOCS {
+            let crlf = lf.replace('\n', "\r\n");
+            for cmd in BLOCK_CMDS {
+                for extend in [0, 1] {
+                    let want = run(lf, cmd, 1, extend).replace('\n', "\r\n");
+                    let got = run(&crlf, cmd, 1, extend);
+                    assert_eq!(got, want, "{cmd:?} (+{extend} lines) on {crlf:?}");
+                }
+            }
+        }
+    }
+
+    /// The repro from manual test 10.4, byte for byte — and Undo / Redo, which replay
+    /// through the same insert hook, restore each side exactly.
+    #[gtktest::test]
+    fn heading_on_a_crlf_line_keeps_its_crlf_and_adds_no_blank_line() {
+        let doc = "first line\r\nsecond line here\r\nthird\r\nfourth\r\n";
+        let want = "first line\r\n# second line here\r\nthird\r\nfourth\r\n";
+        assert_eq!(run(doc, FormatCmd::Heading(1), 1, 0), want);
+
+        let buf = armed_buf(doc);
+        apply_edit(&buf, &format::apply(FormatCmd::Heading(1), doc, 12, 12));
+        buf.undo();
+        assert_eq!(text_of(&buf), doc, "undo");
+        buf.redo();
+        assert_eq!(text_of(&buf), want, "redo");
+    }
+
+    /// A mixed document keeps every line's own ending under each in-place command: the
+    /// CRLF line stays CRLF and the LF lines stay LF.
+    #[gtktest::test]
+    fn a_block_command_on_a_mixed_document_keeps_each_lines_ending() {
+        let doc = "one\ntwo\r\nthree\n";
+        for cmd in &BLOCK_CMDS[..6] {
+            let out = run(doc, *cmd, 1, 0);
+            assert_eq!(
+                out.matches("\r\n").count(),
+                1,
+                "{cmd:?} on {doc:?} must keep line 2's CRLF and add no other: {out:?}"
+            );
+        }
+    }
+}

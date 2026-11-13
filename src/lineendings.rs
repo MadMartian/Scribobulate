@@ -151,6 +151,28 @@ pub(crate) fn normalize_lone_cr(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// [`normalize_lone_cr`] for text being **inserted** into a buffer, judged in place:
+/// `followed_by_lf` says whether the character at the insertion point is `\n`.
+///
+/// Whether a `\r` is lone depends on what follows it, and for the inserted text's LAST
+/// character that is the buffer, not the text. A block format command rewrites a CRLF
+/// line up to its `\n`, so its replacement ends in that line's `\r` and lands right in
+/// front of the `\n` it pairs with. Judged on the text alone, that `\r` looked lone and
+/// became a `\n` — `"# line\r"` + `"\n"` turned into `"# line\n\n"`: the line lost its
+/// CRLF and the document gained a blank line (TDD 10.5).
+pub(crate) fn repair_insertion(text: &str, followed_by_lf: bool) -> Cow<'_, str> {
+    match text.strip_suffix('\r') {
+        Some(head) if followed_by_lf => match normalize_lone_cr(head) {
+            Cow::Borrowed(_) => Cow::Borrowed(text),
+            Cow::Owned(mut repaired) => {
+                repaired.push('\r');
+                Cow::Owned(repaired)
+            }
+        },
+        _ => normalize_lone_cr(text),
+    }
+}
+
 /// [`normalize_lone_cr`] for a raw-bytes reader. Same rule, same reason.
 ///
 /// # Precondition: the bytes are UTF-8 (or at least ASCII-compatible)
@@ -320,10 +342,12 @@ fn wire_paste_normalization(buffer: &sourceview::Buffer) {
         // repair produced `fatal runtime error: stack overflow` rather than a failed
         // assertion, because termination had been resting on the repair being complete
         // instead of on the handler's shape.
-        if in_repair.get() || !has_lone_cr(text) {
+        if in_repair.get() {
             return;
         }
-        let repaired = normalize_lone_cr(text);
+        let Cow::Owned(repaired) = repair_insertion(text, iter.char() == '\n') else {
+            return;
+        };
         glib::signal::signal_stop_emission_by_name(buf, "insert-text");
         in_repair.set(true);
         buf.insert(iter, &repaired);
@@ -333,7 +357,24 @@ fn wire_paste_normalization(buffer: &sourceview::Buffer) {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_lone_cr, normalize_lone_cr, normalize_lone_cr_bytes};
+    use super::{has_lone_cr, normalize_lone_cr, normalize_lone_cr_bytes, repair_insertion};
+    use std::borrow::Cow;
+
+    /// TDD 10.5: an inserted text's trailing `\r` that lands in front of a `\n` is the
+    /// first half of a CRLF, not a lone CR, and is kept; anywhere else it is repaired.
+    #[test]
+    fn an_insertions_trailing_cr_before_a_lf_is_half_of_a_crlf() {
+        assert!(matches!(
+            repair_insertion("# line\r", true),
+            Cow::Borrowed("# line\r")
+        ));
+        assert_eq!(repair_insertion("# line\r", false), "# line\n");
+        assert_eq!(repair_insertion("a\rb\r", true), "a\nb\r");
+        assert_eq!(repair_insertion("a\r\r", true), "a\n\r");
+        assert_eq!(repair_insertion("a\r\nb\r", true), "a\r\nb\r");
+        assert!(matches!(repair_insertion("plain", true), Cow::Borrowed(_)));
+        assert_eq!(repair_insertion("a\rb", true), "a\nb");
+    }
 
     /// The bytes twin, tested directly rather than through its `&str` sibling.
     ///
