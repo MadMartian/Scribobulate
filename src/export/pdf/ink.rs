@@ -749,10 +749,15 @@ fn draw_table_row(
         // pages) owns: a whole-layout `show_layout` would draw a piece's neighbours too,
         // off the page's foot, and put their words into the text layer once per page.
         // `show_layout_line` hands cairo UTF-8 with clusters exactly as `show_layout`
-        // does, so a wrapped cell stays searchable and selectable (TDD 25.18).
+        // does, so a wrapped cell stays searchable and selectable (TDD 25.18) — but only
+        // while the line's layout is alive, which is why the line is fetched from the
+        // cell's layout here rather than carried on its own (`TableCell::layout`).
         for ink in &cell.lines {
+            let Some(line) = cell.layout.line_readonly(ink.index) else {
+                continue;
+            };
             cr.move_to(left + ink.x, ink.baseline);
-            pangocairo::functions::show_layout_line(cr, &ink.line);
+            pangocairo::functions::show_layout_line(cr, &line);
         }
     }
     cr.restore().ok();

@@ -38,6 +38,11 @@
 //! right and nothing in it can be searched, selected or copied (TDD 25.18). Stated here
 //! and again at [`ink`], because that is where someone would write the loop.
 //!
+//! The same loss has a second door: a `pango::LayoutLine` whose layout has been dropped.
+//! Pango NULLs the line's back-pointer when the layout is finalized, so the line still
+//! draws, as glyphs with no text. Hold the LAYOUT and a line index, and fetch the line
+//! when drawing, as [`LineKind::Text`] and [`TableCell`] do; never store a bare line.
+//!
 //! # Colour
 //!
 //! Resolved through the theme engine like every other surface, against the System
@@ -257,9 +262,17 @@ struct LayoutSpec {
 /// One cell of a laid-out table row — or of the PIECE of one a page draws, when the row
 /// was too tall for a page and [`pdftable::split_row`] cut it.
 struct TableCell {
-    /// The whole cell's layout — test-only, for the tests that read what a cell's RUNS
-    /// carry. The ink pass draws [`TableCell::lines`], never this.
-    #[cfg(test)]
+    /// The whole cell's layout, which the ink pass asks for each of [`TableCell::lines`]
+    /// at draw time.
+    ///
+    /// **Load-bearing for the text layer, not a convenience.** A `pango::LayoutLine` held
+    /// on its own does not keep its layout alive, and Pango NULLs `line->layout` when
+    /// the layout is finalized. `pango_renderer_draw_layout_line` then has no text to
+    /// hand cairo and draws bare glyphs: the page looks right, Linux still extracts
+    /// (cairo's FreeType backend reverse-maps glyphs through the cmap, except ligatures),
+    /// and on macOS every cell character extracted as U+FFFD (TDD 25.18). Holding the
+    /// layout and an index — the shape [`LineKind::Text`] has always had — makes a line
+    /// without its layout unrepresentable here.
     layout: pango::Layout,
     /// Which column of the row's grid this cell occupies.
     column: usize,
@@ -273,7 +286,8 @@ struct TableCell {
 
 /// One line of a cell, ready for `show_layout_line`.
 struct CellInkLine {
-    line: pango::LayoutLine,
+    /// The line's index in its cell's [`TableCell::layout`].
+    index: i32,
     /// Left edge of the line within the cell's text box, in points — non-zero for a
     /// centred or right-aligned column, which `show_layout_line` does not apply itself.
     x: f64,
