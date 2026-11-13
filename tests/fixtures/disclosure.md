@@ -31,7 +31,7 @@ Prose after the first block, so a copy can start above it and end below it.
 <details open>
 <summary>Already expanded</summary>
 
-This body is visible without any user action, and can still be collapsed.
+This body is visible without any user action, and {==can still be collapsed==}{>>An annotation inside a body: its highlight must survive a fold and an expand.<<}.
 
 </details>
 
