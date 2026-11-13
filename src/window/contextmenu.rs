@@ -11,9 +11,23 @@ use super::*;
 /// finalized widgets → `g_object_unref: G_IS_OBJECT` (one per node). Running the popdown
 /// on idle moves the whole teardown out of the dispatch. (GTK4Rs/AP-30;
 /// researcher-verified, gtk-4-6.)
+///
+/// At `HIGH_IDLE`, not the default idle priority: the pop-down must run BEFORE any work
+/// the row's command deferred to an idle of its own. A row bound by action name has
+/// already activated its action when this handler runs (`clicked` is `RUN_FIRST`, and
+/// the button's class handler is what activates it), so an action that defers to a
+/// default idle — `win.annotate` raises its card that way — is queued AHEAD of a
+/// same-priority pop-down. The card then took the focus first and the menu's pop-down
+/// handed it back to the pane, which dismissed the card: the context menu's Annotate
+/// closed the menu and showed nothing (TDD 17.23). A higher priority orders the two by
+/// what they are rather than by which was queued first. `HIGH_IDLE` is still an idle,
+/// outside the event dispatch the deferral exists to leave.
 fn dismiss_context_popover(po: &gtk::Popover) {
     let po = po.clone();
-    gtk::glib::idle_add_local_once(move || po.popdown());
+    gtk::glib::idle_add_local_full(glib::Priority::HIGH_IDLE, move || {
+        po.popdown();
+        glib::ControlFlow::Break
+    });
 }
 /// The scaffold every right-click menu shares (the document, tab and toolbar menus): a
 /// plain arrowless `GtkPopover` — the convention here, because `GtkPopoverMenu` grows a
@@ -635,8 +649,9 @@ mod gtk_integration_tests {
 
     /// Right-click `view` through its own secondary-button gesture, as a pointer press
     /// would, and return the document menu once it has mapped.
-    fn open_document_menu(win: &ApplicationWindow, view: &CodePreviewView) -> gtk::Popover {
+    fn open_document_menu(win: &ApplicationWindow, view: &impl IsA<gtk::Widget>) -> gtk::Popover {
         let press = view
+            .as_ref()
             .observe_controllers()
             .into_iter()
             .filter_map(|c| c.ok().and_downcast::<GestureClick>())
@@ -717,6 +732,135 @@ mod gtk_integration_tests {
                 "the document menu's body outlived the menu: something it owns holds it"
             );
             drop(view);
+            win.destroy();
+        });
+    }
+
+    /// The first widget under `root` (inclusive) that `pick` accepts.
+    fn find_widget(root: &gtk::Widget, pick: impl Fn(&gtk::Widget) -> bool) -> Option<gtk::Widget> {
+        let mut stack = vec![root.clone()];
+        while let Some(w) = stack.pop() {
+            if pick(&w) {
+                return Some(w);
+            }
+            let mut c = w.first_child();
+            while let Some(child) = c {
+                c = child.next_sibling();
+                stack.push(child);
+            }
+        }
+        None
+    }
+
+    /// Whether an annotation comment card is up and holding the keyboard focus — the
+    /// state the reader needs to type a comment. Both panes' cards carry
+    /// `ANNOTATION_CARD_CLASS`.
+    fn annotation_card_is_up(win: &ApplicationWindow) -> bool {
+        let card = find_widget(win.upcast_ref(), |w| {
+            w.has_css_class(crate::window::ANNOTATION_CARD_CLASS) && w.is_visible() && w.is_mapped()
+        });
+        let Some(card) = card else { return false };
+        let mut focus = GtkWindowExt::focus(win);
+        while let Some(w) = focus {
+            if w == card {
+                return true;
+            }
+            focus = w.parent();
+        }
+        false
+    }
+
+    /// Right-click `view`, click the menu's Annotate row as the pointer would, and
+    /// report whether the comment card is up once everything the click deferred has run
+    /// (the menu's pop-down, its focus restore, and its release).
+    fn annotate_from_the_context_menu(
+        win: &ApplicationWindow,
+        view: &impl IsA<gtk::Widget>,
+    ) -> bool {
+        crate::window::update_annotate_action_state(win);
+        assert!(
+            win.lookup_action("annotate")
+                .is_some_and(|a| a.is_enabled()),
+            "precondition: a selection enables win.annotate"
+        );
+        let menu = open_document_menu(win, view);
+        let row = find_widget(menu.upcast_ref(), |w| {
+            w.downcast_ref::<gtk::Button>()
+                .and_then(|b| b.action_name())
+                .is_some_and(|n| n == "win.annotate")
+        })
+        .and_downcast::<gtk::Button>()
+        .expect("the context menu carries an Annotate row");
+        assert!(row.is_sensitive(), "precondition: the Annotate row is live");
+        row.emit_clicked();
+        until_for(
+            Clock::Frame,
+            Duration::from_secs(5),
+            "the context menu to close",
+            || !menu.is_visible(),
+        );
+        // Past the release too: the card must STAY, not flash and vanish.
+        drain_for(
+            Clock::Frame,
+            TOOLTIP_HOVER_DRAIN + Duration::from_millis(300),
+        );
+        annotation_card_is_up(win)
+    }
+
+    /// **TDD 17.23, editor: the context menu's Annotate raises the comment card.** The
+    /// row both activated `win.annotate` (which raises the card on an idle) and queued
+    /// the menu's pop-down on an idle of the same priority, queued second — so the card
+    /// took focus first and the pop-down's focus restore then dismissed it. The menu
+    /// closed, the selection stayed, and no card appeared, while the accelerator, the
+    /// Edit menu and the toolbar worked.
+    ///
+    /// Mutation check: queuing the pop-down at `DEFAULT_IDLE` again fails this.
+    #[gtktest::test]
+    fn the_context_menu_annotate_raises_the_editor_card() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let (win, _preview) = document_window("ctxannotateeditor", "# Heading\n\nbody text\n");
+            crate::window::change_action_state(&win, "view-mode", &"edit".to_variant());
+            let st = state(&win).expect("state");
+            let editor = st.editor.clone();
+            until(Clock::Frame, "the editor to lay out", || {
+                editor.height() > 0
+            });
+            editor.grab_focus();
+            until(Clock::Frame, "the editor to take focus", || {
+                editor.has_focus()
+            });
+            let buf = &st.editor_buf;
+            buf.select_range(&buf.start_iter(), &buf.iter_at_offset(9));
+            assert!(
+                annotate_from_the_context_menu(&win, &editor),
+                "the context menu's Annotate must raise the editor's comment card and keep it"
+            );
+            assert!(
+                buf.has_selection(),
+                "the selection is still there to annotate"
+            );
+            win.destroy();
+        });
+    }
+
+    /// **TDD 17.23, preview: the context menu's Annotate raises the comment card.** The
+    /// same race as the editor case, through the preview's card.
+    #[gtktest::test]
+    fn the_context_menu_annotate_raises_the_preview_card() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::session::with_state_home_for_test(dir.path(), || {
+            let (win, view) = document_window("ctxannotatepreview", "# Heading\n\nbody text\n");
+            view.grab_focus();
+            until(Clock::Frame, "the preview to take focus", || {
+                view.has_focus()
+            });
+            let buf = view.buffer();
+            buf.select_range(&buf.start_iter(), &buf.iter_at_offset(7));
+            assert!(
+                annotate_from_the_context_menu(&win, &view),
+                "the context menu's Annotate must raise the preview's comment card and keep it"
+            );
             win.destroy();
         });
     }
