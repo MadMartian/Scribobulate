@@ -23,15 +23,29 @@ pub(super) fn apply_code_block(chars: &[char], start: usize, end: usize) -> Edit
             .map(|l| l.content.trim().starts_with("```"))
             .unwrap_or(false);
 
+    // On a CRLF line the span's last line ends in its `\r` (the span stops at the
+    // `\n`). That `\r` belongs to the span's END, not to whichever line ends up last
+    // after the rewrite, so it is held aside and re-attached there.
+    let last_cr = |s: &str| s.ends_with('\r');
+    let tail = if lines.last().is_some_and(|l| last_cr(l.content)) {
+        "\r"
+    } else {
+        ""
+    };
+
     if fenced {
         let inner = text::rejoin(&lines[1..lines.len() - 1]);
-        return text::replace_block(&span, inner);
+        let inner = inner.strip_suffix('\r').unwrap_or(&inner);
+        return text::replace_block(&span, format!("{inner}{tail}"));
     }
 
     // The fence lines join the block inside its container, so they carry the first
-    // spanned line's container prefix.
+    // spanned line's container prefix, and the document's own line ending.
     let fence = format!("{}```", lines[0].prefix);
-    let replacement = format!("{fence}\n{}\n{fence}", text::rejoin(&lines));
+    let eol = text::eol_at(chars, span.start);
+    let body = text::rejoin(&lines);
+    let body = body.strip_suffix('\r').unwrap_or(&body);
+    let replacement = format!("{fence}{eol}{body}{eol}{fence}{tail}");
     // Select the WHOLE fenced block (fences included), exactly like every other
     // per-line block transform (`text::replace_block`: quote/list/heading/unwrap).
     // A prior version selected only the inner content ("```\n" = 4 chars in), but

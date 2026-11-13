@@ -1,6 +1,7 @@
 //! Thematic-break (`---`) insertion. Unlike the block prefixers this is a pure
 //! insertion on its own line — no toggle. See [`super`] for the semantics.
 
+use super::text;
 use super::Edit;
 
 pub(super) fn apply_hr(chars: &[char], start: usize, end: usize) -> Edit {
@@ -10,17 +11,25 @@ pub(super) fn apply_hr(chars: &[char], start: usize, end: usize) -> Edit {
     // blank line between it and any text above — one newline ends the line the caret
     // is on, a second leaves the blank; at the start of a line only the blank is
     // missing, and only when the line above holds text.
-    let after_blank_line =
-        start == 0 || (at_line_start && (start == 1 || chars.get(start - 2) == Some(&'\n')));
-    let prefix = if after_blank_line {
-        ""
-    } else if at_line_start {
-        "\n"
-    } else {
-        "\n\n"
+    // Every line ending it writes is the document's own (CRLF beside a CRLF line).
+    let eol = text::eol_at(chars, start);
+    let line_above_is_blank = || {
+        let above = text::line_start_of(chars, start - 1);
+        matches!(&chars[above..start - 1], [] | ['\r'])
     };
-    let needs_trailing_nl = chars.get(end) != Some(&'\n');
-    let suffix = if needs_trailing_nl { "\n" } else { "" };
+    let after_blank_line = start == 0 || (at_line_start && line_above_is_blank());
+    let prefix = if after_blank_line {
+        String::new()
+    } else if at_line_start {
+        eol.to_string()
+    } else {
+        eol.repeat(2)
+    };
+    let suffix = if text::at_line_end(chars, end) && end < chars.len() {
+        ""
+    } else {
+        eol
+    };
     let replacement = format!("{prefix}---{suffix}");
     let caret = start + replacement.chars().count();
     Edit {

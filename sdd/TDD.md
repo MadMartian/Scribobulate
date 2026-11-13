@@ -1788,6 +1788,7 @@
 - **And** Quote, Code Block, Bulleted List, Numbered List, and Task List toggle **off** when re-applied to already-formatted text (accepting any bullet marker `- `/`* `/`+ ` or ordered delimiter `.`/`)` across a mixed run; Task List additionally requires a checkbox `[ ]`/`[x]`/`[X]` after the bullet, so a bare bullet is **not** treated as a task item)
 - **And** applying one list kind to lines that are already a list of **another** kind converts them in place, for every pairing of bulleted, numbered and task: the old marker is replaced, never kept beside the new one (`- a` + Task List → `- [ ] a`, not `- [ ] - a`; `- [x] a` + Bulleted List → `- a`; `- a` + Numbered List → `1. a`); a block un-listed by toggle-off loses every list marker it carries, whatever its kind
 - **And** the preview renders the Bulleted/Numbered result as a real list, and the Task List result as real (read-only) checkboxes
+- **And** every block command — these, Heading (10.4) and Increase / Decrease Indent (10.21) — keeps the document's line endings: on a CRLF document each line it rewrites or adds ends in CRLF, no blank line appears, and a mixed document keeps each line's own ending
 
 ### 10.6 Format commands require editor focus
 - **Given** preview mode, or any state where the editor pane does not hold keyboard focus

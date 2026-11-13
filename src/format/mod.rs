@@ -303,6 +303,72 @@ mod tests {
         );
     }
 
+    /// TDD 10.5: every block command gives a CRLF document exactly the result it
+    /// gives the LF twin, CRLF throughout — splicing as the editor buffer does, whose
+    /// insert hook repairs a lone `\r` judged in place (`lineendings::repair_insertion`).
+    /// A mixed document keeps each line's own ending.
+    #[test]
+    fn block_commands_keep_the_documents_line_endings() {
+        let through_buffer = |cmd: FormatCmd, text: &str, s: usize, e: usize| -> String {
+            let edit = apply(cmd, text, s, e);
+            let chars: Vec<char> = text.chars().collect();
+            let followed_by_lf = chars.get(edit.end) == Some(&'\n');
+            let mut out: String = chars[..edit.start].iter().collect();
+            out.push_str(&crate::lineendings::repair_insertion(
+                &edit.replacement,
+                followed_by_lf,
+            ));
+            out.extend(&chars[edit.end..]);
+            out
+        };
+        // The caret one character into `line` (0-based), or at its start when it
+        // is empty — never between a CRLF's two halves, where no caret can sit.
+        let caret = |text: &str, line: usize| -> usize {
+            let mut rows = text.split_inclusive('\n');
+            let before: usize = rows.by_ref().take(line).map(|r| r.chars().count()).sum();
+            let row = rows.next().unwrap_or("");
+            before + usize::from(!row.trim_end_matches(['\r', '\n']).is_empty())
+        };
+        let cmds = [
+            FormatCmd::Heading(1),
+            FormatCmd::Heading(3),
+            FormatCmd::Quote,
+            FormatCmd::BulletedList,
+            FormatCmd::NumberedList,
+            FormatCmd::TaskList,
+            FormatCmd::CodeBlock,
+            FormatCmd::HorizontalRule,
+            FormatCmd::Indent,
+            FormatCmd::Dedent,
+        ];
+        let docs = [
+            "first line\nsecond line here\nthird\nfourth\n",
+            "- a\n- b\n  - c\n- d\n",
+            "# a\n# b\n> c\nd",
+            "```\ncode\n```\n",
+            "a\n\n",
+            "x\n```\ny\n```",
+        ];
+        for lf in docs {
+            let crlf = lf.replace('\n', "\r\n");
+            for cmd in cmds {
+                for extend in [0, 1] {
+                    let (s, e) = (caret(lf, 1), caret(lf, 1 + extend));
+                    let want = through_buffer(cmd, lf, s, e).replace('\n', "\r\n");
+                    let (s, e) = (caret(&crlf, 1), caret(&crlf, 1 + extend));
+                    let got = through_buffer(cmd, &crlf, s, e);
+                    assert_eq!(got, want, "{cmd:?} (+{extend} lines) on {crlf:?}");
+                }
+            }
+        }
+        let mixed = "one\ntwo\r\nthree\n";
+        for cmd in &cmds[..6] {
+            let out = through_buffer(*cmd, mixed, 5, 5);
+            assert_eq!(out.matches("\r\n").count(), 1, "{cmd:?}: {out:?}");
+            assert_eq!(out.matches('\n').count(), 3, "{cmd:?}: {out:?}");
+        }
+    }
+
     #[test]
     fn reversed_selection_range_is_normalised() {
         let (text, _s, _e) = applied(FormatCmd::Bold, "hello world", 11, 6);
