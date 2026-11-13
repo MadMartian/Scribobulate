@@ -323,3 +323,101 @@ fn strike_wrapping_a_bare_link_carries_both_tags() {
         "FIXED: strike now covers the same range as link"
     );
 }
+
+// ── an annotation's highlight inside a toggled body ─────────────────────────
+
+/// **A highlighted claim inside a disclosure's body keeps its `annotation-highlight`
+/// tag across a fold and expand made through the splice.**
+///
+/// The full render applies that tag AFTER its walk (`build::apply_highlight_tags`),
+/// not as the walk writes, so a region render — which is a walk and nothing after it —
+/// writes the body back untagged. Two splices on ONE buffer, closed then open, because
+/// that is the reader's gesture and because the second splice's input is the first
+/// one's output: the extents and anchors it is handed are the ones a live pane would
+/// hold after the first toggle.
+#[gtktest::test]
+fn a_highlight_inside_a_body_survives_a_spliced_fold_and_expand() {
+    const ANNOTATED: &str = concat!(
+        "# Title\n\nintro paragraph\n\n",
+        "<details open>\n<summary>A summary label</summary>\n\n",
+        "body text with {==the claim==}{>>a reader's note<<} in the middle of it, long ",
+        "enough to run past the collapsed preview limit",
+        "\n\n</details>\n\n",
+        "## After\n\ntail paragraph\n"
+    );
+    let hl = crate::tags::TagName::AnnotationHighlight.name();
+    let key = crate::renderer::disclosure::scan_document(
+        ANNOTATED,
+        crate::renderer::frontmatter::Show::AsDisclosure,
+    )[0]
+    .fold_key();
+    let open = FoldState::default();
+    let mut closed = FoldState::default();
+    closed.toggle(key);
+    let prepared = |folds: &FoldState| {
+        crate::preview::build::Prepared::new(
+            None,
+            ANNOTATED,
+            None,
+            1.0,
+            false,
+            crate::theme::active(),
+            folds,
+        )
+    };
+
+    let starting = crate::preview::build::build_render_products_with_theme(
+        None,
+        ANNOTATED,
+        None,
+        1.0,
+        false,
+        crate::theme::active(),
+        &open,
+    );
+    let before = tag_ranges(&starting.buf, hl);
+    assert_eq!(
+        before.len(),
+        1,
+        "the oracle is dead: the starting render did not tag exactly the one claim"
+    );
+    let (claim_start, claim_end) = before[0];
+    let claim: String = starting
+        .buf
+        .slice(
+            &starting.buf.iter_at_offset(claim_start),
+            &starting.buf.iter_at_offset(claim_end),
+            true,
+        )
+        .into();
+    assert_eq!(
+        claim, "the claim",
+        "the tag covers the annotated characters"
+    );
+
+    let folded = crate::preview::splice::splice(
+        &starting.buf,
+        None,
+        &starting.anchored,
+        &starting.maps.disclosure_extents,
+        &prepared(&closed),
+        key,
+    )
+    .expect("the open block was drawn in the starting render");
+    let _expanded = crate::preview::splice::splice(
+        &starting.buf,
+        None,
+        &folded.merged_anchored,
+        &folded.products.maps.disclosure_extents,
+        &prepared(&open),
+        key,
+    )
+    .expect("the folded block was drawn by the first splice");
+
+    assert_eq!(
+        tag_ranges(&starting.buf, hl),
+        before,
+        "after a spliced fold and expand the claim must carry `annotation-highlight` \
+         over exactly the characters it covered before the fold"
+    );
+}

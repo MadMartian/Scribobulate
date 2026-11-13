@@ -65,6 +65,7 @@ mod regionwriter;
 use super::build::{Prepared, RenderProducts};
 use crate::fold::FoldKey;
 use crate::renderer::{frontmatter, DisclosureToggle};
+use crate::span::BufferSpan;
 use gtk::prelude::*;
 use gtk::TextBuffer;
 use regionwriter::{RegionWriter, Writing};
@@ -129,7 +130,9 @@ impl From<RenderProducts> for ScratchProducts {
             disclosure_toggles: _,
             anchored: _,
             image_tints: _,
-            // The tags are already on the live buffer — this render did not write it.
+            // Outside the region the tags are already on the live buffer; inside it
+            // `splice` re-applies them itself (`retag_region_highlights`) before this
+            // conversion runs, so nothing downstream needs them.
             highlight_ranges: _,
             // ── valid against any buffer whose text matches ──
             maps,
@@ -299,6 +302,7 @@ pub(super) fn splice(
     let mut del_start = buf.iter_at_offset(old_volatile.start);
     let mut del_end = buf.iter_at_offset(region_end);
     buf.delete(&mut del_start, &mut del_end);
+    let after_delete = buf.char_count();
 
     // PASS SEED+LIVE. The FIRST refusal that can arrive after the buffer has been
     // mutated — see `SpliceRefusal::RegionLost`.
@@ -312,6 +316,18 @@ pub(super) fn splice(
     ) else {
         return Err(SpliceRefusal::RegionLost);
     };
+
+    // The region's characters were just inserted, and a region render is a walk with
+    // nothing after it — the full render tags annotation highlights AFTER its walk
+    // (`build::apply_highlight_tags`), so the region arrives untagged. PASS A's ranges
+    // are valid against this buffer (module docs), so the region takes its share of
+    // them here. Scoped to the region: everything outside it is unchanged text under
+    // unchanged annotations and already carries the right tags.
+    let region_written = BufferSpan::new(
+        old_volatile.start,
+        old_volatile.start + (buf.char_count() - after_delete),
+    );
+    retag_region_highlights(buf, &products.highlight_ranges, region_written);
 
     // Merge: survivors (GTK's own delete already unparented anything strictly
     // inside the deleted range and touched nothing outside it, so this is exact)
@@ -371,6 +387,43 @@ pub(super) fn splice(
         products: products.into(),
         merged_anchored: merged,
         region,
+    })
+}
+
+/// Put the `annotation-highlight` tag over the part of each of `ranges` that falls
+/// inside `region`, clearing it from `region` first so the result is exactly PASS A's
+/// extent rather than PASS A's plus whatever the insertion point carried. Table-cell highlights are not buffer tags (they
+/// are Pango markup the region render already wrote into its own cell labels), so
+/// they never appear in `ranges` and need nothing here.
+fn retag_region_highlights(buf: &TextBuffer, ranges: &[BufferSpan], region: BufferSpan) {
+    let Some(tag) = buf
+        .tag_table()
+        .lookup(crate::tags::TagName::AnnotationHighlight.name())
+    else {
+        return;
+    };
+    buf.remove_tag(
+        &tag,
+        &buf.iter_at_offset(region.start),
+        &buf.iter_at_offset(region.end),
+    );
+    for span in clip_to_region(ranges, region) {
+        buf.apply_tag(
+            &tag,
+            &buf.iter_at_offset(span.start),
+            &buf.iter_at_offset(span.end),
+        );
+    }
+}
+
+/// The non-empty intersections of `ranges` with `region`, in order.
+fn clip_to_region(
+    ranges: &[BufferSpan],
+    region: BufferSpan,
+) -> impl Iterator<Item = BufferSpan> + '_ {
+    ranges.iter().filter_map(move |span| {
+        let clipped = BufferSpan::new(span.start.max(region.start), span.end.min(region.end));
+        (clipped.start < clipped.end).then_some(clipped)
     })
 }
 
@@ -492,6 +545,28 @@ mod boundary_tests {
                 .and_then(|i| chars.get(i))
                 .copied()
         }
+    }
+
+    #[test]
+    fn highlights_are_clipped_to_the_region_and_empty_overlaps_dropped() {
+        use super::{clip_to_region, BufferSpan};
+        let ranges = [
+            BufferSpan::new(0, 5),   // wholly before
+            BufferSpan::new(8, 12),  // straddles the start
+            BufferSpan::new(14, 16), // wholly inside
+            BufferSpan::new(18, 25), // straddles the end
+            BufferSpan::new(20, 20), // touches the end, empty
+            BufferSpan::new(30, 40), // wholly after
+        ];
+        let clipped: Vec<_> = clip_to_region(&ranges, BufferSpan::new(10, 20)).collect();
+        assert_eq!(
+            clipped,
+            vec![
+                BufferSpan::new(10, 12),
+                BufferSpan::new(14, 16),
+                BufferSpan::new(18, 20),
+            ]
+        );
     }
 
     #[test]
