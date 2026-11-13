@@ -5,7 +5,7 @@ Exhaustive manual/GUI verification checklist for Scribobulate. This complements
 visible window and is **not** automatable through the unit-test suite (POLICY.md
 "Manual integration testing").
 
-Audience: a human tester, or an agent driving the app — on Linux via
+**Audience**: a human tester, or a Sonnet (or equivalent) sub-agent driving the app — on Linux via
 `xdotool`/`import` (§1 "Dev loop"), on macOS via the calibrated-click procedure in
 **§A.2**. Every checklist item traces to a `sdd/TDD.md` rubric number where one
 exists; items in the final section are proposed additions not yet in TDD.md —
