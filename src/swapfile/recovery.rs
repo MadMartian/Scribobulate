@@ -112,6 +112,26 @@ pub(crate) fn disposition(
     }
 }
 
+/// Put every snapshot the session restored by identity ahead of every one that can only
+/// be placed by path, keeping the scan's order within each group.
+///
+/// `disposition`'s path fallback ADOPTS the tab it picks, re-filing it under the
+/// snapshot's id. Visited first, a path match can therefore take the very tab another
+/// snapshot later in the pass owns by identity — and that owner, still listed in
+/// `restored`, then looks for a tab answering to its id, finds none, and is skipped
+/// without a word: one tab showing one edit, the other edit unreachable (TDD 22.16).
+/// Directory order decides which comes first, so the defect came and went by filesystem.
+/// Settling every exact match before any adoption leaves the path fallback only tabs no
+/// snapshot owns, and the claimed-tab rule then sends a second same-path snapshot to a
+/// tab of its own.
+pub(crate) fn identity_matches_first<T>(
+    snapshots: &mut [T],
+    restored: &[DocId],
+    id_of: impl Fn(&T) -> &DocId,
+) {
+    snapshots.sort_by_key(|s| !restored.contains(id_of(s)));
+}
+
 /// Whether the twin on disk still matches the baseline this snapshot was taken against.
 ///
 /// `on_disk` is `None` when the file no longer exists, which counts as *changed*: the
@@ -143,7 +163,8 @@ pub(crate) fn holds_nothing_new(header: &SwapHeader, body: &str, on_disk: Option
 #[cfg(test)]
 mod tests {
     use super::{
-        baseline_is_current, disposition, holds_nothing_new, sync_action, SwapDisposition, SwapSync,
+        baseline_is_current, disposition, holds_nothing_new, identity_matches_first, sync_action,
+        SwapDisposition, SwapSync,
     };
     use crate::swapfile::{content_digest, DocId, SwapHeader};
 
@@ -227,6 +248,20 @@ mod tests {
             SwapDisposition::ReopenFile("/home/u/notes.md".to_string()),
             "two unsaved buffers for one path are two documents; losing one to the \
              other is worse than the duplicate tab the path fallback exists to remove"
+        );
+    }
+
+    /// A path-only snapshot scanned ahead of the one the session restored by identity
+    /// must not get first pick: it would adopt the owner's tab and the owner would find
+    /// none (TDD 22.16).
+    #[test]
+    fn snapshots_restored_by_identity_are_placed_before_any_path_match() {
+        let mut scanned = vec![id('b'), id('c'), id('a'), id('d')];
+        identity_matches_first(&mut scanned, &[id('a'), id('d')], |d| d);
+        assert_eq!(
+            scanned,
+            vec![id('a'), id('d'), id('b'), id('c')],
+            "identity matches first, scan order kept within each group"
         );
     }
 

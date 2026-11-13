@@ -499,6 +499,79 @@ fn a_second_snapshot_for_one_path_gets_its_own_tab_rather_than_overwriting_the_f
     });
 }
 
+/// **TDD 22.16 after a bare relaunch**: the session restored the shared file's tab under
+/// ONE of the two snapshots' identities, and each snapshot still gets a tab of its own.
+///
+/// Distinct from the test above, where the open tab matched neither snapshot by identity.
+/// Here one snapshot matches by identity and the other only by path, and the scan visits
+/// them in whatever order the directory yields. Run with the restored identity on each
+/// side in turn so both visiting orders are exercised whatever that order is.
+fn each_snapshot_gets_its_own_tab_when_the_session_restored_one_of_them(
+    app_id: &str,
+    restored_is_first: bool,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    crate::session::with_state_home_for_test(dir.path(), || {
+        let app = super::super::gtk_integration_tests::test_app(app_id);
+        let doc = dir.path().join("shared.md");
+        std::fs::write(&doc, "on disk").unwrap();
+
+        let win = new_window(&app, "IT", "on disk", Some(&doc));
+        let tab = winstate::state(&win).expect("a tab");
+        let before = winstate::tabs_for_window(&win).len();
+
+        let one = DocId::generate();
+        let two = DocId::generate();
+        tab.adopt_doc_id(if restored_is_first { &one } else { &two }.clone());
+        seed_swap(
+            dir.path(),
+            &header(one, Some(&doc), b"on disk"),
+            "work from instance one",
+        );
+        seed_swap(
+            dir.path(),
+            &header(two, Some(&doc), b"on disk"),
+            "work from instance two",
+        );
+
+        gtk::glib::MainContext::default().block_on(recover_after_restore(&app));
+
+        let texts: Vec<String> = winstate::tabs_for_window(&win)
+            .iter()
+            .map(|t| t.editor_text())
+            .collect();
+        assert_eq!(
+            winstate::tabs_for_window(&win).len(),
+            before + 1,
+            "one snapshot goes into the restored tab, the other opens its own: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "work from instance one"),
+            "neither buffer may be hidden: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "work from instance two"),
+            "neither buffer may be hidden: {texts:?}"
+        );
+    });
+}
+
+#[gtktest::test]
+fn both_snapshots_get_tabs_when_the_session_restored_the_first_ones_identity() {
+    each_snapshot_gets_its_own_tab_when_the_session_restored_one_of_them(
+        "com.extollit.scribobulate.it.rec15a",
+        true,
+    );
+}
+
+#[gtktest::test]
+fn both_snapshots_get_tabs_when_the_session_restored_the_second_ones_identity() {
+    each_snapshot_gets_its_own_tab_when_the_session_restored_one_of_them(
+        "com.extollit.scribobulate.it.rec15b",
+        false,
+    );
+}
+
 /// TDD 22.10: an unrelated file in the recovery location is neither parsed nor
 /// removed.
 ///
