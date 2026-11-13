@@ -476,15 +476,46 @@ fn step_history(window: &ApplicationWindow, step: HistoryStep) {
     // Read before the step: the preview is re-rendered from the new text below, and
     // "was the change already on screen" is a question about the view the reader saw.
     let preview_before = super::panescroll::preview_lines_on_screen(&st);
-    match step {
+    let change = first_changed_char(&st.editor_buf, || match step {
         HistoryStep::Undo => st.editor_buf.undo(),
         HistoryStep::Redo => st.editor_buf.redo(),
-    }
+    });
     reveal_editor_caret(&st);
     if current_mode(window) == ViewMode::Preview {
         refresh_preview_after_undo_redo(window);
-        reveal_change_in_preview(&st, preview_before);
+        reveal_change_in_preview(&st, change, preview_before);
     }
+}
+
+/// Run one history `step` on `buf` and answer the lowest editor char offset it
+/// inserted or deleted at: where the change it made begins.
+///
+/// The caret does not answer this. Undoing a deletion restores the selection the
+/// buffer had when the deletion was recorded (`gtk_text_history_reverse`,
+/// `gtktexthistory.c:668-676` at 4.6.9), and an annotation is recorded as a delete plus
+/// an insert (`annotate::splice_minimal`) made while the caret sat wherever the reader
+/// last left it in the editor, so undoing one parks the caret there — at the end of the
+/// document, say — far from the text that changed.
+///
+/// The lowest offset is exact across a group: an operation moves only offsets at or
+/// after its own, so the minimum seen so far stays valid in the final buffer. The
+/// offset is used in the same turn, before anything else can edit the buffer.
+fn first_changed_char(buf: &impl IsA<gtk::TextBuffer>, step: impl FnOnce()) -> Option<i32> {
+    let first = std::rc::Rc::new(std::cell::Cell::new(None::<i32>));
+    let note = {
+        let first = first.clone();
+        move |at: i32| first.set(Some(first.get().map_or(at, |seen| seen.min(at))))
+    };
+    let inserted = buf.connect_insert_text({
+        let note = note.clone();
+        move |_, at, _| note(at.offset())
+    });
+    let deleted =
+        buf.connect_delete_range(move |_, start, end| note(start.offset().min(end.offset())));
+    step();
+    buf.disconnect(inserted);
+    buf.disconnect(deleted);
+    first.get()
 }
 
 /// Bring the editor's caret into view after an undo or redo, so the reader sees what
@@ -515,12 +546,17 @@ fn reveal_editor_caret(st: &crate::winstate::TabState) {
 }
 
 /// Preview-only mode: bring the change an undo or redo made into view in the preview,
-/// unless it was already on screen (TDD 9.16). The caret, which the history places on
-/// the change, is carried across as a document position.
-fn reveal_change_in_preview(st: &crate::winstate::TabState, before: Option<(i32, i32)>) {
+/// unless it was already on screen (TDD 9.16). The change's start, from
+/// [`first_changed_char`], is carried across as a document position; the caret stands in
+/// only for a step that changed no text.
+fn reveal_change_in_preview(
+    st: &crate::winstate::TabState,
+    change: Option<i32>,
+    before: Option<(i32, i32)>,
+) {
     let buf = &st.editor_buf;
-    let caret = buf.iter_at_mark(&buf.get_insert()).offset();
-    let pos = crate::readingpos::from_editor_char(&st.editor_text(), caret);
+    let at = change.unwrap_or_else(|| buf.iter_at_mark(&buf.get_insert()).offset());
+    let pos = crate::readingpos::from_editor_char(&st.editor_text(), at);
     super::panescroll::preview_reveal(st, pos, before);
 }
 
