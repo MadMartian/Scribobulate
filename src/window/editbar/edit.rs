@@ -265,4 +265,84 @@ mod line_ending_tests {
             );
         }
     }
+
+    /// The buffer's own line count — what Ctrl+End, Down and Go To Line walk — agrees
+    /// with the line count of its text read back and re-parsed whole. GtkTextBuffer
+    /// splits lines as each insertion arrives, so a `\r` inserted in front of an
+    /// existing `\n` ends a line of its own while the bytes still read `\r\n`: the
+    /// text is right and the editor has a line the file does not.
+    fn assert_lines_agree(b: &sourceview::Buffer, what: &str) {
+        let text = text_of(b);
+        let reparsed = gtk::TextBuffer::new(None);
+        reparsed.set_text(&text);
+        assert_eq!(
+            b.line_count(),
+            reparsed.line_count(),
+            "{what}: buffer has a line its text does not: {text:?}"
+        );
+    }
+
+    /// Manual 10.4, caret only: Heading on line 1 of a fresh CRLF document leaves the
+    /// editor at the same number of lines, and two lines down from line 1 is still
+    /// `quote line` — not a phantom empty line the next line-targeted command hits.
+    #[gtktest::test]
+    fn heading_with_the_caret_on_a_crlf_line_adds_no_phantom_buffer_line() {
+        let doc = "head line\r\n\r\nquote line\r\n\r\nbullet a\r\nbullet b\r\n";
+        let buf = armed_buf(doc);
+        let lines = buf.line_count();
+        apply_edit(&buf, &format::apply(FormatCmd::Heading(1), doc, 0, 0));
+        assert_eq!(
+            text_of(&buf),
+            "# head line\r\n\r\nquote line\r\n\r\nbullet a\r\nbullet b\r\n"
+        );
+        assert_eq!(buf.line_count(), lines, "Ctrl+End line");
+        let third = buf.iter_at_line(2).expect("line 3 exists");
+        let mut end = third;
+        end.forward_to_line_end();
+        let ln3 = crate::saferizer::BufferText::of_range(&buf, &third, &end).into_string();
+        assert_eq!(ln3, "quote line", "Ln 3");
+        assert_lines_agree(&buf, "Heading, caret on line 1");
+    }
+
+    /// Every block command, caret-only and over a selection, on every CRLF fixture:
+    /// the buffer's lines agree with its text's — and so do Undo and Redo, which
+    /// replay through the same insertion path.
+    #[gtktest::test]
+    fn no_block_command_on_a_crlf_document_leaves_a_phantom_buffer_line() {
+        for lf in LF_DOCS {
+            let crlf = lf.replace('\n', "\r\n");
+            for cmd in BLOCK_CMDS {
+                for (start, end) in [(0, 0), (1, 1), (0, crlf.chars().count())] {
+                    let buf = armed_buf(&crlf);
+                    apply_edit(&buf, &format::apply(cmd, &crlf, start, end));
+                    let what = format!("{cmd:?} [{start},{end}) on {crlf:?}");
+                    assert_lines_agree(&buf, &what);
+                    buf.undo();
+                    assert_lines_agree(&buf, &format!("{what}, undone"));
+                    buf.redo();
+                    assert_lines_agree(&buf, &format!("{what}, redone"));
+                }
+            }
+        }
+    }
+
+    /// The same split reached without a format command: text ending in `\r` pasted at
+    /// the end of an LF line forms a CRLF with that line's `\n`, and the editor counts
+    /// it as one line ending, as the file will.
+    #[gtktest::test]
+    fn a_paste_ending_in_cr_before_a_lf_adds_no_phantom_buffer_line() {
+        let buf = armed_buf("one\ntwo\n");
+        buf.place_cursor(&buf.iter_at_offset(3));
+        buf.insert_at_cursor("x\r");
+        assert_eq!(text_of(&buf), "onex\r\ntwo\n");
+        assert_lines_agree(&buf, "paste of \"x\\r\" before a LF");
+        // Past the line ending the paste completed: between its two halves is no
+        // caret position once the buffer sees them as one.
+        assert_eq!(buf.cursor_position(), 6, "caret at the start of `two`");
+        // The `\n` taken out and put back is part of the one step, so a single Undo
+        // restores the line, not half of it.
+        buf.undo();
+        assert_eq!(text_of(&buf), "one\ntwo\n", "one undo");
+        assert_lines_agree(&buf, "paste undone");
+    }
 }
