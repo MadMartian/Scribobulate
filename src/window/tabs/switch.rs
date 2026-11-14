@@ -187,7 +187,13 @@ pub(super) fn resync_tab_action_state(window: &ApplicationWindow, st: &Rc<TabSta
     // happens before this tab became the active one, so it judged the focus
     // against the outgoing tab's panes. Judge it again against this tab, after
     // the mode-state reset above, so the focused pane is the real one too.
-    crate::window::editbar::sync_gate_to_pane_focus(window);
+    //
+    // Focus on a sticky surface (the menu bar after a menu-bar command) is in neither
+    // pane, so there is nothing to judge; the gate's last real decision stands in for
+    // it (TDD 10.6a).
+    if !crate::window::editbar::sync_gate_to_pane_focus(window) {
+        crate::window::editbar::restore_remembered_gate(window);
+    }
 }
 
 /// Phase 2 — repaint/rewire the window-shared surfaces that reflect the active

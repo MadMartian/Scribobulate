@@ -784,6 +784,7 @@ fn build_window_chrome_state(
         overlay_edit_btns: ov_edit_btns,
         fmt_edit_state: Cell::new(None),
         focused_pane: Cell::new(winstate::FocusedPane::Editor),
+        editor_gate_remembered: Cell::new(false),
         ctx_link: RefCell::new(None),
         zoom_level: Cell::new(zoom_level),
         sidebar_split: Cell::new(sidebar_split),

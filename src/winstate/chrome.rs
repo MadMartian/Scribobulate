@@ -167,6 +167,13 @@ pub(crate) struct WindowChrome {
     /// is a window property); reset to `Editor` on every mode/tab switch and updated
     /// by the editor-focus gate as the user moves between panes.
     pub(crate) focused_pane: Cell<FocusedPane>,
+    /// The editor-focus gate's last REAL decision — open when focus last entered an editor,
+    /// closed when it last entered some other real area; a sticky surface (the menu bar, the
+    /// find bar) never writes it. A tab switch forces the gate shut for a tab that shows no
+    /// editor, so the open state would otherwise be lost across a round trip through one
+    /// while the focus sits on a sticky surface; this is what that round trip reads back
+    /// (`editbar::restore_remembered_gate`). Window-scoped like the gate itself.
+    pub(crate) editor_gate_remembered: Cell<bool>,
     /// The link the user right-clicked ON, for the lifetime of one context-menu
     /// popover — set before the menu is built, cleared when it closes
     /// (`window::copylink`).
