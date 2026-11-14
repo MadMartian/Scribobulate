@@ -80,6 +80,8 @@
 - **When** the application tries to open it
 - **Then** the path is refused before it is read, the tab shows a refusal notice naming the reason, and the tab carries no backing path — so a later save cannot write the notice over the user's file
 - **And** a path that merely does not exist is unaffected, still opening as an empty creatable document (1.3)
+- **And** a regular file within the limit whose bytes contain a NUL (a zero byte) is refused the same way once it has been read — the notice says it holds a NUL and is binary data rather than text, and the tab carries no backing path — because the editor cannot hold a NUL, and a document the editor could not take must never be one a save can write back: admitted, it opened an empty editor against the file's full text, a tab already marked unsaved, and a Save with nothing typed replaced the file with nothing. This holds for every route a document is read by: Open in any form, session restore, link navigation and crash recovery
+- **And** a file whose bytes are not UTF-8 at all is likewise not opened as text: the tab shows a notice that it could not be opened, again with no backing path
 
 ### 1.4b Survive a pathologically structured document
 - **Given** a small Markdown file whose structure is nested far past anything a person would write (e.g. thousands of nested blockquotes)
@@ -885,7 +887,7 @@
 ---
 
 ### 5.5 A document that stops being admissible is refused on re-read, not read anyway
-- **Given** an open document whose file has since grown past the load limit, or been replaced by something that is not a regular file
+- **Given** an open document whose file has since grown past the load limit, been replaced by something that is not a regular file, or come to contain a NUL byte (1.4a)
 - **When** the application re-reads it — an explicit Reload, a save's check for external changes, or the live-reload watcher noticing it changed
 - **Then** the read is refused rather than attempted: Reload reports why, a save asks before overwriting rather than assuming it is safe, and the watcher does nothing
 - **And** the application never waits on it — the same admission test that guards the first read guards every later one

@@ -67,6 +67,7 @@
 //! state files not**.
 
 pub(crate) mod budget;
+mod content;
 mod pool;
 pub(crate) mod rename;
 
@@ -83,6 +84,7 @@ pub(crate) use rename::{host_rules, rename_document, validate_new_name, RenameEr
 pub(crate) use pool::slow_io;
 
 use crate::limits;
+use content::Refusal;
 use pool::off_main;
 use std::path::{Path, PathBuf};
 
@@ -108,8 +110,9 @@ pub(crate) struct LoadedDoc {
 /// async runtime, while the messages and the `log::` records stay on the main
 /// thread where the forensic breadcrumb ring expects them.
 enum DocRead {
-    /// The path was refused before being read (not a regular file, or over the cap).
-    Refused(limits::LoadRefusal),
+    /// Refused: before being read (not a regular file, or over the cap), or once its
+    /// bytes were seen (a NUL — [`content`]).
+    Refused(Refusal),
     /// Read in full.
     Loaded(String),
     /// Nothing there — an intended NEW document (TDD 1.3), not an error.
@@ -254,13 +257,20 @@ fn read_document_blocking(path: &Path) -> DocRead {
     // which is canonicalize-based and unaffected by this.
     if let Ok(meta) = std::fs::metadata(path) {
         if let Err(refusal) = limits::is_regular_file_within_limit(&meta) {
-            return DocRead::Refused(refusal);
+            return DocRead::Refused(refusal.into());
         }
     }
     // Distinguish "not found" (an intended new document — TDD 1.3, empty and
     // creatable on save) from "exists but unreadable" (C3, see above).
+    //
+    // A NUL is valid UTF-8 and the editor cannot hold it, so it is refused here, after
+    // the read, like an admission failure (`content`'s module doc: admitted, it opened
+    // an EMPTY editor against a full baseline, and a Save wrote nothing over the file).
     match std::fs::read_to_string(path) {
-        Ok(content) => DocRead::Loaded(repaired(without_bom(content))),
+        Ok(text) => match content::screen(text.as_bytes()) {
+            Ok(()) => DocRead::Loaded(repaired(without_bom(text))),
+            Err(refusal) => DocRead::Refused(refusal.into()),
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocRead::Missing,
         Err(e) => DocRead::Failed(e),
     }
@@ -323,7 +333,7 @@ fn notice_path_span(path: &Path) -> String {
 /// invites the user to retry or check permissions, and neither will help here —
 /// the application declined, and the reason is a property of the file that will
 /// not change on its own.
-fn refusal_doc(path: &Path, refusal: &limits::LoadRefusal) -> String {
+fn refusal_doc(path: &Path, refusal: &Refusal) -> String {
     format!(
         "# ⚠ Refused to open file\n\n{}\n\n{refusal}\n",
         notice_path_span(path)
@@ -445,12 +455,14 @@ fn read_document_text_blocking(path: &Path) -> std::io::Result<String> {
     // is the QA round-2 N6 defect.
     let meta = std::fs::metadata(path)?;
     if let Err(refusal) = limits::is_regular_file_within_limit(&meta) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            refusal.to_string(),
-        ));
+        return Err(Refusal::from(refusal).into_io_error());
     }
-    std::fs::read_to_string(path).map(without_bom).map(repaired)
+    // The same content screen as the display reader: a file that GAINS a NUL while
+    // open is refused on re-read (TDD 5.5) — Reload reports it, the save guard asks,
+    // the watcher stays silent — rather than loaded into a buffer that drops it whole.
+    let text = std::fs::read_to_string(path)?;
+    content::screen(text.as_bytes()).map_err(|r| Refusal::from(r).into_io_error())?;
+    Ok(repaired(without_bom(text)))
 }
 
 /// Read a document's raw bytes for a content comparison — crash recovery's check
@@ -465,14 +477,12 @@ pub(crate) async fn read_document_bytes(path: PathBuf) -> std::io::Result<Vec<u8
     off_main(move || {
         let meta = std::fs::metadata(&path)?;
         if let Err(refusal) = limits::is_regular_file_within_limit(&meta) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                refusal.to_string(),
-            ));
+            return Err(Refusal::from(refusal).into_io_error());
         }
-        std::fs::read(&path)
-            .map(without_bom_bytes)
-            .map(repaired_bytes)
+        // Screened like the text readers, so this reader never admits what they refuse.
+        let bytes = std::fs::read(&path)?;
+        content::screen(&bytes).map_err(|r| Refusal::from(r).into_io_error())?;
+        Ok(repaired_bytes(without_bom_bytes(bytes)))
     })
     .await
 }
@@ -524,7 +534,7 @@ mod tests {
         // start a new block. Both are legal in a POSIX filename.
         let hostile = Path::new("evil`\n# Injected heading\n[click](http://example.invalid)`");
 
-        let refused = refusal_doc(hostile, &limits::LoadRefusal::NotARegularFile);
+        let refused = refusal_doc(hostile, &limits::LoadRefusal::NotARegularFile.into());
         let errored = read_error_doc(
             hostile,
             &std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
@@ -881,6 +891,73 @@ mod tests {
             "a refused path must not be savable-back-over (C3) — a later save \
              would replace the user's pipe with the refusal notice"
         );
+    }
+
+    /// **A file carrying a NUL is refused, with the reason, by every reader (TDD 1.4a,
+    /// 5.5; manual 4.2-c).**
+    ///
+    /// The defect: a NUL is valid UTF-8, so the read admitted it, and the editor's
+    /// `set_text` then dropped the WHOLE document on GTK's `g_utf8_validate` assertion —
+    /// an empty buffer against a full baseline, a tab born dirty, and a Save with
+    /// nothing typed writing 0 bytes over the file. The display reader must refuse it
+    /// with no backing path, as invalid UTF-8 already was; the two comparison readers
+    /// must refuse it too, or a file that gains a NUL while open is re-read into the
+    /// same empty buffer by Reload or the watcher. Mutation: dropping any one of the
+    /// three `content::screen` calls fails exactly one block below.
+    #[test]
+    fn a_file_containing_a_nul_is_refused_by_every_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nul.md");
+        let bytes = b"# Title\n\nbefore\x00after\n\nlast line\n";
+        std::fs::write(&path, bytes).unwrap();
+
+        match read(&path) {
+            DocRead::Refused(refusal) => assert_eq!(
+                refusal,
+                Refusal::Content(content::ContentRefusal::ContainsNul { offset: 15 })
+            ),
+            other => panic!("expected Refused, got {:?}", DebugRead(&other)),
+        }
+        let doc = describe(&path, "t".into(), read(&path));
+        assert!(
+            doc.source.contains("Refused to open file"),
+            "{}",
+            doc.source
+        );
+        assert!(
+            doc.source.contains("NUL"),
+            "the notice names why: {}",
+            doc.source
+        );
+        assert!(
+            !doc.source.contains('\0'),
+            "the notice itself is text the editor can take"
+        );
+        assert!(
+            doc.backing.is_none(),
+            "a refused document has no path a save could write over"
+        );
+
+        let text = drive(read_document_text(path.clone())).expect_err("re-read refuses");
+        assert_eq!(text.kind(), std::io::ErrorKind::InvalidData);
+        assert!(text.to_string().contains("NUL"), "{text}");
+        let raw = drive(read_document_bytes(path.clone())).expect_err("bytes refuse");
+        assert_eq!(raw.kind(), std::io::ErrorKind::InvalidData);
+
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "reading never writes");
+    }
+
+    /// Invalid UTF-8 keeps its own, older answer — a "could not open" notice with no
+    /// backing path — so the NUL screen added nothing to it and took nothing from it.
+    #[test]
+    fn invalid_utf8_still_fails_to_open_without_a_backing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("latin1.md");
+        std::fs::write(&path, b"caf\xe9\n").unwrap();
+        assert!(matches!(read(&path), DocRead::Failed(_)));
+        let doc = describe(&path, "t".into(), read(&path));
+        assert!(doc.source.contains("Could not open file"), "{}", doc.source);
+        assert!(doc.backing.is_none());
     }
 
     /// The guard must not reclassify anything the read already handled: a missing

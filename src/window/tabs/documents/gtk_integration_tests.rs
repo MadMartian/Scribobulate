@@ -539,3 +539,82 @@ fn two_overlapping_invocations_naming_one_file_open_it_once() {
         "two overlapping invocations naming one file must produce ONE tab backing it"
     );
 }
+
+/// **Opening a file that carries a NUL leaves no dirty tab, and the file on disk is
+/// byte-identical afterwards, even after a Save (TDD 1.4a; manual 4.2-c).**
+///
+/// The defect, MEASURED on Linux and Windows: the loader admitted the NUL (it is valid
+/// UTF-8), the editor's `set_text` dropped the whole document on GTK's
+/// `g_utf8_validate` assertion, and the tab opened dirty against its full baseline —
+/// so a Save with nothing typed wrote 0 bytes over the file and said "File saved.".
+/// Driven through the real `open` handler (`app.open`, which File ▸ Open, the CLI and a
+/// file-association launch all reach), then a Save is attempted the way the user
+/// attempted it, and the bytes are compared. Pre-fix this dies on the fatal
+/// `Gtk-CRITICAL` the insert raises.
+#[gtktest::test]
+fn opening_a_file_with_a_nul_leaves_no_dirty_tab_and_the_file_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("nul.md");
+    let bytes = b"# Title\n\nbefore\x00after\n\nlast line\n";
+    std::fs::write(&file, bytes).unwrap();
+
+    crate::session::with_state_home_for_test(dir.path(), || {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.nulopen"),
+            gtk::gio::ApplicationFlags::HANDLES_OPEN | gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        crate::app::setup_app(&app);
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register before building a window");
+        let window = crate::window::new_window(&app, "Scribobulate", crate::app::WELCOME, None);
+        crate::testpump::until(
+            crate::testpump::Clock::Idle,
+            "the new window becomes active",
+            || app.active_window().is_some(),
+        );
+
+        let _cold = crate::app::coldstart::force_for_test(false);
+        let built_before = crate::app::BATCHES_BUILT.with(std::cell::Cell::get);
+        app.open(&[gtk::gio::File::for_path(&file)], "interactive");
+        assert!(
+            crate::docio::settle(
+                || crate::app::BATCHES_BUILT.with(std::cell::Cell::get) > built_before
+            ),
+            "the open batch must finish building"
+        );
+
+        // Read the tab's state BEFORE the save, then press Save, then assert — the
+        // data loss first, so a regression reports the overwrite rather than stopping
+        // at the first symptom that precedes it.
+        let st = state(&window).expect("the opened tab is active");
+        let source = st.source().clone();
+        let has_path = st.path.borrow().is_some();
+        let dirty = winstate::tabs_for_window(&window)
+            .iter()
+            .any(|tab| tab.is_dirty());
+        let save_enabled = window.lookup_action("save").is_some_and(|a| a.is_enabled());
+
+        // The user's gesture, whatever its enablement: it must not reach the file.
+        gtk::prelude::ActionGroupExt::activate_action(&window, "save", None);
+        crate::testpump::drain_for(
+            crate::testpump::Clock::Worker,
+            std::time::Duration::from_millis(500),
+        );
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            bytes,
+            "the file on disk is byte-identical after open and Save"
+        );
+        assert!(!dirty, "no tab may open dirty");
+        assert!(!save_enabled, "Save is disabled on the refused tab");
+        assert!(
+            !has_path,
+            "a refused document has no path a save could write over"
+        );
+        assert!(
+            source.contains("Refused to open file") && source.contains("NUL"),
+            "the tab shows a refusal naming the NUL, got: {source}"
+        );
+        window.destroy();
+    });
+}

@@ -71,6 +71,7 @@ src/copymap.rs
 src/cssfrag.rs
 src/decorplan.rs
 src/docio/budget.rs
+src/docio/content.rs
 src/docio/mod.rs
 src/docio/pool.rs
 src/docio/rename.rs
