@@ -276,6 +276,10 @@ fn resync_find_bar_for_tab(window: &ApplicationWindow, st: &Rc<TabState>) {
     findbar::sync_history_buttons(st);
     let query = st.find_query.borrow().clone();
     chrome.find_entry.set_text(&query);
+    // The replace field is window-shared like the find field, so it is re-derived from
+    // this tab too — else a new tab opens with the tab just left's replacement.
+    let replacement = st.replace_text.borrow().clone();
+    chrome.replace_entry.set_text(&replacement);
     chrome.match_count_label.set_visible(!query.is_empty());
     chrome.replace_row.set_visible(st.find_replace_mode.get());
     findbar::sync_replace_availability(st);
@@ -543,6 +547,41 @@ mod gtk_integration_tests {
             bool_action_state(&window, "show-unsafe-images", false),
             "same requirement for the pre-existing show-unsafe-images toggle"
         );
+
+        window.destroy();
+    }
+
+    /// The replace field is one widget shared by every tab, so it must be re-derived
+    /// from the tab switched to: a new tab opens with an EMPTY Replace field, and
+    /// switching back restores the text typed there — never the previous tab's text.
+    /// Mutation check: dropping the `replace_entry.set_text` line in
+    /// `resync_find_bar_for_tab` fails the second assertion.
+    #[gtktest::test]
+    fn each_tab_keeps_its_own_replace_text() {
+        let app = gtk::Application::new(
+            Some("com.extollit.scribobulate.integrationtest.replacetext"),
+            gtk::gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.register(gtk::gio::Cancellable::NONE)
+            .expect("register (emits startup) before building any window");
+        let window = crate::window::new_window(&app, "IT", "# A\n\nbody", None);
+        let chrome = winstate::chrome(&window).expect("chrome registered");
+        let tab_a = state(&window).expect("state registered after new_window");
+        chrome.replace_entry.set_text("alpha-replacement");
+        assert_eq!(*tab_a.replace_text.borrow(), "alpha-replacement");
+
+        crate::window::create_tab_in_window(&window, "# B\n\nbody", None, false, false)
+            .expect("tab B");
+        assert_eq!(
+            chrome.replace_entry.text(),
+            "",
+            "a new tab must not inherit the previous tab's replace text"
+        );
+        chrome.replace_entry.set_text("beta-replacement");
+
+        chrome.tabs.focus_page(&tab_a.content_box);
+        assert_eq!(chrome.replace_entry.text(), "alpha-replacement");
+        assert_eq!(*tab_a.replace_text.borrow(), "alpha-replacement");
 
         window.destroy();
     }

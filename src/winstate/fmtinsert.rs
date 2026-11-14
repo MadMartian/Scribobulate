@@ -26,6 +26,15 @@ impl FmtInsertKind {
         }
     }
 
+    /// This command's accelerator, read from its `FORMAT_CMDS` descriptor — the one
+    /// place it is declared — so a relabelled surface keeps showing it.
+    pub(crate) fn accel(self) -> &'static str {
+        crate::app::FORMAT_CMDS
+            .iter()
+            .find(|c| c.target == self.target())
+            .map_or("", |c| c.accel)
+    }
+
     /// The surface label/tooltip for this command in insert vs edit mode.
     pub(crate) fn label(self, editing: bool) -> &'static str {
         match (self, editing) {

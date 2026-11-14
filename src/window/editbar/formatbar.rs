@@ -24,7 +24,7 @@ fn format_button(cmd: &crate::app::FmtCmd) -> gtk::Button {
         Some(name) => gtk::Button::from_icon_name(name),
         None => gtk::Button::with_label(cmd.glyph),
     };
-    crate::a11y::name(&btn, cmd.label);
+    crate::a11y::name_with_accel(&btn, cmd.label, cmd.accel);
     btn.add_css_class("flat");
     btn.set_focus_on_click(false);
     btn.set_action_name(Some("win.format"));
@@ -121,4 +121,49 @@ pub(crate) fn build_format_bar() -> (
         bx.append(it);
     }
     (bx, heading_btn, edit_btns)
+}
+
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod gtk_integration_tests {
+    use super::*;
+
+    /// TDD 16.4: every Format button's tooltip carries the shortcut its descriptor
+    /// declares — read from `FORMAT_CMDS`, never restated. Insert Link…, Increase Indent
+    /// and Horizontal Bar showed the bare label because `format_button` named every
+    /// button without its accelerator.
+    /// Mutation check: naming the button with `a11y::name` again fails here.
+    #[gtktest::test]
+    fn every_format_button_tooltip_shows_its_declared_shortcut() {
+        let (items, _heading, _edit) = format_items();
+        let buttons: Vec<gtk::Button> = items
+            .iter()
+            .filter_map(|w| w.clone().downcast::<gtk::Button>().ok())
+            .collect();
+        for cmd in FORMAT_CMDS.iter().filter(|c| !c.accel.is_empty()) {
+            let want = crate::app::tooltip_with_accel(cmd.label, cmd.accel);
+            let btn = buttons
+                .iter()
+                .find(|b| {
+                    b.action_target_value()
+                        .and_then(|v| v.str().map(str::to_owned))
+                        .as_deref()
+                        == Some(cmd.target)
+                })
+                .unwrap_or_else(|| panic!("no toolbar button for format target {}", cmd.target));
+            assert_eq!(btn.tooltip_text().as_deref(), Some(want.as_str()));
+            assert!(want.ends_with(')'), "{want}: no accelerator in the tooltip");
+        }
+    }
+
+    /// The Insert/Edit relabel rewrites the tooltip, and must keep the shortcut.
+    #[gtktest::test]
+    fn the_edit_relabel_keeps_the_shortcut_in_the_tooltip() {
+        let (_items, _heading, edit_btns) = format_items();
+        for (kind, btn) in &edit_btns {
+            crate::a11y::name_with_accel(btn, kind.label(true), kind.accel());
+            let tip = btn.tooltip_text().expect("tooltip");
+            assert!(tip.starts_with("Edit "), "{tip}");
+            assert!(tip.ends_with(')'), "{tip}");
+        }
+    }
 }

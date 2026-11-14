@@ -319,6 +319,16 @@ pub(super) fn wire_find_bar(window: &ApplicationWindow, chrome: &Chrome) {
         }
     ));
 
+    // ── Replace field: remember this tab's own replacement text ───────────────
+    replace_entry.connect_changed(glib::clone!(
+        #[weak(rename_to = w)]
+        window,
+        move |entry| {
+            let Some(st) = state(&w) else { return };
+            *st.replace_text.borrow_mut() = entry.text().to_string();
+        }
+    ));
+
     // ── win.find-match-case / win.find-whole-word / win.find-regex ────────────
     // The three match options, one stateful boolean action each. **Uncommon commands**
     // (CAM § Uncommon commands): a find-bar toggle and nothing else — no menu item,

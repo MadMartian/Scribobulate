@@ -24,6 +24,11 @@ pub(crate) enum Refusal {
     /// not be `stat`ed at all. Reading it could block the main thread forever or never
     /// end, so it is never opened.
     NotARegularFile,
+    /// The path could not be `stat`ed, opened or read — missing, permission denied, an
+    /// I/O error. Not the same fact as [`NotARegularFile`](Self::NotARegularFile): the
+    /// kind is kept so the log names what actually failed. (The kind, not the OS text,
+    /// so the record is the same on every platform and locale.)
+    Unreadable { kind: std::io::ErrorKind },
 }
 
 impl From<crate::limits::LoadRefusal> for Refusal {
@@ -44,6 +49,7 @@ impl std::fmt::Display for Refusal {
                 *bytes as f64 / (1024.0 * 1024.0),
                 local_file_limit_bytes() as f64 / (1024.0 * 1024.0)
             ),
+            Refusal::Unreadable { kind } => write!(f, "could not be read: {kind}"),
             Refusal::NotARegularFile => {
                 // A DIRECTORY is the case this reaches on Windows, which has no FIFO
                 // form at all — the Windows seat measured `metadata()` succeeding on a
@@ -68,6 +74,10 @@ fn local_file_limit_bytes() -> u64 {
     crate::config::config().images.local_file_limit_mib * BYTES_PER_MIB
 }
 
+fn unreadable(err: std::io::Error) -> Refusal {
+    Refusal::Unreadable { kind: err.kind() }
+}
+
 /// Admit and read a local image file — a REGULAR file, within the configured byte
 /// cap, exactly as a document is admitted (POLICY § Input limits), and for the same
 /// reason: a FIFO named `x.gif` must never block the main thread, and a huge regular
@@ -85,17 +95,15 @@ pub(crate) fn read_local(path: &Path) -> Result<Arc<[u8]>, Refusal> {
     use std::io::Read;
 
     let cap = local_file_limit_bytes();
-    let meta = std::fs::metadata(path).map_err(|_| Refusal::NotARegularFile)?;
+    let meta = std::fs::metadata(path).map_err(unreadable)?;
     crate::limits::is_regular_file_within(&meta, cap).map_err(Refusal::from)?;
 
-    let file = std::fs::File::open(path).map_err(|_| Refusal::NotARegularFile)?;
+    let file = std::fs::File::open(path).map_err(unreadable)?;
     // `+ 1`: enough to tell "exactly at the cap" from "over it" without ever reading
     // more than one byte past the limit, whatever the file grows to mid-read.
     let mut limited = file.take(cap + 1);
     let mut buf = Vec::new();
-    limited
-        .read_to_end(&mut buf)
-        .map_err(|_| Refusal::NotARegularFile)?;
+    limited.read_to_end(&mut buf).map_err(unreadable)?;
     if buf.len() as u64 > cap {
         return Err(Refusal::TooLarge {
             bytes: buf.len() as u64,
@@ -118,10 +126,50 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_file_is_refused_as_not_a_regular_file() {
+    fn a_missing_file_is_refused_as_unreadable_not_as_a_non_regular_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("does-not-exist.png");
-        assert_eq!(read_local(&path), Err(Refusal::NotARegularFile));
+        let refusal = read_local(&path).unwrap_err();
+        assert_eq!(
+            refusal,
+            Refusal::Unreadable {
+                kind: std::io::ErrorKind::NotFound
+            }
+        );
+        assert!(!refusal.to_string().contains("regular"), "{refusal}");
+    }
+
+    /// TDD 6.8 / the logged reason: a regular file the process may not open fails to
+    /// OPEN, and the record says so rather than calling it a pipe or device.
+    #[test]
+    fn a_file_without_read_permission_is_logged_as_unreadable() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("locked.png");
+            std::fs::write(&path, b"x").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+            if std::fs::File::open(&path).is_ok() {
+                crate::testsymlink::skipped(
+                    "TDD 6.8",
+                    "the process ignores file permissions (root)",
+                );
+                return;
+            }
+            let refusal = read_local(&path).unwrap_err();
+            assert_eq!(
+                refusal,
+                Refusal::Unreadable {
+                    kind: std::io::ErrorKind::PermissionDenied
+                }
+            );
+            let text = refusal.to_string();
+            assert!(text.contains("permission denied"), "{text}");
+            assert!(!text.contains("regular"), "{text}");
+        }
+        #[cfg(not(unix))]
+        crate::testsymlink::skipped("TDD 6.8", "permission bits are unix-only here");
     }
 
     /// A DIRECTORY carrying an image name — the non-regular file every platform can
