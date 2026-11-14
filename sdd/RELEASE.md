@@ -51,6 +51,15 @@ release needs be taken without taking everything `master` has gained since the c
   head carries, and a fix that reached only the release branch is lost to the next
   release the moment the branch is deleted. Whether a defect found during readiness is a
   fix the release needs or a deferral is gate 3's decision, recorded there.
+- **A fix that touches `tests/MANUAL-TEST.md` or `sdd/`** passes `cargo xtask
+  lint-references` before it is handed back, beside fmt, clippy and its tests: a manual
+  item added under a number already taken, or a register citation left dangling, fails
+  the pipeline's references step on all three platforms and costs a whole run.
+- **Fixes are batched.** Findings accumulate until the pass that found them ends, or
+  until a checkpoint declared in the record beforehand; then the fixes the release needs
+  land as one batch, and the target moves once for all of them. The exceptions are fixed
+  at once, each moving the target on its own: data loss, a blocker that stops the passes
+  from continuing, and a security defect.
 - **Every commit on the branch moves the target.** The head is the target, so a fix —
   or a register entry — re-stamps the record's header and unticks gate 4 onward (the
   checklist's rule). A commit that touches no build input (only `sdd/`, `docs/`,
@@ -85,7 +94,7 @@ rubric added or rewritten. **MINOR or MAJOR** moved — a feature release. The r
 header names the kind, and gate 1 checks the reading against the change list (a rubric
 added since the tag under a patch number is a version bump owed, not a patch release).
 
-A **feature release** runs every gate below in full.
+A **feature release** runs every gate below in full, gate 8 at the tier gate 8 names.
 
 A **patch release** runs every gate, but four of them smaller, because what a patch
 can change is bounded by what its fixes touched — and each gate says what "touched"
@@ -95,14 +104,12 @@ means so the reduction is read off the diff, not argued:
   rendering dependency, a rendering path, the process model or how the renderer is
   selected (POLICY § Footprint verification's own trigger list); the record cites the
   diff and the tag's readings stand.
-- **Gate 8 (manual testing)**: not a full pass. On each platform: `tests/MANUAL-TEST.md`
-  §A, plus every item of every section whose rubric a fix cites (each fix names the
-  rubric it makes hold — that is what makes it a patch), plus the items of any section
-  the diff touches by module (TECH.md's module map says which). The report lists the
-  items run and why; the operator's 👍 is still the proof.
-- **Gate 9 (install, launch, uninstall)**: full on a platform whose packaging the diff
-  touches; on the others, install the artefact, launch it, open a document, read the
-  version in About, quit.
+- **Gate 8 (manual testing)**: the smoke tier (gate 8), plus every item of every
+  section whose rubric a fix cites (each fix names the rubric it makes hold — that is
+  what makes it a patch). The report lists the items run and why; the operator's 👍 is
+  still the proof.
+- **Gate 9 (install, launch, uninstall)**: by gate 9's own rule — full when the diff
+  touches what that rule lists, lite otherwise.
 - **Gate 10 (documentation)**: `cargo xtask lint-references` and the README's install
   examples carry the new version; the status banner and AI-DILIGENCE figures stand.
 
@@ -146,7 +153,14 @@ Its shape:
   above), the release branch, the target commit hash once chosen (blank until gate 4,
   re-stamped whenever the target moves), and who holds the release.
 - One section per gate, in the order below, each a Markdown task list (`- [ ]`) with
-  one item per bullet of that gate, and one item for the gate's **Proof**.
+  one item per bullet of that gate, and one item for the gate's **Proof**. A gate's
+  section holds its proof lines and its decisions, nothing else.
+- **One findings table** for the whole release — a row per finding: its id, the
+  platforms it was seen on, its class (fix, defer, accept, reword) and its disposition
+  (the fix's branch, the register entry, the rubric changed). A finding seen on two
+  platforms is one row, not two.
+- The passes' chunk-by-chunk narratives stay in each seat's `tests/reports/`; the record
+  cites a report, it does not carry one.
 - A ticked item carries its evidence inline — the run URL, the command output's
   decisive line, the file path, the date — never only the tick. An item with a tick
   and no evidence is unticked by whoever finds it.
@@ -158,8 +172,9 @@ Its shape:
   operator's natural way to write it is a CriticMarkup annotation on the item; the
   agent then resolves the annotation into a plain quotation on the item with the
   date, so the record reads clean once the file is handed on. The
-  👨‍✈️ items are gate 2's waivers, gate 3's deferrals, gate 6's licence
-  election, gate 8's 👍, gate 11's review of the release body and gate 12's publish.
+  👨‍✈️ items are gate 2's waivers, the findings gate 3 reserves for the operator,
+  gate 6's licence election, gate 8's 👍, gate 11's review of the release body (which
+  is where the operator sees every deferral) and gate 12's publish.
 - A target that moves (every commit on the release branch moves it) is recorded as
   an event — old hash, new hash, why — and every item from gate 4 on is unticked.
 
@@ -195,11 +210,12 @@ decision the operator records, not one an agent makes.
   (secret scanning is off by decision: the application holds no credentials and
   connects to nothing that needs one).
   Every open alert ends in one of two states before the gate passes:
-  - **satisfied** — fixed on the target commit, or the alert dismissed on GitHub with a
-    reason that is true (false positive, not reachable, not shipped). A fix is not only
-    an upgrade: the cheapest route is often to **change the dependency's shape** — narrow
-    a feature set so the vulnerable crate leaves the graph (the 1.0.0 dry run cleared
-    three advisories at once by dropping `syntect` loaders the app never used);
+  - **satisfied** — by one of three routes: **upgrade** the dependency so the target
+    commit carries the fix; **narrow the dependency's shape** — a feature set dropped so
+    the vulnerable crate leaves the graph, often the cheapest route (the 1.0.0 dry run
+    cleared three advisories at once by dropping `syntect` loaders the app never used);
+    or **dismiss** the alert on GitHub with a reason that is true (false positive, not
+    reachable, not shipped);
   - **waived** — carried into the release with a written justification: why it does
     not affect a user of this release, and what retires it. A waiver is an ISSUES.md
     entry (so it is tracked) and a line in the release notes' Known issues (so the user
@@ -227,12 +243,19 @@ decision the operator records, not one an agent makes.
     entry: why it is acceptable to a user of this release (severity, how rarely it is
     hit, the workaround). A deferred entry that a user can hit is a line in Known
     issues, in the user's terms.
-- The decision is the operator's per entry, not a severity threshold applied
-  mechanically — a low-severity issue in a headline feature may block, a high one in a
-  path no user reaches may not. An agent proposes the split; the operator ratifies it.
+- **Decided by default.** The release seat classifies every finding and entry as it
+  arrives. A cosmetic one, a Low one, and a rubric that drifted from the behaviour are
+  filed in ISSUES.md or reworded in TDD.md and MANUAL-TEST.md with no decision asked
+  for. The operator decides the rest, one 👨‍✈️ item each: a High entry, anything that
+  loses data, a security defect, and a reader-facing defect seen on more than one
+  platform. Severity is where the classification starts, not where it ends — a Low
+  entry in a headline feature goes to the operator, and the seat says why.
+- The operator sees the default deferrals once, as the release body's Known issues at
+  gate 11, and can pull any of them back into a fix there.
 - Closed (`CLSD-`) entries are limitations, already settled; they appear in Known issues
   when a user can meet them, and need no new decision. A `Test`-scope entry (the
-  register's own scope column) is deferred without a user-facing line: no user meets it.
+  register's own scope column) needs no user-facing decision and no Known-issues line:
+  no user meets it.
 - An entry filed from a CI flake records the runner's toolchain (the macOS runner's
   Homebrew GTK is not pinned); a local 0-of-N measured on a different version is weaker
   evidence than it reads, and the same version makes it like-for-like.
@@ -245,6 +268,11 @@ decision the operator records, not one an agent makes.
   itself, every platform, no step
   skipped or declared non-applicable that is not declared so permanently in
   `scripts/pipeline.steps`.
+- Read a red job's check-run annotations before its log. A hosted macOS job that ends
+  cancelled with **zero steps** ("not acquired by Runner … capacity constraints") is
+  runner capacity, not a crash and not the code: re-run the failed job
+  (`gh run rerun <id> --failed`). A job that ran steps and died is a different shape,
+  read from its log.
 - **Proof:** the run's URL, and the commit hash it reports is the target.
 
 ### 5. Packaging dry run
@@ -259,9 +287,10 @@ decision the operator records, not one an agent makes.
   new letter to decide. A red that reproduces is a fix the release needs.
 - Stage the downloaded artefacts, with a `SHA256SUMS.txt` beside them, where every seat
   can reach them without GitHub credentials (`../Scribobulate-artefacts/<version>/`
-  beside the tree, which the Windows VM sees through its shared folder) — the sums file
-  lists bare filenames, since the staging directory is flat — and have each seat verify
-  the sum before using one.
+  beside the tree, which the Windows VM sees through its shared folder, and the
+  operator's `/srv/pub/…` mirror of it) — the sums file lists bare filenames, not the
+  download tree's subpaths, since the staging directory is flat and `shasum -c` fails
+  otherwise — and have each seat verify the sum before using one.
 - These artefacts — not a `cargo build` on a developer machine — are what gates 6–9 are
   run against. A dev build proves the code; the release proves the installer.
 - **Proof:** the run's URL; each artefact's name carries the release version and its
@@ -313,16 +342,31 @@ Every published artefact carries the notices its dependencies require (POLICY
 
 ### 8. Manual testing on all three platforms
 
-- A **full** `tests/MANUAL-TEST.md` pass on each of Linux, macOS and Windows, against
-  the installed dry-run artefact of the target commit. Each pass records every item's
-  verdict in its run-sheet (`tests/reports/MANUAL-TEST-REPORT.md`, per its §7); a pass
-  with an un-verdicted item is not complete.
+- A `tests/MANUAL-TEST.md` pass on each of Linux, macOS and Windows, against the
+  installed dry-run artefact of the target commit, at one of two tiers:
+  - **the full plan** — the baseline, run for a MAJOR release or on the operator's word;
+  - **the smoke tier** otherwise — the items MANUAL-TEST's header marks `[smoke]`, on
+    every platform, plus the items the diff touches: for each change, the rows of the
+    [CAM.md](CAM.md) matrices it falls under name the surfaces it reaches, and every
+    item testing one of those surfaces runs.
+
+  Each pass records every item's verdict in its run-sheet
+  (`tests/reports/MANUAL-TEST-REPORT.md`, per its §7); a pass with an un-verdicted item
+  of its tier is not complete.
+- **A re-drive after a fix round** runs only the items that failed and the legs never
+  run. Nothing that passed is repeated: a fix is answerable for the items it names, and
+  its own tests cover the mechanism it changed.
 - **NOT-RUN with a reason** is a legitimate verdict (MANUAL-TEST § header) and is
-  listed, not hidden. A **FAIL** is either fixed — which moves the target commit and
-  restarts at gate 4 — or becomes an ISSUES.md entry that then goes through gate 3's
-  deferral, by the operator's decision.
+  listed, not hidden. A **FAIL** is either fixed — in the batch the release branch's
+  rule sets, which moves the target commit and restarts at gate 4 — or becomes an
+  ISSUES.md entry or a reworded rubric, classified as gate 3 says.
 - Only `windows` and `mac` can run their own platform's pass; `linux` dictates the
   target commit and collects the three reports for the operator.
+- A brief to a seat is sent at the maximum message TTL with an acknowledgement asked
+  for: a seat mid-chunk reads its inbox late, and a brief that expires unread is
+  indistinguishable, from the sender's side, from one that was read. The release seat
+  keeps one consolidated current brief per seat — target, artefact and sum, what to run,
+  what to skip — and re-sends that, not a chain of amendments.
 - **Proof:** the operator's 👍 on the three reports. Each report carries the commit
   hash tested, the artefact's name, the date, the counts (pass / fail / not-run) and
   the NOT-RUN and FAIL item numbers with reasons; a 👎 names what sends the release
@@ -338,7 +382,21 @@ On each platform, from the gate-5 artefact, by the platform procedure in MANUAL-
   resolve.
 - The file association opens a `.md` from the file manager.
 - Uninstall leaves nothing behind that the installer put there.
-- **Proof:** one line per platform in the release record.
+- **Full once per campaign, lite after that.** The steps above run in full once per
+  release campaign, and again only when the diff since the last full run touches
+  `packaging/`, `.github/workflows/`, `scripts/pipeline.steps`, `Cargo.toml` or
+  `Cargo.lock`, `build.rs`, the resources (desktop file, icons, MIME, `Info.plist`,
+  entitlements, the licence bundle) or startup and lifecycle code (`src/main.rs`,
+  `src/app/`, `src/logging.rs`, `src/forensics/`, settings and session migration). Any
+  other change cannot alter whether the package installs or the binary launches, and
+  takes **gate 9 lite**: verify the artefact's sum, install it over the previous build,
+  prove the version (`--version`) and the commit, launch once, quit once. The commit
+  proof is the log's identity line on Windows and macOS; on Linux, whose log carries
+  none, it is the commit found in the installed binary (`strings`) and the previous
+  one absent. On macOS the lite run strips quarantine from its scratch copy
+  (`xattr -d com.apple.quarantine`), so it costs the operator no Gatekeeper click —
+  the full run already proved what Gatekeeper shows.
+- **Proof:** one line per platform in the release record, saying full or lite.
 
 ### 10. Documentation
 
@@ -404,6 +462,12 @@ On each platform, from the gate-5 artefact, by the platform procedure in MANUAL-
   reports the released version. A later minor or major step overrides it at the next
   gate 1.
 - Open `ISSUES.md` and remove nothing: a release does not close an issue, a fix does.
+
+## Rig notes
+
+The lessons the release rigs taught — pdftotext's form feed, a pipe held by a portal, the
+shared at-spi socket, Inno's still-running uninstaller, macOS Open Anyway's expiry — are
+ScrAP-366 to ScrAP-370 in [ANTI-PATTERNS.md](ANTI-PATTERNS.md).
 
 ## What is deliberately not a gate
 
