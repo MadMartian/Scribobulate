@@ -34,7 +34,7 @@ pub(super) struct Builder<'a> {
     /// Items collected for each open list, innermost last.
     list_items: Vec<Vec<ListItem>>,
     /// A task-list marker seen inside the item currently open, if any.
-    pending_task: Option<bool>,
+    pending_task: Vec<Option<bool>>,
     /// Fenced code text accumulates here between the block's start and end events.
     code: Option<(Option<String>, String)>,
     /// `<picture>` grouping carried ACROSS events, because a single-line
@@ -180,7 +180,7 @@ impl<'a> Builder<'a> {
             table: None,
             in_table_head: false,
             list_items: Vec::new(),
-            pending_task: None,
+            pending_task: Vec::new(),
             code: None,
             picture_open: false,
             picture_taken: false,
@@ -286,7 +286,11 @@ impl<'a> Builder<'a> {
             // The marker belongs to the item already open around it; it is held
             // until that item closes rather than emitted, because a task marker is
             // a property of the item and not content inside it.
-            Event::TaskListMarker(checked) => self.pending_task = Some(checked),
+            Event::TaskListMarker(checked) => {
+                if let Some(top) = self.pending_task.last_mut() {
+                    *top = Some(checked);
+                }
+            }
             // Raw HTML is DROPPED, exactly as the preview drops it — except the image
             // elements the one allowlist names. Not escaped (that would put text on
             // the page the preview never showed) and never passed through (that would
@@ -379,7 +383,9 @@ impl<'a> Builder<'a> {
             Tag::Item => {
                 self.block_stack.push(Vec::new());
                 self.open.push(Open::Item);
-                self.pending_task = None;
+                // One slot per open item: a nested item opening must not clear the
+                // marker its parent already read.
+                self.pending_task.push(None);
             }
             Tag::CodeBlock(kind) => {
                 let lang = match kind {
@@ -541,7 +547,7 @@ impl<'a> Builder<'a> {
             }
             Open::Item => {
                 let blocks = self.block_stack.pop().unwrap_or_default();
-                let task = self.pending_task.take();
+                let task = self.pending_task.pop().flatten();
                 if let Some(items) = self.list_items.last_mut() {
                     items.push(ListItem { task, blocks });
                 }

@@ -62,7 +62,9 @@ pub(crate) use image::image_placeholder_tooltip;
 pub(crate) use normalize::{md_options, NormalizedMd};
 pub(crate) use picture::{scan_image_tags, ImgTag};
 pub(crate) use scan::Script;
-pub(crate) use segments::{is_inline_tag, is_inline_tag_end, segments_of, BlockScripts, Seg};
+#[cfg(test)]
+pub(crate) use segments::segments_of;
+pub(crate) use segments::{is_inline_tag, is_inline_tag_end, BlockScripts, Seg};
 
 // ── table-cell annotation markup (table-cell annotation display path) ───────────────────────
 
