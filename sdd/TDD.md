@@ -2977,6 +2977,8 @@ Rubrics 15.10a–15.10f cover restoring each window's **window place** (PRODUCT.
 - **Then** the card dismisses — the anchor it was raised over is superseded
 - **And When** the reader presses Escape instead
 - **Then** the card dismisses and focus returns to the pane
+- **And When** the reader commits the comment instead, with Enter or Save
+- **Then** the card dismisses and focus returns to the pane the annotation was started from, as Escape does — never to a control elsewhere in the window, so the reader's next Enter cannot close the tab
 - **But** a selection that merely becomes *empty* never dismisses it: that is the app's own clipboard bookkeeping, not the reader choosing something else
 
 ### 17.40 Both annotation cards show what they are about to destroy

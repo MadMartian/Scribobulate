@@ -29,6 +29,8 @@ use std::rc::Rc;
 // window.rs was decomposed into focused submodules (see TECH.md module map).
 mod actions;
 mod annotate;
+#[cfg(all(test, feature = "gtk-integration-tests"))]
+mod annotate_focus_tests;
 mod annotations_nav;
 mod arrangement;
 mod contextmenu;

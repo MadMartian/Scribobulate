@@ -66,6 +66,25 @@ pub(crate) fn wire_editor_annotate_card(
         }
     });
 
+    // Dismiss the card AND hand the keyboard back to the editor — the one exit both the
+    // commit (Enter, Save) and the cancel (Escape, ×) take, so neither can leave the focus
+    // behind. Hiding the card that holds the focus does not move it here: GTK defers a
+    // successor to after-paint and picks the first focusable ancestor of the card or,
+    // failing that, the window's first focusable widget (gtkwindow.c
+    // `maybe_unset_focus_and_default`, 4.6.9) — a `GtkPaned` on Linux, the tab strip's ×
+    // on Windows, where the reader's next Enter closed the tab. Grabbing a visible widget
+    // straight after the hide cancels that deferred move (`gtk_window_root_set_focus`).
+    let dismiss: Rc<dyn Fn()> = Rc::new({
+        let hide = hide.clone();
+        let editor = editor.downgrade();
+        move || {
+            hide();
+            if let Some(editor) = editor.upgrade() {
+                editor.grab_focus();
+            }
+        }
+    });
+
     // Commit: map the captured selection to a CreateAnnotation over the RAW source and
     // write it into the editor buffer. DEFER the buffer mutation to an idle turn — doing
     // it synchronously inside the Save `clicked` handler mutates (and, in split, re-renders
@@ -79,7 +98,7 @@ pub(crate) fn wire_editor_annotate_card(
     let card = CommentEntry::new("", {
         let editor = editor.downgrade();
         let pending = pending.clone();
-        let hide = hide.clone();
+        let dismiss = dismiss.clone();
         move |text: &str| {
             let Some(editor) = editor.upgrade() else {
                 return;
@@ -89,7 +108,7 @@ pub(crate) fn wire_editor_annotate_card(
                 .borrow_mut()
                 .take()
                 .and_then(|target| target.with_comment(text));
-            hide();
+            dismiss();
             if let Some(create) = create {
                 glib::idle_add_local_once(move || {
                     crate::window::apply_annotation_edit(&buf, AnnotationEdit::Create(create));
@@ -167,14 +186,8 @@ pub(crate) fn wire_editor_annotate_card(
     // Escape or the corner × dismisses the card and returns focus to the editor (an
     // in-surface overlay child has no popover autohide, so this is wired explicitly).
     card.wire_cancel(&bar, {
-        let hide = hide.clone();
-        let editor = editor.downgrade();
-        move || {
-            hide();
-            if let Some(editor) = editor.upgrade() {
-                editor.grab_focus();
-            }
-        }
+        let dismiss = dismiss.clone();
+        move || dismiss()
     });
 
     // Focus leaving the whole card (a genuine outside click / focus move — not the
