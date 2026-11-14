@@ -56,12 +56,66 @@ pub(crate) use shortcuts::make_shortcuts_window;
 ///
 /// Both spellings are stripped whether or not either was found, so the arguments that
 /// reach `HANDLES_OPEN` are file paths and nothing else.
+///
+/// Only arguments before a bare `--` are switches: `scribobulate -- -n` opens a file
+/// named `-n`, as TDD 8.8 requires of every switch.
 pub(crate) fn new_instance_argv(args: Vec<String>) -> (bool, Vec<String>) {
-    let is_flag = |a: &String| a == "--new-instance" || a == "-n";
-    let force_new = args.iter().any(is_flag);
-    let mut rest = args;
-    rest.retain(|a| !is_flag(a));
+    let is_flag = |a: &str| a == "--new-instance" || a == "-n";
+    let mut force_new = false;
+    let mut rest = Vec::with_capacity(args.len());
+    let mut past_separator = false;
+    for (index, arg) in args.into_iter().enumerate() {
+        if index > 0 && !past_separator {
+            if arg == END_OF_OPTIONS {
+                past_separator = true;
+            } else if is_flag(&arg) {
+                force_new = true;
+                continue;
+            }
+        }
+        rest.push(arg);
+    }
     (force_new, rest)
+}
+
+/// The bare argument that ends option parsing (POSIX).
+const END_OF_OPTIONS: &str = "--";
+
+/// Resolve a bare `--` here, so neither GLib nor the macOS handoff ever sees one.
+///
+/// GLib's option parser keeps a `--` in the argv it hands `open` whenever a later
+/// argument starts with `-` (`glib/goption.c`, the `separator_pos` clear, unchanged from
+/// 2.72 through 2.90), so `scribobulate -- --help` opened `--` and `--help`; the macOS
+/// single-instance handoff never parses at all and forwarded `--` as a file. Dropping the
+/// `--` alone is not enough: the operand after it would then be parsed as an unknown
+/// option and refused. So an operand after it that starts with `-` is spelled `./<name>`
+/// (with the platform's separator),
+/// which the parser leaves alone and `g_file_new_for_commandline_arg` resolves against
+/// the working directory, as it does any relative name. A lone `-` is already an operand
+/// to the parser and stays as it is. Everything before the `--` is untouched.
+pub(crate) fn end_of_options_argv(args: Vec<String>) -> Vec<String> {
+    let Some(separator) = args
+        .iter()
+        .skip(1)
+        .position(|a| a == END_OF_OPTIONS)
+        .map(|offset| offset + 1)
+    else {
+        return args;
+    };
+    let mut rest = args;
+    let operands = rest.split_off(separator + 1);
+    rest.pop();
+    rest.extend(operands.into_iter().map(|operand| {
+        if operand.starts_with('-') && operand != "-" {
+            std::path::Path::new(".")
+                .join(&operand)
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            operand
+        }
+    }));
+    rest
 }
 
 /// Does argv carry an argument shaped like an option?
@@ -316,5 +370,87 @@ mod new_instance_tests {
             rest,
             argv(&["scribobulate", "-notes.md", "--new-instance-x"])
         );
+    }
+
+    #[test]
+    fn a_switch_after_the_separator_is_a_file() {
+        let (force_new, rest) = new_instance_argv(argv(&["scribobulate", "--", "-n"]));
+        assert!(!force_new, "-n after -- names a file");
+        assert_eq!(rest, argv(&["scribobulate", "--", "-n"]));
+        let (force_new, rest) = new_instance_argv(argv(&["scribobulate", "-n", "--", "a.md"]));
+        assert!(force_new, "-n before -- is still the switch");
+        assert_eq!(rest, argv(&["scribobulate", "--", "a.md"]));
+    }
+}
+
+#[cfg(test)]
+mod end_of_options_tests {
+    use super::end_of_options_argv;
+
+    fn argv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    fn shaped(rest: &[&str]) -> Vec<String> {
+        end_of_options_argv(argv(&[&["scribobulate"], rest].concat()))
+    }
+
+    fn in_cwd(name: &str) -> String {
+        std::path::Path::new(".")
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn the_separator_is_dropped_before_a_plain_name() {
+        assert_eq!(
+            shaped(&["--", "file.md"]),
+            argv(&["scribobulate", "file.md"])
+        );
+    }
+
+    #[test]
+    fn a_dash_led_operand_after_it_is_spelled_as_a_relative_path() {
+        for name in ["-x.md", "--help", "-n", "--"] {
+            assert_eq!(
+                shaped(&["--", name]),
+                vec!["scribobulate".to_owned(), in_cwd(name)],
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lone_dash_stays_itself() {
+        assert_eq!(shaped(&["--", "-"]), argv(&["scribobulate", "-"]));
+    }
+
+    #[test]
+    fn a_separator_alone_leaves_no_operand() {
+        assert_eq!(shaped(&["--"]), argv(&["scribobulate"]));
+    }
+
+    #[test]
+    fn arguments_before_it_and_argv_without_it_are_untouched() {
+        assert_eq!(
+            shaped(&["--help", "a.md", "--", "-b.md"]),
+            vec![
+                "scribobulate".to_owned(),
+                "--help".to_owned(),
+                "a.md".to_owned(),
+                in_cwd("-b.md")
+            ]
+        );
+        assert_eq!(
+            shaped(&["-x", "a.md"]),
+            argv(&["scribobulate", "-x", "a.md"])
+        );
+    }
+
+    /// argv[0] is the program, never the separator.
+    #[test]
+    fn the_program_name_is_never_examined() {
+        assert_eq!(end_of_options_argv(argv(&["--"])), argv(&["--"]));
     }
 }
