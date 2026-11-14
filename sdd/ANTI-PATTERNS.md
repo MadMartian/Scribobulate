@@ -340,6 +340,9 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 
 ## 261. A derived-state hook installed at the producer misses the rebuild shape the producer also has
 **Symptom**: a hook that keeps state consistent with the rendered document fires for every re-render *except* the one the feature exists for. The headless test — which drives the in-place re-render — passes; on the live display the same scenario leaves the state stale, silently, with no warning and no log line.
+**Root cause**: "the preview was rebuilt" is **two code paths, not one**. Preview mode's external reload rebuilds by a wholesale render into a brand-new scroller/view widget; split mode re-renders the existing view in place. A hook installed on the in-place path is absent from the wholesale one, and nothing types, lints or tests the difference — the producer's shape is invisible from the hook's own site.
+**Resolution**: move the hook off the producer and put it **immediately in front of its consumer** — here, reconcile the history against the live heading set inside the function that computes the two actions' sensitivity, so the reconciliation and the value it protects are computed in the same call and cannot disag…
+**Lesson**: when a producer has more than one code shape, a hook on the producer is a latent regression — the next shape added will not have it, and a test written against the shape you are looking at will not notice. Prefer siting derived state in front of the
 **Scribobulate**: `window/navhistory.rs`'s `reconcile_nav_history_headings` is private and called from `refresh_nav_history_actions` (before it reads `nav_can`) and from `traverse` (before it steps); `preview/render.rs` deliberately calls nothing.
 **See**: kin GTK4Rs/AP-55 (the same two rebuild shapes, reached through a stale *signal* rather than a missing hook — different root cause, same architectural fact); TDD 23.14.
 
@@ -377,6 +380,9 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 
 ## 309. A cancelled export destroys the destination, and the wreckage is a valid file
 **Symptom**: cancelling a `GtkPrintOperation` export leaves a valid, readable, **partial** PDF at the destination, having already replaced whatever was there; it extracts cleanly and the extractor exits 0, so nothing signals that the previous file is gone. MEASURED (Windows, GTK 4.22.4): a 43,973-byte destination replaced by a 171,327-byte 51-page partial.
+**Root cause**: `set_export_filename` hands cairo the destination directly — no temp-and-rename — and GTK opens, and therefore truncates, it **before the first page is drawn** (zero `draw-page` calls when the open fails). Cancel is a normal-completion path, not an error path, so the destruction is reached by pressing Cancel in ordinary use.
+**Resolution**: never point an export sink at a user-visible destination. Render to a private temp file and publish atomically **on success only**, gated on the application's own page count rather than the toolkit's return value (GTK4Rs/AP-294).
+**Lesson**: a write that begins by truncating its destination has no cancel path — "cancel" and "half-write" are the same outcome, and a valid-looking partial is worse than a corrupt one because nothing downstream complains.
 **Scribobulate**: `atomic_io::AtomicPublish` holds the create-private-temp → write → publish sequence; `export_pdf` stages into it and promotes only on `Ok(Apply)` with `drawn == expected` (TDD 25.21).
 **See**: GTK4Rs/AP-167 — the same family (a failure mid-write) and the same promote-only-after-a-complete-write rule, on the swap file; this entry's trigger is user intent, not a fault.
 
@@ -438,11 +444,17 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 
 ## 340. Splicing a region whose rendered content was written by an event ABOVE that region
 **Symptom**: an UNSPACED `<details>` (rubric 2.26d) collapsed correctly and then could never be opened again — the fold splice deleted the body and wrote nothing back, and the heading below lost its block separator.
+**Root cause**: a region render is seeded at the region's start and replays only the events BELOW it. An unspaced block's body is literal text inside the block's own opening raw-HTML event, which sits above the region — so the region walk never emits it, while a FULL render of either fold state is correct. Only the transition is wrong, which is why no unit test could see it and driving the running app could.
+**Resolution**: the renderer records `DisclosureExtent::spliceable`, false for any frame that wrote literal text of its own, and `preview::splice` refuses before it touches the buffer so the caller's full re-render runs instead.
+**Lesson**: a splice's precondition is not "I know the region" but "every character in the region is produced by an event inside it". Before adding a region-scoped fast path, ask which event WROTE the content — a construct whose rendering is emitted by an ancestor event is not spliceable at any region granularity.
 **Scribobulate**: `renderer::DisclosureExtent::spliceable` (set in `renderer::start::record_disclosure_extent`), refused in `preview::splice::splice`; pinned by `preview::build`'s `an_unspaced_disclosure_is_not_spliceable_and_a_spaced_one_is`, which carries its own positive control.
 **See**: GTK4Rs/AP-321 (the reader-position half of the same splice).
 
 ## 343. Enlarging a decoded `GdkTexture` to display a VECTOR image at a larger size
 **Symptom**: an SVG diagram drawn above its natural size is soft, and the TEXT inside it — the part the reader enlarged it to read — goes first.
+**Root cause**: two facts that only bite together. `GdkTexture::from_file` decodes a scalable source at its NATURAL size with no way to ask for another (GTK 4.6 falls through to `gdk_pixbuf_new_from_stream`, whose **no-op size callback** discards any size before librsvg sees it). And enlarging the result cannot be sharp: GSK 4.6 sets no cairo filter at all, so it lands on cairo's default `FILTER_GOOD`, and `gtk_snapshot_append_scaled_texture` is 4.10+.
+**Resolution**: make the target size an INPUT to the decode — `Pixbuf::from_stream_at_scale(admitted_bytes, w, -1, true)` — banned outside `imagedecode` — which reaches librsvg's vector renderer (MEASURED: a 4× thinner anti-aliased fringe than a bilinear upscale). Take BYTES, never the path: the path-taking twin re-opens the file after admission, a check-then-use seam. Gate on `PixbufFormat::is_scalable()`, free in the header probe. Riders: pass ONE axis and `-1` (`preserve_aspect_ratio = false` letterboxes); cap the TARGET pixels (a `viewBox="0 0 24 24"` probes as 576 and bounds nothing); fall back to the natural-size decode on loader failure (the SVG loader is a separate package everywhere).
+**Lesson**: a scaling defect that looks like a filtering problem is often a decoding problem one layer up: ask whether the SOURCE was resolution-independent and the decode discarded that — no work at the drawing end recovers it.
 **Scribobulate**: `imagecache::loader::rasterize_vector` and `LoadedImage` (which carries the size at zoom 1.0 apart from the texture's own — for a re-rendered vector they differ); target bound `renderer::image::cap_raster`. Plain-gdk-pixbuf repro and measurements: `probes/svg-rasterise-rs`.
 **See**: TDD 13.11; kin GTK4Rs/AP-58, GTK4Rs/AP-66; `sprite.rs` pre-resamples for the same GSK reason.
 
@@ -471,11 +483,17 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 
 ## 351. A gdk-pixbuf loader module that retains every decode — invisible to refcount assertions, visible only as slope
 **Symptom**: ~12 MB per render of one animated WebP, never returned (104 MB → 2708 MB over 98 headless renders). Every gate green, every object we held proven finalized.
+**Root cause**: not ours. `webp-pixbuf-loader` (0.0.5-5~22.04.1) over-references `GdkPixbufWebpAnim` through a `GdkPixbufWebpAnimIter` it never releases, so the anim keeps the decoded frame and the whole file buffer alive; its refcount is 2 where GIF's is 1. Per-loader-module, not per-format: a STATIC WebP of the same size is flat, GIF is clean. A 20-line C program making only our render's two calls reproduces the app's per-iteration leak to within 1%.
+**Resolution**: own the decode (`richimg`) so the module is never entered, and gate the class rather than the instance — GROWTH over N renders after discarded warm-up, measured as what one allocation cannot explain (TDD 6.6, 6.11), plus a finalization half (TDD 6.7, 6.9). Caching only reduces how often an unfixable leak is invoked.
+**Lesson**: **a leak can be entirely real and invisible to refcount assertions** — our `GdkTexture` was weak-ref-verified finalized 40/40 while the retaining owner sat a layer below it, in a C module we never named as a dependency. A gate watching the objects you own cannot see a leak owned by something you merely called; only growth over many repetitions can. And freed memory is not returned memory on any target platform, so a single-shot "render, free, assert it came back" cannot pass even on correct code.
 **Scribobulate**: `src/imagedecode/` is the only decode route, with `clippy.toml` banning GTK's encoded-image entry points elsewhere; the gate is `src/memgate/` (the growth predicate in `memgate::growth`, sampler field `footprint`, never `rss`), its own pipeline step 5b.
 **See**: TDD 6.6–6.9; ScrAP-352 (why the plainest GTK call reaches that module's leaking branch at all); kin GTK4Rs/AP-66.
 
 ## 352. `GdkTexture::from_file`/`from_bytes` reach a pixbuf module's INCREMENTAL path, not its one-shot `load`
 **Symptom**: `gdk_pixbuf_new_from_file` on an animated WebP errors ("Cannot create WebP decoder") while `GdkTexture::from_file` on the same bytes succeeds — and leaks. Two entry points to one module behaving as two decoders made the defect look format-specific and unreproducible by the obvious API.
+**Root cause**: two code paths in the module. GTK 4.6 decodes PNG/JPEG/TIFF itself and falls through to `gdk_pixbuf_new_from_stream` for everything else, driving the module's `begin_load`/`load_increment`/`stop_load` trio; `new_from_file` calls its one-shot `load`. A bug in only one of the two is reachable from the plainest GTK call and absent from the call you would reproduce it with.
+**Resolution**: measure the ENTRY POINT the application actually uses, each route its own subject: here `new_from_stream`/`GdkPixbufLoader` leaked 11.7–12.9 MB/call, `Pixbuf::file_info` 2.31 MB, `gdk_pixbuf_animation_new_from_file` (width/height only) was flat, and `PixbufAnimation::static_image` leaked the same AND SIGSEGV'd on truncated input. The two leaking calls were super-additive (2.31 + ~12.2 alone, 22.0 together).
+**Lesson**: "the library decodes this format" is not one behaviour. Before blaming a format or a library, establish WHICH path your call takes into it — a one-shot and an incremental API can disagree about errors, leaks and crashes on the same bytes.
 **Scribobulate**: the SVG dimension probe that used the animation API for this reason is gone; sizing reads `imagedecode::probe_vector_dimensions`, and every raster decode goes through `src/imagedecode/`.
 **See**: kin `GTK4Rs/AP-66`, GTK4Rs/AP-66, GTK4Rs/AP-311; ScrAP-351 is the leak this asymmetry hid.
 
@@ -505,6 +523,9 @@ Scribobulate's register of costly dead ends. It is a **project index, not an ess
 
 ## 359. A pixel test that counts an exact colour over antialiased text — a glyph fringe can forge it
 **Symptom**: a PDF test that counts rows of an exact marker colour on a rasterised page failed intermittently for weeks, only inside a full parallel suite run (locally and on CI), with a few short marker-coloured runs inside the quoted text; never on demand. Dropped from ISSUES once for not reproducing, and it recurred.
+**Root cause**: the host's subpixel (LCD) text antialiasing darkens each glyph edge one channel at a time, and over a magenta panel (255,0,255) an edge darkened only in blue IS pure red (255,0,0) — the marker. Which edges land exactly there varies run to run under parallel load. Asking pangocairo/cairo for greyscale antialiasing (on the layout context or the cairo context) was measured to change nothing; why was not established.
+**Resolution**: a marker no darkened edge can produce — yellow (255,255,0) over magenta, whose green is 0 and which ink only darkens. Found by saving the asserted page on every run and diffing a failing page against a passing one: only a few letters' edges differed.
+**Lesson**: an exact-colour oracle on a raster that also carries text must use a colour outside everything the text's antialiasing can produce over that background; and keep the rendered output of an intermittent pixel test, because a picture shows in seconds what numbers about it hid for weeks.
 **Scribobulate**: `export::pdf::measure::tests` — the blockquote tiling test's `MARK` and its `KeptPage` (pages under `target/test-artifacts/`).
 **See**: GTK4Rs/AP-56 (headless pixels prove less than they look).
 
